@@ -157,7 +157,7 @@ def _bind_param_type(
                 error_node,
                 f"hir Function call {callee.name!r}: arg {i} shape/dtype "
                 f"mismatch — callee param {param.name!r} expects logical "
-                f"{p.shape} {p.dtype}, got {arg_ty.shape} {arg_ty.dtype}",
+                f"{p.shape} {p.dtype.name}, got {arg_ty.shape} {arg_ty.dtype.name}",
             )
         return arg_ty
     if arg_ty != p:

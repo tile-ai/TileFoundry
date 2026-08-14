@@ -75,6 +75,37 @@ def _legal_slice_of(m: Mesh, e: Mesh) -> bool:
         return False
 
 
+def _mesh_str(mesh: Mesh) -> str:
+    """A mesh as its topologies and the shape they are viewed through."""
+    topologies = ", ".join(f"{t.name}({t.size})" for t in mesh.topologies)
+    return f"({topologies})[{', '.join(str(d) for d in mesh.layout.shape)}]"
+
+
+def _no_enclosing_mesh_error(m: Mesh, scope: "tuple[Mesh, ...]") -> VerifyError:
+    """Name which of the three ways a sync failed to reach an enclosing mesh.
+
+    All three land on the same check, so saying only "not inside a MeshScope"
+    describes the first and misleads about the other two: there may well be an
+    enclosing scope that the synced mesh simply does not come from.
+    """
+    if not scope:
+        return VerifyError(
+            f"T.sync({_mesh_str(m)}): no enclosing mesh scope — a sync must name a mesh "
+            "bound by an enclosing `with Mesh(...) as m`"
+        )
+    enclosing = ", ".join(_mesh_str(e) for e in scope)
+    if not isinstance(m.layout, ComposedLayout):
+        return VerifyError(
+            f"T.sync({_mesh_str(m)}): no enclosing scope binds that mesh; the scopes in "
+            f"force bind {enclosing}"
+        )
+    return VerifyError(
+        f"T.sync({_mesh_str(m)}): that sub-box is not a slice any enclosing mesh can "
+        f"produce; the scopes in force bind {enclosing}, and a sliced sync must name a "
+        "sub-box `m[...]` builds from one of them"
+    )
+
+
 @register_verify_stmt(Sync)
 def _(call: "Call", ctx: "VerifyContext") -> None:
     """Verify a Sync references an enclosing mesh or its legal constant slice.
@@ -95,11 +126,7 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
     else:
         ok = any(_legal_slice_of(m, e) for e in scope)
     if not ok:
-        raise VerifyError(
-            "T.sync(m): not inside a MeshScope binding the synced mesh; T.sync "
-            "must reference an enclosing `with Mesh(...) as m` (m or a legal "
-            "m[slice])"
-        )
+        raise _no_enclosing_mesh_error(m, scope)
 
     classify(m)
 

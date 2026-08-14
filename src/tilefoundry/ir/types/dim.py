@@ -86,16 +86,17 @@ def _dim_binop(op_cls, a, b):
     """Dim binop.
 
     Build a dim-arithmetic Call, or ``NotImplemented`` for operands outside
-    ``ShapeDim = int | DimVar | Expr``.
+    ``ShapeDim = int | DimVar | Expr``. A bool raises instead of falling back to
+    ``NotImplemented``, which would let Python retry the operation as plain
+    integer arithmetic and silently give the dimension the value 0 or 1.
     """
-
-    def _ok(v):
-
-        if isinstance(v, bool):
-            return False
-        return isinstance(v, (int, DimVar, Expr))
-
-    if not (_ok(a) and _ok(b)):
+    for operand in (a, b):
+        if isinstance(operand, bool):
+            raise TypeError(
+                f"dim arithmetic: bool operand {operand!r} is not a dimension; bool is an "
+                "int subclass, so it is refused here rather than silently becoming 0 or 1"
+            )
+    if not all(isinstance(v, (int, DimVar, Expr)) for v in (a, b)):
         return NotImplemented
     return simplify_dim(op_cls, (a, b))
 
@@ -162,8 +163,9 @@ def simplify_dim(op_cls: type[Op], args: tuple) -> Expr:
     def _wrap(v):
         if isinstance(v, bool):
             raise TypeError(
-                f"simplify_dim: bool operand {v!r} is not a valid "
-                f"ShapeDim entry (use int / DimVar / Expr)"
+                f"simplify_dim: bool operand {v!r} is not a ShapeDim (int / DimVar / Expr); "
+                "bool is an int subclass, so it is refused here rather than silently "
+                "becoming 0 or 1"
             )
         if isinstance(v, int):
             return Constant(type=ti64, value=v)

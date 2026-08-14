@@ -163,6 +163,40 @@ def _shape_scalar_params(
     return tuple(extra)
 
 
+def _scope_str(mesh) -> str:
+    """A thread scope as its topologies and the lane layout they are viewed through."""
+    topologies = ", ".join(f"{t.name}({t.size})" for t in mesh.topologies)
+    layout = mesh.layout
+    return f"{topologies} viewed as shape {tuple(layout.shape)} strides {tuple(layout.strides)}"
+
+
+def _scope_mismatch_str(current, required) -> str:
+    """Say which part of the required thread scope the enclosing one fails to provide.
+
+    A fragment's scope can be wrong by topology, by lane count, or by the exact
+    thread-value decomposition, and reporting the last of those for all three
+    sends the reader looking at the layout when the topology is what differs.
+    """
+    head = (
+        f"enclosing mesh scope [{_scope_str(current)}] does not provide the atom's "
+        f"required thread scope [{_scope_str(required)}]"
+    )
+    if current.topologies[0].name != required.topologies[0].name:
+        return (
+            f"{head} — the scope is a {current.topologies[0].name} scope and the atom needs "
+            f"a {required.topologies[0].name} one"
+        )
+    if current.topologies[0].size != required.topologies[0].size:
+        return (
+            f"{head} — the scope has {current.topologies[0].size} lanes and the atom needs "
+            f"{required.topologies[0].size}"
+        )
+    return (
+        f"{head} — the lane count matches, so what differs is the thread-value "
+        "decomposition, which must match shape and strides exactly"
+    )
+
+
 def parse_prim_func(fn, *, target=None, extra_closure=None) -> PrimFunction:
     node = extract_ast(fn)
     closure = _collect_closure(fn, extra_closure)
@@ -523,15 +557,8 @@ class _TirBodyVisitor(BaseExprVisitor):
                     f"`with Mesh(...)` thread scope"
                 )
             if not mesh_scope_matches_required_scope(mesh, owner.required_scope):
-                req = owner.required_scope
                 raise VerifyError(
-                    f"mma fragment `atom.{attr}`: enclosing mesh scope does not "
-                    f"match the atom's required thread scope "
-                    f"(topology {req.topologies[0].name!r}, {req.topologies[0].size} lanes); "
-                    f"a {req.topologies[0].name}({req.topologies[0].size}) scope with the "
-                    f"exact lane layout shape {tuple(req.layout.shape)} strides "
-                    f"{tuple(req.layout.strides)} is required (e.g. the fragment "
-                    f"`Split` axes need the 2-axis (4,8) warp, not a flat (32,))"
+                    f"mma fragment `atom.{attr}`: {_scope_mismatch_str(mesh, owner.required_scope)}"
                 )
         return val
 

@@ -49,8 +49,13 @@ class ParseErrorCase:
     subject: str | Callable[[], object]
     """DSL source to import, or a builder for the ones with no source to feed."""
     raises: type[BaseException]
-    match: str | None = None
-    """Four rows pin only the exception type; they stay that way."""
+    match: str
+    """The diagnostic, tight enough that no other row in the table satisfies it.
+
+    A pattern loose enough to accept a neighbour's message stops asserting
+    which thing went wrong, and a row can then drift off the check it was
+    written for without anything noticing.
+    """
 
 
 def run_parse_error_case(case: ParseErrorCase) -> None:
@@ -412,6 +417,21 @@ def _bool_split_extent_single_axis() -> None:
             return reshard(xr, (1, 128), "gmem")  # noqa: F405, F821
 
 
+def _float_split_extent_single_axis() -> None:
+    """A non-``bool`` split extent that is not a shape dimension names its own type.
+
+    ``bool`` earns a separate diagnostic because it *is* an int; every other
+    wrong type gets the plain one, and this row is what keeps that plain one
+    from going unwritten.
+    """
+
+    @func(topologies=(Topology("thread", 128),))
+    def _f(x: Tensor[(1, 128), "bf16"]) -> Tensor[(1, 128), "bf16"]:
+        with Mesh(("thread",), layout=(4, 32), names=("w", "t")) as m:
+            xr = reshard(x, (1, 1.5 @ m.w), "rmem")  # noqa: F405, F821
+            return reshard(xr, (1, 128), "gmem")  # noqa: F405, F821
+
+
 def _duplicate_topology_name() -> None:
     @func(topologies=(Topology("cta", 128), Topology("cta", 64)))
     def _dup(a: Tensor[(1, 1536), "f32"]) -> Tensor[(1, 1536), "f32"]:
@@ -569,6 +589,18 @@ def _sync_on_a_non_contiguous_slice() -> None:
     verify_prim_function(scoped_sync(m, m[:, 1:3]))
 
 
+def _sync_on_a_mesh_the_scope_does_not_bind() -> None:
+    """An un-sliced mesh the enclosing scope simply does not bind.
+
+    This is the middle of the three ways to miss an enclosing mesh: a scope is
+    in force, and the synced mesh is a whole mesh rather than a sub-box, so what
+    is wrong is the identity of the mesh and not the shape of a slice.
+    """
+    enclosing = thread_mesh()
+    other = Mesh((Topology("thread", 64),), Layout(shape=(64,), strides=(1,)))
+    verify_prim_function(scoped_sync(enclosing, other))
+
+
 def _sync_on_a_forged_subbox_exceeding_its_parent() -> None:
     """A (1, 64) sub-box of a (4, 32) parent is not constructible by ``Mesh.__getitem__``."""
     enclosing = thread_mesh()
@@ -626,6 +658,7 @@ _HIR_BODY_STATEMENTS: tuple[ParseErrorCase, ...] = (
                 yield x
         """,
         raises=VerifyError,
+        match=r"`yield` is not an HIR statement",
     ),
     ParseErrorCase(
         id="lambda-in-hir-body",
@@ -684,7 +717,7 @@ _OP_CALL_SURFACE: tuple[ParseErrorCase, ...] = (
                 return relu((x, x))
         """,
         raises=VerifyError,
-        match="Tuple",
+        match=r"unsupported AST node in expression: Tuple",
     ),
     ParseErrorCase(
         id="integer-literal-keeps-its-own-dtype",
@@ -698,7 +731,7 @@ _OP_CALL_SURFACE: tuple[ParseErrorCase, ...] = (
                 return mul(x, 2)
         """,
         raises=VerifyError,
-        match="dtype mismatch",
+        match=r"Binary MUL: dtype mismatch \(f32 vs i64\)",
     ),
     ParseErrorCase(
         id="unknown-dtype-string-at-a-call",
@@ -726,23 +759,25 @@ _DIM_OPERANDS: tuple[ParseErrorCase, ...] = (
         id="dim-plus-bool",
         subject=lambda: CTX_LEN + True,
         raises=TypeError,
+        match=r"dim arithmetic: bool operand True is not a dimension",
     ),
     ParseErrorCase(
         id="dim-plus-object",
         subject=lambda: CTX_LEN + object(),
         raises=TypeError,
+        match=r"unsupported operand type\(s\) for \+: 'DimVar' and 'object'",
     ),
     ParseErrorCase(
         id="simplify-dim-bool-on-the-left",
         subject=lambda: simplify_dim(DimAdd, (True, CTX_LEN)),
         raises=TypeError,
-        match="bool operand",
+        match=r"simplify_dim: bool operand True is not a ShapeDim",
     ),
     ParseErrorCase(
         id="simplify-dim-bool-on-the-right",
         subject=lambda: simplify_dim(DimAdd, (CTX_LEN, False)),
         raises=TypeError,
-        match="bool operand",
+        match=r"simplify_dim: bool operand False is not a ShapeDim",
     ),
 )
 
@@ -752,7 +787,7 @@ _CALL_BOUNDARY: tuple[ParseErrorCase, ...] = (
         id="nested-call-arg-type-mismatch",
         subject=_arg_type_mismatch,
         raises=VerifyError,
-        match="type mismatch",
+        match=r"arg 0 shape/dtype mismatch",
     ),
     ParseErrorCase(
         id="direct-call-arity-mismatch",
@@ -770,25 +805,25 @@ _CALL_BOUNDARY: tuple[ParseErrorCase, ...] = (
         id="reach-a-child-entry-by-name",
         subject=_reach_a_child_entry_by_name,
         raises=VerifyError,
-        match="called through its bare binding",
+        match=r"'leaf.entry': a Module is called through its bare binding",
     ),
     ParseErrorCase(
         id="reach-a-child-helper-by-name",
         subject=_reach_a_child_helper_by_name,
         raises=VerifyError,
-        match="called through its bare binding",
+        match=r"'leaf.helper': a Module is called through its bare binding",
     ),
     ParseErrorCase(
         id="reach-a-module-member-by-class",
         subject=_reach_a_module_member_by_class,
         raises=VerifyError,
-        match="called through its bare binding",
+        match=r"'Callee.entry': a Module is called through its bare binding",
     ),
     ParseErrorCase(
         id="call-a-module-with-no-entry",
         subject=_call_a_module_with_no_entry,
         raises=VerifyError,
-        match="calling a Module calls its entry",
+        match=r"Module 'NoEntry' declares no entry",
     ),
     ParseErrorCase(
         id="call-a-module-whose-entry-is-a-prim-func",
@@ -800,25 +835,25 @@ _CALL_BOUNDARY: tuple[ParseErrorCase, ...] = (
         id="bare-decorator-leaves-the-child-unattached",
         subject=_bare_decorator_leaves_the_child_unattached,
         raises=VerifyError,
-        match="authored in a @module class body",
+        match=r"'leaf': a Module is called only from a function authored in a @module class body",
     ),
     ParseErrorCase(
         id="declaration-left-open-by-a-failed-class-body",
         subject=_declaration_left_open_by_a_failed_class_body,
         raises=VerifyError,
-        match="authored in a @module class body",
+        match=r"'Callee': a Module is called only from a function authored in a @module class body",
     ),
     ParseErrorCase(
         id="module-call-with-no-binding",
         subject=_module_call_with_no_binding,
         raises=ValueError,
-        match="no class-body binding attaches",
+        match=r"@module '_Unattached': call\(s\) to Module\(s\) \['Callee'\] that no class-body binding attaches",
     ),
     ParseErrorCase(
         id="module-call-bound-only-inside-a-list",
         subject=_module_call_bound_only_inside_a_list,
         raises=ValueError,
-        match="no class-body binding attaches",
+        match=r"@module '_ListAttached': call\(s\) to Module\(s\) \['Callee'\] that no class-body binding attaches",
     ),
 )
 
@@ -958,19 +993,25 @@ _GRID_LOOPS: tuple[ParseErrorCase, ...] = (
         id="tile-with-a-keyword-step",
         subject=hir_source("for i in tile(8, step=2):", "    y = relu(x)"),
         raises=VerifyError,
-        match="positional-only at the IR level",
+        match=r"tile\(\) does not accept keyword args",
     ),
     ParseErrorCase(
         id="range-with-a-keyword-stop",
         subject=hir_source("for i in range(stop=8):", "    y = relu(x)"),
         raises=VerifyError,
-        match="positional-only at the IR level",
+        match=r"range\(\) does not accept keyword args",
     ),
     ParseErrorCase(
         id="range-over-a-non-dim-expr",
         subject=hir_source("for i in range(x):", "    y = relu(x)"),
         raises=VerifyError,
-        match="dim expression",
+        match=r"and extent=x \(Var\) is not one",
+    ),
+    ParseErrorCase(
+        id="range-over-a-float-extent",
+        subject=hir_source("for i in range(8.5):", "    y = relu(x)"),
+        raises=VerifyError,
+        match=r"and extent=float is not one",
     ),
 )
 
@@ -1004,19 +1045,25 @@ _SHARD_SUGAR: tuple[ParseErrorCase, ...] = (
         id="unresolved-dynamic-split-axis",
         subject=_unresolved_dynamic_split_axis,
         raises=ValueError,
-        match="bind symbolic dimensions",
+        match=r"split layout dim DimVar\(name='seq_len'.*mesh extent DimVar\(name='other'",
     ),
     ParseErrorCase(
         id="symbolic-mesh-extent",
         subject=_symbolic_mesh_extent,
         raises=ValueError,
-        match="bind symbolic dimensions",
+        match=r"split layout dim 128 and mesh extent DimVar\(name='W'.*at axis position 0",
     ),
     ParseErrorCase(
         id="bool-layout-extent",
         subject=_bool_split_extent_single_axis,
         raises=ValueError,
-        match="shape dimension",
+        match=r"bool True is not one; bool is an int subclass",
+    ),
+    ParseErrorCase(
+        id="float-layout-extent",
+        subject=_float_split_extent_single_axis,
+        raises=ValueError,
+        match=r"layout dim must be a shape dimension \(int / DimVar / dim-op Expr\), got float",
     ),
 )
 
@@ -1103,33 +1150,42 @@ _CONSTRAINTS: tuple[ParseErrorCase, ...] = (
         id="where-with-no-kwargs",
         subject=where_source("    y: where() = tf.add(x, x)\n    return y"),
         raises=VerifyError,
-        match="where|layout|duplicate|binding",
+        match=r"where\(\.\.\.\) cannot be empty",
     ),
     ParseErrorCase(
         id="where-with-an-empty-layout",
         subject=where_source("    y: where(layout=()) = tf.add(x, x)\n    return y"),
         raises=VerifyError,
-        match="where|layout|duplicate|binding",
+        match="layout constraint cannot be empty",
     ),
     ParseErrorCase(
-        id="where-with-two-bindings-on-one-axis",
+        id="where-binding-one-topology-twice",
         subject=where_source(
-            '    y: where(layout=(_, {cta @ B(), cta @ P("sum")})) = tf.add(x, x)\n    return y'
+            '    y: where(layout=((_, 16 @ cta), {cta @ P("sum")})) = tf.add(x, x)\n    return y'
         ),
         raises=VerifyError,
-        match="where|layout|duplicate|binding",
+        match="layout constraint cannot bind one topology more than once",
+    ),
+    ParseErrorCase(
+        id="where-with-two-binding-sets",
+        subject=where_source(
+            '    y: where(layout=((_, 16), {cta @ P("sum")}, {cta @ B()})) = tf.add(x, x)\n'
+            "    return y"
+        ),
+        raises=VerifyError,
+        match="layout constraint accepts one binding set",
     ),
     ParseErrorCase(
         id="where-with-an-unknown-kwarg",
         subject=where_source('    y: where(partial=P("sum")) = tf.add(x, x)\n    return y'),
         raises=VerifyError,
-        match="where|layout|duplicate|binding",
+        match=r"where\(\.\.\.\) has unknown field 'partial'",
     ),
     ParseErrorCase(
         id="where-with-a-non-int-extent",
         subject=where_source("    y: where(layout=(1.5,)) = tf.add(x, x)\n    return y"),
         raises=VerifyError,
-        match="where|layout|duplicate|binding",
+        match="layout dimensions must use `_`, an integer, or a symbolic extent",
     ),
     ParseErrorCase(
         id="where-annotated-twice",
@@ -1139,7 +1195,7 @@ _CONSTRAINTS: tuple[ParseErrorCase, ...] = (
             "    return y"
         ),
         raises=VerifyError,
-        match="where|layout|duplicate|binding",
+        match="duplicate where annotation for Expr 'y'",
     ),
     ParseErrorCase(
         id="where-on-a-subscript-lvalue",
@@ -1166,7 +1222,7 @@ _CONSTRAINTS: tuple[ParseErrorCase, ...] = (
         id="where-layout-extent-name-undefined",
         subject=where_source("    y: where(layout=(_, N @ cta)) = tf.add(x, x)\n    return y"),
         raises=VerifyError,
-        match="undefined name|where layout extent",
+        match=r"where layout extent 'N' could not be resolved: undefined name 'N'",
     ),
     ParseErrorCase(
         id="where-layout-extent-name-is-a-string",
@@ -1185,31 +1241,31 @@ _MMA_SCOPES: tuple[ParseErrorCase, ...] = (
         id="mma-flat-32-lanes",
         subject=_mma_scope(Topology("thread", 32), Layout(shape=(32,), strides=(1,))),
         raises=VerifyError,
-        match="required thread scope",
+        match=r"shape \(32,\) strides \(1,\).*thread-value decomposition",
     ),
     ParseErrorCase(
         id="mma-wrong-lane-order",
         subject=_mma_scope(Topology("thread", 32), Layout(shape=(4, 8), strides=(8, 1))),
         raises=VerifyError,
-        match="required thread scope",
+        match=r"shape \(4, 8\) strides \(8, 1\).*thread-value decomposition",
     ),
     ParseErrorCase(
         id="mma-cta-not-thread",
         subject=_mma_scope(Topology("cta", 32), Layout(shape=(4, 8), strides=(1, 4))),
         raises=VerifyError,
-        match="required thread scope",
+        match="the scope is a cta scope and the atom needs a thread one",
     ),
     ParseErrorCase(
         id="mma-wrong-lane-count",
         subject=_mma_scope(Topology("thread", 64), Layout(shape=(8, 8), strides=(1, 8))),
         raises=VerifyError,
-        match="required thread scope",
+        match=r"shape \(8, 8\) strides \(1, 8\).*64 lanes and the atom needs 32",
     ),
     ParseErrorCase(
         id="mma-inconsistent-mesh",
         subject=_mma_scope(Topology("thread", 64), Layout(shape=(4, 8), strides=(1, 4))),
         raises=VerifyError,
-        match="required thread scope",
+        match=r"thread\(64\) viewed as shape \(4, 8\).*64 lanes and the atom needs 32",
     ),
     ParseErrorCase(
         id="mma-atom-outside-a-mesh-scope",
@@ -1225,24 +1281,31 @@ _SYNC_SCOPES: tuple[ParseErrorCase, ...] = (
         id="sync-argument-is-not-a-mesh",
         subject=_sync_argument_is_not_a_mesh,
         raises=VerifyError,
+        match=r"T.sync expects a Mesh argument \(m or a slice m\[\.\.\.\]\), got Var",
     ),
     ParseErrorCase(
         id="sync-with-no-enclosing-mesh",
         subject=_sync_with_no_enclosing_mesh,
         raises=VerifyError,
-        match="enclosing",
+        match="no enclosing mesh scope",
+    ),
+    ParseErrorCase(
+        id="sync-on-a-mesh-the-scope-does-not-bind",
+        subject=_sync_on_a_mesh_the_scope_does_not_bind,
+        raises=VerifyError,
+        match="no enclosing scope binds that mesh",
     ),
     ParseErrorCase(
         id="sync-on-a-forged-subbox-exceeding-its-parent",
         subject=_sync_on_a_forged_subbox_exceeding_its_parent,
         raises=VerifyError,
-        match="enclosing",
+        match=r"T\.sync\(\(thread\(128\)\)\[1, 64\]\): that sub-box is not a slice",
     ),
     ParseErrorCase(
         id="sync-on-a-forged-topology-mismatch",
         subject=_sync_on_a_forged_topology_mismatch,
         raises=VerifyError,
-        match="enclosing",
+        match=r"T\.sync\(\(warp\(4\)\)\[2, 32\]\): that sub-box is not a slice",
     ),
     ParseErrorCase(
         id="sync-on-a-non-contiguous-slice",
@@ -1254,7 +1317,7 @@ _SYNC_SCOPES: tuple[ParseErrorCase, ...] = (
         id="sync-on-a-cross-warp-unaligned-slice",
         subject=_sync_on_a_cross_warp_unaligned_slice,
         raises=VerifyError,
-        match="warp-aligned",
+        match=r"a cross-warp subset must be warp-aligned",
     ),
     ParseErrorCase(
         id="classify-a-partial-cta-slice",

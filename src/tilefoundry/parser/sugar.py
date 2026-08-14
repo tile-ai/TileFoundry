@@ -295,7 +295,15 @@ def _extract_dim(
         except ValueError:
             raise VerifyError(f"expected shape dimension, got {ast.dump(node)}") from None
     if not _is_shape_dim(val):
-        raise LayoutSugarError(f"layout dim must be a shape dimension, got {val!r}")
+        if isinstance(val, bool):
+            raise LayoutSugarError(
+                f"layout dim must be a shape dimension, and bool {val!r} is not one; bool is "
+                "an int subclass, so it is refused here rather than silently becoming 0 or 1"
+            )
+        raise LayoutSugarError(
+            f"layout dim must be a shape dimension (int / DimVar / dim-op Expr), got "
+            f"{type(val).__name__} {val!r}"
+        )
     return val
 
 

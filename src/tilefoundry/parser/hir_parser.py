@@ -234,6 +234,20 @@ def _parse_layout_constraint(
         raise VerifyError("layout constraint cannot bind one topology more than once")
     return LayoutConstraint(layout=Layout(shape=tuple(shape)), bindings=tuple(bindings))
 
+
+def _dim_operand_str(value: object) -> str:
+    """Name a loop-domain operand the way its author wrote it.
+
+    A parsed operand carries its whole ``TensorType`` in its repr, which buries
+    the one thing the reader needs — which operand it was, and what kind of
+    thing it turned out to be.
+    """
+    name = getattr(value, "name", None)
+    if isinstance(name, str) and name:
+        return f"{name} ({type(value).__name__})"
+    return f"{type(value).__name__}"
+
+
 def _is_pass_body(stmts: list[ast.stmt]) -> bool:
     """A dispatch-prototype body is exactly ``pass``.
 
@@ -426,9 +440,11 @@ class _HirBodyVisitor(BaseExprVisitor):
         if isinstance(node, ast.With):
             return self._visit_with(node, stmts, idx, require_return)
         if isinstance(node, ast.Expr):
-
-
-
+            if isinstance(node.value, (ast.Yield, ast.YieldFrom)):
+                raise VerifyError(
+                    "hir: `yield` is not an HIR statement — a @func body builds one value, "
+                    "so return it instead of yielding it"
+                )
             raise VerifyError("hir: bare expression statement not allowed; use assign or return")
         if isinstance(node, ast.For):
             return self._visit_loop_for(node, stmts, idx, require_return)
@@ -721,10 +737,14 @@ class _HirBodyVisitor(BaseExprVisitor):
                     f"tile() takes 2 arguments (extent, step), got {len(loop_args)}"
                 )
         if not (is_dim_expr(start) and is_dim_expr(extent) and is_dim_expr(step)):
+            offending = ", ".join(
+                f"{label}={_dim_operand_str(value)}"
+                for label, value in (("start", start), ("extent", extent), ("step", step))
+                if not is_dim_expr(value)
+            )
             raise VerifyError(
                 f"{loop_kind}(): start / extent / step must be a dim expression "
-                f"(int / DimVar / dim-op Expr), got start={start!r}, "
-                f"extent={extent!r}, step={step!r}"
+                f"(int / DimVar / dim-op Expr), and {offending} is not one"
             )
 
 
