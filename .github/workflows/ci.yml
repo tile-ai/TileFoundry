@@ -13,6 +13,7 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write
 
 defaults:
   run:
@@ -23,7 +24,6 @@ jobs:
     runs-on: [self-hosted, tilefoundry]
     container: tilefoundry-ci-runner:local
     env:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       UV_CACHE_DIR: /__w/uv-cache
       UV_NO_PROGRESS: "1"
     steps:
@@ -113,11 +113,17 @@ jobs:
           name: coverage-report
           path: test_results/
           if-no-files-found: ignore
-      - name: Upload coverage to Codecov
-        if: always() && env.CODECOV_TOKEN != ''
-        run: |
-          for mode in source installed; do
-            [ -f "test_results/coverage-$mode.xml" ] || continue
-            uvx --from "codecov-cli==11.3.1" codecovcli upload-process \
-              --flag "$mode" --file "test_results/coverage-$mode.xml" --disable-search
-          done
+      - uses: codecov/codecov-action@v5
+        if: always() && !github.event.pull_request.head.repo.fork && hashFiles('test_results/coverage-source.xml') != ''
+        with:
+          use_oidc: true
+          files: test_results/coverage-source.xml
+          flags: source
+          disable_search: true
+      - uses: codecov/codecov-action@v5
+        if: always() && !github.event.pull_request.head.repo.fork && hashFiles('test_results/coverage-installed.xml') != ''
+        with:
+          use_oidc: true
+          files: test_results/coverage-installed.xml
+          flags: installed
+          disable_search: true
