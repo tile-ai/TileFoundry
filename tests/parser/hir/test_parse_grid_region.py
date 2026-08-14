@@ -3,8 +3,9 @@
 ``range`` and ``tile`` share one loop domain ``(start, extent, step)``;
 body Assigns whose LHS is an outer-scope Var get lifted to ``carried_args`` +
 ``yield_values``. The corpus authors a carried-accumulator grid loop and
-evaluates it, so this file keeps the domain forms no model spells out and the
-diagnostics for loop bodies the surface does not support.
+evaluates it, so this file keeps the domain forms no model spells out; the
+diagnostics for loop bodies the surface does not support are rows in
+``error_cases.py``.
 """
 
 from __future__ import annotations
@@ -12,31 +13,16 @@ from __future__ import annotations
 import ast
 from dataclasses import replace
 
-import pytest
-
-from tests._source import import_dsl
 from tilefoundry import func
 from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import DimVar, Tensor
 from tilefoundry.dsl._stub_gen import regen_stubs
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
 from tilefoundry.ir.core import Call, Var
-from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types.storage import StorageKind
 
 _SEQ = DimVar("seq_len", 1, 100)
-
-_PRELUDE = """from tilefoundry import func
-from tilefoundry.dsl.tf import *
-from tilefoundry.dsl import Tensor
-"""
-
-
-def _src(*body: str) -> str:
-    """A one-``@func`` script over ``x``; *body* lines carry their own nesting."""
-    lines = "\n".join(f"    {line}" for line in body)
-    return f'{_PRELUDE}\n@func\ndef f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:\n{lines}\n'
 
 
 @func
@@ -197,17 +183,6 @@ def test_nested_for_builds_nested_grid_region():
     assert [v.name for v in inner.carried_args] == ["o"]
 
 
-def test_single_argument_tile_points_to_range():
-    with pytest.raises(VerifyError, match=r"use range\(extent\)"):
-        import_dsl(_src("for i in tile(8):", "    y = relu(x)"))
-
-
-@pytest.mark.parametrize("loop", ["tile(8, step=2)", "range(stop=8)"])
-def test_grid_loops_reject_keyword_args(loop: str):
-    with pytest.raises(VerifyError, match="positional-only at the IR level"):
-        import_dsl(_src(f"for i in {loop}:", "    y = relu(x)"))
-
-
 def test_generated_tile_stub_requires_window_step(tmp_path):
     stub = ast.parse(regen_stubs(tmp_path)["tf"].read_text())
     tile_def = next(
@@ -215,20 +190,3 @@ def test_generated_tile_stub_requires_window_step(tmp_path):
     )
     assert [arg.arg for arg in tile_def.args.args] == ["extent", "step"]
     assert tile_def.args.defaults == []
-
-
-def test_range_rejects_non_dim_expr():
-
-    with pytest.raises(VerifyError, match="dim expression"):
-        import_dsl(_src("for i in range(x):", "    y = relu(x)"))
-
-
-def test_return_inside_grid_body_rejected():
-    with pytest.raises(VerifyError, match="must not contain `return`"):
-        import_dsl(_src("for i in range(8):", "    return x", "return x"))
-
-
-def test_augassign_in_body_rejected():
-
-    with pytest.raises(VerifyError, match="augmented assignment"):
-        import_dsl(_src("o = relu(x)", "for i in range(8):", "    o += x", "return o"))

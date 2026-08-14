@@ -2,20 +2,17 @@
 
 The DSL surface accepts the string form (`dtype="f32"`, `kind="sum"`); the
 parser normalizes it to the IR-canonical descriptor or enum at the call
-boundary, and an unknown string raises a clear error. Both authoring forms
-print to the same canonical IR
-([parser §2.4](docs/spec/parser.md#24-pyi-stub-regeneration)).
+boundary. Both authoring forms print to the same canonical IR
+([parser §2.4](docs/spec/parser.md#24-pyi-stub-regeneration)). The unknown
+strings that must raise a clear error are rows in ``error_cases.py``.
 """
 
 from __future__ import annotations
 
 import textwrap
 
-import pytest
-
 from tests._source import import_dsl
 from tilefoundry.inspection import as_script
-from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.types import DType
 
 
@@ -79,53 +76,3 @@ def g(x: Tensor[(8,), "f32"]) -> Tensor[(1,), "f32"]:
 """
     )
     assert as_script(import_dsl(_dedent(string_kind))) == as_script(import_dsl(_dedent(enum_kind)))
-
-
-_BAD_CALL_DTYPE = (
-    _HEADER
-    + """
-@func
-def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "bf16"]:
-    return cast(x, dtype="float32")
-"""
-)
-
-_BAD_ANNOTATION_DTYPE = (
-    _HEADER
-    + """
-@func
-def f(x: Tensor[(8,), "float32"]) -> Tensor[(8,), "f32"]:
-    return cast(x, dtype="f32")
-"""
-)
-
-_BAD_REDUCE_KIND = (
-    _HEADER
-    + """
-@func
-def g(x: Tensor[(8,), "f32"]) -> Tensor[(1,), "f32"]:
-    return reduce(x, axes=(0,), keepdim=True, kind="plus")
-"""
-)
-
-
-@pytest.mark.parametrize(
-    ("src", "error_type", "message"),
-    [
-        (_BAD_CALL_DTYPE, VerifyError, r"DType: unknown value 'float32'"),
-        (_BAD_ANNOTATION_DTYPE, ValueError, r"DType: unknown value 'float32'"),
-        (_BAD_REDUCE_KIND, VerifyError, r"ReduceKind: unknown value 'plus'"),
-    ],
-    ids=["call-dtype", "annotation-dtype", "reduce-kind"],
-)
-def test_an_unknown_surface_string_names_the_type_it_failed(
-    src: str, error_type: type[Exception], message: str
-) -> None:
-    """A misspelled string must not fall through as an opaque value.
-
-    A misspelled string must not fall through as an opaque value: the
-    annotation position and the call position both name the type and the value,
-    which is the whole benefit of accepting strings at the surface.
-    """
-    with pytest.raises(error_type, match=message):
-        import_dsl(_dedent(src))

@@ -9,36 +9,13 @@ than the grown cache -- so no model reaches either contract here.
 
 from __future__ import annotations
 
-import pytest
-
+from tests.parser.error_cases import CTX_LEN
 from tilefoundry import func
-from tilefoundry.dsl import DimVar, Tensor, ceildiv, tf
+from tilefoundry.dsl import Tensor, ceildiv, tf
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.ir.core.expr import Call
 from tilefoundry.ir.hir.verify import verify_function
-from tilefoundry.ir.types.dim import DimAdd, DimMul, simplify_dim
-
-CTX_LEN = DimVar("CTX_LEN", 1, 4097)
-
-
-def test_a_bool_is_not_an_int_dim_operand() -> None:
-    """``bool`` is a subclass of ``int`` in Python.
-
-    ``bool`` is a subclass of ``int`` in Python, so both the operator surface
-    and ``simplify_dim`` (which canonicalises raw ints to ``Constant(i64, v)``)
-    must reject it explicitly on either side -- otherwise ``CTX_LEN + True``
-    silently becomes ``CTX_LEN + 1``, and a stray bool reaches a dim ``Call`` as
-    an operand.
-    """
-    with pytest.raises(TypeError):
-        _ = CTX_LEN + True
-    with pytest.raises(TypeError):
-        _ = CTX_LEN + object()
-
-    with pytest.raises(TypeError, match="bool operand"):
-        simplify_dim(DimAdd, (True, CTX_LEN))
-    with pytest.raises(TypeError, match="bool operand"):
-        simplify_dim(DimAdd, (CTX_LEN, False))
+from tilefoundry.ir.types.dim import DimAdd, DimMul
 
 
 @func

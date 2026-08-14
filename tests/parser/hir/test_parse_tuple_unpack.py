@@ -1,29 +1,19 @@
 """Parser ``a, b = call(...)`` — TupleType unpack.
 
 Every decode step returns a tuple, so the corpus evaluates the multi-output
-surface end to end; the cases here are the IR shape one unpack produces, the
-compile-time form that binds numbers instead, and the three ways an unpack cannot
-mean anything.
+surface end to end; the cases here are the IR shape one unpack produces and the
+compile-time form that binds numbers instead. The three ways an unpack cannot
+mean anything are rows in ``error_cases.py``.
 """
 
 from __future__ import annotations
 
-import textwrap
-
-import pytest
-
-from tests._source import import_dsl
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
 from tilefoundry.ir.core import Call, Tuple
-from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TupleType
-
-
-def _dedent(src: str) -> str:
-    return textwrap.dedent(src).strip()
 
 
 @func
@@ -96,43 +86,3 @@ def test_unpacking_compile_time_values_binds_the_values() -> None:
     """
     assert _unpacked_dims.body.target.new_shape == (1, _NV * _KD // _VD, _VD)
     assert _unpacked_dims.body.type.shape == (1, 64, 64)
-
-
-_HEADER = """
-from tilefoundry import func
-from tilefoundry.dsl.tf import *  # noqa: F401, F403
-from tilefoundry.dsl import Tensor
-"""
-
-
-_BAD_RHS = (
-    _HEADER
-    + """
-@func
-def bad_rhs(a: Tensor[(1, 4), "f32"], b: Tensor[(1, 4), "f32"]) -> Tensor[(1, 4), "f32"]:
-    p, q = add(a, b)
-    return p
-"""
-)
-
-_BAD_TARGETS = (
-    _HEADER
-    + """
-@func
-def bad_targets(x: Tensor[(1, 1536), "bf16"]) -> Tensor[(1, 1536), "fp8e4m3"]:
-    {targets} = quant(x)
-    return a
-"""
-)
-
-
-def test_tuple_unpack_errors() -> None:
-    """Non-TupleType RHS / arity mismatch / nested tuple target all raise."""
-    with pytest.raises(VerifyError, match="tuple unpack requires RHS of TupleType"):
-        import_dsl(_dedent(_BAD_RHS))
-
-    with pytest.raises(VerifyError, match="tuple unpack arity mismatch"):
-        import_dsl(_dedent(_BAD_TARGETS.format(targets="a, b, c")))
-
-    with pytest.raises(VerifyError, match="targets must all be plain names"):
-        import_dsl(_dedent(_BAD_TARGETS.format(targets="(a, b), c")))

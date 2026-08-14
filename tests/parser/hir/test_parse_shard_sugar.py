@@ -1,12 +1,12 @@
 """Shard-layout sugar parse tests.
 
-Each scenario is a named ``build_*_func`` / ``build_*_case`` builder carrying a
-docstring that describes the DSL scene; the ``test_*`` below runs it and asserts
-the parsed ``ShardLayout`` or the diagnostic it must raise. Covers inline
-``Split``, the ``{...}`` ``Partial`` value-state set, default ``Broadcast``,
-multi-mesh-axis split, explicit strides, the single-axis ``int @ mesh``
-shorthand, closure/dynamic axis extents, and the printer's fallback when a mesh
-cannot be named.
+Each scenario is a named ``build_*_func`` builder carrying a docstring that
+describes the DSL scene; the ``test_*`` below runs it and asserts the parsed
+``ShardLayout``. Covers inline ``Split``, the ``{...}`` ``Partial`` value-state
+set, default ``Broadcast``, multi-mesh-axis split, explicit strides, the
+single-axis ``int @ mesh`` shorthand, closure/dynamic axis extents, and the
+printer's fallback when a mesh cannot be named. The sugar forms that must be
+refused are rows in ``error_cases.py``.
 """
 
 from __future__ import annotations
@@ -16,11 +16,12 @@ import ast
 import pytest
 
 from tests.fixtures.placed.mma_tile import MatmulModule
+from tests.parser.error_cases import mesh_dims_reshard_func
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- binds bare op names (reshard, ...)
 from tilefoundry.inspection import as_script
-from tilefoundry.ir.core import Call, VerifyError
+from tilefoundry.ir.core import Call
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.arange import Arange
@@ -46,9 +47,6 @@ _M_GPU = Mesh(
 _M_MULTI = Mesh((Topology("thread", 6 * 32),), Layout((6, 32), (32, 1)), names=("w", "t"))
 _M_STRIDED = Mesh((Topology("thread", 4 * 32),), Layout((4, 32), (32, 1)), names=("y", "t"))
 _M_CTA = Mesh((Topology("cta", 128),), Layout((128,), (1,)), names=("cta",))
-_M_STATE = Mesh(
-    (Topology("thread", 4 * 2 * 16),), Layout((4, 2, 16), (32, 16, 1)), names=("l", "g", "t")
-)
 
 
 def build_split_inline_and_default_broadcast_func():
@@ -195,74 +193,6 @@ def test_annotation_sugar_parses_to_the_hand_written_layout(
     assert parsed.layout == ShardLayout(layout=layout, attrs=attrs, mesh=mesh)
 
 
-def build_multi_axis_split_not_divisible_func():
-    """A dim must be divisible by the product of the mesh extents; ``100 @`` is rejected.
-
-    A dim must be divisible by the product of the mesh extents; ``100 @
-    (w, t)`` (product 192) is rejected.
-    """
-
-    @func
-    def _bad(
-        a: Tensor[(1, 100), "f32", (1, 100 @ (_M_MULTI.w, _M_MULTI.t)), "smem"],
-    ) -> Tensor[(1, 100), "f32"]:
-        return a
-
-    return _bad
-
-
-def build_value_state_not_final_func():
-    """The ``{...}`` value-state set is valid only as the last outer item.
-
-    The ``{...}`` value-state set is valid only as the last outer item; a
-    stride tuple after it is rejected.
-    """
-
-    @func
-    def _bad(
-        a: Tensor[
-            (4, 64),
-            "f32",
-            ((4 @ _M_STATE.l, 64), {_M_STATE.t @ P("sum")}, (64, 1)),
-            "smem",
-        ],
-    ) -> Tensor[(4, 64), "f32"]:
-        return a
-
-    return _bad
-
-
-def build_value_state_bare_p_func():
-    """``P(...)`` in the value-state set requires its reduction argument.
-
-    ``P(...)`` in the value-state set requires its reduction argument; bare
-    ``P()`` is rejected (the surface is ``mesh.axis @ P("reduction")``).
-    """
-
-    @func
-    def _bad(
-        a: Tensor[(4, 64), "f32", ((4 @ _M_STATE.l, 64), {_M_STATE.t @ P()}), "smem"],
-    ) -> Tensor[(4, 64), "f32"]:
-        return a
-
-    return _bad
-
-
-@pytest.mark.parametrize(
-    ("build_func", "match"),
-    [
-        (build_multi_axis_split_not_divisible_func, "not divisible"),
-        (build_value_state_not_final_func, "last outer item"),
-        (build_value_state_bare_p_func, "reduction argument"),
-    ],
-    ids=["not-divisible", "value-state-not-final", "bare-p"],
-)
-def test_invalid_annotation_sugar_raises(build_func, match) -> None:
-
-    with pytest.raises(ValueError, match=match):
-        build_func()
-
-
 def test_printer_falls_back_to_verbose_when_mesh_has_no_names() -> None:
     """A mesh without ``names=`` cannot use ``@`` sugar.
 
@@ -298,17 +228,7 @@ def test_mesh_axis_in_expr_is_a_rank_zero_position_coordinate() -> None:
     assert worker_shard.target.layout.attrs == (Split(axis=0),)
 
 
-def test_mesh_coordinate_cannot_slice_an_already_placed_tensor() -> None:
-    with pytest.raises(VerifyError, match="data-dependent mesh ownership"):
-        @func(topologies=(Topology("cta", 8),))
-        def _bad(x: Tensor[(8,), "i64"]) -> Tensor[(4,), "i64"]:
-            with Mesh(("cta",), layout=(8,), names=("w",)) as cta:
-                placed = reshard(x, (8 @ cta.w,), "rmem")  # noqa: F821
-                return placed[cta.w : cta.w + 4]
-
-
 _S_DYN = DimVar("seq_len", 1, 4)
-_MESH_DIM_W = DimVar("W", 1, 8)
 
 
 def build_dynamic_bare_and_closure_split_func():
@@ -355,34 +275,6 @@ def test_reshard_sugar_accepts_matching_dynamic_split_axis() -> None:
     assert actual.attrs == (Split(1),)
 
 
-def test_reshard_sugar_rejects_unresolved_dynamic_split_axis() -> None:
-    """Different symbolic extents cannot establish divisibility before binding."""
-    other = DimVar("other", 1, 4)
-    cta = Mesh((Topology("cta", other),), Layout((other,), (1,)), names=("cta",))
-    node = ast.parse("(1, S @ cta, 32, 128)", mode="eval").body
-    with pytest.raises(ValueError, match="bind symbolic dimensions"):
-        parse_shard_layout_sugar(
-            node, lambda n: cta if n == "cta" else None, closure={"S": _S_DYN}
-        )
-
-
-def build_mesh_dims_reshard_func(warps, lanes):
-    """Build mesh dims reshard func.
-
-    A mesh-shape sugar (``layout=(warps, lanes)``) whose dims may be integer
-    literals or closure Names — a closure int must resolve like the literal, and a
-    dynamic ``DimVar`` in that static-extent position must be rejected.
-    """
-
-    @func(topologies=(Topology("thread", 128),))
-    def _f(x: Tensor[(1, 128), "bf16"]) -> Tensor[(1, 128), "bf16"]:
-        with Mesh(("thread",), layout=(warps, lanes), names=("w", "t")) as m:
-            xr = reshard(x, (1, 128 @ (m.w, m.t)), "rmem")  # noqa: F821
-            return reshard(xr, (1, 128), "gmem")  # noqa: F821
-
-    return _f
-
-
 def build_literal_reshard_func():
     """All-literal reference form.
 
@@ -406,32 +298,4 @@ def test_closure_int_mesh_dims_resolve_like_literal() -> None:
     form — the parser must resolve the ``ast.Name`` rather than reject it, which
     is the positive counterpart of the static-extent diagnostic below.
     """
-    assert as_script(build_mesh_dims_reshard_func(4, 32)) == as_script(build_literal_reshard_func())
-
-
-def build_bool_split_extent_single_axis_func():
-    """A ``bool`` split extent in the single-axis form is rejected with a static-int diagnostic.
-
-    A ``bool`` split extent in the single-axis form (``True @ m.w``) is
-    rejected with a static-int diagnostic.
-    """
-
-    @func(topologies=(Topology("thread", 128),))
-    def _f(x: Tensor[(1, 128), "bf16"]) -> Tensor[(1, 128), "bf16"]:
-        with Mesh(("thread",), layout=(4, 32), names=("w", "t")) as m:
-            xr = reshard(x, (1, True @ m.w), "rmem")  # noqa: F821
-            return reshard(xr, (1, 128), "gmem")  # noqa: F821
-
-    return _f
-
-
-def test_symbolic_mesh_extent_reaches_canonicalization() -> None:
-    """A symbolic mesh extent is valid even when a later split is undecidable."""
-    with pytest.raises(ValueError, match="bind symbolic dimensions"):
-        build_mesh_dims_reshard_func(_MESH_DIM_W, 32)
-
-
-def test_bool_layout_extent_is_not_a_shape_dimension() -> None:
-    """A bool is never accepted as a layout ``ShapeDim``."""
-    with pytest.raises(ValueError, match="shape dimension"):
-        build_bool_split_extent_single_axis_func()
+    assert as_script(mesh_dims_reshard_func(4, 32)) == as_script(build_literal_reshard_func())

@@ -13,11 +13,10 @@ from dataclasses import dataclass
 
 import pytest
 
-from tests._source import import_dsl
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
-from tilefoundry.ir.core import Call, Constant, Tuple, VerifyError
+from tilefoundry.ir.core import Call, Constant, Tuple
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.types import DType
 
@@ -45,26 +44,6 @@ def test_parse_insert_slice_offset_tuple() -> None:
     assert len(offsets.elements) == 3
     for field in offsets.type.fields:
         assert field.shape == () and field.dtype in (DType.i32, DType.i64)
-
-
-def test_tuple_input_rejected_for_non_offsets_param() -> None:
-    """Containment: the tuple-literal input path is open ONLY for a param that declares it.
-
-    Containment: the tuple-literal input path is open ONLY for a param that
-    declares it (``insert_slice.offsets``). A tuple literal bound to any other
-    op's plain tensor input keeps the pre-existing rejection.
-    """
-    bad = """
-from tilefoundry import func
-from tilefoundry.dsl.tf import *
-from tilefoundry.dsl import Tensor
-
-@func
-def f(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
-    return relu((x, x))
-"""
-    with pytest.raises(VerifyError, match="Tuple"):
-        import_dsl(bad)
 
 
 @dataclass(frozen=True)

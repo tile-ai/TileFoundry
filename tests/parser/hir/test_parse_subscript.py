@@ -3,48 +3,25 @@
 ``expr[...]`` dispatches on the subject: tuples select a field, tensors select a
 region, and compile-time lists select the expression they hold. Integer indexing
 drops its axis while a slice keeps it. Tile windows are verified through their
-runtime and analysis behavior rather than parser node shape.
+runtime and analysis behavior rather than parser node shape. The subscripts and
+window moves that must be refused are rows in ``error_cases.py``.
 """
 
 from __future__ import annotations
 
-import pytest
 import torch
 
 from tests._source import import_dsl
+from tests.parser.error_cases import HIR_PRELUDE as _PRELUDE
+from tests.parser.error_cases import hir_source as _src
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare bindings used by @func bodies
-from tilefoundry.evaluator import EvalError, evaluate
+from tilefoundry.evaluator import evaluate
 from tilefoundry.inspection import as_script
-from tilefoundry.ir.core import Call, VerifyError
+from tilefoundry.ir.core import Call
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
-
-_PRELUDE = """from tilefoundry import func
-from tilefoundry.dsl.tf import *
-from tilefoundry.dsl import Tensor
-"""
-
-
-def _src(signature: str, *body: str) -> str:
-    """A one-``@func`` script.
-
-    A one-``@func`` script: *signature* closes the param list and states the
-    return annotation, *body* lines carry their own nesting.
-    """
-    lines = "\n".join(f"    {line}" for line in body)
-    return f"{_PRELUDE}\n@func\ndef f({signature}:\n{lines}\n"
-
-
-def test_tile_with_too_many_args_rejected():
-    bad = _src(
-        'x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]',
-        "for i in tile(1, 2, 3):",
-        "    y = relu(x)",
-    )
-    with pytest.raises(VerifyError, match="tile.. takes 2 arguments"):
-        import_dsl(bad)
 
 
 @func
@@ -125,45 +102,19 @@ def test_runtime_start_slice_keeps_sharding_without_an_offset():
     assert fn.body.type.layout.layout.shape == (2, 2, 2)
 
 
-def test_runtime_slice_stride_is_still_compile_time():
-    bad = _src(
-        'x: Tensor[(8, 4), "f32"], step: Tensor[(), "i64"]'
-        ') -> Tensor[(4, 4), "f32"]',
-        "return x[0:8:step, :]",
-    )
-    with pytest.raises(
-        VerifyError,
-        match=r"tensor subscript axis 0: slice stride must be a compile-time dimension",
-    ):
-        import_dsl(bad)
-
-
 def test_range_scalar_can_drive_a_manual_slice_window():
     fn = import_dsl(_src(
-        'x: Tensor[(8, 4), "f32"]) -> Tensor[(2, 4), "f32"]',
         "out = x[0:2, :]",
         "for i in range(0, 8, 2):",
         "    out = x[i:i + 2, :]",
         "return out",
+        signature='x: Tensor[(8, 4), "f32"]) -> Tensor[(2, 4), "f32"]',
     ))
 
     x = torch.arange(32, dtype=torch.float32).reshape(8, 4)
     torch.testing.assert_close(
         evaluate(fn, x, device="cpu"), x[6:8, :]
     )
-
-
-def test_runtime_start_slice_rejects_an_unrelated_stop():
-    bad = _src(
-        'x: Tensor[(8, 4), "f32"], start: Tensor[(), "i64"]'
-        ') -> Tensor[(4, 4), "f32"]',
-        "return x[start:8, :]",
-    )
-    with pytest.raises(
-        VerifyError,
-        match=r"tensor subscript axis 0: a run-time start needs the stop endpoint",
-    ):
-        import_dsl(bad)
 
 
 def test_a_compile_time_list_is_indexed_where_it_is_written():
@@ -192,24 +143,6 @@ def test_a_compile_time_list_is_indexed_where_it_is_written():
         evaluate(import_dsl(literal), x, device="cpu"),
         x[:, :, 0:1] + x[:, :, 7:8],
     )
-
-
-@func
-def _tail_window(x: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
-    out = add(seed, seed)
-    for row in tile(10, 4):
-        out = add(x[row, :], seed)
-    return out
-
-
-def test_non_divisible_tile_window_evaluation_fails_closed():
-    with pytest.raises(EvalError, match="Slice window exceeds axis 0"):
-        evaluate(
-            _tail_window,
-            torch.ones((10, 4)),
-            torch.ones((4, 4)),
-            device="cpu",
-        )
 
 
 @func
@@ -278,12 +211,14 @@ def test_a_run_time_endpoint_and_a_moved_window_share_one_subscript():
     pairs with a compile-time window, and a move keeps the window it was given.
     """
     mixed = import_dsl(_src(
-        'x: Tensor[(8, 8), "f32"], e: Tensor[(), "i64"], '
-        f'seed: Tensor[(2, {_STEP}), "f32"]) -> Tensor[(2, {_STEP}), "f32"]',
         "out = add(seed, seed)",
         f"for n in tile({_HALF}, {_STEP}):",
         f"    out = add(out, x[e:e + 2, n + {_HALF}])",
         "return out",
+        signature=(
+            'x: Tensor[(8, 8), "f32"], e: Tensor[(), "i64"], '
+            f'seed: Tensor[(2, {_STEP}), "f32"]) -> Tensor[(2, {_STEP}), "f32"]'
+        ),
     ))
 
     x = torch.arange(64, dtype=torch.float32).reshape(8, 8)
@@ -308,90 +243,3 @@ def test_a_moved_window_round_trips_as_the_move_it_was_written_as():
         evaluate(import_dsl(script), gu, seed, device="cpu"),
         _fused_reference(gu, seed),
     )
-
-
-def test_a_move_a_window_cannot_make_is_rejected():
-    """Each way a move stops describing a window of the same length on the axis.
-
-    Each way a move stops describing a window of the same length inside the
-    axis: an offset that is not compile-time, a subtraction that reverses the
-    window instead of moving it, a move that walks the last window off the end,
-    and a move that starts the first window before the front. The extent, the
-    window length and the offset are all compile-time, so the last two are
-    answered here rather than at evaluate time.
-    """
-    runtime_offset = _src(
-        'x: Tensor[(1, 8), "f32"], k: Tensor[(), "i64"]) -> Tensor[(1, 2), "f32"]',
-        "o = relu(x[:, 0:2])",
-        "for n in tile(4, 2):",
-        "    o = relu(x[:, n + k])",
-        "return o",
-    )
-    with pytest.raises(VerifyError, match="moves by a compile-time integer"):
-        import_dsl(runtime_offset)
-
-    reversed_window = _src(
-        'x: Tensor[(1, 8), "f32"]) -> Tensor[(1, 2), "f32"]',
-        "o = relu(x[:, 0:2])",
-        "for n in tile(4, 2):",
-        "    o = relu(x[:, 4 - n])",
-        "return o",
-    )
-    with pytest.raises(VerifyError, match="reverses the window"):
-        import_dsl(reversed_window)
-
-    off_the_end = _src(
-        'x: Tensor[(1, 8), "f32"]) -> Tensor[(1, 2), "f32"]',
-        "o = relu(x[:, 0:2])",
-        "for n in tile(4, 2):",
-        "    o = relu(x[:, n + 5])",
-        "return o",
-    )
-    with pytest.raises(VerifyError, match=r"reads \[7, 9\).*axis is 8 long"):
-        import_dsl(off_the_end)
-
-    before_the_front = _src(
-        'x: Tensor[(1, 8), "f32"]) -> Tensor[(1, 2), "f32"]',
-        "o = relu(x[:, 0:2])",
-        "for n in tile(4, 2):",
-        "    o = relu(x[:, n - 2])",
-        "return o",
-    )
-    with pytest.raises(VerifyError, match="begin before the axis"):
-        import_dsl(before_the_front)
-
-
-def test_unsupported_subscripts_are_rejected():
-    """Two shapes of illegal indexer, each named by its own diagnostic.
-
-    Two shapes of illegal indexer, each named by its own diagnostic: a subscript
-    whose rank does not match the tensor's, and a runtime value as a tuple index
-    (the field must be known at parse time to give the result a type).
-    """
-    rank_mismatch = _src(
-        'x: Tensor[(1, 2048), "f32"]) -> Tensor[(1, 2048), "f32"]',
-        "o = relu(x)",
-        "for ok in tile(2048, 512):",
-        "    o = relu(x[ok])",
-        "return o",
-    )
-    with pytest.raises(VerifyError, match="rank 1 != tensor rank 2"):
-        import_dsl(rank_mismatch)
-
-    runtime_tuple_index = _src(
-        'x: Tensor[(1, 1536), "bf16"], i: Tensor[(), "i64"]) -> Tensor[(1, 1536), "fp8e4m3"]',
-        "out = quant(x)",
-        "return out[i]",
-    )
-    with pytest.raises(VerifyError, match="integer constant index"):
-        import_dsl(runtime_tuple_index)
-
-    scaled_window = _src(
-        'x: Tensor[(1, 8), "f32"]) -> Tensor[(1, 2), "f32"]',
-        "o = relu(x[:, 0:2])",
-        "for n in tile(4, 2):",
-        "    o = relu(x[:, n * 2])",
-        "return o",
-    )
-    with pytest.raises(VerifyError, match="unsupported indexer"):
-        import_dsl(scaled_window)
