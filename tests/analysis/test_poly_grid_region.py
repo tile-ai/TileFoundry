@@ -12,6 +12,8 @@ from __future__ import annotations
 import isl
 import pytest
 
+from tests.fixtures.shapes.moved_tile_window_add import moved_tile_window_add
+from tests.fixtures.shapes.tile_window_add import tile_window_add
 from tilefoundry import func
 from tilefoundry.analysis import extract
 from tilefoundry.analysis.poly import ExtractError
@@ -62,32 +64,12 @@ def data_index_select(
 
 
 @func
-def full_windows(
-    x: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]
-) -> Tensor[(4, 4), "f32"]:
-    o = add(seed, seed)
-    for i in tile(10, 4):
-        o = add(x[i, :], seed)
-    return o
-
-
-@func
 def dynamic_full_windows(
     x: Tensor[(SEQ, 4), "f32"], seed: Tensor[(4, 4), "f32"]
 ) -> Tensor[(4, 4), "f32"]:
     o = add(seed, seed)
     for i in tile(SEQ, 4):
         o = add(x[i, :], seed)
-    return o
-
-
-@func
-def moved_windows(
-    x: Tensor[(12, 4), "f32"], seed: Tensor[(3, 4), "f32"]
-) -> Tensor[(3, 4), "f32"]:
-    o = add(seed, seed)
-    for i in tile(6, 3):
-        o = add(x[i + 6, :], seed)
     return o
 
 
@@ -227,7 +209,7 @@ def test_dynamic_extent_becomes_an_isl_parameter():
 
 
 def test_windowed_loop_analyzes_only_full_tiles_and_offsets_its_read():
-    tg = extract(full_windows)
+    tg = extract(tile_window_add)
     domain = _domains(tg)["Binary1"]
 
     assert domain.is_equal(
@@ -252,7 +234,7 @@ def test_a_moved_window_carries_its_offset_into_the_access_map():
     by that offset, so the offset belongs in the access map rather than in a
     separate statement -- the move is an address, not a computation.
     """
-    tg = extract(moved_windows)
+    tg = extract(moved_tile_window_add)
     domain = _domains(tg)["Binary1"]
 
     assert domain.is_equal(

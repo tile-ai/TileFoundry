@@ -14,6 +14,8 @@ from __future__ import annotations
 import pytest
 import torch
 
+from tests.fixtures.shapes.fused_scaled_parent import FusedScaledParent
+from tests.fixtures.shapes.scaled_child import ScaledChild
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, Tensor, tf
 from tilefoundry.target import CudaTarget
@@ -38,25 +40,9 @@ class _Weights:
         )
 
 
-@module(entry="run")
-class _Scaled:
-    @func
-    def run(x: Tensor[(4,), "f32"], w: ConstTensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return tf.mul(x, w)
-
-
-@module(entry="fused", target=CudaTarget("nvidia.h200_sxm"))
-class _Fused:
-    scaled = _Scaled
-
-    @func
-    def fused(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return scaled(x)  # noqa: F821
-
-
 def test_reading_a_resource_without_a_child_weight_is_refused() -> None:
     with pytest.raises(KeyError, match="missing declared weight 'w'"):
-        _Fused.load(_Weights({}))
+        FusedScaledParent.load(_Weights({}))
 
 
 def test_a_reached_child_that_cannot_cover_its_constants_is_named() -> None:
@@ -65,7 +51,7 @@ def test_a_reached_child_that_cannot_cover_its_constants_is_named() -> None:
     ``prepare`` builds one as it stages, so the guard is not reachable only
     through the loader that already refuses a resource with the weight absent.
     """
-    reading = _Fused.load(_Weights({"scaled.w": torch.ones(4)}))
+    reading = FusedScaledParent.load(_Weights({"scaled.w": torch.ones(4)}))
     stripped = type(reading)(
         module=reading.module,
         constants=reading.constants,
@@ -82,8 +68,8 @@ def test_a_reached_child_that_cannot_cover_its_constants_is_named() -> None:
 def test_an_attached_child_no_call_reaches_has_no_say_in_placement() -> None:
     @module(entry="fused", target=CudaTarget("nvidia.h200_sxm"))
     class _WithSpare:
-        scaled = _Scaled
-        spare = _Scaled
+        scaled = ScaledChild
+        spare = ScaledChild
 
         @func
         def fused(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
@@ -98,7 +84,7 @@ def test_an_attached_child_no_call_reaches_has_no_say_in_placement() -> None:
 
 def test_a_child_weight_elsewhere_is_refused_before_anything_runs() -> None:
     elsewhere = torch.ones(4, device="meta")
-    reading = _Fused.load(_Weights({"scaled.w": elsewhere}))
+    reading = FusedScaledParent.load(_Weights({"scaled.w": elsewhere}))
 
     with pytest.raises(ValueError, match="more than one device"):
         reading.fused(torch.ones(4))
@@ -108,7 +94,7 @@ def test_a_child_weight_elsewhere_is_refused_before_anything_runs() -> None:
 def test_a_converter_may_call_a_child_staged_before_it(tmp_path) -> None:
     @module(entry="run", target=CudaTarget("nvidia.h200_sxm"))
     class _Converted:
-        scaled = _Scaled
+        scaled = ScaledChild
 
         @func
         def run(x: Tensor[(4,), "f32"], w: ConstTensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
@@ -170,7 +156,7 @@ def test_a_child_only_a_converter_reaches_has_no_say_at_run_time() -> None:
 
     @module(entry="run", target=CudaTarget("nvidia.h200_sxm"))
     class _ConverterOnly:
-        scaled = _Scaled
+        scaled = ScaledChild
 
         @func
         def run(x: Tensor[(4,), "f32"], w: ConstTensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:

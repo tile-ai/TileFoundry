@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tests.parser.error_cases import CTX_LEN, Callee, Weighted
+from tests.fixtures.logical.hir_composition import Expert
+from tests.parser.error_cases import CTX_LEN, Callee
 from tilefoundry import func, module, prim_func
 from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, T, Tensor, ceildiv, tf
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op names used by the bodies
@@ -409,7 +410,7 @@ class HirModule:
     leaf = Callee
     first = Callee
     second = Callee
-    mlp = Weighted
+    mlp = Expert
     deep = Deep
     variant_leaf = Scaled
 

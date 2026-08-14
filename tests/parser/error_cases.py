@@ -21,6 +21,8 @@ import torch
 
 import tilefoundry.codegen.cuda  # noqa: F401 — trigger emitter autodiscovery
 from tests._source import import_dsl
+from tests.fixtures.logical.hir_composition import Expert
+from tests.fixtures.shapes.tile_window_add import tile_window_add
 from tilefoundry import func, module, prim_func
 from tilefoundry.codegen.cuda.context import CodegenContext
 from tilefoundry.dsl import ConstTensor, DimVar, T, Tensor, tf
@@ -136,15 +138,6 @@ class PrimEntry:
     def device(x: Tensor[(8,), "f32"]) -> None:  # noqa: ARG001
         with Mesh((Topology("thread", 8),), Layout(shape=(8,), strides=(1,))) as m:
             T.sync(m)
-
-
-@module(entry="run")
-class Weighted:
-    """A child Module taking one activation and one declared constant."""
-
-    @func
-    def run(x: Tensor[(4, 8), "f32"], w: ConstTensor[(8, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-        return tf.matmul(x, w)
 
 
 def _arg_type_mismatch() -> None:
@@ -288,7 +281,7 @@ def _direct_call_of_the_wrong_arity() -> None:
 def _child_call_of_the_wrong_width() -> None:
     @module(entry="fused", target=CudaTarget("nvidia.h200_sxm"))
     class _TooMany:
-        mlp = Weighted
+        mlp = Expert
 
         @func
         def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
@@ -298,16 +291,8 @@ def _child_call_of_the_wrong_width() -> None:
 CTX_LEN = DimVar("CTX_LEN", 1, 4097)
 
 
-@func
-def _tail_window(x: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
-    out = add(seed, seed)  # noqa: F405
-    for row in tile(10, 4):  # noqa: F405
-        out = add(x[row, :], seed)  # noqa: F405
-    return out
-
-
 def _evaluate_a_non_divisible_tile_window() -> None:
-    evaluate(_tail_window, torch.ones((10, 4)), torch.ones((4, 4)), device="cpu")
+    evaluate(tile_window_add, torch.ones((10, 4)), torch.ones((4, 4)), device="cpu")
 
 
 _M_MULTI = Mesh((Topology("thread", 6 * 32),), Layout((6, 32), (32, 1)), names=("w", "t"))

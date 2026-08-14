@@ -24,7 +24,9 @@ from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.logical.gqa_static import static_online_attend
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.rmsnorm import RmsnormModule
-from tilefoundry import func, module
+from tests.fixtures.shapes.gemm_rms_norm import gemm_rms_norm
+from tests.fixtures.shapes.paired_scaled_parent import PairedScaledParent
+from tilefoundry import func
 from tilefoundry.analysis import (
     AnalysisError,
     OccurrenceProvenance,
@@ -35,7 +37,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.preflight import validate_authored
 from tilefoundry.analysis.walk import postorder, values_of
-from tilefoundry.dsl import ConstTensor, Tensor
+from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamically
 from tilefoundry.inspection.analysis_report import render_analysis
 from tilefoundry.inspection.values import (
@@ -212,24 +214,7 @@ def test_check_program_reuses_promoted_child_resources_and_enforces_its_budget()
 
 
 def test_check_program_keeps_resources_of_two_attachments_distinct() -> None:
-    @module(entry="run")
-    class Weighted:
-        @func
-        def run(
-            x: Tensor[(4,), "f32"], w: ConstTensor[(4,), "f32"]
-        ) -> Tensor[(4,), "f32"]:
-            return mul(x, w)  # noqa: F405
-
-    @module(entry="run", target=CudaTarget("nvidia.h200_sxm"))
-    class Paired:
-        left = Weighted
-        right = Weighted
-
-        @func
-        def run(w: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            return add(left(w), right(w))  # noqa: F405, F821
-
-    expanded = check_program(Paired, Paired.entry_function())
+    expanded = check_program(PairedScaledParent, PairedScaledParent.entry_function())
     resources = {param.name: param for param in expanded.params if param.is_const}
     calls = [expr for expr in postorder(expanded.body) if isinstance(expr, Call)]
 
@@ -299,17 +284,6 @@ def test_only_unmaterialized_loop_indices_get_the_singleton_reshape_exemption() 
 
 
 @func
-def gemm_rmsnorm(
-    x: Tensor[(2, 4), "f32"],
-    w: Tensor[(4, 2), "f32"],
-    weight: Tensor[(2,), "f32"],
-) -> Tensor[(2, 2), "f32"]:
-    h = matmul(x, w)  # noqa: F405
-    y = rms_norm(h, weight)  # noqa: F405
-    return y
-
-
-@func
 def gqa_expand(x: Tensor[(B, S, H, D), "f32"]) -> Tensor[(B, S, H * REPEATS, D), "f32"]:
     y = repeat_interleave(x, repeats=REPEATS, axis=2)  # noqa: F405
     return y
@@ -338,7 +312,7 @@ def test_the_dependences_are_exactly_what_the_access_relations_imply() -> None:
     `is_subset`: a relation that invented a third dependence would order work
     that need not be ordered, and only an exact comparison says so.
     """
-    tg = extract(gemm_rmsnorm)
+    tg = extract(gemm_rms_norm)
     assert isinstance(tg, TileGraph)
     assert {u.name: type(u.op.target).__name__ for u in tg.units} == {
         "MM": "MatMul",
@@ -359,7 +333,7 @@ def test_only_an_accumulated_dimension_is_serial() -> None:
     cannot show, and the half a scheduler gets wrong by assuming that reducing
     and being serial are the same property.
     """
-    tg = extract(gemm_rmsnorm)
+    tg = extract(gemm_rms_norm)
 
     assert tg.parallel_dims["MM"] == (True, True, False)
     assert tg.parallel_dims["RN"] == (True,)

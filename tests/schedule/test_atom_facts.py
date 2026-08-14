@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.fixtures.shapes.gemm_rms_norm import gemm_rms_norm
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- matmul/rms_norm resolved dynamically
@@ -50,17 +51,6 @@ def odd_shape_bf16_gemm(
 ) -> Tensor[(15, 64), "bf16"]:
     h = matmul(x, w)
     return h
-
-
-@func
-def gemm_rmsnorm(
-    x: Tensor[(64, 128), "f32"],
-    w: Tensor[(128, 64), "f32"],
-    weight: Tensor[(64,), "f32"],
-) -> Tensor[(64, 64), "f32"]:
-    h = matmul(x, w)
-    y = rms_norm(h, weight)
-    return y
 
 
 def test_bf16_gemm_lists_the_sm80_atom_with_real_numbers():
@@ -119,11 +109,11 @@ def test_non_matmul_op_raises():
     """V1 supports a MatMul Call only.
 
     V1 supports a MatMul Call only; any other op (here RMSNorm, from
-    ``gemm_rmsnorm``'s body) raises a clear ``NotImplementedError`` rather
+    ``gemm_rms_norm``'s body) raises a clear ``NotImplementedError`` rather
     than silently returning ``[]``.
     """
     with pytest.raises(NotImplementedError):
-        candidate_atoms(gemm_rmsnorm.body)
+        candidate_atoms(gemm_rms_norm.body)
 
 
 def test_non_cuda_target_raises():

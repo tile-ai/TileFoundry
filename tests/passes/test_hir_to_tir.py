@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.fixtures.shapes.moved_tile_window_add import moved_tile_window_add
+from tests.fixtures.shapes.tile_window_add import tile_window_add
 from tilefoundry.dsl import (
     Mesh,
     ReduceKind,
@@ -260,15 +262,8 @@ def test_a_moved_window_lowers_to_the_moved_address() -> None:
     The offset reaches the coordinate as arithmetic over the induction variable,
     so nothing is materialized to hold it.
     """
-
-    @func
-    def f(x: Tensor[(12, 4), "f32"], seed: Tensor[(3, 4), "f32"]):
-        out = tf.add(seed, seed)
-        for row in tile(6, 3):
-            out = tf.add(x[row + 6, :], seed)
-        return out
-
-    pf = HirToTirPass().run(Module(name="t", functions=(f,), entry=f.name)).lookup("f")
+    f = moved_tile_window_add
+    pf = HirToTirPass().run(Module(name="t", functions=(f,), entry=f.name)).lookup(f.name)
     coordinates = []
 
     def walk(stmt):
@@ -315,13 +310,7 @@ def test_a_computed_window_coordinate_fails_closed() -> None:
 
 
 def test_non_divisible_tile_window_lowering_fails_closed() -> None:
-    @func
-    def f(x: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
-        out = tf.add(seed, seed)
-        for row in tile(10, 4):
-            out = tf.add(x[row, :], seed)
-        return out
-
+    f = tile_window_add
     with pytest.raises(NotImplementedError, match="requires handwritten tail lowering"):
         HirToTirPass().run(Module(name="t", functions=(f,), entry=f.name))
 

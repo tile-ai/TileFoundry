@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.fixtures.logical.hir_composition import REFERENCE_PROGRAMS
+from tests.fixtures.logical.hir_composition import REFERENCE_PROGRAMS, Expert
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tilefoundry import func, module
 from tilefoundry.analysis.api import analyze
@@ -29,13 +29,6 @@ from tilefoundry.target import CudaTarget
 
 _H200 = "nvidia.h200_sxm"
 _CTA = (Topology("cta", 132),)
-
-
-@module(entry="run")
-class _Matmul:
-    @func
-    def run(x: Tensor[(4, 8), "f32"], w: ConstTensor[(8, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-        return tf.matmul(x, w)
 
 
 def _matmul_records(result) -> tuple[ComputeCostMetadata, ...]:
@@ -69,7 +62,7 @@ def _traffic(records) -> dict[str, int]:
 def test_a_repeated_call_site_counts_its_work_again() -> None:
     @module(entry="once", target=CudaTarget(_H200), topologies=_CTA)
     class _Once:
-        mm = _Matmul
+        mm = Expert
 
         @func
         def once(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
@@ -77,7 +70,7 @@ def test_a_repeated_call_site_counts_its_work_again() -> None:
 
     @module(entry="twice", target=CudaTarget(_H200), topologies=_CTA)
     class _Twice:
-        mm = _Matmul
+        mm = Expert
 
         @func
         def twice(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
@@ -97,7 +90,7 @@ def test_a_repeated_call_site_counts_its_work_again() -> None:
 def test_a_child_call_a_loop_varies_is_counted_once_per_trip() -> None:
     @module(entry="looped", target=CudaTarget(_H200), topologies=_CTA)
     class _Looped:
-        mm = _Matmul
+        mm = Expert
 
         @func
         def looped(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
@@ -108,7 +101,7 @@ def test_a_child_call_a_loop_varies_is_counted_once_per_trip() -> None:
 
     @module(entry="once", target=CudaTarget(_H200), topologies=_CTA)
     class _Once:
-        mm = _Matmul
+        mm = Expert
 
         @func
         def once(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
@@ -141,7 +134,7 @@ def test_the_weight_traffic_of_a_fused_root_is_what_its_callees_read() -> None:
 
     @module(entry="fused", target=CudaTarget(_H200), topologies=_CTA)
     class _Fused:
-        mm = _Matmul
+        mm = Expert
 
         @func
         def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:

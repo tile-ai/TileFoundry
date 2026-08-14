@@ -15,6 +15,7 @@ import torch
 from safetensors.torch import save_file
 
 from tests.fixtures.placed import gqa_decode
+from tests.fixtures.shapes.composed_leaf_source import composed_leaf_source
 from tests.models.corpus import MODELS_ROOT
 from tilefoundry import cli
 from tilefoundry.cli.source import load_namespace, select_ir
@@ -595,24 +596,7 @@ def test_a_nested_child_reads_only_its_own_part_of_the_checkpoint(routing, capsy
 def test_a_pinned_extent_on_a_root_that_reaches_a_child(tmp_path, capsys) -> None:
     """Binding an extent must not turn the child call back into an exact one."""
     source = tmp_path / "composed.py"
-    source.write_text(
-        "from tilefoundry import func, module\n"
-        "from tilefoundry.dsl import ConstTensor, DimVar, Tensor, tf\n"
-        "from tilefoundry.target import CudaTarget\n"
-        "N = DimVar('n_check', 1, 9)\n"
-        "@module(entry='run')\n"
-        "class Leaf:\n"
-        "    @func\n"
-        "    def run(x: Tensor[(N,), 'f32'], w: ConstTensor[(1,), 'f32']) -> Tensor[(N,), 'f32']:\n"
-        "        return tf.mul(x, w)\n"
-        "@module(entry='root', target=CudaTarget('nvidia.h200_sxm'))\n"
-        "class Composed:\n"
-        "    leaf = Leaf\n"
-        "    @func\n"
-        "    def root(x: Tensor[(N,), 'f32']) -> Tensor[(N,), 'f32']:\n"
-        "        return leaf(x)\n",
-        encoding="utf-8",
-    )
+    source.write_text(composed_leaf_source("n_check"), encoding="utf-8")
     assert (
         cli.main(
             [

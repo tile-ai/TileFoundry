@@ -16,9 +16,7 @@ from ortools.sat.python import cp_model
 
 from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.logical.gqa_static import static_online_attend
-from tilefoundry import func
-from tilefoundry.dsl import Tensor
-from tilefoundry.dsl.tf import matmul, rms_norm
+from tests.fixtures.shapes.bf16_gemm_rms_norm import bf16_gemm_rms_norm
 from tilefoundry.inspection.python_printer import as_script
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard import ShardLayout, Topology
@@ -36,23 +34,12 @@ from tilefoundry.schedule.partition import (
 )
 from tilefoundry.schedule.partition import solve as solve_module
 from tilefoundry.schedule.pipeline.problem import PipelineProblemError
-from tilefoundry.target import CudaTarget
 
 _SOLVER = ScheduleOptions(workers=1, stop_at_first_solution=True)
 
 
-@func(target=CudaTarget("nvidia.h200_sxm"))
-def gemm_norm(
-    x: Tensor[(64, 128), "bf16"],
-    w: Tensor[(128, 64), "bf16"],
-    weight: Tensor[(64,), "f32"],
-) -> Tensor[(64, 64), "bf16"]:
-    h = matmul(x, w)
-    return rms_norm(h, weight)
-
-
 def _module(extent: int = 4):
-    return replace(gemm_norm, topologies=(Topology("cta", extent),))
+    return replace(bf16_gemm_rms_norm, topologies=(Topology("cta", extent),))
 
 
 def _closed(extent: int = 4):
@@ -190,7 +177,7 @@ def test_partition_refuses_a_level_the_facts_and_the_program_do_not_share() -> N
     with pytest.raises(ValueError, match="no partition facts for 'thread'"):
         module.resolve_target().get_facts(PartitionFacts, program.facts_query("thread"))
 
-    thread_only = replace(gemm_norm, topologies=(Topology("thread", 128),))
+    thread_only = replace(bf16_gemm_rms_norm, topologies=(Topology("thread", 128),))
     with pytest.raises(ScheduleError, match="cta"):
         schedule(thread_only, thread_only.entry_function(), topology="cta")
 

@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import torch
 
+from tests.fixtures.shapes.fused_scaled_parent import FusedScaledParent
+from tests.fixtures.shapes.paired_scaled_parent import PairedScaledParent
+from tests.fixtures.shapes.scaled_child import ScaledChild
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
@@ -97,13 +100,6 @@ def test_multi_carry_accumulator():
     assert torch.allclose(out, (a + 2 * b) + (b + 2 * a))
 
 
-@module(entry="run")
-class _Scaled:
-    @func
-    def run(x: Tensor[(4,), "f32"], w: ConstTensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return mul(x, w)  # noqa: F821
-
-
 class _Weights:
     """A resource whose subtree is the dotted prefix, like a checkpoint's."""
 
@@ -120,44 +116,26 @@ class _Weights:
         )
 
 
-@module(entry="fused", target=CudaTarget("nvidia.h200_sxm"))
-class _Fused:
-    scaled = _Scaled
-
-    @func
-    def fused(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-        return scaled(x)  # noqa: F821
-
-
 def test_a_child_module_call_runs_against_that_child_reading() -> None:
     x = torch.arange(4, dtype=torch.float32)
     w = torch.tensor([2.0, 3.0, 4.0, 5.0])
-    reading = _Fused.load(_Weights({"scaled.w": w}))
+    reading = FusedScaledParent.load(_Weights({"scaled.w": w}))
 
     assert torch.equal(reading.fused(x), x * w)
 
 
 def test_one_module_read_twice_yields_two_independent_readings() -> None:
     x = torch.ones(4)
-    first = _Fused.load(_Weights({"scaled.w": torch.full((4,), 2.0)}))
-    second = _Fused.load(_Weights({"scaled.w": torch.full((4,), 5.0)}))
+    first = FusedScaledParent.load(_Weights({"scaled.w": torch.full((4,), 2.0)}))
+    second = FusedScaledParent.load(_Weights({"scaled.w": torch.full((4,), 5.0)}))
 
     assert torch.equal(second.fused(x), torch.full((4,), 5.0))
     assert torch.equal(first.fused(x), torch.full((4,), 2.0))
 
 
 def test_two_bindings_of_one_child_read_their_own_constants() -> None:
-    @module(entry="both", target=CudaTarget("nvidia.h200_sxm"))
-    class _Both:
-        left = _Scaled
-        right = _Scaled
-
-        @func
-        def both(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-            return add(left(x), right(x))  # noqa: F821
-
     x = torch.ones(4)
-    reading = _Both.load(
+    reading = PairedScaledParent.load(
         _Weights({"left.w": torch.full((4,), 2.0), "right.w": torch.full((4,), 7.0)})
     )
 
@@ -167,7 +145,7 @@ def test_two_bindings_of_one_child_read_their_own_constants() -> None:
 def test_a_child_call_inside_a_loop_keeps_its_reading_on_every_trip() -> None:
     @module(entry="looped", target=CudaTarget("nvidia.h200_sxm"))
     class _Looped:
-        scaled = _Scaled
+        scaled = ScaledChild
 
         @func
         def looped(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:

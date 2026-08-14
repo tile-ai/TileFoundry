@@ -6,9 +6,10 @@ from dataclasses import replace
 
 import pytest
 
+from tests.fixtures.shapes.bf16_gemm_rms_norm import bf16_gemm_rms_norm
 from tilefoundry import func
 from tilefoundry.dsl import Tensor
-from tilefoundry.dsl.tf import matmul, rms_norm, sigmoid
+from tilefoundry.dsl.tf import sigmoid
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.schedule import schedule
 from tilefoundry.schedule.pipeline import (
@@ -29,18 +30,8 @@ from tilefoundry.schedule.pipeline.solve import (
 from tilefoundry.target import CudaTarget
 
 
-@func(target=CudaTarget("nvidia.h200_sxm"))
-def bf16_gemm_rmsnorm(
-    x: Tensor[(64, 128), "bf16"],
-    w: Tensor[(128, 64), "bf16"],
-    weight: Tensor[(64,), "f32"],
-) -> Tensor[(64, 64), "bf16"]:
-    h = matmul(x, w)
-    return rms_norm(h, weight)
-
-
 def _module():
-    return replace(bf16_gemm_rmsnorm, topologies=(Topology("cta", 1), Topology("thread", 128)))
+    return replace(bf16_gemm_rms_norm, topologies=(Topology("cta", 1), Topology("thread", 128)))
 
 
 @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 8),))

@@ -10,6 +10,7 @@ absent.
 from __future__ import annotations
 
 from tests._source import import_dsl
+from tests.fixtures.logical.hir_composition import Expert
 from tests.fixtures.placed.derived_prefill import DerivedPrefill
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
@@ -234,19 +235,10 @@ def test_a_sibling_call_survives_the_round_trip() -> None:
     assert as_script(import_dsl(once)) == once
 
 
-@module(entry="run")
-class _Weighted:
-    @func
-    def run(
-        x: Tensor[(4, 8), "f32"], w: ConstTensor[(8, 8), "f32"]
-    ) -> Tensor[(4, 8), "f32"]:
-        return tf.matmul(x, w)
-
-
 @module(entry="fused", target=CudaTarget("nvidia.h200_sxm"))
 class _Composed:
-    first = _Weighted
-    second = _Weighted
+    first = Expert
+    second = Expert
 
     @func
     def fused(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
@@ -262,7 +254,7 @@ def test_a_child_call_prints_by_its_binding_and_carries_activations_only() -> No
     source = as_script(_Composed)
 
     assert "v0 = first(x)" in source and "v1 = second(x)" in source
-    assert "_Weighted" not in source and ".run(" not in source
+    assert "Expert" not in source and ".run(" not in source
 
     imported = import_dsl(source)
     left, right = imported.entry_function().body.args
@@ -298,7 +290,7 @@ def test_a_child_before_the_functions_naming_it() -> None:
 
 @module(entry="root", target=CudaTarget("nvidia.h200_sxm"), topologies=(_CTA,))
 class _Rebuilt:
-    leaf = _Weighted
+    leaf = Expert
 
     @func
     def root(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
