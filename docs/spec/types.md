@@ -491,7 +491,9 @@ def ceildiv(a, b) -> Expr:
   - `DimVar` identity MUST be canonical per `(name, lo, hi)`. Same-name
     dimensions in one function signature MUST agree on bounds.
   - Producers of arithmetic dimension calls MUST route construction through
-    `simplify_dim`.
+    `simplify_dim`. A `DimVar` and the `Call` produced by dimension arithmetic
+    both support continued `+`, `-`, `*`, `//`, and `%` construction, including
+    the reflected forms. Other `Call` values do not support this arithmetic.
   - `simplify_dim` MUST only construct dimension arithmetic: it wraps raw integer
     operands as integer `Constant` values and rejects boolean operands, but MUST
     NOT fold constants or apply algebraic identities.

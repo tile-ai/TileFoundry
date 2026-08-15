@@ -47,7 +47,7 @@ def test_a_derived_topology_and_mesh_geometry_survive_the_round_trip() -> None:
 
     assert 'prefill_n = DimVar("prefill_n", 1, 65)' in source
     assert 'topology_only = DimVar("topology_only", 1, 1025)' in source
-    assert 'Topology("cta", ceildiv(prefill_n, 8))' in source
+    assert 'Topology("cta", ((prefill_n - 1) // 8) + 1)' in source
     assert 'Topology("thread", topology_only)' in source
     assert imported.topologies == DerivedPrefill.topologies
     assert imported.entry_function().params[0].type == (
@@ -60,6 +60,8 @@ def test_prefill_decode_specializations_survive_the_round_trip() -> None:
     source = as_script(PrefillDecodeAttention)
     imported = import_dsl(source)
     restored = import_dsl(as_script(imported))
+
+    assert as_script(restored) == as_script(imported)
 
     assert "arange(" in source
     assert "where(" in source
@@ -80,6 +82,8 @@ def test_flash_split_k_decode_survives_the_round_trip() -> None:
     source = as_script(FlashSplitKDecode)
     imported = import_dsl(source)
     restored = import_dsl(as_script(imported))
+
+    assert as_script(restored) == as_script(imported)
 
     for roundtripped in (imported, restored):
         assert roundtripped.topologies == FlashSplitKDecode.topologies

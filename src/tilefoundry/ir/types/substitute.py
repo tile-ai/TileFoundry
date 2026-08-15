@@ -182,7 +182,7 @@ def _canonicalize_layout_dims(layout: object) -> object:
     return layout
 
 
-def _canonicalize_topology_dims(topology: object) -> object:
+def canonicalize_topology_dims(topology: object) -> object:
     _, _, _, _, Topology = _shard_types()
     if not isinstance(topology, Topology):
         return topology
@@ -196,7 +196,7 @@ def _canonicalize_mesh_dims(mesh: object) -> object:
     _, _, _, Mesh, _ = _shard_types()
     if not isinstance(mesh, Mesh):
         return mesh
-    topologies = tuple(_canonicalize_topology_dims(item) for item in mesh.topologies)
+    topologies = tuple(canonicalize_topology_dims(item) for item in mesh.topologies)
     layout = _canonicalize_layout_dims(mesh.layout)
     if topologies == mesh.topologies and layout is mesh.layout:
         return mesh
@@ -362,6 +362,7 @@ def has_symbolic_dims(value: object) -> bool:
 __all__ = [
     "DimSubstitutionError",
     "canonicalize_dims",
+    "canonicalize_topology_dims",
     "dim_vars_by_name",
     "dim_vars_in",
     "has_symbolic_dims",

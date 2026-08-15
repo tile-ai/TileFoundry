@@ -88,6 +88,64 @@ def test_simplify_dim_constructs_symbolic_and_invalid_arithmetic() -> None:
     assert isinstance(bool_arg.target, DimAdd)
 
 
+def test_dim_call_arithmetic_is_pure_construction_in_both_directions() -> None:
+    seq = DimVar("S_chain", 1, 1024)
+    base = seq - 1
+
+    expressions = (
+        base + 8,
+        8 + base,
+        base - 8,
+        8 - base,
+        base * 8,
+        8 * base,
+        base // 8,
+        8 // base,
+        base % 8,
+        8 % base,
+    )
+
+    assert all(isinstance(expr, Call) for expr in expressions)
+    assert [type(expr.target) for expr in expressions] == [
+        DimAdd,
+        DimAdd,
+        DimSub,
+        DimSub,
+        DimMul,
+        DimMul,
+        DimFloorDiv,
+        DimFloorDiv,
+        DimMod,
+        DimMod,
+    ]
+
+
+def test_non_dim_calls_do_not_gain_dimension_arithmetic() -> None:
+    tensor = TensorType.umat_tensor((8,), DType.f32)
+    value = Var(type=tensor, name="value")
+    ordinary = Call(
+        type=tensor,
+        target=Unary(kind=UnaryKind.NEG),
+        args=(value,),
+    )
+    operations = (
+        lambda: ordinary + 1,
+        lambda: 1 + ordinary,
+        lambda: ordinary - 1,
+        lambda: 1 - ordinary,
+        lambda: ordinary * 1,
+        lambda: 1 * ordinary,
+        lambda: ordinary // 1,
+        lambda: 1 // ordinary,
+        lambda: ordinary % 1,
+        lambda: 1 % ordinary,
+    )
+
+    for operation in operations:
+        with pytest.raises(TypeError):
+            operation()
+
+
 def test_typeinfer_canonicalizes_equivalent_symbolic_shapes() -> None:
     seq = DimVar("S_canonical", 1, 8193)
     verbose = simplify_dim(

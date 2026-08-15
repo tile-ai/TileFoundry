@@ -16,6 +16,7 @@ from typing import Mapping, Union
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types.shard.mesh import Topology
+from tilefoundry.ir.types.substitute import canonicalize_topology_dims
 from tilefoundry.ir.types.tensor_type import TensorType
 from tilefoundry.target.base import Target, target_instance
 from tilefoundry.utils.spec_ref import spec_ref_render
@@ -245,6 +246,9 @@ class Module:
                 f"method and a function/child module; names must be disjoint"
             )
         if self.topologies is not None:
+            topologies = tuple(canonicalize_topology_dims(t) for t in self.topologies)
+            if topologies != self.topologies:
+                object.__setattr__(self, "topologies", topologies)
             names = [t.name for t in self.topologies]
             dupes = sorted({n for n in names if names.count(n) > 1})
             if dupes:

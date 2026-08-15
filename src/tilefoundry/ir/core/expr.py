@@ -82,6 +82,44 @@ class Call(Expr):
     target: Op
     args: tuple[Expr, ...]
 
+    def _dim_binop(self, other, op_name: str, *, reverse: bool = False):
+        from tilefoundry.ir.types import dim  # noqa: PLC0415
+
+        if not dim.is_dim_op_call(self):
+            return NotImplemented
+        operands = (other, self) if reverse else (self, other)
+        return dim._dim_binop(getattr(dim, op_name), *operands)
+
+    def __add__(self, other):
+        return self._dim_binop(other, "DimAdd")
+
+    def __radd__(self, other):
+        return self._dim_binop(other, "DimAdd", reverse=True)
+
+    def __sub__(self, other):
+        return self._dim_binop(other, "DimSub")
+
+    def __rsub__(self, other):
+        return self._dim_binop(other, "DimSub", reverse=True)
+
+    def __mul__(self, other):
+        return self._dim_binop(other, "DimMul")
+
+    def __rmul__(self, other):
+        return self._dim_binop(other, "DimMul", reverse=True)
+
+    def __floordiv__(self, other):
+        return self._dim_binop(other, "DimFloorDiv")
+
+    def __rfloordiv__(self, other):
+        return self._dim_binop(other, "DimFloorDiv", reverse=True)
+
+    def __mod__(self, other):
+        return self._dim_binop(other, "DimMod")
+
+    def __rmod__(self, other):
+        return self._dim_binop(other, "DimMod", reverse=True)
+
 
 @dataclass(frozen=True)
 class Tuple(Expr):
