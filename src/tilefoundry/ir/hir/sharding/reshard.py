@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import isl
+
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -17,6 +19,11 @@ from tilefoundry.ir.types.shard.shard_layout import (
 )
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelationResult,
+    register_type_relation,
+)
+from tilefoundry.visitor_registry.isl_utility import to_domain
 
 
 def _dim_mul(a, b):
@@ -159,6 +166,17 @@ class Reshard(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     layout = ParamDef(kind="attribute", annotation=ShardLayout, default=None)
     storage = ParamDef(kind="attribute", default=None)
+
+
+@register_type_relation(Reshard)
+def _reshard_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
+    """Reshard preserves logical element coordinates."""
+    (x,) = input_types
+    domain, param_map = to_domain(x.shape)
+    dims = [f"d{i}" for i in range(len(x.shape))]
+    src = "[" + ", ".join(dims) + "]"
+    ident = isl.map(f"{{ {src} -> [{', '.join(dims)}] }}")
+    return AccessRelationResult(domain=domain, maps=(ident, ident), param_map=param_map)
 
 
 @register_typeinfer(Reshard)
