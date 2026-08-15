@@ -23,7 +23,17 @@ _UNARY_TAG = {
     UnaryKind.NEG: "tilefoundry::ops::neg_op",
     UnaryKind.RELU: "tilefoundry::ops::relu_op",
     UnaryKind.SQUARE: "tilefoundry::ops::square_op",
+    UnaryKind.EXP: "tilefoundry::ops::exp_op",
+    UnaryKind.EXP2: "tilefoundry::ops::exp2_op",
+    UnaryKind.LOG: "tilefoundry::ops::log_op",
+    UnaryKind.LOG2: "tilefoundry::ops::log2_op",
+    UnaryKind.ABS: "tilefoundry::ops::abs_op",
+    UnaryKind.CEIL: "tilefoundry::ops::ceil_op",
+    UnaryKind.ROUND: "tilefoundry::ops::round_op",
 }
+# ``CAST`` is emitted by its own handler, and ``NOT`` is a boolean operation
+# whose element type is not the float path these functors assume; both are
+# deliberately absent rather than pending.
 
 
 
