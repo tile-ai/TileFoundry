@@ -497,14 +497,16 @@ def ceildiv(a, b) -> Expr:
   - `simplify_dim` MUST only construct dimension arithmetic: it wraps raw integer
     operands as integer `Constant` values and rejects boolean operands, but MUST
     NOT fold constants or apply algebraic identities.
-  - Every dimension stored in IR, including function signatures, inferred types,
-    layouts, topology and mesh entries, and op attributes, MUST use the one
-    `normalize_dim` isl affine normal form. All-constant expressions normalize to
-    plain Python integers. Runtime scalar `Var` leaves MUST be represented by
-    object identity, not name, so repeated uses of one value can cancel without
-    conflating distinct same-named values. Normalization MUST NOT apply `DimVar`
-    envelope bounds. Expressions outside the affine subset or not decodable as
-    one `ShapeDim` MUST remain unchanged.
+  - Every dimension stored in an IR type or op attribute MUST use the one
+    `normalize_dim` isl affine normal form. This covers function signatures,
+    inferred types, layouts, topology and mesh entries, and op attributes; it
+    does not cover dimension expressions used as `Expr` operands, such as a
+    `Slice` start address. All-constant expressions normalize to plain Python
+    integers. Runtime scalar `Var` leaves MUST be represented by object identity,
+    not name, so repeated uses of one value can cancel without conflating
+    distinct same-named values. Normalization MUST NOT apply `DimVar` envelope
+    bounds. Expressions outside the affine subset or not decodable as one
+    `ShapeDim` MUST remain unchanged.
   - `is_dim_expr` MUST accept non-boolean integers, `DimVar`, integer-valued
     `Constant`, and recursively valid calls to the seven dimension arithmetic
     operations, and MUST reject other values.

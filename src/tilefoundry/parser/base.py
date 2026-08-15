@@ -33,7 +33,7 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType, TensorType, TupleType
-from tilefoundry.ir.types.dim import DimAdd, is_dim_expr, simplify_dim
+from tilefoundry.ir.types.dim import DimAdd, dim_expr, is_dim_expr, simplify_dim
 from tilefoundry.ir.types.dim_isl import normalize_dim
 from tilefoundry.ir.types.dtype import FloatDType
 from tilefoundry.ir.types.shape_helpers import i64_const
@@ -615,9 +615,9 @@ class BaseExprVisitor:
                 collapsed.append(axis)
                 continue
             b, e, s = self._slicer_for_dim(el, dim, axis)
-            b_expr = b if isinstance(b, Expr) else i64_const(int(b))
-            e_expr = e if isinstance(e, Expr) else i64_const(int(e))
-            s_expr = s if isinstance(s, Expr) else i64_const(int(s))
+            b_expr = dim_expr(b)
+            e_expr = dim_expr(e)
+            s_expr = dim_expr(s)
             starts.append(b_expr)
             from tilefoundry.ir.hir.tensor.slice import slice_size  # noqa: PLC0415
 

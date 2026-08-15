@@ -190,6 +190,21 @@ def is_dim_expr(value) -> bool:
     return False
 
 
+def dim_expr(value) -> Expr:
+    """Convert a dimension value to an expression without simplifying it."""
+    if isinstance(value, Expr):
+        return value
+    if isinstance(value, bool):
+        raise TypeError("dim_expr: bool is not a dimension")
+    if isinstance(value, int):
+        from .tensor_type import TensorType  # noqa: PLC0415
+
+        return Constant(type=TensorType.umat_scalar(), value=value)
+    if isinstance(value, DimVar):
+        return simplify_dim(DimAdd, (value, 0))
+    raise TypeError(f"dim_expr: expected int, DimVar, or Expr, got {type(value).__name__}")
+
+
 def is_dim_op_call(value) -> bool:
     """True iff *value* is a ``Call`` over one of this module's dim ops.
 
@@ -247,6 +262,7 @@ __all__ = [
     "DimMax",
     "simplify_dim",
     "is_dim_expr",
+    "dim_expr",
     "is_dim_op_call",
     "dim_min",
     "dim_max",

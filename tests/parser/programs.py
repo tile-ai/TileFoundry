@@ -154,6 +154,12 @@ class HirExpressions:
         return x[:, :, 1:20:3]
 
     @func
+    def slice_to_symbolic_extents(
+        x: Tensor[(CTX_LEN, _KD), "f32"],
+    ) -> Tensor[(CTX_LEN, _KD), "f32"]:
+        return x[0:CTX_LEN, 0:_KD]
+
+    @func
     def full_tile_window(x: Tensor[(8, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
         out = add(seed, seed)  # noqa: F405
         for row in tile(8, 4):  # noqa: F405
@@ -484,6 +490,7 @@ PROGRAMS: tuple[ParserProgram, ...] = (
             "tuple-literal op input",
             "multi-output tuple unpack",
             "subscript indexing and slicing",
+            "slice endpoints at symbolic extents",
             "tile window",
             "window move by a compile-time offset",
         ),

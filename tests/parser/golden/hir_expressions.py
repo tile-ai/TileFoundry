@@ -143,6 +143,15 @@ class HirExpressions:
         return v4
 
     @func
+    def slice_to_symbolic_extents(
+        x: Tensor[(CTX_LEN, 128), "f32"]
+    ) -> Tensor[(CTX_LEN, 128), "f32"]:
+        v0 = 0
+        v1 = 0
+        v3 = x[:, :]
+        return v3
+
+    @func
     def full_tile_window(
         x: Tensor[(8, 4), "f32"],
         seed: Tensor[(4, 4), "f32"]

@@ -486,8 +486,10 @@ For a tensor slice, a run-time rank-0 integer is permitted as an endpoint only
 when the resulting window size is a compile-time dimension. The canonical
 spelling is `start:start + K`; the parser MUST reject an unrelated stop
 endpoint because `Slice.sizes` is a static attribute. The slice stride remains
-compile-time. A tile window keeps its own length and MAY be **moved** by a
-compile-time offset instead ([§1.7](#17-for-i-in-tile--for-i-in-range-hir-only)).
+compile-time. An endpoint MAY also be a compile-time dimension, including the
+axis's own symbolic extent; its window size is symbolic accordingly. A tile
+window keeps its own length and MAY be **moved** by a compile-time offset instead
+([§1.7](#17-for-i-in-tile--for-i-in-range-hir-only)).
 
 ## 2. DSL namespace surface
 

@@ -37,25 +37,29 @@ from tests.parser.programs import (
     doubles_a_constant,
     returns_a_pair,
 )
+from tilefoundry.analysis.preflight import infer_authored_types
 from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl._stub_gen import regen_stubs
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.constraints import LayoutConstraint, constraint_metadata
-from tilefoundry.ir.core import Call, Tuple, Var, get_metadata
+from tilefoundry.ir.core import Call, Constant, Tuple, Var, get_metadata
 from tilefoundry.ir.hir.function import Function, elaborate
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.specialize import origin_of, specialize_function
+from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type
-from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.dim import DimAdd, DimVar
 from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Topology, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.parser import hir_parser
 from tilefoundry.parser.base import _ModuleCallee
 from tilefoundry.parser.sugar import parse_shard_layout_sugar
+from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 
 @pytest.mark.parametrize("program", PROGRAMS, ids=[program.name for program in PROGRAMS])
@@ -412,6 +416,77 @@ def test_a_program_still_evaluates_to_what_torch_would_give() -> None:
         torch.testing.assert_close(
             evaluate(HirExpressions.lookup(name), x, device="cpu"), expected, msg=name
         )
+
+
+def test_symbolic_slice_endpoints_preserve_shape_and_bind_across_a_call() -> None:
+    """Equivalent full windows retain the authored dimension at a call boundary."""
+    prelude = (
+        "from tilefoundry import func\n"
+        "from tilefoundry.dsl.tf import *\n"
+        "from tilefoundry.dsl import DimVar, Tensor\n"
+    )
+    full_window = import_dsl(
+        prelude
+        + '\nCTX_LEN = DimVar("CTX_LEN", 1, 4097)\n'
+        '@func\ndef f(x: Tensor[(CTX_LEN, 128), "f32"]) '
+        '-> Tensor[(CTX_LEN, 128), "f32"]:\n'
+        "    return x[:, 0:128]\n"
+    )
+    explicit_window = HirExpressions.lookup("slice_to_symbolic_extents")
+    assert isinstance(explicit_window.body, Call)
+    assert isinstance(explicit_window.body.target, Slice)
+    assert explicit_window.body.target.sizes == full_window.body.target.sizes
+    assert explicit_window.body.target.strides == full_window.body.target.strides
+    assert explicit_window.body.type == full_window.body.type
+    assert explicit_window.body.args[1] == full_window.body.args[1]
+    authored_extent = explicit_window.params[0].type.shape[0]
+    assert explicit_window.body.target.sizes[0] is authored_extent
+    assert explicit_window.body.type.shape[0] is authored_extent
+
+    param = Var(type=explicit_window.return_type, name="window")
+    consumer = Function.build(
+        name="consume_window",
+        params=(param,),
+        body=param,
+        return_type=explicit_window.return_type,
+    )
+    call = Call(type=consumer.return_type, target=consumer, args=(explicit_window.body,))
+    assert TypeInferVisitor(TypeInferContext()).visit(call) == consumer.return_type
+
+    dimension_start = import_dsl(
+        prelude
+        + '\nS = DimVar("m2_start_seq", 1, 4097)\n'
+        '@func\ndef f(x: Tensor[(S + 8, 128), "f32"]) -> Tensor[(8, 128), "f32"]:\n'
+        "    return x[S:S + 8, 0:128]\n"
+    )
+    start = dimension_start.body.args[1].elements[0]
+    assert isinstance(start, Call) and isinstance(start.target, DimAdd)
+    assert any(start.args[0] is arg for arg in dimension_start.params[0].type.shape[0].args)
+    assert isinstance(start.args[1], Constant) and start.args[1].value == 0
+
+
+def test_a_packed_cache_can_keep_a_symbolic_capacity_axis() -> None:
+    """A layer index and full symbolic windows can name every packed-cache axis."""
+    packed = import_dsl(
+        "from tilefoundry import func, module\n"
+        "from tilefoundry.dsl.tf import *\n"
+        "from tilefoundry.dsl import DimVar, Tensor\n"
+        '\nCAP = DimVar("m2_capacity", 1, 4097)\n'
+        '@module(entry="run")\n'
+        "class PackedCache:\n"
+        "    @func\n"
+        '    def run(kc: Tensor[(4, CAP, 8, 16), "f32"], '
+        'seed: Tensor[(CAP, 8, 16), "f32"]) -> Tensor[(CAP, 8, 16), "f32"]:\n'
+        "        out = relu(seed)\n"
+        "        for i in range(4):\n"
+        "            out = add(out, kc[i, 0:CAP, 0:8, 0:16])\n"
+        "        return out\n"
+    )
+    entry = packed.entry_function()
+    infer_authored_types((entry,), packed)
+    capacity = entry.params[0].type.shape[1]
+
+    assert entry.body.type.shape == (capacity, 8, 16)
 
 
 def _fused_reference(gu, seed):
