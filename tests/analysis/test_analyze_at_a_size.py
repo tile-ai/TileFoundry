@@ -97,8 +97,16 @@ def test_every_analysis_runs_at_a_stated_size(family: str) -> None:
 
 @pytest.mark.parametrize(
     ("dims", "expected_bound"),
-    (({"seq": 512}, "compute"), ({"seq": 1}, "memory")),
-    ids=["qwen3-pd-seq-512", "qwen3-pd-seq-1"],
+    (
+        ({"ctx_len": 0, "seq": 512}, "compute"),
+        ({"ctx_len": 512, "seq": 512}, "compute"),
+        ({"ctx_len": 4608, "seq": 1}, "memory"),
+    ),
+    ids=[
+        "qwen3-pd-prefill-no-context",
+        "qwen3-pd-prefill-with-context",
+        "qwen3-pd-decode-context",
+    ],
 )
 def test_qwen3_pd_fixture_runs_all_analysis_families(
     dims: dict[str, int], expected_bound: str

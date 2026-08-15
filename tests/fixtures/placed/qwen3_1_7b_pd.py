@@ -1,6 +1,17 @@
-"""Qwen3-1.7B prefill and decode layer fixture."""
+"""Qwen3-1.7B prefill and decode layer fixture.
+
+The context bound comes from the ``max_position_embeddings`` scalar in the
+model config; importing the executable model during test collection would
+build a second IR program. ``SEQ`` is bounded by this fixture's 8192-row
+prefill chunk envelope, not by the model limit. ``CAP`` is the independently
+allocated 4608-position cache depth, while attention scans the prior context
+plus the current sequence through ``CTX + SEQ``.
+"""
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, Mesh, Tensor, tf
@@ -8,7 +19,11 @@ from tilefoundry.dsl.tf import *  # noqa: F401,F403
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 
+_CONFIG = Path(__file__).parents[2] / "models" / "qwen3_1_7b" / "config.json"
+MAX_POSITION_EMBEDDINGS = json.loads(_CONFIG.read_text(encoding="utf-8"))["max_position_embeddings"]
+
 SEQ = DimVar("seq", 1, 8193)
+CTX = DimVar("ctx_len", 0, MAX_POSITION_EMBEDDINGS)
 
 CAP = 4608
 
@@ -63,13 +78,12 @@ class PrefillLayer:
         act: Tensor[(SEQ, FFN), "bf16"],
         out: Tensor[(SEQ, HID), "bf16"],
     ) -> Tensor[(SEQ, HID), "bf16"]:
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:
+        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as _cta:
             xb = xn
             for m in tile(SEQ, ROWS):  # noqa: F405
                 xr = tf.rms_norm(x[m, 0:HID], g_in)
                 xb = tf.insert_slice(xb, tf.reshard(xr, (ROWS, HID), "gmem"), (m, 0))
 
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:
             p = qkv
             for m in tile(SEQ, ROWS):  # noqa: F405
                 for n in tile(QKV_N, BN):  # noqa: F405
@@ -85,7 +99,6 @@ class PrefillLayer:
                         acc = acc + tf.reshard(mm, (ROWS, BN), "rmem")
                     p = tf.insert_slice(p, tf.reshard(acc, (ROWS, BN), "gmem"), (m, n))
 
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:
             qb = q
             kc2 = kc
             vc2 = vc
@@ -102,7 +115,6 @@ class PrefillLayer:
                 vc2 = tf.cache_update(vc2, cur, width, v4)
                 qb = tf.insert_slice(qb, tf.reshape(qr, (ROWS, HKV, G, D)), (m, 0, 0, 0))
 
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:
             ab = attn
             for m in tile(SEQ, ROWS):  # noqa: F405
                 for kv in tile(HKV, 1):  # noqa: F405
@@ -115,7 +127,7 @@ class PrefillLayer:
                         )
                         lr = tf.reshard(tf.zeros((ROWS, 1), dtype="f32"), (ROWS, 1), "rmem")
                         acc = tf.reshard(tf.zeros((ROWS, D), dtype="f32"), (ROWS, D), "rmem")
-                        for c in tile(CAP, BKV):  # noqa: F405
+                        for c in tile(CTX + SEQ, BKV):  # noqa: F405
                             khb = tf.reshard(
                                 tf.reshape(kc2[0:1, c, kv, 0:D], (BKV, D)), (BKV, D), "smem"
                             )
@@ -141,7 +153,6 @@ class PrefillLayer:
                         ah = tf.reshard(tf.cast(tf.div(acc, lr), dtype="bf16"), (ROWS, D), "gmem")
                         ab = tf.insert_slice(ab, tf.reshape(ah, (ROWS, 1, 1, D)), (m, kv, g, 0))
 
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:
             af = tf.reshape(ab, (SEQ, QN))
             hb = h1
             for m in tile(SEQ, ROWS):  # noqa: F405
@@ -160,7 +171,6 @@ class PrefillLayer:
                     sm = tf.cast(tf.cast(xr, dtype="f32") + op, dtype="bf16")
                     hb = tf.insert_slice(hb, tf.reshard(sm, (ROWS, BN), "gmem"), (m, n))
 
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:
             gb = gu
             for m in tile(SEQ, ROWS):  # noqa: F405
                 xn1 = tf.rms_norm(hb[m, 0:HID], g_post)
@@ -191,7 +201,6 @@ class PrefillLayer:
                         (m, 1, n),
                     )
 
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:
             acb = act
             for m in tile(SEQ, ROWS):  # noqa: F405
                 for n in tile(FFN, BN):  # noqa: F405
@@ -200,7 +209,6 @@ class PrefillLayer:
                     sw = tf.cast(tf.silu(gate) * up, dtype="bf16")
                     acb = tf.insert_slice(acb, tf.reshard(sw, (ROWS, BN), "gmem"), (m, n))
 
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:  # noqa: F841
             o = out
             for m in tile(SEQ, ROWS):  # noqa: F405
                 for n in tile(HID, BN):  # noqa: F405
@@ -246,11 +254,10 @@ class PrefillLayer:
         act: Tensor[(SEQ, FFN), "bf16"],
         out: Tensor[(SEQ, HID), "bf16"],
     ) -> Tensor[(SEQ, HID), "bf16"]:
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:
+        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as _cta:
             xr = tf.rms_norm(x[0:1, 0:HID], g_in)
             xb = tf.insert_slice(xn, tf.reshard(xr, (1, HID), "gmem"), (0, 0))
 
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:
             p = qkv
             for n in tile(QKV_N, DN_QKV):  # noqa: F405
                 acc = tf.reshard(tf.zeros((1, DN_QKV), dtype="f32"), (1, DN_QKV), "rmem")
@@ -265,7 +272,6 @@ class PrefillLayer:
                     acc = acc + tf.reshard(mm, (1, DN_QKV), "rmem")
                 p = tf.insert_slice(p, tf.reshard(acc, (1, DN_QKV), "gmem"), (0, n))
 
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:
             q4 = tf.reshape(tf.cast(p[0:1, 0:QN], dtype="bf16"), (1, 1, HQ, D))
             k4 = tf.reshape(tf.cast(p[0:1, QN : QN + KN], dtype="bf16"), (1, 1, HKV, D))
             v4 = tf.reshape(tf.cast(p[0:1, QN + KN : QKV_N], dtype="bf16"), (1, 1, HKV, D))
@@ -281,7 +287,6 @@ class PrefillLayer:
             vc2 = tf.cache_update(vc, cur, width, v4)
             qb = tf.insert_slice(q, tf.reshape(qr, (1, HKV, G, D)), (0, 0, 0, 0))
 
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:
             ab = attn
             for kv in tile(HKV, 1):  # noqa: F405
                 for g in tile(G, 1):  # noqa: F405
@@ -289,7 +294,7 @@ class PrefillLayer:
                     mx = tf.reshard(tf.zeros((1, 1), dtype="f32") - 30000.0, (1, 1), "rmem")
                     lr = tf.reshard(tf.zeros((1, 1), dtype="f32"), (1, 1), "rmem")
                     acc = tf.reshard(tf.zeros((1, D), dtype="f32"), (1, D), "rmem")
-                    for c in tile(CAP, BKV):  # noqa: F405
+                    for c in tile(CTX + SEQ, BKV):  # noqa: F405
                         khb = tf.reshard(
                             tf.reshape(kc2[0:1, c, kv, 0:D], (BKV, D)), (BKV, D), "smem"
                         )
@@ -309,7 +314,6 @@ class PrefillLayer:
                     ah = tf.reshard(tf.cast(tf.div(acc, lr), dtype="bf16"), (1, D), "gmem")
                     ab = tf.insert_slice(ab, tf.reshape(ah, (1, 1, 1, D)), (0, kv, g, 0))
 
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:
             af = tf.reshape(ab, (SEQ, QN))
             hb = h1
             for n in tile(HID, DN_O):  # noqa: F405
@@ -327,7 +331,6 @@ class PrefillLayer:
                 sm = tf.cast(tf.cast(xr, dtype="f32") + op, dtype="bf16")
                 hb = tf.insert_slice(hb, tf.reshard(sm, (1, DN_O), "gmem"), (0, n))
 
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:
             gb = gu
             xn1 = tf.rms_norm(hb[0:1, 0:HID], g_post)
             for n in tile(FFN, DN_FFN):  # noqa: F405
@@ -363,7 +366,6 @@ class PrefillLayer:
                     (0, 1, n),
                 )
 
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:
             acb = act
             for n in tile(FFN, DN_FFN):  # noqa: F405
                 gate = tf.reshard(tf.reshape(gb[0:1, 0:1, n], (1, DN_FFN)), (1, DN_FFN), "rmem")
@@ -371,7 +373,6 @@ class PrefillLayer:
                 sw = tf.cast(tf.silu(gate) * up, dtype="bf16")
                 acb = tf.insert_slice(acb, tf.reshard(sw, (1, DN_FFN), "gmem"), (0, n))
 
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:  # noqa: F841
             o = out
             for n in tile(HID, DN_DOWN):  # noqa: F405
                 dp = tf.reshard(tf.zeros((1, DN_DOWN), dtype="f32"), (1, DN_DOWN), "rmem")
@@ -453,7 +454,7 @@ class PrefillLayer:
         out: Tensor[(SEQ, HID), "bf16"],
         logits: Tensor[(SEQ, V), "f32"],
     ) -> Tensor[(SEQ, V), "f32"]:
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:
+        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as _cta:
             h = x
             for m in tile(SEQ, ROWS):  # noqa: F405
                 h = tf.insert_slice(
@@ -466,34 +467,33 @@ class PrefillLayer:
                     (m, 0),
                 )
 
-        for i in tile(L, 1):  # noqa: F405
-            h = layer_prefill(  # noqa: F405
-                h,
-                tf.reshape(w_qkv[i, 0:HID, 0:QKV_N], (HID, QKV_N)),
-                tf.reshape(w_o[i, 0:QN, 0:HID], (QN, HID)),
-                tf.reshape(w_gu[i, 0:HID, 0:2, 0:FFN], (HID, 2, FFN)),
-                tf.reshape(w_down[i, 0:FFN, 0:HID], (FFN, HID)),
-                tf.reshape(g_in[i, 0:HID], (HID,)),
-                tf.reshape(g_q[i, 0:D], (D,)),
-                tf.reshape(g_k[i, 0:D], (D,)),
-                tf.reshape(g_post[i, 0:HID], (HID,)),
-                kc[i, 0:CAP, 0:HKV, 0:D],
-                vc[i, 0:CAP, 0:HKV, 0:D],
-                cur,
-                cos,
-                sin,
-                pos,
-                xn,
-                qkv,
-                q,
-                attn,
-                h1,
-                gu,
-                act,
-                out,
-            )
+            for i in tile(L, 1):  # noqa: F405
+                h = layer_prefill(  # noqa: F405
+                    h,
+                    tf.reshape(w_qkv[i, 0:HID, 0:QKV_N], (HID, QKV_N)),
+                    tf.reshape(w_o[i, 0:QN, 0:HID], (QN, HID)),
+                    tf.reshape(w_gu[i, 0:HID, 0:2, 0:FFN], (HID, 2, FFN)),
+                    tf.reshape(w_down[i, 0:FFN, 0:HID], (FFN, HID)),
+                    tf.reshape(g_in[i, 0:HID], (HID,)),
+                    tf.reshape(g_q[i, 0:D], (D,)),
+                    tf.reshape(g_k[i, 0:D], (D,)),
+                    tf.reshape(g_post[i, 0:HID], (HID,)),
+                    kc[i, 0:CAP, 0:HKV, 0:D],
+                    vc[i, 0:CAP, 0:HKV, 0:D],
+                    cur,
+                    cos,
+                    sin,
+                    pos,
+                    xn,
+                    qkv,
+                    q,
+                    attn,
+                    h1,
+                    gu,
+                    act,
+                    out,
+                )
 
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:  # noqa: F841
             lg = logits
             for m in tile(SEQ, ROWS):  # noqa: F405
                 hf = tf.rms_norm(h[m, 0:HID], g_final)
@@ -542,38 +542,37 @@ class PrefillLayer:
         out: Tensor[(SEQ, HID), "bf16"],
         logits: Tensor[(SEQ, V), "f32"],
     ) -> Tensor[(SEQ, V), "f32"]:
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:
+        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as _cta:
             e = tf.reshard(tf.index_select(w_embed, ids[0:1], dim=0), (1, HID), "gmem")
             h = tf.insert_slice(x, e, (0, 0))
 
-        for i in tile(L, 1):  # noqa: F405
-            h = layer_decode(  # noqa: F405
-                h,
-                tf.reshape(w_qkv[i, 0:HID, 0:QKV_N], (HID, QKV_N)),
-                tf.reshape(w_o[i, 0:QN, 0:HID], (QN, HID)),
-                tf.reshape(w_gu[i, 0:HID, 0:2, 0:FFN], (HID, 2, FFN)),
-                tf.reshape(w_down[i, 0:FFN, 0:HID], (FFN, HID)),
-                tf.reshape(g_in[i, 0:HID], (HID,)),
-                tf.reshape(g_q[i, 0:D], (D,)),
-                tf.reshape(g_k[i, 0:D], (D,)),
-                tf.reshape(g_post[i, 0:HID], (HID,)),
-                kc[i, 0:CAP, 0:HKV, 0:D],
-                vc[i, 0:CAP, 0:HKV, 0:D],
-                cur,
-                cos,
-                sin,
-                pos,
-                xn,
-                qkv,
-                q,
-                attn,
-                h1,
-                gu,
-                act,
-                out,
-            )
+            for i in tile(L, 1):  # noqa: F405
+                h = layer_decode(  # noqa: F405
+                    h,
+                    tf.reshape(w_qkv[i, 0:HID, 0:QKV_N], (HID, QKV_N)),
+                    tf.reshape(w_o[i, 0:QN, 0:HID], (QN, HID)),
+                    tf.reshape(w_gu[i, 0:HID, 0:2, 0:FFN], (HID, 2, FFN)),
+                    tf.reshape(w_down[i, 0:FFN, 0:HID], (FFN, HID)),
+                    tf.reshape(g_in[i, 0:HID], (HID,)),
+                    tf.reshape(g_q[i, 0:D], (D,)),
+                    tf.reshape(g_k[i, 0:D], (D,)),
+                    tf.reshape(g_post[i, 0:HID], (HID,)),
+                    kc[i, 0:CAP, 0:HKV, 0:D],
+                    vc[i, 0:CAP, 0:HKV, 0:D],
+                    cur,
+                    cos,
+                    sin,
+                    pos,
+                    xn,
+                    qkv,
+                    q,
+                    attn,
+                    h1,
+                    gu,
+                    act,
+                    out,
+                )
 
-        with Mesh(("cta",), layout=(CTAS,), names=("cta",)) as cta:  # noqa: F841
             lg = logits
             hf = tf.rms_norm(h[0:1, 0:HID], g_final)
             for n in tile(V, BN):  # noqa: F405

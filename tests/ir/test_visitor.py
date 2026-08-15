@@ -42,7 +42,6 @@ from tilefoundry.ir.visitor import (
     ExprFunctor,
     ExprMutator,
     ExprVisitor,
-    ExprWalker,
     StmtExprMutator,
     StmtMutator,
     StmtVisitor,
@@ -109,11 +108,7 @@ def test_expr_visitor_dispatches_by_class_name_and_shares_unchanged_branches() -
     assert ExprMutator().visit(tree) is tree
 
 
-def test_expr_functor_and_visitor_split_memo_from_rewrite() -> None:
-    assert issubclass(ExprVisitor, ExprFunctor)
-    assert issubclass(ExprWalker, ExprVisitor)
-    assert issubclass(ExprMutator, ExprFunctor)
-
+def test_expr_mutator_does_not_share_rewrite_results() -> None:
     shared = _var("shared")
     tree = _call(_OpA(), shared, shared)
 
