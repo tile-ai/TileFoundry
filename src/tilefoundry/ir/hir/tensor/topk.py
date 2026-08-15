@@ -38,6 +38,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     layout_axis_to_tensor_axis,
     shard_layout_of,
 )
+from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
@@ -87,6 +88,40 @@ def _static_dim_value(d) -> "int | None":
     return None
 
 
+class _DimUpperBoundVisitor(ExprVisitor[int | None]):
+    def visit_Constant(self, d: Constant) -> int | None:
+        value = d.value
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    def visit_DimVar(self, d: DimVar) -> int:
+        return d.hi - 1
+
+    def visit_Call(self, d: Call) -> int | None:
+        target = d.target
+        if isinstance(target, (DimMin, DimMax, DimAdd, DimMul)):
+            a_hi = self.visit(d.args[0])
+            b_hi = self.visit(d.args[1])
+            if a_hi is None or b_hi is None:
+                return None
+            if isinstance(target, DimMin):
+                return min(a_hi, b_hi)
+            if isinstance(target, DimMax):
+                return max(a_hi, b_hi)
+            if isinstance(target, DimAdd):
+                return a_hi + b_hi
+            return None if a_hi < 0 or b_hi < 0 else a_hi * b_hi
+        if isinstance(target, (DimFloorDiv, DimMod)):
+            a_hi = self.visit(d.args[0])
+            b_val = _static_dim_value(d.args[1])
+            if a_hi is None or b_val is None or b_val <= 0:
+                return None
+            return a_hi // b_val if isinstance(target, DimFloorDiv) else b_val - 1
+        return None
+
+    def default_visit(self, d) -> int | None:
+        return None
+
+
 def _dim_upper_bound(d) -> "int | None":
     """Return a best-effort inclusive static upper bound.
 
@@ -103,28 +138,8 @@ def _dim_upper_bound(d) -> "int | None":
     if isinstance(d, Constant):
         v = d.value
         return v if isinstance(v, int) and not isinstance(v, bool) else None
-    if isinstance(d, DimVar):
-        return d.hi - 1
-    if isinstance(d, Call):
-        target = d.target
-        if isinstance(target, (DimMin, DimMax, DimAdd, DimMul)):
-            a_hi = _dim_upper_bound(d.args[0])
-            b_hi = _dim_upper_bound(d.args[1])
-            if a_hi is None or b_hi is None:
-                return None
-            if isinstance(target, DimMin):
-                return min(a_hi, b_hi)
-            if isinstance(target, DimMax):
-                return max(a_hi, b_hi)
-            if isinstance(target, DimAdd):
-                return a_hi + b_hi
-            return None if a_hi < 0 or b_hi < 0 else a_hi * b_hi
-        if isinstance(target, (DimFloorDiv, DimMod)):
-            a_hi = _dim_upper_bound(d.args[0])
-            b_val = _static_dim_value(d.args[1])
-            if a_hi is None or b_val is None or b_val <= 0:
-                return None
-            return a_hi // b_val if isinstance(target, DimFloorDiv) else b_val - 1
+    if isinstance(d, (DimVar, Call)):
+        return _DimUpperBoundVisitor().visit(d)
     return None
 
 

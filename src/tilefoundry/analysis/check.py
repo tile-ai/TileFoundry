@@ -37,6 +37,7 @@ from tilefoundry.ir.types.substitute import (
     substitute_shape_dim,
     substitute_topology_dims,
 )
+from tilefoundry.ir.visitor import ExprMutator
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
@@ -515,6 +516,127 @@ def _view_metadata(expr: Expr) -> tuple:
     )
 
 
+class _InlineMutator(ExprMutator):
+    def __init__(self, owner, env, memo, function, path, active) -> None:
+        super().__init__()
+        self.owner = owner
+        self.env = env
+        self.memo = memo
+        self.function = function
+        self.path = path
+        self.active = active
+
+    def _cached(self, expr):
+        bound = self.env.get(id(expr))
+        if bound is not None:
+            return bound
+        return self.memo.get(id(expr))
+
+    def _finish(self, expr, rebuilt):
+        self.memo[id(expr)] = rebuilt
+        return rebuilt
+
+    def visit_Var(self, expr: Var) -> Expr:
+        cached = self._cached(expr)
+        if cached is not None:
+            return cached
+        return self._finish(expr, replace(expr, metadata=_view_metadata(expr)))
+
+    def visit_Constant(self, expr: Constant) -> Expr:
+        cached = self._cached(expr)
+        if cached is not None:
+            return cached
+        return self._finish(expr, replace(expr, metadata=_view_metadata(expr)))
+
+    def visit_Tuple(self, expr: Tuple) -> Expr:
+        cached = self._cached(expr)
+        if cached is not None:
+            return cached
+        rebuilt = replace(
+            expr,
+            elements=tuple(self.visit(item) for item in expr.elements),
+            metadata=_view_metadata(expr),
+        )
+        return self._finish(expr, rebuilt)
+
+    def visit_GridRegionExpr(self, grid: GridRegionExpr) -> GridRegionExpr:
+        cached = self._cached(grid)
+        if cached is not None:
+            return cached
+        init_args = tuple(self.visit(item) for item in grid.init_args)
+        induction_var = replace(
+            grid.induction_var, metadata=_view_metadata(grid.induction_var)
+        )
+        carried_args = tuple(
+            replace(item, metadata=_view_metadata(item)) for item in grid.carried_args
+        )
+        inner_env = dict(self.env)
+        inner_env[id(grid.induction_var)] = induction_var
+        inner_env.update(
+            (id(old), new) for old, new in zip(grid.carried_args, carried_args)
+        )
+        inner = _InlineMutator(
+            self.owner,
+            inner_env,
+            self.memo,
+            self.function,
+            self.path,
+            self.active,
+        )
+        body = inner.visit(grid.body)
+        yield_values = tuple(inner.visit(item) for item in grid.yield_values)
+        rebuilt = replace(
+            grid,
+            induction_var=induction_var,
+            carried_args=carried_args,
+            init_args=init_args,
+            body=body,
+            yield_values=yield_values,
+            metadata=_view_metadata(grid),
+        )
+        return self._finish(grid, rebuilt)
+
+    def visit_Call(self, expr: Call) -> Expr:
+        cached = self._cached(expr)
+        if cached is not None:
+            return cached
+        target = expr.target
+        call_index = None
+        if isinstance(target, Function):
+            call_index = self.owner.function_call_counters[-1]
+            self.owner.function_call_counters[-1] += 1
+        new_args = tuple(self.visit(arg) for arg in expr.args)
+        if isinstance(target, Function):
+            reading = _call_reading(self.owner.module, self.function, expr)
+            supplied = iter(new_args)
+            callee_env: dict[int, Expr] = {}
+            for param in target.params:
+                if reading is not None and param.is_const:
+                    callee_env[id(param)] = self.owner.resources[
+                        (self.owner.module_paths[id(reading)], param.name)
+                    ]
+                else:
+                    callee_env[id(param)] = next(supplied)
+            rebuilt = self.owner.function_body(
+                target,
+                callee_env,
+                (*self.path, target.name, str(call_index)),
+                self.active,
+            )
+            return self._finish(expr, rebuilt)
+        metadata = (
+            *_view_metadata(expr),
+            BindingMetadata(self.owner._binding()),
+            OccurrenceProvenance(
+                source_call=id(_authored_call(self.function, expr)), call_path=self.path
+            ),
+        )
+        return self._finish(expr, replace(expr, args=new_args, metadata=metadata))
+
+    def default_visit(self, expr: Expr) -> Expr:
+        raise AnalysisError(f"cannot inline unsupported HIR node {type(expr).__name__}")
+
+
 class _Inliner:
     def __init__(
         self,
@@ -574,108 +696,7 @@ class _Inliner:
         path: tuple[str, ...],
         active: frozenset[int],
     ) -> Expr:
-        bound = env.get(id(expr))
-        if bound is not None:
-            return bound
-        cached = memo.get(id(expr))
-        if cached is not None:
-            return cached
-
-        match expr:
-            case Var():
-                rebuilt = replace(expr, metadata=_view_metadata(expr))
-            case Constant():
-                rebuilt = replace(expr, metadata=_view_metadata(expr))
-            case Tuple(elements=elements):
-                rebuilt = replace(
-                    expr,
-                    elements=tuple(
-                        self.expr(item, env, memo, function, path, active)
-                        for item in elements
-                    ),
-                    metadata=_view_metadata(expr),
-                )
-            case GridRegionExpr():
-                rebuilt = self._grid(expr, env, memo, function, path, active)
-            case Call(target=target, args=args) if isinstance(target, Function):
-                call_index = self.function_call_counters[-1]
-                self.function_call_counters[-1] += 1
-                new_args = tuple(
-                    self.expr(arg, env, memo, function, path, active) for arg in args
-                )
-                reading = _call_reading(self.module, function, expr)
-                supplied = iter(new_args)
-                callee_env: dict[int, Expr] = {}
-                for param in target.params:
-                    if reading is not None and param.is_const:
-                        callee_env[id(param)] = self.resources[
-                            (self.module_paths[id(reading)], param.name)
-                        ]
-                    else:
-                        callee_env[id(param)] = next(supplied)
-                rebuilt = self.function_body(
-                    target,
-                    callee_env,
-                    (*path, target.name, str(call_index)),
-                    active,
-                )
-            case Call(args=args):
-                new_args = tuple(
-                    self.expr(arg, env, memo, function, path, active) for arg in args
-                )
-                metadata = (
-                    *_view_metadata(expr),
-                    BindingMetadata(self._binding()),
-                    OccurrenceProvenance(
-                        source_call=id(_authored_call(function, expr)), call_path=path
-                    ),
-                )
-                rebuilt = replace(expr, args=new_args, metadata=metadata)
-            case _:
-                raise AnalysisError(
-                    f"cannot inline unsupported HIR node {type(expr).__name__}"
-                )
-        memo[id(expr)] = rebuilt
-        return rebuilt
-
-    def _grid(
-        self,
-        grid: GridRegionExpr,
-        env: Mapping[int, Expr],
-        memo: dict[int, Expr],
-        function: Function,
-        path: tuple[str, ...],
-        active: frozenset[int],
-    ) -> GridRegionExpr:
-        init_args = tuple(
-            self.expr(item, env, memo, function, path, active)
-            for item in grid.init_args
-        )
-        induction_var = replace(
-            grid.induction_var, metadata=_view_metadata(grid.induction_var)
-        )
-        carried_args = tuple(
-            replace(item, metadata=_view_metadata(item)) for item in grid.carried_args
-        )
-        inner_env = dict(env)
-        inner_env[id(grid.induction_var)] = induction_var
-        inner_env.update(
-            (id(old), new) for old, new in zip(grid.carried_args, carried_args)
-        )
-        body = self.expr(grid.body, inner_env, memo, function, path, active)
-        yield_values = tuple(
-            self.expr(item, inner_env, memo, function, path, active)
-            for item in grid.yield_values
-        )
-        return replace(
-            grid,
-            induction_var=induction_var,
-            carried_args=carried_args,
-            init_args=init_args,
-            body=body,
-            yield_values=yield_values,
-            metadata=_view_metadata(grid),
-        )
+        return _InlineMutator(self, env, memo, function, path, active).visit(expr)
 
 
 def _inline_view(module: Module, function: Function, budget: int) -> Function:

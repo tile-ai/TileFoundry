@@ -26,6 +26,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     layout_axis_to_tensor_axis,
     split_target_axes,
 )
+from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
@@ -78,6 +79,30 @@ def _constant_int(expr: Expr) -> int | None:
     return None
 
 
+class _WindowBaseVisitor(ExprVisitor[tuple[Expr | None, int]]):
+    def visit_Constant(self, expr: Constant) -> tuple[Expr | None, int]:
+        value = _constant_int(expr)
+        return (None, value) if value is not None else (expr, 0)
+
+    def visit_Call(self, expr: Call) -> tuple[Expr | None, int]:
+        if not isinstance(expr.target, (DimAdd, DimSub)):
+            return expr, 0
+        sign = 1 if isinstance(expr.target, DimAdd) else -1
+        left, right = expr.args
+        right_offset = _constant_int(right)
+        if right_offset is not None:
+            base, offset = self.visit(left)
+            return base, offset + sign * right_offset
+        left_offset = _constant_int(left)
+        if left_offset is not None and sign == 1:
+            base, offset = self.visit(right)
+            return base, offset + left_offset
+        return expr, 0
+
+    def default_visit(self, expr) -> tuple[Expr | None, int]:
+        return expr, 0
+
+
 def window_base(start: Expr) -> "tuple[Expr | None, int]":
     """Split a window start into the base it moves off and its constant offset.
 
@@ -90,18 +115,7 @@ def window_base(start: Expr) -> "tuple[Expr | None, int]":
     value = _constant_int(start)
     if value is not None:
         return None, value
-    if isinstance(start, Call) and isinstance(start.target, (DimAdd, DimSub)):
-        sign = 1 if isinstance(start.target, DimAdd) else -1
-        left, right = start.args
-        right_offset = _constant_int(right)
-        if right_offset is not None:
-            base, offset = window_base(left)
-            return base, offset + sign * right_offset
-        left_offset = _constant_int(left)
-        if left_offset is not None and sign == 1:
-            base, offset = window_base(right)
-            return base, offset + left_offset
-    return start, 0
+    return _WindowBaseVisitor().visit(start)
 
 
 def _dim_mul(left, right):

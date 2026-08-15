@@ -46,6 +46,54 @@ class Launch(Op):
     attrs = ParamDef(kind="attribute", default=LaunchAttrs())
 
 
+_LAUNCH_EXTENT_MUTATOR_TYPE = None
+
+
+def _launch_extent_mutator_type():
+    global _LAUNCH_EXTENT_MUTATOR_TYPE
+    if _LAUNCH_EXTENT_MUTATOR_TYPE is None:
+        from tilefoundry.ir.visitor import ExprMutator  # noqa: PLC0415
+
+        class _LaunchExtentMutator(ExprMutator):
+            def __init__(self, dimvar_src, dim_ops, i32, shape_of) -> None:
+                super().__init__()
+                self.dimvar_src = dimvar_src
+                self.dim_ops = dim_ops
+                self.i32 = i32
+                self.shape_of = shape_of
+
+            def visit_Constant(self, dim):
+                return dim
+
+            def visit_DimVar(self, dim):
+                src = self.dimvar_src.get(id(dim))
+                if src is None:
+                    raise ValueError(
+                        f"launch_call: launch extent references dimension variable "
+                        f"{dim.name!r}, which is not a bare axis of any forwarded "
+                        f"tensor argument; its runtime extent cannot be resolved"
+                    )
+                arg, axis = src
+                return self.shape_of(type=self.i32, param=arg, axis=axis)
+
+            def visit_Call(self, dim):
+                if not isinstance(dim.target, self.dim_ops):
+                    raise ValueError(
+                        f"launch_call: unsupported launch extent {type(dim).__name__}"
+                    )
+                from dataclasses import replace  # noqa: PLC0415
+
+                return replace(dim, args=tuple(self.visit(arg) for arg in dim.args))
+
+            def default_visit(self, dim):
+                raise ValueError(
+                    f"launch_call: unsupported launch extent {type(dim).__name__}"
+                )
+
+        _LAUNCH_EXTENT_MUTATOR_TYPE = _LaunchExtentMutator
+    return _LAUNCH_EXTENT_MUTATOR_TYPE
+
+
 def launch_call(
     callee,
     forwarded_args,
@@ -65,8 +113,6 @@ def launch_call(
 
     See [tir §2.3](docs/spec/tir.md#23-tir-ops).
     """
-    from dataclasses import replace  # noqa: PLC0415
-
     from tilefoundry.ir.core import Call, Constant  # noqa: PLC0415
     from tilefoundry.ir.tir.shape import ShapeOf  # noqa: PLC0415
     from tilefoundry.ir.tir.stmts import Evaluate  # noqa: PLC0415
@@ -117,20 +163,11 @@ def launch_call(
             raise ValueError(f"launch_call: bool is not a launch extent: {dim!r}")
         if isinstance(dim, int):
             return Constant(type=i64, value=dim)
-        if isinstance(dim, Constant):
-            return dim
-        if isinstance(dim, DimVar):
-            src = dimvar_src.get(id(dim))
-            if src is None:
-                raise ValueError(
-                    f"launch_call: launch extent references dimension variable "
-                    f"{dim.name!r}, which is not a bare axis of any forwarded "
-                    f"tensor argument; its runtime extent cannot be resolved"
-                )
-            arg, axis = src
-            return ShapeOf(type=i32, param=arg, axis=axis)
-        if isinstance(dim, Call) and isinstance(dim.target, _DIM_OPS):
-            return replace(dim, args=tuple(_canon(a) for a in dim.args))
+        if isinstance(dim, (Constant, DimVar, Call)):
+            mutator = _launch_extent_mutator_type()(
+                dimvar_src, _DIM_OPS, i32, ShapeOf
+            )
+            return mutator.visit(dim)
         raise ValueError(f"launch_call: unsupported launch extent {type(dim).__name__}")
 
     grid_e = tuple(_canon(d) for d in grid)

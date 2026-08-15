@@ -166,6 +166,41 @@ def simplify_dim(op_cls: type[Op], args: tuple) -> Expr:
 
 _DIM_OP_TYPES = (DimAdd, DimSub, DimMul, DimFloorDiv, DimMod, DimMin, DimMax)
 
+_DIM_EXPR_VISITOR_TYPE = None
+_DIM_EXPR_VISITOR = None
+
+
+def _dim_expr_visitor_type():
+    global _DIM_EXPR_VISITOR_TYPE
+    if _DIM_EXPR_VISITOR_TYPE is None:
+        from ..visitor import ExprVisitor  # noqa: PLC0415
+
+        class _DimExprVisitor(ExprVisitor[bool]):
+            def visit_DimVar(self, value: DimVar) -> bool:
+                return True
+
+            def visit_Constant(self, value: Constant) -> bool:
+                return isinstance(value.value, int) and not isinstance(value.value, bool)
+
+            def visit_Call(self, value: Call) -> bool:
+                return isinstance(value.target, _DIM_OP_TYPES) and all(
+                    self.visit(arg) for arg in value.args
+                )
+
+            def default_visit(self, value) -> bool:
+                return False
+
+        _DIM_EXPR_VISITOR_TYPE = _DimExprVisitor
+    return _DIM_EXPR_VISITOR_TYPE
+
+
+def _dim_expr_visitor():
+    global _DIM_EXPR_VISITOR
+    if _DIM_EXPR_VISITOR is None:
+        _DIM_EXPR_VISITOR = _dim_expr_visitor_type()()
+    _DIM_EXPR_VISITOR.clear()
+    return _DIM_EXPR_VISITOR
+
 
 def is_dim_expr(value) -> bool:
     """True iff *value* is a valid static-or-symbolic dim expression.
@@ -181,12 +216,8 @@ def is_dim_expr(value) -> bool:
         return False
     if isinstance(value, int):
         return True
-    if isinstance(value, DimVar):
-        return True
-    if isinstance(value, Constant):
-        return isinstance(value.value, int) and not isinstance(value.value, bool)
-    if isinstance(value, Call):
-        return isinstance(value.target, _DIM_OP_TYPES) and all(is_dim_expr(a) for a in value.args)
+    if isinstance(value, (DimVar, Constant, Call)):
+        return _dim_expr_visitor().visit(value)
     return False
 
 

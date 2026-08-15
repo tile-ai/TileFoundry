@@ -26,11 +26,11 @@ class Dispatch:
         pass
 
     @main.specialize(DimVarRangePat("S", 1, 4))
-    def _(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
+    def small_shape(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
         return mul(x, x)  # noqa: F821  (bound via ``from tilefoundry.dsl.tf import *``)
 
     @main.specialize(DimVarRangePat("S", 4, 8))
-    def _(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
+    def large_shape(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
         return add(x, x)  # noqa: F821
 
 

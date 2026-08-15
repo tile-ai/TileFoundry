@@ -62,7 +62,7 @@ def sub(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
 
 
 @sub.specialize(DimVarRangePat("S", 1, 3))
-def _(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
+def narrow_s(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
     return x
 
 
@@ -80,12 +80,12 @@ def test_func_specializations_parse_to_variants() -> None:
     assert variants[0].specializations == (DimVarRangePat("S", 1, 3),)
     assert variants[1].specializations == (DimVarRangePat("S", 4, 7),)
 
-    assert display_name(variants[0]) is None
+    assert display_name(variants[0]) == "narrow_s"
     assert display_name(variants[1]) == "wide_s"
 
     printed = as_script(sub)
     assert "def wide_s(" in printed
-    assert "def _(" in printed
+    assert "def narrow_s(" in printed
 
     for v in variants:
         (param,) = v.params

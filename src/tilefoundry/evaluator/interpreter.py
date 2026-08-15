@@ -77,27 +77,18 @@ def child_reading(reading, callee: Function):
 
 
 class Evaluator(ExprVisitor):
-    """``ExprVisitor[Value]`` memoized on ``id(expr)`` within one scope."""
+    """``ExprVisitor[Value]`` evaluated with one memo per execution scope."""
 
     def __init__(
         self, env: dict[int, Value], device: str,
         dim_env: dict[str, int] | None = None,
         reading=None,
     ) -> None:
+        super().__init__()
         self.env = env
         self.device = device
         self.dim_env = dim_env or {}
         self.reading = reading
-        self.memo: dict[int, Value] = {}
-
-    def visit(self, expr) -> Value:
-        key = id(expr)
-        if key in self.memo:
-            return self.memo[key]
-        value = super().visit(expr)
-        self.memo[key] = value
-        return value
-
     def visit_Var(self, var: Var) -> Value:
         try:
             return self.env[id(var)]

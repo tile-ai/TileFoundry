@@ -34,6 +34,7 @@ from tilefoundry.ir.types.dim import (
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target import CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
 from tilefoundry.visitor_registry import verify_stmt_registry
@@ -204,6 +205,28 @@ def _check_rank0_bool(ctx, stmt, expr):
         raise VerifyError(f"condition must be rank-0 bool, got {t}")
 
 
+class _AllocTensorRejectingVisitor(ExprVisitor[None]):
+    def __init__(self, *, at_letstmt_value: bool) -> None:
+        super().__init__()
+        self.at_letstmt_value = at_letstmt_value
+
+    def visit_Call(self, expr: Call) -> None:
+        if isinstance(expr.target, AllocTensorOp):
+            if not self.at_letstmt_value:
+                raise VerifyError(
+                    f"{spec_ref_render(_PRIM_FUNCTION)}: Call(AllocTensor, ...) may only appear "
+                    f"as a direct LetStmt.value; found nested inside another Expr"
+                )
+            self.at_letstmt_value = False
+            self.visit_operands(expr)
+            return
+        self.at_letstmt_value = False
+        self.visit_operands(expr)
+
+    def default_visit(self, expr) -> None:
+        return None
+
+
 def _reject_nested_alloc_tensor(expr: Expr, *, at_letstmt_value: bool) -> None:
     """Reject an ``AllocTensor`` call nested outside a ``LetStmt`` value.
 
@@ -211,18 +234,8 @@ def _reject_nested_alloc_tensor(expr: Expr, *, at_letstmt_value: bool) -> None:
 
     See [tir §1.3](docs/spec/tir.md#13-primfunction).
     """
-    if isinstance(expr, Call) and isinstance(expr.target, AllocTensorOp):
-        if at_letstmt_value:
-            for a in expr.args:
-                _reject_nested_alloc_tensor(a, at_letstmt_value=False)
-            return
-        raise VerifyError(
-            f"{spec_ref_render(_PRIM_FUNCTION)}: Call(AllocTensor, ...) may only appear "
-            f"as a direct LetStmt.value; found nested inside another Expr"
-        )
-    if isinstance(expr, Call):
-        for a in expr.args:
-            _reject_nested_alloc_tensor(a, at_letstmt_value=False)
+    visitor = _AllocTensorRejectingVisitor(at_letstmt_value=at_letstmt_value)
+    visitor.visit(expr)
 
 
 def _check_embedded_sharding(expr: Expr, scope, fn):
@@ -390,6 +403,48 @@ def _verify_symbol_call(stmt: Evaluate, fn, module_fn_map, ctx):
 _LAUNCH_EXTENT_OPS = (DimAdd, DimSub, DimMul, DimFloorDiv, DimMod, DimMin, DimMax)
 
 
+class _LaunchExtentVisitor(ExprVisitor[None]):
+    def __init__(self, extent_params, ref_name) -> None:
+        super().__init__()
+        self.extent_params = extent_params
+        self.ref_name = ref_name
+
+    def visit_Constant(self, extent: Constant) -> None:
+        if isinstance(extent.value, bool) or not isinstance(extent.value, int):
+            raise VerifyError(
+                f"Launch of {self.ref_name!r}: grid/block extent Constant must be an "
+                f"int, got {extent.value!r}"
+            )
+
+    def visit_ShapeOf(self, extent: ShapeOf) -> None:
+        param = self.extent_params.get(id(extent.param))
+        if param is None:
+            raise VerifyError(
+                f"Launch of {self.ref_name!r}: grid/block extent ShapeOf references "
+                f"{extent.param.name!r}, which is not a forwarded launch "
+                f"argument or host parameter"
+            )
+        rank = len(param.type.shape) if isinstance(param.type, TensorType) else 0
+        if not isinstance(param.type, TensorType) or not (0 <= extent.axis < rank):
+            raise VerifyError(
+                f"Launch of {self.ref_name!r}: grid/block extent ShapeOf axis "
+                f"{extent.axis} is out of range for {extent.param.name!r} "
+                f"(rank {rank})"
+            )
+
+    def visit_Call(self, extent: Call) -> None:
+        if not (isinstance(extent.target, _LAUNCH_EXTENT_OPS)):
+            self.default_visit(extent)
+            return
+        self.visit_operands(extent)
+
+    def default_visit(self, extent) -> None:
+        raise VerifyError(
+            f"Launch of {self.ref_name!r}: grid/block extent must be an integer "
+            f"Constant, ShapeOf, or dim-arithmetic Call, got {type(extent).__name__}"
+        )
+
+
 def _verify_launch_extent(extent, extent_params, ref_name) -> None:
     """Verify launch extent.
 
@@ -397,37 +452,9 @@ def _verify_launch_extent(extent, extent_params, ref_name) -> None:
     ``ShapeOf`` of a forwarded / entry tensor parameter, or a dim-arithmetic
     ``Call`` whose operands are themselves valid extents.
     """
-    if isinstance(extent, Constant):
-        if isinstance(extent.value, bool) or not isinstance(extent.value, int):
-            raise VerifyError(
-                f"Launch of {ref_name!r}: grid/block extent Constant must be an "
-                f"int, got {extent.value!r}"
-            )
+    if isinstance(extent, int) and not isinstance(extent, bool):
         return
-    if isinstance(extent, ShapeOf):
-        p = extent_params.get(id(extent.param))
-        if p is None:
-            raise VerifyError(
-                f"Launch of {ref_name!r}: grid/block extent ShapeOf references "
-                f"{extent.param.name!r}, which is not a forwarded launch "
-                f"argument or host parameter"
-            )
-        rank = len(p.type.shape) if isinstance(p.type, TensorType) else 0
-        if not isinstance(p.type, TensorType) or not (0 <= extent.axis < rank):
-            raise VerifyError(
-                f"Launch of {ref_name!r}: grid/block extent ShapeOf axis "
-                f"{extent.axis} is out of range for {extent.param.name!r} "
-                f"(rank {rank})"
-            )
-        return
-    if isinstance(extent, Call) and isinstance(extent.target, _LAUNCH_EXTENT_OPS):
-        for operand in extent.args:
-            _verify_launch_extent(operand, extent_params, ref_name)
-        return
-    raise VerifyError(
-        f"Launch of {ref_name!r}: grid/block extent must be an integer "
-        f"Constant, ShapeOf, or dim-arithmetic Call, got {type(extent).__name__}"
-    )
+    _LaunchExtentVisitor(extent_params, ref_name).visit(extent)
 
 
 def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx):

@@ -12,7 +12,6 @@ from dataclasses import dataclass, replace
 from typing import Union
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
-from tilefoundry.ir.core.expr import child_exprs
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, locate_dim_var
 from tilefoundry.ir.hir.cuda.nn.mma import (
@@ -91,7 +90,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     layout_axis_to_tensor_axis as _layout_axis_to_tensor_axis,
 )
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.visitor import ExprVisitor
+from tilefoundry.ir.visitor import ExprFunctor, ExprVisitor, ExprWalker
 from tilefoundry.passes.pass_base import ModulePass
 from tilefoundry.target import CudaTarget, Target, default_target
 from tilefoundry.visitor_registry.registries import (
@@ -100,27 +99,57 @@ from tilefoundry.visitor_registry.registries import (
 )
 
 
+class _InductionSliceVisitor(ExprVisitor[bool]):
+    def __init__(self, induction_var: Var) -> None:
+        super().__init__()
+        self.induction_var = induction_var
+
+    def visit_Call(self, expr: Call) -> bool:
+        if isinstance(expr.target, HirSlice):
+            starts = expr.args[1]
+            if isinstance(starts, Tuple) and any(
+                window_base(start)[0] is self.induction_var for start in starts.elements
+            ):
+                return True
+        target = expr.target
+        return any(
+            self.visit(child)
+            for child in ((*target,) if isinstance(target, HirFunction) else ())
+            + expr.args
+        )
+
+    def visit_Function(self, expr: HirFunction) -> bool:
+        children = () if expr.body is None else (expr.body,)
+        children += expr.variants
+        children += tuple(converter for _, converter in expr.converters)
+        return any(self.visit(child) for child in children)
+
+    def visit_Tuple(self, expr: Tuple) -> bool:
+        return any(self.visit(element) for element in expr.elements)
+
+    def visit_GridRegionExpr(self, expr: GridRegionExpr) -> bool:
+        return any(
+            self.visit(value)
+            for value in (*expr.init_args, expr.body, *expr.yield_values, *expr.carried_args)
+        )
+
+    def visit_Var(self, expr: Var) -> bool:
+        return False
+
+    def visit_Constant(self, expr: Constant) -> bool:
+        return False
+
+    def default_visit(self, expr) -> bool:
+        return False
+
+
 def _has_induction_slice(root: Expr, induction_var: Var) -> bool:
     """Whether ``root`` contains a Slice starting at ``induction_var``.
 
     A window moved by a compile-time offset is still that loop's window, so a
     tail it cannot read is still that loop's tail.
     """
-    seen: set[int] = set()
-
-    def visit(expr: Expr) -> bool:
-        if id(expr) in seen:
-            return False
-        seen.add(id(expr))
-        if isinstance(expr, Call) and isinstance(expr.target, HirSlice):
-            starts = expr.args[1]
-            if isinstance(starts, Tuple) and any(
-                window_base(start)[0] is induction_var for start in starts.elements
-            ):
-                return True
-        return any(visit(child) for child in child_exprs(expr))
-
-    return visit(root)
+    return _InductionSliceVisitor(induction_var).visit(root)
 
 
 def _reject_partial_window(region: GridRegionExpr) -> None:
@@ -635,23 +664,46 @@ class _Lowerer:
         (the gmem alias root), or ``None``. Used by the cross-CTA
         sync-then-reshard rule in ``_lower_reshard``.
         """
-        if _depth > 64:
-            return None
-        if isinstance(expr, Var):
-            if id(expr) in self._carry_init:
-                return self._param_alias_root(
-                    self._carry_init[id(expr)], _depth + 1
-                )
-            return expr if self._cache.get(id(expr)) is expr else None
-        if isinstance(expr, GridRegionExpr):
-            for a in expr.init_args:
-                r = self._param_alias_root(a, _depth + 1)
-                if r is not None:
-                    return r
-            return None
-        if isinstance(getattr(expr, "target", None), Reshard):
-            return self._param_alias_root(expr.args[0], _depth + 1)
-        return None
+        class _AliasVisitor(ExprVisitor[Var | None]):
+            def __init__(self, owner) -> None:
+                super().__init__()
+                self.owner = owner
+                self.depth = _depth
+
+            def _recurse(self, value):
+                self.depth += 1
+                try:
+                    return self.visit(value)
+                finally:
+                    self.depth -= 1
+
+            def dispatch_visit(self, value):
+                if self.depth > 64:
+                    return None
+                return ExprFunctor.dispatch_visit(self, value)
+
+            def visit_Var(self, value: Var) -> Var | None:
+                initial = self.owner._carry_init.get(id(value))
+                if initial is not None:
+                    return self._recurse(initial)
+                return value if self.owner._cache.get(id(value)) is value else None
+
+            def visit_GridRegionExpr(self, value: GridRegionExpr) -> Var | None:
+                for initial in value.init_args:
+                    result = self._recurse(initial)
+                    if result is not None:
+                        return result
+                return None
+
+            def visit_Call(self, value: Call) -> Var | None:
+                if isinstance(value.target, Reshard):
+                    return self._recurse(value.args[0])
+                return None
+
+            def default_visit(self, value) -> Var | None:
+                return None
+
+        return _AliasVisitor(self).visit(expr) if expr is not None else None
 
 
     def _lower_hir_call(self, call: Call, callee_hir: HirFunction) -> Var:
@@ -1216,6 +1268,20 @@ def _insert_slice_coord(ctx: "_Lowerer", off_expr):
     return ctx.lower(off_expr)
 
 
+class _CoordinateArithmeticVisitor(ExprVisitor[bool]):
+    def visit_Constant(self, expr: Constant) -> bool:
+        return True
+
+    def visit_Var(self, expr: Var) -> bool:
+        return True
+
+    def visit_Call(self, expr: Call) -> bool:
+        return is_dim_op_call(expr) and all(self.visit(arg) for arg in expr.args)
+
+    def default_visit(self, expr) -> bool:
+        return False
+
+
 def _is_coordinate_arithmetic(expr) -> bool:
     """Whether *expr* is dim arithmetic over literals and scalar Vars.
 
@@ -1224,10 +1290,9 @@ def _is_coordinate_arithmetic(expr) -> bool:
     """
     if not is_dim_op_call(expr):
         return False
-    return all(
-        isinstance(arg, (Constant, Var)) or _is_coordinate_arithmetic(arg)
-        for arg in expr.args
-    )
+    if isinstance(expr, Call):
+        return _CoordinateArithmeticVisitor().visit(expr)
+    return False
 
 
 @register_hir_lowering(HirSlice)
@@ -1737,7 +1802,7 @@ def _build_dispatch_entry(
     )
 
 
-class _MeshDeriver(ExprVisitor[None]):
+class _MeshDeriver(ExprWalker[None]):
     """Walk a HIR expression to find meshes, keyed by topology name.
 
     ``cta_mesh`` / ``thread_mesh`` hold the first mesh found for each
@@ -1746,6 +1811,7 @@ class _MeshDeriver(ExprVisitor[None]):
     """
 
     def __init__(self) -> None:
+        super().__init__()
         self.cta_mesh: Mesh | None = None
         self.thread_mesh: Mesh | None = None
 
@@ -1772,7 +1838,7 @@ class _MeshDeriver(ExprVisitor[None]):
 
 
                 self.thread_mesh = m
-        self.generic_visit(call)
+        self.visit_operands(call)
 
 
 def _derive_meshes_from_body(expr) -> tuple[Mesh | None, Mesh | None]:
@@ -1786,17 +1852,18 @@ def _derive_meshes_from_body(expr) -> tuple[Mesh | None, Mesh | None]:
     return deriver.cta_mesh, deriver.thread_mesh
 
 
-class _CalleeCollector(ExprVisitor[None]):
+class _CalleeCollector(ExprWalker[None]):
     """Collect the set of HIR function names called anywhere in an Expr."""
 
     def __init__(self) -> None:
+        super().__init__()
         self.found: set[str] = set()
 
     def visit_Call(self, call: Call) -> None:
         tgt = call.target
         if isinstance(tgt, HirFunction):
             self.found.add(tgt.name)
-        self.generic_visit(call)
+        self.visit_operands(call)
 
 
 def _collect_hir_callee_names(expr) -> set[str]:

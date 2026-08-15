@@ -76,24 +76,20 @@ def _calls_in(function) -> tuple:
     Its own body and nothing else: a variant this dispatch did not select is
     not running, and a converter runs offline rather than here.
     """
-    from tilefoundry.ir.core.expr import Call, child_exprs  # noqa: PLC0415 -- cycle
+    from tilefoundry.ir.core.expr import Call  # noqa: PLC0415 -- cycle
+    from tilefoundry.ir.visitor import ExprWalker  # noqa: PLC0415
 
     found: list[Call] = []
-    seen: set[int] = set()
 
-    def visit(expr) -> None:
-        if expr is None or id(expr) in seen:
-            return
-        seen.add(id(expr))
-        if isinstance(expr, Call) and isinstance(expr.target, HirFunction):
-            found.append(expr)
-            for arg in expr.args:
-                visit(arg)
-            return
-        for child in child_exprs(expr):
-            visit(child)
+    class _CallVisitor(ExprWalker[None]):
+        def visit_Call(self, expr: Call) -> None:
+            if isinstance(expr.target, HirFunction):
+                found.append(expr)
+            self.visit_operands(expr)
 
-    visit(getattr(function, "body", None))
+    body = getattr(function, "body", None)
+    if body is not None:
+        _CallVisitor().visit(body)
     return tuple(found)
 
 

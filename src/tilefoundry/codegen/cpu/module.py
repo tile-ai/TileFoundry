@@ -17,7 +17,7 @@ from tilefoundry.codegen.cuda.tir.prim_function import (
 )
 from tilefoundry.codegen.linkable import LinkableFunction, LinkableModule
 from tilefoundry.codegen.registry import CodeGenerator
-from tilefoundry.ir.core import Call, Var
+from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.tir.dispatch import DispatchCall
@@ -37,6 +37,7 @@ from tilefoundry.ir.types.dim import (
 )
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target import Target
 
 _STORAGE_DEVICE_TYPE = {
@@ -76,6 +77,43 @@ _DIM_BINOP_CXX = {
 }
 
 
+class _HostIntExprVisitor(ExprVisitor[str]):
+    def visit_Constant(self, expr: Constant) -> str:
+        value = static_dim_value(expr)
+        if value is None:
+            raise ValueError(
+                "emit_host_module: unsupported launch-extent node "
+                f"{type(expr).__name__}"
+            )
+        return str(value)
+
+    def visit_ShapeOf(self, expr: ShapeOf) -> str:
+        return f"{expr.param.name}.shape()[{expr.axis}]"
+
+    def visit_Call(self, expr: Call) -> str:
+        target = expr.target
+        sym = next((s for op, s in _DIM_BINOP_CXX.items() if isinstance(target, op)), None)
+        if sym is not None:
+            a, b = expr.args
+            return f"({self.visit(a)} {sym} {self.visit(b)})"
+        if isinstance(target, (DimMin, DimMax)):
+            a, b = expr.args
+            ca = self.visit(a)
+            cb = self.visit(b)
+            cmp = "<" if isinstance(target, DimMin) else ">"
+            return f"(({ca}) {cmp} ({cb}) ? ({ca}) : ({cb}))"
+        raise ValueError(
+            f"emit_host_module: unsupported launch-extent op "
+            f"{type(target).__name__}"
+        )
+
+    def default_visit(self, expr) -> str:
+        raise ValueError(
+            f"emit_host_module: unsupported launch-extent node "
+            f"{type(expr).__name__}"
+        )
+
+
 def _emit_host_int_expr(expr) -> str:
     """Lower a launch-extent Expr to a host C++ integer expression.
 
@@ -87,28 +125,8 @@ def _emit_host_int_expr(expr) -> str:
     sv = static_dim_value(expr)
     if sv is not None:
         return str(sv)
-    if isinstance(expr, ShapeOf):
-        return f"{expr.param.name}.shape()[{expr.axis}]"
-    if isinstance(expr, Call):
-        target = expr.target
-        sym = next(
-            (s for op, s in _DIM_BINOP_CXX.items() if isinstance(target, op)), None
-        )
-        if sym is not None:
-            a, b = expr.args
-            return (
-                f"({_emit_host_int_expr(a)} {sym} {_emit_host_int_expr(b)})"
-            )
-        if isinstance(target, (DimMin, DimMax)):
-            a, b = expr.args
-            ca = _emit_host_int_expr(a)
-            cb = _emit_host_int_expr(b)
-            cmp = "<" if isinstance(target, DimMin) else ">"
-            return f"(({ca}) {cmp} ({cb}) ? ({ca}) : ({cb}))"
-        raise ValueError(
-            f"emit_host_module: unsupported launch-extent op "
-            f"{type(target).__name__}"
-        )
+    if isinstance(expr, (ShapeOf, Call, Constant)):
+        return _HostIntExprVisitor().visit(expr)
     raise ValueError(
         f"emit_host_module: unsupported launch-extent node "
         f"{type(expr).__name__}"

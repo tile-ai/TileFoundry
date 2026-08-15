@@ -7,6 +7,7 @@ from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.tensor_type import TupleType
+from tilefoundry.ir.visitor import ExprVisitor
 
 from .function import Function, canonical_specialization_signature
 
@@ -134,21 +135,33 @@ def _ingest_dim_vars(ty: object, bounds: dict[str, tuple[int, int]]) -> None:
             _ingest_dim_vars(field, bounds)
 
 
-def _ingest_shape_entry(entry: object, bounds: dict[str, tuple[int, int]]) -> None:
-    if isinstance(entry, DimVar):
-        prior = bounds.get(entry.name)
+class _SignatureDimVisitor(ExprVisitor[None]):
+    def __init__(self, bounds: dict[str, tuple[int, int]]) -> None:
+        super().__init__()
+        self.bounds = bounds
+
+    def visit_DimVar(self, entry: DimVar) -> None:
+        prior = self.bounds.get(entry.name)
         if prior is None:
-            bounds[entry.name] = (entry.lo, entry.hi)
+            self.bounds[entry.name] = (entry.lo, entry.hi)
         elif prior != (entry.lo, entry.hi):
             raise VerifyError(
                 f"inconsistent DimVar bounds for {entry.name!r} within "
                 f"function signature: [{prior[0]}, {prior[1]}) vs "
                 f"[{entry.lo}, {entry.hi})"
             )
-        return
-    if isinstance(entry, Call):
+
+    def visit_Call(self, entry: Call) -> None:
         for arg in entry.args:
-            _ingest_shape_entry(arg, bounds)
+            self.visit(arg)
+
+    def default_visit(self, entry) -> None:
+        return None
+
+
+def _ingest_shape_entry(entry: object, bounds: dict[str, tuple[int, int]]) -> None:
+    if isinstance(entry, (DimVar, Call)):
+        _SignatureDimVisitor(bounds).visit(entry)
 
 
 def _collect_param_dim_vars(fn: Function) -> dict[str, tuple[int, int]]:
@@ -199,12 +212,24 @@ def _verify_signature_dim_vars(fn: Function) -> None:
             )
 
 
-def _reject_stmt_nodes(expr: Expr) -> None:
-    if isinstance(expr, Stmt):
-        raise VerifyError(f"hir body contains a Stmt node {type(expr).__name__}; hir is expr-only")
-    if isinstance(expr, Call):
+class _StmtRejectingVisitor(ExprVisitor[None]):
+    def visit_Call(self, expr: Call) -> None:
         for arg in expr.args:
-            _reject_stmt_nodes(arg)
+            if isinstance(arg, Stmt):
+                raise VerifyError(
+                    f"hir body contains a Stmt node {type(arg).__name__}; hir is expr-only"
+                )
+            self.visit(arg)
+
+    def default_visit(self, expr) -> None:
+        if isinstance(expr, Stmt):
+            raise VerifyError(
+                f"hir body contains a Stmt node {type(expr).__name__}; hir is expr-only"
+            )
+
+
+def _reject_stmt_nodes(expr: Expr) -> None:
+    _StmtRejectingVisitor().visit(expr)
 
 
 __all__ = ["verify_function"]

@@ -35,6 +35,7 @@ from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.function import Function as HirFunction
+from tilefoundry.ir.hir.function import canonical_specialization_signature
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
@@ -67,7 +68,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
 )
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.substitute import dim_vars_by_name
-from tilefoundry.ir.visitor import _expr_children
+from tilefoundry.ir.visitor import ExprFunctor, _expr_children
 from tilefoundry.utils.python_source import PythonExpr
 
 from .values import PARTS, render_comment
@@ -168,46 +169,57 @@ def shape_entry_str(entry: object) -> str:
     return _shape_entry_str(entry, nested=False)
 
 
-def _shape_entry_str(entry: object, *, nested: bool) -> str:
-    if isinstance(entry, bool):
-        return repr(entry)
-    if isinstance(entry, int):
-        return str(entry)
-    if isinstance(entry, DimVar):
+class _ShapeEntryVisitor(ExprFunctor[str]):
+    def __init__(self, nested: bool) -> None:
+        super().__init__()
+        self.nested = nested
+
+    def visit_DimVar(self, entry: DimVar) -> str:
         return entry.name
-    if isinstance(entry, Var):
+
+    def visit_Var(self, entry: Var) -> str:
         return entry.name
-    if isinstance(entry, Constant):
+
+    def visit_Constant(self, entry: Constant) -> str:
         return str(entry.value)
-    if isinstance(entry, Call):
+
+    def visit_Call(self, entry: Call) -> str:
         ceildiv_args = _ceildiv_args(entry)
         if ceildiv_args is not None:
             a, b = ceildiv_args
-            return (
-                f"ceildiv({_shape_entry_str(a, nested=False)}, "
-                f"{_shape_entry_str(b, nested=False)})"
-            )
+            return f"ceildiv({self._render(a, False)}, {self._render(b, False)})"
         target = entry.target
         if isinstance(target, DimConst):
             return str(target.value)
         for op_cls, sym in _DIM_INFIX_OPS.items():
             if isinstance(target, op_cls):
                 a, b = entry.args
-                rendered = (
-                    f"{_shape_entry_str(a, nested=True)} {sym} "
-                    f"{_shape_entry_str(b, nested=True)}"
-                )
-                return f"({rendered})" if nested else rendered
+                rendered = f"{self._render(a, True)} {sym} {self._render(b, True)}"
+                return f"({rendered})" if self.nested else rendered
         for op_cls, fname in _DIM_FUNC_OPS.items():
             if isinstance(target, op_cls):
-                rendered = ", ".join(
-                    _shape_entry_str(a, nested=False) for a in entry.args
-                )
+                rendered = ", ".join(self._render(arg, False) for arg in entry.args)
                 return f"{fname}({rendered})"
         return repr(entry)
-    if isinstance(entry, Expr):
+
+    def default_visit(self, entry) -> str:
+        if isinstance(entry, bool):
+            return repr(entry)
+        if isinstance(entry, int):
+            return str(entry)
         return repr(entry)
-    return repr(entry)
+
+    def _render(self, entry, nested: bool) -> str:
+        previous = self.nested
+        self.nested = nested
+        try:
+            return self.visit(entry)
+        finally:
+            self.nested = previous
+
+
+def _shape_entry_str(entry: object, *, nested: bool) -> str:
+    return _ShapeEntryVisitor(nested).visit(entry)
 
 
 def _ceildiv_args(entry: Call) -> tuple[object, object] | None:
@@ -1152,41 +1164,67 @@ def _emit_def(
         )
         printed.add(id(expr))
 
-    def _emit_expr(expr: Expr, level: str) -> None:
-        key = id(expr)
-        if key in printed:
-            return
-        if key in _inlined_start_ids:
-            printed.add(key)
-            return
-        if isinstance(expr, Var):
-            printed.add(key)
-            return
-        if isinstance(expr, Constant):
-            lines.append(f"{level}{_names[key]} = {repr(expr.value)}{_comments(expr, options, mesh_map)}")
-            printed.add(key)
-            return
-        if isinstance(expr, Tuple):
+    class _ExprEmitter(ExprFunctor[None]):
+        def __init__(self, level: str) -> None:
+            super().__init__()
+            self.level = level
+
+        def emit(self, expr: Expr) -> None:
+            self.visit(expr)
+
+        def visit(self, expr):
+            key = id(expr)
+            if key in printed:
+                return None
+            if key in _inlined_start_ids:
+                printed.add(key)
+                return None
+            return super().visit(expr)
+
+        def visit_Var(self, expr: Var) -> None:
+            printed.add(id(expr))
+
+        def visit_Constant(self, expr: Constant) -> None:
+            lines.append(
+                f"{self.level}{_names[id(expr)]} = {repr(expr.value)}"
+                f"{_comments(expr, options, mesh_map)}"
+            )
+            printed.add(id(expr))
+
+        def visit_Tuple(self, expr: Tuple) -> None:
             for element in expr.elements:
                 if not isinstance(element, Constant):
-                    _emit_expr(element, level)
-            printed.add(key)
-            return
-        if isinstance(expr, GridRegionExpr):
-            _emit_grid(expr, level)
-            return
-        if isinstance(expr, Call):
+                    self.visit(element)
+            printed.add(id(expr))
+
+        def visit_GridRegionExpr(self, expr: GridRegionExpr) -> None:
+            _emit_grid(expr, self.level)
+
+        def visit_Call(self, expr: Call) -> None:
             if (
                 isinstance(expr.target, TupleGetItem)
                 and len(expr.args) == 1
                 and isinstance(expr.args[0], GridRegionExpr)
             ):
-                _emit_grid(expr.args[0], level)
-                printed.add(key)
+                _emit_grid(expr.args[0], self.level)
+                printed.add(id(expr))
                 return
             for arg in expr.args:
-                _emit_expr(arg, level)
-            _emit_inline_call(expr, level)
+                self.visit(arg)
+            _emit_inline_call(expr, self.level)
+
+        def default_visit(self, expr) -> None:
+            return None
+
+    _expr_emitter = _ExprEmitter("")
+
+    def _emit_expr(expr: Expr, level: str) -> None:
+        previous = _expr_emitter.level
+        _expr_emitter.level = level
+        try:
+            _expr_emitter.emit(expr)
+        finally:
+            _expr_emitter.level = previous
 
     def _emit_grid(grid: GridRegionExpr, level: str) -> None:
         key = id(grid)
@@ -1358,6 +1396,15 @@ def _emit_header(
     return lines
 
 
+def _variant_binding_name(variant: HirFunction) -> str:
+    """Return a valid source binding for a variant without display metadata."""
+    label = display_name(variant)
+    if label is not None:
+        return label
+    signature = canonical_specialization_signature(variant.specializations)
+    return "variant_" + re.sub(r"[^0-9A-Za-z_]", "_", signature)
+
+
 def _emit_decorated_defs(
     fn: HirFunction, mesh_map: dict[int, str], indent: str, options: PythonPrintOptions,
     child_entries: dict[int, str] | None = None,
@@ -1394,7 +1441,7 @@ def _emit_decorated_defs(
         )
         lines.extend(
             _emit_def(
-                variant, display_name(variant) or "_", mesh_map, indent, options,
+                variant, _variant_binding_name(variant), mesh_map, indent, options,
                 child_entries,
                 line_offset=line_offset + _physical_line_count(lines),
                 statements=statements,

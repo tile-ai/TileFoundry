@@ -13,9 +13,13 @@ import logging
 import os
 import pkgutil
 
-from tilefoundry.ir.core import Call
+from tilefoundry.ir.core import Call, Constant, Tuple, Var
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import LetStmt, MeshScope, Sequential
+from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.visitor import ExprWalker
 
 _log = logging.getLogger(__name__)
 _tir_path = os.path.dirname(__file__)
@@ -130,13 +134,34 @@ def _derive_launch_config(
             grid_x = max(grid_x, g)
             block_x = max(block_x, b)
 
-    def _walk_expr(e):
-        if isinstance(e, Call):
-            _harvest_from_layout(getattr(e.type, "layout", None))
-            for a in e.args:
-                _walk_expr(a)
-        else:
-            _harvest_from_layout(getattr(getattr(e, "type", None), "layout", None))
+    class _LayoutVisitor(ExprWalker[None]):
+        def _record(self, expr) -> None:
+            _harvest_from_layout(getattr(getattr(expr, "type", None), "layout", None))
+
+        def visit_Call(self, expr: Call) -> None:
+            self._record(expr)
+            self.visit_operands(expr)
+
+        def visit_Tuple(self, expr: Tuple) -> None:
+            self._record(expr)
+
+        def visit_GridRegionExpr(self, expr: GridRegionExpr) -> None:
+            self._record(expr)
+
+        def visit_Var(self, expr: Var) -> None:
+            self._record(expr)
+
+        def visit_Constant(self, expr: Constant) -> None:
+            self._record(expr)
+
+        def visit_SymbolRef(self, expr: SymbolRef) -> None:
+            self._record(expr)
+
+        def visit_ShapeOf(self, expr: ShapeOf) -> None:
+            self._record(expr)
+
+        def default_visit(self, expr) -> None:
+            self._record(expr)
 
     def walk(stmt) -> None:
         nonlocal grid_x, block_x
@@ -156,7 +181,7 @@ def _derive_launch_config(
 
 
                 if hasattr(stmt, "value"):
-                    _walk_expr(stmt.value)
+                    _LayoutVisitor().visit(stmt.value)
                 if hasattr(stmt, "var") and getattr(stmt.var, "type", None) is not None:
                     _harvest_from_layout(getattr(stmt.var.type, "layout", None))
                 walk(stmt.body)

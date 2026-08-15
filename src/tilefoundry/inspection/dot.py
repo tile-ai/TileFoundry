@@ -13,6 +13,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.visitor import ExprWalker
 
 from .python_printer import _collect_meshes, _mesh_name_map, _op_display_name, _tensor_annotation
 
@@ -47,8 +48,6 @@ def hir_function_to_dot(fn: HirFunction) -> str:
              '  edge [fontsize=10, fontcolor="#555555"];', '']
     _counter = [0]
     _ids = {}
-    _emitted: set[int] = set()
-
     def _id(node):
         key = id(node)
         if key not in _ids:
@@ -72,64 +71,62 @@ def hir_function_to_dot(fn: HirFunction) -> str:
     CALL_FILL = "#d5f5e3"
     SHARDING_FILL = "#e8daef"
 
-    def walk(expr):
-        nid = _id(expr)
-        key = id(expr)
-        is_new = key not in _emitted
-        if is_new:
-            _emitted.add(key)
+    class _DotWalker(ExprWalker[None]):
+        def _emit_leaf(self, expr, label_lines, fill) -> None:
+            _emit_node(_id(expr), label_lines, fill=fill)
 
-        match expr:
-            case Var():
-                if is_new:
-                    _emit_node(nid, [
-                        f"Var: {expr.name}",
-                        *_type_lines(expr.type, mesh_map),
-                    ], fill=VAR_FILL)
-            case Constant():
-                if is_new:
-                    val = f"{expr.value:.6g}" if isinstance(expr.value, float) else str(expr.value)
-                    _emit_node(nid, [
-                        f"Const: {val}",
-                        *_type_lines(expr.type, mesh_map),
-                    ], fill=CONST_FILL)
-            case Call():
-                target = expr.target
-                if isinstance(target, Reshard):
-                    if is_new:
-                        name = binding_name(expr)
-                        header = f"{name}\\nReshard" if name else "Reshard"
-                        _emit_node(nid, [
-                            header,
-                            *_type_lines(expr.type, mesh_map),
-                        ], fill=SHARDING_FILL)
-                        for arg in expr.args:
-                            walk(arg)
-                            _emit_edge(_id(arg), nid)
-                    return
+        def visit_Var(self, expr: Var) -> None:
+            self._emit_leaf(
+                expr,
+                [f"Var: {expr.name}", *_type_lines(expr.type, mesh_map)],
+                VAR_FILL,
+            )
 
-                op_label = _op_display_name(target)
+        def visit_Constant(self, expr: Constant) -> None:
+            value = f"{expr.value:.6g}" if isinstance(expr.value, float) else str(expr.value)
+            self._emit_leaf(
+                expr,
+                [f"Const: {value}", *_type_lines(expr.type, mesh_map)],
+                CONST_FILL,
+            )
+
+        def visit_Call(self, expr: Call) -> None:
+            nid = _id(expr)
+            target = expr.target
+            if isinstance(target, Reshard):
                 name = binding_name(expr)
-                header = f"{name}\\n{op_label}" if name else op_label
-                if is_new:
-                    _emit_node(nid, [
-                        header,
-                        *_type_lines(expr.type, mesh_map),
-                    ], fill=CALL_FILL)
-                    for i, arg in enumerate(expr.args):
-                        walk(arg)
-                        edge_label = f"arg[{i}]" if len(expr.args) > 1 else ""
-                        _emit_edge(_id(arg), nid, edge_label)
-                else:
-                    for arg in expr.args:
-                        walk(arg)
-            case _:
-                if is_new:
-                    _emit_node(nid, [type(expr).__name__], fill="#ffffff")
+                header = f"{name}\\nReshard" if name else "Reshard"
+                _emit_node(nid, [header, *_type_lines(expr.type, mesh_map)], fill=SHARDING_FILL)
+                for arg in expr.args:
+                    self.visit(arg)
+                    _emit_edge(_id(arg), nid)
+                return
 
-    walk(fn.body)
-    for p in fn.params:
-        walk(p)
+            op_label = _op_display_name(target)
+            name = binding_name(expr)
+            header = f"{name}\\n{op_label}" if name else op_label
+            _emit_node(nid, [header, *_type_lines(expr.type, mesh_map)], fill=CALL_FILL)
+            for i, arg in enumerate(expr.args):
+                self.visit(arg)
+                edge_label = f"arg[{i}]" if len(expr.args) > 1 else ""
+                _emit_edge(_id(arg), nid, edge_label)
+
+        def visit_Tuple(self, expr) -> None:
+            self._emit_leaf(expr, [type(expr).__name__], "#ffffff")
+
+        def visit_GridRegionExpr(self, expr) -> None:
+            self._emit_leaf(expr, [type(expr).__name__], "#ffffff")
+
+        def visit_ShapeOf(self, expr) -> None:
+            _emit_node(_id(expr), ["ShapeOf"], fill="#ffffff")
+
+        def default_visit(self, expr) -> None:
+            _emit_node(_id(expr), [type(expr).__name__], fill="#ffffff")
+
+    walker = _DotWalker()
+    walker.visit(fn.body)
+    for param in fn.params:
+        walker.visit(param)
 
 
     lines.append("")

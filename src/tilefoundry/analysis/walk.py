@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from tilefoundry.ir.core import (
     Call,
+    Constant,
     Expr,
     IRMetadata,
     SourceSpanMetadata,
@@ -19,25 +20,21 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.module import owning_module as _owning_module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
 from tilefoundry.ir.types.shard import Mesh, shard_layout_of
 from tilefoundry.ir.types.shard.layout_algebra import size
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.visitor import ExprWalker, _expr_children
 
 from .errors import AnalysisError
 
 
 def children(expr: Expr) -> tuple[Expr, ...]:
     """The operand expressions of *expr*, in authored order."""
-    match expr:
-        case Call(args=args):
-            return args
-        case Tuple(elements=elements):
-            return elements
-        case GridRegionExpr(init_args=init_args, body=body, yield_values=yield_values):
-            return (*init_args, body, *yield_values)
-        case _:
-            return ()
+    if isinstance(expr, (Function, ShapeOf)):
+        return ()
+    return _expr_children(expr)
 
 
 def enclosing_trips(root: Expr | None) -> dict[int, int]:
@@ -105,18 +102,42 @@ def postorder(root: Expr | None) -> tuple[Expr, ...]:
     """
     if root is None:
         return ()
-    seen: set[int] = set()
     result: list[Expr] = []
 
-    def visit(expr: Expr) -> None:
-        if id(expr) in seen:
-            return
-        seen.add(id(expr))
-        for child in children(expr):
-            visit(child)
-        result.append(expr)
+    class _Postorder(ExprWalker[None]):
+        def _record(self, expr: Expr) -> None:
+            result.append(expr)
 
-    visit(root)
+        def visit_Call(self, expr: Call) -> None:
+            self.visit_operands(expr)
+            self._record(expr)
+
+        def visit_Var(self, expr: Var) -> None:
+            self._record(expr)
+
+        def visit_Constant(self, expr: Constant) -> None:
+            self._record(expr)
+
+        def visit_Tuple(self, expr: Tuple) -> None:
+            self.visit_operands(expr)
+            self._record(expr)
+
+        def visit_GridRegionExpr(self, expr: GridRegionExpr) -> None:
+            self.visit_operands(expr)
+            self._record(expr)
+
+        def visit_Function(self, expr: Function) -> None:
+            self.visit_operands(expr)
+            self._record(expr)
+
+        def visit_SymbolRef(self, expr) -> None:
+            self._record(expr)
+
+        def visit_ShapeOf(self, expr) -> None:
+            self._record(expr)
+
+    if root is not None:
+        _Postorder().visit(root)
     return tuple(result)
 
 

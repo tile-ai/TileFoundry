@@ -257,9 +257,14 @@ def _elaborate_from_bound_types(
         Rebuild ``callee.body`` under ``subst`` (memoized by node
         identity so SSA-as-DAG sharing survives), re-stamping every
         changed node's type through the shared typeinfer visitor.
+
+        The local memo stays here because each result depends on this
+        elaborator's substitution and body context; it must not be shared
+        through ExprVisitor's read-only memo.
         """
 
         def __init__(self, body_ctx: TypeInferContext) -> None:
+            super().__init__()
             self.body_ctx = body_ctx
             self._memo: dict[int, Expr] = {}
 
@@ -356,8 +361,8 @@ def _elaborate_from_bound_types(
             )
             return self._retyped(rebuilt)
 
-        def generic_visit(self, expr: Expr) -> Expr:
-            rebuilt = super().generic_visit(expr)
+        def default_visit(self, expr: Expr) -> Expr:
+            rebuilt = super().default_visit(expr)
             if rebuilt is expr:
                 return expr
             return self._retyped(rebuilt)

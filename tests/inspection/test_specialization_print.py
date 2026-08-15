@@ -42,7 +42,7 @@ def test_prototype_prints_pass_base_and_specialize_blocks() -> None:
     """Test prototype prints pass base and specialize blocks.
 
     The base is a pass-bodied prototype and each variant a ``.specialize`` block
-    over a throwaway ``def _``. The ``@module``-wrapped form must emit the same
+    over a generated binding. The ``@module``-wrapped form must emit the same
     ``DimVarRangePat`` import as the standalone form — module and standalone output
     share one header emitter, so a construct requiring an extra import in one mode
     requires it in both.
@@ -52,7 +52,8 @@ def test_prototype_prints_pass_base_and_specialize_blocks() -> None:
 
     for src in (standalone, in_module):
         assert "    pass" in src
-        assert "def _(" in src
+        assert "def variant_S_1_3(" in src
+        assert "def variant_S_4_7(" in src
         assert '@main.specialize(DimVarRangePat("S", 1, 3))' in src
         assert '@main.specialize(DimVarRangePat("S", 4, 7))' in src
 

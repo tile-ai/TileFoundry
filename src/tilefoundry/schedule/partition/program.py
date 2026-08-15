@@ -33,6 +33,7 @@ from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import Mesh, ShardLayout, Split
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.visitor import ExprVisitor, ExprWalker
 
 from .facts import PartitionFactsQuery
 
@@ -41,6 +42,125 @@ ValueRole = Literal["normal", "carry", "yield", "result"]
 
 class PartitionProgramError(ValueError):
     """The authored program cannot be extracted into a partition program."""
+
+
+class _ProcessExprVisitor(ExprVisitor[tuple[int, ...]]):
+    """Process one Expr context while the owner keeps partition side effects."""
+
+    def __init__(self, owner, function, function_path, env) -> None:
+        super().__init__()
+        self.owner = owner
+        self.function = function
+        self.function_path = function_path
+        self.env = env
+
+    def _key(self, expr: Expr) -> tuple[tuple[int, ...], int]:
+        return self.function_path, id(expr)
+
+    def visit(self, expr: Expr) -> tuple[int, ...]:
+        cached = self.owner._expr_values.get(self._key(expr))
+        if cached is not None:
+            return cached
+        return super().visit(expr)
+
+    def visit_Var(self, expr: Var) -> tuple[int, ...]:
+        key = self._key(expr)
+        refs = self.env.get(id(expr))
+        if refs is None:
+            refs = self.owner._param_values.get(key, ())
+        self.owner._expr_values[key] = refs
+        return refs
+
+    def visit_Constant(self, expr: Constant) -> tuple[int, ...]:
+        self.owner._expr_values[self._key(expr)] = ()
+        return ()
+
+    def visit_Tuple(self, expr: Tuple) -> tuple[int, ...]:
+        refs = tuple(ref for element in expr.elements for ref in self.visit(element))
+        key = self._key(expr)
+        self.owner._expr_values[key] = refs
+        self.owner._record_requirement(refs, expr)
+        return refs
+
+    def visit_GridRegionExpr(self, expr: GridRegionExpr) -> tuple[int, ...]:
+        refs = self.owner._process_region(
+            expr, self.function, self.function_path, self.env
+        )
+        key = self._key(expr)
+        self.owner._expr_values[key] = refs
+        self.owner._record_requirement(refs, expr)
+        return refs
+
+    def visit_Call(self, expr: Call) -> tuple[int, ...]:
+        key = self._key(expr)
+        arg_refs = tuple(self.visit(arg) for arg in expr.args)
+        target = expr.target
+        if isinstance(target, Function):
+            call_path = self.function_path + (len(self.owner.function_instances),)
+            helper_env = dict(zip((id(param) for param in target.params), arg_refs))
+            self.owner._process_function(target, call_path, helper_env, parent_call=expr)
+            refs = self.owner._process_expr(target.body, target, call_path, helper_env)
+            self.owner._expr_values[key] = refs
+            self.owner._record_requirement(refs, expr)
+            return refs
+        if isinstance(target, (PrimFunction, Launch, SymbolRef)):
+            raise PartitionProgramError(
+                f"kernel boundary {type(target).__name__} at "
+                f"{expr_location(expr)} is not a partitioned operation"
+            )
+        if is_induction_var_singleton_reshape(expr):
+            refs = arg_refs[0] if arg_refs else ()
+            self.owner._expr_values[key] = refs
+            self.owner._record_requirement(refs, expr)
+            return refs
+        if isinstance(target, TupleGetItem):
+            source_refs = arg_refs[0] if arg_refs else ()
+            fields = tensor_leaves(expr.args[0].type)
+            index = target.index
+            if index < 0 or index >= len(fields):
+                raise PartitionProgramError(
+                    f"TupleGetItem index {index} is out of range at "
+                    f"{expr_location(expr)}"
+                )
+            start = sum(
+                len(tensor_leaves(field))
+                for field in expr.args[0].type.fields[:index]  # type: ignore[union-attr]
+            )
+            refs = source_refs[
+                start : start
+                + len(tensor_leaves(expr.args[0].type.fields[index]))  # type: ignore[union-attr]
+            ]
+            self.owner._expr_values[key] = refs
+            self.owner._record_requirement(refs, expr)
+            return refs
+        site_id = self.owner._next_site
+        self.owner._next_site += 1
+        output_refs = tuple(
+            self.owner._new_value(
+                expr, type, path, self.function_path, producer_site_id=site_id
+            )
+            for path, type in tensor_leaves(expr.type)
+        )
+        self.owner.sites.append(
+            OperationSite(site_id, expr, self.function_path, arg_refs, output_refs)
+        )
+        self.owner.site_order.append(site_id)
+        self.owner.site_enclosing_regions[site_id] = (
+            self.owner._active_regions[-1] if self.owner._active_regions else None
+        )
+        if self.owner._active_regions:
+            region_id = self.owner._active_regions[-1]
+            info = self.owner.regions[region_id]
+            self.owner.regions[region_id] = replace(
+                info, operation_site_ids=(*info.operation_site_ids, site_id)
+            )
+        self.owner._expr_values[key] = output_refs
+        self.owner._record_requirement(output_refs, expr)
+        return output_refs
+
+    def default_visit(self, expr: Expr) -> tuple[int, ...]:
+        self.owner._expr_values[self._key(expr)] = ()
+        return ()
 
 
 def expr_location(expr: Expr) -> str:
@@ -193,14 +313,21 @@ class _Extractor:
                         ):
                             record(tensor.layout.layout.shape[attr.axis])
                     for dim in tensor.layout.mesh.layout.shape:
-                        record(dim)
+                            record(dim)
 
-        def visit_expr(expr: Expr | None) -> None:
-            if expr is None:
-                return
-            visit_type(expr.type)
-            metadata = constraint_metadata(expr)
-            if metadata is not None:
+        owner = self
+
+        class _ExtentVisitor(ExprWalker[None]):
+            def visit(self, expr):
+                if expr is not None and not isinstance(expr, Function):
+                    self._record_expr(expr)
+                return super().visit(expr)
+
+            def _record_expr(self, expr: Expr) -> None:
+                visit_type(expr.type)
+                metadata = constraint_metadata(expr)
+                if metadata is None:
+                    return
                 for constraint in metadata.constraints:
                     if isinstance(constraint, LayoutConstraint):
                         for _, attr in constraint.bindings:
@@ -209,30 +336,46 @@ class _Extractor:
                             ):
                                 record(constraint.layout.shape[attr.axis])
                     elif isinstance(constraint, MeshConstraint) and constraint.mesh is not None:
-                        self.required_meshes.append(constraint.mesh)
+                        owner.required_meshes.append(constraint.mesh)
                         for dim in constraint.mesh.layout.shape:
                             record(dim)
-            if isinstance(expr, Call):
+
+            def visit_function(self, function: Function) -> None:
+                if id(function) in seen_functions:
+                    return
+                seen_functions.add(id(function))
+                for param in function.params:
+                    self.visit(param)
+                if function.body is not None:
+                    self.visit(function.body)
+
+            def visit_Call(self, expr: Call) -> None:
                 if isinstance(expr.target, Function):
-                    visit_function(expr.target)
-                for arg in expr.args:
-                    visit_expr(arg)
-            elif isinstance(expr, Tuple):
-                for element in expr.elements:
-                    visit_expr(element)
-            elif isinstance(expr, GridRegionExpr):
-                for value in (*expr.init_args, expr.body, *expr.yield_values):
-                    visit_expr(value)
+                    self.visit_function(expr.target)
+                self.visit_operands(expr)
 
-        def visit_function(function: Function) -> None:
-            if id(function) in seen_functions:
-                return
-            seen_functions.add(id(function))
-            for param in function.params:
-                visit_expr(param)
-            visit_expr(function.body)
+            def visit_Tuple(self, expr: Tuple) -> None:
+                self.visit_operands(expr)
 
-        visit_function(self.root)
+            def visit_GridRegionExpr(self, expr: GridRegionExpr) -> None:
+                self.visit_operands(expr)
+
+            def visit_Function(self, expr: Function) -> None:
+                self.visit_function(expr)
+
+            def visit_Var(self, expr: Var) -> None:
+                return None
+
+            def visit_Constant(self, expr: Constant) -> None:
+                return None
+
+            def visit_SymbolRef(self, expr: SymbolRef) -> None:
+                return None
+
+            def visit_ShapeOf(self, expr: Expr) -> None:
+                return None
+
+        _ExtentVisitor().visit_function(self.root)
         return tuple(sorted(extents))
 
     def _new_value(
@@ -296,96 +439,7 @@ class _Extractor:
         cached = self._expr_values.get(key)
         if cached is not None:
             return cached
-        if isinstance(expr, Var):
-            refs = env.get(id(expr))
-            if refs is None:
-                refs = self._param_values.get((function_path, id(expr)), ())
-            self._expr_values[key] = refs
-            return refs
-        if isinstance(expr, Constant):
-            self._expr_values[key] = ()
-            return ()
-        if isinstance(expr, Tuple):
-            refs = tuple(
-                ref
-                for element in expr.elements
-                for ref in self._process_expr(element, function, function_path, env)
-            )
-            self._expr_values[key] = refs
-            self._record_requirement(refs, expr)
-            return refs
-        if isinstance(expr, GridRegionExpr):
-            refs = self._process_region(expr, function, function_path, env)
-            self._expr_values[key] = refs
-            self._record_requirement(refs, expr)
-            return refs
-        if not isinstance(expr, Call):
-            self._expr_values[key] = ()
-            return ()
-        arg_refs = tuple(
-            self._process_expr(arg, function, function_path, env) for arg in expr.args
-        )
-        target = expr.target
-        if isinstance(target, Function):
-            call_path = function_path + (len(self.function_instances),)
-            helper_env = dict(zip((id(param) for param in target.params), arg_refs))
-            self._process_function(target, call_path, helper_env, parent_call=expr)
-            refs = self._process_expr(target.body, target, call_path, helper_env)
-            self._expr_values[key] = refs
-            self._record_requirement(refs, expr)
-            return refs
-        if isinstance(target, (PrimFunction, Launch, SymbolRef)):
-            raise PartitionProgramError(
-                f"kernel boundary {type(target).__name__} at "
-                f"{expr_location(expr)} is not a partitioned operation"
-            )
-        if is_induction_var_singleton_reshape(expr):
-            refs = arg_refs[0] if arg_refs else ()
-            self._expr_values[key] = refs
-            self._record_requirement(refs, expr)
-            return refs
-        if isinstance(target, TupleGetItem):
-            source_refs = arg_refs[0] if arg_refs else ()
-            fields = tensor_leaves(expr.args[0].type)
-            index = target.index
-            if index < 0 or index >= len(fields):
-                raise PartitionProgramError(
-                    f"TupleGetItem index {index} is out of range at "
-                    f"{expr_location(expr)}"
-                )
-            start = sum(
-                len(tensor_leaves(field))
-                for field in expr.args[0].type.fields[:index]  # type: ignore[union-attr]
-            )
-            refs = source_refs[
-                start : start
-                + len(tensor_leaves(expr.args[0].type.fields[index]))  # type: ignore[union-attr]
-            ]
-            self._expr_values[key] = refs
-            self._record_requirement(refs, expr)
-            return refs
-        site_id = self._next_site
-        self._next_site += 1
-        output_refs = tuple(
-            self._new_value(expr, type, path, function_path, producer_site_id=site_id)
-            for path, type in tensor_leaves(expr.type)
-        )
-        self.sites.append(
-            OperationSite(site_id, expr, function_path, arg_refs, output_refs)
-        )
-        self.site_order.append(site_id)
-        self.site_enclosing_regions[site_id] = (
-            self._active_regions[-1] if self._active_regions else None
-        )
-        if self._active_regions:
-            region_id = self._active_regions[-1]
-            info = self.regions[region_id]
-            self.regions[region_id] = replace(
-                info, operation_site_ids=(*info.operation_site_ids, site_id)
-            )
-        self._expr_values[key] = output_refs
-        self._record_requirement(output_refs, expr)
-        return output_refs
+        return _ProcessExprVisitor(self, function, function_path, env).visit(expr)
 
     def _process_region(
         self,

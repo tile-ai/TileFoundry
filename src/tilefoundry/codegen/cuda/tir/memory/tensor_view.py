@@ -28,6 +28,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     shard_layout_local_shape,
 )
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout as SL
+from tilefoundry.ir.visitor import ExprVisitor
 
 
 def _render_layout(shape, strides) -> str:
@@ -197,6 +198,38 @@ def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None):
 _COORD_OPERATORS = {DimAdd: "+", DimSub: "-", DimMul: "*"}
 
 
+class _CoordinateVisitor(ExprVisitor[str]):
+    def __init__(self, ctx: CodegenContext) -> None:
+        super().__init__()
+        self.ctx = ctx
+
+    def visit_Constant(self, expr: Constant) -> str:
+        return str(int(expr.value))
+
+    def visit_Call(self, expr: Call) -> str:
+        operator = _COORD_OPERATORS.get(type(expr.target))
+        if operator is not None:
+            lhs, rhs = (self.visit(arg) for arg in expr.args)
+            return f"({lhs} {operator} {rhs})"
+        return self._leaf(expr)
+
+    def _leaf(self, expr) -> str:
+        name = self.ctx.name_for(expr)
+        shape = getattr(getattr(expr, "type", None), "shape", ()) or ()
+        dims = tuple(getattr(d, "value", d) for d in shape)
+        if dims == ():
+            return name
+        if dims == (1,):
+            return f"{name}_tensor(0)" if self.ctx.is_kernel_param(expr) else f"{name}(0)"
+        raise NotImplementedError(
+            f"local_tile coordinate from a rank-{len(dims)} offset {dims} "
+            "is not supported"
+        )
+
+    def default_visit(self, expr) -> str:
+        return self._leaf(expr)
+
+
 def _coord_ref(index_var, ctx: CodegenContext) -> str:
     """Render a compile-time, scalar, or one-element absolute coordinate.
 
@@ -206,24 +239,7 @@ def _coord_ref(index_var, ctx: CodegenContext) -> str:
     placement after an ordinal is converted to an element start, and an addition
     moves a window's base by a compile-time offset. Other forms fail closed.
     """
-    if isinstance(index_var, Constant):
-        return str(int(index_var.value))
-    if isinstance(index_var, Call):
-        operator = _COORD_OPERATORS.get(type(index_var.target))
-        if operator is not None:
-            lhs, rhs = (_coord_ref(arg, ctx) for arg in index_var.args)
-            return f"({lhs} {operator} {rhs})"
-    name = ctx.name_for(index_var)
-    shape = getattr(getattr(index_var, "type", None), "shape", ()) or ()
-    dims = tuple(getattr(d, "value", d) for d in shape)
-    if dims == ():
-        return name
-    if dims == (1,):
-        return f"{name}_tensor(0)" if ctx.is_kernel_param(index_var) else f"{name}(0)"
-    raise NotImplementedError(
-        f"local_tile coordinate from a rank-{len(dims)} offset {dims} "
-        "is not supported"
-    )
+    return _CoordinateVisitor(ctx).visit(index_var)
 
 
 @register_codegen_cuda(TensorView)

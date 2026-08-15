@@ -133,11 +133,11 @@ def test_a_variant_this_dispatch_did_not_select_has_no_say() -> None:
             pass
 
         @dispatch.specialize(DimVarRangePat("n_resource", 1, 5))
-        def _(x: Tensor[(_N,), "f32"]) -> Tensor[(_N,), "f32"]:
+        def near_dispatch(x: Tensor[(_N,), "f32"]) -> Tensor[(_N,), "f32"]:
             return near(x)  # noqa: F821
 
         @dispatch.specialize(DimVarRangePat("n_resource", 5, 9))
-        def _(x: Tensor[(_N,), "f32"]) -> Tensor[(_N,), "f32"]:
+        def far_dispatch(x: Tensor[(_N,), "f32"]) -> Tensor[(_N,), "f32"]:
             return far(x)  # noqa: F821
 
     reading = _Dispatch.load(
@@ -201,11 +201,11 @@ class _Nested:
         pass
 
     @pick.specialize(DimVarRangePat("n_resource", 1, 5))
-    def _(x: Tensor[(_N,), "f32"]) -> Tensor[(_N,), "f32"]:
+    def near_dispatch(x: Tensor[(_N,), "f32"]) -> Tensor[(_N,), "f32"]:
         return near(x)  # noqa: F821
 
     @pick.specialize(DimVarRangePat("n_resource", 5, 9))
-    def _(x: Tensor[(_N,), "f32"]) -> Tensor[(_N,), "f32"]:
+    def far_dispatch(x: Tensor[(_N,), "f32"]) -> Tensor[(_N,), "f32"]:
         return far(x)  # noqa: F821
 
 

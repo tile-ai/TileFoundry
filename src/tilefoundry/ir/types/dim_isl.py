@@ -64,6 +64,126 @@ def _bind_param(
     return name
 
 
+_RANGE_EXPR_VISITOR_TYPE = None
+_DIM_RANGE_VISITOR_TYPE = None
+
+
+def _range_expr_visitor_type():
+    global _RANGE_EXPR_VISITOR_TYPE
+    if _RANGE_EXPR_VISITOR_TYPE is None:
+        from tilefoundry.ir.visitor import ExprVisitor  # noqa: PLC0415
+
+        class _RangeExprVisitor(ExprVisitor[str]):
+            def __init__(self, params, param_map, identities) -> None:
+                super().__init__()
+                self.params = params
+                self.param_map = param_map
+                self.identities = identities
+
+            def visit_Constant(self, dim: Constant) -> str:
+                return str(int(dim.value))
+
+            def visit_DimVar(self, dim: DimVar) -> str:
+                return _bind_param(dim, self.params, self.param_map, self.identities)
+
+            def visit_Var(self, dim: Var) -> str:
+                return _bind_param(dim, self.params, self.param_map, self.identities)
+
+            def visit_Call(self, dim: Call) -> str:
+                op = type(dim.target)
+                if op not in _DIM_OP_TYPES:
+                    return _bind_param(dim, self.params, self.param_map, self.identities)
+                a, b = dim.args
+                if op is DimMul and not (_is_const(a) or _is_const(b)):
+                    name = _bind_param(dim, self.params, self.param_map, self.identities)
+                    if self.params[name] is None:
+                        self.params[name] = dim_range(dim)
+                    return name
+                if op in (DimFloorDiv, DimMod) and not _is_const(b):
+                    raise NotImplementedError(
+                        f"{op.__name__} by a symbolic divisor has no isl representation"
+                    )
+                sa = self.visit(a)
+                sb = self.visit(b)
+                if op is DimAdd:
+                    return f"({sa} + {sb})"
+                if op is DimSub:
+                    return f"({sa} - {sb})"
+                if op is DimMul:
+                    return f"({sa} * {sb})"
+                if op is DimFloorDiv:
+                    return f"floor({sa}/{sb})"
+                if op is DimMod:
+                    return f"({sa} mod {sb})"
+                if op is DimMax:
+                    return f"max({sa}, {sb})"
+                if op is DimMin:
+                    return f"min({sa}, {sb})"
+                raise AssertionError(f"unhandled dim op {op.__name__}")
+
+            def default_visit(self, value) -> str:
+                if isinstance(value, bool):
+                    raise TypeError("ShapeDim must not be bool")
+                if isinstance(value, int):
+                    return str(value)
+                if self.identities is None:
+                    raise TypeError(f"unsupported ShapeDim {type(value).__name__}")
+                return _bind_param(value, self.params, self.param_map, self.identities)
+
+        _RANGE_EXPR_VISITOR_TYPE = _RangeExprVisitor
+    return _RANGE_EXPR_VISITOR_TYPE
+
+
+def _dim_range_visitor_type():
+    global _DIM_RANGE_VISITOR_TYPE
+    if _DIM_RANGE_VISITOR_TYPE is None:
+        from tilefoundry.ir.visitor import ExprVisitor  # noqa: PLC0415
+
+        class _DimRangeVisitor(ExprVisitor[tuple[int, int]]):
+            def visit_Constant(self, value: Constant) -> tuple[int, int]:
+                number = int(value.value)
+                return number, number + 1
+
+            def visit_DimVar(self, value: DimVar) -> tuple[int, int]:
+                return value.lo, value.hi
+
+            def visit_Call(self, value: Call) -> tuple[int, int]:
+                if type(value.target) is DimMul:
+                    a, b = value.args
+                    if not (_is_const(a) or _is_const(b)):
+                        alo, ahi = self.visit(a)
+                        blo, bhi = self.visit(b)
+                        corners = (
+                            alo * blo,
+                            alo * (bhi - 1),
+                            (ahi - 1) * blo,
+                            (ahi - 1) * (bhi - 1),
+                        )
+                        return min(corners), max(corners) + 1
+                params: dict[str, tuple[int, int] | None] = {}
+                expr = _range_expr(value, params)
+                prefix = f"[{', '.join(params)}] -> " if params else ""
+                pw_aff = isl.pw_aff(prefix + f"{{ [{expr}] }}")
+                if params:
+                    bounds = " and ".join(
+                        f"{lo} <= {name} <= {hi - 1}"
+                        for name, bound in params.items()
+                        for lo, hi in (bound,)
+                    )
+                    pw_aff = pw_aff.intersect_params(isl.set(prefix + f"{{ : {bounds} }}"))
+                return int(pw_aff.min_val().num_si()), int(pw_aff.max_val().num_si()) + 1
+
+            def default_visit(self, value) -> tuple[int, int]:
+                if isinstance(value, bool):
+                    raise TypeError("ShapeDim must not be bool")
+                if isinstance(value, int):
+                    return value, value + 1
+                raise TypeError(f"unsupported ShapeDim {type(value).__name__}")
+
+        _DIM_RANGE_VISITOR_TYPE = _DimRangeVisitor
+    return _DIM_RANGE_VISITOR_TYPE
+
+
 def _range_expr(
     dim,
     params: dict[str, tuple[int, int] | None],
@@ -71,45 +191,7 @@ def _range_expr(
     param_map: dict[str, object] | None = None,
     identities: dict[int, str] | None = None,
 ) -> str:
-    if isinstance(dim, bool):
-        raise TypeError("ShapeDim must not be bool")
-    if isinstance(dim, int):
-        return str(dim)
-    if isinstance(dim, Constant):
-        return str(int(dim.value))
-    if isinstance(dim, (DimVar, Var)):
-        return _bind_param(dim, params, param_map, identities)
-    if isinstance(dim, Call):
-        op = type(dim.target)
-        if op not in _DIM_OP_TYPES:
-            return _bind_param(dim, params, param_map, identities)
-        a, b = dim.args
-        if op is DimMul and not (_is_const(a) or _is_const(b)):
-            name = _bind_param(dim, params, param_map, identities)
-            if params[name] is None:
-                params[name] = dim_range(dim)
-            return name
-        if op in (DimFloorDiv, DimMod) and not _is_const(b):
-            raise NotImplementedError(
-                f"{op.__name__} by a symbolic divisor has no isl representation"
-            )
-        sa = _range_expr(a, params, param_map=param_map, identities=identities)
-        sb = _range_expr(b, params, param_map=param_map, identities=identities)
-        if op is DimAdd:
-            return f"({sa} + {sb})"
-        if op is DimSub:
-            return f"({sa} - {sb})"
-        if op is DimMul:
-            return f"({sa} * {sb})"
-        if op is DimFloorDiv:
-            return f"floor({sa}/{sb})"
-        if op is DimMod:
-            return f"({sa} mod {sb})"
-        if op is DimMax:
-            return f"max({sa}, {sb})"
-        if op is DimMin:
-            return f"min({sa}, {sb})"
-    raise TypeError(f"unsupported ShapeDim {type(dim).__name__}")
+    return _range_expr_visitor_type()(params, param_map, identities).visit(dim)
 
 
 def _raw_dim_call(op_cls, args: tuple):
@@ -208,39 +290,7 @@ def normalize_dim_entries(value):
 
 def dim_range(dim) -> tuple[int, int]:
     """Return conservative half-open value bounds ``[lo, hi)`` for *dim*."""
-    if isinstance(dim, bool):
-        raise TypeError("ShapeDim must not be bool")
-    if isinstance(dim, int):
-        return (dim, dim + 1)
-    if isinstance(dim, Constant):
-        value = int(dim.value)
-        return (value, value + 1)
-    if isinstance(dim, DimVar):
-        return (dim.lo, dim.hi)
-    if isinstance(dim, Call) and type(dim.target) is DimMul:
-        a, b = dim.args
-        if not (_is_const(a) or _is_const(b)):
-            alo, ahi = dim_range(a)
-            blo, bhi = dim_range(b)
-            corners = (
-                alo * blo,
-                alo * (bhi - 1),
-                (ahi - 1) * blo,
-                (ahi - 1) * (bhi - 1),
-            )
-            return (min(corners), max(corners) + 1)
-    params: dict[str, tuple[int, int] | None] = {}
-    expr = _range_expr(dim, params)
-    prefix = f"[{', '.join(params)}] -> " if params else ""
-    pw_aff = isl.pw_aff(prefix + f"{{ [{expr}] }}")
-    if params:
-        bounds = " and ".join(
-            f"{lo} <= {name} <= {hi - 1}"
-            for name, bound in params.items()
-            for lo, hi in (bound,)
-        )
-        pw_aff = pw_aff.intersect_params(isl.set(prefix + f"{{ : {bounds} }}"))
-    return (int(pw_aff.min_val().num_si()), int(pw_aff.max_val().num_si()) + 1)
+    return _dim_range_visitor_type()().visit(dim)
 
 
 def to_domain(extents: tuple) -> tuple:

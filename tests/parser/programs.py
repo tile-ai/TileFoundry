@@ -455,7 +455,7 @@ class HirModule:
         pass
 
     @dispatches_to_a_variant.specialize(DimVarRangePat("N", 1, 64))  # noqa: F821
-    def _(x: Tensor[(N_SCALED,), "f32"]) -> Tensor[(N_SCALED,), "f32"]:
+    def scaled_variant(x: Tensor[(N_SCALED,), "f32"]) -> Tensor[(N_SCALED,), "f32"]:
         return variant_leaf(x)  # noqa: F821
 
     @func

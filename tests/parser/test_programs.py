@@ -18,6 +18,7 @@ import torch
 
 from tests._source import import_dsl
 from tests.fixtures.placed.mma_tile import MatmulModule
+from tests.fixtures.placed.qwen3_1_7b_pd import PrefillLayer
 from tests.parser.conftest import GoldenFiles
 from tests.parser.error_cases import literal_reshard_func, mesh_dims_reshard_func
 from tests.parser.programs import (
@@ -37,8 +38,10 @@ from tests.parser.programs import (
     doubles_a_constant,
     returns_a_pair,
 )
+from tilefoundry import func, module
 from tilefoundry.analysis.preflight import infer_authored_types
 from tilefoundry.analysis.walk import postorder
+from tilefoundry.dsl import ConstTensor, DimVarRangePat, Tensor
 from tilefoundry.dsl._stub_gen import regen_stubs
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.dim import resolve_dim
@@ -68,6 +71,40 @@ def test_a_feature_dense_program_parses_to_its_golden(
 ) -> None:
     """Parsing the program yields exactly the recorded IR, printed back as source."""
     golden.check(f"{program.name}.py", as_script(program.parsed))
+
+
+def test_the_qwen3_pd_fixture_parses_with_two_regime_variants() -> None:
+    """The 28-layer prefill/decode fixture is accepted by the parser."""
+    model = PrefillLayer.lookup("model")
+    assert len(model.variants) == 2
+
+
+def test_converter_declared_before_variants_is_retained() -> None:
+    seq = DimVar("converter_before_variant", 1, 8)
+
+    @module()
+    class ConverterThenVariants:
+        @func
+        def dispatch(
+            x: Tensor[(seq,), "f32"], w: ConstTensor[(8,), "f32"]
+        ) -> Tensor[(seq,), "f32"]:
+            pass
+
+        @dispatch.converter("w")
+        def convert(w: ConstTensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
+            return w
+
+        @dispatch.specialize(DimVarRangePat("converter_before_variant", 1, 4))
+        def small(x: Tensor[(seq,), "f32"], w: ConstTensor[(8,), "f32"]) -> Tensor[(seq,), "f32"]:
+            return x
+
+        @dispatch.specialize(DimVarRangePat("converter_before_variant", 4, 8))
+        def large(x: Tensor[(seq,), "f32"], w: ConstTensor[(8,), "f32"]) -> Tensor[(seq,), "f32"]:
+            return x
+
+    dispatch = ConverterThenVariants.lookup("dispatch")
+    assert len(dispatch.converters) == 1
+    assert len(dispatch.variants) == 2
 
 
 def test_annotation_sugar_lands_on_the_hand_written_layout() -> None:

@@ -843,6 +843,68 @@ _CALL_BOUNDARY: tuple[ParseErrorCase, ...] = (
 )
 
 
+_FUNCTION_BINDINGS: tuple[ParseErrorCase, ...] = (
+    ParseErrorCase(
+        id="kernel-binding-underscore",
+        subject="""
+            from tilefoundry import func, module
+            from tilefoundry.dsl import Tensor
+
+            @module()
+            class _KernelUnderscore:
+                @func
+                def _(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
+                    return x
+        """,
+        raises=ValueError,
+        match=r"@module '_KernelUnderscore': a kernel binding may not be named '_'",
+    ),
+    ParseErrorCase(
+        id="variant-binding-underscore",
+        subject="""
+            from tilefoundry import func, module
+            from tilefoundry.dsl import DimVar, DimVarRangePat, Tensor
+
+            _N = DimVar("N", 1, 8)
+
+            @module()
+            class _VariantUnderscore:
+                @func
+                def dispatch(x: Tensor[(_N,), "f32"]) -> Tensor[(_N,), "f32"]:
+                    pass
+
+                @dispatch.specialize(DimVarRangePat("N", 1, 4))
+                def _(x: Tensor[(_N,), "f32"]) -> Tensor[(_N,), "f32"]:
+                    return x
+        """,
+        raises=ValueError,
+        match=(
+            r"@module '_VariantUnderscore' base 'dispatch': "
+            r"a variant binding may not be named '_'"
+        ),
+    ),
+    ParseErrorCase(
+        id="duplicate-kernel-binding",
+        subject="""
+            from tilefoundry import func, module
+            from tilefoundry.dsl import Tensor
+
+            @module()
+            class _DuplicateKernel:
+                @func
+                def run(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
+                    return x
+
+                @func
+                def run(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
+                    return x
+        """,
+        raises=ValueError,
+        match=r"@module '_DuplicateKernel': duplicate kernel binding 'run'",
+    ),
+)
+
+
 _SUBSCRIPTS: tuple[ParseErrorCase, ...] = (
     ParseErrorCase(
         id="tile-with-too-many-args",
@@ -1324,6 +1386,7 @@ ERROR_CASES: tuple[ParseErrorCase, ...] = (
     *_OP_CALL_SURFACE,
     *_DIM_OPERANDS,
     *_CALL_BOUNDARY,
+    *_FUNCTION_BINDINGS,
     *_SUBSCRIPTS,
     *_GRID_LOOPS,
     *_SHARD_SUGAR,

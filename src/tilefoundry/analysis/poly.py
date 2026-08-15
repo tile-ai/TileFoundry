@@ -28,6 +28,7 @@ from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.ir.types.dim import DimVar, is_dim_op_call
 from tilefoundry.ir.types.shard.shard_layout import shard_layout_of, split_target_axes
+from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry.access_relation import AccessRelationResult, build_relation
 
 from .walk import children, postorder
@@ -120,35 +121,48 @@ def _buffer_namer():
     used: set[str] = set()
     anonymous = itertools.count()
 
+    class _NameVisitor(ExprVisitor[str]):
+        def __init__(self, prefix: str) -> None:
+            super().__init__()
+            self.prefix = prefix
+
+        def _assign(self, expr, base: str | None = None) -> str:
+            key = id(expr)
+            cached = seen.get(key)
+            if cached is not None:
+                return cached
+            if base is None:
+                base = binding_name(expr) or f"t{next(anonymous)}"
+            base = f"{self.prefix}{base}"
+            candidate = base
+            suffix = 0
+            while candidate in used:
+                suffix += 1
+                candidate = f"{base}_{suffix}"
+            used.add(candidate)
+            seen[key] = candidate
+            return candidate
+
+        def visit_Call(self, expr: Call) -> str:
+            if isinstance(expr.target, TupleGetItem):
+                base = _NameVisitor("").visit(expr.args[0])
+                name = f"{base}_{expr.target.index}"
+                seen[id(expr)] = name
+                return name
+            if isinstance(expr.target, (Reshape, IndexSelect, Slice)):
+                name = _NameVisitor("").visit(expr.args[0])
+                seen[id(expr)] = name
+                return name
+            return self._assign(expr)
+
+        def visit_Var(self, expr: Var) -> str:
+            return self._assign(expr, expr.name)
+
+        def default_visit(self, expr) -> str:
+            return self._assign(expr)
+
     def name_for(expr, prefix: str = "") -> str:
-        key = id(expr)
-        cached = seen.get(key)
-        if cached is not None:
-            return cached
-        if isinstance(expr, Call) and isinstance(expr.target, TupleGetItem):
-            name = f"{name_for(expr.args[0])}_{expr.target.index}"
-            seen[key] = name
-            return name
-        if isinstance(expr, Call) and isinstance(expr.target, (Reshape, IndexSelect, Slice)):
-            name = name_for(expr.args[0])
-            seen[key] = name
-            return name
-        if isinstance(expr, Var):
-            base = expr.name
-        else:
-
-
-
-            base = binding_name(expr) or f"t{next(anonymous)}"
-        base = f"{prefix}{base}"
-        candidate = base
-        suffix = 0
-        while candidate in used:
-            suffix += 1
-            candidate = f"{base}_{suffix}"
-        used.add(candidate)
-        seen[key] = candidate
-        return candidate
+        return _NameVisitor(prefix).visit(expr)
 
     def alias(phi: Var, yielded) -> None:
         """One buffer for a loop carry: ``phi`` and ``yielded`` share a name.
@@ -772,29 +786,43 @@ def _loop_axes(root):
     axis_of: dict[int, GridRegionExpr] = {}
     seed: dict[int, tuple] = {}
     depth: dict[int, int] = {}
-    seen: set[int] = set()
+    class _LoopAxisVisitor(ExprVisitor[None]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.level = 0
 
-    def visit(expr, level: int) -> None:
-        if id(expr) in seen:
-            return
-        seen.add(id(expr))
-        if isinstance(expr, GridRegionExpr):
-            axis = expr
-            axis_of[id(expr)] = axis
-            depth[id(axis)] = level
-            seed[id(expr.induction_var)] = (axis, None)
+        def _visit_at(self, expr, level: int) -> None:
+            previous = self.level
+            self.level = level
+            try:
+                self.visit(expr)
+            finally:
+                self.level = previous
+
+        def visit_Call(self, expr: Call) -> None:
+            for arg in expr.args:
+                self._visit_at(arg, self.level)
+
+        def visit_Tuple(self, expr: Tuple) -> None:
+            for element in expr.elements:
+                self._visit_at(element, self.level)
+
+        def visit_GridRegionExpr(self, expr: GridRegionExpr) -> None:
+            axis_of[id(expr)] = expr
+            depth[id(expr)] = self.level
+            seed[id(expr.induction_var)] = (expr, None)
             for phi, init in zip(expr.carried_args, expr.init_args):
-                seed[id(phi)] = (axis, init)
+                seed[id(phi)] = (expr, init)
             for init in expr.init_args:
-                visit(init, level)
-            visit(expr.body, level + 1)
+                self._visit_at(init, self.level)
+            self._visit_at(expr.body, self.level + 1)
             for value in expr.yield_values:
-                visit(value, level + 1)
-            return
-        for child in children(expr):
-            visit(child, level)
+                self._visit_at(value, self.level + 1)
 
-    visit(root, 0)
+        def default_visit(self, expr) -> None:
+            return None
+
+    _LoopAxisVisitor()._visit_at(root, 0)
     return axis_of, seed, depth
 
 

@@ -17,7 +17,7 @@ from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TupleType, Type, UnitType
-from tilefoundry.ir.visitor import ExprVisitor, StmtVisitor
+from tilefoundry.ir.visitor import ExprVisitor, ExprWalker, StmtVisitor
 
 from .contexts import Cost, CostContext, TypeInferContext, VerifyContext, _constant_type
 from .registries import (
@@ -37,11 +37,12 @@ class TypeInferVisitor(ExprVisitor[Type]):
     ``TypeInferContext.type_of`` is the caller-facing cache + dispatch
     entry; it constructs one of these per lookup and delegates to
     ``visit(expr)``. There is no ``isinstance`` fallback — an ``Expr``
-    subclass with no ``visit_<Kind>`` here raises via ``generic_visit``
+    subclass with no ``visit_<Kind>`` here raises via ``default_visit``
     rather than trusting a possibly-stale ``expr.type`` field.
     """
 
     def __init__(self, ctx: TypeInferContext) -> None:
+        super().__init__()
         self.ctx = ctx
 
     def visit(self, expr: Expr) -> Type:
@@ -95,7 +96,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
         """
         return shape_of.type
 
-    def generic_visit(self, expr: Expr) -> Type:
+    def default_visit(self, expr: Expr) -> Type:
         self.ctx.error(expr, f"no typeinfer rule for Expr subclass {type(expr).__name__}")
 
 
@@ -168,6 +169,7 @@ class CodegenVisitor:
         *,
         backend: str,
     ) -> None:
+        super().__init__()
         self.ctx = ctx
         self.backend = backend
         self.registry = registry
@@ -199,7 +201,7 @@ class CodegenVisitor:
         )
 
 
-class CostEvaluator(ExprVisitor[Cost]):
+class CostEvaluator(ExprWalker[Cost]):
     """Dispatch the registered recursive-local Cost Evaluator per Op class.
 
     A missing evaluator fails closed — it is a construction error, not a
@@ -211,6 +213,7 @@ class CostEvaluator(ExprVisitor[Cost]):
         ctx: CostContext,
         registry: AnalysisRegistry = cost_evaluator_registry,
     ) -> None:
+        super().__init__()
         self.ctx = ctx
         self.registry = registry
 
@@ -221,7 +224,6 @@ class CostEvaluator(ExprVisitor[Cost]):
                 call, f"no cost evaluator registered for {type(call.target).__name__}"
             )
         return fn(call, self.ctx)
-
 
 __all__ = [
     "TypeInferVisitor",

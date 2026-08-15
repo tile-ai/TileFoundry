@@ -239,14 +239,15 @@ def f(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
     pass
 
 @f.specialize(DimVarRangePat("S", 1, 4))
-def _(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
+def small_sequence(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
     ...
 ```
 
 The pattern prints in its constructor form (`DimVarRangePat("S", 1, 4)`;
-other `Pattern` subclasses fall back to `repr(pattern)`). The emitted form
-mirrors the authoring surface
-([parser.md §1.1](./parser.md#11-decorators)). Because a
+other `Pattern` subclasses fall back to `repr(pattern)`). The emitted binding
+mirrors the authoring surface ([parser.md §1.1](./parser.md#11-decorators));
+when an IR variant has no display label, the printer synthesizes a valid binding
+from its canonical specialization signature. Because a
 dispatch prototype has a `DimVar` parameter, its rendering is a
 **display-only** surface ([§2.7](#27-round-trip-contract)): human-readable, not a round-trip
 validation artifact.

@@ -21,6 +21,72 @@ class DimSubstitutionError(ValueError):
     """A dimension was bound to something its declaration does not admit."""
 
 
+_DIM_COLLECTOR_TYPE = None
+_SHAPE_DIM_MUTATOR_TYPE = None
+
+
+def _dim_collector_type():
+    global _DIM_COLLECTOR_TYPE
+    if _DIM_COLLECTOR_TYPE is None:
+        from tilefoundry.ir.visitor import ExprWalker  # noqa: PLC0415
+
+        class _DimCollector(ExprWalker[None]):
+            def __init__(self, found) -> None:
+                super().__init__()
+                self.found = found
+
+            def visit_DimVar(self, expr: DimVar) -> None:
+                self.found[expr.name] = expr
+
+            def visit_Call(self, expr: Call) -> None:
+                if isinstance(expr.target, _DIM_OP_TYPES):
+                    self.visit_operands(expr)
+
+        _DIM_COLLECTOR_TYPE = _DimCollector
+    return _DIM_COLLECTOR_TYPE
+
+
+def _shape_dim_mutator_type():
+    global _SHAPE_DIM_MUTATOR_TYPE
+    if _SHAPE_DIM_MUTATOR_TYPE is None:
+        from tilefoundry.ir.visitor import ExprMutator  # noqa: PLC0415
+
+        class _ShapeDimMutator(ExprMutator):
+            def __init__(self, bindings) -> None:
+                super().__init__()
+                self.bindings = bindings
+
+            def visit(self, value):
+                if isinstance(value, bool):
+                    raise DimSubstitutionError(f"{value!r} is not a shape entry")
+                return super().visit(value)
+
+            def visit_DimVar(self, value):
+                if value.name not in self.bindings:
+                    return value
+                return _checked(value, self.bindings[value.name])
+
+            def visit_Constant(self, value):
+                return value
+
+            def visit_Call(self, value):
+                if not isinstance(value.target, _DIM_OP_TYPES):
+                    return value
+                args = tuple(self.visit(arg) for arg in value.args)
+                if args == value.args:
+                    return value
+                folded = normalize_dim(simplify_dim(type(value.target), args))
+                if isinstance(folded, Constant) and isinstance(folded.value, int):
+                    return int(folded.value)
+                return folded
+
+            def default_visit(self, value):
+                return value
+
+        _SHAPE_DIM_MUTATOR_TYPE = _ShapeDimMutator
+    return _SHAPE_DIM_MUTATOR_TYPE
+
+
 def dim_vars_in(value: object) -> tuple[str, ...]:
     """Every distinct `DimVar` name reachable from *value*, in first-seen order.
 
@@ -83,8 +149,7 @@ def _collect(value: object, found: dict[str, "DimVar"]) -> None:
         _collect_layout(value, found)
         return
     if isinstance(value, Call) and isinstance(value.target, _DIM_OP_TYPES):
-        for arg in value.args:
-            _collect(arg, found)
+        _dim_collector_type()(found).visit(value)
 
 
 def _collect_layout(layout: object, found: dict[str, "DimVar"]) -> None:
@@ -294,21 +359,8 @@ def substitute_shape_dim(entry: object, bindings: Mapping[str, int]) -> object:
         raise DimSubstitutionError(f"{entry!r} is not a shape entry")
     if isinstance(entry, int):
         return entry
-    if isinstance(entry, DimVar):
-        if entry.name not in bindings:
-            return entry
-        return _checked(entry, bindings[entry.name])
-    if isinstance(entry, Constant):
-        return entry
-    if isinstance(entry, Call) and isinstance(entry.target, _DIM_OP_TYPES):
-        args = tuple(substitute_shape_dim(arg, bindings) for arg in entry.args)
-        if args == tuple(entry.args):
-            return entry
-        folded = normalize_dim(simplify_dim(type(entry.target), args))
-
-        if isinstance(folded, Constant) and isinstance(folded.value, int):
-            return int(folded.value)
-        return folded
+    if isinstance(entry, (DimVar, Constant, Call)):
+        return _shape_dim_mutator_type()(bindings).visit(entry)
     return entry
 
 

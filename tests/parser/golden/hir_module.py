@@ -152,7 +152,7 @@ class HirModule:
         pass
 
     @dispatches_to_a_variant.specialize(DimVarRangePat("N", 1, 64))
-    def _(
+    def scaled_variant(
         x: Tensor[(N,), "f32"]
     ) -> Tensor[(N,), "f32"]:
         v0 = variant_leaf(x)

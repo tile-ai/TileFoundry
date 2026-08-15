@@ -41,6 +41,7 @@ from tilefoundry.ir.types.shard import (
     try_c_order_strides,
 )
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.visitor import ExprMutator
 from tilefoundry.visitor_registry.contexts import (
     Cost,
     CostContext,
@@ -357,18 +358,27 @@ class _Closer:
                 )
 
     def _retag(self, expr: Expr, types: "itertools.chain | object") -> Expr:
-        if isinstance(expr, Tuple):
-            new_elements = tuple(self._retag(element, types) for element in expr.elements)
-            if new_elements == expr.elements:
-                return expr
-            return replace(expr, elements=new_elements)
-        if isinstance(expr.type, TensorType):
-            try:
-                type = next(types)  # type: ignore[call-overload]
-            except StopIteration:
-                return expr
-            return replace(expr, type=type)
-        return expr
+        class _RetagMutator(ExprMutator):
+            def __init__(self, type_iter) -> None:
+                super().__init__()
+                self.type_iter = type_iter
+
+            def visit_Tuple(self, value: Tuple) -> Expr:
+                new_elements = tuple(self.visit(element) for element in value.elements)
+                if new_elements == value.elements:
+                    return value
+                return replace(value, elements=new_elements)
+
+            def default_visit(self, value: Expr) -> Expr:
+                if isinstance(value.type, TensorType):
+                    try:
+                        type = next(self.type_iter)  # type: ignore[call-overload]
+                    except StopIteration:
+                        return value
+                    return replace(value, type=type)
+                return value
+
+        return _RetagMutator(types).visit(expr)
 
     def _candidate_call(
         self, site: OperationSite, input_types: tuple[Type, ...]

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from tests._source import import_dsl
 from tests.fixtures.logical import module_context as context_fixture
+from tests.fixtures.logical.gqa_static import static_online_attend
 from tests.fixtures.logical.hir_composition import Expert
 from tests.fixtures.placed.derived_prefill import DerivedPrefill
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
@@ -26,6 +27,7 @@ from tilefoundry.dsl import (  # noqa: F401
     tf,
 )
 from tilefoundry.inspection import as_script
+from tilefoundry.inspection.dot import hir_function_to_dot
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.specialize import origin_of
@@ -308,7 +310,7 @@ class _Dispatching:
         pass
 
     @dispatch.specialize(DimVarRangePat("n_print", 1, 9))
-    def _(x: Tensor[(_N, 8), "f32"]) -> Tensor[(_N, 8), "f32"]:
+    def child_dispatch(x: Tensor[(_N, 8), "f32"]) -> Tensor[(_N, 8), "f32"]:
         return leaf(x)  # noqa: F821
 
 
@@ -330,3 +332,12 @@ def test_a_child_call_in_a_specialization_body_survives_the_round_trip() -> None
     assert variant.body.target is imported_child.entry_function()
     assert len(variant.body.args) == 1
     assert [param.is_const for param in variant.body.target.params] == [False, True]
+
+
+def test_hir_function_dot_keeps_grid_regions_as_opaque_leaves() -> None:
+    """The public DOT form keeps structured regions as white leaf boxes."""
+    dot = hir_function_to_dot(static_online_attend.entry_function())
+
+    assert len(dot.splitlines()) == 29
+    assert 'label="GridRegionExpr", fillcolor="#ffffff"' in dot
+    assert "TupleType(" not in dot

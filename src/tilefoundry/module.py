@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import FrameType
 
 
@@ -29,6 +29,9 @@ UNDECLARED = _Undeclared()
 class _Entry:
     topologies: tuple | None
     frame: FrameType
+    owner_name: str | None = None
+    bound: dict[str, "ParsedFuncKind"] = field(default_factory=dict)
+    owned: set[int] = field(default_factory=set)
 
 
 _DECLARING: list[_Entry] = []
@@ -45,6 +48,7 @@ def enclosing_declaration(frame: FrameType | None) -> _Entry | None:
         if "__qualname__" in frame.f_locals:
             for entry in reversed(_DECLARING):
                 if entry.frame is frame.f_back:
+                    entry.owner_name = frame.f_locals["__qualname__"].rsplit(".", 1)[-1]
                     return entry
         elif frame.f_code.co_name == "<module>":
             return None
@@ -62,32 +66,34 @@ def _retarget_module_calls(owner: str, functions, attached: dict) -> None:
     and collecting it would leave the call pointing outside the tree being built.
     """
     from tilefoundry.ir.core import (  # noqa: PLC0415 — avoid import cycle
+        Expr,
         FunctionScope,
         TypeInferContext,
         get_metadata,
     )
     from tilefoundry.ir.core.expr import (  # noqa: PLC0415 — avoid import cycle
         Call,
-        child_exprs,
     )
     from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: PLC0415
     from tilefoundry.ir.hir.function import elaborate  # noqa: PLC0415
+    from tilefoundry.ir.visitor import ExprWalker  # noqa: PLC0415
     from tilefoundry.parser.base import _ModuleCallee  # noqa: PLC0415
 
-    seen: set[int] = set()
     unattached: list[str] = []
 
-    def visit(expr) -> None:
-        if expr is None or id(expr) in seen:
-            return
-        seen.add(id(expr))
-        if isinstance(expr, Call) and isinstance(expr.target, HirFunction):
+    class _RetargetVisitor(ExprWalker[None]):
+        def visit(self, expr):
+            if expr is None or not isinstance(expr, Expr):
+                return None
+            return super().visit(expr)
+
+        def visit_Call(self, expr: Call) -> None:
             record = get_metadata(expr, _ModuleCallee)
-            if record is None:
-                visit(expr.target)
-            elif record.binding not in attached:
+            if isinstance(expr.target, HirFunction) and record is None:
+                self.visit(expr.target)
+            elif isinstance(expr.target, HirFunction) and record.binding not in attached:
                 unattached.append(record.binding)
-            else:
+            elif isinstance(expr.target, HirFunction):
                 child = attached[record.binding]
                 entry = child.entry_function()
                 object.__setattr__(
@@ -115,14 +121,19 @@ def _retarget_module_calls(owner: str, functions, attached: dict) -> None:
                     "metadata",
                     tuple(m for m in expr.metadata if not isinstance(m, _ModuleCallee)),
                 )
-            for arg in expr.args:
-                visit(arg)
-            return
-        for child in child_exprs(expr):
-            visit(child)
+            self.visit_operands(expr)
 
+        def visit_Function(self, fn) -> None:
+            self.visit_operands(fn)
+            for variant in fn.variants:
+                self.visit(variant)
+            for converter in fn.converters:
+                if isinstance(converter, tuple):
+                    self.visit(converter[-1])
+
+    visitor = _RetargetVisitor()
     for fn in functions:
-        visit(fn)
+        visitor.visit(fn)
     if unattached:
         raise ValueError(
             f"@module {owner!r}: call(s) to Module(s) {sorted(set(unattached))} that "
@@ -218,12 +229,9 @@ def module(
                 f"@module class body may contain only these three member kinds"
             )
 
-        converter_fns = {
-            conv for fn in functions for _, conv in getattr(fn, "converters", ())
-        }
         functions = [
             fn for fn in functions
-            if not getattr(fn, "specializations", ()) and fn not in converter_fns
+            if id(fn) not in mine.owned and not getattr(fn, "specializations", ())
         ]
         if not functions and not child_modules and not methods:
             raise TypeError(

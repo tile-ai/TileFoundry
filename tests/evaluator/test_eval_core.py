@@ -177,7 +177,7 @@ def test_a_variant_body_reaches_its_child_the_same_way() -> None:
             pass
 
         @dispatch.specialize(DimVarRangePat("N_eval", 1, 8))
-        def _(x: Tensor[(_N_EVAL,), "f32"]) -> Tensor[(_N_EVAL,), "f32"]:
+        def dynamic_variant(x: Tensor[(_N_EVAL,), "f32"]) -> Tensor[(_N_EVAL,), "f32"]:
             return scaled(x)  # noqa: F821
 
     (child,) = _Dispatch.modules

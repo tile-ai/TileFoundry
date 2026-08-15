@@ -267,12 +267,21 @@ freeze** below).
 
 - `variants` is a canonical IR field — it participates in structural
   equality, hashing, and canonical printing.
-- A variant MAY carry a **display label**, taken from the identifier its author
-  decorated ([parser §1.1](./parser.md#11-decorators)). The label is
-  non-canonical metadata: it MUST NOT participate in structural equality,
-  hashing, or the canonical signature, and nothing MAY select an implementation
-  by it. Printing a variant back to source MUST preserve it, since it is the only
-  thing distinguishing two implementations that share a name.
+- Parser-time Function roles use the following naming and handle contract:
+
+  | role | purpose | lookup handle | `_` allowed | binding uniqueness | parser ledger classification |
+  |---|---|---|---|---|---|
+  | **kernel / prototype** | Module execution unit | `fn.name` | no | unique within the Module class body | `_Entry.bound[binding] = KERNEL`; `id(fn)` is not in `_Entry.owned` |
+  | **variant** | Implementation for a dim range | `f"{base}${dim}${lo}_{hi}"` | no | unique within the base | `_Entry.bound[binding] = VARIANT`; `id(fn)` is in `_Entry.owned` |
+  | **converter** | Offline weight conversion | `f"{base}.converter[{weight}]"` | yes | reusable | `_Entry.bound[binding] = CONVERTER`; `id(fn)` is in `_Entry.owned` |
+
+  The parser enforces this table during decoration. A parser-authored variant
+  MUST carry a non-underscore display label, while a `Function` built directly
+  in IR MAY omit the non-canonical label. The label MUST NOT participate in
+  structural equality, hashing, or the canonical signature, and nothing MAY
+  select an implementation by it. A printer emitting an unlabeled IR variant
+  MUST choose a valid source binding so the emitted definition remains
+  importable.
 - Every variant of a base MUST share the base's `name`, `params`, and
   `return_type`: a variant specializes the body, not the signature. A variant
   runs in the same execution domain as its base because both are owned by the

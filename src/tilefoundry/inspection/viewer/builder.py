@@ -26,6 +26,7 @@ from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType
+from tilefoundry.ir.visitor import ExprVisitor
 
 from .htmltable import Cell, Span, Table
 from .palette import (
@@ -227,6 +228,36 @@ def _op_attributes(
     return out
 
 
+class _DimSpanVisitor(ExprVisitor[list[Span]]):
+    def visit_DimVar(self, dim: DimVar) -> list[Span]:
+        return [Span(text=dim.name, color=DIMVAR_COLOR, bold=True)]
+
+    def visit_Constant(self, dim: Constant) -> list[Span]:
+        return [Span(text=str(dim.value))]
+
+    def visit_Call(self, dim: Call) -> list[Span]:
+        target = dim.target
+        for op_cls, sym in _DIM_INFIX_OPS.items():
+            if isinstance(target, op_cls):
+                spans = list(self.visit(dim.args[0]))
+                spans.append(Span(text=f" {sym} "))
+                spans.extend(self.visit(dim.args[1]))
+                return spans
+        for op_cls, fname in _DIM_FUNC_OPS.items():
+            if isinstance(target, op_cls):
+                spans = [Span(text=f"{fname}(")]
+                for i, arg in enumerate(dim.args):
+                    if i:
+                        spans.append(Span(text=", "))
+                    spans.extend(self.visit(arg))
+                spans.append(Span(text=")"))
+                return spans
+        return [Span(text=shape_entry_str(dim))]
+
+    def default_visit(self, dim) -> list[Span]:
+        return [Span(text=shape_entry_str(dim))]
+
+
 def _format_dim(dim) -> list[Span]:
     """Render a shape dimension as inline viewer spans.
 
@@ -235,28 +266,7 @@ def _format_dim(dim) -> list[Span]:
     symbol; integers remain plain.
     See [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms).
     """
-    if isinstance(dim, DimVar):
-        return [Span(text=dim.name, color=DIMVAR_COLOR, bold=True)]
-    if isinstance(dim, Constant):
-        return [Span(text=str(dim.value))]
-    if isinstance(dim, Call):
-        tgt = dim.target
-        for op_cls, sym in _DIM_INFIX_OPS.items():
-            if isinstance(tgt, op_cls):
-                spans = list(_format_dim(dim.args[0]))
-                spans.append(Span(text=f" {sym} "))
-                spans.extend(_format_dim(dim.args[1]))
-                return spans
-        for op_cls, fname in _DIM_FUNC_OPS.items():
-            if isinstance(tgt, op_cls):
-                spans = [Span(text=f"{fname}(")]
-                for i, a in enumerate(dim.args):
-                    if i:
-                        spans.append(Span(text=", "))
-                    spans.extend(_format_dim(a))
-                spans.append(Span(text=")"))
-                return spans
-    return [Span(text=shape_entry_str(dim))]
+    return _DimSpanVisitor().visit(dim)
 
 
 def _shard_inline(ty: TensorType, mesh_name_map: dict[int, str] | None):

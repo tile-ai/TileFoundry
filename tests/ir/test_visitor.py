@@ -1,20 +1,28 @@
 """``tilefoundry.ir.visitor`` — Expr / Stmt visitor + mutator contract.
 
-Every pass is written against these four guarantees, and a break in any of them
+Every pass is written against these six guarantees, and a break in any of them
 shows up in a pass's output rather than at its cause: class-name dispatch, an
 untouched child stays *the same object* (so a pass rewriting one node cannot
 silently deep-copy the tree), binding-site Vars are never handed to a generic
 mutator, and a Stmt subclass missing from the rebuild tables is caught here
-instead of dropping statements downstream.
+instead of dropping statements downstream; Expr dispatch and memoization are
+separate, and unhandled Expr nodes fail explicitly.
 """
 
 from __future__ import annotations
 
+import gc
+
+import pytest
+
+from tilefoundry.analysis.walk import postorder
 from tilefoundry.ir.core import Call, Constant, Expr, Op, Var
+from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.tir.cuda.nn.mma import Mma
 from tilefoundry.ir.tir.memory import Copy, Fill
 from tilefoundry.ir.tir.prim_function import PrimFunction
+from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import (
     Evaluate,
     For,
@@ -31,8 +39,10 @@ from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.mesh import Topology
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import (
+    ExprFunctor,
     ExprMutator,
     ExprVisitor,
+    ExprWalker,
     StmtExprMutator,
     StmtMutator,
     StmtVisitor,
@@ -91,12 +101,129 @@ def test_expr_visitor_dispatches_by_class_name_and_shares_unchanged_branches() -
 
         def visit_Call(self, call):
             visits.append(("Call", type(call.target).__name__))
-            self.generic_visit(call)
+            self.visit_operands(call)
 
     tree = _call(_OpA(), _var("x"), _const(1.0))
     V().visit(tree)
     assert visits == [("Call", "_OpA"), ("Var", "x"), ("Constant", 1.0)]
     assert ExprMutator().visit(tree) is tree
+
+
+def test_expr_functor_and_visitor_split_memo_from_rewrite() -> None:
+    assert issubclass(ExprVisitor, ExprFunctor)
+    assert issubclass(ExprWalker, ExprVisitor)
+    assert issubclass(ExprMutator, ExprFunctor)
+
+    shared = _var("shared")
+    tree = _call(_OpA(), shared, shared)
+
+    class FreshVars(ExprMutator):
+        def visit_Var(self, var: Var) -> Var:
+            return _var(var.name)
+
+    rewritten = FreshVars().visit(tree)
+    assert rewritten.args[0] is not shared
+    assert rewritten.args[1] is not shared
+    assert rewritten.args[0] is not rewritten.args[1]
+
+
+def test_expr_visitor_memo_visits_shared_dag_once_and_returns_same_result() -> None:
+    shared = _call(_OpA(), _var("shared"))
+    tree = _call(_OpB(), shared, shared)
+
+    class CountingVisitor(ExprVisitor[object]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.counts: dict[str, int] = {}
+
+        def _count(self, expr: Expr) -> None:
+            name = type(expr).__name__
+            self.counts[name] = self.counts.get(name, 0) + 1
+
+        def visit_Var(self, var: Var) -> str:
+            self._count(var)
+            return var.name
+
+        def visit_Call(self, call: Call) -> tuple[str, tuple[object, ...]]:
+            self._count(call)
+            return (type(call.target).__name__, tuple(self.visit(arg) for arg in call.args))
+
+    class CountingFunctor(ExprFunctor[object]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.counts: dict[str, int] = {}
+
+        def _count(self, expr: Expr) -> None:
+            name = type(expr).__name__
+            self.counts[name] = self.counts.get(name, 0) + 1
+
+        def visit_Var(self, var: Var) -> str:
+            self._count(var)
+            return var.name
+
+        def visit_Call(self, call: Call) -> tuple[str, tuple[object, ...]]:
+            self._count(call)
+            return (type(call.target).__name__, tuple(self.visit(arg) for arg in call.args))
+
+    visitor = CountingVisitor()
+    functor = CountingFunctor()
+    assert visitor.visit(tree) == functor.visit(tree)
+    assert visitor.counts == {"Call": 2, "Var": 1}
+    assert functor.counts == {"Call": 3, "Var": 2}
+    assert visitor.visit(shared) == ("_OpA", ("shared",))
+    assert visitor.counts == {"Call": 2, "Var": 1}
+
+
+def test_collected_postorder_visits_each_shared_expression_once() -> None:
+    """The collected analysis path witnesses identity-DAG traversal directly."""
+    shared = _call(_OpA(), _var("shared"))
+    root = _call(_OpB(), shared, shared)
+
+    ordered = postorder(root)
+
+    assert [type(expr).__name__ for expr in ordered] == ["Var", "Call", "Call"]
+    assert ordered[1] is shared
+    assert ordered[2] is root
+
+
+def test_expr_visitor_pins_memo_expr_and_uses_explicit_function_root() -> None:
+    expr = _var("pinned")
+    key = id(expr)
+    marker = object()
+
+    class V(ExprVisitor[object]):
+        def visit_Var(self, var: Var) -> object:
+            return marker
+
+    visitor = V()
+    assert visitor.visit(expr) is marker
+    del expr
+    gc.collect()
+    for i in range(64):
+        _var(f"replacement_{i}")
+
+    pinned, result = visitor._memo[key]
+    assert id(pinned) == key
+    assert visitor.visit(pinned) is result is marker
+
+    body = _var("body")
+    root = Function.build(name="root", params=(), body=body, return_type=body.type)
+    other_body = _var("other_body")
+    other = Function.build(name="other", params=(), body=other_body, return_type=other_body.type)
+    rooted = V(root_function=root)
+    assert rooted.can_visit_function_body(root)
+    assert not rooted.can_visit_function_body(other)
+    assert rooted.visit_function_body(root) is marker
+    assert rooted.visit_function_body(other) is None
+    other_enabled = V(visit_other_functions=True, root_function=root)
+    assert other_enabled.can_visit_function_body(other)
+    assert other_enabled.visit_function_body(other) is marker
+
+
+def test_expr_functor_requires_explicit_handler_for_unknown_expr() -> None:
+    shape = ShapeOf(type=_i32(), param=_var("x"), axis=0)
+    with pytest.raises(NotImplementedError, match="ShapeOf"):
+        ExprVisitor().visit(shape)
 
     x = _var("x")
     y = _var("y")

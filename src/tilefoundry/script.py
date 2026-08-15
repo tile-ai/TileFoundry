@@ -7,7 +7,9 @@ returns the parsed and verified IR node, not the original Python function.
 from __future__ import annotations
 
 import sys
-from typing import Any
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Any, Callable, ClassVar, Literal
 
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
@@ -16,10 +18,143 @@ from tilefoundry.ir.hir.specialize import DISPLAY_NAME
 from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.tir.intrinsic import intrinsic as _intrinsic
 from tilefoundry.ir.tir.verify import verify_prim_function
-from tilefoundry.module import UNDECLARED, enclosing_declaration
+from tilefoundry.module import UNDECLARED, _Entry, enclosing_declaration
 from tilefoundry.parser import parse_prim_func
 from tilefoundry.parser.hir_parser import _parse_func
 from tilefoundry.target.base import target_instance
+
+
+class ParsedFuncKind(StrEnum):
+    """The three parser-time Function roles."""
+
+    KERNEL = "kernel"
+    VARIANT = "variant"
+    CONVERTER = "converter"
+
+
+@dataclass(frozen=True)
+class NamingRule:
+    """Binding-name constraints for one parser-time Function role."""
+
+    binding_unique: bool
+    allow_underscore: bool
+
+    def check(
+        self,
+        binding_name: str,
+        entry: _Entry | None,
+        *,
+        kind: ParsedFuncKind,
+        base_name: str | None = None,
+    ) -> None:
+        scope = _binding_scope(kind, entry, base_name)
+        if not self.allow_underscore and binding_name == "_":
+            raise ValueError(f"{scope}: a {kind.value} binding may not be named '_'")
+        if self.binding_unique and entry is not None and binding_name in entry.bound:
+            raise ValueError(f"{scope}: duplicate {kind.value} binding {binding_name!r}")
+
+
+@dataclass(frozen=True)
+class HandleRule:
+    """Handle construction and uniqueness scope for one Function role."""
+
+    of: Callable[[object, object], str]
+    unique_within: Literal["module", "base"]
+
+    def check(
+        self,
+        kind: ParsedFuncKind,
+        fn: object,
+        key: object,
+        entry: _Entry | None,
+        base: object | None,
+    ) -> None:
+        if self.unique_within == "module":
+            handle = self.of(fn, key)
+            if entry is not None and entry.bound.get(handle) is kind:
+                scope = _binding_scope(kind, entry, None)
+                raise ValueError(f"{scope}: duplicate {kind.value} binding {handle!r}")
+            return
+        if base is None:
+            return
+        handle = self.of(base, key)
+        if kind is ParsedFuncKind.VARIANT:
+            keys = (variant.specializations[0] for variant in getattr(base, "variants", ()))
+        else:
+            keys = (weight_name for weight_name, _ in getattr(base, "converters", ()))
+        if any(self.of(base, existing_key) == handle for existing_key in keys):
+            scope = _binding_scope(kind, entry, base.name)
+            raise ValueError(f"{scope}: duplicate {kind.value} handle {handle!r}")
+
+
+class ParsedFuncRules:
+    """Parser-time naming and handle rules for parsed Functions."""
+
+    NAMING: ClassVar[dict[ParsedFuncKind, NamingRule]] = {
+        ParsedFuncKind.KERNEL: NamingRule(binding_unique=True, allow_underscore=False),
+        ParsedFuncKind.VARIANT: NamingRule(binding_unique=True, allow_underscore=False),
+        ParsedFuncKind.CONVERTER: NamingRule(binding_unique=False, allow_underscore=True),
+    }
+
+    HANDLE: ClassVar[dict[ParsedFuncKind, HandleRule]] = {
+        ParsedFuncKind.KERNEL: HandleRule(lambda fn, key: fn.name, "module"),
+        ParsedFuncKind.VARIANT: HandleRule(
+            lambda fn, key: f"{fn.name}${key.dim_var}${key.lo}_{key.hi}", "base"
+        ),
+        ParsedFuncKind.CONVERTER: HandleRule(
+            lambda fn, key: f"{fn.name}.converter[{key}]", "base"
+        ),
+    }
+
+    @classmethod
+    def check(
+        cls,
+        kind: ParsedFuncKind,
+        ir: object,
+        binding_name: str,
+        key: object,
+        *,
+        entry: _Entry | None,
+        base: object | None = None,
+    ) -> None:
+        cls.HANDLE[kind].check(kind, ir, key, entry, base)
+        cls.NAMING[kind].check(
+            binding_name,
+            entry,
+            kind=kind,
+            base_name=getattr(base, "name", None),
+        )
+
+
+def _binding_scope(
+    kind: ParsedFuncKind, entry: _Entry | None, base_name: str | None
+) -> str:
+    if entry is not None:
+        module_name = entry.owner_name or "<module>"
+        if kind is ParsedFuncKind.VARIANT:
+            return f"@module {module_name!r} base {base_name!r}"
+        return f"@module {module_name!r}"
+    if kind is ParsedFuncKind.VARIANT:
+        return f"base {base_name!r}"
+    return "standalone @func"
+
+
+def _register(
+    kind: ParsedFuncKind,
+    ir: HirFunction,
+    binding_name: str,
+    key: object,
+    *,
+    base: HirFunction | None = None,
+) -> None:
+    """Validate and record a parser-time Function in its enclosing Module."""
+    entry = _enclosing_declaration()
+    ParsedFuncRules.check(kind, ir, binding_name, key, entry=entry, base=base)
+    if entry is None:
+        return
+    entry.bound[binding_name] = kind
+    if kind is not ParsedFuncKind.KERNEL:
+        entry.owned.add(id(ir))
 
 
 def _validate_one_pattern(pattern: Any) -> Pattern:
@@ -103,6 +238,11 @@ def func(fn=None, *, topologies=UNDECLARED, target=None):
     declared_topologies = None if topologies is UNDECLARED else tuple(topologies)
 
     def _wrap(fn_inner):
+        ParsedFuncRules.NAMING[ParsedFuncKind.KERNEL].check(
+            fn_inner.__name__,
+            _enclosing_declaration(),
+            kind=ParsedFuncKind.KERNEL,
+        )
         extra_closure = _definition_namespace()
         parse_topologies = declared_topologies
         if parse_topologies is None:
@@ -113,6 +253,7 @@ def func(fn=None, *, topologies=UNDECLARED, target=None):
             in_module_body=_enclosing_declaration() is not None,
         )
         verify_function(ir)
+        _register(ParsedFuncKind.KERNEL, ir, fn_inner.__name__, None)
         if not declares_context:
             return ir
         return Module(
@@ -132,13 +273,19 @@ def _specialize(self: HirFunction, pattern: Any):
     """``@base.specialize(DimVarRangePat(...))`` — register a shape variant.
 
     Parses the decorated ``def`` into a variant ``hir.Function`` and appends it to
-    ``base.variants``. The identifier becomes the variant's display label, or
-    nothing when it is ``_``; the variant's ``name`` is the base's either way.
+    ``base.variants``. The identifier becomes the variant's display label and the
+    variant's ``name`` is the base's either way.
     Legal only before ``base`` enters a ``Module`` (a later call raises).
     """
     pat = _validate_one_pattern(pattern)
 
     def _wrap_variant(fn_inner):
+        ParsedFuncRules.NAMING[ParsedFuncKind.VARIANT].check(
+            fn_inner.__name__,
+            _enclosing_declaration(),
+            kind=ParsedFuncKind.VARIANT,
+            base_name=self.name,
+        )
         extra_closure = _definition_namespace()
         ir = _parse_func(
             fn_inner, topologies=_enclosing_topologies() or (),
@@ -151,10 +298,16 @@ def _specialize(self: HirFunction, pattern: Any):
                 "`pass` (only the base prototype declares a `pass` body)"
             )
 
-        if fn_inner.__name__ != "_":
-            object.__setattr__(ir, DISPLAY_NAME, fn_inner.__name__)
+        object.__setattr__(ir, DISPLAY_NAME, fn_inner.__name__)
         object.__setattr__(ir, "name", self.name)
         verify_function(ir)
+        _register(
+            ParsedFuncKind.VARIANT,
+            ir,
+            fn_inner.__name__,
+            pat,
+            base=self,
+        )
         self.add_variant(ir)
         return ir
 
@@ -187,6 +340,13 @@ def _converter(self: HirFunction, weight_name: str):
 
         object.__setattr__(ir, "name", f"{self.name}.converter[{weight_name}]")
         verify_function(ir)
+        _register(
+            ParsedFuncKind.CONVERTER,
+            ir,
+            fn_inner.__name__,
+            weight_name,
+            base=self,
+        )
         self.add_converter(weight_name, ir)
         return ir
 

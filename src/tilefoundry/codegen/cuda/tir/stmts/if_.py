@@ -12,6 +12,7 @@ from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cu
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.tir.stmts import If
+from tilefoundry.ir.visitor import ExprVisitor
 
 _SCALAR_BINARY_OP: dict[BinaryKind, str] = {
     BinaryKind.EQ: "==",
@@ -24,13 +25,12 @@ _SCALAR_BINARY_OP: dict[BinaryKind, str] = {
 }
 
 
-def render_scalar_predicate(expr, ctx: CodegenContext) -> str:
-    """Render a scalar boolean / integer expression as a C source string.
+class _PredicateVisitor(ExprVisitor[str]):
+    def __init__(self, ctx: CodegenContext) -> None:
+        super().__init__()
+        self.ctx = ctx
 
-    Intended for ``tir.If.cond`` and any other scalar predicate site.
-    Walks only the small Expr subset listed in the module docstring.
-    """
-    if isinstance(expr, Constant):
+    def visit_Constant(self, expr: Constant) -> str:
         value = expr.value
         if isinstance(value, bool):
             return "true" if value else "false"
@@ -41,30 +41,41 @@ def render_scalar_predicate(expr, ctx: CodegenContext) -> str:
             f"{type(value).__name__!r} is not supported "
             f"(only int / bool)."
         )
-    if isinstance(expr, Var):
-        return ctx.name_for(expr)
-    if isinstance(expr, Call):
+
+    def visit_Var(self, expr: Var) -> str:
+        return self.ctx.name_for(expr)
+
+    def visit_Call(self, expr: Call) -> str:
         op = expr.target
         kind = getattr(op, "kind", None)
         if not isinstance(kind, BinaryKind) or kind not in _SCALAR_BINARY_OP:
             raise NotImplementedError(
                 f"render_scalar_predicate: Call target {type(op).__name__} "
                 f"with kind {kind!r} is not a supported scalar binary. "
-                f"Supported kinds: "
-                f"{sorted(k.name for k in _SCALAR_BINARY_OP)}."
+                f"Supported kinds: {sorted(k.name for k in _SCALAR_BINARY_OP)}."
             )
         if len(expr.args) != 2:
             raise ValueError(
                 f"render_scalar_predicate: scalar Binary expects 2 args, "
                 f"got {len(expr.args)}"
             )
-        lhs = render_scalar_predicate(expr.args[0], ctx)
-        rhs = render_scalar_predicate(expr.args[1], ctx)
+        lhs, rhs = (self.visit(arg) for arg in expr.args)
         return f"({lhs}) {_SCALAR_BINARY_OP[kind]} ({rhs})"
-    raise NotImplementedError(
-        f"render_scalar_predicate: Expr type {type(expr).__name__!r} is "
-        f"not supported."
-    )
+
+    def default_visit(self, expr) -> str:
+        raise NotImplementedError(
+            f"render_scalar_predicate: Expr type {type(expr).__name__!r} is "
+            f"not supported."
+        )
+
+
+def render_scalar_predicate(expr, ctx: CodegenContext) -> str:
+    """Render a scalar boolean / integer expression as a C source string.
+
+    Intended for ``tir.If.cond`` and any other scalar predicate site.
+    Walks only the small Expr subset listed in the module docstring.
+    """
+    return _PredicateVisitor(ctx).visit(expr)
 
 
 @register_codegen_cuda(If)

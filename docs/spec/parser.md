@@ -104,14 +104,11 @@ def _(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
   `specializations=(pattern,)`), registers it on `base.variants`, and
   returns the variant.
 - The decorated identifier is the variant's **display label** and nothing more.
-  It MUST NOT become the variant's `name`, and MUST NOT take part in equality,
-  hashing, dispatch or TIR identity ([hir.md §1.1](./hir.md#11-function)): the
-  variants of one base share that base's name, and which one runs is decided by
-  the pattern alone. `def _` states no label and remains legal — `_` is reusable
-  across variants because the base is the persistent handle — and anything
-  reporting an unlabelled variant names it by its canonical specialization
-  signature instead. A label is for a reader who has to be told which of two
-  implementations ran.
+  Variant naming, binding uniqueness, and lookup handles follow the contract in
+  [hir §1.1](./hir.md#11-function). The label MUST NOT become the variant's
+  `name`, and MUST NOT take part in equality, hashing, dispatch, or TIR
+  identity: the variants of one base share that base's name, and which one runs
+  is decided by the pattern alone.
 - `pattern` MUST be a single `DimVarRangePat` (see
   [core-ir §3](./core-ir.md#3-pattern)); other `Pattern` subclasses are rejected for
   v0. The referenced `DimVar` and its `(lo, hi)` envelope live on the base
