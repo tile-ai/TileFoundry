@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import isl
 import torch
 
 from tilefoundry.evaluator.registry import register_eval
@@ -11,6 +12,11 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelationResult,
+    register_type_relation,
+)
+from tilefoundry.visitor_registry.isl_utility import to_domain
 
 _COMMUTES_WITH = frozenset({"max", "min"})
 
@@ -20,6 +26,17 @@ class Softplus(Op):
     """Pointwise softplus ``log(1 + e**x)``."""
 
     x = ParamDef(kind="input", pattern=Tensor)
+
+
+@register_type_relation(Softplus)
+def _softplus_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
+    """Model Softplus as one elementwise read and write."""
+    (x,) = input_types
+    domain, param_map = to_domain(x.shape)
+    dims = [f"d{i}" for i in range(len(x.shape))]
+    src = "[" + ", ".join(dims) + "]"
+    ident = isl.map(f"{{ {src} -> [{', '.join(dims)}] }}")
+    return AccessRelationResult(domain=domain, maps=(ident, ident), param_map=param_map)
 
 
 @register_typeinfer(Softplus)

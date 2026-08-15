@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import isl
 import torch.nn.functional as F
 
 from tilefoundry.evaluator.registry import register_eval
@@ -12,6 +13,11 @@ from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelationResult,
+    register_type_relation,
+)
+from tilefoundry.visitor_registry.isl_utility import to_domain
 
 
 @register_op(name="layer_norm")
@@ -21,6 +27,43 @@ class LayerNorm(Op):
     bias = ParamDef(kind="input", pattern=Tensor)
     axis = ParamDef(kind="attribute", annotation=int)
     eps = ParamDef(kind="attribute", annotation=float)
+
+
+@register_type_relation(LayerNorm)
+def _layer_norm_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
+    """Model LayerNorm over its complete normalized suffix."""
+    x, weight, bias = input_types
+    axis = _normalized_axis(call, ctx, len(x.shape))
+    normalized_shape = x.shape[axis:]
+    if weight.shape != normalized_shape or bias.shape != normalized_shape:
+        raise NotImplementedError(
+            "LayerNorm type_relation: weight and bias must match normalized "
+            f"shape {normalized_shape}, got {weight.shape} and {bias.shape}"
+        )
+    if any(not isinstance(extent, int) or isinstance(extent, bool) for extent in normalized_shape):
+        raise NotImplementedError(
+            "LayerNorm type_relation: normalized axes must be static ints, "
+            f"got {normalized_shape}"
+        )
+
+    prefix_shape = x.shape[:axis]
+    domain, param_map = to_domain(prefix_shape)
+    prefix = [f"d{i}" for i in range(axis)]
+    normalized = [f"j{i}" for i in range(len(normalized_shape))]
+    src = "[" + ", ".join(prefix) + "]"
+    row = ", ".join((*prefix, *normalized))
+    suffix = ", ".join(normalized)
+    bounds = " and ".join(
+        f"0 <= {dim} < {extent}"
+        for dim, extent in zip(normalized, normalized_shape, strict=True)
+    )
+    row_map = isl.map(f"{{ {src} -> [{row}] : {bounds} }}")
+    affine_map = isl.map(f"{{ {src} -> [{suffix}] : {bounds} }}")
+    return AccessRelationResult(
+        domain=domain,
+        maps=(row_map, affine_map, affine_map, row_map),
+        param_map=param_map,
+    )
 
 
 def _normalized_axis(call: "Call", ctx: "TypeInferContext", rank: int) -> int:
