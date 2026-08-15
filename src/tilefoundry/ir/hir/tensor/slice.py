@@ -53,6 +53,12 @@ def _i64(value: int) -> Constant:
 
 def slice_size(begin: Expr, end: Expr, stride: Expr) -> Expr:
     """Return ``ceil((end - begin) / stride)`` as a dimension expression."""
+    static = tuple(_constant_int(value) for value in (begin, end, stride))
+    if all(value is not None for value in static):
+        start, stop, step = static
+        if step > 0 and stop < start:
+            return _i64(0)
+
     diff = simplify_dim(DimSub, (end, begin))
 
     bump = simplify_dim(

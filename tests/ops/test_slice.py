@@ -17,9 +17,10 @@ from tilefoundry.ir.core import Call, Constant, Tuple, TypeInferContext, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.tensor.slice import Slice
+from tilefoundry.ir.hir.tensor.slice import Slice, slice_size
 from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
+from tilefoundry.ir.types.dim_isl import normalize_dim
 from tilefoundry.ir.types.shard import ComposedLayout, Layout, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split, shard_layout_of
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes
@@ -60,6 +61,21 @@ def _windowed_shard(source, shape, strides) -> ShardLayout:
         attrs=source.layout.attrs,
         mesh=source.layout.mesh,
     )
+
+
+def test_reversed_static_window_is_an_empty_slice() -> None:
+    scalar = make_tensor_type((), DType.i64)
+    size = normalize_dim(
+        slice_size(
+            Constant(type=scalar, value=8),
+            Constant(type=scalar, value=4),
+            Constant(type=scalar, value=1),
+        )
+    )
+
+    actual = _slice_type(make_tensor_type((8, 4), _F), (8, 0), (size, 4), (1, 1))
+
+    assert actual.shape == (0, 4)
 
 
 def test_slice_of_unbound_axis_preserves_the_shard_layout():

@@ -621,8 +621,7 @@ their input when it states one. An input with `layout=None` produces a view with
   `starts` is a tuple of rank-0 integer operands; `sizes` and `strides` are
   `ShapeDim` attributes stored in the same IR normal form as every other dim.
   Its result shape is exactly the normalized `sizes` and MUST NOT contain an
-  induction `Var`. A
-  start MAY be dim arithmetic over an induction `Var` — a window moved off that
+  induction `Var`. A start MAY be dim arithmetic over an induction `Var` — a window moved off that
   loop's window by a compile-time offset. That start is an address computed where
   it is read, not a value some op produces, so a walk over compute ops MUST leave
   it alone.
