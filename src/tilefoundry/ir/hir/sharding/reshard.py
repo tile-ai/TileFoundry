@@ -16,6 +16,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     ShardLayout,
     Split,
     shard_layout_local_shape,
+    split_target_axes,
 )
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
@@ -170,8 +171,34 @@ class Reshard(Op):
 
 @register_type_relation(Reshard)
 def _reshard_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Reshard preserves logical element coordinates."""
+    """Use identity only when Reshard preserves each position's local shape."""
     (x,) = input_types
+    layout = call.target.layout
+    output_shape = tuple(x.shape)
+    if layout is not None:
+        if any(isinstance(attr, Split) for attr in layout.attrs):
+            output_shape = list(x.shape)
+            targets = split_target_axes(layout, x.shape)
+            for mesh_axis, tensor_axis in enumerate(targets):
+                if tensor_axis is None:
+                    continue
+                extent = layout.mesh.layout.shape[mesh_axis]
+                size = output_shape[tensor_axis]
+                if extent is None:
+                    output_shape[tensor_axis] = 1
+                elif not isinstance(size, int) or size % extent != 0:
+                    output_shape = ()
+                    break
+                else:
+                    output_shape[tensor_axis] = size // extent
+            output_shape = tuple(output_shape)
+        else:
+            output_shape = tuple(layout.layout.shape)
+    if output_shape != x.shape:
+        raise NotImplementedError(
+            "Reshard type_relation: cross-position redistribution changes "
+            f"the local shape from {x.shape} to {output_shape}"
+        )
     domain, param_map = to_domain(x.shape)
     dims = [f"d{i}" for i in range(len(x.shape))]
     src = "[" + ", ".join(dims) + "]"
