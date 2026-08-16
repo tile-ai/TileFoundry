@@ -40,7 +40,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.footprint import _local_type as footprint_local_type
 from tilefoundry.analysis.preflight import validate_authored
-from tilefoundry.analysis.walk import postorder, values_of
+from tilefoundry.analysis.walk import loop_scopes, postorder, values_of
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamically
 from tilefoundry.inspection.analysis_report import render_analysis
@@ -539,6 +539,66 @@ def test_forward_relations_distinguish_layer_norm_from_elementwise() -> None:
     )
     assert len(elementwise.maps) == 2
     assert all(item.is_equal(identity) for item in elementwise.maps)
+
+
+def test_loop_scopes_choose_the_containing_loop_instead_of_the_smaller_work_set() -> None:
+    scalar = TensorType.scalar(DType.i32)
+    outer_iv = Var(type=scalar, name="outer")
+    middle_iv = Var(type=scalar, name="middle")
+    inner_iv = Var(type=scalar, name="inner")
+
+    outer_value = Call(type=scalar, target=ReLU(), args=(outer_iv,))
+    middle_values = [Call(type=scalar, target=ReLU(), args=(middle_iv,))]
+    for _ in range(4):
+        middle_values.append(
+            Call(type=scalar, target=ReLU(), args=(middle_values[-1],))
+        )
+
+    inner = GridRegionExpr(
+        type=scalar,
+        induction_var=inner_iv,
+        carried_args=(),
+        init_args=(outer_value, middle_values[-1]),
+        body=middle_values[-1],
+        yield_values=(),
+        extent=2,
+        step=1,
+    )
+    middle = GridRegionExpr(
+        type=scalar,
+        induction_var=middle_iv,
+        carried_args=(),
+        init_args=(outer_value,),
+        body=inner,
+        yield_values=(),
+        extent=2,
+        step=1,
+    )
+    outer = GridRegionExpr(
+        type=scalar,
+        induction_var=outer_iv,
+        carried_args=(),
+        init_args=(),
+        body=middle,
+        yield_values=(),
+        extent=2,
+        step=1,
+    )
+    function = Function.build(
+        name="nested_variance",
+        params=(),
+        body=outer,
+        return_type=scalar,
+    )
+
+    parent, scope_of = loop_scopes(function)
+
+    assert parent == {
+        id(inner): id(middle),
+        id(middle): id(outer),
+        id(outer): None,
+    }
+    assert scope_of[id(middle_values[-1])] == id(middle)
 
 
 def _relations(target, shape, *args) -> AccessRelations:

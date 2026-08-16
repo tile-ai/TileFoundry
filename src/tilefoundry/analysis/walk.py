@@ -91,24 +91,28 @@ def loop_scopes(
     loops = [expr for expr in values if isinstance(expr, GridRegionExpr)]
     repeated = {id(loop): loop_repeated_values(loop) for loop in loops}
 
+    def innermost(candidates: list[GridRegionExpr]) -> GridRegionExpr:
+        return next(
+            candidate
+            for candidate in candidates
+            if not any(
+                other is not candidate and id(other) in repeated[id(candidate)]
+                for other in candidates
+            )
+        )
+
     parent: dict[int, int | None] = {}
     for loop in loops:
         candidates = [
             owner for owner in loops if owner is not loop and id(loop) in repeated[id(owner)]
         ]
-        parent[id(loop)] = (
-            id(min(candidates, key=lambda item: len(repeated[id(item)]))) if candidates else None
-        )
+        parent[id(loop)] = id(innermost(candidates)) if candidates else None
 
     scope_of: dict[int, int | None] = {}
     for expr in values:
         if isinstance(expr, Call):
             candidates = [loop for loop in loops if id(expr) in repeated[id(loop)]]
-            scope_of[id(expr)] = (
-                id(min(candidates, key=lambda item: len(repeated[id(item)])))
-                if candidates
-                else None
-            )
+            scope_of[id(expr)] = id(innermost(candidates)) if candidates else None
         elif isinstance(expr, GridRegionExpr):
             scope_of[id(expr)] = parent[id(expr)]
     return parent, scope_of
