@@ -17,14 +17,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import get_args, get_origin, get_type_hints
 
-from tilefoundry.analysis.metadata import (
-    ComputeCostMetadata,
-    LoopFootprintMetadata,
-    MemoryMetadata,
-    RooflineMetadata,
-    TimelineMetadata,
-    TimelineSummaryMetadata,
-)
 from tilefoundry.ir.core.metadata import IRMetadata, SourceSpanMetadata
 from tilefoundry.ir.core.values import TotalAndPerUnit, TripInterval
 from tilefoundry.visitor_registry.contexts import TrafficBytes
@@ -417,6 +409,16 @@ class TimelineSummaryView(IRMetadata):
     local_makespan_ns: int = 0
     waves: int = 1
     estimated_kernel_ns: int = 0
+
+
+from tilefoundry.analysis.metadata import (  # noqa: E402, I001 -- initialized after helpers
+    ComputeCostMetadata,
+    LoopFootprintMetadata,
+    MemoryMetadata,
+    RooflineMetadata,
+    TimelineMetadata,
+    TimelineSummaryMetadata,
+)
 
 
 comment(

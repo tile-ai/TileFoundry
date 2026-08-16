@@ -319,7 +319,7 @@ def _implicit_capacity(
     return capacity
 
 
-def _cache_pressure(
+def cache_pressure(
     record: LoopFootprintMetadata,
     facts: MemoryHierarchyFacts,
     peaks: dict[str, int],
@@ -425,7 +425,7 @@ def _advisories(
     for loop, record in loops:
         notes.extend(
             note
-            for pressure in _cache_pressure(record, facts, peaks)
+            for pressure in cache_pressure(record, facts, peaks)
             if (note := _residency_advisory(loop, record, pressure, facts)) is not None
         )
     return tuple(notes)
@@ -509,4 +509,4 @@ def analyze_memory(
             attach(loop, record)
 
 
-__all__ = ["SELECTOR", "analyze_memory"]
+__all__ = ["SELECTOR", "analyze_memory", "cache_pressure"]
