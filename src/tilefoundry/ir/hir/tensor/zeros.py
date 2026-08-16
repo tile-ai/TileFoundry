@@ -1,9 +1,4 @@
-"""HIR ``zeros(shape, dtype, storage)`` callable Op.
-
-Allocate a zero-initialised tensor with explicit ``shape`` / ``dtype``
-/ ``storage``. Sharding is set up later by a separate ``reshard``
-call — ``zeros`` is intentionally storage-only, no layout attribute.
-"""
+"""HIR ``zeros(type)`` callable Op."""
 
 from __future__ import annotations
 
@@ -15,29 +10,25 @@ from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 
 
 @register_op
 class Zeros(Op):
-    """Allocate a zero-initialised tensor with the given shape / dtype / storage."""
+    """Allocate a zero-initialised tensor with the given complete type."""
 
-    shape = ParamDef(kind="attribute", annotation=tuple)
-    dtype = ParamDef(kind="attribute", annotation=DType)
-    storage = ParamDef(kind="attribute", default=StorageKind.GMEM)
+    type = ParamDef(kind="attribute", annotation=TensorType)
 
 
 @register_typeinfer(Zeros)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    op = call.target
-    return TensorType(shape=op.shape, dtype=op.dtype, layout=None, storage=op.storage)
+    return call.target.type
 
 
 @register_eval(Zeros)
 def _eval_zeros(ctx):
 
-    shape = tuple(resolve_dim(d, ctx.dim_bindings) for d in ctx.op.shape)
-    data = torch.zeros(shape, dtype=to_torch_dtype(ctx.op.dtype), device=ctx.device)
+    shape = tuple(resolve_dim(d, ctx.dim_bindings) for d in ctx.op.type.shape)
+    data = torch.zeros(shape, dtype=to_torch_dtype(ctx.op.type.dtype), device=ctx.device)
     return TensorValue(data=data, type=ctx.result_type)

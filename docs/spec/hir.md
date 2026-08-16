@@ -691,15 +691,15 @@ An output with no real sharding receives a fresh C-order `Layout`.
 
 ##### Arange
 
-`Arange(end, start=0, step=1, dtype=i64)` produces the one-dimensional half-open
-integer sequence `[start, end)` in `i32` or `i64`. `start` and `end` MUST be
-static or symbolic `ShapeDim` attributes and specialization MUST substitute
-them just as it substitutes tuple-valued shape attributes. `step` MUST be a
-positive static integer. A statically negative interval is rejected. The
-result extent is `ceildiv(end - start, step)`, with `layout=None` and
-`storage=umat`. Coordinates are synthesized without standalone traffic; their
-consumers own any materialization. The op has type, evaluation, access-relation,
-and cost semantics but no HIR-to-TIR lowering or codegen contract.
+`Arange(type, start=0, step=1)` produces exactly `type.shape[0]` integer values,
+starting at `start` and separated by `step`. `type` MUST be a rank-one
+`TensorType` with `i32` or `i64` dtype. `start` MUST be a static or symbolic
+`ShapeDim`; `step` MUST be a positive static integer. The complete result type,
+including layout and storage, is the supplied `type`; type inference MUST return
+it rather than constructing another type. Coordinates are synthesized without
+standalone traffic; their consumers own any materialization. The op has type,
+evaluation, access-relation, and cost semantics but no HIR-to-TIR lowering or
+codegen contract.
 
 ##### Where
 
@@ -1041,22 +1041,26 @@ operation and is not an HIR op.
 ##### Zeros
 ```python
 class Zeros(Op):
-    """Allocate a zero-initialised tensor; produces a Tensor.
+    """Allocate a zero-initialised tensor of one complete type.
 
     Attributes:
-        shape: attribute; output logical shape.
-        dtype: attribute; output dtype.
-        storage: attribute; output storage kind.
+        type: attribute; complete output TensorType.
     """
 
-    shape: tuple[ShapeDim, ...]
-    dtype: DType
-    storage: StorageKind = StorageKind.GMEM
+    type: TensorType
 ```
 - constraints:
-  - The result is zero-initialised and its logical shape is exactly `shape`.
-  - Evaluation MUST resolve every symbolic shape entry from the function's
+  - Type inference MUST return `type` without reconstructing any part of it.
+  - The result is zero-initialised and its logical shape is exactly `type.shape`.
+  - Evaluation MUST resolve every symbolic entry of `type.shape` from the function's
     dimension bindings before allocating the concrete tensor.
+
+Ops whose result type is determined entirely by attributes, including `Zeros`
+and `Arange`, MUST accept one complete `TensorType`; shape, dtype, layout, and
+storage MUST NOT be split across independent attributes. Transforming ops whose
+result type is partly inherited from an input, including `Reshard`, `Cast`, and
+`Transpose`, MUST instead carry exactly the portions they change and inherit the
+rest from that input.
 
 ##### Reduce
 ```python

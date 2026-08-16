@@ -241,7 +241,7 @@ class _LoopOnly:
 
     @func
     def main(x: Tensor[(8,), "f32"]):
-        total = tf.zeros(shape=(8,), dtype="f32")
+        total = tf.zeros(Tensor[(8,), "f32"])
         for _ in range(_LOOP_CTX):
             total = tf.add(total, x)
         return total

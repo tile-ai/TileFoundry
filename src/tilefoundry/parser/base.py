@@ -57,9 +57,7 @@ from .static_eval import eval_static
 from .sugar import (
     LayoutSugarError,
     _is_tuple_sugar,
-    parse_layout_sugar,
-    parse_shard_layout_sugar,
-    try_parse_sugar_tensor_type,
+    parse_sugar,
 )
 from .symtab import LexicalEnv
 
@@ -178,7 +176,14 @@ def _is_const_tensor_annotation(node: ast.AST) -> bool:
     )
 
 
-def _resolve_tensor_type(node: ast.AST, closure: dict[str, Any]) -> TensorType:
+def _resolve_tensor_type(
+    node: ast.AST,
+    closure: dict[str, Any],
+    *,
+    mesh_resolver=None,
+    default_mesh: Mesh | None = None,
+    name_resolver=None,
+) -> TensorType:
     """Resolve tensor annotations identically for HIR and TIR functions.
 
     Parse compact layout sugar directly from AST or evaluate the verbose shard
@@ -186,7 +191,20 @@ def _resolve_tensor_type(node: ast.AST, closure: dict[str, Any]) -> TensorType:
     [parser §1.4](docs/spec/parser.md#14-tensor-and-consttensor-annotations) and
     [parser §1.5](docs/spec/parser.md#15-layout-sugar).
     """
-    result = try_parse_sugar_tensor_type(node, closure)
+    bindings = dict(closure)
+    if name_resolver is not None:
+        for candidate in ast.walk(node):
+            if isinstance(candidate, ast.Name):
+                value = name_resolver(candidate.id)
+                if value is not None:
+                    bindings[candidate.id] = value
+    result = parse_sugar(
+        node,
+        TensorType,
+        closure=bindings,
+        mesh_resolver=mesh_resolver,
+        default_mesh=default_mesh,
+    )
     if result is not None:
         return canonicalize_dims(result)
     try:
@@ -543,6 +561,14 @@ class BaseExprVisitor:
         - Compile-time integers and scalar range induction Names also reshape
           away their selected axis, matching torch indexing.
         """
+        if _annotation_head_name(node.value) in ("Tensor", "ConstTensor"):
+            return _resolve_tensor_type(
+                node,
+                self.closure,
+                mesh_resolver=self._resolve_body_mesh,
+                default_mesh=self._current_default_mesh(),
+                name_resolver=self.env.lookup,
+            )
         if isinstance(node.value, ast.Name):
             bound = self.env.lookup(node.value.id)
             if isinstance(bound, list):
@@ -1319,6 +1345,8 @@ class BaseExprVisitor:
         annotation = self._lookup_param_annotation(
             schema=schema, op_cls=op_cls, attr_name=attr_name
         )
+        if annotation is TensorType and isinstance(node, ast.Subscript):
+            return self.expr(node)
         if annotation is not None and _is_tuple_sugar(node):
             sugar = self._sugar_parser_for_annotation(annotation)
             if sugar is not None:
@@ -1333,8 +1361,10 @@ class BaseExprVisitor:
         elif annotation is None and attr_name == "layout" and _is_tuple_sugar(node):
 
             try:
-                return parse_shard_layout_sugar(
-                    node, self._resolve_body_mesh,
+                return parse_sugar(
+                    node,
+                    ShardLayout,
+                    mesh_resolver=self._resolve_body_mesh,
                     default_mesh=self._current_default_mesh(),
                     closure=self.closure,
                 )
@@ -1389,13 +1419,15 @@ class BaseExprVisitor:
     def _sugar_parser_for_annotation(self, annotation: type):
         """Return the sugar parser for a Layout-family annotation, else None."""
         if annotation is ShardLayout:
-            return lambda n: parse_shard_layout_sugar(
-                n, self._resolve_body_mesh,
+            return lambda n: parse_sugar(
+                n,
+                ShardLayout,
+                mesh_resolver=self._resolve_body_mesh,
                 default_mesh=self._current_default_mesh(),
                 closure=self.closure,
             )
         if annotation is Layout:
-            return parse_layout_sugar
+            return lambda n: parse_sugar(n, Layout, closure=self.closure)
         return None
 
     def _resolve_static_attribute(self, owner, attr: str):

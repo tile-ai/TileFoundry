@@ -71,9 +71,7 @@ DIMS = {"ctx_len": CONTEXT}
 FAMILIES = ("compute-cost", "memory", "roofline", "timeline")
 QWEN3_PD_FAMILIES = ("compute-cost", "memory", "roofline")
 CORPUS_ANALYSES = [
-    pytest.param(case, selected, id=selected.id)
-    for case in CORPUS
-    for selected in case.analyze
+    pytest.param(case, selected, id=selected.id) for case in CORPUS for selected in case.analyze
 ]
 
 
@@ -218,9 +216,7 @@ def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
     )
 
     assert result.function is not FlashSplitKDecode.entry_function()
-    loops = [
-        expr for expr in postorder(result.function.body) if isinstance(expr, GridRegionExpr)
-    ]
+    loops = [expr for expr in postorder(result.function.body) if isinstance(expr, GridRegionExpr)]
     assert len(loops) == 1
     (loop,) = loops
     assert loop.step == BLOCK * WORKERS
@@ -237,9 +233,7 @@ def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
     )
 
     slices = [
-        expr
-        for expr in loop_exprs
-        if isinstance(expr, Call) and isinstance(expr.target, Slice)
+        expr for expr in loop_exprs if isinstance(expr, Call) and isinstance(expr.target, Slice)
     ]
     assert len(slices) == 2
     for window in slices:
@@ -265,7 +259,7 @@ def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
         worker_source = worker_shard.args[0]
         assert isinstance(worker_source, Call)
         assert isinstance(worker_source.target, Arange)
-        assert worker_source.target.end == WORKERS
+        assert worker_source.target.type.shape == (WORKERS,)
         assert worker_source.target.start == 0
         assert worker_shard.target.storage is StorageKind.RMEM
         worker_layout = worker_shard.target.layout
@@ -296,8 +290,7 @@ def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
     assert len(kv_windows) == 2
     trips = enclosing_trips(result.function.body)
     assert all(
-        trips.get(id(window), 1)
-        * get_metadata(window, ComputeCostMetadata).traffic_at("gmem").read
+        trips.get(id(window), 1) * get_metadata(window, ComputeCostMetadata).traffic_at("gmem").read
         == cache_bytes // WORKERS
         for window in kv_windows
     )
@@ -456,9 +449,7 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         loop_timelines.append(tuple(timelines))
 
         loop = next(
-            expr
-            for expr in postorder(result.function.body)
-            if isinstance(expr, GridRegionExpr)
+            expr for expr in postorder(result.function.body) if isinstance(expr, GridRegionExpr)
         )
         consumers = [
             expr
@@ -468,10 +459,9 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         loop_start = min(record.start_ns for record in timelines)
         loop_end = loop_start + extent * timelines[0].stride_ns
         assert len(consumers) == 3
-        assert {
-            get_metadata(consumer, TimelineMetadata).start_ns
-            for consumer in consumers
-        } == {loop_end}
+        assert {get_metadata(consumer, TimelineMetadata).start_ns for consumer in consumers} == {
+            loop_end
+        }
 
         root_timeline = get_metadata(result.function, TimelineSummaryMetadata)
         assert root_timeline is not None
@@ -517,11 +507,7 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
     rendered = render_analysis(results[0])
     lines = rendered.annotated.splitlines()
     rows = [row for row in rendered.data["calls"] if "timeline" in row]
-    comments = [
-        line.split("; timeline=", 1)[1]
-        for line in lines
-        if "; timeline=" in line
-    ]
+    comments = [line.split("; timeline=", 1)[1] for line in lines if "; timeline=" in line]
     expected_comments = []
     for row in rows:
         value, line_text = row["value"].rsplit(":", 1)
@@ -531,13 +517,10 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         if timeline["trips"] > 1:
             offset = f"{timeline['stride_ns']}t+"
             expected_comments.append(
-                f"[{offset}{timeline['start_ns']},{offset}{timeline['end_ns']})"
-                f"*{timeline['trips']}"
+                f"[{offset}{timeline['start_ns']},{offset}{timeline['end_ns']})*{timeline['trips']}"
             )
         else:
-            expected_comments.append(
-                f"[{timeline['start_ns']},{timeline['end_ns']})"
-            )
+            expected_comments.append(f"[{timeline['start_ns']},{timeline['end_ns']})")
 
     assert comments == expected_comments
     first = next(row for row in rows if row["value"].startswith("v0:"))
@@ -556,6 +539,8 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
     assert "timeline=[920t+652,920t+652)*8" in lines[58]
     assert lines[82].strip() == "m = v16"
     assert "timeline" not in lines[82]
+
+
 @pytest.mark.parametrize("ctx_len", (1, 1024))
 def test_qwen_decoder_unplaced_calls_are_refused_at_each_sequence_length(
     ctx_len: int,
@@ -669,10 +654,10 @@ def test_scheduling_at_a_stated_size_plans_and_verifies() -> None:
     program = build_partition_program(module, result.function)
     selections = [site for site in program.sites if isinstance(site.call.target, IndexSelect)]
     assert len(selections) == 2
-    assert {
-        program.values[site.input_value_ids[0][0]].source.name
-        for site in selections
-    } == {"k_cache", "v_cache"}
+    assert {program.values[site.input_value_ids[0][0]].source.name for site in selections} == {
+        "k_cache",
+        "v_cache",
+    }
 
 
 def test_scheduling_refuses_a_size_no_variant_covers() -> None:

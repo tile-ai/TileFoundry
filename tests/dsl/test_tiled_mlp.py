@@ -68,8 +68,8 @@ class TiledMLP:
             new_shape=(NK_HID, 1, NB_INT, KT, NT),
         )
 
-        gate_z = tf.zeros(shape=(MB, NB_INT, MT, NT), dtype="f32")
-        up_z = tf.zeros(shape=(MB, NB_INT, MT, NT), dtype="f32")
+        gate_z = tf.zeros(Tensor[(MB, NB_INT, MT, NT), "f32"])
+        up_z = tf.zeros(Tensor[(MB, NB_INT, MT, NT), "f32"])
         for kh in range(NK_HID):
             kh_index = tf.reshape(kh, new_shape=(1,))
             x_k = tf.cast(
@@ -122,7 +122,7 @@ class TiledMLP:
             tf.transpose(tf.reshape(w_down, new_shape=(NK_INT, KT, NB_HID, NT)), perm=(0, 2, 1, 3)),
             new_shape=(NK_INT, 1, NB_HID, KT, NT),
         )
-        out_z = tf.zeros(shape=(MB, NB_HID, MT, NT), dtype="f32")
+        out_z = tf.zeros(Tensor[(MB, NB_HID, MT, NT), "f32"])
         for ki in range(NK_INT):
             ki_index = tf.reshape(ki, new_shape=(1,))
             out_z = out_z + tf.matmul(

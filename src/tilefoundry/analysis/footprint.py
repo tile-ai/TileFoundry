@@ -154,14 +154,15 @@ def _static_range(expr: Expr, *, narrow: bool) -> tuple[int, int] | None:
     if isinstance(expr.target, (Reshape, Reshard)):
         return _static_range(expr.args[0], narrow=narrow)
     if isinstance(expr.target, Arange):
-        start, end, step = expr.target.start, expr.target.end, expr.target.step
+        start, step = expr.target.start, expr.target.step
+        (length,) = expr.target.type.shape
         if not all(
-            isinstance(item, int) and not isinstance(item, bool) for item in (start, end, step)
+            isinstance(item, int) and not isinstance(item, bool) for item in (start, step, length)
         ):
             return None
-        if end <= start:
+        if length <= 0:
             return 0, 0
-        return start, start + ((end - start - 1) // step) * step
+        return start, start + (length - 1) * step
     if isinstance(expr.target, Binary):
         left = _static_range(expr.args[0], narrow=narrow)
         right = _static_range(expr.args[1], narrow=narrow)

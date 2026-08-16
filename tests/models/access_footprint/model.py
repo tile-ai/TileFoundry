@@ -38,8 +38,8 @@ class TiledQKVProjection:
             result = output
             for m in tile(S, BM):  # noqa: F405
                 for n in tile(N, BN):  # noqa: F405
-                    acc = tf.reshard(
-                        tf.zeros((BM, BN), dtype="f32"), (BM, BN), "rmem"
+                    acc = tf.zeros(
+                        Tensor[(BM, BN), "f32", (BM, BN), "rmem"]
                     )
                     for k in tile(K, BK):  # noqa: F405
                         lhs = tf.reshard(x[m, k], (BM, BK), "smem")

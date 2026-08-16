@@ -48,7 +48,7 @@ class HirSharded:
     @func
     def mesh_axis_as_a_position_coordinate(
     ) -> Tensor[(), "i64"]:
-        v0 = arange(end=8, start=0, step=1, dtype="i64")
+        v0 = arange(type=Tensor[(8,), "i64"], start=0, step=1)
         v1 = reshard(v0, layout=ShardLayout(
             layout=Layout((8,), (1,)),
             attrs=(S(0),),

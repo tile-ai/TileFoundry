@@ -20,7 +20,7 @@ from tilefoundry.ir.types.shard.scope_match import (
     states_consistent_positions,
 )
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
-from tilefoundry.parser.sugar import parse_shard_layout_sugar
+from tilefoundry.parser.sugar import parse_sugar
 from tilefoundry.schedule.partition.problem import _placement_relation
 
 
@@ -75,10 +75,16 @@ def test_named_mesh_axis_sugar_carries_a_layout_index() -> None:
     mesh = make_mesh((8,), names=("cta",), topology="cta")
     node = ast.parse("(8 @ cta.cta,)", mode="eval").body
 
-    layout = parse_shard_layout_sugar(node, lambda name: mesh if name == "cta" else None)
+    layout = parse_sugar(
+        node,
+        ShardLayout,
+        mesh_resolver=lambda name: mesh if name == "cta" else None,
+    )
     partial_node = ast.parse('((8,), {cta.cta @ P("sum")})', mode="eval").body
-    partial_layout = parse_shard_layout_sugar(
-        partial_node, lambda name: mesh if name == "cta" else None
+    partial_layout = parse_sugar(
+        partial_node,
+        ShardLayout,
+        mesh_resolver=lambda name: mesh if name == "cta" else None,
     )
 
     assert layout.attrs == (Split(0),)
