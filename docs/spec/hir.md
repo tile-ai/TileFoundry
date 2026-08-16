@@ -658,6 +658,25 @@ their input when it states one. An input with `layout=None` produces a view with
   The result type describes a full window; whether a loop iteration can contain
   that window is an analysis-domain question, not a type-inference question.
 
+##### Concat
+
+`Concat(inputs..., axis=a)` materializes a rank-preserving tensor by joining
+each input segment along `a`. All inputs MUST have one common rank and dtype,
+and every non-concatenated dimension MUST match. Negative `axis` values resolve
+against that rank. The output's concatenated extent is the sum of the input
+extents; every input access map is defined only on its segment and subtracts
+the preceding segments' extent from that axis, while the output map is the
+identity.
+
+Type inference derives fresh output ownership from those access maps. A
+`Split` on a non-concatenated axis MAY propagate when shared ownership
+propagation proves a zero-offset projection. A `Split` on the concatenated axis
+MUST be rejected, including when it appears only on the zero-offset first
+input, and the diagnostic MUST require an explicit `Reshard` before `Concat`.
+Dynamic ownership, incompatible meshes, nonuniform `Partial` states, and an
+unrepresentable derived layout MUST likewise fail with the `Reshard` remedy.
+An output with no real sharding receives a fresh C-order `Layout`.
+
 ##### Rank and ShapeOf
 
 - `Rank` produces a rank-0 `i64`; `ShapeOf` produces a rank-1 `i64` vector with
