@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
-from dataclasses import asdict
+import re
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, fields, is_dataclass
+from typing import get_args, get_origin, get_type_hints
 
 from tilefoundry.analysis.facts import MemoryHierarchyFacts
 from tilefoundry.analysis.memory import cache_pressure
@@ -12,18 +14,114 @@ from tilefoundry.analysis.metadata import (
     ComputeCostMetadata,
     LoopFootprintMetadata,
     MemoryMetadata,
+    RooflineMetadata,
+    TimelineMetadata,
+    TimelineSummaryMetadata,
 )
 from tilefoundry.analysis.walk import postorder, tensor_types
-from tilefoundry.inspection.values import (
-    declared_records,
-    expr_field,
-    family_of,
-    render_record,
-)
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+
+_FAMILIES: dict[type[IRMetadata], str] = {}
+_EXPR_FIELDS: dict[type[IRMetadata], dict[str, Callable[..., object]]] = {}
+
+
+def _derived_family(record: type) -> str:
+    """The family name the record class already states."""
+    stem = record.__name__.removesuffix("Metadata")
+    return re.sub(r"(?<!^)(?=[A-Z])", "-", stem).lower()
+
+
+def declare_record(record: type[IRMetadata], *, family: str | None = None) -> None:
+    """Declare one structured record and its report family."""
+    _FAMILIES[record] = family or _derived_family(record)
+
+
+def declared_records() -> tuple[type[IRMetadata], ...]:
+    """Every record type declared as structured report data."""
+    return tuple(_FAMILIES)
+
+
+def family_of(record: type[IRMetadata]) -> str:
+    """The report family that owns *record*."""
+    return _FAMILIES.get(record, _derived_family(record))
+
+
+def expr_field(
+    record: type[IRMetadata], key: str, of: Callable[..., object]
+) -> None:
+    """Read one report field from the expression carrying its record."""
+    _EXPR_FIELDS.setdefault(record, {})[key] = of
+
+
+def expr_fields(record: type[IRMetadata]) -> frozenset[str]:
+    """Which fields of *record* are read from its expression."""
+    return frozenset(_EXPR_FIELDS.get(record, {}))
+
+
+def render_record(record: IRMetadata, expr: object) -> dict[str, object]:
+    """Serialize every record field under its declared field name."""
+    from_expr = _EXPR_FIELDS.get(type(record), {})
+    hints = get_type_hints(type(record))
+    reported: dict[str, object] = {}
+    for name in (item.name for item in fields(record)):
+        if name in from_expr:
+            value = from_expr[name](record, expr)
+            if value is not None:
+                reported[name] = value
+            continue
+        reported[name] = _reported_value(getattr(record, name), hints[name])
+    return reported
+
+
+def _reported_value(value: object, declared: object) -> object:
+    """Serialize one value according to the type its field declared."""
+    if value is None:
+        return None
+    if is_dataclass(declared) and isinstance(declared, type):
+        hints = get_type_hints(declared)
+        return {
+            item.name: _reported_value(getattr(value, item.name), hints[item.name])
+            for item in fields(declared)
+        }
+    origin = get_origin(declared)
+    if origin is dict:
+        _, value_type = get_args(declared)
+        return {key: _reported_value(item, value_type) for key, item in value.items()}
+    if origin in (tuple, list):
+        item_type = _item_type(declared)
+        pair = _pair_types(item_type)
+        if pair is not None:
+            return {key: _reported_value(item, pair[1]) for key, item in value}
+        return [_reported_value(item, item_type) for item in value]
+    return value
+
+
+def _item_type(declared: object) -> object:
+    args = [arg for arg in get_args(declared) if arg is not Ellipsis]
+    return args[0] if args else object
+
+
+def _pair_types(declared: object) -> tuple[object, object] | None:
+    if get_origin(declared) is not tuple:
+        return None
+    args = get_args(declared)
+    if len(args) != 2 or Ellipsis in args:
+        return None
+    return args[0], args[1]
+
+
+for _record_type in (
+    ComputeCostMetadata,
+    LoopFootprintMetadata,
+    MemoryMetadata,
+    RooflineMetadata,
+    TimelineMetadata,
+    TimelineSummaryMetadata,
+):
+    declare_record(_record_type)
 
 
 def _type_text(type_: object) -> str:
@@ -220,4 +318,14 @@ def render_json(data: dict[str, object]) -> str:
     return json.dumps(data, indent=2, sort_keys=True)
 
 
-__all__ = ["render_json", "report_data", "selected_types"]
+__all__ = [
+    "declare_record",
+    "declared_records",
+    "expr_field",
+    "expr_fields",
+    "family_of",
+    "render_json",
+    "render_record",
+    "report_data",
+    "selected_types",
+]
