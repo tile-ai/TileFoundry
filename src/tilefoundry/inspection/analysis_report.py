@@ -17,11 +17,14 @@ from dataclasses import asdict, dataclass
 
 from tilefoundry.analysis import (
     ComputeCostMetadata,
+    LoopFootprintMetadata,
     MemoryMetadata,
     RooflineMetadata,
     TimelineSummaryMetadata,
 )
 from tilefoundry.analysis.api import AnalysisResult
+from tilefoundry.analysis.facts import MemoryHierarchyFacts
+from tilefoundry.analysis.memory import _cache_pressure
 from tilefoundry.analysis.walk import postorder, tensor_types
 from tilefoundry.inspection.python_printer import (
     PythonPrintOptions,
@@ -45,6 +48,7 @@ from tilefoundry.inspection.values import (
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.target import Target
 
 
 def _type_text(type_: object) -> str:
@@ -176,7 +180,7 @@ def render_analysis(
         "executed": list(result.executed),
         "function_records": function_records,
         "calls": _call_records(function, selected, rendered.statements),
-        "loops": _loop_records(function, selected),
+        "loops": _loop_records(function, selected, target),
     }
     available = set(result.metadata_types)
     if ComputeCostMetadata in selected or (
@@ -266,15 +270,36 @@ def _call_records(
 
 
 def _loop_records(
-    function: Function, selected: frozenset[type[IRMetadata]]
+    function: Function,
+    selected: frozenset[type[IRMetadata]],
+    target: Target,
 ) -> list[dict[str, object]]:
     """Every selected record attached to an authored loop."""
-    return [
-        {"value": expr.induction_var.name, **records}
-        for expr in postorder(function.body)
-        if isinstance(expr, GridRegionExpr)
-        and (records := _records_of(expr, selected))
-    ]
+    memory = get_metadata(function, MemoryMetadata)
+    facts = (
+        target.get_facts(MemoryHierarchyFacts)
+        if memory is not None and MemoryMetadata in selected
+        else None
+    )
+    peaks = (
+        {item.level: item.peak_bytes for item in memory.footprint}
+        if memory is not None
+        else {}
+    )
+    rows: list[dict[str, object]] = []
+    for expr in postorder(function.body):
+        if not isinstance(expr, GridRegionExpr):
+            continue
+        records = _records_of(expr, selected)
+        if not records:
+            continue
+        record = get_metadata(expr, LoopFootprintMetadata)
+        if record is not None and facts is not None:
+            pressure = _cache_pressure(record, facts, peaks)
+            if pressure:
+                records["cache-pressure"] = [asdict(item) for item in pressure]
+        rows.append({"value": expr.induction_var.name, **records})
+    return rows
 
 
 def _work_totals(function: Function) -> dict[str, object]:

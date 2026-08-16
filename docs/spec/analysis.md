@@ -350,9 +350,11 @@ The JSON report carries the same identity and selection in `target`, `module`,
 `function`, `topology`, `requested`, and `executed`. Whole-function
 projections are under `function_records`; `calls` is a value-ordered list whose
 entries have a `value` label and one key per selected family. `loops` is the
-corresponding authored-loop list, labelled by induction variable. `totals`
-appears when the selected view includes compute cost or roofline's bounded work
-evidence.
+corresponding authored-loop list, labelled by induction variable. When memory is
+selected, a loop whose backing storage has a same-scope implicit cache also has
+`cache-pressure`: one target-aware row per cache, computed from the loop's
+device-wide access footprint. `totals` appears when the selected view includes
+compute cost or roofline's bounded work evidence.
 
 One result is rendered once, and every surface reads that rendering:
 
@@ -637,7 +639,25 @@ class MemoryMetadata(IRMetadata):
 | `MemoryMetadata.footprint` | One `LevelFootprint` per occupied storage level. | As above |
 | `MemoryMetadata.traffic` | Exact per-level sum of the Function's already-scaled `ComputeCostMetadata.traffic`. | No |
 | `MemoryMetadata.lifetimes` | Every value residency except a `Reshape`, which aliases its input. | As above |
-| `MemoryMetadata.advisories` | Explicit peak overflow, cache/shared-capacity division, and same-scope cache working-set findings. | `MemoryHierarchyFacts` |
+| `MemoryMetadata.advisories` | Explicit peak overflow, cache/shared-capacity division, and same-scope authored-loop access-footprint findings. | `MemoryHierarchyFacts` |
+
+The target-aware loop projection is report data rather than another metadata
+record. `LoopFootprintMetadata` remains target-independent:
+
+```text
+"cache-pressure": [{"cache_level": <level>, "backing_level": <level>,
+                    "device_bytes": <int>, "capacity_bytes": <int|null>,
+                    "status": "fits"|"exceeds"|"lower-bound"|"unknown"}, ...]
+```
+
+The projection MUST use `device_bytes`, sum rows at the cache's ultimate explicit
+backing level, and compare only levels whose capacity scopes agree. A missing
+backing level or a scope mismatch MUST emit no row and MUST NOT fail analysis.
+`lower-bound` means an incomplete footprint has not yet exceeded capacity;
+`exceeds` remains conclusive when the lower bound alone exceeds it. A cache with
+no usable capacity emits `unknown`. A buffer with `device_bytes < bytes` MUST be
+removed before projection and its `LoopFootprintMetadata` MUST be marked
+incomplete.
 
 The family reads this target projection:
 
@@ -758,8 +778,9 @@ attached only to the Function. Its full JSON projection is under
   - Analysis MUST NOT infer memory ownership from a storage level's name or
     capacity scope.
   - One value exceeding an explicit level's capacity MUST raise `AnalysisError`.
-    An aggregate explicit peak or implicit working set exceeding capacity MUST
-    instead produce an advisory and MUST NOT fail the call.
+    An aggregate explicit peak or an authored-loop access footprint exceeding an
+    implicit cache capacity MUST instead produce an advisory and MUST NOT fail
+    the call.
 
 #### 2.2.3 `roofline`
 

@@ -24,6 +24,7 @@ from tests.fixtures.shapes.window_programs import WindowCost
 from tilefoundry import func, module
 from tilefoundry.analysis import (
     ComputeCostMetadata,
+    LoopFootprintMetadata,
     MemoryHierarchyFacts,
     MemoryMetadata,
     MemoryRelationKind,
@@ -47,7 +48,7 @@ from tilefoundry.inspection.analysis_report import (
 )
 from tilefoundry.inspection.values import render_comment
 from tilefoundry.ir.core import Call, Constant, Tuple, Var, get_metadata
-from tilefoundry.ir.hir import Function
+from tilefoundry.ir.hir import Function, GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import DType, TensorType, TupleType, make_tensor_type, numel, tensor_bytes
@@ -346,9 +347,14 @@ def _modest_shared(source: Tensor[(1024,), "f32"]):
         return tf.add(local, local)
 
 
-@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4),))
 def _oversized_working_set(source: Tensor[(16_000_000,), "f32"]):
-    return tf.add(source, source)
+    with Mesh(("cta",), layout=(4,), names=("tile",)) as _cta:
+        broadcast = tf.reshard(source, (16_000_000,), "gmem")
+        result = broadcast
+        for i in tile(2, 1):  # noqa: F405
+            result = tf.add(result, broadcast)
+        return result
 
 
 def _entry(owner):
@@ -905,7 +911,30 @@ def test_a_cache_too_small_is_advisory_and_only_where_the_scopes_agree() -> None
     assert any("l2 holds" in note for note in record.advisories)
     assert not any("l1 holds" in note for note in record.advisories)
 
-    lines = render_text(render_analysis(result)).splitlines()
+    loop = next(
+        expr
+        for expr in postorder(entry.body)
+        if isinstance(expr, GridRegionExpr)
+    )
+    footprint = get_metadata(loop, LoopFootprintMetadata)
+    assert footprint is not None and footprint.known
+    assert len(footprint.footprints) == 2
+    assert all(
+        item.device_bytes == item.bytes == 64_000_000
+        for item in footprint.footprints
+    )
+
+    rendered = render_analysis(result)
+    assert rendered.data["loops"][0]["cache-pressure"] == [
+        {
+            "cache_level": "l2",
+            "backing_level": "gmem",
+            "device_bytes": 128_000_000,
+            "capacity_bytes": 50_000_000,
+            "status": "exceeds",
+        }
+    ]
+    lines = render_text(rendered).splitlines()
     assert [f"# advisory={json.dumps(note)}" for note in record.advisories] == [
         line for line in lines if line.startswith("# advisory")
     ]

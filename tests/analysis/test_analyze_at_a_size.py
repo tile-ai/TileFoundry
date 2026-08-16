@@ -297,6 +297,15 @@ def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
     assert rendered.data["loops"] == [
         {
             "value": "c",
+            "cache-pressure": [
+                {
+                    "cache_level": "l2",
+                    "backing_level": "gmem",
+                    "device_bytes": 2 * cache_bytes,
+                    "capacity_bytes": 50_000_000,
+                    "status": "fits",
+                }
+            ],
             "loop-footprint": {
                 "footprints": [
                     {
