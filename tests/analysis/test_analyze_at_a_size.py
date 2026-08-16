@@ -20,7 +20,9 @@ from tests.fixtures.placed.flash_split_k_decode import BLOCK, HEADS, WORKERS, Fl
 from tests.fixtures.placed.gqa_decode import MAX_CTX, GqaOnline
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tests.fixtures.placed.qwen3_1_7b_pd import PrefillLayer
+from tests.models.corpus import FunctionCase, ModelCase
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
+from tests.models.registry import CORPUS
 from tilefoundry.analysis import (
     ComputeCostMetadata,
     LoopFootprintMetadata,
@@ -68,6 +70,11 @@ CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT}
 FAMILIES = ("compute-cost", "memory", "roofline", "timeline")
 QWEN3_PD_FAMILIES = ("compute-cost", "memory", "roofline")
+CORPUS_ANALYSES = [
+    pytest.param(case, selected, id=selected.id)
+    for case in CORPUS
+    for selected in case.analyze
+]
 
 
 SOLVER = ScheduleOptions(timeout_seconds=60, workers=4, random_seed=0, stop_at_first_solution=True)
@@ -84,6 +91,20 @@ def _subject(family: str):
     """A concrete query that satisfies the selected family's readiness."""
     module = _aimed()
     return module, module.entry_function(), DIMS
+
+
+@pytest.mark.parametrize(("case", "selected"), CORPUS_ANALYSES)
+def test_every_corpus_function_analyzes_from_source(
+    case: ModelCase, selected: FunctionCase
+) -> None:
+    module = case.build()
+    owner, function = case.resolve(module, selected.selector)
+    families = FAMILIES if selected.timeline else QWEN3_PD_FAMILIES
+
+    result = analyze(owner, function, analysis=families, dims=selected.dims)
+
+    assert result.module is owner
+    assert result.metadata_types
 
 
 @pytest.mark.parametrize("family", FAMILIES)
