@@ -759,7 +759,11 @@ def _parse_tensor_type_sugar(
             )
         storage = resolve_storage(_eval_ast(elts[3], closure))
 
-    if isinstance(layout, ShardLayout) and layout.layout.strides is None:
+    if (
+        isinstance(layout, ShardLayout)
+        and isinstance(layout.layout, Layout)
+        and layout.layout.strides is None
+    ):
         layout = ShardLayout(
             layout=Layout(
                 shape=layout.layout.shape,

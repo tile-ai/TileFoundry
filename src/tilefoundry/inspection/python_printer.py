@@ -1142,7 +1142,7 @@ def _emit_def(
                 sl_str = _shard_layout_str(value, indent=indent_here + "        ")
                 attr_strs.append(f"{param.name}={sl_str}")
             elif isinstance(value, TensorType):
-                attr_strs.append(f"{param.name}={_compact_type(value, mesh_map)}")
+                attr_strs.append(f"{param.name}={_compact_type(value, {})}")
             elif isinstance(value, tuple):
                 attr_strs.append(f"{param.name}={_attr_tuple_str(value)}")
             else:
