@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import isl
-
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -24,6 +22,7 @@ from tilefoundry.visitor_registry.access_relation import (
     register_type_relation,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
+from tilefoundry.visitor_registry.relation_build import identity_map
 
 
 def _dim_mul(a, b):
@@ -136,9 +135,7 @@ def _materialize_reshard_strides(
     UMAT materializes in RMEM, so it uses that boundary when choosing sugar
     strides.
     """
-    src_storage = (
-        StorageKind.RMEM if src_ty.storage is StorageKind.UMAT else src_ty.storage
-    )
+    src_storage = StorageKind.RMEM if src_ty.storage is StorageKind.UMAT else src_ty.storage
     src_layout = src_ty.layout if isinstance(src_ty.layout, ShardLayout) else None
     if src_storage == new_storage:
         if _src_form_is_per_instance(src_layout):
@@ -181,9 +178,7 @@ def _reshard_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     if layout is not None:
         factored = list(shard_layout_local_shape(layout, require_static=False))
         excess = len(factored) - len(x.shape)
-        split_positions = {
-            attr.axis for attr in layout.attrs if isinstance(attr, Split)
-        }
+        split_positions = {attr.axis for attr in layout.attrs if isinstance(attr, Split)}
         for position in sorted(split_positions, reverse=True):
             if excess == 0:
                 break
@@ -197,9 +192,7 @@ def _reshard_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
             f"the local shape from {x.shape} to {output_shape}"
         )
     domain, param_map = to_domain(x.shape)
-    dims = [f"d{i}" for i in range(len(x.shape))]
-    src = "[" + ", ".join(dims) + "]"
-    ident = isl.map(f"{{ {src} -> [{', '.join(dims)}] }}")
+    ident = identity_map(len(x.shape))
     return AccessRelationResult(domain=domain, maps=(ident, ident), param_map=param_map)
 
 

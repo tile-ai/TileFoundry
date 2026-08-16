@@ -1,9 +1,32 @@
 """Forward access-relation construction helpers (input-type driven)."""
+
 from __future__ import annotations
 
 import isl
 
+from tilefoundry.visitor_registry.access_relation import AccessRelationResult
 from tilefoundry.visitor_registry.isl_utility import to_dim, to_domain
+
+
+def identity_map(rank: int) -> "isl.map":
+    """Identity access map for a tensor of *rank*."""
+    dims = ", ".join(f"d{i}" for i in range(rank))
+    return isl.map(f"{{ [{dims}] -> [{dims}] }}")
+
+
+def elementwise_relation(n_inputs: int = 1):
+    """Build a forward handler whose input and output maps are all identity."""
+
+    def _handler(call, input_types, ctx) -> AccessRelationResult:
+        domain, param_map = to_domain(input_types[0].shape)
+        ident = identity_map(len(input_types[0].shape))
+        return AccessRelationResult(
+            domain=domain,
+            maps=(ident,) * (n_inputs + 1),
+            param_map=param_map,
+        )
+
+    return _handler
 
 
 def build_domain(extents: tuple) -> "isl.set":
@@ -57,8 +80,7 @@ def shape_from_relation(relation, source_extents: tuple | None = None) -> tuple:
                 shape.append(to_dim(extent, relation.param_map))
         else:
             raise ValueError(
-                f"output axis {o} is not a pure projection or constant; "
-                "cannot infer shape"
+                f"output axis {o} is not a pure projection or constant; cannot infer shape"
             )
     return tuple(shape)
 
@@ -72,9 +94,13 @@ def validate_output_map_arity(output_map: "isl.map", output_shape: tuple) -> Non
     """
     n_out = output_map.dim(isl.dim_type.OUT)
     if n_out != len(output_shape):
-        raise ValueError(
-            f"output map range rank {n_out} != output shape rank {len(output_shape)}"
-        )
+        raise ValueError(f"output map range rank {n_out} != output shape rank {len(output_shape)}")
 
 
-__all__ = ["build_domain", "shape_from_relation", "validate_output_map_arity"]
+__all__ = [
+    "identity_map",
+    "elementwise_relation",
+    "build_domain",
+    "shape_from_relation",
+    "validate_output_map_arity",
+]

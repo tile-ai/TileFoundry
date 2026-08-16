@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import isl
 import torch
 
 from tilefoundry.evaluator.registry import register_eval
@@ -14,11 +13,8 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import (
-    AccessRelationResult,
-    register_type_relation,
-)
-from tilefoundry.visitor_registry.isl_utility import to_domain
+from tilefoundry.visitor_registry.access_relation import register_type_relation
+from tilefoundry.visitor_registry.relation_build import elementwise_relation
 
 
 @register_op
@@ -28,15 +24,7 @@ class Silu(Op):
     x = ParamDef(kind="input", pattern=Tensor)
 
 
-@register_type_relation(Silu)
-def _silu_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Elementwise: the domain is the input shape, both maps the identity."""
-    (x,) = input_types
-    domain, param_map = to_domain(x.shape)
-    dims = [f"d{i}" for i in range(len(x.shape))]
-    src = "[" + ", ".join(dims) + "]"
-    ident = isl.map(f"{{ {src} -> [{', '.join(dims)}] }}")
-    return AccessRelationResult(domain=domain, maps=(ident, ident), param_map=param_map)
+register_type_relation(Silu)(elementwise_relation())
 
 
 @register_typeinfer(Silu)

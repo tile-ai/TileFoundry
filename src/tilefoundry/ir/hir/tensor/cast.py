@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import isl
-
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, to_torch_dtype
 from tilefoundry.ir.core import Op
@@ -18,7 +16,7 @@ from tilefoundry.visitor_registry.access_relation import (
     register_access_relation,
     register_type_relation,
 )
-from tilefoundry.visitor_registry.relation_build import build_domain
+from tilefoundry.visitor_registry.relation_build import build_domain, identity_map
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
@@ -39,9 +37,7 @@ def _cast_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     layout pass through unchanged.
     """
     (x,) = input_types
-    dims = [f"d{i}" for i in range(len(x.shape))]
-    src = "[" + ", ".join(dims) + "]"
-    ident = isl.map(f"{{ {src} -> [{', '.join(dims)}] }}")
+    ident = identity_map(len(x.shape))
     return AccessRelationResult(domain=build_domain(x.shape), maps=(ident, ident))
 
 
