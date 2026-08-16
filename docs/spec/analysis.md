@@ -619,8 +619,8 @@ class MemoryMetadata(IRMetadata):
 |---|---|---|
 | `BufferFootprint.buffer` | Use the source parameter or authored binding name, with the same definition-order suffixing as value lifetimes. | No |
 | `BufferFootprint.level` | Read the source buffer's declared storage level. | No |
-| `BufferFootprint.bytes` | Build relations from rank-preserving per-position Types, union the loop-prefixed access images, take their per-axis bounding box, multiply its total element count by the dtype bit width, then round the whole buffer reading up to bytes. | No |
-| `BufferFootprint.device_bytes` | Repeat the same image and bounding-box measurement from authored Types without shard narrowing, giving the union across logical positions in bytes. | No |
+| `BufferFootprint.bytes` | Build relations from rank-preserving per-position Types, union the loop-prefixed access images, count the union's integer points, multiply by the dtype bit width, then round the whole buffer reading up to bytes. If the count is not an integer or exceeds `repeated_bytes`, that buffer reading is unavailable. | No |
+| `BufferFootprint.device_bytes` | Repeat the same exact union measurement from authored Types without shard narrowing, giving the union across logical positions in bytes. | No |
 | `BufferFootprint.repeated_bytes` | Multiply each operand's per-position element count by its enclosing trip counts, sum accesses to the same buffer, multiply by dtype bit width, then round the whole buffer reading up to bytes. | No |
 | `LoopFootprintMetadata.footprints` | One `BufferFootprint` per known source buffer and storage level, sorted by buffer then level. When `known` is false these rows are the available lower bound rather than an empty replacement. | No |
 | `LoopFootprintMetadata.known` | False when an access in the loop or a descendant loop lacks a representable forward relation, marking `footprints` as a lower bound; true otherwise. | No |

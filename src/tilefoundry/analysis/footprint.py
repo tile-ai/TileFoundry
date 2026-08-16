@@ -513,24 +513,20 @@ def _reached(access: _Access, loop: GridRegionExpr) -> isl.set:
     return access.relation.intersect_domain(domain).range()
 
 
-def _boxed_elements(sets: list[isl.set]) -> int:
-    """Element count of each rank's union bounding box."""
+def _reached_elements(sets: list[isl.set]) -> int:
+    """Exact integer-point count of each rank's unioned access image."""
     merged: dict[int, isl.set] = {}
     for set_ in sets:
         rank = set_.dim(isl.dim_type.SET)
         merged[rank] = set_ if rank not in merged else merged[rank].union(set_)
     total = 0
-    for rank, set_ in merged.items():
+    for set_ in merged.values():
         if set_.is_empty():
             continue
-        amount = 1
-        for axis in range(rank):
-            lower = set_.dim_min_val(axis)
-            upper = set_.dim_max_val(axis)
-            if not lower.is_int() or not upper.is_int():
-                raise _Unavailable
-            amount *= upper.get_num_si() - lower.get_num_si() + 1
-        total += amount
+        amount = set_.coalesce().count_val()
+        if not amount.is_int():
+            raise _Unavailable
+        total += amount.get_num_si()
     return total
 
 
@@ -539,7 +535,11 @@ def _packed_bytes(elements: int, bit_width: int) -> int:
 
 
 def _reading(
-    loop: GridRegionExpr, accesses_by_scope: dict[int, list[_Access]], *, known: bool
+    loop: GridRegionExpr,
+    accesses_by_scope: dict[int, list[_Access]],
+    *,
+    known: bool,
+    validate_repeated: bool = True,
 ) -> _LoopReading:
     grouped: dict[tuple[int, str, int], list[_Access]] = {}
     for accesses in accesses_by_scope.values():
@@ -554,7 +554,6 @@ def _reading(
         grouped.items(), key=lambda item: (item[1][0].buffer, item[0][1])
     ):
         try:
-            reached = _boxed_elements([_reached(access, loop) for access in group])
             repeated = sum(
                 access.per_call_elements
                 * math.prod(
@@ -569,13 +568,18 @@ def _reading(
                 )
                 for access in group
             )
+            reached = _reached_elements([_reached(access, loop) for access in group])
+            bytes_ = _packed_bytes(reached, bit_width)
+            repeated_bytes = _packed_bytes(repeated, bit_width)
+            if validate_repeated and bytes_ > repeated_bytes:
+                raise _Unavailable
             buffers.append(
                 _BufferReading(
                     buffer=group[0].buffer,
                     level=level,
-                    bytes=_packed_bytes(reached, bit_width),
+                    bytes=bytes_,
                     device_bytes=0,
-                    repeated_bytes=_packed_bytes(repeated, bit_width),
+                    repeated_bytes=repeated_bytes,
                 )
             )
         except (ValueError, isl.Error, _Unavailable):
@@ -599,6 +603,7 @@ def loop_footprints(module: Module, fn: Function) -> dict[int, _LoopReading]:
             loop,
             device_accesses,
             known=not device_unavailable[loop_id],
+            validate_repeated=False,
         )
         local_rows = {(item.buffer, item.level): item for item in local.buffers}
         device_rows = {(item.buffer, item.level): item for item in device.buffers}

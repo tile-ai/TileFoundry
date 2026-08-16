@@ -289,7 +289,9 @@ def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
         assert reading.level == "gmem"
         assert reading.device_bytes == cache_bytes
         assert reading.repeated_bytes == cache_bytes // (HEADS * WORKERS)
-        assert reading.bytes < reading.device_bytes
+        assert reading.bytes == reading.repeated_bytes
+    assert all(item.bytes <= item.repeated_bytes for item in footprint.footprints)
+    assert by_buffer["acc"].repeated_bytes > by_buffer["acc"].bytes
 
     rendered = render_analysis(result)
     assert rendered.data["loops"] == [
