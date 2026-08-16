@@ -23,6 +23,7 @@ from tests.fixtures.placed.qwen3_1_7b_pd import PrefillLayer
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry.analysis import (
     ComputeCostMetadata,
+    LoopFootprintMetadata,
     MemoryMetadata,
     RooflineMetadata,
     TimelineMetadata,
@@ -120,10 +121,19 @@ def test_qwen3_pd_fixture_runs_all_analysis_families(
 
     assert ComputeCostMetadata in result.metadata_types
     assert MemoryMetadata in result.metadata_types
+    assert LoopFootprintMetadata in result.metadata_types
     assert RooflineMetadata in result.metadata_types
     assert result.module is PrefillLayer
     roofline = get_metadata(result.function, RooflineMetadata)
     assert roofline is not None and roofline.bound_by == expected_bound
+    loop_footprints = [
+        record
+        for expr in postorder(result.function.body)
+        if isinstance(expr, GridRegionExpr)
+        and (record := get_metadata(expr, LoopFootprintMetadata)) is not None
+    ]
+    assert loop_footprints and all(record.footprints for record in loop_footprints)
+    assert any(not record.known for record in loop_footprints) is (dims["seq"] != 1)
 
 
 @pytest.mark.parametrize(
@@ -182,7 +192,7 @@ def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
     result = analyze(
         FlashSplitKDecode,
         FlashSplitKDecode.entry_function(),
-        analysis="roofline",
+        analysis=("memory", "roofline"),
         dims={"ctx": 4096},
     )
 
@@ -270,6 +280,37 @@ def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
         == cache_bytes // WORKERS
         for window in kv_windows
     )
+
+    footprint = get_metadata(loop, LoopFootprintMetadata)
+    assert footprint is not None and footprint.known
+    by_buffer = {item.buffer: item for item in footprint.footprints}
+    for name in ("k_cache", "v_cache"):
+        reading = by_buffer[name]
+        assert reading.level == "gmem"
+        assert reading.device_bytes == cache_bytes
+        assert reading.repeated_bytes == cache_bytes // (HEADS * WORKERS)
+        assert reading.bytes < reading.device_bytes
+
+    rendered = render_analysis(result)
+    assert rendered.data["loops"] == [
+        {
+            "value": "c",
+            "loop-footprint": {
+                "footprints": [
+                    {
+                        "buffer": item.buffer,
+                        "level": item.level,
+                        "bytes": item.bytes,
+                        "device_bytes": item.device_bytes,
+                        "repeated_bytes": item.repeated_bytes,
+                    }
+                    for item in footprint.footprints
+                ],
+                "known": True,
+            },
+        }
+    ]
+    assert "; loop-footprint footprints=" in rendered.annotated
 
 
 @pytest.mark.parametrize("family", FAMILIES)

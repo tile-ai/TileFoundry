@@ -73,6 +73,29 @@ class LevelFootprint:
 
 
 @dataclass(frozen=True)
+class BufferFootprint:
+    """Per-position, device-wide, and repeated bytes touched in one buffer."""
+
+    buffer: str
+    level: str
+    bytes: int
+    device_bytes: int
+    repeated_bytes: int
+
+
+@dataclass(frozen=True)
+class LoopFootprintMetadata(IRMetadata):
+    """Buffer bytes touched by one authored loop, grouped by storage level.
+
+    ``known`` is false when some access has no representable relation; the
+    retained footprints are then a lower bound over the accesses that are known.
+    """
+
+    footprints: tuple[BufferFootprint, ...]
+    known: bool
+
+
+@dataclass(frozen=True)
 class ValueLifetime:
     """One value's residency, as positions in the function's definition order.
 
@@ -156,8 +179,10 @@ class TimelineSummaryMetadata(IRMetadata):
 
 
 __all__ = [
+    "BufferFootprint",
     "ComputeCostMetadata",
     "LevelFootprint",
+    "LoopFootprintMetadata",
     "MemoryMetadata",
     "OccurrenceProvenance",
     "RooflineMetadata",

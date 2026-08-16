@@ -22,6 +22,7 @@ import tilefoundry.cli.analyze as cli_analyze
 from tests.analysis.test_analysis_families import _oversized_working_set
 from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.logical.gqa_static import static_online_attend
+from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tests.fixtures.shapes.matmul_programs import gemm_rms_norm
@@ -29,6 +30,7 @@ from tests.fixtures.shapes.scaled_modules import PairedScaledParent
 from tilefoundry import func
 from tilefoundry.analysis import (
     AnalysisError,
+    LoopFootprintMetadata,
     OccurrenceProvenance,
     TileGraph,
     analyze,
@@ -615,6 +617,16 @@ def _analysed_mega() -> tuple[dict[type, list[tuple[object, object]]], tuple[obj
     for expr in (function, *postorder(function.body)):
         for value in expr.metadata:
             found.setdefault(type(value), []).append((value, expr))
+    loop_result = analyze(
+        FlashSplitKDecode,
+        FlashSplitKDecode.entry_function(),
+        analysis="memory",
+        dims={"ctx": 4096},
+    )
+    for expr in postorder(loop_result.function.body):
+        record = get_metadata(expr, LoopFootprintMetadata)
+        if record is not None:
+            found.setdefault(type(record), []).append((record, expr))
     return found, rendered.summary
 
 

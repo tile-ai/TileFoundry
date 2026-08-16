@@ -19,6 +19,7 @@ from typing import get_args, get_origin, get_type_hints
 
 from tilefoundry.analysis.metadata import (
     ComputeCostMetadata,
+    LoopFootprintMetadata,
     MemoryMetadata,
     RooflineMetadata,
     TimelineMetadata,
@@ -347,6 +348,17 @@ def _advisory_count(record: MemoryMetadata) -> int:
     return len(record.advisories)
 
 
+def _loop_footprints(record: LoopFootprintMetadata) -> dict[str, str]:
+    return {
+        f"{item.buffer}@{item.level}": f"{item.bytes}/{item.device_bytes}/{item.repeated_bytes}"
+        for item in record.footprints
+    }
+
+
+def _loop_footprint_status(record: LoopFootprintMetadata) -> str:
+    return "complete" if record.known else "lower-bound"
+
+
 def _interval(record: TimelineMetadata) -> TripInterval:
     """The occurrence's interval, with its repetition folded in."""
     return TripInterval(record.start_ns, record.end_ns, record.stride_ns, record.trips)
@@ -418,6 +430,11 @@ comment(
     Projection("peak", dict[str, int], peak_footprint),
     Projection("persistent", int, _persistent_bytes, default=0),
     Projection("advisories", int, _advisory_count, default=0),
+)
+comment(
+    LoopFootprintMetadata,
+    Projection("footprints", dict[str, str], _loop_footprints),
+    Projection("status", str, _loop_footprint_status),
 )
 comment(RooflineMetadata, "ideal_ns", "bound_by")
 comment(TimelineMetadata, Projection("interval", TripInterval, _interval))

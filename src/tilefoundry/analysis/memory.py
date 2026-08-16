@@ -20,6 +20,7 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import Type, local_type_of
@@ -32,9 +33,12 @@ from .facts import (
     ImplicitMemoryLevelFacts,
     MemoryHierarchyFacts,
 )
+from .footprint import loop_footprints
 from .metadata import (
+    BufferFootprint,
     ComputeCostMetadata,
     LevelFootprint,
+    LoopFootprintMetadata,
     MemoryMetadata,
     TrafficBytes,
     ValueLifetime,
@@ -416,6 +420,28 @@ def analyze_memory(
                 advisories=_advisories(facts, peaks),
             ),
         )
+        loop_values = {
+            id(expr): expr
+            for expr in postorder(fn.body)
+            if isinstance(expr, GridRegionExpr)
+        }
+        for loop_id, reading in loop_footprints(module, fn).items():
+            attach(
+                loop_values[loop_id],
+                LoopFootprintMetadata(
+                    footprints=tuple(
+                        BufferFootprint(
+                            buffer=item.buffer,
+                            level=item.level,
+                            bytes=item.bytes,
+                            device_bytes=item.device_bytes,
+                            repeated_bytes=item.repeated_bytes,
+                        )
+                        for item in reading.buffers
+                    ),
+                    known=reading.known,
+                ),
+            )
 
 
 __all__ = ["SELECTOR", "analyze_memory"]

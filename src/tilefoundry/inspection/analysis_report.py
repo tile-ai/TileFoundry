@@ -44,6 +44,7 @@ from tilefoundry.inspection.values import (
 )
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
 
 
 def _type_text(type_: object) -> str:
@@ -175,6 +176,7 @@ def render_analysis(
         "executed": list(result.executed),
         "function_records": function_records,
         "calls": _call_records(function, selected, rendered.statements),
+        "loops": _loop_records(function, selected),
     }
     available = set(result.metadata_types)
     if ComputeCostMetadata in selected or (
@@ -259,6 +261,18 @@ def _call_records(
         for expr in postorder(function.body)
         if isinstance(expr, Call)
         and (statement := statements.get(id(expr))) is not None
+        and (records := _records_of(expr, selected))
+    ]
+
+
+def _loop_records(
+    function: Function, selected: frozenset[type[IRMetadata]]
+) -> list[dict[str, object]]:
+    """Every selected record attached to an authored loop."""
+    return [
+        {"value": expr.induction_var.name, **records}
+        for expr in postorder(function.body)
+        if isinstance(expr, GridRegionExpr)
         and (records := _records_of(expr, selected))
     ]
 
