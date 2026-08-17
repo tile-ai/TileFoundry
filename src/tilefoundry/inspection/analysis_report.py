@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 from tilefoundry.analysis.api import AnalysisResult
 from tilefoundry.analysis.metadata import (
     ComputeCostMetadata,
     MemoryMetadata,
+    PerformanceSummaryMetadata,
     RooflineMetadata,
-    TimelineSummaryMetadata,
 )
 from tilefoundry.analysis.report import _type_text as _type_text
 from tilefoundry.analysis.report import (
@@ -23,10 +23,10 @@ from tilefoundry.inspection.python_printer import PythonPrintOptions, _render_hi
 from tilefoundry.inspection.values import (
     AdvisorySummary,
     MemorySummary,
+    PerformanceSummaryView,
     Prose,
     ReportIdentity,
     ReportSelection,
-    TimelineSummaryView,
     peak_footprint,
     render_comment,
 )
@@ -111,10 +111,13 @@ def _summary(
     if "roofline" in function_records:
         views.append(get_metadata(function, RooflineMetadata))
     if "timeline" in function_records:
-        summary = get_metadata(function, TimelineSummaryMetadata)
+        summary = get_metadata(function, PerformanceSummaryMetadata)
         views.append(
-            TimelineSummaryView(
-                root=f"{data['module']}::{data['function']}", **asdict(summary)
+            PerformanceSummaryView(
+                root=f"{data['module']}::{data['function']}",
+                predicted_ns=summary.timeline.end_ns - summary.timeline.start_ns,
+                waves=summary.waves,
+                solver_status=summary.solver_status,
             )
         )
     return tuple(views)

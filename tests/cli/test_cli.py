@@ -653,9 +653,9 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
         f"# peak-footprint=gmem:{peak[0]['peak_bytes']}",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# timeline root=MoEMegaKernel::experts "
-        f"local-makespan-ns={summary['local_makespan_ns']} "
+        f"predicted-ns={summary['timeline']['end_ns']} "
         f"waves={summary['waves']} "
-        f"estimated-kernel-ns={summary['estimated_kernel_ns']}",
+        f"solver-status={summary['solver_status']}",
     ]
     assert payload["totals"]["flops"] == cost["flops"]
     assert payload["totals"]["traffic"] == cost["traffic"]
@@ -673,9 +673,10 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
     rows = payload["calls"]
     assert len(rows) == 7
     assert all(
-        set(row) == {"value", "compute-cost", "roofline", "timeline"}
-        for row in rows
+        set(row) <= {"value", "compute-cost", "roofline", "timeline"} for row in rows
     )
+    timed = [index for index, row in enumerate(rows) if "timeline" in row]
+    assert timed == [1, 4, 6]
     starts = []
     for row in rows:
         value, line_text = row["value"].rsplit(":", 1)
@@ -686,13 +687,16 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
     for index, (row, start) in enumerate(zip(rows, starts)):
         stop = starts[index + 1] - 1 if index + 1 < len(starts) else len(lines)
         statement = "\n".join(lines[start - 1 : stop])
-        timeline = row["timeline"]
-        assert f"timeline=[{timeline['start_ns']},{timeline['end_ns']})" in statement
+        if "timeline" in row:
+            timeline = row["timeline"]["timeline"]
+            assert f"timeline=[{timeline['start_ns']},{timeline['end_ns']})" in statement
+        else:
+            assert "; timeline=" not in statement
         annotated_meshes = set(re.findall(r"@ (\w+)\.", statement.split("  # ", 1)[1]))
         assert annotated_meshes <= hoisted
         placed_meshes = set(re.findall(r"mesh=(\w+),", statement))
         if annotated_meshes and placed_meshes:
             assert annotated_meshes == placed_meshes
-    assert len([line for line in lines if "; timeline=" in line]) == len(rows)
+    assert len([line for line in lines if "; timeline=" in line]) == len(timed)
     assert len({row["value"] for row in rows}) == len(rows)
     assert "units=" not in annotated

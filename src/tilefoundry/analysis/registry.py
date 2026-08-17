@@ -39,8 +39,8 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
         )
     if selector == "timeline":
         from tilefoundry.analysis.metadata import (  # noqa: PLC0415
-            TimelineMetadata,
-            TimelineSummaryMetadata,
+            PerformanceMetadata,
+            PerformanceSummaryMetadata,
         )
         from tilefoundry.analysis.timeline import analyze_timeline  # noqa: PLC0415
 
@@ -48,7 +48,7 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
             "timeline",
             analyze_timeline,
             requires=("compute-cost",),
-            produces=(TimelineMetadata, TimelineSummaryMetadata),
+            produces=(PerformanceMetadata, PerformanceSummaryMetadata),
         )
     return None
 

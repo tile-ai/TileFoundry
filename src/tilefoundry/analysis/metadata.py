@@ -156,11 +156,13 @@ class RooflineMetadata(IRMetadata):
 
 
 @dataclass(frozen=True)
-class TimelineMetadata(IRMetadata):
-    """One occurrence's CTA-local interval on the nominal timeline.
+class TimelineMetadata:
+    """One interval on the nominal timeline.
 
     A repeated loop-body occurrence states its first interval plus the trip
-    count and stride needed to derive every later interval.
+    count and stride needed to derive every later interval. This is a value a
+    performance record carries rather than a record of its own: what the
+    interval spans is decided by the record it sits in.
     """
 
     start_ns: int = 0
@@ -170,12 +172,30 @@ class TimelineMetadata(IRMetadata):
 
 
 @dataclass(frozen=True)
-class TimelineSummaryMetadata(IRMetadata):
-    """One Function's local schedule and physical-wave estimate."""
+class PerformanceMetadata(IRMetadata):
+    """One occurrence's interval within one local wave of its Function.
 
-    local_makespan_ns: int = 0
-    waves: int = 1
-    estimated_kernel_ns: int = 0
+    Only an occurrence with a modeled duration carries one. A structural
+    occurrence takes no modeled time, and an empty interval on it would read as
+    a measurement rather than as the absence of one.
+    """
+
+    timeline: TimelineMetadata
+
+
+@dataclass(frozen=True)
+class PerformanceSummaryMetadata(IRMetadata):
+    """One Function's predicted time, and what reaching it took.
+
+    ``timeline`` is the whole-Function envelope from zero, so its duration is
+    the prediction; ``waves`` is the uniform scaling between one local wave and
+    that envelope. ``solver_status`` separates a makespan proved optimal from a
+    feasible incumbent, which are otherwise the same number.
+    """
+
+    timeline: TimelineMetadata
+    waves: int
+    solver_status: str
 
 
 __all__ = [
@@ -185,9 +205,10 @@ __all__ = [
     "LoopFootprintMetadata",
     "MemoryMetadata",
     "OccurrenceProvenance",
+    "PerformanceMetadata",
+    "PerformanceSummaryMetadata",
     "RooflineMetadata",
     "TimelineMetadata",
-    "TimelineSummaryMetadata",
     "TrafficBytes",
     "ValueLifetime",
 ]

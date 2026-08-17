@@ -14,9 +14,9 @@ from tilefoundry.analysis.metadata import (
     ComputeCostMetadata,
     LoopFootprintMetadata,
     MemoryMetadata,
+    PerformanceMetadata,
+    PerformanceSummaryMetadata,
     RooflineMetadata,
-    TimelineMetadata,
-    TimelineSummaryMetadata,
 )
 from tilefoundry.analysis.walk import postorder, tensor_types
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
@@ -118,10 +118,11 @@ for _record_type in (
     LoopFootprintMetadata,
     MemoryMetadata,
     RooflineMetadata,
-    TimelineMetadata,
-    TimelineSummaryMetadata,
 ):
     declare_record(_record_type)
+
+declare_record(PerformanceMetadata, family="timeline")
+declare_record(PerformanceSummaryMetadata, family="timeline")
 
 
 def _type_text(type_: object) -> str:

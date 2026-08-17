@@ -81,9 +81,12 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
     assert set(payload["function_records"]) == set(families)
     assert len(payload["calls"]) == 7
     assert all(
-        set(row) == {"value", "compute-cost", "roofline", "timeline"}
+        set(row) <= {"value", "compute-cost", "roofline", "timeline"}
         for row in payload["calls"]
     )
+    assert [
+        index for index, row in enumerate(payload["calls"]) if "timeline" in row
+    ] == [1, 4, 6]
     assert text.startswith(
         "# analysis target=nvidia.h200_sxm module=MoEMegaKernel function=experts"
     )
@@ -92,7 +95,7 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
         "# compute-cost flops=f32:",
         "# peak-footprint=",
         "# roofline ideal-ns=",
-        "# timeline root=MoEMegaKernel::experts local-makespan-ns=",
+        "# timeline root=MoEMegaKernel::experts predicted-ns=",
     ):
         assert conclusion in text
 
@@ -168,9 +171,14 @@ def test_timeline_resolves_derived_execution_geometry(tf, derived_prefill) -> No
     payload = json.loads(bound.stdout)
     timeline = payload["function_records"]["timeline"]
     assert timeline == {
-        "estimated_kernel_ns": timeline["local_makespan_ns"],
-        "local_makespan_ns": timeline["local_makespan_ns"],
+        "timeline": {
+            "start_ns": 0,
+            "end_ns": timeline["timeline"]["end_ns"],
+            "trips": 1,
+            "stride_ns": 0,
+        },
         "waves": 1,
+        "solver_status": "optimal",
     }
 
 

@@ -129,13 +129,15 @@ def _roofline_evidence(report: dict) -> str | None:
 def _timeline_evidence(report: dict) -> str | None:
     """What `timeline` must have laid out and scaled by physical capacity."""
     record = report["function_records"]["timeline"]
-    if not record["local_makespan_ns"] > 0:
-        return f"local_makespan_ns is {record['local_makespan_ns']!r}"
+    envelope = record["timeline"]
+    if envelope["start_ns"] != 0 or not envelope["end_ns"] > 0:
+        return f"predicted interval is {envelope!r}"
     if not record["waves"] > 0:
         return f"waves is {record['waves']!r}"
-    expected = record["local_makespan_ns"] * record["waves"]
-    if record["estimated_kernel_ns"] != expected:
-        return f"estimated_kernel_ns is {record['estimated_kernel_ns']!r}, expected {expected}"
+    if envelope["end_ns"] % record["waves"]:
+        return f"end_ns {envelope['end_ns']!r} is not {record['waves']!r} equal waves"
+    if record["solver_status"] not in ("optimal", "feasible"):
+        return f"solver_status is {record['solver_status']!r}"
     return None
 
 

@@ -66,15 +66,22 @@ def test_external_v100_documents_analyse_a_copied_installed_model(
     assert gmem["peak_bytes"] < 32_000_000_000
     timeline = report["function_records"]["timeline"]
     assert timeline["waves"] == 2
-    assert timeline["estimated_kernel_ns"] == 2 * timeline["local_makespan_ns"]
-    call_timelines = [call["timeline"] for call in report["calls"]]
+    assert timeline["solver_status"] == "optimal"
+    call_timelines = [
+        call["timeline"]["timeline"] for call in report["calls"] if "timeline" in call
+    ]
     assert call_timelines
     assert all(
         set(call) == {"start_ns", "end_ns", "trips", "stride_ns"}
         for call in call_timelines
     )
-    assert all(call["end_ns"] >= call["start_ns"] for call in call_timelines)
-    assert timeline["local_makespan_ns"] == max(call["end_ns"] for call in call_timelines)
+    assert all(call["end_ns"] > call["start_ns"] for call in call_timelines)
+    assert timeline["timeline"] == {
+        "start_ns": 0,
+        "end_ns": 2 * max(call["end_ns"] for call in call_timelines),
+        "trips": 1,
+        "stride_ns": 0,
+    }
 
     scheduled = tf(
         "schedule",

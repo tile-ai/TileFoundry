@@ -27,9 +27,9 @@ from tilefoundry.analysis import (
     ComputeCostMetadata,
     LoopFootprintMetadata,
     MemoryMetadata,
+    PerformanceMetadata,
+    PerformanceSummaryMetadata,
     RooflineMetadata,
-    TimelineMetadata,
-    TimelineSummaryMetadata,
     analyze,
 )
 from tilefoundry.analysis.errors import AnalysisError
@@ -370,16 +370,16 @@ def test_one_root_and_four_roots_produce_the_same_timeline_records() -> None:
         dims=single_dims,
     )
     assert tuple(
-        get_metadata(expr, TimelineMetadata)
+        get_metadata(expr, PerformanceMetadata)
         for expr in (single.function, *postorder(single.function.body))
-        if get_metadata(expr, TimelineMetadata) is not None
+        if get_metadata(expr, PerformanceMetadata) is not None
     ) == tuple(
-        get_metadata(expr, TimelineMetadata)
+        get_metadata(expr, PerformanceMetadata)
         for expr in (result.function, *postorder(result.function.body))
-        if get_metadata(expr, TimelineMetadata) is not None
+        if get_metadata(expr, PerformanceMetadata) is not None
     )
-    assert get_metadata(single.function, TimelineSummaryMetadata) == get_metadata(
-        result.function, TimelineSummaryMetadata
+    assert get_metadata(single.function, PerformanceSummaryMetadata) == get_metadata(
+        result.function, PerformanceSummaryMetadata
     )
 
 
@@ -421,30 +421,27 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         for expr in postorder(result.function.body):
             if not isinstance(expr, Call) or trips.get(id(expr)) != extent:
                 continue
-            timeline = get_metadata(expr, TimelineMetadata)
-            assert timeline is not None
-            timelines.append(timeline)
+            record = get_metadata(expr, PerformanceMetadata)
+            if record is not None:
+                timelines.append(record.timeline)
             if isinstance(expr.target, Reshape):
                 cost = get_metadata(expr, ComputeCostMetadata)
                 assert cost is not None
-                structural.append((cost, timeline))
+                structural.append((cost, record))
             if isinstance(expr.target, Cast):
                 cost = get_metadata(expr, ComputeCostMetadata)
                 assert cost is not None
                 costs.append(cost)
         assert len(costs) == 2
-        assert len(timelines) == 18
+        assert len(timelines) == 17
         assert len(structural) == 1
         assert {record.trips for record in timelines} == {extent}
         assert {record.stride_ns for record in timelines} == {920}
-        structural_cost, structural_timeline = structural[0]
+        structural_cost, structural_record = structural[0]
+        assert structural_record is None
         assert structural_cost.flops_per_unit == ()
         assert structural_cost.traffic_per_unit_at("gmem").total_bytes == 0
         assert structural_cost.traffic_per_unit == ()
-        assert (
-            structural_timeline.start_ns,
-            structural_timeline.end_ns,
-        ) == (652, 652)
         loop_casts.append(tuple(costs))
         loop_timelines.append(tuple(timelines))
 
@@ -458,12 +455,20 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         ]
         loop_start = min(record.start_ns for record in timelines)
         loop_end = loop_start + extent * timelines[0].stride_ns
+        yielded_starts = [
+            record.timeline.start_ns
+            for expr in postorder(result.function.body)
+            if isinstance(expr, Call)
+            and any(arg is consumer for arg in expr.args for consumer in consumers)
+            and (record := get_metadata(expr, PerformanceMetadata)) is not None
+        ]
         assert len(consumers) == 3
-        assert {get_metadata(consumer, TimelineMetadata).start_ns for consumer in consumers} == {
-            loop_end
-        }
+        assert all(
+            get_metadata(consumer, PerformanceMetadata) is None for consumer in consumers
+        )
+        assert yielded_starts and min(yielded_starts) >= loop_end
 
-        root_timeline = get_metadata(result.function, TimelineSummaryMetadata)
+        root_timeline = get_metadata(result.function, PerformanceSummaryMetadata)
         assert root_timeline is not None
         root_timelines.append(root_timeline)
 
@@ -489,13 +494,10 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
             for record in loop_timelines[0]
         )
     ] * 2
-    assert (loop_timelines[0][0].start_ns, loop_timelines[0][0].end_ns) == (
-        652,
-        652,
-    )
-    assert [record.local_makespan_ns for record in root_timelines] == [9_129, 16_489]
+    assert min(record.start_ns for record in loop_timelines[0]) == 652
     assert [record.waves for record in root_timelines] == [1, 1]
-    assert [record.estimated_kernel_ns for record in root_timelines] == [9_129, 16_489]
+    assert [record.timeline.end_ns for record in root_timelines] == [9_129, 16_489]
+    assert [record.solver_status for record in root_timelines] == ["optimal"] * 2
 
     roots = []
     for result in results:
@@ -513,7 +515,7 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         value, line_text = row["value"].rsplit(":", 1)
         line = int(line_text)
         assert lines[line - 1].lstrip().startswith(f"{value} = ")
-        timeline = row["timeline"]
+        timeline = row["timeline"]["timeline"]
         if timeline["trips"] > 1:
             offset = f"{timeline['stride_ns']}t+"
             expected_comments.append(
@@ -523,20 +525,25 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
             expected_comments.append(f"[{timeline['start_ns']},{timeline['end_ns']})")
 
     assert comments == expected_comments
-    first = next(row for row in rows if row["value"].startswith("v0:"))
+    first = next(row for row in rendered.data["calls"] if row["value"].startswith("v0:"))
+    assert set(first) == {"value", "compute-cost"}
     assert first["value"] == "v0:44"
     assert lines[43].lstrip().startswith("v0 = reshard(")
-    assert "; timeline=[0,0)" in lines[47]
-    structural = next(row for row in rows if row["value"].startswith("v10:"))
-    assert set(structural) == {"value", "compute-cost", "timeline"}
+    assert "; timeline=" not in lines[47]
+    structural = next(
+        row for row in rendered.data["calls"] if row["value"].startswith("v10:")
+    )
+    assert set(structural) == {"value", "compute-cost"}
     assert structural["value"] == "v10:59"
-    assert structural["timeline"] == {
-        "end_ns": 652,
+    assert "; timeline=" not in lines[58]
+    repeated = next(row for row in rows if row["value"].startswith("v11:"))
+    assert repeated["timeline"]["timeline"] == {
+        "end_ns": 653,
         "start_ns": 652,
         "stride_ns": 920,
         "trips": 8,
     }
-    assert "timeline=[920t+652,920t+652)*8" in lines[58]
+    assert "timeline=[920t+652,920t+653)*8" in rendered.annotated
     assert lines[82].strip() == "m = v16"
     assert "timeline" not in lines[82]
 

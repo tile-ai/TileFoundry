@@ -22,7 +22,12 @@ from .check import Placement, _timeline_placements
 from .compute_cost import _local_duration_ns
 from .errors import AnalysisError
 from .facts import ParallelCapacityFacts, ThroughputFacts
-from .metadata import ComputeCostMetadata, TimelineMetadata, TimelineSummaryMetadata
+from .metadata import (
+    ComputeCostMetadata,
+    PerformanceMetadata,
+    PerformanceSummaryMetadata,
+    TimelineMetadata,
+)
 from .walk import (
     attach,
     children,
@@ -239,18 +244,22 @@ def _records(
     offset_ns: int = 0,
     trips: int = 1,
     stride_ns: int = 0,
-) -> dict[int, TimelineMetadata]:
+) -> dict[int, PerformanceMetadata]:
     """Materialize absolute first-trip intervals from a nested schedule."""
-    result: dict[int, TimelineMetadata] = {}
+    result: dict[int, PerformanceMetadata] = {}
     for key, occurrence in schedule.occurrences.items():
         start = offset_ns + occurrence.start_ns
         end = offset_ns + occurrence.end_ns
         if isinstance(occurrence.expr, Call):
-            result[key] = TimelineMetadata(
-                start_ns=start,
-                end_ns=end,
-                trips=trips,
-                stride_ns=stride_ns if trips > 1 else 0,
+            if occurrence.duration_ns == 0:
+                continue
+            result[key] = PerformanceMetadata(
+                timeline=TimelineMetadata(
+                    start_ns=start,
+                    end_ns=end,
+                    trips=trips,
+                    stride_ns=stride_ns if trips > 1 else 0,
+                )
             )
             continue
         if occurrence.body is not None:
@@ -298,10 +307,10 @@ def analyze_timeline(
                 attach(expr, record)
         attach(
             fn,
-            TimelineSummaryMetadata(
-                local_makespan_ns=schedule.makespan_ns,
+            PerformanceSummaryMetadata(
+                timeline=TimelineMetadata(end_ns=schedule.makespan_ns * waves),
                 waves=waves,
-                estimated_kernel_ns=schedule.makespan_ns * waves,
+                solver_status="optimal",
             ),
         )
 

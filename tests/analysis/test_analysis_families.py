@@ -29,10 +29,11 @@ from tilefoundry.analysis import (
     MemoryMetadata,
     MemoryRelationKind,
     ParallelCapacityFacts,
+    PerformanceMetadata,
+    PerformanceSummaryMetadata,
     RooflineMetadata,
     ThroughputFacts,
     TimelineMetadata,
-    TimelineSummaryMetadata,
 )
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import _mesh_image, _result_placement, _timeline_placements
@@ -1019,7 +1020,11 @@ def test_timeline_refuses_unplaced_results_before_dependencies_run(monkeypatch) 
 
     placed, function = _run(_placed_wide_grid, "timeline")
     assert placed.executed == ("compute-cost", "timeline")
-    assert all(get_metadata(call, TimelineMetadata) is not None for call in _calls(function))
+    assert [
+        type(call.target).__name__
+        for call in _calls(function)
+        if get_metadata(call, PerformanceMetadata) is not None
+    ] == ["Binary"]
 
     ran = False
 
@@ -1126,31 +1131,17 @@ def test_mega_kernel_preserves_placement_costs_and_timeline_order() -> None:
         in render_comment(cost, opt_in=frozenset({"operands"}))
     )
 
-    records = tuple(get_metadata(call, TimelineMetadata) for call in calls)
-    assert all(record is not None for record in records)
-
-    routed_in, routed, routed_out, shared_in, shared, shared_out, join = records
-    assert routed_in is not None and routed is not None and routed_out is not None
-    assert shared_in is not None and shared is not None and shared_out is not None
-    assert join is not None
+    records = tuple(get_metadata(call, PerformanceMetadata) for call in calls)
+    assert [index for index, record in enumerate(records) if record is not None] == [
+        1,
+        4,
+        6,
+    ]
+    routed, shared, join = (records[index].timeline for index in (1, 4, 6))
 
     assert [
-        (record.start_ns, record.end_ns)
-        for record in (
-            routed_in,
-            routed,
-            routed_out,
-            shared_in,
-            shared,
-            shared_out,
-            join,
-        )
-    ] == [(0, 0), (0, 15), (15, 15), (0, 0), (0, 141), (141, 141), (141, 2_676)]
-    assert (routed.end_ns - routed.start_ns, shared.end_ns - shared.start_ns) == (
-        15,
-        141,
-    )
-    assert routed_in.start_ns == shared_in.start_ns == 0
+        (record.start_ns, record.end_ns) for record in (routed, shared, join)
+    ] == [(0, 15), (0, 141), (141, 2_676)]
 
     routed_positions = placements[id(calls[1])]
     shared_positions = placements[id(calls[4])]
@@ -1159,19 +1150,15 @@ def test_mega_kernel_preserves_placement_costs_and_timeline_order() -> None:
 
     whole_positions = placements[id(calls[2])]
     assert whole_positions == placements[id(calls[5])] == frozenset(range(132))
-    assert (
-        routed_out.end_ns <= shared_out.start_ns
-        or shared_out.end_ns <= routed_out.start_ns
-    )
     assert whole_positions != shared_positions
     assert whole_positions & shared_positions
-    assert join.start_ns >= max(routed_out.end_ns, shared_out.end_ns)
+    assert join.start_ns >= max(routed.end_ns, shared.end_ns)
 
-    summary = get_metadata(result.function, TimelineSummaryMetadata)
-    assert summary == TimelineSummaryMetadata(
-        local_makespan_ns=2_676,
+    summary = get_metadata(result.function, PerformanceSummaryMetadata)
+    assert summary == PerformanceSummaryMetadata(
+        timeline=TimelineMetadata(end_ns=2_676),
         waves=1,
-        estimated_kernel_ns=2_676,
+        solver_status="optimal",
     )
 
 
@@ -1200,36 +1187,33 @@ def test_timeline_scales_one_local_schedule_by_root_capacity() -> None:
     )
 
     intervals = [
-        tuple(get_metadata(call, TimelineMetadata) for call in _calls(result.function))
+        tuple(get_metadata(call, PerformanceMetadata) for call in _calls(result.function))
         for result in results
     ]
     summaries = [
-        get_metadata(result.function, TimelineSummaryMetadata) for result in results
+        get_metadata(result.function, PerformanceSummaryMetadata) for result in results
     ]
     assert intervals[0] == intervals[1] == intervals[2]
     assert all(summary is not None for summary in summaries)
     first, wider, constrained_summary = summaries
     assert first is not None and wider is not None and constrained_summary is not None
-    assert {
-        first.local_makespan_ns,
-        wider.local_makespan_ns,
-        constrained_summary.local_makespan_ns,
-    } == {15}
     assert (first.waves, wider.waves, constrained_summary.waves) == (1, 3, 5)
     assert (
-        first.estimated_kernel_ns,
-        wider.estimated_kernel_ns,
-        constrained_summary.estimated_kernel_ns,
+        first.timeline.end_ns,
+        wider.timeline.end_ns,
+        constrained_summary.timeline.end_ns,
     ) == (15, 45, 75)
+    assert {summary.timeline.start_ns for summary in summaries} == {0}
+    assert {summary.solver_status for summary in summaries} == {"optimal"}
 
     data = report(results[1])
-    assert set(data["function_records"]["timeline"]) == {
-        "local_makespan_ns",
-        "waves",
-        "estimated_kernel_ns",
+    assert data["function_records"]["timeline"] == {
+        "timeline": {"start_ns": 0, "end_ns": 45, "trips": 1, "stride_ns": 0},
+        "waves": 3,
+        "solver_status": "optimal",
     }
     assert all(
-        set(row["timeline"]) == {"start_ns", "end_ns", "trips", "stride_ns"}
+        set(row["timeline"]["timeline"]) == {"start_ns", "end_ns", "trips", "stride_ns"}
         for row in data["calls"]
     )
 
@@ -1299,28 +1283,21 @@ def test_timeline_refuses_traffic_only_at_an_unmodelled_storage_level() -> None:
         _run(_reshard_boundary, "timeline")
 
 
-def test_a_zero_cost_structural_occurrence_has_an_empty_timeline_interval() -> None:
+def test_a_zero_cost_structural_occurrence_carries_no_performance_record() -> None:
     result, entry = _run(_zero_cost_view, "timeline")
 
     view = next(
         call for call in _calls(entry) if type(call.target).__name__ == "TupleGetItem"
     )
-    record = get_metadata(view, TimelineMetadata)
-    assert record is not None
-    assert record.start_ns == record.end_ns
-    timelines = [
-        row["timeline"] for row in report(result)["calls"] if "timeline" in row
-    ]
-    assert all(
-        set(item)
-        == {"start_ns", "end_ns", "trips", "stride_ns"}
-        for item in timelines
+    assert get_metadata(view, PerformanceMetadata) is None
+    rows = report(result)["calls"]
+    assert rows and all(
+        set(row["timeline"]["timeline"]) == {"start_ns", "end_ns", "trips", "stride_ns"}
+        for row in rows
     )
-    assert any(
-        item["start_ns"] == item["end_ns"]
-        and item["trips"] == 1
-        and item["stride_ns"] == 0
-        for item in timelines
+    assert all(
+        row["timeline"]["timeline"]["start_ns"] < row["timeline"]["timeline"]["end_ns"]
+        for row in rows
     )
 
 
@@ -1329,12 +1306,11 @@ def test_an_unplaced_structural_occurrence_ignores_unmodelled_traffic() -> None:
 
     (view,) = _calls(entry)
     cost = get_metadata(view, ComputeCostMetadata)
-    timeline = get_metadata(view, TimelineMetadata)
-    assert cost is not None and timeline is not None
+    assert cost is not None
+    assert get_metadata(view, PerformanceMetadata) is None
     assert cost.flops_per_unit == ()
     assert cost.traffic_per_unit_at("gmem").total_bytes == 0
     assert cost.traffic_per_unit_at("rmem") == TrafficBytes(read=8, write=8)
-    assert (timeline.start_ns, timeline.end_ns) == (0, 0)
 
 
 def test_the_gpu_memory_graph_is_not_a_tree() -> None:

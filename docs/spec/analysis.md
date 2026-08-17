@@ -330,7 +330,7 @@ Each owns its record types and declares its dependencies and output additions.
 | `compute-cost` | - | `ComputeCostMetadata` | every measured Call and the Function | the authored program | `compute-cost` | every measured Call |
 | `memory` | `compute-cost` | `MemoryMetadata`, `LoopFootprintMetadata` | `MemoryMetadata` on the Function; `LoopFootprintMetadata` on every `GridRegionExpr` | the authored program, `MemoryHierarchyFacts` | `peak-footprint`, `advisory` | none |
 | `roofline` | `memory`, `compute-cost` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | bounded dependency evidence, `roofline` | every measured Call |
-| `timeline` | `compute-cost` | `TimelineMetadata`, `TimelineSummaryMetadata` | `TimelineMetadata` on every measured Call; `TimelineSummaryMetadata` on the Function | `ThroughputFacts`, `ParallelCapacityFacts` | `timeline` | every measured Call |
+| `timeline` | `compute-cost` | `PerformanceMetadata`, `PerformanceSummaryMetadata` | `PerformanceMetadata` on every Call with a modeled duration; `PerformanceSummaryMetadata` on the Function | `ThroughputFacts`, `ParallelCapacityFacts` | `timeline` | every Call with a modeled duration |
 
 Every compact text summary begins with these two lines:
 
@@ -895,11 +895,13 @@ as defined in that family's section.
 #### 2.2.4 `timeline`
 
 `timeline` places compute-cost-priced occurrences on a CTA-local nominal timeline,
-then scales the root schedule by a fixed physical parallel capacity.
+then scales the root schedule by a fixed physical parallel capacity. The records
+it owns are named for the prediction they carry rather than for the selector, so
+that the interval stays one nested value with one meaning wherever it appears.
 
 ```python
-class TimelineMetadata(IRMetadata):
-    """One occurrence's CTA-local interval on the nominal timeline.
+class TimelineMetadata:
+    """One interval on the nominal timeline.
 
     Attributes:
         start_ns: attribute; Modeled start, in ns.
@@ -914,19 +916,32 @@ class TimelineMetadata(IRMetadata):
     stride_ns: int = 0
 
 
-class TimelineSummaryMetadata(IRMetadata):
-    """One Function's local schedule and physical-wave estimate.
+class PerformanceMetadata(IRMetadata):
+    """One occurrence's interval within one local wave of its Function.
 
     Attributes:
-        local_makespan_ns: attribute; Solved CTA-local schedule length, in ns.
-        waves: attribute; Physical waves required by the root topology.
-        estimated_kernel_ns: attribute; Local makespan scaled by waves, in ns.
+        timeline: attribute; That occurrence's CTA-local interval.
     """
 
-    local_makespan_ns: int = 0
-    waves: int = 1
-    estimated_kernel_ns: int = 0
+    timeline: TimelineMetadata
+
+
+class PerformanceSummaryMetadata(IRMetadata):
+    """One Function's predicted time, and what reaching it took.
+
+    Attributes:
+        timeline: attribute; Whole-Function envelope from zero, in ns.
+        waves: attribute; Physical waves required by the root topology.
+        solver_status: attribute; `"optimal"` or `"feasible"`.
+    """
+
+    timeline: TimelineMetadata
+    waves: int
+    solver_status: str
 ```
+
+`TimelineMetadata` is a value, not a record: it MUST NOT be attached to a Call or
+a Function on its own, and what it spans is stated by the record carrying it.
 
 Occurrence fields are:
 
@@ -941,9 +956,9 @@ Function summary fields are:
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `local_makespan_ns` | End of the CTA-local schedule, or zero with no work. | No |
+| `timeline` | `[0, local makespan * waves)`, where the local makespan is the end of the CTA-local schedule, or zero with no work. Its duration is the prediction. | Through `waves` |
 | `waves` | `ceil(N / P)`, where `N` is the static extent of the root topology selected by `ParallelCapacityFacts.topology` and `P` is `parallel_units`. | `ParallelCapacityFacts` |
-| `estimated_kernel_ns` | `local_makespan_ns * waves`. | Through `waves` |
+| `solver_status` | `"optimal"` when the makespan was proved minimal, `"feasible"` when a schedule was found but not proved minimal. | No |
 
 Occurrence intervals remain CTA-local. They are not copied once per wave, and
 neither the root topology extent nor `parallel_units` changes them. The capacity
@@ -969,20 +984,21 @@ class ParallelCapacityFacts:
 Requesting timeline adds this Function verdict to the summary:
 
 ```text
-timeline root=<Module>::<Function> local-makespan-ns=<int> waves=<int> estimated-kernel-ns=<int>
+timeline root=<Module>::<Function> predicted-ns=<int> waves=<int> solver-status=<token>
 ```
 
 `root` is the report's own identity, composed by inspection from the module and
-function it already states; it is not a field of `TimelineSummaryMetadata` and does
-not appear in that record's JSON projection. `waves` is stated even when it is one,
-because how many passes over the machine a plan takes is a conclusion and one wave
-is an answer.
+function it already states; it is not a field of `PerformanceSummaryMetadata` and
+does not appear in that record's JSON projection. `predicted-ns` is the duration of
+the summary's own envelope, not a second measurement. `waves` is stated even when
+it is one, because how many passes over the machine a plan takes is a conclusion
+and one wave is an answer.
 
-Every measured Call receives this annotation, one interval whether or not it
-repeats: a single trip states its own bounds, and a repeated occurrence states
-them offset by the trip index, with the trip count as a suffix. The trip count is
-not a second key, because a reader deriving the later intervals reads it off the
-interval it is a coefficient in:
+Every Call with a modeled duration receives this annotation, one interval whether
+or not it repeats: a single trip states its own bounds, and a repeated occurrence
+states them offset by the trip index, with the trip count as a suffix. The trip
+count is not a second key, because a reader deriving the later intervals reads it
+off the interval it is a coefficient in:
 
 ```text
 timeline=[<int>,<int>)
@@ -993,23 +1009,28 @@ Reported Call and Function records use distinct projections under their
 `timeline` keys:
 
 ```text
-Call: {"start_ns": <int>, "end_ns": <int>, "trips": <int>, "stride_ns": <int>}
-Function: {"local_makespan_ns": <int>, "waves": <int>,
-           "estimated_kernel_ns": <int>}
+Call: {"timeline": {"start_ns": <int>, "end_ns": <int>, "trips": <int>,
+                    "stride_ns": <int>}}
+Function: {"timeline": {"start_ns": 0, "end_ns": <int>, "trips": 1,
+                        "stride_ns": 0},
+           "waves": <int>, "solver_status": <str>}
 ```
 
-`estimated_kernel_ns` is a deterministic comparison estimate, not a runtime
-prediction. It deliberately excludes launch overhead, occupancy, utilization,
-traffic volume, and other execution effects that this family does not model.
+The summary envelope's duration is a deterministic comparison estimate, not a
+runtime prediction. It deliberately excludes launch overhead, occupancy,
+utilization, traffic volume, and other execution effects that this family does not
+model.
 
 - constraints:
   - A primitive Call is eligible for timeline only when every tensor leaf of its
     result type carries one `ShardLayout` at the selected topology level and all
     leaves name the same participant set. An occurrence whose `flops_per_unit`
     are all zero and whose `traffic_per_unit` is zero at the target's published
-    bandwidth level is structural: it needs no result placement and receives an
-    empty interval at its dependency-ready time. Inputs MUST NOT supply placement
-    for an unplaced result. `Reshard` executes on the placement of its result.
+    bandwidth level is structural: it needs no result placement and MUST receive
+    no record, because an empty interval reads as a measurement rather than as
+    the absence of one. It still carries its producers' precedence to its
+    consumers. Inputs MUST NOT supply placement for an unplaced result.
+    `Reshard` executes on the placement of its result.
   - The participant set MUST be the exact image of the result Mesh layout under
     [shard §5](./shard.md#5-mesh), not an extent inferred from a topology or an
     operand. A `Broadcast` shard attribute still names placement: attributes
@@ -1027,8 +1048,9 @@ traffic volume, and other execution effects that this family does not model.
     that full span. Loop-invariant values remain single occurrences outside it.
   - Equal-makespan schedules MUST use inline occurrence order as a deterministic
     tie-break, not as an execution dependency. On a `Function`, the summary's
-    `local_makespan_ns` MUST span the whole local plan from the origin to its
-    solved makespan.
+    `timeline` MUST start at zero and span the whole local plan, scaled by
+    `waves`; there MUST be no second field restating the local makespan or the
+    scaled estimate.
   - `parallel_units` is compiler policy over hardware facts. It MUST NOT enter
     one-unit rates or the CTA-local interval solver, and is not a program rewrite.
   - Timeline is a modeled plan and MUST NOT be read as a guarantee about

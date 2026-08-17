@@ -48,9 +48,9 @@ from .metadata import (
     ComputeCostMetadata,
     MemoryMetadata,
     OccurrenceProvenance,
+    PerformanceMetadata,
+    PerformanceSummaryMetadata,
     RooflineMetadata,
-    TimelineMetadata,
-    TimelineSummaryMetadata,
 )
 from .preflight import infer_authored_types, validate_call_context
 from .walk import describe, postorder, reachable_functions, tensor_types
@@ -59,9 +59,9 @@ _INLINE_NODES = 10_000
 _DERIVED_METADATA = {
     ComputeCostMetadata,
     MemoryMetadata,
+    PerformanceMetadata,
+    PerformanceSummaryMetadata,
     RooflineMetadata,
-    TimelineMetadata,
-    TimelineSummaryMetadata,
 }
 _ResourceKey = tuple[str, str]
 Placement = frozenset[int]

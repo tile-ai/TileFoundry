@@ -20,9 +20,9 @@ from tilefoundry.analysis.metadata import (
     ComputeCostMetadata,
     LoopFootprintMetadata,
     MemoryMetadata,
+    PerformanceMetadata,
+    PerformanceSummaryMetadata,
     RooflineMetadata,
-    TimelineMetadata,
-    TimelineSummaryMetadata,
 )
 from tilefoundry.analysis.report import (
     declare_record,
@@ -264,9 +264,17 @@ def _loop_footprint_status(record: LoopFootprintMetadata) -> str:
     return "complete" if record.known else "lower-bound"
 
 
-def _interval(record: TimelineMetadata) -> TripInterval:
+def _interval(record: PerformanceMetadata) -> TripInterval:
     """The occurrence's interval, with its repetition folded in."""
-    return TripInterval(record.start_ns, record.end_ns, record.stride_ns, record.trips)
+    timeline = record.timeline
+    return TripInterval(
+        timeline.start_ns, timeline.end_ns, timeline.stride_ns, timeline.trips
+    )
+
+
+def _predicted_ns(record: PerformanceSummaryMetadata) -> int:
+    """How long the whole Function is predicted to take."""
+    return record.timeline.end_ns - record.timeline.start_ns
 
 
 def _source_span(record: SourceSpanMetadata) -> str:
@@ -307,21 +315,21 @@ class AdvisorySummary(IRMetadata):
 
 
 @dataclass(frozen=True)
-class TimelineSummaryView(IRMetadata):
-    """One function's local plan, under the root the report is about.
+class PerformanceSummaryView(IRMetadata):
+    """One function's prediction, under the root the report is about.
 
     ``root`` is the report's own identity composed for a reader, not something
-    the timeline family measured, which is why it lives here and not on
-    ``TimelineSummaryMetadata``. ``waves`` is stated even when it is one: how
+    the family measured, which is why it lives here and not on
+    ``PerformanceSummaryMetadata``. ``waves`` is stated even when it is one: how
     many passes over the machine a plan takes is a conclusion, and one wave is an
     answer rather than nothing to say. It is declared with no value it says
     nothing by, so the suppression rule itself stays one rule.
     """
 
     root: str = ""
-    local_makespan_ns: int = 0
+    predicted_ns: int = 0
     waves: int = 1
-    estimated_kernel_ns: int = 0
+    solver_status: str = ""
 
 
 comment(
@@ -342,19 +350,29 @@ comment(
     Projection("status", str, _loop_footprint_status),
 )
 comment(RooflineMetadata, "ideal_ns", "bound_by")
-comment(TimelineMetadata, Projection("interval", TripInterval, _interval))
-comment(TimelineSummaryMetadata, family="timeline")
+comment(
+    PerformanceMetadata,
+    Projection("interval", TripInterval, _interval),
+    family="timeline",
+)
+comment(
+    PerformanceSummaryMetadata,
+    Projection("predicted_ns", int, _predicted_ns),
+    Projection("waves", int, _read("waves")),
+    "solver_status",
+    family="timeline",
+)
 comment(SourceSpanMetadata, Projection("span", str, _source_span), family="source")
 comment(ReportIdentity, family="analysis")
 comment(ReportSelection, family="selection")
 comment(MemorySummary, family="peak-footprint")
 comment(AdvisorySummary, family="advisory")
 comment(
-    TimelineSummaryView,
+    PerformanceSummaryView,
     "root",
-    "local_makespan_ns",
+    "predicted_ns",
     Projection("waves", int, _read("waves")),
-    "estimated_kernel_ns",
+    "solver_status",
     family="timeline",
 )
 
@@ -372,11 +390,11 @@ __all__ = [
     "RENDER",
     "TRIPS",
     "MemorySummary",
+    "PerformanceSummaryView",
     "Projection",
     "RecordComment",
     "ReportIdentity",
     "ReportSelection",
-    "TimelineSummaryView",
     "comment",
     "comment_of",
     "declared_records",
