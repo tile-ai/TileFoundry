@@ -199,6 +199,10 @@ class _MovementCosts:
         return tf.concat(source[0:512, :], source[512:1024, :], axis=0)
 
     @func
+    def swapped(source: Tensor[(1024, 2048), "f32"]):
+        return tf.concat(source[512:1024, :], source[0:512, :], axis=0)
+
+    @func
     def held(source: Tensor[(1024, 2048), "f32"]):
         made = tf.add(source, source)
         window = made[0:256, :]
@@ -216,6 +220,20 @@ class _MovementCosts:
         made = tf.add(source, source)
         written = tf.insert_slice(made, patch, (0, 0))
         return tf.add(written, made)
+
+    @func
+    def written_through_a_view(
+        source: Tensor[(1024, 2048), "f32"], patch: Tensor[(256, 2048), "f32"]
+    ):
+        with Mesh(("cta",), layout=(1,), names=("tile",)) as cta:
+            made = tf.add(source, source)
+            viewed = tf.reshard(made, (1024 @ cta.tile, 2048), "gmem")
+            written = tf.insert_slice(viewed, patch, (0, 0))
+            return tf.add(written, tf.reshard(made, (1024 @ cta.tile, 2048), "gmem"))
+
+    @func
+    def donated(source: Tensor[(1024, 2048), "f32"], patch: Tensor[(256, 2048), "f32"]):
+        return tf.insert_slice(source, patch, (0, 0))
 
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
@@ -620,8 +638,7 @@ def test_movement_costs_follow_each_operations_materialization() -> None:
         write=2 * selected_bytes,
     )
 
-    tiled = functions["tiled"]
-    result = analyze(_MovementCosts, tiled, analysis="memory")
+    result = analyze(_MovementCosts, functions["tiled"], analysis="memory")
     *windows, joined = _calls(result.function)
     assert get_metadata(joined, BufferAliasMetadata) == BufferAliasMetadata(
         "forward", (0, 1)
@@ -634,6 +651,14 @@ def test_movement_costs_follow_each_operations_materialization() -> None:
     assert all(item.persistent for item in footprint.lifetimes)
     assert all(
         get_metadata(window, BufferAliasMetadata).kind == "forward" for window in windows
+    )
+
+    result = analyze(_MovementCosts, functions["swapped"], analysis="compute-cost")
+    swapped = _calls(result.function)[-1]
+    assert get_metadata(swapped, BufferAliasMetadata) == BufferAliasMetadata("produce")
+    whole = 1024 * 2048 * 4
+    assert get_metadata(swapped, ComputeCostMetadata).traffic_at("gmem") == TrafficBytes(
+        read=whole, write=whole
     )
 
 
@@ -653,17 +678,25 @@ def test_an_in_place_write_reuses_its_destination_only_when_nothing_reads_it_aga
     assert reused is not None
     assert binding_name(write) not in {item.binding for item in reused.lifetimes}
 
-    result = analyze(_MovementCosts, functions["read_after_write"], analysis="memory")
-    _made, write, _consumer = _calls(result.function)
+    for name, position in (("read_after_write", 1), ("written_through_a_view", 2)):
+        result = analyze(_MovementCosts, functions[name], analysis="memory")
+        write = _calls(result.function)[position]
+        assert get_metadata(write, BufferAliasMetadata) == BufferAliasMetadata("produce")
+        assert get_metadata(write, ComputeCostMetadata).traffic_at(
+            "gmem"
+        ) == TrafficBytes(read=whole, write=whole)
+        materialized = get_metadata(result.function, MemoryMetadata)
+        assert materialized is not None
+        assert (binding_name(write), whole) in {
+            (item.binding, item.bytes) for item in materialized.lifetimes
+        }
+
+    result = analyze(_MovementCosts, functions["donated"], analysis="memory")
+    (write,) = _calls(result.function)
     assert get_metadata(write, BufferAliasMetadata) == BufferAliasMetadata("produce")
     assert get_metadata(write, ComputeCostMetadata).traffic_at("gmem") == TrafficBytes(
         read=whole, write=whole
     )
-    materialized = get_metadata(result.function, MemoryMetadata)
-    assert materialized is not None
-    assert (binding_name(write), whole) in {
-        (item.binding, item.bytes) for item in materialized.lifetimes
-    }
 
 
 def test_a_view_keeps_the_buffer_it_reads_alive() -> None:

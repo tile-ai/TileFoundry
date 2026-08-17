@@ -43,10 +43,17 @@ class AliasSpan:
 
 @dataclass(frozen=True)
 class AliasClaim:
-    """Which operands a result lives in, and where inside them if that is known."""
+    """Which operands a result lives in, and where inside them if that is known.
+
+    ``spans_required`` marks a claim that is only true because of where the
+    pieces sit -- putting several of them side by side, say. Without it, a claim
+    whose spans do not resolve still stands on its operands alone, which is what
+    a re-indexing of one operand is whether or not its address is known.
+    """
 
     operands: tuple[int, ...]
     spans: tuple[AliasSpan, ...] = ()
+    spans_required: bool = False
 
 
 @dataclass(frozen=True)
@@ -75,11 +82,18 @@ class AliasContext:
     users: Mapping[int, tuple[Expr, ...]] = field(default_factory=dict)
     positions: Mapping[int, int] = field(default_factory=dict)
     caller_owned: frozenset[int] = frozenset()
+    bases: dict[int, Expr] = field(default_factory=dict)
     extents: dict[int, AliasExtent] = field(default_factory=dict)
     members: dict[int, list[Expr]] = field(default_factory=dict)
 
     def record(self, expr: Expr, base: Expr, extent: AliasExtent | None = None) -> None:
-        """Remember that *expr*'s bytes belong to *base*, at *extent* if known."""
+        """Remember that *expr*'s bytes belong to *base*, at *extent* if known.
+
+        Which base a value belongs to and where inside it are separate answers:
+        a claim can settle the first without the second, and everything that
+        asks who else shares this buffer needs the first either way.
+        """
+        self.bases[id(expr)] = base
         if extent is not None:
             self.extents[id(expr)] = extent
         self.members.setdefault(id(base), []).append(expr)
@@ -89,17 +103,23 @@ class AliasContext:
         return static_bytes(self.type_of(expr))
 
     def extent_of(self, expr: Expr) -> AliasExtent | None:
-        """Where *expr* lives: a proven span of a base, or its own buffer."""
+        """Where *expr* sits in a base, or ``None`` when no address is known.
+
+        A value that owns its bytes is all of itself. A value that lives in
+        somebody else's buffer without a proven address has no extent to give,
+        so nothing can build a coverage proof on top of it.
+        """
         known = self.extents.get(id(expr))
         if known is not None:
             return known
+        if id(expr) in self.bases:
+            return None
         size = self.bytes_of(expr)
         return None if size is None else AliasExtent(expr, 0, size)
 
-    def base_of(self, expr: Expr) -> Expr | None:
+    def base_of(self, expr: Expr) -> Expr:
         """The value that owns the bytes *expr* reads."""
-        extent = self.extent_of(expr)
-        return None if extent is None else extent.base
+        return self.bases.get(id(expr), expr)
 
     def last_authored_use(self, base: Expr, call: Call) -> bool:
         """Whether *call* is the last authored reader of *base*'s alias group."""
@@ -211,7 +231,7 @@ def update_in_place(
     if size is None or size != ctx.bytes_of(call.args[destination]):
         return None
     base = ctx.base_of(call.args[destination])
-    if base is None or id(base) in ctx.caller_owned or isinstance(base, Constant):
+    if id(base) in ctx.caller_owned or isinstance(base, Constant):
         return None
     if ctx.base_of(call.args[source]) is base:
         return None
@@ -233,10 +253,11 @@ def prove_alias(call: Call, ctx: AliasContext) -> tuple[AliasKind, tuple[int, ..
         return None
     if claim.spans:
         extent = compose(call, claim, ctx)
-        if extent is None:
+        if extent is not None:
+            ctx.record(call, extent.base, extent)
+            return handler.kind, claim.operands
+        if claim.spans_required:
             return None
-        ctx.record(call, extent.base, extent)
-        return handler.kind, claim.operands
     base = _one_base(call, claim.operands, ctx)
     if base is None:
         return None
@@ -246,20 +267,21 @@ def prove_alias(call: Call, ctx: AliasContext) -> tuple[AliasKind, tuple[int, ..
 
 def _one_base(call: Call, operands: tuple[int, ...], ctx: AliasContext) -> Expr | None:
     """The single base every named operand resolves to, if there is one."""
-    bases = []
-    for operand in operands:
-        if not 0 <= operand < len(call.args):
-            return None
-        base = ctx.base_of(call.args[operand])
-        if base is None:
-            return None
-        bases.append(base)
+    if not all(0 <= operand < len(call.args) for operand in operands):
+        return None
+    bases = [ctx.base_of(call.args[operand]) for operand in operands]
     first = bases[0]
     return first if all(base is first for base in bases) else None
 
 
 def compose(call: Call, claim: AliasClaim, ctx: AliasContext) -> AliasExtent | None:
-    """Resolve a claim's spans onto one base, covering the result exactly."""
+    """Resolve a claim's spans onto one base, covering the result exactly.
+
+    The spans are read in the order the result is laid out in, and each has to
+    begin where the previous one ended. Sorting them first would accept a claim
+    whose pieces are all there but in the wrong places, which is a different
+    result than the one being proven.
+    """
     result_bytes = ctx.bytes_of(call)
     if result_bytes is None:
         return None
@@ -274,15 +296,14 @@ def compose(call: Call, claim: AliasClaim, ctx: AliasContext) -> AliasExtent | N
     base = resolved[0][0]
     if any(item[0] is not base for item in resolved):
         return None
-    pieces = sorted((offset, size) for _, offset, size in resolved)
-    cursor = pieces[0][0]
-    for offset, size in pieces:
+    start = cursor = resolved[0][1]
+    for _base, offset, size in resolved:
         if offset != cursor:
             return None
         cursor += size
-    if cursor - pieces[0][0] != result_bytes:
+    if cursor - start != result_bytes:
         return None
-    return AliasExtent(base, pieces[0][0], result_bytes)
+    return AliasExtent(base, start, result_bytes)
 
 
 __all__ = [

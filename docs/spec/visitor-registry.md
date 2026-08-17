@@ -787,9 +787,10 @@ def register_alias(op_cls: type[Op], kind: AliasKind, *, destination: int | None
   - A claim MUST be held to one base: every named operand MUST resolve to the
     same owning value, or the conclusion falls back to `PRODUCE`.
   - Spans MUST cover the result exactly -- one unbroken run, no gap and no
-    overlap -- or the conclusion falls back to `PRODUCE`. A claim with no spans
-    still concludes, but states no address, so it MUST NOT serve as a piece of
-    another claim's coverage.
+    overlap -- read in the order the result lays them out, so a claim whose
+    pieces are all present but permuted MUST fall back to `PRODUCE`. A claim
+    with no spans still concludes which base it lives in, but states no
+    address, so it MUST NOT serve as a piece of another claim's coverage.
   - `destination` names the operand an `UPDATE` overwrites. An `UPDATE` MUST NOT
     close over a value the enclosing function does not own.
   - A handler MUST NOT attach metadata, and MUST NOT depend on any analysis

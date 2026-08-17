@@ -89,7 +89,9 @@ def _concat_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
         if size is None or size == 0:
             return None
         spans.append(AliasSpan(index, 0, size))
-    return AliasClaim(tuple(range(len(call.args))), tuple(spans))
+    return AliasClaim(
+        tuple(range(len(call.args))), tuple(spans), spans_required=True
+    )
 
 
 @register_type_relation(Concat)
