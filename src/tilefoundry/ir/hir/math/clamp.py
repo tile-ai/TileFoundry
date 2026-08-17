@@ -16,6 +16,8 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import register_type_relation
+from tilefoundry.visitor_registry.relation_build import elementwise_relation
 
 _COMMUTES_WITH = frozenset({"max", "min"})
 
@@ -27,6 +29,9 @@ class Clamp(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     min_val = ParamDef(kind="attribute", annotation=float)
     max_val = ParamDef(kind="attribute", annotation=float)
+
+
+register_type_relation(Clamp)(elementwise_relation())
 
 
 @register_typeinfer(Clamp)
@@ -43,9 +48,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(Clamp)
 def _eval_clamp(ctx):
-    out = torch.clamp(
-        ctx.args[0].data, min=ctx.op.min_val, max=ctx.op.max_val
-    )
+    out = torch.clamp(ctx.args[0].data, min=ctx.op.min_val, max=ctx.op.max_val)
     return TensorValue(data=out, type=ctx.result_type)
 
 

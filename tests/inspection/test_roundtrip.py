@@ -89,7 +89,7 @@ def test_two_argument_tile_window_roundtrips_as_a_subscript() -> None:
     fn = import_dsl(
         _HEADER + "\n@func\n"
         'def scan_copy(x: Tensor[(4, 4), "f32"]):\n'
-        '    out = zeros(shape=(4, 4), dtype="f32")\n'
+        '    out = zeros(Tensor[(4, 4), "f32"])\n'
         "    for row in tile(4, 2):\n"
         "        out = insert_slice(out, x[row, :], (row, 0))\n"
         "    return out\n"
@@ -106,7 +106,7 @@ def test_non_unit_scalar_index_loop_roundtrips_as_range() -> None:
         fn = import_dsl(
             _HEADER + "\n@func\n"
             'def gather(x: Tensor[(8,), "f32"]):\n'
-            '    out = zeros(shape=(), dtype="f32")\n'
+            '    out = zeros(Tensor[(), "f32"])\n'
             f"    for i in {loop}:\n"
             "        out = add(out, x[i])\n"
             "    return out\n"
@@ -223,8 +223,8 @@ def test_carry_updates_print_last_without_shadowing_the_old_value() -> None:
     fn = import_dsl(
         _HEADER + "\n@func\n"
         'def online(x: Tensor[(4,), "f32"]):\n'
-        '    m = zeros(shape=(4,), dtype="f32")\n'
-        '    o = zeros(shape=(4,), dtype="f32")\n'
+        '    m = zeros(Tensor[(4,), "f32"])\n'
+        '    o = zeros(Tensor[(4,), "f32"])\n'
         "    for i in range(4):\n"
         "        m_new = maximum(m, x)\n"
         "        corr = sub(m, m_new)\n"

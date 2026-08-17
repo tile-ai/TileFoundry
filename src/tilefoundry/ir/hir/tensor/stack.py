@@ -10,12 +10,14 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
+from tilefoundry.ir.hir._shard_checks import (
+    reject_dynamic_shards,
+    require_compatible_meshes,
+    require_uniform_partial_slices,
+)
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard import (
-    Dynamic,
     Layout,
-    Partial,
-    ShardLayout,
     shard_layout_of,
     try_c_order_strides,
 )
@@ -66,58 +68,6 @@ def _stack_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     )
 
 
-def _reject_dynamic_shards(call, ctx, types) -> None:
-    for index, type_ in enumerate(types):
-        layout = shard_layout_of(type_.layout)
-        if layout is not None and any(
-            isinstance(attr, Dynamic) for attr in layout.attrs
-        ):
-            ctx.error(
-                call,
-                f"input {index} has dynamic shard ownership; use an explicit "
-                "Reshard before Stack",
-            )
-
-
-def _require_compatible_meshes(call, ctx, types) -> None:
-    placed = [
-        (index, layout)
-        for index, type_ in enumerate(types)
-        if (layout := shard_layout_of(type_.layout)) is not None
-    ]
-    if not placed:
-        return
-    mesh = placed[0][1].mesh
-    for index, layout in placed[1:]:
-        if layout.mesh != mesh:
-            ctx.error(
-                call,
-                f"input {index} references a different mesh; use an explicit "
-                "Reshard before Stack",
-            )
-
-
-def _require_uniform_partial_slices(call, ctx, types, output: ShardLayout) -> None:
-    for mesh_axis, output_attr in enumerate(output.attrs):
-        if not isinstance(output_attr, Partial):
-            continue
-        for index, type_ in enumerate(types):
-            layout = shard_layout_of(type_.layout)
-            input_attr = (
-                layout.attrs[mesh_axis]
-                if layout is not None
-                and layout.mesh == output.mesh
-                and mesh_axis < len(layout.attrs)
-                else None
-            )
-            if input_attr != output_attr:
-                ctx.error(
-                    call,
-                    f"input {index} does not carry {output_attr!r} on mesh axis "
-                    f"{mesh_axis}; use an explicit Reshard before Stack",
-                )
-
-
 @register_typeinfer(Stack)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if not call.args:
@@ -133,21 +83,18 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_shape = list(base.shape)
     new_shape.insert(axis, len(call.args))
     new_shape = tuple(new_shape)
-    _reject_dynamic_shards(call, ctx, types)
-    _require_compatible_meshes(call, ctx, types)
+    reject_dynamic_shards(ctx, call, types, "Stack")
+    require_compatible_meshes(ctx, call, types, "Stack")
     try:
         relation = build_relation(call, tuple(types), ctx)
-        layout = derive_output_shard_layout(
-            tuple(types), relation, new_shape, fresh_strides=True
-        )
+        layout = derive_output_shard_layout(tuple(types), relation, new_shape, fresh_strides=True)
     except ValueError as error:
         ctx.error(
             call,
-            f"cannot derive input ownership: {error}; use an explicit Reshard "
-            "before Stack",
+            f"cannot derive input ownership: {error}; use an explicit Reshard before Stack",
         )
     if layout is not None:
-        _require_uniform_partial_slices(call, ctx, types, layout)
+        require_uniform_partial_slices(ctx, call, types, layout, "Stack")
         if getattr(layout.layout, "strides", None) is None:
             first = next(
                 index

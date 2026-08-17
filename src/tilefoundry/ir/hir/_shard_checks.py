@@ -8,7 +8,13 @@ See [shard §8](docs/spec/shard.md#8-layout-propagation).
 
 from __future__ import annotations
 
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, shard_layout_of
+from tilefoundry.ir.types.shard.shard_layout import (
+    Broadcast,
+    Dynamic,
+    Partial,
+    ShardLayout,
+    shard_layout_of,
+)
 from tilefoundry.visitor_registry.shard_propagate import partial_reductions_by_axis
 
 
@@ -142,8 +148,62 @@ def require_matching_partial_state(ctx, call, dst, update, dst_name, update_name
         )
 
 
+def reject_dynamic_shards(ctx, call, types, op_name: str) -> None:
+    """Reject ownership that cannot be propagated statically."""
+    for index, type_ in enumerate(types):
+        layout = shard_layout_of(type_.layout)
+        if layout is not None and any(isinstance(attr, Dynamic) for attr in layout.attrs):
+            ctx.error(
+                call,
+                f"input {index} has dynamic shard ownership; use an explicit Reshard before {op_name}",
+            )
+
+
+def require_compatible_meshes(ctx, call, types, op_name: str) -> None:
+    """Require all placed inputs to reference one mesh."""
+    placed = [
+        (index, layout)
+        for index, type_ in enumerate(types)
+        if (layout := shard_layout_of(type_.layout)) is not None
+    ]
+    if not placed:
+        return
+    mesh = placed[0][1].mesh
+    for index, layout in placed[1:]:
+        if layout.mesh != mesh:
+            ctx.error(
+                call,
+                f"input {index} references a different mesh; use an explicit Reshard before {op_name}",
+            )
+
+
+def require_uniform_partial_slices(ctx, call, types, output: ShardLayout, op_name: str) -> None:
+    """Require every input to carry each Partial state derived for the output."""
+    for mesh_axis, output_attr in enumerate(output.attrs):
+        if not isinstance(output_attr, Partial):
+            continue
+        for index, type_ in enumerate(types):
+            layout = shard_layout_of(type_.layout)
+            input_attr = (
+                layout.attrs[mesh_axis]
+                if layout is not None
+                and layout.mesh == output.mesh
+                and mesh_axis < len(layout.attrs)
+                else None
+            )
+            if input_attr != output_attr:
+                ctx.error(
+                    call,
+                    f"input {index} does not carry {output_attr!r} on mesh axis "
+                    f"{mesh_axis}; use an explicit Reshard before {op_name}",
+                )
+
+
 __all__ = [
     "reject_partials",
     "check_multilinear_partials",
     "require_matching_partial_state",
+    "reject_dynamic_shards",
+    "require_compatible_meshes",
+    "require_uniform_partial_slices",
 ]

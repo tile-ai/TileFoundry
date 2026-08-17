@@ -46,26 +46,18 @@ class PrefillDecodeAttention:
     ) -> Tensor[(1, SEQ, HEADS, HEAD_DIM), "bf16"]:
         with Mesh(("cta",), layout=(HEADS,), names=("head",)) as cta:
             padded_k = tf.insert_slice(
-                tf.zeros(
-                    shape=(1, ceildiv(CTX, BLOCK) * BLOCK, HEADS, HEAD_DIM),
-                    dtype="bf16",
-                ),
+                tf.zeros(Tensor[(1, ceildiv(CTX, BLOCK) * BLOCK, HEADS, HEAD_DIM), "bf16"]),
                 k_cache,
                 (0, 0, 0, 0),
             )
             padded_v = tf.insert_slice(
-                tf.zeros(
-                    shape=(1, ceildiv(CTX, BLOCK) * BLOCK, HEADS, HEAD_DIM),
-                    dtype="bf16",
-                ),
+                tf.zeros(Tensor[(1, ceildiv(CTX, BLOCK) * BLOCK, HEADS, HEAD_DIM), "bf16"]),
                 v_cache,
                 (0, 0, 0, 0),
             )
             context_size = tf.shape_of(k_cache)[1]
             query_start = context_size - 1
-            qh = tf.reshard(
-                q, (1, SEQ, HEADS @ cta.head, HEAD_DIM), "smem"
-            )
+            qh = tf.reshard(q, (1, SEQ, HEADS @ cta.head, HEAD_DIM), "smem")
             qt = tf.transpose(tf.cast(qh, dtype="f32"), perm=(0, 2, 1, 3))
             qs = qt * tf.full_like(qt, value=SCALE)
             template = tf.reduce(qt, axes=(-1,), keepdim=True, kind="sum")
@@ -86,12 +78,14 @@ class PrefillDecodeAttention:
                 )
                 kt = tf.transpose(tf.cast(kb, dtype="f32"), perm=(0, 2, 3, 1))
                 vt = tf.transpose(tf.cast(vb, dtype="f32"), perm=(0, 2, 1, 3))
-                query_positions = tf.reshape(
-                    tf.arange(SEQ), new_shape=(SEQ, 1)
-                ) + query_start
-                key_positions = tf.reshape(
-                    tf.arange(BLOCK), new_shape=(1, BLOCK)
-                ) + window
+                query_positions = (
+                    tf.reshape(tf.arange(Tensor[(SEQ,), "i64", "gmem"]), new_shape=(SEQ, 1))
+                    + query_start
+                )
+                key_positions = (
+                    tf.reshape(tf.arange(Tensor[(BLOCK,), "i64", "gmem"]), new_shape=(1, BLOCK))
+                    + window
+                )
                 keep = key_positions <= query_positions
                 raw_scores = tf.matmul(qs, kt)
                 scores = tf.where(
@@ -106,17 +100,13 @@ class PrefillDecodeAttention:
                 next_sum = running_sum * correction + tf.reduce(
                     probabilities, axes=(-1,), keepdim=True, kind="sum"
                 )
-                next_out = running_out * correction + tf.matmul(
-                    probabilities, vt
-                )
+                next_out = running_out * correction + tf.matmul(probabilities, vt)
                 running_max = next_max
                 running_sum = next_sum
                 running_out = next_out
 
             normalized = running_out / running_sum
-            return tf.transpose(
-                tf.cast(normalized, dtype="bf16"), perm=(0, 2, 1, 3)
-            )
+            return tf.transpose(tf.cast(normalized, dtype="bf16"), perm=(0, 2, 1, 3))
 
     @attend.specialize(DimVarRangePat("seq", 2, 4097))
     def prefill(
@@ -126,10 +116,7 @@ class PrefillDecodeAttention:
     ) -> Tensor[(1, SEQ, HEADS, HEAD_DIM), "bf16"]:
         with Mesh(("cta",), layout=(HEADS,), names=("head",)) as cta:
             padded_q = tf.insert_slice(
-                tf.zeros(
-                    shape=(1, ceildiv(SEQ, BLOCK) * BLOCK, HEADS, HEAD_DIM),
-                    dtype="bf16",
-                ),
+                tf.zeros(Tensor[(1, ceildiv(SEQ, BLOCK) * BLOCK, HEADS, HEAD_DIM), "bf16"]),
                 q,
                 (0, 0, 0, 0),
             )
@@ -143,10 +130,7 @@ class PrefillDecodeAttention:
                 ),
                 "smem",
             )
-            output = tf.zeros(
-                shape=(1, ceildiv(SEQ, BLOCK) * BLOCK, HEADS, HEAD_DIM),
-                dtype="bf16",
-            )
+            output = tf.zeros(Tensor[(1, ceildiv(SEQ, BLOCK) * BLOCK, HEADS, HEAD_DIM), "bf16"])
 
             for query_start in range(0, ceildiv(SEQ, BLOCK) * BLOCK, BLOCK):
                 qb = tf.slice(
@@ -155,13 +139,9 @@ class PrefillDecodeAttention:
                     sizes=(1, BLOCK, HEADS, HEAD_DIM),
                     strides=(1, 1, 1, 1),
                 )
-                queries = tf.transpose(
-                    tf.cast(qb, dtype="f32"), perm=(0, 2, 1, 3)
-                )
+                queries = tf.transpose(tf.cast(qb, dtype="f32"), perm=(0, 2, 1, 3))
                 scaled = queries * tf.full_like(queries, value=SCALE)
-                template = tf.reduce(
-                    queries, axes=(-1,), keepdim=True, kind="sum"
-                )
+                template = tf.reduce(queries, axes=(-1,), keepdim=True, kind="sum")
                 running_max = tf.full_like(template, value=-1e30)
                 running_sum = tf.full_like(template, value=0.0)
                 running_out = tf.full_like(queries, value=0.0)
@@ -173,16 +153,22 @@ class PrefillDecodeAttention:
                         sizes=(1, BLOCK, HEADS, HEAD_DIM),
                         strides=(1, 1, 1, 1),
                     )
-                    values = tf.transpose(
-                        tf.cast(kb, dtype="f32"), perm=(0, 2, 1, 3)
-                    )
+                    values = tf.transpose(tf.cast(kb, dtype="f32"), perm=(0, 2, 1, 3))
                     keys = tf.transpose(values, perm=(0, 1, 3, 2))
-                    query_positions = tf.reshape(
-                        tf.arange(BLOCK), new_shape=(BLOCK, 1)
-                    ) + query_start
-                    key_positions = tf.reshape(
-                        tf.arange(BLOCK), new_shape=(1, BLOCK)
-                    ) + key_start
+                    query_positions = (
+                        tf.reshape(
+                            tf.arange(Tensor[(BLOCK,), "i64", "gmem"]),
+                            new_shape=(BLOCK, 1),
+                        )
+                        + query_start
+                    )
+                    key_positions = (
+                        tf.reshape(
+                            tf.arange(Tensor[(BLOCK,), "i64", "gmem"]),
+                            new_shape=(1, BLOCK),
+                        )
+                        + key_start
+                    )
                     keep = key_positions <= query_positions
                     raw_scores = tf.matmul(scaled, keys)
                     scores = tf.where(
@@ -190,9 +176,7 @@ class PrefillDecodeAttention:
                         raw_scores,
                         tf.full_like(raw_scores, value=-1e30),
                     )
-                    block_max = tf.reduce(
-                        scores, axes=(-1,), keepdim=True, kind="max"
-                    )
+                    block_max = tf.reduce(scores, axes=(-1,), keepdim=True, kind="max")
                     next_max = tf.max(running_max, block_max)
                     correction = tf.exp(running_max - next_max)
                     probabilities = tf.exp(scores - next_max)
@@ -202,20 +186,14 @@ class PrefillDecodeAttention:
                         keepdim=True,
                         kind="sum",
                     )
-                    next_out = running_out * correction + tf.matmul(
-                        probabilities, values
-                    )
+                    next_out = running_out * correction + tf.matmul(probabilities, values)
                     running_max = next_max
                     running_sum = next_sum
                     running_out = next_out
 
                 attended = running_out / running_sum
-                block_output = tf.transpose(
-                    tf.cast(attended, dtype="bf16"), perm=(0, 2, 1, 3)
-                )
-                output = tf.insert_slice(
-                    output, block_output, (0, query_start, 0, 0)
-                )
+                block_output = tf.transpose(tf.cast(attended, dtype="bf16"), perm=(0, 2, 1, 3))
+                output = tf.insert_slice(output, block_output, (0, query_start, 0, 0))
 
             return tf.slice(
                 output,

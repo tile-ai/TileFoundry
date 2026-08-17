@@ -27,7 +27,7 @@ from .walk import (
     attach,
     children,
     describe,
-    loop_repeated_values,
+    loop_scopes,
     loop_trip_count,
     postorder,
     reachable_functions,
@@ -168,31 +168,7 @@ def _schedule(
     """Build and solve the Function's nested occurrence schedules."""
     values = postorder(fn.body)
     source_index = {id(expr): index for index, expr in enumerate(values)}
-    loops = [expr for expr in values if isinstance(expr, GridRegionExpr)]
-    repeated = {id(loop): loop_repeated_values(loop) for loop in loops}
-
-    parent: dict[int, int | None] = {}
-    for loop in loops:
-        candidates = [
-            owner for owner in loops if owner is not loop and id(loop) in repeated[id(owner)]
-        ]
-        parent[id(loop)] = (
-            min(candidates, key=lambda item: len(repeated[id(item)])) if candidates else None
-        )
-        if parent[id(loop)] is not None:
-            parent[id(loop)] = id(parent[id(loop)])
-
-    scope_of: dict[int, int | None] = {}
-    for expr in values:
-        if isinstance(expr, Call):
-            candidates = [loop for loop in loops if id(expr) in repeated[id(loop)]]
-            scope_of[id(expr)] = (
-                id(min(candidates, key=lambda item: len(repeated[id(item)])))
-                if candidates
-                else None
-            )
-        elif isinstance(expr, GridRegionExpr):
-            scope_of[id(expr)] = parent[id(expr)]
+    parent, scope_of = loop_scopes(fn)
 
     schedulable = set(scope_of)
 

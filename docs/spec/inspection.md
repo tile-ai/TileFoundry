@@ -504,7 +504,8 @@ class DumpFlags(IntFlag):
     PASS_IR = 1
     CODEGEN_SOURCE = 2
     BUILD_LOG = 4
-    ALL = PASS_IR | CODEGEN_SOURCE | BUILD_LOG
+    ANALYSIS = 8
+    ALL = PASS_IR | CODEGEN_SOURCE | BUILD_LOG | ANALYSIS
 
 
 class DumpScope:
@@ -528,3 +529,6 @@ class DumpScope:
   - Test output MUST be rooted at `test_results/<file-stem>/<test-name>/`.
     A non-master worker appends `__<worker-id>` to the test-name leaf rather
     than adding a worker directory. `pytest.mark.no_dump` disables it.
+  - A completed `analyze(...)` call MUST dump its complete report data as
+    `analysis.json` when `DumpFlags.ANALYSIS` is enabled. This includes
+    target-aware report-only projections such as authored-loop cache pressure.

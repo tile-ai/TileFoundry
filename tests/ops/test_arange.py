@@ -1,4 +1,4 @@
-"""Arange's symbolic half-open coordinate contract."""
+"""Arange's typed coordinate contract."""
 
 from __future__ import annotations
 
@@ -31,15 +31,14 @@ def _infer(op: Arange) -> TensorType:
 
 @func
 def _symbolic_arange(x: Tensor[(_N,), "f32"]):
-    return tf.arange(_N, start=1, step=2, dtype="i32")
+    return tf.arange(Tensor[(ceildiv(_N - 1, 2),), "i32"], start=1, step=2)
 
 
 def test_arange_static_type_evaluation_and_cost():
-    op = Arange(end=8, start=2, step=2, dtype=DType.i64)
+    type_ = TensorType(shape=(3,), dtype=DType.i64, layout=None, storage=StorageKind.GMEM)
+    op = Arange(type=type_, start=2, step=2)
 
-    assert _infer(op) == TensorType(
-        shape=(3,), dtype=DType.i64, layout=None, storage=StorageKind.UMAT
-    )
+    assert _infer(op) is type_
     run_eval_case(
         EvalCase(
             "half_open",
@@ -63,16 +62,41 @@ def test_arange_symbolic_extent_resolves_from_runtime_shape():
     concrete = specialize_concretely(_symbolic_arange, {"arange_n": 8})
     assert residual_dims(concrete) == ()
     assert isinstance(concrete.body.target, Arange)
-    assert concrete.body.target.end == 8
+    assert concrete.body.target.type.shape == (4,)
 
 
 @pytest.mark.parametrize(
     ("op", "message"),
     [
-        (Arange(end=True), "end must be a static or symbolic shape dimension"),
-        (Arange(end=8, step=0), "step must be a positive static integer"),
-        (Arange(end=2, start=3), "requires end >= start"),
-        (Arange(end=8, dtype=DType.f32), "dtype must be i32 or i64"),
+        (
+            Arange(
+                type=TensorType(shape=(), dtype=DType.i64, layout=None, storage=StorageKind.GMEM)
+            ),
+            "type must have rank 1",
+        ),
+        (
+            Arange(
+                type=TensorType(
+                    shape=(8,),
+                    dtype=DType.i64,
+                    layout=None,
+                    storage=StorageKind.GMEM,
+                ),
+                step=0,
+            ),
+            "step must be a positive static integer",
+        ),
+        (
+            Arange(
+                type=TensorType(
+                    shape=(8,),
+                    dtype=DType.f32,
+                    layout=None,
+                    storage=StorageKind.GMEM,
+                )
+            ),
+            "dtype must be i32 or i64",
+        ),
     ],
 )
 def test_arange_rejects_unsupported_attributes(op, message):

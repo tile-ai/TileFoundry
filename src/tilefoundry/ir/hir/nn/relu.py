@@ -11,6 +11,8 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import register_type_relation
+from tilefoundry.visitor_registry.relation_build import elementwise_relation
 
 _COMMUTES_WITH = frozenset({"max", "min"})
 
@@ -18,6 +20,9 @@ _COMMUTES_WITH = frozenset({"max", "min"})
 @register_op
 class ReLU(Op):
     x = ParamDef(kind="input", pattern=Tensor)
+
+
+register_type_relation(ReLU)(elementwise_relation())
 
 
 @register_typeinfer(ReLU)

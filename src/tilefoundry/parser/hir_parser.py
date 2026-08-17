@@ -53,7 +53,7 @@ from .base import (
     _resolve_tensor_type,
     extract_ast,
 )
-from .sugar import _is_tuple_sugar, _resolve_mesh_axis, parse_mesh_layout_sugar
+from .sugar import _is_tuple_sugar, _resolve_mesh_axis, parse_sugar
 from .symtab import LexicalEnv
 
 _HIR_FUNCTION = "[hir §1.1](docs/spec/hir.md#11-function)"
@@ -327,7 +327,17 @@ class _HirBodyVisitor(BaseExprVisitor):
         if cached is not None:
             return cached
 
-        vector = self._build_call(Arange(end=extent), ())
+        vector = self._build_call(
+            Arange(
+                type=TensorType(
+                    shape=(extent,),
+                    dtype=DType.i64,
+                    layout=None,
+                    storage=StorageKind.GMEM,
+                )
+            ),
+            (),
+        )
         attrs = tuple(
             Split(axis=0) if mesh_axis == axis else Broadcast()
             for mesh_axis in range(len(mesh.layout.shape))
@@ -1026,7 +1036,7 @@ class _HirBodyVisitor(BaseExprVisitor):
 
         def _eval_mesh_arg(arg_node: ast.AST, *, is_layout_slot: bool = True):
             if is_layout_slot and _is_tuple_sugar(arg_node):
-                return parse_mesh_layout_sugar(arg_node, closure=self.closure)
+                return parse_sugar(arg_node, Layout, closure=self.closure)
             return self._eval_static(arg_node)
 
         def _resolve_string_topology(name: str) -> object:

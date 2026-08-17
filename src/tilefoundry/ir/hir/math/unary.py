@@ -6,7 +6,6 @@ sugar names (``neg`` / ``abs`` / ``rsqrt`` / ``logical_not``).
 
 from __future__ import annotations
 
-import isl
 import torch
 
 from tilefoundry.evaluator.registry import register_eval
@@ -24,6 +23,7 @@ from tilefoundry.visitor_registry.access_relation import (
     register_type_relation,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
+from tilefoundry.visitor_registry.relation_build import identity_map
 
 
 @register_op
@@ -45,9 +45,7 @@ def _unary_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     """
     (x,) = input_types
     domain, param_map = to_domain(x.shape)
-    dims = [f"d{i}" for i in range(len(x.shape))]
-    src = "[" + ", ".join(dims) + "]"
-    ident = isl.map(f"{{ {src} -> [{', '.join(dims)}] }}")
+    ident = identity_map(len(x.shape))
     return AccessRelationResult(domain=domain, maps=(ident, ident), param_map=param_map)
 
 

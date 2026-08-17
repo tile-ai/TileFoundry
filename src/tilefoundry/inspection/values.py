@@ -12,17 +12,25 @@ one each, and nothing else in the tree spells one.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, fields, is_dataclass
-from typing import get_args, get_origin, get_type_hints
+from dataclasses import dataclass, field, fields
+from typing import get_type_hints
 
 from tilefoundry.analysis.metadata import (
     ComputeCostMetadata,
+    LoopFootprintMetadata,
     MemoryMetadata,
     RooflineMetadata,
     TimelineMetadata,
     TimelineSummaryMetadata,
+)
+from tilefoundry.analysis.report import (
+    declare_record,
+    declared_records,
+    expr_field,
+    expr_fields,
+    family_of,
+    render_record,
 )
 from tilefoundry.ir.core.metadata import IRMetadata, SourceSpanMetadata
 from tilefoundry.ir.core.values import TotalAndPerUnit, TripInterval
@@ -123,12 +131,6 @@ class RecordComment:
 _COMMENTS: dict[type[IRMetadata], RecordComment] = {}
 
 
-def _derived_family(record: type) -> str:
-    """The family name the class name already states."""
-    stem = record.__name__.removesuffix("Metadata")
-    return re.sub(r"(?<!^)(?=[A-Z])", "-", stem).lower()
-
-
 def _field_projections(record: type[IRMetadata], names: tuple[str, ...]) -> tuple[Projection, ...]:
     hints = get_type_hints(record)
     defaults = {item.name: item.default for item in fields(record)}
@@ -163,25 +165,13 @@ def comment(
         else _field_projections(record, (item,))[0]
         for item in declared
     )
-    _COMMENTS[record] = RecordComment(
-        family=family or _derived_family(record), emissions=emissions
-    )
+    declare_record(record, family=family)
+    _COMMENTS[record] = RecordComment(family=family_of(record), emissions=emissions)
 
 
 def comment_of(record: type[IRMetadata]) -> RecordComment | None:
     """What *record* declared it emits, if it declared anything."""
     return _COMMENTS.get(record)
-
-
-def declared_records() -> tuple[type[IRMetadata], ...]:
-    """Every record type that declared it renders as a comment."""
-    return tuple(_COMMENTS)
-
-
-def family_of(record: type[IRMetadata]) -> str:
-    """The family name *record* is reported under."""
-    declared = _COMMENTS.get(record)
-    return declared.family if declared is not None else _derived_family(record)
 
 
 def render_comment(
@@ -218,90 +208,6 @@ def _says_nothing(value: object, default: object) -> bool:
         return value == default
     entries = _entries_of(value)
     return entries is not None and not entries
-
-
-_EXPR_FIELDS: dict[type[IRMetadata], dict[str, Callable[..., object]]] = {}
-
-
-def expr_field(
-    record: type[IRMetadata], key: str, of: Callable[..., object]
-) -> None:
-    """Declare that one field is reported from the expression it is attached to.
-
-    A record states what it measured, not what the program calls the things it
-    measured. A field whose report needs those names is read by *of*, which is
-    given the record and its expression, and returns ``None`` where the program
-    offers no such reading.
-    """
-    _EXPR_FIELDS.setdefault(record, {})[key] = of
-
-
-def expr_fields(record: type[IRMetadata]) -> frozenset[str]:
-    """Which of *record*'s fields are reported from its expression."""
-    return frozenset(_EXPR_FIELDS.get(record, {}))
-
-
-def render_record(record: IRMetadata, expr: object) -> dict[str, object]:
-    """One record as report data, keyed by its own field names.
-
-    Nothing is left out and nothing is folded: a default, a ``None``, and an
-    empty mapping are each a fact a program may branch on, and the key is the
-    field name unchanged so a consumer reading the record reads the same word.
-    """
-    from_expr = _EXPR_FIELDS.get(type(record), {})
-    hints = get_type_hints(type(record))
-    reported: dict[str, object] = {}
-    for name in (item.name for item in fields(record)):
-        if name in from_expr:
-            value = from_expr[name](record, expr)
-            if value is not None:
-                reported[name] = value
-            continue
-        reported[name] = _reported_value(getattr(record, name), hints[name])
-    return reported
-
-
-def _reported_value(value: object, declared: object) -> object:
-    """One value as report data, read through the type its field declared.
-
-    The type is what decides, because a value cannot: an empty tuple of pairs and
-    an empty tuple of strings are the same object and different reports.
-    """
-    if value is None:
-        return None
-    if is_dataclass(declared) and isinstance(declared, type):
-        hints = get_type_hints(declared)
-        return {
-            item.name: _reported_value(getattr(value, item.name), hints[item.name])
-            for item in fields(declared)
-        }
-    origin = get_origin(declared)
-    if origin is dict:
-        _, value_type = get_args(declared)
-        return {key: _reported_value(item, value_type) for key, item in value.items()}
-    if origin in (tuple, list):
-        item_type = _item_type(declared)
-        pair = _pair_types(item_type)
-        if pair is not None:
-            return {key: _reported_value(item, pair[1]) for key, item in value}
-        return [_reported_value(item, item_type) for item in value]
-    return value
-
-
-def _item_type(declared: object) -> object:
-    """What one entry of a declared sequence is."""
-    args = [arg for arg in get_args(declared) if arg is not Ellipsis]
-    return args[0] if args else object
-
-
-def _pair_types(declared: object) -> tuple[object, object] | None:
-    """The key and value types of a declared pair, or ``None`` if it is not one."""
-    if get_origin(declared) is not tuple:
-        return None
-    args = get_args(declared)
-    if len(args) != 2 or Ellipsis in args:
-        return None
-    return args[0], args[1]
 
 
 def _paired_flops(record: ComputeCostMetadata) -> dict[str, TotalAndPerUnit[int]]:
@@ -345,6 +251,17 @@ def _persistent_bytes(record: MemoryMetadata) -> int:
 def _advisory_count(record: MemoryMetadata) -> int:
     """How many advisories there are; the comment is not where they are read."""
     return len(record.advisories)
+
+
+def _loop_footprints(record: LoopFootprintMetadata) -> dict[str, str]:
+    return {
+        f"{item.buffer}@{item.level}": f"{item.bytes}/{item.device_bytes}/{item.repeated_bytes}"
+        for item in record.footprints
+    }
+
+
+def _loop_footprint_status(record: LoopFootprintMetadata) -> str:
+    return "complete" if record.known else "lower-bound"
 
 
 def _interval(record: TimelineMetadata) -> TripInterval:
@@ -418,6 +335,11 @@ comment(
     Projection("peak", dict[str, int], peak_footprint),
     Projection("persistent", int, _persistent_bytes, default=0),
     Projection("advisories", int, _advisory_count, default=0),
+)
+comment(
+    LoopFootprintMetadata,
+    Projection("footprints", dict[str, str], _loop_footprints),
+    Projection("status", str, _loop_footprint_status),
 )
 comment(RooflineMetadata, "ideal_ns", "bound_by")
 comment(TimelineMetadata, Projection("interval", TripInterval, _interval))

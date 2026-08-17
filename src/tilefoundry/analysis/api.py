@@ -22,7 +22,9 @@ from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.facts import ParallelCapacityFacts, ThroughputFacts
 from tilefoundry.analysis.preflight import validate_authored
 from tilefoundry.analysis.registry import Analyzer
+from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.analysis.walk import reachable_functions, values_of
+from tilefoundry.dump import DumpFlags, dump
 from tilefoundry.ir.core import IRMetadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
@@ -213,7 +215,7 @@ def analyze(
     surviving = {metadata_type for key in written_records & final.keys()
                  for _expr_id, metadata_type in (key,)}
 
-    return AnalysisResult(
+    result = AnalysisResult(
         module=result_module,
         function=function,
         analyses=roots,
@@ -221,6 +223,21 @@ def analyze(
         executed=tuple(algorithm.selector for algorithm in closure),
         metadata_types=tuple(item for item in order if item in surviving),
     )
+    dump(
+        "analysis.json",
+        render_json(
+            report_data(
+                module=result.module,
+                function=result.function,
+                analyses=result.analyses,
+                level=result.level,
+                executed=result.executed,
+                metadata_types=result.metadata_types,
+            )
+        ),
+        DumpFlags.ANALYSIS,
+    )
+    return result
 
 
 def _metadata_snapshot(

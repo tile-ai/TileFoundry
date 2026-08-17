@@ -220,9 +220,7 @@ def elaborate(
     if cached is not None:
         return cached
 
-    instance = _elaborate_from_bound_types(
-        callee, bound_types, ctx, scope=binding.scope
-    )
+    instance = _elaborate_from_bound_types(callee, bound_types, ctx, scope=binding.scope)
     ctx.elaboration_cache[cache_key] = instance
     return instance
 
@@ -383,9 +381,7 @@ def _elaborate_from_bound_types(
 
     inner = scope if scope is not None else _scope_for(ctx, callee)
     if dims is None:
-        body_ctx = TypeInferContext(
-            scope=inner, elaboration_cache=ctx.elaboration_cache
-        )
+        body_ctx = TypeInferContext(scope=inner, elaboration_cache=ctx.elaboration_cache)
     else:
         body_ctx = TypeInferContext(scope=inner)
     new_body = _Elaborator(body_ctx).visit(callee.body)
@@ -443,6 +439,7 @@ def _substitute_op_dims(target: object, dims: "Mapping[str, int]") -> object:
     from tilefoundry.ir.types.shard.layout import LayoutBase  # noqa: PLC0415
     from tilefoundry.ir.types.shard.mesh import Mesh  # noqa: PLC0415
     from tilefoundry.ir.types.substitute import (  # noqa: PLC0415
+        substitute_dims,
         substitute_layout_dims,
         substitute_mesh_dims,
     )
@@ -453,6 +450,11 @@ def _substitute_op_dims(target: object, dims: "Mapping[str, int]") -> object:
             continue
         value = getattr(target, param.name, None)
 
+        if isinstance(value, TensorType):
+            rebuilt_type = substitute_dims(value, dims)
+            if rebuilt_type is not value:
+                changed[param.name] = rebuilt_type
+            continue
         if isinstance(value, LayoutBase):
             rebuilt_layout = substitute_layout_dims(value, dims)
             if rebuilt_layout is not value:

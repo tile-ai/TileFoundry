@@ -80,7 +80,7 @@ class HirExpressions:
 
     @func
     def dim_from_a_static_call(x: Tensor[(CTX_LEN,), "bf16"]):
-        return tf.zeros(shape=(ceildiv(CTX_LEN, 128) * 128,), dtype="bf16")
+        return tf.zeros(Tensor[(ceildiv(CTX_LEN, 128) * 128,), "bf16"])
 
     @func
     def cast_by_dtype_string(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "bf16"]:
@@ -459,9 +459,7 @@ class HirModule:
         return variant_leaf(x)  # noqa: F821
 
     @func
-    def uses_a_custom_op(
-        a: Tensor[(8,), "f32"], b: Tensor[(8,), "f32"]
-    ) -> Tensor[(8,), "f32"]:
+    def uses_a_custom_op(a: Tensor[(8,), "f32"], b: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
         return custom_parse_addsq(a, b)
 
 

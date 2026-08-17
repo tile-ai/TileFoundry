@@ -325,12 +325,12 @@ they describe: a record on a `Call` describes that call, while a record on a
 The first families are `compute-cost`, `memory`, `roofline`, and `timeline`.
 Each owns its record types and declares its dependencies and output additions.
 
-| Selector | Requires | Owns | Rests on | Text summary adds | Annotates equations |
-|---|---|---|---|---|---|
-| `compute-cost` | - | `ComputeCostMetadata` | the authored program | `compute-cost` | every measured Call |
-| `memory` | `compute-cost` | `MemoryMetadata` | `MemoryHierarchyFacts` | `peak-footprint`, `advisory` | none |
-| `roofline` | `memory`, `compute-cost` | `RooflineMetadata` | `ThroughputFacts` | bounded dependency evidence, `roofline` | every measured Call |
-| `timeline` | `compute-cost` | `TimelineMetadata`, `TimelineSummaryMetadata` | `ThroughputFacts`, `ParallelCapacityFacts` | `timeline` | every measured Call |
+| Selector | Requires | Owns | Attaches to | Rests on | Text summary adds | Annotates equations |
+|---|---|---|---|---|---|---|
+| `compute-cost` | - | `ComputeCostMetadata` | every measured Call and the Function | the authored program | `compute-cost` | every measured Call |
+| `memory` | `compute-cost` | `MemoryMetadata`, `LoopFootprintMetadata` | `MemoryMetadata` on the Function; `LoopFootprintMetadata` on every `GridRegionExpr` | the authored program, `MemoryHierarchyFacts` | `peak-footprint`, `advisory` | none |
+| `roofline` | `memory`, `compute-cost` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | bounded dependency evidence, `roofline` | every measured Call |
+| `timeline` | `compute-cost` | `TimelineMetadata`, `TimelineSummaryMetadata` | `TimelineMetadata` on every measured Call; `TimelineSummaryMetadata` on the Function | `ThroughputFacts`, `ParallelCapacityFacts` | `timeline` | every measured Call |
 
 Every compact text summary begins with these two lines:
 
@@ -349,8 +349,12 @@ record of the selected Function.
 The JSON report carries the same identity and selection in `target`, `module`,
 `function`, `topology`, `requested`, and `executed`. Whole-function
 projections are under `function_records`; `calls` is a value-ordered list whose
-entries have a `value` label and one key per selected family. `totals` appears
-when the selected view includes compute cost or roofline's bounded work evidence.
+entries have a `value` label and one key per selected family. `loops` is the
+corresponding authored-loop list, labelled by induction variable. When memory is
+selected, a loop whose backing storage has a same-scope implicit cache also has
+`cache-pressure`: one target-aware row per cache, computed from the loop's
+device-wide access footprint. `totals` appears when the selected view includes
+compute cost or roofline's bounded work evidence.
 
 One result is rendered once, and every surface reads that rendering:
 
@@ -501,9 +505,9 @@ appears only for a primitive Call and contains objects in positional order:
 ```
 
 - constraints:
-  - A record MUST be attached to every reachable `Call`; compute cost MUST NOT
-    add a whole-Function record because its exact total is the sum of Call
-    records.
+  - A record MUST be attached to every reachable `Call` and to the Function.
+    The Function record MUST include authored-loop repetition and therefore is
+    not the direct sum of the one-occurrence Call records.
   - An op with no registered cost evaluator MUST raise `AnalysisError`.
   - Missing program geometry MUST NOT be replaced with a target capacity.
   - The enclosing recomputation factor MUST be the product of the authored loop
@@ -550,6 +554,34 @@ class LevelFootprint:
     persistent_bytes: int
     capacity_bytes: int | None = None
 
+class BufferFootprint:
+    """Bytes one authored loop touches in one buffer at one storage level.
+
+    Attributes:
+        buffer: attribute; The stable value name of the source buffer.
+        level: attribute; The storage level containing that buffer.
+        bytes: attribute; Deduplicated bytes reached by one logical position.
+        device_bytes: attribute; Deduplicated bytes in the union across positions.
+        repeated_bytes: attribute; Per-position bytes without deduplicating repeated access.
+    """
+
+    buffer: str
+    level: str
+    bytes: int
+    device_bytes: int
+    repeated_bytes: int
+
+class LoopFootprintMetadata(IRMetadata):
+    """Known buffer accesses or a lower bound within one authored GridRegionExpr.
+
+    Attributes:
+        footprints: attribute; One row per source buffer and storage level.
+        known: attribute; Whether every access had a representable relation.
+    """
+
+    footprints: tuple[BufferFootprint, ...]
+    known: bool
+
 class ValueLifetime:
     """One value's residency, as positions in the function's value order.
 
@@ -587,6 +619,13 @@ class MemoryMetadata(IRMetadata):
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
+| `BufferFootprint.buffer` | Use the source parameter or authored binding name, with the same definition-order suffixing as value lifetimes. | No |
+| `BufferFootprint.level` | Read the source buffer's declared storage level. | No |
+| `BufferFootprint.bytes` | Build relations from rank-preserving per-position Types, union the loop-prefixed access images, count the union's integer points, multiply by the dtype bit width, then round the whole buffer reading up to bytes. If the count is not an integer or exceeds `repeated_bytes`, that buffer reading is unavailable. | No |
+| `BufferFootprint.device_bytes` | Repeat the same exact union measurement from authored Types without shard narrowing, giving the union across logical positions in bytes. | No |
+| `BufferFootprint.repeated_bytes` | Multiply each operand's per-position element count by its enclosing trip counts, sum accesses to the same buffer, multiply by dtype bit width, then round the whole buffer reading up to bytes. | No |
+| `LoopFootprintMetadata.footprints` | One `BufferFootprint` per known source buffer and storage level, sorted by buffer then level. When `known` is false these rows are the available lower bound rather than an empty replacement. | No |
+| `LoopFootprintMetadata.known` | False when an access in the loop or a descendant loop lacks a representable forward relation, marking `footprints` as a lower bound; true otherwise. | No |
 | `ValueLifetime.binding` | Use the parameter or authored binding name, or `<value N>` when unnamed; repeated names take the printer's numeric suffix in definition order. | No |
 | `ValueLifetime.level` | Emit one lifetime per storage level occupied by the value's Type. | No |
 | `ValueLifetime.bytes` | Project the Type through every authored split at or coarser than the explicit level's `owner`, then take its logical bytes; a target-owned or undeclared level remains global. | `MemoryHierarchyFacts.explicit_levels[].owner` |
@@ -600,7 +639,25 @@ class MemoryMetadata(IRMetadata):
 | `MemoryMetadata.footprint` | One `LevelFootprint` per occupied storage level. | As above |
 | `MemoryMetadata.traffic` | Exact per-level sum of the Function's already-scaled `ComputeCostMetadata.traffic`. | No |
 | `MemoryMetadata.lifetimes` | Every value residency except a `Reshape`, which aliases its input. | As above |
-| `MemoryMetadata.advisories` | Explicit peak overflow, cache/shared-capacity division, and same-scope cache working-set findings. | `MemoryHierarchyFacts` |
+| `MemoryMetadata.advisories` | Explicit peak overflow, cache/shared-capacity division, and same-scope authored-loop access-footprint findings. | `MemoryHierarchyFacts` |
+
+The target-aware loop projection is report data rather than another metadata
+record. `LoopFootprintMetadata` remains target-independent:
+
+```text
+"cache-pressure": [{"cache_level": <level>, "backing_level": <level>,
+                    "device_bytes": <int>, "capacity_bytes": <int|null>,
+                    "status": "fits"|"exceeds"|"lower-bound"|"unknown"}, ...]
+```
+
+The projection MUST use `device_bytes`, sum rows at the cache's ultimate explicit
+backing level, and compare only levels whose capacity scopes agree. A missing
+backing level or a scope mismatch MUST emit no row and MUST NOT fail analysis.
+`lower-bound` means an incomplete footprint has not yet exceeded capacity;
+`exceeds` remains conclusive when the lower bound alone exceeds it. A cache with
+no usable capacity emits `unknown`. A buffer with `device_bytes < bytes` MUST be
+removed before projection and its `LoopFootprintMetadata` MUST be marked
+incomplete.
 
 The family reads this target projection:
 
@@ -721,8 +778,9 @@ attached only to the Function. Its full JSON projection is under
   - Analysis MUST NOT infer memory ownership from a storage level's name or
     capacity scope.
   - One value exceeding an explicit level's capacity MUST raise `AnalysisError`.
-    An aggregate explicit peak or implicit working set exceeding capacity MUST
-    instead produce an advisory and MUST NOT fail the call.
+    An aggregate explicit peak or an authored-loop access footprint exceeding an
+    implicit cache capacity MUST instead produce an advisory and MUST NOT fail
+    the call.
 
 #### 2.2.3 `roofline`
 

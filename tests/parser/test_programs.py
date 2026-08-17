@@ -59,7 +59,7 @@ from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.parser import hir_parser
 from tilefoundry.parser.base import _ModuleCallee
-from tilefoundry.parser.sugar import parse_shard_layout_sugar
+from tilefoundry.parser.sugar import parse_sugar
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
@@ -146,12 +146,17 @@ def test_a_reshard_split_axis_resolved_through_the_closure() -> None:
 
 
 def test_a_symbolic_extent_on_both_sides_has_local_size_one() -> None:
-    """``parse_shard_layout_sugar`` on a bare AST node, with no function around it."""
+    """Shard-layout sugar on a bare AST node, with no function around it."""
     dyn = DimVar("seq_len", 1, 4)
     cta = Mesh((Topology("cta", dyn),), Layout((dyn,), (1,)), names=("cta",))
     node = ast.parse("(1, S @ cta, 32, 128)", mode="eval").body
 
-    actual = parse_shard_layout_sugar(node, lambda n: cta if n == "cta" else None, closure={"S": dyn})
+    actual = parse_sugar(
+        node,
+        ShardLayout,
+        mesh_resolver=lambda n: cta if n == "cta" else None,
+        closure={"S": dyn},
+    )
 
     assert actual.layout.shape == (1, dyn, 32, 128)
     assert actual.attrs == (Split(1),)
@@ -219,9 +224,7 @@ def test_a_carry_reuses_the_nodes_it_was_built_from() -> None:
     from_parameter = HirGrid.lookup("carry_initialized_from_a_parameter")
     initialized = from_parameter.body
     assert initialized.init_args[0] is from_parameter.params[0]
-    assert [expr for expr in postorder(initialized) if isinstance(expr, Call)] == [
-        initialized.body
-    ]
+    assert [expr for expr in postorder(initialized) if isinstance(expr, Call)] == [initialized.body]
 
     outer = HirGrid.lookup("nested_for").body
     assert [v.name for v in outer.carried_args] == ["o"]
@@ -284,10 +287,12 @@ def test_a_where_layout_extent_is_read_out_of_the_globals(monkeypatch) -> None:
     assert function.body is attached[0]
     assert constraint_metadata(attached[0]).constraints[0].layout.shape[1] == 16
 
-    as_dim_var = import_dsl(source.replace("N = 16", 'N = DimVar("S", 1, 128)').replace(
-        "from tilefoundry.dsl import Tensor, tf\n",
-        "from tilefoundry.dsl import Tensor, tf\nfrom tilefoundry.ir.types.dim import DimVar\n",
-    ))
+    as_dim_var = import_dsl(
+        source.replace("N = 16", 'N = DimVar("S", 1, 128)').replace(
+            "from tilefoundry.dsl import Tensor, tf\n",
+            "from tilefoundry.dsl import Tensor, tf\nfrom tilefoundry.ir.types.dim import DimVar\n",
+        )
+    )
     extent = constraint_metadata(as_dim_var.body).constraints[0].layout.shape[1]
     assert isinstance(extent, DimVar) and extent.name == "S"
 
@@ -318,7 +323,7 @@ def test_a_value_literal_takes_the_dtype_of_the_operand_it_meets() -> None:
 
 def test_a_dim_expression_stays_resolvable_arithmetic() -> None:
     """The golden prints the dim expression; that it still evaluates is separate."""
-    padded = HirExpressions.lookup("dim_from_a_static_call").body.target.shape[0]
+    padded = HirExpressions.lookup("dim_from_a_static_call").body.target.type.shape[0]
     assert resolve_dim(padded, {"CTX_LEN": 128}) == 128
     assert resolve_dim(padded, {"CTX_LEN": 130}) == 256
 
@@ -456,8 +461,7 @@ def test_symbolic_slice_endpoints_preserve_shape_and_bind_across_a_call() -> Non
         "from tilefoundry.dsl import DimVar, Tensor\n"
     )
     full_window = import_dsl(
-        prelude
-        + '\nCTX_LEN = DimVar("CTX_LEN", 1, 4097)\n'
+        prelude + '\nCTX_LEN = DimVar("CTX_LEN", 1, 4097)\n'
         '@func\ndef f(x: Tensor[(CTX_LEN, 128), "f32"]) '
         '-> Tensor[(CTX_LEN, 128), "f32"]:\n'
         "    return x[:, 0:128]\n"
@@ -484,8 +488,7 @@ def test_symbolic_slice_endpoints_preserve_shape_and_bind_across_a_call() -> Non
     assert TypeInferVisitor(TypeInferContext()).visit(call) == consumer.return_type
 
     dimension_start = import_dsl(
-        prelude
-        + '\nS = DimVar("m2_start_seq", 1, 4097)\n'
+        prelude + '\nS = DimVar("m2_start_seq", 1, 4097)\n'
         '@func\ndef f(x: Tensor[(S + 8, 128), "f32"]) -> Tensor[(8, 128), "f32"]:\n'
         "    return x[S:S + 8, 0:128]\n"
     )
@@ -538,9 +541,7 @@ def test_a_moved_tile_window_evaluates_where_it_says_it_reads() -> None:
 
     script = as_script(HirExpressions.lookup("two_windows_a_fixed_distance_apart"))
     assert "gu[:, n + 4]" in script, script
-    torch.testing.assert_close(
-        evaluate(import_dsl(script), gu, seed, device="cpu"), expected
-    )
+    torch.testing.assert_close(evaluate(import_dsl(script), gu, seed, device="cpu"), expected)
 
 
 def test_a_range_scalar_and_a_runtime_endpoint_drive_a_slice_window() -> None:
@@ -551,8 +552,7 @@ def test_a_range_scalar_and_a_runtime_endpoint_drive_a_slice_window() -> None:
         "from tilefoundry.dsl import Tensor\n"
     )
     runtime_start = import_dsl(
-        prelude
-        + "\nfrom tilefoundry.ir.types.shard import Layout\n"
+        prelude + "\nfrom tilefoundry.ir.types.shard import Layout\n"
         "plain_layout = Layout((8, 4), (4, 1))\n"
         '\n@func\ndef f(x: Tensor[(8, 4), "f32", plain_layout], '
         'start: Tensor[(), "i64"]) -> Tensor[(4, 4), "f32"]:\n'
@@ -563,8 +563,7 @@ def test_a_range_scalar_and_a_runtime_endpoint_drive_a_slice_window() -> None:
     assert runtime_start.body.type.layout is None
 
     shifted_start = import_dsl(
-        prelude
-        + '\n@func\ndef f(x: Tensor[(16, 4), "f32"], '
+        prelude + '\n@func\ndef f(x: Tensor[(16, 4), "f32"], '
         'start: Tensor[(), "i64"]) -> Tensor[(8, 4), "f32"]:\n'
         "    return x[start + 1:start + 9, :]\n"
     )
@@ -605,8 +604,7 @@ def test_a_compile_time_list_is_indexed_where_it_is_written() -> None:
     x = torch.arange(32, dtype=torch.float32).reshape(1, 4, 8)
 
     comprehension = import_dsl(
-        prelude
-        + "    taps = [x[:, :, j:j + 1] for j in range(4)]\n"
+        prelude + "    taps = [x[:, :, j:j + 1] for j in range(4)]\n"
         "    return add(taps[0], taps[-1])\n"
     )
     torch.testing.assert_close(
@@ -614,13 +612,9 @@ def test_a_compile_time_list_is_indexed_where_it_is_written() -> None:
     )
 
     literal = import_dsl(
-        prelude
-        + "    ends = [x[:, :, 0:1], x[:, :, 7:8]]\n"
-        "    return add(ends[0], ends[1])\n"
+        prelude + "    ends = [x[:, :, 0:1], x[:, :, 7:8]]\n    return add(ends[0], ends[1])\n"
     )
-    torch.testing.assert_close(
-        evaluate(literal, x, device="cpu"), x[:, :, 0:1] + x[:, :, 7:8]
-    )
+    torch.testing.assert_close(evaluate(literal, x, device="cpu"), x[:, :, 0:1] + x[:, :, 7:8])
 
 
 def test_a_closure_int_mesh_dim_resolves_like_the_literal() -> None:
@@ -640,6 +634,4 @@ def test_a_tile_window_survives_the_print_import_trip() -> None:
     fn = HirExpressions.lookup("full_tile_window")
     expected = evaluate(fn, x, seed, device="cpu")
 
-    torch.testing.assert_close(
-        evaluate(import_dsl(as_script(fn)), x, seed, device="cpu"), expected
-    )
+    torch.testing.assert_close(evaluate(import_dsl(as_script(fn)), x, seed, device="cpu"), expected)

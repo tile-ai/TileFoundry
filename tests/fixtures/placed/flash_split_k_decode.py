@@ -38,24 +38,18 @@ class FlashSplitKDecode:
         k_cache: Tensor[(1, CTX, HEADS, HEAD_DIM), "bf16"],
         v_cache: Tensor[(1, CTX, HEADS, HEAD_DIM), "bf16"],
     ) -> Tensor[(1, 1, HEADS, HEAD_DIM), "bf16"]:
-        with Mesh(
-            ("cta",), layout=(HEADS, WORKERS), names=("head", "w")
-        ) as cta:
-            qh = tf.reshard(
-                q, (1, 1, HEADS @ cta.head, HEAD_DIM), "smem"
-            )
+        with Mesh(("cta",), layout=(HEADS, WORKERS), names=("head", "w")) as cta:
+            qh = tf.reshard(q, (1, 1, HEADS @ cta.head, HEAD_DIM), "smem")
             queries = tf.transpose(tf.cast(qh, dtype="f32"), perm=(0, 2, 1, 3))
             scaled = queries * tf.full_like(queries, value=SCALE)
 
-            m_slots = tf.reshard(
-                tf.zeros(shape=(WORKERS, HEADS, 1, 1), dtype="f32"),
-                (WORKERS @ cta.w, HEADS @ cta.head, 1, 1),
-                "smem",
-            )
-            acc_slots = tf.reshard(
-                tf.zeros(shape=(WORKERS, HEADS, 1, HEAD_DIM), dtype="f32"),
-                (WORKERS @ cta.w, HEADS @ cta.head, 1, HEAD_DIM),
-                "smem",
+            m_slots = tf.zeros(Tensor[(WORKERS @ cta.w, HEADS @ cta.head, 1, 1), "f32", "smem"])
+            acc_slots = tf.zeros(
+                Tensor[
+                    (WORKERS @ cta.w, HEADS @ cta.head, 1, HEAD_DIM),
+                    "f32",
+                    "smem",
+                ]
             )
             m = tf.full_like(m_slots, value=-1e30)
             l = tf.full_like(m_slots, value=0.0)
@@ -73,47 +67,27 @@ class FlashSplitKDecode:
                     (1, BLOCK, HEADS @ cta.head, HEAD_DIM),
                     "smem",
                 )
-                keys = tf.transpose(
-                    tf.cast(kb, dtype="f32"), perm=(0, 2, 3, 1)
-                )
-                values = tf.transpose(
-                    tf.cast(vb, dtype="f32"), perm=(0, 2, 1, 3)
-                )
+                keys = tf.transpose(tf.cast(kb, dtype="f32"), perm=(0, 2, 3, 1))
+                values = tf.transpose(tf.cast(vb, dtype="f32"), perm=(0, 2, 1, 3))
                 scores = tf.matmul(scaled, keys)
-                block_m = tf.reduce(
-                    scores, axes=(-1,), keepdim=True, kind="max"
-                )
+                block_m = tf.reduce(scores, axes=(-1,), keepdim=True, kind="max")
                 next_m = tf.max(m, block_m)
                 correction = tf.exp(m - next_m)
                 weights = tf.exp(scores - next_m)
-                l = l * correction + tf.reduce(
-                    weights, axes=(-1,), keepdim=True, kind="sum"
-                )
+                l = l * correction + tf.reduce(weights, axes=(-1,), keepdim=True, kind="sum")
                 acc = acc * correction + tf.matmul(weights, values)
                 m = next_m
 
-            all_m = tf.reshard(
-                m, (WORKERS, HEADS @ cta.head, 1, 1), "smem"
-            )
-            all_l = tf.reshard(
-                l, (WORKERS, HEADS @ cta.head, 1, 1), "smem"
-            )
-            all_acc = tf.reshard(
-                acc, (WORKERS, HEADS @ cta.head, 1, HEAD_DIM), "smem"
-            )
+            all_m = tf.reshard(m, (WORKERS, HEADS @ cta.head, 1, 1), "smem")
+            all_l = tf.reshard(l, (WORKERS, HEADS @ cta.head, 1, 1), "smem")
+            all_acc = tf.reshard(acc, (WORKERS, HEADS @ cta.head, 1, HEAD_DIM), "smem")
             global_m = tf.reduce(all_m, axes=(0,), keepdim=False, kind="max")
             weights = tf.exp(all_m - global_m)
-            global_l = tf.reduce(
-                weights * all_l, axes=(0,), keepdim=False, kind="sum"
-            )
-            global_acc = tf.reduce(
-                weights * all_acc, axes=(0,), keepdim=False, kind="sum"
-            )
+            global_l = tf.reduce(weights * all_l, axes=(0,), keepdim=False, kind="sum")
+            global_acc = tf.reduce(weights * all_acc, axes=(0,), keepdim=False, kind="sum")
             output = tf.cast(global_acc / global_l, dtype="bf16")
             output = tf.reshape(output, new_shape=(1, 1, HEADS, HEAD_DIM))
-            return tf.reshard(
-                output, (1, 1, HEADS @ cta.head, HEAD_DIM), "gmem"
-            )
+            return tf.reshard(output, (1, 1, HEADS @ cta.head, HEAD_DIM), "gmem")
 
 
 flash_split_k_decode = FlashSplitKDecode.entry_function()

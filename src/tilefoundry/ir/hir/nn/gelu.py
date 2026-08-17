@@ -11,6 +11,8 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import register_type_relation
+from tilefoundry.visitor_registry.relation_build import elementwise_relation
 
 _COMMUTES_WITH = frozenset()
 
@@ -25,6 +27,9 @@ class Gelu(Op):
 
     x = ParamDef(kind="input", pattern=Tensor)
     approximate = ParamDef(kind="attribute", annotation=str, default="tanh")
+
+
+register_type_relation(Gelu)(elementwise_relation())
 
 
 @register_typeinfer(Gelu)

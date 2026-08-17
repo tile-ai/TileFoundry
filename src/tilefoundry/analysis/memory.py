@@ -20,6 +20,7 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import Type, local_type_of
@@ -32,9 +33,12 @@ from .facts import (
     ImplicitMemoryLevelFacts,
     MemoryHierarchyFacts,
 )
+from .footprint import loop_footprints
 from .metadata import (
+    BufferFootprint,
     ComputeCostMetadata,
     LevelFootprint,
+    LoopFootprintMetadata,
     MemoryMetadata,
     TrafficBytes,
     ValueLifetime,
@@ -60,6 +64,17 @@ class _Residency:
     defined_at: int
     last_used_at: int
     persistent: bool
+
+
+@dataclass(frozen=True)
+class _CachePressure:
+    """One authored loop's device-wide access against one implicit cache."""
+
+    cache_level: str
+    backing_level: str
+    device_bytes: int
+    capacity_bytes: int | None
+    status: str
 
 
 def _is_view(expr: Expr) -> bool:
@@ -304,29 +319,72 @@ def _implicit_capacity(
     return capacity
 
 
-def _residency_advisory(
-    level: ImplicitMemoryLevelFacts,
+def cache_pressure(
+    record: LoopFootprintMetadata,
     facts: MemoryHierarchyFacts,
     peaks: dict[str, int],
-) -> str | None:
-    """Whether *level* is too small for the working set it fronts.
+) -> tuple[_CachePressure, ...]:
+    """Compare one loop's device-wide explicit accesses with their caches.
 
     The comparison is made only when the cache and the level it backs are stated
     per the same topology scope. A per-SM capacity set against a whole-device
     footprint would exceed it for almost any program, which reads as a finding
     while saying nothing: the per-SM share of that footprint is not known here.
     """
-    backing_name = facts.backing_level(level.name)
-    backing = facts.explicit(backing_name)
-    if backing is None or backing.scope != level.scope:
+    rows: list[_CachePressure] = []
+    for level in facts.implicit_levels:
+        backing_name = facts.backing_level(level.name)
+        backing = facts.explicit(backing_name)
+        if backing is None or backing.scope != level.scope:
+            continue
+        accesses = tuple(
+            item for item in record.footprints if item.level == backing_name
+        )
+        if not accesses or any(item.device_bytes < item.bytes for item in accesses):
+            continue
+        working_set = sum(item.device_bytes for item in accesses)
+        capacity = _implicit_capacity(level.name, facts, peaks)
+        if capacity is None:
+            status = "unknown"
+        elif working_set > capacity:
+            status = "exceeds"
+        elif record.known:
+            status = "fits"
+        else:
+            status = "lower-bound"
+        rows.append(
+            _CachePressure(
+                cache_level=level.name,
+                backing_level=backing_name,
+                device_bytes=working_set,
+                capacity_bytes=capacity,
+                status=status,
+            )
+        )
+    return tuple(rows)
+
+
+def _residency_advisory(
+    loop: GridRegionExpr,
+    record: LoopFootprintMetadata,
+    pressure: _CachePressure,
+    facts: MemoryHierarchyFacts,
+) -> str | None:
+    """Report one loop whose access footprint exceeds a same-scope cache."""
+    if pressure.status != "exceeds" or pressure.capacity_bytes is None:
         return None
-    working_set = peaks.get(backing_name, 0)
-    capacity = _implicit_capacity(level.name, facts, peaks)
-    if not working_set or capacity is None or working_set <= capacity:
+    level = facts.implicit(pressure.cache_level)
+    if level is None:
         return None
+    amount = (
+        str(pressure.device_bytes)
+        if record.known
+        else f"at least {pressure.device_bytes}"
+    )
     return (
-        f"{level.name} holds {capacity} B per {level.scope}, so the "
-        f"{backing_name} working set of {working_set} B will not stay resident"
+        f"{pressure.cache_level} holds {pressure.capacity_bytes} B per {level.scope}, "
+        f"so the {pressure.backing_level} access footprint of {amount} B in loop "
+        f"{loop.induction_var.name!r} will not stay resident"
     )
 
 
@@ -354,18 +412,21 @@ def _division_advisory(
 
 
 def _advisories(
-    facts: MemoryHierarchyFacts, peaks: dict[str, int]
+    facts: MemoryHierarchyFacts,
+    peaks: dict[str, int],
+    loops: tuple[tuple[GridRegionExpr, LoopFootprintMetadata], ...],
 ) -> tuple[str, ...]:
     """Order and cache findings, none of which invalidate the program."""
     notes = list(_explicit_peak_advisories(facts, peaks))
     for level in facts.implicit_levels:
+        note = _division_advisory(level, facts, peaks)
+        if note is not None:
+            notes.append(note)
+    for loop, record in loops:
         notes.extend(
             note
-            for note in (
-                _division_advisory(level, facts, peaks),
-                _residency_advisory(level, facts, peaks),
-            )
-            if note is not None
+            for pressure in cache_pressure(record, facts, peaks)
+            if (note := _residency_advisory(loop, record, pressure, facts)) is not None
         )
     return tuple(notes)
 
@@ -395,6 +456,34 @@ def analyze_memory(
         for item in residencies:
             if item.persistent:
                 persistent[item.level] = persistent.get(item.level, 0) + item.bytes
+        loop_values = {
+            id(expr): expr
+            for expr in postorder(fn.body)
+            if isinstance(expr, GridRegionExpr)
+        }
+        loop_records: list[tuple[GridRegionExpr, LoopFootprintMetadata]] = []
+        for loop_id, reading in loop_footprints(module, fn).items():
+            valid = tuple(
+                item for item in reading.buffers if item.device_bytes >= item.bytes
+            )
+            loop_records.append(
+                (
+                    loop_values[loop_id],
+                    LoopFootprintMetadata(
+                        footprints=tuple(
+                            BufferFootprint(
+                                buffer=item.buffer,
+                                level=item.level,
+                                bytes=item.bytes,
+                                device_bytes=item.device_bytes,
+                                repeated_bytes=item.repeated_bytes,
+                            )
+                            for item in valid
+                        ),
+                        known=reading.known and len(valid) == len(reading.buffers),
+                    ),
+                )
+            )
         attach(
             fn,
             MemoryMetadata(
@@ -413,9 +502,11 @@ def analyze_memory(
                     )
                     for item in residencies
                 ),
-                advisories=_advisories(facts, peaks),
+                advisories=_advisories(facts, peaks, tuple(loop_records)),
             ),
         )
+        for loop, record in loop_records:
+            attach(loop, record)
 
 
-__all__ = ["SELECTOR", "analyze_memory"]
+__all__ = ["SELECTOR", "analyze_memory", "cache_pressure"]

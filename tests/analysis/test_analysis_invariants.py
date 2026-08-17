@@ -22,21 +22,25 @@ import tilefoundry.cli.analyze as cli_analyze
 from tests.analysis.test_analysis_families import _oversized_working_set
 from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.logical.gqa_static import static_online_attend
+from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.rmsnorm import RmsnormModule
+from tests.fixtures.placed.square_cuda import Model as SquareCuda
 from tests.fixtures.shapes.matmul_programs import gemm_rms_norm
 from tests.fixtures.shapes.scaled_modules import PairedScaledParent
 from tilefoundry import func
 from tilefoundry.analysis import (
     AnalysisError,
+    LoopFootprintMetadata,
     OccurrenceProvenance,
     TileGraph,
     analyze,
     check_program,
     extract,
 )
+from tilefoundry.analysis.footprint import _local_type as footprint_local_type
 from tilefoundry.analysis.preflight import validate_authored
-from tilefoundry.analysis.walk import postorder, values_of
+from tilefoundry.analysis.walk import loop_scopes, postorder, values_of
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamically
 from tilefoundry.inspection.analysis_report import render_analysis
@@ -71,7 +75,10 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.nn.layer_norm import LayerNorm
+from tilefoundry.ir.hir.nn.relu import ReLU
 from tilefoundry.ir.hir.nn.rope import RoPE
+from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.quant import Quant
@@ -87,6 +94,7 @@ from tilefoundry.visitor_registry.access_relation import (
     OPAQUE,
     AccessRelations,
     access_relation_registry,
+    build_relation,
 )
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
@@ -465,6 +473,134 @@ def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
     assert "-> y[" not in str(rows.reads)
 
 
+def test_reshard_relation_rejects_redistribution_but_accepts_storage_moves() -> None:
+    function = check_program(SquareCuda, SquareCuda.entry_function())
+    reshards = [
+        expr
+        for expr in postorder(function.body)
+        if isinstance(expr, Call) and isinstance(expr.target, Reshard)
+    ]
+    assert len(reshards) == 2
+
+    redistribution, storage_move = reshards
+    redistribution_inputs = tuple(
+        footprint_local_type(arg.type) for arg in redistribution.args
+    )
+    with pytest.raises(
+        NotImplementedError,
+        match=r"cross-position redistribution changes the local shape from \(168,\) to \(1,\)",
+    ):
+        build_relation(redistribution, redistribution_inputs, TypeInferContext())
+
+    storage_inputs = tuple(footprint_local_type(arg.type) for arg in storage_move.args)
+    assert storage_inputs[0].shape == (1,)
+    relation = build_relation(storage_move, storage_inputs, TypeInferContext())
+    assert relation is not None
+    assert relation.domain.is_equal(isl.set("{ [d0 = 0] }"))
+    assert len(relation.maps) == 2
+    assert all(item.is_equal(isl.map("{ [d0] -> [d0] }")) for item in relation.maps)
+
+
+def test_forward_relations_distinguish_layer_norm_from_elementwise() -> None:
+    x_type = make_tensor_type((2, 3, 4), DType.f32)
+    affine_type = make_tensor_type((3, 4), DType.f32)
+    x = Var(type=x_type, name="x")
+    weight = Var(type=affine_type, name="weight")
+    bias = Var(type=affine_type, name="bias")
+    layer_norm = Call(
+        type=x_type,
+        target=LayerNorm(axis=1, eps=1e-5),
+        args=(x, weight, bias),
+    )
+
+    relation = build_relation(
+        layer_norm, (x_type, affine_type, affine_type), TypeInferContext()
+    )
+    assert relation is not None
+    assert relation.domain.is_equal(isl.set("{ [d0] : 0 <= d0 < 2 }"))
+    row = isl.map("{ [d0] -> [d0, j0, j1] : 0 <= j0 < 3 and 0 <= j1 < 4 }")
+    affine = isl.map(
+        "{ [d0] -> [j0, j1] : 0 <= j0 < 3 and 0 <= j1 < 4 }"
+    )
+    assert len(relation.maps) == 4
+    assert relation.maps[0].is_equal(row)
+    assert relation.maps[1].is_equal(affine)
+    assert relation.maps[2].is_equal(affine)
+    assert relation.maps[3].is_equal(row)
+
+    relu = Call(type=x_type, target=ReLU(), args=(x,))
+    elementwise = build_relation(relu, (x_type,), TypeInferContext())
+    assert elementwise is not None
+    identity = isl.map("{ [d0, d1, d2] -> [d0, d1, d2] }")
+    assert elementwise.domain.is_equal(
+        isl.set(
+            "{ [d0, d1, d2] : 0 <= d0 < 2 and 0 <= d1 < 3 and 0 <= d2 < 4 }"
+        )
+    )
+    assert len(elementwise.maps) == 2
+    assert all(item.is_equal(identity) for item in elementwise.maps)
+
+
+def test_loop_scopes_choose_the_containing_loop_instead_of_the_smaller_work_set() -> None:
+    scalar = TensorType.scalar(DType.i32)
+    outer_iv = Var(type=scalar, name="outer")
+    middle_iv = Var(type=scalar, name="middle")
+    inner_iv = Var(type=scalar, name="inner")
+
+    outer_value = Call(type=scalar, target=ReLU(), args=(outer_iv,))
+    middle_values = [Call(type=scalar, target=ReLU(), args=(middle_iv,))]
+    for _ in range(4):
+        middle_values.append(
+            Call(type=scalar, target=ReLU(), args=(middle_values[-1],))
+        )
+
+    inner = GridRegionExpr(
+        type=scalar,
+        induction_var=inner_iv,
+        carried_args=(),
+        init_args=(outer_value, middle_values[-1]),
+        body=middle_values[-1],
+        yield_values=(),
+        extent=2,
+        step=1,
+    )
+    middle = GridRegionExpr(
+        type=scalar,
+        induction_var=middle_iv,
+        carried_args=(),
+        init_args=(outer_value,),
+        body=inner,
+        yield_values=(),
+        extent=2,
+        step=1,
+    )
+    outer = GridRegionExpr(
+        type=scalar,
+        induction_var=outer_iv,
+        carried_args=(),
+        init_args=(),
+        body=middle,
+        yield_values=(),
+        extent=2,
+        step=1,
+    )
+    function = Function.build(
+        name="nested_variance",
+        params=(),
+        body=outer,
+        return_type=scalar,
+    )
+
+    parent, scope_of = loop_scopes(function)
+
+    assert parent == {
+        id(inner): id(middle),
+        id(middle): id(outer),
+        id(outer): None,
+    }
+    assert scope_of[id(middle_values[-1])] == id(middle)
+
+
 def _relations(target, shape, *args) -> AccessRelations:
     """The registered relation of one op, at the black-box (whole-call) level."""
     operands = (Var(type=make_tensor_type(shape, DType.bf16), name="x"), *args)
@@ -615,6 +751,16 @@ def _analysed_mega() -> tuple[dict[type, list[tuple[object, object]]], tuple[obj
     for expr in (function, *postorder(function.body)):
         for value in expr.metadata:
             found.setdefault(type(value), []).append((value, expr))
+    loop_result = analyze(
+        FlashSplitKDecode,
+        FlashSplitKDecode.entry_function(),
+        analysis="memory",
+        dims={"ctx": 4096},
+    )
+    for expr in postorder(loop_result.function.body):
+        record = get_metadata(expr, LoopFootprintMetadata)
+        if record is not None:
+            found.setdefault(type(record), []).append((record, expr))
     return found, rendered.summary
 
 

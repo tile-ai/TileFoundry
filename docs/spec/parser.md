@@ -166,11 +166,12 @@ gated to the TIR token; using it in HIR is a verify error.
 
 ### 1.4 `Tensor[...]` and `ConstTensor[...]` annotations
 
-`Tensor` and `ConstTensor` are parser-owned **DSL authoring annotation sugar**,
+`Tensor` and `ConstTensor` are parser-owned **DSL authoring type sugar**,
 imported from `tilefoundry.dsl` (`from tilefoundry.dsl import Tensor`). It
 is distinct from the IR-level `tilefoundry.ir.types.TensorType` (the
-runtime carrier on `Expr.type`); the parser resolves a `Tensor[...]`
-annotation into a `TensorType` at parameter / return-binding time.
+runtime carrier on `Expr.type`). The parser resolves a `Tensor[...]` literal
+into a `TensorType` both in parameter/return annotations and in expression
+positions that bind a `TensorType` operation attribute.
 
 ```
 tensor-annot   ::= ('Tensor' | 'ConstTensor') '[' shape ',' dtype (',' layout)? (',' storage)? ']'
@@ -195,6 +196,7 @@ shape) is rejected.
 Tensor[(4096, 2048), "bf16"]
 Tensor[(4096, 2048), "bf16", (4096 @ gpu.cta, 2048)]
 Tensor[(4096, 2048), "bf16", (4096 @ gpu.cta, 2048), "smem"]
+Tensor[(4096 @ gpu.cta, 2048), "bf16", "smem"]       # placement in shape
 Tensor[(), "bf16"]                                    # scalar
 ```
 
@@ -970,30 +972,37 @@ A registered Op has one or more `OpSchema` entries indexed by
 
 ### 4.4 Annotation-driven sugar dispatch
 
-At each attribute slot of a call, the parser consults the matched
-schema's `ParamDef.annotation`:
+At each attribute slot of a call, the parser consults the matched schema's
+`ParamDef.annotation` and invokes `parse_sugar(node, expected, ...)`:
 
-- `annotation=ShardLayout` → `parse_shard_layout_sugar`
-- `annotation=Layout`      → `parse_layout_sugar`
+- `annotation=ShardLayout` → `expected=ShardLayout`
+- `annotation=Layout`      → `expected=Layout`
+- `annotation=TensorType`  → `expected=TensorType`
 
 ```python
-def parse_mesh_layout_sugar(
-    node: ast.AST, *, closure: dict[str, Any] | None = None
-) -> Layout:
-    """Parse mesh-layout tuple sugar.
+def parse_sugar(
+    node: ast.AST,
+    expected: type,
+    *,
+    closure: dict[str, Any] | None = None,
+    mesh_resolver: Callable[[str], Mesh] | None = None,
+) -> Layout | ShardLayout | TensorType | None:
+    """Parse one type-directed layout or tensor-type sugar form.
 
     Args:
         node: Static tuple syntax.
+        expected: Required result family.
         closure: Optional static-name bindings.
+        mesh_resolver: Optional lexical mesh lookup.
 
     Returns:
-        The parsed mesh layout.
+        The parsed value, or None when a TensorType head is not recognised.
     """
     ...
 ```
 
 - constraints:
-  - `parse_mesh_layout_sugar` MUST resolve closure-bound integer extents and
+  - The `Layout` branch MUST resolve closure-bound integer extents and
     MUST derive C-order strides when the tuple omits them.
 
 Sugar dispatch is annotation-driven, not name-driven: an attribute
@@ -1009,14 +1018,16 @@ Attribute string normalization is also annotation-driven:
 - A string-valued Enum annotation resolves by Enum value and rejects any other
   string with a `VerifyError`.
 
-### 4.5 `Tensor[...]` annotation surface
+### 4.5 `Tensor[...]` type-literal surface
 
-`Tensor[shape, dtype, layout, storage]` is recognised by
-`try_parse_sugar_tensor_type`, which is the entry point shared by
-both `@func` and `@prim_func` parsers when reading parameter and
-return-type annotations. The shape and dtype slots are required;
-the layout and storage slots are optional. The same routine reads
-the layout sugar described in [§1.4](#14-tensor-and-consttensor-annotations).
+`Tensor[shape, dtype, layout, storage]` is recognised by `parse_sugar`, the
+single public entry point for `Layout`, `ShardLayout`, and `TensorType` sugar.
+The caller supplies the expected result type plus contextual closure and mesh
+resolution. Both `@func` and `@prim_func` annotations and body expression
+positions use this entry point. The shape and dtype slots are required; layout
+and storage are optional. Placement sugar MAY appear directly in the shape
+slot, in which case the third slot is storage and no separate layout slot is
+accepted.
 
 The dtype slot MUST resolve to the canonical descriptor named by its string.
 Unknown names MUST be rejected and MUST NOT silently select `DType.f32`.

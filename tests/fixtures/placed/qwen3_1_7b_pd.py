@@ -46,6 +46,7 @@ DN_QKV, DN_O, DN_FFN, DN_DOWN = 32, 16, 48, 16
 
 _H200 = CudaTarget("nvidia.h200_sxm")
 
+
 @module(
     entry="model",
     target=_H200,
@@ -87,7 +88,7 @@ class PrefillLayer:
             p = qkv
             for m in tile(SEQ, ROWS):  # noqa: F405
                 for n in tile(QKV_N, BN):  # noqa: F405
-                    acc = tf.reshard(tf.zeros((ROWS, BN), dtype="f32"), (ROWS, BN), "rmem")
+                    acc = tf.zeros(Tensor[(ROWS, BN), "f32", (ROWS, BN), "rmem"])
                     for k in tile(HID, BK):  # noqa: F405
                         xt = tf.reshard(xb[m, k], (ROWS, BK), "smem")
                         wt = tf.reshard(
@@ -120,13 +121,9 @@ class PrefillLayer:
                 for kv in tile(HKV, 1):  # noqa: F405
                     for g in tile(G, 1):  # noqa: F405
                         qh = tf.reshard(tf.reshape(qb[m, kv, g, 0:D], (ROWS, D)), (ROWS, D), "smem")
-                        mx = tf.reshard(
-                            tf.zeros((ROWS, 1), dtype="f32") - 30000.0,
-                            (ROWS, 1),
-                            "rmem",
-                        )
-                        lr = tf.reshard(tf.zeros((ROWS, 1), dtype="f32"), (ROWS, 1), "rmem")
-                        acc = tf.reshard(tf.zeros((ROWS, D), dtype="f32"), (ROWS, D), "rmem")
+                        mx = tf.zeros(Tensor[(ROWS, 1), "f32", (ROWS, 1), "rmem"]) - 30000.0
+                        lr = tf.zeros(Tensor[(ROWS, 1), "f32", (ROWS, 1), "rmem"])
+                        acc = tf.zeros(Tensor[(ROWS, D), "f32", (ROWS, D), "rmem"])
                         for c in tile(CTX + SEQ, BKV):  # noqa: F405
                             khb = tf.reshard(
                                 tf.reshape(kc2[0:1, c, kv, 0:D], (BKV, D)), (BKV, D), "smem"
@@ -157,7 +154,7 @@ class PrefillLayer:
             hb = h1
             for m in tile(SEQ, ROWS):  # noqa: F405
                 for n in tile(HID, BN):  # noqa: F405
-                    op = tf.reshard(tf.zeros((ROWS, BN), dtype="f32"), (ROWS, BN), "rmem")
+                    op = tf.zeros(Tensor[(ROWS, BN), "f32", (ROWS, BN), "rmem"])
                     for k in tile(QN, BK):  # noqa: F405
                         xt = tf.reshard(af[m, k], (ROWS, BK), "smem")
                         wt = tf.reshard(
@@ -175,7 +172,7 @@ class PrefillLayer:
             for m in tile(SEQ, ROWS):  # noqa: F405
                 xn1 = tf.rms_norm(hb[m, 0:HID], g_post)
                 for n in tile(FFN, BN):  # noqa: F405
-                    gv = tf.reshard(tf.zeros((ROWS, BN), dtype="f32"), (ROWS, BN), "rmem")
+                    gv = tf.zeros(Tensor[(ROWS, BN), "f32", (ROWS, BN), "rmem"])
                     for k in tile(HID, BK):  # noqa: F405
                         wk = tf.reshape(w_gu[k, 0:1, n], (BK, BN))
                         xt = tf.reshard(xn1[0:ROWS, k], (ROWS, BK), "smem")
@@ -188,7 +185,7 @@ class PrefillLayer:
                         (m, 0, n),
                     )
                 for n in tile(FFN, BN):  # noqa: F405
-                    gv = tf.reshard(tf.zeros((ROWS, BN), dtype="f32"), (ROWS, BN), "rmem")
+                    gv = tf.zeros(Tensor[(ROWS, BN), "f32", (ROWS, BN), "rmem"])
                     for k in tile(HID, BK):  # noqa: F405
                         wk = tf.reshape(w_gu[k, 1:2, n], (BK, BN))
                         xt = tf.reshard(xn1[0:ROWS, k], (ROWS, BK), "smem")
@@ -212,7 +209,7 @@ class PrefillLayer:
             o = out
             for m in tile(SEQ, ROWS):  # noqa: F405
                 for n in tile(HID, BN):  # noqa: F405
-                    dp = tf.reshard(tf.zeros((ROWS, BN), dtype="f32"), (ROWS, BN), "rmem")
+                    dp = tf.zeros(Tensor[(ROWS, BN), "f32", (ROWS, BN), "rmem"])
                     for k in tile(FFN, BK):  # noqa: F405
                         xt = tf.reshard(acb[m, k], (ROWS, BK), "smem")
                         wt = tf.reshard(
@@ -226,7 +223,6 @@ class PrefillLayer:
                     sm = tf.cast(tf.cast(hr, dtype="f32") + dp, dtype="bf16")
                     o = tf.insert_slice(o, tf.reshard(sm, (ROWS, BN), "gmem"), (m, n))
         return o
-
 
     @func
     def layer_decode(
@@ -260,7 +256,7 @@ class PrefillLayer:
 
             p = qkv
             for n in tile(QKV_N, DN_QKV):  # noqa: F405
-                acc = tf.reshard(tf.zeros((1, DN_QKV), dtype="f32"), (1, DN_QKV), "rmem")
+                acc = tf.zeros(Tensor[(1, DN_QKV), "f32", (1, DN_QKV), "rmem"])
                 for k in tile(HID, BK):  # noqa: F405
                     xt = tf.reshard(xb[0:1, k], (1, BK), "smem")
                     wt = tf.reshard(
@@ -291,9 +287,9 @@ class PrefillLayer:
             for kv in tile(HKV, 1):  # noqa: F405
                 for g in tile(G, 1):  # noqa: F405
                     qh = tf.reshard(tf.reshape(qb[0:1, kv, g, 0:D], (1, D)), (1, D), "smem")
-                    mx = tf.reshard(tf.zeros((1, 1), dtype="f32") - 30000.0, (1, 1), "rmem")
-                    lr = tf.reshard(tf.zeros((1, 1), dtype="f32"), (1, 1), "rmem")
-                    acc = tf.reshard(tf.zeros((1, D), dtype="f32"), (1, D), "rmem")
+                    mx = tf.zeros(Tensor[(1, 1), "f32", (1, 1), "rmem"]) - 30000.0
+                    lr = tf.zeros(Tensor[(1, 1), "f32", (1, 1), "rmem"])
+                    acc = tf.zeros(Tensor[(1, D), "f32", (1, D), "rmem"])
                     for c in tile(CTX + SEQ, BKV):  # noqa: F405
                         khb = tf.reshard(
                             tf.reshape(kc2[0:1, c, kv, 0:D], (BKV, D)), (BKV, D), "smem"
@@ -317,7 +313,7 @@ class PrefillLayer:
             af = tf.reshape(ab, (SEQ, QN))
             hb = h1
             for n in tile(HID, DN_O):  # noqa: F405
-                op = tf.reshard(tf.zeros((1, DN_O), dtype="f32"), (1, DN_O), "rmem")
+                op = tf.zeros(Tensor[(1, DN_O), "f32", (1, DN_O), "rmem"])
                 for k in tile(QN, BK):  # noqa: F405
                     xt = tf.reshard(af[0:1, k], (1, BK), "smem")
                     wt = tf.reshard(
@@ -334,7 +330,7 @@ class PrefillLayer:
             gb = gu
             xn1 = tf.rms_norm(hb[0:1, 0:HID], g_post)
             for n in tile(FFN, DN_FFN):  # noqa: F405
-                gv = tf.reshard(tf.zeros((1, DN_FFN), dtype="f32"), (1, DN_FFN), "rmem")
+                gv = tf.zeros(Tensor[(1, DN_FFN), "f32", (1, DN_FFN), "rmem"])
                 for k in tile(HID, BK):  # noqa: F405
                     xt = tf.reshard(xn1[0:1, k], (1, BK), "smem")
                     wt = tf.reshard(
@@ -350,7 +346,7 @@ class PrefillLayer:
                     (0, 0, n),
                 )
             for n in tile(FFN, DN_FFN):  # noqa: F405
-                uv = tf.reshard(tf.zeros((1, DN_FFN), dtype="f32"), (1, DN_FFN), "rmem")
+                uv = tf.zeros(Tensor[(1, DN_FFN), "f32", (1, DN_FFN), "rmem"])
                 for k in tile(HID, BK):  # noqa: F405
                     xt = tf.reshard(xn1[0:1, k], (1, BK), "smem")
                     wt = tf.reshard(
@@ -375,7 +371,7 @@ class PrefillLayer:
 
             o = out
             for n in tile(HID, DN_DOWN):  # noqa: F405
-                dp = tf.reshard(tf.zeros((1, DN_DOWN), dtype="f32"), (1, DN_DOWN), "rmem")
+                dp = tf.zeros(Tensor[(1, DN_DOWN), "f32", (1, DN_DOWN), "rmem"])
                 for k in tile(FFN, BK):  # noqa: F405
                     xt = tf.reshard(acb[0:1, k], (1, BK), "smem")
                     wt = tf.reshard(
@@ -498,7 +494,7 @@ class PrefillLayer:
             for m in tile(SEQ, ROWS):  # noqa: F405
                 hf = tf.rms_norm(h[m, 0:HID], g_final)
                 for n in tile(V, BN):  # noqa: F405
-                    acc = tf.reshard(tf.zeros((ROWS, BN), dtype="f32"), (ROWS, BN), "rmem")
+                    acc = tf.zeros(Tensor[(ROWS, BN), "f32", (ROWS, BN), "rmem"])
                     for k in tile(HID, BK):  # noqa: F405
                         xt = tf.reshard(hf[0:ROWS, k], (ROWS, BK), "smem")
                         wt = tf.reshard(
@@ -576,7 +572,7 @@ class PrefillLayer:
             lg = logits
             hf = tf.rms_norm(h[0:1, 0:HID], g_final)
             for n in tile(V, BN):  # noqa: F405
-                acc = tf.reshard(tf.zeros((1, BN), dtype="f32"), (1, BN), "rmem")
+                acc = tf.zeros(Tensor[(1, BN), "f32", (1, BN), "rmem"])
                 for k in tile(HID, BK):  # noqa: F405
                     xt = tf.reshard(hf[0:1, k], (1, BK), "smem")
                     wt = tf.reshard(w_head[k, n], (BK, BN), "smem")

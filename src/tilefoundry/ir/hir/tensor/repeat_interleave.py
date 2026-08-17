@@ -16,7 +16,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     register_type_relation,
 )
-from tilefoundry.visitor_registry.relation_build import build_domain
+from tilefoundry.visitor_registry.relation_build import build_domain, identity_map
 
 
 @register_op(name="repeat_interleave")
@@ -62,7 +62,7 @@ def _repeat_interleave_relation(call: "Call", input_types, ctx) -> AccessRelatio
     src = "[" + ", ".join(dims) + "]"
     in_dims = [f"floor({dims[i]}/{repeats})" if i == ax else dims[i] for i in range(rank)]
     in_map = isl.map(f"{{ {src} -> [{', '.join(in_dims)}] }}")
-    out_map = isl.map(f"{{ {src} -> [{', '.join(dims)}] }}")
+    out_map = identity_map(rank)
     return AccessRelationResult(domain=build_domain(tuple(out_shape)), maps=(in_map, out_map))
 
 

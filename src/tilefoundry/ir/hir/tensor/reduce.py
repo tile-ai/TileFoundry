@@ -26,7 +26,7 @@ from tilefoundry.visitor_registry.access_relation import (
     build_relation,
     register_type_relation,
 )
-from tilefoundry.visitor_registry.relation_build import build_domain
+from tilefoundry.visitor_registry.relation_build import build_domain, identity_map
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 __all__ = ["ReduceKind", "Reduce"]
@@ -60,7 +60,7 @@ def _reduce_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
     reduced = _reduced_axes(call, rank)
     dims = [f"d{i}" for i in range(rank)]
     src = "[" + ", ".join(dims) + "]"
-    in_map = isl.map(f"{{ {src} -> [{', '.join(dims)}] }}")
+    in_map = identity_map(rank)
     out_dims = dims if call.target.keepdim else [dims[i] for i in range(rank) if i not in reduced]
     out_map = isl.map(f"{{ {src} -> [{', '.join(out_dims)}] }}")
     return AccessRelationResult(domain=build_domain(x.shape), maps=(in_map, out_map))

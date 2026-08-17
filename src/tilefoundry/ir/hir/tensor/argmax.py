@@ -32,7 +32,7 @@ from tilefoundry.visitor_registry.access_relation import (
     register_access_relation,
     register_type_relation,
 )
-from tilefoundry.visitor_registry.relation_build import build_domain
+from tilefoundry.visitor_registry.relation_build import build_domain, identity_map
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
@@ -112,7 +112,7 @@ def _argmax_type_relation(call: "Call", input_types, ctx) -> AccessRelationResul
     return AccessRelationResult(
         domain=build_domain(x.shape),
         maps=(
-            isl.map(f"{{ {source} -> [{', '.join(dims)}] }}"),
+            identity_map(rank),
             isl.map(f"{{ {source} -> [{', '.join(output)}] }}"),
         ),
     )

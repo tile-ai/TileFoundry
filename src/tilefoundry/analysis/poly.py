@@ -324,6 +324,8 @@ def _local_type(ty: TensorType) -> TensorType:
     Partial, broadcast, and dynamic mesh axes consume no tensor axis. Keeping
     this conversion here makes every registered relation sharding-aware.
     """
+    if not isinstance(ty, TensorType):
+        return ty
     layout = shard_layout_of(ty.layout)
     if layout is None:
         return ty

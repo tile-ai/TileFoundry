@@ -24,6 +24,7 @@ from tests.fixtures.shapes.window_programs import WindowCost
 from tilefoundry import func, module
 from tilefoundry.analysis import (
     ComputeCostMetadata,
+    LoopFootprintMetadata,
     MemoryHierarchyFacts,
     MemoryMetadata,
     MemoryRelationKind,
@@ -47,7 +48,7 @@ from tilefoundry.inspection.analysis_report import (
 )
 from tilefoundry.inspection.values import render_comment
 from tilefoundry.ir.core import Call, Constant, Tuple, Var, get_metadata
-from tilefoundry.ir.hir import Function
+from tilefoundry.ir.hir import Function, GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import DType, TensorType, TupleType, make_tensor_type, numel, tensor_bytes
@@ -168,7 +169,7 @@ class _Rotated:
 class _Allocated:
     @func
     def main(source: Tensor[(64,), "f32"]):
-        return tf.add(source, tf.zeros(shape=(64,), dtype="f32"))
+        return tf.add(source, tf.zeros(Tensor[(64,), "f32"]))
 
 
 @module(entry="row", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
@@ -197,7 +198,7 @@ class _UnmaterializedValueCosts:
     @func
     def main(source: Tensor[(8, 4), "f32"]):
         shape_value = tf.shape_of(source)[1]
-        return tf.zeros(shape=(shape_value,), dtype="i64", storage="umat")
+        return tf.zeros(Tensor[(shape_value,), "i64", "umat"])
 
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
@@ -211,8 +212,8 @@ class _RuntimeCoordinateCosts:
 class _UnmaterializedIndexTensorCosts:
     @func
     def main():
-        row_positions = tf.reshape(tf.arange(128), new_shape=(1, 128))
-        column_positions = tf.reshape(tf.arange(128), new_shape=(128, 1))
+        row_positions = tf.reshape(tf.arange(Tensor[(128,), "i64", "gmem"]), new_shape=(1, 128))
+        column_positions = tf.reshape(tf.arange(Tensor[(128,), "i64", "gmem"]), new_shape=(128, 1))
         return row_positions <= column_positions
 
 
@@ -346,9 +347,14 @@ def _modest_shared(source: Tensor[(1024,), "f32"]):
         return tf.add(local, local)
 
 
-@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4),))
 def _oversized_working_set(source: Tensor[(16_000_000,), "f32"]):
-    return tf.add(source, source)
+    with Mesh(("cta",), layout=(4,), names=("tile",)) as _cta:
+        broadcast = tf.reshard(source, (16_000_000,), "gmem")
+        result = broadcast
+        for i in tile(2, 1):  # noqa: F405
+            result = tf.add(result, broadcast)
+        return result
 
 
 def _entry(owner):
@@ -638,7 +644,7 @@ def test_slice_costs_coordinates_but_not_the_view() -> None:
 def test_unmaterialized_shape_values_are_not_charged_as_attributes() -> None:
     function = _UnmaterializedValueCosts.entry_function()
     zeros = _calls(function)[-1]
-    shape_value = zeros.target.shape[0]
+    shape_value = zeros.target.type.shape[0]
     assert shape_value.type.storage is StorageKind.UMAT
     assert shape_value not in zeros.args
     assert zeros.type.storage is StorageKind.UMAT
@@ -666,16 +672,16 @@ def test_mixed_runtime_coordinates_are_charged_per_leaf() -> None:
     assert record.operands[1] == TrafficBytes(read=16)
 
 
-def test_non_scalar_unmaterialized_operands_are_charged_at_rmem() -> None:
+def test_typed_arange_operands_are_charged_at_their_declared_storage() -> None:
     function = _UnmaterializedIndexTensorCosts.entry_function()
     result = analyze(_UnmaterializedIndexTensorCosts, function, analysis="compute-cost")
 
     (binary,) = [call for call in _calls(result.function) if isinstance(call.target, Binary)]
     assert tuple(arg.type.shape for arg in binary.args) == ((1, 128), (128, 1))
-    assert all(arg.type.storage is StorageKind.UMAT for arg in binary.args)
+    assert all(arg.type.storage is StorageKind.GMEM for arg in binary.args)
     record = get_metadata(binary, ComputeCostMetadata)
     assert record is not None
-    assert record.traffic == (("rmem", TrafficBytes(read=2_048)),)
+    assert record.traffic == (("gmem", TrafficBytes(read=2_048, write=2_048)),)
     assert record.operands == (
         TrafficBytes(read=1_024),
         TrafficBytes(read=1_024),
@@ -857,22 +863,22 @@ def test_analysis_snapshot_drift_sentinel() -> None:
         "shared_largest_tile_bytes": 211_200,
         "gmem_lhs_bytes": 4_325_376,
         "modest_shared_bytes": 4_096,
-        "placed_ideal_ns": (3_496, 65_447),
+        "placed_ideal_ns": (3_501, 65_447),
         "placed_traffic": (
             {
-                "gmem": {"read": 8_390_656, "write": 8_388_608},
-                "rmem": {"read": 17_256, "write": 0},
+                "gmem": {"read": 8_407_240, "write": 8_396_936},
+                "rmem": {"read": 672, "write": 0},
                     "smem": {"read": 21_669_568, "write": 21_432_000},
             },
             {
-                "gmem": {"read": 4_194_304, "write": 8_388_608},
-                "rmem": {"read": 279_488, "write": 0},
+                "gmem": {"read": 4_472_832, "write": 8_536_064},
+                "rmem": {"read": 960, "write": 0},
                     "smem": {"read": 794_492_928, "write": 484_114_432},
             },
         ),
         "flash_split_traffic": {
-            "gmem": {"read": 2_132_480, "write": 35_328},
-            "rmem": {"read": 400, "write": 104},
+            "gmem": {"read": 2_099_264, "write": 2_048},
+            "rmem": {"read": 336, "write": 104},
             "smem": {"read": 11_899_776, "write": 11_578_752},
         },
         "flash_split_offset_slice_traffic": (
@@ -905,7 +911,30 @@ def test_a_cache_too_small_is_advisory_and_only_where_the_scopes_agree() -> None
     assert any("l2 holds" in note for note in record.advisories)
     assert not any("l1 holds" in note for note in record.advisories)
 
-    lines = render_text(render_analysis(result)).splitlines()
+    loop = next(
+        expr
+        for expr in postorder(entry.body)
+        if isinstance(expr, GridRegionExpr)
+    )
+    footprint = get_metadata(loop, LoopFootprintMetadata)
+    assert footprint is not None and footprint.known
+    assert len(footprint.footprints) == 2
+    assert all(
+        item.device_bytes == item.bytes == 64_000_000
+        for item in footprint.footprints
+    )
+
+    rendered = render_analysis(result)
+    assert rendered.data["loops"][0]["cache-pressure"] == [
+        {
+            "cache_level": "l2",
+            "backing_level": "gmem",
+            "device_bytes": 128_000_000,
+            "capacity_bytes": 50_000_000,
+            "status": "exceeds",
+        }
+    ]
+    lines = render_text(rendered).splitlines()
     assert [f"# advisory={json.dumps(note)}" for note in record.advisories] == [
         line for line in lines if line.startswith("# advisory")
     ]

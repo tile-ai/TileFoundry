@@ -5,9 +5,8 @@ Shared bottom layer ``_parse_layout_literal()`` extracts shape + strides
 from a tuple AST node.  Target-specific entry points lower the literal
 to ``Layout`` or ``ShardLayout``.
 
-Consumers (type annotation, ``with Mesh``, body ``reshard`` calls) call
-the same parser helpers; the only contextual difference is the
-``mesh_resolver`` callable for ``ShardLayout`` sugar.
+Consumers call :func:`parse_sugar` with the expected result type; contextual
+differences are closure lookup and mesh resolution.
 """
 
 from __future__ import annotations
@@ -49,9 +48,6 @@ class LayoutSugarError(VerifyError):
     back to generic static evaluation on a plain ``ValueError``) MUST let this
     propagate so the real diagnostic is not masked by a downstream error.
     """
-
-
-
 
 
 def _is_constant(node: ast.AST) -> bool:
@@ -191,6 +187,8 @@ def _resolve_dtype_ast(node: ast.AST, closure: dict[str, Any]) -> DType | None:
         val = closure.get(node.id)
         if isinstance(val, DType):
             return val
+        if isinstance(val, str):
+            return DType._members().get(val)
         return DType._members().get(node.id)
     if isinstance(node, ast.Attribute):
         try:
@@ -200,9 +198,6 @@ def _resolve_dtype_ast(node: ast.AST, closure: dict[str, Any]) -> DType | None:
         except ValueError:
             pass
     return None
-
-
-
 
 
 def _resolve_mesh(name: str, mesh_by_name: dict[str, Mesh]) -> Mesh:
@@ -231,12 +226,7 @@ def _resolve_mesh_axis(mesh: Mesh, axis_name: str) -> int:
         if index < len(mesh.layout.shape):
             return index
     available = list(mesh.names) if mesh.names else ["x", "y", "z"][: len(mesh.layout.shape)]
-    raise VerifyError(
-        f"mesh has no axis named {axis_name!r}; available: {available}"
-    )
-
-
-
+    raise VerifyError(f"mesh has no axis named {axis_name!r}; available: {available}")
 
 
 def _parse_layout_literal(
@@ -249,13 +239,15 @@ def _parse_layout_literal(
     parser handles axis binding. A closure may resolve named static dimensions.
     """
     if isinstance(node, ast.Tuple):
-        if len(node.elts) == 2 and isinstance(node.elts[0], ast.Tuple) and isinstance(node.elts[1], ast.Tuple):
-
+        if (
+            len(node.elts) == 2
+            and isinstance(node.elts[0], ast.Tuple)
+            and isinstance(node.elts[1], ast.Tuple)
+        ):
             dim_nodes = list(node.elts[0].elts)
             strides = _eval_ast(node.elts[1], closure)
             shape = tuple(_extract_dim(dn, closure=closure) for dn in dim_nodes)
         else:
-
             dim_nodes = list(node.elts)
             strides = None
             shape = tuple(_extract_dim(dn, closure=closure) for dn in dim_nodes)
@@ -263,22 +255,25 @@ def _parse_layout_literal(
         shape = (_extract_dim(node, closure=closure),)
         strides = None
     else:
-        raise VerifyError(f"expected tuple layout literal, got {ast.dump(node)}")
+        try:
+            resolved = _eval_ast(node, closure)
+        except ValueError:
+            resolved = None
+        if not isinstance(resolved, tuple) or not all(_is_shape_dim(dim) for dim in resolved):
+            raise VerifyError(f"expected tuple layout literal, got {ast.dump(node)}")
+        shape = resolved
+        strides = None
 
     if strides is not None:
         if not isinstance(strides, tuple):
             raise VerifyError(f"strides must be a tuple, got {strides!r}")
         if len(strides) != len(shape):
-            raise VerifyError(
-                f"strides rank {len(strides)} != layout shape rank {len(shape)}"
-            )
+            raise VerifyError(f"strides rank {len(strides)} != layout shape rank {len(shape)}")
 
     return shape, strides
 
 
-def _extract_dim(
-    node: ast.AST, *, closure: dict[str, Any] | None = None
-) -> ShapeDim:
+def _extract_dim(node: ast.AST, *, closure: dict[str, Any] | None = None) -> ShapeDim:
     """Extract a static or symbolic dimension from a layout dim node.
 
     Handles: plain ``Constant(32)``, closure/global ``Name`` references bound to
@@ -307,43 +302,17 @@ def _extract_dim(
     return val
 
 
-
-
-
-def parse_layout_sugar(node: ast.AST) -> Layout:
-    """Parse a tuple sugar as a plain ``Layout``.
-
-    >>> parse_layout_sugar(ast.parse("(1, 1536)", mode="eval").body)
-    Layout(shape=(1, 1536), strides=(1536, 1))
-    """
-    shape, strides = _parse_layout_literal(node)
-    if strides is None:
-        strides = _auto_strides(shape)
-    return Layout(shape=shape, strides=strides)
-
-
-def parse_mesh_layout_sugar(
-    node: ast.AST, *, closure: dict[str, Any] | None = None
-) -> Layout:
-    """Parse a mesh's layout tuple sugar as a ``Layout``.
-
-    ``closure`` lets mesh dims be closure/global ``int`` names (e.g. a
-    ``WARPS = 4`` constant used as ``(WARPS, LANES)``).
-
-    >>> parse_mesh_layout_sugar(ast.parse("(128,)", mode="eval").body)
-    Layout(shape=(128,), strides=(1,))
-    """
+def _parse_layout_sugar(node: ast.AST, *, closure: dict[str, Any] | None = None) -> Layout:
     shape, strides = _parse_layout_literal(node, closure=closure)
     if strides is None:
         strides = _auto_strides(shape)
     return Layout(shape=shape, strides=strides)
 
 
-
 MeshResolver = Callable[[str], Mesh]
 
 
-def parse_shard_layout_sugar(
+def _parse_shard_layout_sugar(
     node: ast.AST,
     mesh_resolver: MeshResolver,
     *,
@@ -363,7 +332,6 @@ def parse_shard_layout_sugar(
 
     dim_nodes = _get_dim_nodes(axis_node)
 
-
     canonicalize = strides is None
     parsed: list[_LayoutItem] = []
     for dn in dim_nodes:
@@ -372,9 +340,7 @@ def parse_shard_layout_sugar(
         )
 
     value_states = (
-        _parse_value_state(value_set_node, mesh_resolver)
-        if value_set_node is not None
-        else []
+        _parse_value_state(value_set_node, mesh_resolver) if value_set_node is not None else []
     )
 
     shape: list[int] = []
@@ -426,10 +392,6 @@ def parse_shard_layout_sugar(
             raise VerifyError(f"mesh axis {m_axis} already bound")
         attrs_list[m_axis] = Partial(reduction or "sum")
 
-
-
-
-
     return ShardLayout(
         layout=Layout(shape=tuple(shape), strides=strides),
         attrs=tuple(attrs_list),
@@ -455,17 +417,13 @@ def _split_layout_outer(
     if not isinstance(node, ast.Tuple):
         raise VerifyError(f"expected tuple layout, got {ast.dump(node)}")
 
-
     if node.elts and isinstance(node.elts[0], ast.Tuple):
         axis_node = node.elts[0]
         strides = None
         value_set: ast.Set | None = None
         for elt in node.elts[1:]:
             if value_set is not None:
-
-                raise VerifyError(
-                    "layout sugar: the value-state set must be the last outer item"
-                )
+                raise VerifyError("layout sugar: the value-state set must be the last outer item")
             if isinstance(elt, ast.Set):
                 value_set = elt
             elif isinstance(elt, ast.Tuple):
@@ -482,9 +440,7 @@ def _split_layout_outer(
     return node, None, None
 
 
-def _parse_value_state(
-    node: "ast.Set", mesh_resolver: MeshResolver
-) -> list[tuple[Mesh, int, str]]:
+def _parse_value_state(node: "ast.Set", mesh_resolver: MeshResolver) -> list[tuple[Mesh, int, str]]:
     """Parse value-state entries into mesh-axis reductions.
 
     Parse a ``{mesh.axis @ P("reduction"), ...}`` value-state set into a list
@@ -501,12 +457,11 @@ def _parse_value_state(
             and elt.right.func.id == "P"
         ):
             raise VerifyError(
-                'value-state entry must be `mesh.axis @ P("reduction")`, got '
-                f"{ast.dump(elt)}"
+                f'value-state entry must be `mesh.axis @ P("reduction")`, got {ast.dump(elt)}'
             )
         if len(elt.right.args) != 1:
             raise VerifyError(
-                'value-state P(...) requires exactly one reduction argument, '
+                "value-state P(...) requires exactly one reduction argument, "
                 'e.g. `mesh.axis @ P("sum")`'
             )
         mesh_name, axis_name = _parse_axis_ref(elt.left)
@@ -526,13 +481,16 @@ def _get_dim_nodes(node: ast.AST) -> list[ast.AST]:
     ``1536 @ (m.w, m.t)`` without a wrapping tuple).
     """
     if isinstance(node, ast.Tuple):
-        if len(node.elts) == 2 and isinstance(node.elts[0], ast.Tuple) and isinstance(node.elts[1], ast.Tuple):
+        if (
+            len(node.elts) == 2
+            and isinstance(node.elts[0], ast.Tuple)
+            and isinstance(node.elts[1], ast.Tuple)
+        ):
             return list(node.elts[0].elts)
         return list(node.elts)
     if _is_constant(node) or _is_matmul(node):
         return [node]
     raise VerifyError(f"expected tuple layout, got {ast.dump(node)}")
-
 
 
 _LayoutItem = tuple[ShapeDim | None, Mesh | None, int | None, str, str | None]
@@ -559,7 +517,6 @@ def _parse_layout_item(
     if _is_constant(node):
         return [(_extract_dim(node, closure=closure), None, None, "broadcast", None)]
 
-
     if _is_matmul(node):
         rhs = node.right
         dim = None if _is_placeholder(node.left) else _extract_dim(node.left, closure=closure)
@@ -571,7 +528,6 @@ def _parse_layout_item(
         if isinstance(rhs, ast.Tuple):
             return _expand_multi_axis_sugar(dim, rhs.elts, mesh_resolver)
 
-
         if isinstance(rhs, ast.Attribute):
             mesh_name, axis_name = _parse_axis_ref(rhs)
             mesh = mesh_resolver(mesh_name)
@@ -581,10 +537,6 @@ def _parse_layout_item(
             if not canonicalize:
                 return [(dim, mesh, axis, "split", None)]
             return _canonicalize_single_axis(dim, mesh, axis)
-
-
-
-
 
         if isinstance(rhs, ast.Name):
             mesh = mesh_resolver(rhs.id)
@@ -599,10 +551,6 @@ def _parse_layout_item(
             if not canonicalize:
                 return [(dim, mesh, 0, "split", None)]
             return _canonicalize_single_axis(dim, mesh, 0)
-
-
-
-
 
     if closure is not None:
         try:
@@ -739,90 +687,126 @@ def _parse_axis_ref(node: ast.AST) -> tuple[str, str]:
     raise VerifyError(f"expected mesh.axis (e.g. gpu.cluster), got {ast.dump(node)}")
 
 
-
-
-
-def try_parse_sugar_tensor_type(
+def _parse_tensor_type_sugar(
     node: ast.AST,
     closure: dict[str, Any],
+    *,
+    mesh_resolver: MeshResolver | None = None,
+    default_mesh: Mesh | None = None,
 ) -> TensorType | None:
-    """Parse a tensor annotation containing layout sugar.
-
-    Constant and mutable annotations produce the same tensor type; callers set
-    constness from the head name. Return ``None`` for non-sugar annotations so
-    callers can evaluate the verbose shard-layout form.
-    See [parser §1.4](docs/spec/parser.md#14-tensor-and-consttensor-annotations).
-    """
+    """Parse a ``Tensor[...]`` or ``ConstTensor[...]`` type literal."""
     if not isinstance(node, ast.Subscript):
         return None
-    if not isinstance(node.value, ast.Name) or node.value.id not in (
-        "Tensor", "ConstTensor",
-    ):
+    head = node.value.id if isinstance(node.value, ast.Name) else None
+    if isinstance(node.value, ast.Attribute):
+        head = node.value.attr
+    if head not in ("Tensor", "ConstTensor"):
         return None
     if not isinstance(node.slice, ast.Tuple):
-        return None
+        raise VerifyError("Tensor[...] requires shape and dtype slots")
     elts = node.slice.elts
-    if len(elts) < 2:
-        return None
+    if len(elts) not in (2, 3, 4):
+        raise VerifyError("Tensor[...] requires shape, dtype, and optional layout/storage")
 
-
-    has_sugar = any(_has_sugar(elt) for elt in elts[2:])
-
-
-    mesh_by_name: dict[str, Mesh] = {}
-    for key, val in closure.items():
-        if isinstance(val, Mesh):
-            mesh_by_name[key] = val
-
-
-    if not has_sugar and len(elts) >= 3:
-        third = elts[2]
-        if mesh_by_name and (isinstance(third, ast.Tuple) or _is_layout_slot_constant(third)):
-            has_sugar = True
-
-    if not has_sugar:
-        return None
-
-    try:
-        shape = _eval_ast(elts[0])
-    except ValueError:
-        return None
-    if not isinstance(shape, tuple):
-        return None
-
+    shape, _ = _parse_layout_literal(elts[0], closure=closure)
     dtype_val = _resolve_dtype_ast(elts[1], closure)
     if dtype_val is None:
-        return None
+        raise VerifyError(f"unknown tensor dtype {ast.unparse(elts[1])!r}")
+
+    meshes = {key: value for key, value in closure.items() if isinstance(value, Mesh)}
+    resolver = mesh_resolver or meshes.get
+    if default_mesh is None and len(meshes) == 1:
+        default_mesh = next(iter(meshes.values()))
 
     layout = None
     storage = StorageKind.GMEM
+    embedded_layout = _has_sugar(elts[0])
+    if embedded_layout:
+        layout = _parse_shard_layout_sugar(
+            elts[0], resolver, default_mesh=default_mesh, closure=closure
+        )
+
     if len(elts) >= 3:
-
-        default_mesh = next(iter(mesh_by_name.values())) if len(mesh_by_name) == 1 else None
-        sl = parse_shard_layout_sugar(elts[2], mesh_by_name.get, default_mesh=default_mesh)
-
-
-
-
-
-
-
-
-
-        if sl.layout.strides is None:
-            sl = ShardLayout(
-                layout=Layout(
-                    shape=sl.layout.shape,
-                    strides=_auto_strides(sl.layout.shape),
-                ),
-                attrs=sl.attrs,
-                mesh=sl.mesh,
+        third = elts[2]
+        if isinstance(third, ast.Constant) and third.value is None:
+            pass
+        else:
+            try:
+                third_value = _eval_ast(third, closure)
+            except ValueError:
+                third_value = None
+            try:
+                storage_value = resolve_storage(third_value)
+            except (TypeError, ValueError):
+                storage_value = None
+            if storage_value is not None:
+                storage = storage_value
+            else:
+                if embedded_layout:
+                    raise VerifyError(
+                        "Tensor[...] cannot specify placement in both shape and layout slots"
+                    )
+                if isinstance(third_value, (Layout, ShardLayout)):
+                    layout = third_value
+                else:
+                    layout = _parse_shard_layout_sugar(
+                        third, resolver, default_mesh=default_mesh, closure=closure
+                    )
+    if len(elts) == 4:
+        if embedded_layout:
+            raise VerifyError(
+                "Tensor[...] with placement in its shape takes storage as the third slot"
             )
-        layout = sl
-    if len(elts) >= 4:
-        try:
-            storage = resolve_storage(_eval_ast(elts[3], closure))
-        except ValueError:
-            return None
+        storage = resolve_storage(_eval_ast(elts[3], closure))
 
+    if (
+        isinstance(layout, ShardLayout)
+        and isinstance(layout.layout, Layout)
+        and layout.layout.strides is None
+    ):
+        layout = ShardLayout(
+            layout=Layout(
+                shape=layout.layout.shape,
+                strides=_auto_strides(layout.layout.shape),
+            ),
+            attrs=layout.attrs,
+            mesh=layout.mesh,
+        )
     return TensorType(shape=shape, dtype=dtype_val, layout=layout, storage=storage)
+
+
+def parse_sugar(
+    node: ast.AST,
+    expected: type,
+    *,
+    closure: dict[str, Any] | None = None,
+    mesh_resolver: MeshResolver | None = None,
+    default_mesh: Mesh | None = None,
+) -> Layout | ShardLayout | TensorType | None:
+    """Parse one type-directed layout or tensor-type sugar form."""
+    closure = closure or {}
+    if expected is Layout:
+        return _parse_layout_sugar(node, closure=closure)
+    if expected is ShardLayout:
+        if mesh_resolver is None:
+            meshes = {key: value for key, value in closure.items() if isinstance(value, Mesh)}
+            mesh_resolver = meshes.get
+            if default_mesh is None and len(meshes) == 1:
+                default_mesh = next(iter(meshes.values()))
+        return _parse_shard_layout_sugar(
+            node,
+            mesh_resolver,
+            default_mesh=default_mesh,
+            closure=closure,
+        )
+    if expected is TensorType:
+        return _parse_tensor_type_sugar(
+            node,
+            closure,
+            mesh_resolver=mesh_resolver,
+            default_mesh=default_mesh,
+        )
+    raise TypeError(f"unsupported sugar result type {expected!r}")
+
+
+__all__ = ["LayoutSugarError", "parse_sugar"]

@@ -56,7 +56,6 @@ MODELS: tuple[str, ...] = (
     "kimi_linear_48b_a3b",
 )
 
-
 def _cases(package: str) -> tuple[ModelCase, ...]:
     """The `CASES` the named package states, one per Module it selects from.
 
@@ -93,9 +92,10 @@ def _cases(package: str) -> tuple[ModelCase, ...]:
     return cases
 
 
+# The authored-loop kernels are corpus inputs, not models shipped in the catalog.
 CORPUS: tuple[ModelCase, ...] = tuple(
     case for package in MODELS for case in _cases(package)
-)
+) + _cases("access_footprint")
 
 
 def case(case_id: str) -> ModelCase:
@@ -111,7 +111,8 @@ def cases_of(model_id: str) -> tuple[ModelCase, ...]:
     """Every case the model called *model_id* states, in the order it states them."""
     found = tuple(model for model in CORPUS if model.model == model_id)
     if not found:
-        raise KeyError(f"no model {model_id!r} in the corpus; it holds {MODELS}")
+        known = tuple(dict.fromkeys(case.model for case in CORPUS))
+        raise KeyError(f"no model {model_id!r} in the corpus; it holds {known}")
     return found
 
 

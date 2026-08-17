@@ -658,6 +658,25 @@ their input when it states one. An input with `layout=None` produces a view with
   The result type describes a full window; whether a loop iteration can contain
   that window is an analysis-domain question, not a type-inference question.
 
+##### Concat
+
+`Concat(inputs..., axis=a)` materializes a rank-preserving tensor by joining
+each input segment along `a`. All inputs MUST have one common rank and dtype,
+and every non-concatenated dimension MUST match. Negative `axis` values resolve
+against that rank. The output's concatenated extent is the sum of the input
+extents; every input access map is defined only on its segment and subtracts
+the preceding segments' extent from that axis, while the output map is the
+identity.
+
+Type inference derives fresh output ownership from those access maps. A
+`Split` on a non-concatenated axis MAY propagate when shared ownership
+propagation proves a zero-offset projection. A `Split` on the concatenated axis
+MUST be rejected, including when it appears only on the zero-offset first
+input, and the diagnostic MUST require an explicit `Reshard` before `Concat`.
+Dynamic ownership, incompatible meshes, nonuniform `Partial` states, and an
+unrepresentable derived layout MUST likewise fail with the `Reshard` remedy.
+An output with no real sharding receives a fresh C-order `Layout`.
+
 ##### Rank and ShapeOf
 
 - `Rank` produces a rank-0 `i64`; `ShapeOf` produces a rank-1 `i64` vector with
@@ -672,15 +691,15 @@ their input when it states one. An input with `layout=None` produces a view with
 
 ##### Arange
 
-`Arange(end, start=0, step=1, dtype=i64)` produces the one-dimensional half-open
-integer sequence `[start, end)` in `i32` or `i64`. `start` and `end` MUST be
-static or symbolic `ShapeDim` attributes and specialization MUST substitute
-them just as it substitutes tuple-valued shape attributes. `step` MUST be a
-positive static integer. A statically negative interval is rejected. The
-result extent is `ceildiv(end - start, step)`, with `layout=None` and
-`storage=umat`. Coordinates are synthesized without standalone traffic; their
-consumers own any materialization. The op has type, evaluation, access-relation,
-and cost semantics but no HIR-to-TIR lowering or codegen contract.
+`Arange(type, start=0, step=1)` produces exactly `type.shape[0]` integer values,
+starting at `start` and separated by `step`. `type` MUST be a rank-one
+`TensorType` with `i32` or `i64` dtype. `start` MUST be a static or symbolic
+`ShapeDim`; `step` MUST be a positive static integer. The complete result type,
+including layout and storage, is the supplied `type`; type inference MUST return
+it rather than constructing another type. Coordinates are synthesized without
+standalone traffic; their consumers own any materialization. The op has type,
+evaluation, access-relation, and cost semantics but no HIR-to-TIR lowering or
+codegen contract.
 
 ##### Where
 
@@ -1022,22 +1041,26 @@ operation and is not an HIR op.
 ##### Zeros
 ```python
 class Zeros(Op):
-    """Allocate a zero-initialised tensor; produces a Tensor.
+    """Allocate a zero-initialised tensor of one complete type.
 
     Attributes:
-        shape: attribute; output logical shape.
-        dtype: attribute; output dtype.
-        storage: attribute; output storage kind.
+        type: attribute; complete output TensorType.
     """
 
-    shape: tuple[ShapeDim, ...]
-    dtype: DType
-    storage: StorageKind = StorageKind.GMEM
+    type: TensorType
 ```
 - constraints:
-  - The result is zero-initialised and its logical shape is exactly `shape`.
-  - Evaluation MUST resolve every symbolic shape entry from the function's
+  - Type inference MUST return `type` without reconstructing any part of it.
+  - The result is zero-initialised and its logical shape is exactly `type.shape`.
+  - Evaluation MUST resolve every symbolic entry of `type.shape` from the function's
     dimension bindings before allocating the concrete tensor.
+
+Ops whose result type is determined entirely by attributes, including `Zeros`
+and `Arange`, MUST accept one complete `TensorType`; shape, dtype, layout, and
+storage MUST NOT be split across independent attributes. Transforming ops whose
+result type is partly inherited from an input, including `Reshard`, `Cast`, and
+`Transpose`, MUST instead carry exactly the portions they change and inherit the
+rest from that input.
 
 ##### Reduce
 ```python

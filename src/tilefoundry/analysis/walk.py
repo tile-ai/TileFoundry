@@ -78,6 +78,46 @@ def loop_repeated_values(loop: GridRegionExpr) -> set[int]:
     return repeated
 
 
+def loop_scopes(
+    fn: Function,
+) -> tuple[dict[int, int | None], dict[int, int | None]]:
+    """Return loop parents and the innermost scope of each schedulable expression.
+
+    ``parent`` is keyed by ``GridRegionExpr`` identity. ``scope_of`` is keyed
+    only by ``Call`` and ``GridRegionExpr`` identities; calls map to their
+    innermost repeated loop, while loops map to their parent loop.
+    """
+    values = postorder(fn.body)
+    loops = [expr for expr in values if isinstance(expr, GridRegionExpr)]
+    repeated = {id(loop): loop_repeated_values(loop) for loop in loops}
+
+    def innermost(candidates: list[GridRegionExpr]) -> GridRegionExpr:
+        return next(
+            candidate
+            for candidate in candidates
+            if not any(
+                other is not candidate and id(other) in repeated[id(candidate)]
+                for other in candidates
+            )
+        )
+
+    parent: dict[int, int | None] = {}
+    for loop in loops:
+        candidates = [
+            owner for owner in loops if owner is not loop and id(loop) in repeated[id(owner)]
+        ]
+        parent[id(loop)] = id(innermost(candidates)) if candidates else None
+
+    scope_of: dict[int, int | None] = {}
+    for expr in values:
+        if isinstance(expr, Call):
+            candidates = [loop for loop in loops if id(expr) in repeated[id(loop)]]
+            scope_of[id(expr)] = id(innermost(candidates)) if candidates else None
+        elif isinstance(expr, GridRegionExpr):
+            scope_of[id(expr)] = parent[id(expr)]
+    return parent, scope_of
+
+
 def loop_trip_count(loop: GridRegionExpr) -> int:
     """How many times *loop* runs, or one when its bounds are not numbers.
 
@@ -338,6 +378,7 @@ __all__ = [
     "enclosing_trips",
     "entry_function",
     "execution_domain",
+    "loop_scopes",
     "loop_repeated_values",
     "loop_trip_count",
     "owning_module",

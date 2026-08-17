@@ -35,11 +35,11 @@ from tilefoundry.ir.tir.sync import Sync, classify
 from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimAdd, simplify_dim
-from tilefoundry.ir.types.shard import Layout, Mesh, P, Topology
+from tilefoundry.ir.types.shard import Layout, Mesh, P, ShardLayout, Topology
 from tilefoundry.ir.types.shard.layout import ComposedLayout
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.module import _DECLARING
-from tilefoundry.parser.sugar import parse_shard_layout_sugar
+from tilefoundry.parser.sugar import parse_sugar
 from tilefoundry.target import CudaTarget
 
 
@@ -351,7 +351,12 @@ def _unresolved_dynamic_split_axis() -> None:
     other = DimVar("other", 1, 4)
     cta = Mesh((Topology("cta", other),), Layout((other,), (1,)), names=("cta",))
     node = ast.parse("(1, S @ cta, 32, 128)", mode="eval").body
-    parse_shard_layout_sugar(node, lambda n: cta if n == "cta" else None, closure={"S": _S_DYN})
+    parse_sugar(
+        node,
+        ShardLayout,
+        mesh_resolver=lambda n: cta if n == "cta" else None,
+        closure={"S": _S_DYN},
+    )
 
 
 def mesh_dims_reshard_func(warps, lanes):
