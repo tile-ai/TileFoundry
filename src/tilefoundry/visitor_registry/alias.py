@@ -241,7 +241,12 @@ def update_in_place(
 
 
 def prove_alias(call: Call, ctx: AliasContext) -> tuple[AliasKind, tuple[int, ...]] | None:
-    """Ask the Op what it claims, and hold that claim to one base."""
+    """Ask the Op what it claims, and hold that claim to one base.
+
+    Spans may reach fewer operands than the claim names, so a resolved coverage
+    has to land on that same base: a conclusion covers every operand it names,
+    and its reader retires the movement of each.
+    """
     handler = declared_alias(call.target)
     if handler is None:
         return None
@@ -251,15 +256,16 @@ def prove_alias(call: Call, ctx: AliasContext) -> tuple[AliasKind, tuple[int, ..
         return None
     if claim is None or not claim.operands:
         return None
-    if claim.spans:
-        extent = compose(call, claim, ctx)
-        if extent is not None:
-            ctx.record(call, extent.base, extent)
-            return handler.kind, claim.operands
-        if claim.spans_required:
-            return None
     base = _one_base(call, claim.operands, ctx)
     if base is None:
+        return None
+    extent = compose(call, claim, ctx) if claim.spans else None
+    if extent is not None:
+        if extent.base is not base:
+            return None
+        ctx.record(call, base, extent)
+        return handler.kind, claim.operands
+    if claim.spans_required:
         return None
     ctx.record(call, base)
     return handler.kind, claim.operands

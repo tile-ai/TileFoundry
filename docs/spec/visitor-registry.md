@@ -768,10 +768,12 @@ class AliasClaim:
     Attributes:
         operands: attribute; operand positions the result lives in.
         spans: attribute; the runs the result is made of, empty when no address follows.
+        spans_required: attribute; whether the claim holds only where its spans do.
     """
 
     operands: tuple[int, ...]
     spans: tuple[AliasSpan, ...] = ()
+    spans_required: bool = False
 
 alias_registry: AnalysisRegistry[type[Op]]
 def register_alias(op_cls: type[Op], kind: AliasKind, *, destination: int | None = None): ...
@@ -785,12 +787,19 @@ def register_alias(op_cls: type[Op], kind: AliasKind, *, destination: int | None
     indexing happens to be the identity MUST NOT alias its operand on that
     ground alone; only a registered claim can.
   - A claim MUST be held to one base: every named operand MUST resolve to the
-    same owning value, or the conclusion falls back to `PRODUCE`.
+    same owning value, or the conclusion falls back to `PRODUCE`. Spans MAY
+    reach fewer operands than the claim names, so a resolved coverage MUST also
+    land on that same base; a conclusion covers every operand it names.
   - Spans MUST cover the result exactly -- one unbroken run, no gap and no
     overlap -- read in the order the result lays them out, so a claim whose
     pieces are all present but permuted MUST fall back to `PRODUCE`. A claim
     with no spans still concludes which base it lives in, but states no
     address, so it MUST NOT serve as a piece of another claim's coverage.
+  - `spans_required` marks a claim that is only true because of where its
+    pieces sit, so unresolved spans MUST make it `PRODUCE`. Without it, spans
+    are an address the claim offers when it can: unresolved spans leave the
+    claim standing on its named operands, which is what re-indexing one operand
+    is whether or not its address is known.
   - `destination` names the operand an `UPDATE` overwrites. An `UPDATE` MUST NOT
     close over a value the enclosing function does not own.
   - A handler MUST NOT attach metadata, and MUST NOT depend on any analysis

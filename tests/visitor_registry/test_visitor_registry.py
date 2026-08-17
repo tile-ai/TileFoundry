@@ -22,7 +22,16 @@ from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.tir.memory import Copy
 from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, Return, Sequential
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import DType, TensorType, tensor_bytes
+from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.visitor_registry.alias import (
+    AliasClaim,
+    AliasContext,
+    AliasKind,
+    AliasSpan,
+    prove_alias,
+    register_alias,
+)
 from tilefoundry.visitor_registry.contexts import (
     CostContext,
     FunctionScope,
@@ -108,6 +117,43 @@ def test_visitors_fail_closed_when_unregistered() -> None:
         CodegenVisitor(_Ctx(), codegen_cuda_registry, backend="cuda").emit_expr(call)
     with pytest.raises(VerifyError, match="no cost evaluator registered for _UnknownOp"):
         CostEvaluator(CostContext()).visit_Call(call)
+
+
+def test_an_alias_claim_covers_every_operand_it_names() -> None:
+    """Addressing one operand does not conclude anything about a second.
+
+    A conclusion is read as "the result lives in these operands", and its reader
+    retires the movement of each. A handler that names two while proving one
+    would have the reader retire bytes nothing was shown about, so the claim is
+    refused rather than trimmed to the part that held.
+    """
+
+    class _ReachesBoth(Op):
+        pass
+
+    class _ReachesOne(Op):
+        pass
+
+    holds = TensorType(shape=(4,), dtype=DType.f32, layout=None, storage=StorageKind.GMEM)
+    size = tensor_bytes(holds)
+    left = Var(type=holds, name="left")
+    right = Var(type=holds, name="right")
+
+    @register_alias(_ReachesBoth, AliasKind.FORWARD)
+    def _both(call: Call, ctx: AliasContext) -> AliasClaim:
+        return AliasClaim((0,), (AliasSpan(0, 0, size),))
+
+    @register_alias(_ReachesOne, AliasKind.FORWARD)
+    def _one(call: Call, ctx: AliasContext) -> AliasClaim:
+        return AliasClaim((0, 1), (AliasSpan(0, 0, size),))
+
+    context = AliasContext(type_of=lambda expr: expr.type)
+    covered = Call(type=holds, target=_ReachesBoth(), args=(left, right))
+    assert prove_alias(covered, context) == (AliasKind.FORWARD, (0,))
+
+    partial = Call(type=holds, target=_ReachesOne(), args=(left, right))
+    assert prove_alias(partial, context) is None
+    assert id(partial) not in context.bases
 
 
 def test_where_a_walk_reads_is_one_pair_and_nothing_else() -> None:
