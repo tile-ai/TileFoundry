@@ -81,7 +81,7 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
     assert set(payload["function_records"]) == set(families)
     assert len(payload["calls"]) == 7
     assert all(
-        set(row) <= {"value", "compute-cost", "roofline", "timeline"}
+        set(row) - {"timeline"} == {"value", "compute-cost", "roofline"}
         for row in payload["calls"]
     )
     assert [

@@ -673,7 +673,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
     rows = payload["calls"]
     assert len(rows) == 7
     assert all(
-        set(row) <= {"value", "compute-cost", "roofline", "timeline"} for row in rows
+        set(row) - {"timeline"} == {"value", "compute-cost", "roofline"} for row in rows
     )
     timed = [index for index, row in enumerate(rows) if "timeline" in row]
     assert timed == [1, 4, 6]
