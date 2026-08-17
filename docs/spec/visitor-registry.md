@@ -2,9 +2,9 @@
 
 The derived-visitor pattern: every `analysis` / `verify` / `codegen`
 walker is the same template — **base visitor + custom Context +
-per-class registry**. This spec defines the template and its five
+per-class registry**. This spec defines the template and its six
 instances (`typeinfer` / `verify` / `codegen_<target>` / `cost` /
-`hir_lowering`).
+`hir_lowering` / `alias`).
 
 The settled split:
 
@@ -117,7 +117,7 @@ Two node shapes can be registry-dispatched:
   flow, binding, `Evaluate`, user `@intrinsic`. The Stmt subclass is
   the registry key; handler signature is `(stmt: Stmt, ctx) -> T`.
 
-A given analysis registry keys exactly one of the two. The four
+A given analysis registry keys exactly one of the two. The
 instances split as follows:
 
 | Instance | Op-branch handler | Stmt-branch handler | Notes |
@@ -127,6 +127,7 @@ instances split as follows:
 | **codegen_\<target\>** | `(Call, CodegenContext) -> str` | `(Stmt, CodegenContext) -> None` | Both sides are emitted |
 | **cost** | `(Call, CostContext) -> Cost` | `(Stmt, CostContext) -> Cost` (optional) | Recursive-local logical work |
 | **hir_lowering** | `(lowerer, Op, Call) -> Var` | — | HIR-to-TIR lowering; see [§11](#11-instance-5--hir_lowering) |
+| **alias** | `(Call, AliasContext) -> AliasClaim \| None` | — | Where a result's bytes live; see [§12](#12-instance-6--alias) |
 
 Generic control-flow / binding Stmts (`For` / `If` / `While` /
 `LetStmt` / `Sequential` / `MeshScope` / `Return`) are handled by
@@ -136,7 +137,7 @@ through any registry — their semantic rules are owned by
 
 ## 3. `AnalysisRegistry`
 
-All four instances share one registry implementation. It is a
+Every instance shares one registry implementation. It is a
 class-keyed dict with a duplicate-registration guard.
 
 ```python
@@ -723,3 +724,73 @@ def register_hir_lowering(op_cls: type[Op]): ...
   - The registry and decorator are public from `tilefoundry.visitor_registry`.
     Concrete handlers remain beside the pass or target-owned op that defines
     the lowering; see [passes §7.1](./passes.md#71-hirtotirpass).
+
+## 12. Instance 6 — `alias`
+
+`alias_registry` answers one question per Op: which of a Call's operands its
+result's bytes live in, and where inside them. It states no cost. An Op's cost
+evaluator reports what that operation moves, and this registry reports whether
+the result is somewhere those bytes already were; the analysis layer that reads
+both decides what the pair means.
+
+```python
+class AliasKind(enum.Enum):
+    """What an Op claims about where its result's bytes live.
+
+    Attributes:
+        PRODUCE: attribute; the result owns its own bytes.
+        FORWARD: attribute; the result is its operands' bytes.
+        UPDATE: attribute; the result is the destination's bytes, overwritten.
+    """
+
+    PRODUCE = "produce"
+    FORWARD = "forward"
+    UPDATE = "update"
+
+@dataclass(frozen=True)
+class AliasSpan:
+    """One run of bytes inside one operand's own buffer.
+
+    Attributes:
+        operand: attribute; operand position the run is inside.
+        offset: attribute; byte offset of the run in that operand.
+        size: attribute; length of the run, in bytes.
+    """
+
+    operand: int
+    offset: int
+    size: int
+
+@dataclass(frozen=True)
+class AliasClaim:
+    """Which operands a result lives in, and where inside them if known.
+
+    Attributes:
+        operands: attribute; operand positions the result lives in.
+        spans: attribute; the runs the result is made of, empty when no address follows.
+    """
+
+    operands: tuple[int, ...]
+    spans: tuple[AliasSpan, ...] = ()
+
+alias_registry: AnalysisRegistry[type[Op]]
+def register_alias(op_cls: type[Op], kind: AliasKind, *, destination: int | None = None): ...
+```
+
+- constraints:
+  - Handler signature is `(call: Call, ctx: AliasContext) -> AliasClaim | None`.
+    Returning `None` claims nothing, which is the same conclusion as having no
+    handler at all.
+  - An Op with no registered handler MUST conclude `PRODUCE`. An operation whose
+    indexing happens to be the identity MUST NOT alias its operand on that
+    ground alone; only a registered claim can.
+  - A claim MUST be held to one base: every named operand MUST resolve to the
+    same owning value, or the conclusion falls back to `PRODUCE`.
+  - Spans MUST cover the result exactly -- one unbroken run, no gap and no
+    overlap -- or the conclusion falls back to `PRODUCE`. A claim with no spans
+    still concludes, but states no address, so it MUST NOT serve as a piece of
+    another claim's coverage.
+  - `destination` names the operand an `UPDATE` overwrites. An `UPDATE` MUST NOT
+    close over a value the enclosing function does not own.
+  - A handler MUST NOT attach metadata, and MUST NOT depend on any analysis
+    having run: it reads the Types and attributes its own Op already states.

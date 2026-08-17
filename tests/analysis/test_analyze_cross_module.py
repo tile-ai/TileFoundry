@@ -17,7 +17,7 @@ from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tilefoundry import func, module
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.metadata import ComputeCostMetadata
+from tilefoundry.analysis.metadata import BufferAliasMetadata, ComputeCostMetadata
 from tilefoundry.analysis.walk import postorder, reachable_functions, tensor_types
 from tilefoundry.dsl import ConstTensor, DimVar, Tensor, Topology, tf
 from tilefoundry.ir.core import Call, get_metadata
@@ -168,7 +168,7 @@ def test_a_child_declaring_the_caller_hierarchy_is_accepted() -> None:
         analysis="compute-cost",
         dims={"child_topology_extent": 132},
     )
-    assert result.metadata_types == (ComputeCostMetadata,)
+    assert result.metadata_types == (ComputeCostMetadata, BufferAliasMetadata)
 
 
 @pytest.mark.parametrize("name,root", REFERENCE_PROGRAMS, ids=[n for n, _ in REFERENCE_PROGRAMS])
@@ -176,7 +176,7 @@ def test_each_reference_program_is_one_analysable_kernel(name, root) -> None:
     """The shared programs measure as one root each; what a call means is not restated."""
     result = analyze(root, root.entry_function(), analysis="compute-cost")
 
-    assert result.metadata_types == (ComputeCostMetadata,)
+    assert result.metadata_types == (ComputeCostMetadata, BufferAliasMetadata)
 
 
 def _placed_primitives(fn) -> list[tuple[str, object]]:

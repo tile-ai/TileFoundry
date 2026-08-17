@@ -32,6 +32,14 @@ from tilefoundry.visitor_registry.access_relation import (
     build_relation,
     register_type_relation,
 )
+from tilefoundry.visitor_registry.alias import (
+    AliasClaim,
+    AliasContext,
+    AliasKind,
+    AliasSpan,
+    register_alias,
+    same_placement,
+)
 from tilefoundry.visitor_registry.isl_utility import to_domain
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
@@ -62,6 +70,26 @@ def _axis(call: "Call", ctx: "TypeInferContext", rank: int) -> int:
     if not (0 <= axis < rank):
         ctx.error(call, f"axis {raw_axis} out of range for input rank {rank}")
     return axis
+
+
+@register_alias(Concat, AliasKind.FORWARD)
+def _concat_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
+    """Putting pieces side by side is free only when they already lie that way.
+
+    Every input is claimed whole; composition then holds them to one base and to
+    one unbroken run, which is what a concatenation of a value's own pieces is
+    and what a concatenation of unrelated values is not.
+    """
+    result = ctx.type_of(call)
+    spans: list[AliasSpan] = []
+    for index, arg in enumerate(call.args):
+        if not same_placement(ctx.type_of(arg), result):
+            return None
+        size = ctx.bytes_of(arg)
+        if size is None or size == 0:
+            return None
+        spans.append(AliasSpan(index, 0, size))
+    return AliasClaim(tuple(range(len(call.args))), tuple(spans))
 
 
 @register_type_relation(Concat)

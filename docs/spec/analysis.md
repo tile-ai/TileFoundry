@@ -327,7 +327,7 @@ Each owns its record types and declares its dependencies and output additions.
 
 | Selector | Requires | Owns | Attaches to | Rests on | Text summary adds | Annotates equations |
 |---|---|---|---|---|---|---|
-| `compute-cost` | - | `ComputeCostMetadata` | every measured Call and the Function | the authored program | `compute-cost` | every measured Call |
+| `compute-cost` | - | `ComputeCostMetadata`, `BufferAliasMetadata` | `ComputeCostMetadata` on every measured Call and the Function; `BufferAliasMetadata` on every measured Call | the authored program | `compute-cost` | every measured Call |
 | `memory` | `compute-cost` | `MemoryMetadata`, `LoopFootprintMetadata` | `MemoryMetadata` on the Function; `LoopFootprintMetadata` on every `GridRegionExpr` | the authored program, `MemoryHierarchyFacts` | `peak-footprint`, `advisory` | none |
 | `roofline` | `memory`, `compute-cost` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | bounded dependency evidence, `roofline` | every measured Call |
 | `timeline` | `compute-cost` | `PerformanceMetadata`, `PerformanceSummaryMetadata` | `PerformanceMetadata` on every Call with a modeled duration; `PerformanceSummaryMetadata` on the Function | `ThroughputFacts`, `ParallelCapacityFacts` | `timeline` | every Call with a modeled duration |
@@ -532,6 +532,39 @@ appears only for a primitive Call and contains objects in positional order:
   - Per-level `traffic` and `operands` MUST NOT be assumed equal for a Type that
     occupies several levels: the aggregate is the conservative placement charge
     while the operand entry is the evaluator's movement amount.
+
+This family also settles where each Call's result bytes live, so that the
+families reading it do not each re-derive the answer and disagree.
+
+```python
+class BufferAliasMetadata(IRMetadata):
+    """Where one Call's result bytes live.
+
+    Attributes:
+        kind: attribute; `"produce"`, `"forward"`, or `"update"`, after the proof.
+        aliased_operands: attribute; operand positions the result lives in.
+    """
+
+    kind: str = "produce"
+    aliased_operands: tuple[int, ...] = ()
+```
+
+- constraints:
+  - The conclusion MUST come from the alias proofs of
+    [visitor-registry §12](./visitor-registry.md#12-instance-6--alias) and MUST be
+    written by this family alone. An Op that could forward or update but whose
+    proof did not close MUST be recorded as `"produce"`.
+  - Every position in `aliased_operands` MUST resolve to the same base, so a
+    reader following those operand edges reaches one value. `"produce"` MUST
+    carry no positions.
+  - A `"forward"` or `"update"` conclusion MUST NOT introduce movement, and MUST
+    NOT change what an Op's own cost evaluator reports. It corrects this
+    family's record in exactly two directions: a proven forward retires the copy
+    the operation reported it would make, and an update whose proof did not
+    close carries the untouched part of its destination into a result of its
+    own.
+  - A caller-owned parameter MUST NOT be reused by an update. Donation is a
+    contract with the caller, not a conclusion this family may draw.
 
 #### 2.2.2 `memory`
 

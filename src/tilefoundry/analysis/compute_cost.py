@@ -9,21 +9,27 @@ a target's rates.
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Call, VerifyError
+from tilefoundry.ir.core import Call, Expr, VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types import DType, Type
+from tilefoundry.ir.types import DType, Type, tensor_bytes
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target
+from tilefoundry.visitor_registry.alias import (
+    AliasContext,
+    declared_alias,
+    prove_alias,
+)
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
 from .facts import ThroughputFacts
-from .metadata import ComputeCostMetadata, TrafficBytes
+from .metadata import BufferAliasMetadata, ComputeCostMetadata, TrafficBytes
 from .walk import (
     attach,
     bytes_by_storage,
+    children,
     describe,
     enclosing_trips,
     postorder,
@@ -168,10 +174,99 @@ def _flops(flops: dict) -> tuple[tuple[str, int], ...]:
     return tuple(sorted((dtype.name, value) for dtype, value in flops.items()))
 
 
+def alias_conclusions(fn: Function, evaluator: CostEvaluator) -> dict[int, BufferAliasMetadata]:
+    """Decide, in authored order, where every Call's result bytes live.
+
+    The whole function is indexed first because an in-place write is only sound
+    once nothing that shares the destination will read it again, and that is not
+    a fact about the write itself.
+    """
+    values = postorder(fn.body)
+    positions = {id(expr): index for index, expr in enumerate(values)}
+    users: dict[int, list[Expr]] = {}
+    for expr in values:
+        for child in children(expr):
+            users.setdefault(id(child), []).append(expr)
+    ctx = AliasContext(
+        type_of=evaluator.ctx.type_of,
+        users={key: tuple(value) for key, value in users.items()},
+        positions=positions,
+        caller_owned=frozenset(id(param) for param in fn.params),
+    )
+    conclusions: dict[int, BufferAliasMetadata] = {}
+    for expr in values:
+        if not isinstance(expr, Call):
+            continue
+        proven = prove_alias(expr, ctx)
+        conclusions[id(expr)] = (
+            BufferAliasMetadata()
+            if proven is None
+            else BufferAliasMetadata(proven[0].value, proven[1])
+        )
+    return conclusions
+
+
+def _aliased_cost(
+    call: Call, cost: Cost, alias: BufferAliasMetadata, result_type: Type
+) -> Cost:
+    """Correct one operation's own cost by what the alias proof concluded.
+
+    An operation that reports the copy it would make -- a transpose, a
+    concatenation -- retires those bytes once its result is shown to be where
+    they already were. An in-place write that failed its proof gains the other
+    direction: it has to carry the part of the container it did not touch into a
+    result of its own. Every other operation already reports what it moves.
+    """
+    if alias.kind == "forward" and alias.aliased_operands:
+        return _without_forwarded_movement(call, cost, alias.aliased_operands)
+    destination = declared_alias(call.target)
+    if alias.kind == "produce" and destination is not None and destination.destination is not None:
+        return _with_untouched_copy(call, cost, destination.destination, result_type)
+    return cost
+
+
+def _without_forwarded_movement(
+    call: Call, cost: Cost, operands: tuple[int, ...]
+) -> Cost:
+    """Retire the read of each forwarded operand and the write it fed."""
+    traffic = list(cost.traffic)
+    retired = 0
+    for index in operands:
+        retired += traffic[index].read
+        traffic[index] = TrafficBytes(0, traffic[index].write)
+    result = traffic[-1]
+    if retired > result.write:
+        raise AnalysisError(
+            f"{describe(call)}: the alias proof retires {retired} B of a "
+            f"{result.write} B result"
+        )
+    traffic[-1] = TrafficBytes(result.read, result.write - retired)
+    return Cost(cost.flops, tuple(traffic))
+
+
+def _with_untouched_copy(
+    call: Call, cost: Cost, destination: int, result_type: Type
+) -> Cost:
+    """Charge the part of the container a materialized update has to carry."""
+    traffic = list(cost.traffic)
+    whole = tensor_bytes(result_type)
+    untouched = whole - traffic[-1].write
+    if untouched < 0:
+        raise AnalysisError(
+            f"{describe(call)}: the update writes {traffic[-1].write} B of a "
+            f"{whole} B result"
+        )
+    moved = traffic[destination]
+    traffic[destination] = TrafficBytes(moved.read + untouched, moved.write)
+    traffic[-1] = TrafficBytes(traffic[-1].read, whole)
+    return Cost(cost.flops, tuple(traffic))
+
+
 def _call_cost_record(
     expr: Call,
     whole: CostEvaluator,
     local: CostEvaluator,
+    alias: BufferAliasMetadata | None = None,
 ) -> ComputeCostMetadata:
     """Measure one Call without attaching the resulting record."""
     try:
@@ -179,11 +274,14 @@ def _call_cost_record(
         local_cost = local.visit(expr)
     except (ValueError, VerifyError) as error:
         raise AnalysisError(str(error)) from None
-    traffic_by_level, operands = _call_movement(expr, whole_cost)
     local_types = (
         *(local.ctx.local_type_of(arg) for arg in expr.args),
         local.ctx.local_output_type(expr),
     )
+    if alias is not None:
+        whole_cost = _aliased_cost(expr, whole_cost, alias, whole.ctx.type_of(expr))
+        local_cost = _aliased_cost(expr, local_cost, alias, local_types[-1])
+    traffic_by_level, operands = _call_movement(expr, whole_cost)
     local_traffic, _local_operands = _call_movement(expr, local_cost, local_types)
     return ComputeCostMetadata(
         flops=_flops(whole_cost.flops),
@@ -240,11 +338,14 @@ def analyze_compute_cost(
         traffic: dict[str, TrafficBytes] = {}
         traffic_per_unit: dict[str, TrafficBytes] = {}
         trips = enclosing_trips(fn.body)
+        aliases = alias_conclusions(fn, whole)
         for expr in postorder(fn.body):
             if not isinstance(expr, Call):
                 continue
             count = trips.get(id(expr), 1)
-            record = _call_cost_record(expr, whole, local)
+            alias = aliases[id(expr)]
+            attach(expr, alias)
+            record = _call_cost_record(expr, whole, local, alias)
             attach(expr, record)
             _accumulate(
                 flops,

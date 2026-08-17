@@ -25,6 +25,15 @@ from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.alias import (
+    AliasClaim,
+    AliasContext,
+    AliasKind,
+    dense,
+    forward_whole,
+    register_alias,
+    same_placement,
+)
 
 
 @register_op
@@ -34,6 +43,19 @@ class Reshape(Op):
 
 
 register_access_relation(Reshape)(identity_relations(1))
+
+
+@register_alias(Reshape, AliasKind.FORWARD)
+def _reshape_alias(call: Call, ctx: AliasContext) -> AliasClaim | None:
+    """A reshape re-indexes its input; it never moves the elements.
+
+    The address only follows through when both sides describe one dense run, so
+    a re-indexing across some other layout forwards without one.
+    """
+    source, result = ctx.type_of(call.args[0]), ctx.type_of(call)
+    if same_placement(source, result) and dense(source) and dense(result):
+        return forward_whole(call, 0, ctx)
+    return AliasClaim((0,))
 
 
 def is_induction_var_singleton_reshape(expr) -> bool:

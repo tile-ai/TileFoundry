@@ -494,9 +494,9 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
             for record in loop_timelines[0]
         )
     ] * 2
-    assert min(record.start_ns for record in loop_timelines[0]) == 652
+    assert min(record.start_ns for record in loop_timelines[0]) == 539
     assert [record.waves for record in root_timelines] == [1, 1]
-    assert [record.timeline.end_ns for record in root_timelines] == [9_129, 16_489]
+    assert [record.timeline.end_ns for record in root_timelines] == [8_903, 16_263]
     assert [record.solver_status for record in root_timelines] == ["optimal"] * 2
 
     roots = []
@@ -538,12 +538,12 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
     assert "; timeline=" not in lines[58]
     repeated = next(row for row in rows if row["value"].startswith("v11:"))
     assert repeated["timeline"]["timeline"] == {
-        "end_ns": 653,
-        "start_ns": 652,
+        "end_ns": 540,
+        "start_ns": 539,
         "stride_ns": 920,
         "trips": 8,
     }
-    assert "timeline=[920t+652,920t+653)*8" in rendered.annotated
+    assert "timeline=[920t+539,920t+540)*8" in rendered.annotated
     assert lines[82].strip() == "m = v16"
     assert "timeline" not in lines[82]
 

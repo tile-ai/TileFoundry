@@ -23,6 +23,7 @@ from tests.fixtures.placed.square_cuda import Model as SquareCuda
 from tests.fixtures.shapes.window_programs import WindowCost
 from tilefoundry import func, module
 from tilefoundry.analysis import (
+    BufferAliasMetadata,
     ComputeCostMetadata,
     LoopFootprintMetadata,
     MemoryHierarchyFacts,
@@ -48,7 +49,7 @@ from tilefoundry.inspection.analysis_report import (
     report,
 )
 from tilefoundry.inspection.values import render_comment
-from tilefoundry.ir.core import Call, Constant, Tuple, Var, get_metadata
+from tilefoundry.ir.core import Call, Constant, Tuple, Var, binding_name, get_metadata
 from tilefoundry.ir.hir import Function, GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.tensor.slice import Slice
@@ -192,6 +193,29 @@ class _MovementCosts:
     def copied(source: Tensor[(1024, 2048), "f32"]):
         selected = source[0:256, :]
         return tf.concat(selected, selected, axis=0)
+
+    @func
+    def tiled(source: Tensor[(1024, 2048), "f32"]):
+        return tf.concat(source[0:512, :], source[512:1024, :], axis=0)
+
+    @func
+    def held(source: Tensor[(1024, 2048), "f32"]):
+        made = tf.add(source, source)
+        window = made[0:256, :]
+        return tf.add(window, window)
+
+    @func
+    def overwritten(source: Tensor[(1024, 2048), "f32"], patch: Tensor[(256, 2048), "f32"]):
+        made = tf.add(source, source)
+        return tf.insert_slice(made, patch, (0, 0))
+
+    @func
+    def read_after_write(
+        source: Tensor[(1024, 2048), "f32"], patch: Tensor[(256, 2048), "f32"]
+    ):
+        made = tf.add(source, source)
+        written = tf.insert_slice(made, patch, (0, 0))
+        return tf.add(written, made)
 
 
 @module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
@@ -590,10 +614,73 @@ def test_movement_costs_follow_each_operations_materialization() -> None:
     selected_bytes = 256 * 2048 * 4
     assert selected_cost.traffic_at("gmem").total_bytes == 0
     assert concat_cost is not None
+    assert get_metadata(concat, BufferAliasMetadata) == BufferAliasMetadata("produce")
     assert concat_cost.traffic_at("gmem") == TrafficBytes(
         read=2 * selected_bytes,
         write=2 * selected_bytes,
     )
+
+    tiled = functions["tiled"]
+    result = analyze(_MovementCosts, tiled, analysis="memory")
+    *windows, joined = _calls(result.function)
+    assert get_metadata(joined, BufferAliasMetadata) == BufferAliasMetadata(
+        "forward", (0, 1)
+    )
+    joined_cost = get_metadata(joined, ComputeCostMetadata)
+    assert joined_cost is not None
+    assert joined_cost.traffic_at("gmem").total_bytes == 0
+    footprint = get_metadata(result.function, MemoryMetadata)
+    assert footprint is not None
+    assert all(item.persistent for item in footprint.lifetimes)
+    assert all(
+        get_metadata(window, BufferAliasMetadata).kind == "forward" for window in windows
+    )
+
+
+def test_an_in_place_write_reuses_its_destination_only_when_nothing_reads_it_again() -> None:
+    """A functional update is free where it is the last reader, and a copy where it is not."""
+    functions = {function.name: function for function in _MovementCosts.functions}
+    whole = 1024 * 2048 * 4
+    window = 256 * 2048 * 4
+
+    result = analyze(_MovementCosts, functions["overwritten"], analysis="memory")
+    _made, write = _calls(result.function)
+    assert get_metadata(write, BufferAliasMetadata) == BufferAliasMetadata("update", (0,))
+    assert get_metadata(write, ComputeCostMetadata).traffic_at("gmem") == TrafficBytes(
+        read=window, write=window
+    )
+    reused = get_metadata(result.function, MemoryMetadata)
+    assert reused is not None
+    assert binding_name(write) not in {item.binding for item in reused.lifetimes}
+
+    result = analyze(_MovementCosts, functions["read_after_write"], analysis="memory")
+    _made, write, _consumer = _calls(result.function)
+    assert get_metadata(write, BufferAliasMetadata) == BufferAliasMetadata("produce")
+    assert get_metadata(write, ComputeCostMetadata).traffic_at("gmem") == TrafficBytes(
+        read=whole, write=whole
+    )
+    materialized = get_metadata(result.function, MemoryMetadata)
+    assert materialized is not None
+    assert (binding_name(write), whole) in {
+        (item.binding, item.bytes) for item in materialized.lifetimes
+    }
+
+
+def test_a_view_keeps_the_buffer_it_reads_alive() -> None:
+    """A base is live while anything reading through it still has a reader."""
+    held = next(function for function in _MovementCosts.functions if function.name == "held")
+    result = analyze(_MovementCosts, held, analysis="memory")
+
+    made, window, consumer = _calls(result.function)
+    assert get_metadata(made, BufferAliasMetadata) == BufferAliasMetadata("produce")
+    assert get_metadata(window, BufferAliasMetadata) == BufferAliasMetadata("forward", (0,))
+    record = get_metadata(result.function, MemoryMetadata)
+    assert record is not None
+    bindings = {item.binding: item for item in record.lifetimes}
+    assert set(bindings) == {"source", binding_name(made), binding_name(consumer)}
+    assert bindings[binding_name(made)].last_used_at == bindings[
+        binding_name(consumer)
+    ].defined_at
 
 
 def test_reshard_costs_no_op_and_cross_storage_copy() -> None:
@@ -732,7 +819,8 @@ def test_memory_footprints_follow_the_owner_recorded_by_the_target() -> None:
     gmem = get_metadata(result.function, MemoryMetadata)
     assert gmem is not None
     gmem_lifetimes = {item.binding: item.bytes for item in gmem.lifetimes if item.level == "gmem"}
-    assert gmem_lifetimes["v0"] == gmem_lifetimes["lhs"]
+    assert "v0" not in gmem_lifetimes
+    assert gmem_lifetimes["lhs"] == tensor_bytes(matmul.params[0].type)
 
     shared = next(fn for fn in _SharedTile.functions if fn.name == "split")
     result = analyze(_SharedTile, shared, analysis="memory")
@@ -869,18 +957,18 @@ def test_analysis_snapshot_drift_sentinel() -> None:
             {
                 "gmem": {"read": 8_407_240, "write": 8_396_936},
                 "rmem": {"read": 672, "write": 0},
-                    "smem": {"read": 21_669_568, "write": 21_432_000},
+                    "smem": {"read": 13_274_816, "write": 13_037_248},
             },
             {
                 "gmem": {"read": 4_472_832, "write": 8_536_064},
                 "rmem": {"read": 960, "write": 0},
-                    "smem": {"read": 794_492_928, "write": 484_114_432},
+                    "smem": {"read": 779_812_864, "write": 469_434_368},
             },
         ),
         "flash_split_traffic": {
             "gmem": {"read": 2_099_264, "write": 2_048},
             "rmem": {"read": 336, "write": 104},
-            "smem": {"read": 11_899_776, "write": 11_578_752},
+            "smem": {"read": 7_701_376, "write": 7_380_352},
         },
         "flash_split_offset_slice_traffic": (
             (

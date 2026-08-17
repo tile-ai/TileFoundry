@@ -21,6 +21,14 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     register_type_relation,
 )
+from tilefoundry.visitor_registry.alias import (
+    AliasClaim,
+    AliasContext,
+    AliasKind,
+    forward_whole,
+    register_alias,
+    same_placement,
+)
 from tilefoundry.visitor_registry.isl_utility import to_domain
 from tilefoundry.visitor_registry.relation_build import identity_map
 
@@ -163,6 +171,24 @@ class Reshard(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     layout = ParamDef(kind="attribute", annotation=ShardLayout, default=None)
     storage = ParamDef(kind="attribute", default=None)
+
+
+@register_alias(Reshard, AliasKind.FORWARD)
+def _reshard_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
+    """A reshard within one storage is a view of it; across storage it is a copy.
+
+    That boundary is the op's own, stated with its cost classification: a layout
+    change alone re-describes the bytes where they already are. The address
+    follows through only when the positions are the same as well.
+    """
+    source, result = ctx.type_of(call.args[0]), ctx.type_of(call)
+    if not isinstance(source, TensorType) or not isinstance(result, TensorType):
+        return None
+    if source.storage != result.storage:
+        return None
+    if not same_placement(source, result):
+        return AliasClaim((0,))
+    return forward_whole(call, 0, ctx)
 
 
 @register_type_relation(Reshard)

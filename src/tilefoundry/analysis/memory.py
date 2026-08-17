@@ -21,8 +21,6 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import Type, local_type_of
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import Target
@@ -35,6 +33,7 @@ from .facts import (
 )
 from .footprint import loop_footprints
 from .metadata import (
+    BufferAliasMetadata,
     BufferFootprint,
     ComputeCostMetadata,
     LevelFootprint,
@@ -78,12 +77,24 @@ class _CachePressure:
 
 
 def _is_view(expr: Expr) -> bool:
-    """Whether *expr* aliases its operand rather than allocating.
+    """Whether *expr* lives in a buffer another value already owns.
 
-    Reshape and Slice re-index the same elements. Other operations produce
-    values at addresses of their own; buffer aliasing may optimize those later.
+    The conclusion is compute-cost's, from a proof against the operation's own
+    addresses. An operation that could have forwarded but did not prove it is
+    recorded as producing, and allocates here like anything else.
     """
-    return isinstance(expr, Call) and isinstance(expr.target, (Reshape, Slice))
+    alias = get_metadata(expr, BufferAliasMetadata)
+    return alias is not None and alias.kind in ("forward", "update")
+
+
+def _base_of(expr: Expr, seen: frozenset[int] = frozenset()) -> Expr:
+    """Follow the proven operand edges to the value that owns the bytes."""
+    if id(expr) in seen:
+        raise AnalysisError(f"{binding_name(expr) or 'a value'} aliases itself")
+    alias = get_metadata(expr, BufferAliasMetadata)
+    if alias is None or not alias.aliased_operands:
+        return expr
+    return _base_of(expr.args[alias.aliased_operands[0]], seen | {id(expr)})
 
 
 def _label(expr: Expr, position: int) -> str:
@@ -149,6 +160,12 @@ def _residencies(
                 )
     if fn.body is not None and id(fn.body) in last_use:
         last_use[id(fn.body)] = len(order) - 1
+    for expr in reversed(order):
+        if not _is_view(expr):
+            continue
+        base = _base_of(expr)
+        if id(base) in last_use:
+            last_use[id(base)] = max(last_use[id(base)], last_use[id(expr)])
 
     labels = _unique_labels(order)
 

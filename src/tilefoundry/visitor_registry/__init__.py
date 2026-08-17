@@ -7,6 +7,7 @@ lightweight registry bits. Contexts and Visitors live in submodules
 """
 from __future__ import annotations
 
+from .alias import alias_registry, register_alias
 from .registries import (
     AnalysisRegistry,
     codegen_cpu_registry,
@@ -25,6 +26,8 @@ from .registries import (
 
 __all__ = [
     "AnalysisRegistry",
+    "alias_registry",
+    "register_alias",
     "typeinfer_registry",
     "verify_stmt_registry",
     "codegen_cuda_registry",

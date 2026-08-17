@@ -9,10 +9,15 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
     """Construct the one standard analysis service named by *selector*."""
     if selector == "compute-cost":
         from tilefoundry.analysis.compute_cost import analyze_compute_cost  # noqa: PLC0415
-        from tilefoundry.analysis.metadata import ComputeCostMetadata  # noqa: PLC0415
+        from tilefoundry.analysis.metadata import (  # noqa: PLC0415
+            BufferAliasMetadata,
+            ComputeCostMetadata,
+        )
 
         return Analyzer(
-            "compute-cost", analyze_compute_cost, produces=(ComputeCostMetadata,)
+            "compute-cost",
+            analyze_compute_cost,
+            produces=(ComputeCostMetadata, BufferAliasMetadata),
         )
     if selector == "memory":
         from tilefoundry.analysis.memory import analyze_memory  # noqa: PLC0415

@@ -207,8 +207,9 @@ def analyze(
         after = _metadata_snapshot(functions)
         records = _require_owned_writes(algorithm, before, after)
         written_records |= records
-        for _expr_id, metadata_type in records:
-            if metadata_type not in order:
+        written = {metadata_type for _expr_id, metadata_type in records}
+        for metadata_type in algorithm.produces:
+            if metadata_type in written and metadata_type not in order:
                 order.append(metadata_type)
 
     final = _metadata_snapshot(functions)

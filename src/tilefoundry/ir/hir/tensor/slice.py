@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue
@@ -21,6 +23,7 @@ from tilefoundry.ir.types.shard import (
     ComposedLayout,
     Layout,
     ShardLayout,
+    try_c_order_strides,
 )
 from tilefoundry.ir.types.shard.shard_layout import (
     layout_axis_to_tensor_axis,
@@ -31,6 +34,15 @@ from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
+)
+from tilefoundry.visitor_registry.alias import (
+    AliasClaim,
+    AliasContext,
+    AliasKind,
+    AliasSpan,
+    dense,
+    register_alias,
+    same_placement,
 )
 
 
@@ -46,6 +58,65 @@ class Slice(Op):
 
 
 register_access_relation(Slice)(identity_relations(2))
+
+
+def _static_window(call: "Call", source: TensorType) -> tuple[int, ...] | None:
+    """The window's per-axis starts, when every one of them is compile-time.
+
+    A stride other than one, a runtime start, or a source extent that is not an
+    integer leaves the window undescribable here, so no address follows from it.
+    """
+    op = call.target
+    starts = call.args[1]
+    if not isinstance(starts, Tuple):
+        return None
+    if any(stride != 1 for stride in op.strides):
+        return None
+    if not all(isinstance(size, int) and not isinstance(size, bool) for size in op.sizes):
+        return None
+    if not all(isinstance(dim, int) and not isinstance(dim, bool) for dim in source.shape):
+        return None
+    values = tuple(_constant_int(start) for start in starts.elements)
+    if any(value is None for value in values):
+        return None
+    return tuple(value for value in values if value is not None)
+
+
+@register_alias(Slice, AliasKind.FORWARD)
+def _slice_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
+    """A window addresses its source; the address follows for one unbroken run.
+
+    That run needs the axes past the narrowed one whole and the ones before it
+    single: any other window is several runs, and naming one offset for it would
+    place bytes that are not there. Such a window still forwards -- it reads its
+    source and nothing else -- it just cannot be a piece of a coverage proof.
+    """
+    source, result = ctx.type_of(call.args[0]), ctx.type_of(call)
+    span = _window_span(call, ctx, source, result)
+    return AliasClaim((0,)) if span is None else AliasClaim((0,), (span,))
+
+
+def _window_span(call: "Call", ctx, source, result) -> "AliasSpan | None":
+    """Where the window sits in its source, when that is one unbroken run."""
+    if not same_placement(source, result) or not dense(source):
+        return None
+    starts = _static_window(call, source)
+    if starts is None:
+        return None
+    sizes, extents = tuple(call.target.sizes), tuple(source.shape)
+    narrowed = [axis for axis, size in enumerate(sizes) if size != extents[axis]]
+    axis = max(narrowed) if narrowed else 0
+    if any(size != 1 for size in sizes[:axis]):
+        return None
+    size = ctx.bytes_of(call)
+    if not size:
+        return None
+    element = size // max(math.prod(sizes), 1)
+    strides = try_c_order_strides(extents)
+    if strides is None:
+        return None
+    offset = sum(start * stride for start, stride in zip(starts, strides)) * element
+    return AliasSpan(0, offset, size)
 
 
 def _i64(value: int) -> Constant:

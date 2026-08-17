@@ -12,6 +12,13 @@ from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.alias import (
+    AliasClaim,
+    AliasContext,
+    AliasKind,
+    register_alias,
+    update_in_place,
+)
 
 
 @register_op(name="insert_slice")
@@ -22,6 +29,12 @@ class InsertSlice(Op):
     update = ParamDef(kind="input", pattern=Tensor)
 
     offsets = ParamDef(kind="input", pattern=Scalar)
+
+
+@register_alias(InsertSlice, AliasKind.UPDATE, destination=0)
+def _insert_slice_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
+    """The window is written into dst; the result is that same buffer."""
+    return update_in_place(call, ctx, destination=0, source=1)
 
 
 def _check_axis(ax: int, dst_ext, upd_ext, off_expr, ctx, call) -> None:

@@ -10,7 +10,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard import ComposedLayout, Layout
+from tilefoundry.ir.types.shard import ComposedLayout, Layout, try_c_order_strides
 from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -19,6 +19,14 @@ from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
     register_type_relation,
+)
+from tilefoundry.visitor_registry.alias import (
+    AliasClaim,
+    AliasContext,
+    AliasKind,
+    forward_whole,
+    register_alias,
+    same_placement,
 )
 from tilefoundry.visitor_registry.relation_build import build_domain, identity_map
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
@@ -31,6 +39,36 @@ class Transpose(Op):
 
 
 register_access_relation(Transpose)(identity_relations(1))
+
+
+def _strides(type_: TensorType) -> tuple | None:
+    """The per-axis strides one position addresses this Type with."""
+    layout = type_.layout
+    shard = shard_layout_of(layout)
+    if shard is not None:
+        layout = shard.layout
+    if not isinstance(layout, Layout) or len(layout.shape) != len(type_.shape):
+        return None
+    if layout.strides is not None:
+        return tuple(layout.strides)
+    return try_c_order_strides(tuple(layout.shape))
+
+
+@register_alias(Transpose, AliasKind.FORWARD)
+def _transpose_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
+    """A permutation that carried its strides along moved no byte."""
+    source, result = ctx.type_of(call.args[0]), ctx.type_of(call)
+    if not same_placement(source, result):
+        return None
+    source_strides, result_strides = _strides(source), _strides(result)
+    if source_strides is None or result_strides is None:
+        return None
+    perm = call.target.perm
+    if len(perm) != len(source_strides):
+        return None
+    if result_strides != tuple(source_strides[axis] for axis in perm):
+        return None
+    return forward_whole(call, 0, ctx)
 
 
 @register_type_relation(Transpose)

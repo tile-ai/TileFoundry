@@ -11,6 +11,14 @@ from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.alias import (
+    AliasClaim,
+    AliasContext,
+    AliasKind,
+    AliasSpan,
+    register_alias,
+    static_bytes,
+)
 
 
 @register_op(name="tuple_get_item")
@@ -26,6 +34,20 @@ class TupleGetItem(Op):
 
 
 register_access_relation(TupleGetItem)(identity_relations(1))
+
+
+@register_alias(TupleGetItem, AliasKind.FORWARD)
+def _tuple_get_item_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
+    """One field is the run of the tuple the earlier fields do not cover."""
+    tuple_type = ctx.type_of(call.args[0])
+    if not isinstance(tuple_type, TupleType):
+        return AliasClaim((0,))
+    sizes = [static_bytes(field) for field in tuple_type.fields]
+    if any(size is None for size in sizes):
+        return AliasClaim((0,))
+    index = call.target.index
+    offset = sum(size for size in sizes[:index] if size is not None)
+    return AliasClaim((0,), (AliasSpan(0, offset, sizes[index] or 0),))
 
 
 @register_typeinfer(TupleGetItem)

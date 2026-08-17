@@ -14,6 +14,13 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.alias import (
+    AliasClaim,
+    AliasContext,
+    AliasKind,
+    register_alias,
+    update_in_place,
+)
 
 
 @register_op(name="cache_update")
@@ -24,6 +31,12 @@ class CacheUpdate(Op):
     cur_pos = ParamDef(kind="input", pattern=Tensor)
     s = ParamDef(kind="input", pattern=Tensor)
     new = ParamDef(kind="input", pattern=Tensor)
+
+
+@register_alias(CacheUpdate, AliasKind.UPDATE, destination=0)
+def _cache_update_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
+    """The new rows are written into the cache; the result is that cache."""
+    return update_in_place(call, ctx, destination=0, source=3)
 
 
 def _is_scalar(shape) -> bool:
