@@ -187,6 +187,12 @@ class _KVCacheAppend:
 
 
 def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
+    """The op charges its window; the analysis adds what reusing the cache would take.
+
+    Here the destination resolves through a reshard to the function's own
+    parameter, which is the caller's storage, so the analysed record carries the
+    rest of the cache into a result of its own instead of writing in place.
+    """
     entry = _KVCacheAppend.entry_function()
     update = next(
         expr
@@ -223,4 +229,11 @@ def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
     assert result.level == "cta"
     assert record is not None
     assert record.flops == record.flops_per_unit == ()
-    assert record.operands == _GLOBAL_TRAFFIC
+    cache_bytes = 2 * 64 * 4 * 8 * 2
+    assert record.operands == (
+        TrafficBytes(read=cache_bytes - _WINDOW_BYTES),
+        TrafficBytes(read=4),
+        TrafficBytes(read=4),
+        TrafficBytes(read=_WINDOW_BYTES),
+        TrafficBytes(write=cache_bytes),
+    )
