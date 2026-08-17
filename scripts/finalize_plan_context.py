@@ -36,6 +36,34 @@ INLINE_POLICY_TAG_RE = re.compile(
 POLICY_CHECK_RE = re.compile(r"^\s*-\s+\[([ xX])\].*<!--\s+policy_(?:ac|final):\s+([\w\-]+)\s+-->")
 CODE_SPAN_RE = re.compile(r"`[^`]*`")
 FENCE_RE = re.compile(r"^\s*(```+|~~~+)")
+TAGGED_FENCE_RE = re.compile(r"^\s*(?:```+|~~~+)\s*([A-Za-z0-9_+#.-]*)\s*$")
+
+CODE_FENCE_LANGUAGES = frozenset(
+    {
+        "bash",
+        "c",
+        "c++",
+        "cc",
+        "cpp",
+        "cs",
+        "csharp",
+        "go",
+        "java",
+        "javascript",
+        "js",
+        "kotlin",
+        "py",
+        "python",
+        "rs",
+        "rust",
+        "sh",
+        "shell",
+        "swift",
+        "ts",
+        "typescript",
+        "zsh",
+    }
+)
 
 
 class FinalizeError(Exception):
@@ -430,6 +458,61 @@ def _require_acceptance(plan: "PlanModel", policies: list[dict[str, Any]]) -> No
                 )
 
 
+def _opening_fence_tags(body: list[str]) -> list[str]:
+    """The language tag of every fenced block opened in *body*.
+
+    Fence state is tracked so a closing fence, which carries no tag, is never read
+    as a second block with an empty one.
+    """
+    tags: list[str] = []
+    inside = False
+    for line in body:
+        match = TAGGED_FENCE_RE.match(line)
+        if match is None:
+            continue
+        if inside:
+            inside = False
+            continue
+        inside = True
+        tags.append(match.group(1).lower())
+    return tags
+
+
+def _require_delivered_shape(plan: "PlanModel") -> None:
+    """Every milestone shows its delivered surface as code.
+
+    A predicate or an access map written as prose makes each reader rebuild it, and
+    two readers rebuild it differently -- which is how a milestone gets built as
+    something the plan never said. The template already carries a fenced block here,
+    so this holds authors to it and to one of ``CODE_FENCE_LANGUAGES``: a ``text``
+    block is printed output, which is what the shape produces rather than the shape.
+    A milestone with no ``Delivered`` at all is left to
+    :func:`_require_acceptance`, so one missing section is not reported twice.
+    """
+    for milestone in plan.milestones:
+        start, end = milestone["target_state_section"]
+        span = _find_section(plan.scan, 5, "Delivered", start + 1, end)
+        if span is None:
+            continue
+        tags = _opening_fence_tags(plan.lines[span[0] + 1 : span[1]])
+        if any(tag in CODE_FENCE_LANGUAGES for tag in tags):
+            continue
+        seen = (
+            "no fenced block at all"
+            if not tags
+            else "only " + ", ".join(f"```{tag or '<untagged>'}" for tag in tags)
+        )
+        raise FinalizeError(
+            f"{plan.path}: milestone {milestone['name']!r} states its "
+            f"`##### Delivered` in prose ({seen}).\n\n"
+            "The template asks for the delivered surface in code or compact "
+            "pseudocode, in a block tagged with a programming language "
+            f"({', '.join(sorted(CODE_FENCE_LANGUAGES))}). A ```text block is "
+            "printed output, which is what the shape produces rather than the "
+            "shape itself, so it does not satisfy this."
+        )
+
+
 def finalize_plan(
     plan_path: Path,
     *,
@@ -447,6 +530,7 @@ def finalize_plan(
     plan = PlanModel(plan_path)
     policies = load_policies(policy_path)
     _require_acceptance(plan, policies)
+    _require_delivered_shape(plan)
 
     plan_matched = filter_policies(policies, plan.plan_related_files)
 

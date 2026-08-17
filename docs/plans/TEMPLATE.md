@@ -36,7 +36,8 @@ target_repo: tilefoundry
 
 ##### Delivered
 <!-- The surface this milestone designs, the behaviour it executes, and its
-     output, in delivered form. Use code or compact pseudocode. -->
+     output, in delivered form. Use code or compact pseudocode, in a fenced
+     block tagged with a programming language. -->
 ```python
 # <delivered code shape>
 ```
