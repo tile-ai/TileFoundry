@@ -1268,7 +1268,10 @@ def test_a_divided_axis_the_layout_also_divides_is_refused() -> None:
 
     Splitting an axis two ways over a source already handed out two ways gives
     each participant one whole part -- but saying which one means knowing where
-    that participant starts, and a projection carries extents alone.
+    that participant starts, and a projection carries extents alone. Refused at
+    the contract the author wrote against, so it is a program this compiler
+    declines rather than one an analysis cannot answer. Dividing an axis the
+    layout leaves whole is expressible and stays legal.
     """
     cta = Topology("cta", 2)
     source = make_shard_tensor_type(
@@ -1278,25 +1281,24 @@ def test_a_divided_axis_the_layout_also_divides_is_refused() -> None:
         dtype=DType.f32,
     )
     held = Var(type=source, name="x")
-    op = SplitOp(axis=0, num_splits=2)
-    inferred = TypeInferVisitor(TypeInferContext()).visit(
-        Call(type=source, target=op, args=(held,))
-    )
-    call = Call(type=inferred, target=op, args=(held,))
-
-    access_relation_registry.lookup(SplitOp)(call, CostContext())
-    with pytest.raises(NotImplementedError, match="itself split across participants"):
-        access_relation_registry.lookup(SplitOp)(
-            call, CostContext(level="cta", topologies=(cta,))
+    with pytest.raises(VerifyError, match="already Split across participants"):
+        TypeInferVisitor(TypeInferContext()).visit(
+            Call(type=source, target=SplitOp(axis=0, num_splits=2), args=(held,))
         )
+
+    TypeInferVisitor(TypeInferContext()).visit(
+        Call(type=source, target=SplitOp(axis=1, num_splits=2), args=(held,))
+    )
 
 
 def test_a_cache_whose_rows_are_split_is_refused() -> None:
     """`cur_pos` is stated against the whole row axis, so a slice of it cannot say.
 
     A batch split is fine and stays fine: each participant writes its own rows
-    at the same position. Splitting the rows themselves is the one that needs an
-    offset nothing here carries.
+    at the same position. Splitting the rows is the case that needs an offset
+    nothing here carries, and it is refused from either side -- a split `new`
+    against a whole cache asks the same question from the other end. So does a
+    batch split only one side agrees to.
     """
     cta = Topology("cta", 2)
     mesh = make_mesh((2,), ("c",), topology=cta)
@@ -1318,14 +1320,28 @@ def test_a_cache_whose_rows_are_split_is_refused() -> None:
         Call(type=batched[0].type, target=CacheUpdate(), args=batched)
     )
 
-    rowwise = (
-        Var(type=split((1, 16, 2, 8), 1), name="cache"),
+    for cache, new in (
+        (split((1, 16, 2, 8), 1), split((1, 4, 2, 8), 1)),
+        (make_tensor_type((1, 16, 2, 8), DType.bf16), split((1, 4, 2, 8), 1)),
+    ):
+        rowwise = (
+            Var(type=cache, name="cache"),
+            *controls,
+            Var(type=new, name="new"),
+        )
+        with pytest.raises(VerifyError, match="row axis is Split across participants"):
+            TypeInferVisitor(TypeInferContext()).visit(
+                Call(type=rowwise[0].type, target=CacheUpdate(), args=rowwise)
+            )
+
+    disagreeing = (
+        Var(type=split((4, 16, 2, 8), 0), name="cache"),
         *controls,
-        Var(type=split((1, 4, 2, 8), 1), name="new"),
+        Var(type=make_tensor_type((4, 4, 2, 8), DType.bf16), name="new"),
     )
-    with pytest.raises(VerifyError, match="the row axis is Split across participants"):
+    with pytest.raises(VerifyError, match="Split on one side and not the other"):
         TypeInferVisitor(TypeInferContext()).visit(
-            Call(type=rowwise[0].type, target=CacheUpdate(), args=rowwise)
+            Call(type=disagreeing[0].type, target=CacheUpdate(), args=disagreeing)
         )
 
 

@@ -17,10 +17,12 @@ from tilefoundry.ir.types.shard import (
     Partial,
     ShardLayout,
     canonical_shard_layout,
+    shard_layout_of,
     try_c_order_strides,
 )
+from tilefoundry.ir.types.shard.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.shard.shard_layout import Split as SplitAttr
-from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis
+from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis, split_target_axes
 from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -31,7 +33,6 @@ from tilefoundry.visitor_registry.access_relation import (
     StorageLink,
     elements_of,
     factored_image,
-    holds_whole_axis,
     logical_coordinates,
     register_access_relation,
     self_image,
@@ -48,6 +49,31 @@ class Split(Op):
     num_splits = ParamDef(kind="attribute", annotation=int)
 
 
+def _reject_redistribution(ctx, call: "Call", x_ty, axis: int, parts: int) -> None:
+    """Refuse dividing an axis the layout already hands out in slices.
+
+    Each participant would hold one whole part, and saying which one means
+    knowing where that participant starts. This wave carries extents and not
+    offsets, so the redistribution is refused at the contract the author wrote
+    against rather than surfacing later as an analysis that cannot answer.
+    """
+    layout = shard_layout_of(x_ty.layout)
+    if layout is None:
+        return
+    targets = split_target_axes(layout, x_ty.shape)
+    mesh = layout.mesh.layout.shape if layout.mesh is not None else ()
+    for mesh_axis, attr in enumerate(layout.attrs):
+        divides = mesh_axis < len(mesh) and mesh[mesh_axis] > 1
+        if isinstance(attr, ShardSplit) and divides and targets[mesh_axis] == axis:
+            ctx.error(
+                call,
+                f"Split: axis {axis} is divided into {parts} parts and is "
+                "already Split across participants, so which part a participant "
+                "holds depends on an offset this analysis does not carry; "
+                "reshard to a replicated layout before the split",
+            )
+
+
 @register_typeinfer(Split)
 def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     x_ty = ctx.type_of(call.args[0])
@@ -59,6 +85,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     n = call.target.num_splits
     if n <= 0:
         ctx.error(call, f"num_splits must be positive, got {n}")
+    _reject_redistribution(ctx, call, x_ty, axis, n)
     orig = x_ty.shape[axis]
     v = static_dim_value(orig)
     if v is not None:
@@ -130,12 +157,6 @@ def _split_access(call: "Call", ctx) -> AccessRelations:
         raise NotImplementedError(
             f"Split access_relation: axis {axis} extent {extent!r} does not "
             f"divide into {parts} static parts"
-        )
-    if not holds_whole_axis(source, logical_source, axis):
-        raise NotImplementedError(
-            f"Split access_relation: axis {axis} is divided into {parts} parts "
-            "and is itself split across participants, so which part a "
-            "participant holds depends on an offset a projection does not carry"
         )
     chunk = extent // parts
 

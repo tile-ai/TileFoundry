@@ -205,33 +205,61 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     cap, s_cap = cache_ty.shape[1], new_ty.shape[1]
     if isinstance(cap, int) and isinstance(s_cap, int) and s_cap > cap:
         ctx.error(call, f"S_CAP {s_cap} exceeds cache capacity {cap}")
-    _reject_split_rows(ctx, call, cache_ty)
+    _reject_split_rows(ctx, call, cache_ty, new_ty)
     return cache_ty
 
 
-def _reject_split_rows(ctx, call: "Call", cache_ty) -> None:
-    """Refuse a cache whose row axis is handed out in slices.
+def _divided_axes(type_) -> set[int]:
+    """Which logical axes a layout really hands out in slices.
 
-    `cur_pos` is stated against the whole row axis, and a participant holding a
-    slice of it would need its own offset to say which of its rows the update
-    covers -- a projection carries extents and not offsets. Every other axis may
-    be split freely: a batch shard writes its own rows at the same position.
+    A `Split` over a mesh axis of one gives the whole axis to the only
+    participant there is, so it divides nothing.
     """
-    layout = shard_layout_of(cache_ty.layout)
+    layout = shard_layout_of(type_.layout)
     if layout is None:
-        return
-    targets = split_target_axes(layout, cache_ty.shape)
+        return set()
+    targets = split_target_axes(layout, type_.shape)
     mesh = layout.mesh.layout.shape if layout.mesh is not None else ()
-    for mesh_axis, attr in enumerate(layout.attrs):
-        divides = mesh_axis < len(mesh) and mesh[mesh_axis] > 1
-        if isinstance(attr, Split) and divides and targets[mesh_axis] == 1:
-            ctx.error(
-                call,
-                "CacheUpdate: the row axis is Split across participants, and "
-                "cur_pos is stated against the whole of it, so which rows a "
-                "participant writes depends on an offset the projection does "
-                "not carry; reshard before the update",
-            )
+    return {
+        targets[mesh_axis]
+        for mesh_axis, attr in enumerate(layout.attrs)
+        if isinstance(attr, Split)
+        and mesh_axis < len(mesh)
+        and mesh[mesh_axis] > 1
+        and targets[mesh_axis] is not None
+    }
+
+
+def _reject_split_rows(ctx, call: "Call", cache_ty, new_ty) -> None:
+    """Refuse an update whose two sides do not own the same thing.
+
+    `cur_pos` is stated against the whole row axis, so a participant holding a
+    slice of it would need its own offset to say which of its rows the update
+    covers. Both sides are asked, because splitting the rows of `new` while the
+    cache stays whole is the same question from the other end.
+
+    Every other axis may be split, and the corpus does split the batch -- but
+    only when both sides agree on it. One side sharded and the other not means
+    a participant writes rows it does not hold, or holds rows nobody wrote.
+    """
+    held, supplied = _divided_axes(cache_ty), _divided_axes(new_ty)
+    if 1 in held or 1 in supplied:
+        ctx.error(
+            call,
+            "CacheUpdate: the row axis is Split across participants, and "
+            "cur_pos is stated against the whole of it, so which rows a "
+            "participant writes depends on an offset the projection does "
+            "not carry; reshard before the update",
+        )
+    disagreed = held ^ supplied
+    if disagreed:
+        axis = min(disagreed)
+        ctx.error(
+            call,
+            f"CacheUpdate: axis {axis} is Split on one side and not the other, "
+            "so a participant would write rows it does not hold; give cache and "
+            "new the same layout before the update",
+        )
 
 
 @register_eval(CacheUpdate)
