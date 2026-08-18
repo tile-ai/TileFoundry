@@ -15,10 +15,11 @@ from dataclasses import dataclass, field
 from tilefoundry.ir.core import Call, Constant, Expr, VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types import DType, TensorType, Type, tensor_bytes
+from tilefoundry.ir.types import DType, TensorType, TupleType, Type, tensor_bytes
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry.access_relation import (
+    AccessRelations,
     StorageEffectClaim,
     StorageEffectKind,
     access_elements,
@@ -241,14 +242,14 @@ def _stated_movement(call: Call, cost: Cost, ctx: CostContext) -> tuple[TrafficB
     operands = (*call.args, call)
     stated: list[TrafficBytes] = []
     for index, (operand, moved) in enumerate(zip(operands, cost.traffic)):
-        is_result = index == len(call.args)
-        quantity = access_elements(
-            relations,
-            boundary=0 if is_result else index,
-            output=is_result,
-        )
-        held = ctx.local_type_of(call) if is_result else ctx.local_type_of(operand)
-        share = _element_share(held, quantity.upper if quantity is not None else None)
+        if index == len(call.args):
+            share = _result_share(relations, ctx.local_type_of(call))
+        else:
+            quantity = access_elements(relations, boundary=index)
+            share = _element_share(
+                ctx.local_type_of(operand),
+                quantity.upper if quantity is not None else None,
+            )
         if share is None:
             stated.append(moved)
             continue
@@ -256,6 +257,27 @@ def _stated_movement(call: Call, cost: Cost, ctx: CostContext) -> tuple[TrafficB
             TrafficBytes(share if moved.read else 0, share if moved.write else 0)
         )
     return tuple(stated)
+
+
+def _result_share(relations: AccessRelations, held: Type) -> int | None:
+    """Bytes the result moves, taking one output boundary per field it has.
+
+    A tuple result is as many boundaries as it has fields, each somewhere of its
+    own that the Op stated separately. Reading only the first would drop the
+    rest, and reading the tuple as one value has no element count to read at
+    all -- either way the Op's own answer is thrown away for a Type's.
+    """
+    fields = held.fields if isinstance(held, TupleType) else (held,)
+    total = 0
+    for position, field_ in enumerate(fields):
+        quantity = access_elements(relations, boundary=position, output=True)
+        share = _element_share(
+            field_, quantity.upper if quantity is not None else None
+        )
+        if share is None:
+            return None
+        total += share
+    return total
 
 
 def _element_share(held: Type, elements: int | None) -> int | None:
@@ -583,13 +605,13 @@ def _call_cost_record(
         *(local.ctx.local_type_of(arg) for arg in expr.args),
         local.ctx.local_output_type(expr),
     )
+    stated = _stated_movement(expr, local_cost, local.ctx)
+    if stated is not None:
+        local_cost = Cost(local_cost.flops, stated, local_cost.service)
     if settled is not None:
         whole_cost = _aliased_cost(expr, whole_cost, settled, whole.ctx.type_of(expr))
         local_cost = _aliased_cost(expr, local_cost, settled, local_types[-1])
     traffic_by_level, operands = _call_movement(expr, whole_cost)
-    stated = _stated_movement(expr, local_cost, local.ctx)
-    if stated is not None:
-        local_cost = Cost(local_cost.flops, stated, local_cost.service)
     local_traffic, _local_operands = _call_movement(expr, local_cost, local_types)
     return ComputeCostMetadata(
         flops=_flops(whole_cost.flops),

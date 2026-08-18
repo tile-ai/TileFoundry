@@ -445,6 +445,14 @@ def _replicated_source(x: Tensor[(16896,), "f32"], bias: Tensor[(1,), "f32"]):
         return tf.reshard(tf.add(local, spread), (16896 @ m.block,), "gmem")
 
 
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
+def _replicated_tuple(x: Tensor[(132, 128), "f32"]):
+    with Mesh(("cta",), layout=(132,), names=("block",)) as m:
+        local = tf.reshard(x, (132 @ m.block, 128), "rmem")
+        chosen, _found = tf.topk(local, k=4, axis=-1)
+        return tf.reshard(chosen, (132 @ m.block, 4), "gmem")
+
+
 @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 def _unplaced_structural(source: Tensor[(), "i64", None, "rmem"]):
     return tf.stack(source, axis=0)
@@ -1920,3 +1928,51 @@ def test_a_participant_is_charged_the_share_of_a_source_it_actually_reads() -> N
     tile_ns = -(-(512 * 1_000_000_000) // services.bandwidth("gmem"))
     assert record.timeline.end_ns - record.timeline.start_ns == tile_ns
     del result
+
+
+def test_a_tuple_result_moves_what_every_field_of_it_states() -> None:
+    """Two outputs are two boundaries, and the result moved both of them.
+
+    A tuple result has one boundary per field. Reading only the first drops the
+    rest; reading the tuple as one value has no element count at all and falls
+    back to the Type the relation replaced. The fields differ in element size,
+    so the sum is not twice either: 4 values at 4 bytes and 4 indices at 8 come
+    to 48, where the first field alone would say 16. The source is replicated,
+    so the read side is one participant's share.
+    """
+    _result, entry = _run(_replicated_tuple, "compute-cost")
+
+    chosen = next(call for call in _calls(entry) if type(call.target).__name__ == "TopK")
+    cost = get_metadata(chosen, ComputeCostMetadata)
+    assert cost.traffic_at("rmem") == TrafficBytes(read=67_584, write=6_336)
+    assert cost.traffic_per_unit_at("rmem") == TrafficBytes(read=512, write=48)
+
+
+def test_an_alias_correction_outlives_the_movement_the_relation_stated() -> None:
+    """What the proof concluded about bytes survives being restated per unit.
+
+    Per-unit movement is rebuilt from the Op's relation, which knows nothing
+    about where the result turned out to live. The proof is applied on top of
+    the rebuild, not under it -- otherwise an in-place write is charged again
+    and a materialised update loses the container it carries. Both are here: the
+    forwarded concat writes nothing, and the materialised update writes the
+    whole 8 MB of which 2 MB was given to it.
+    """
+    functions = {function.name: function for function in _MovementCosts.functions}
+
+    result = analyze(_MovementCosts, functions["tiled"], analysis="compute-cost")
+    *_windows, joined = _calls(result.function)
+    assert get_metadata(joined, BufferAliasMetadata).kind == "forward"
+    forwarded = get_metadata(joined, ComputeCostMetadata)
+    assert forwarded.traffic_per_unit_at("gmem") == TrafficBytes()
+    assert forwarded.traffic_at("gmem") == TrafficBytes()
+
+    result = analyze(_MovementCosts, functions["read_after_write"], analysis="compute-cost")
+    written = next(
+        call for call in _calls(result.function) if type(call.target).__name__ == "InsertSlice"
+    )
+    assert get_metadata(written, BufferAliasMetadata).kind == "produce"
+    carried = get_metadata(written, ComputeCostMetadata)
+    whole = 1024 * 2048 * 4
+    assert carried.traffic_per_unit_at("gmem") == TrafficBytes(read=whole, write=whole)
+    assert carried.traffic_at("gmem") == TrafficBytes(read=whole, write=whole)

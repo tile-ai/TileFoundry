@@ -135,7 +135,7 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
             moves(identity_access(0), 1),
             BoundaryAccess(WindowAccess(tuple(0 for _ in cache), extents), written),
         ),
-        outputs=(moves(identity_access(len(cache)), held),),
+        outputs=(BoundaryAccess(identity_access(len(cache)), written),),
         storage_effect=_cache_update_storage(call, ctx),
     )
 

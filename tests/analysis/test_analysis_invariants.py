@@ -108,7 +108,6 @@ from tilefoundry.schedule.partition import PartitionProgramError, build_partitio
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessQuantity,
     AccessRelations,
     IndexedAccess,
     OperandValue,
@@ -774,7 +773,7 @@ def test_every_boundary_states_the_movement_its_op_performs() -> None:
     )
     assert counted(access_relation_registry.lookup(InsertSlice)(written, ctx)) == (
         [12, 12, 1],
-        [24],
+        [12],
     )
 
     cached = Call(
@@ -789,7 +788,7 @@ def test_every_boundary_states_the_movement_its_op_performs() -> None:
     )
     assert counted(access_relation_registry.lookup(CacheUpdate)(cached, ctx)) == (
         [832, 1, 1, 192],
-        [1024],
+        [192],
     )
 
 
@@ -833,7 +832,7 @@ def test_a_windows_amount_does_not_move_with_where_it_lands() -> None:
         )
 
     top, middle, bottom = written(axes(0, 0)), written(axes(1, 0)), written(axes(2, 0))
-    assert top[:2] == middle[:2] == bottom[:2] == ([12, 12, 1], [24])
+    assert top[:2] == middle[:2] == bottom[:2] == ([12, 12, 1], [12])
     assert top[2].offsets == (0, 0)
     assert bottom[2].offsets == (2, 0)
 
@@ -872,7 +871,9 @@ def test_an_unbound_row_count_states_its_range_and_where_it_came_from() -> None:
     The Op's own contract is that it writes at least one row and no more than
     the fewer of what `new` brought and what the cache holds. That is a range a
     reader can check, and the complement is the same range read from the other
-    side; charging the whole cache would be neither.
+    side; charging the whole cache would be neither. The result says the same
+    range: how big the cache is and how much of it this occurrence wrote are
+    different numbers, and a boundary is asked for the second.
     """
     ctx = TypeInferContext()
     call = Call(
@@ -901,7 +902,7 @@ def test_an_unbound_row_count_states_its_range_and_where_it_came_from() -> None:
     )
     assert kept.pattern.complement
     assert kept.pattern.offsets[1] == OperandValue(operand=1)
-    assert relations.outputs[0].quantity == AccessQuantity(held, held)
+    assert relations.outputs[0].quantity == update.quantity
 
 
 def test_a_lookups_amount_does_not_move_with_the_values_it_looks_up() -> None:

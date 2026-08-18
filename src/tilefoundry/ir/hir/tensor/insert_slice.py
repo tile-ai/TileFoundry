@@ -71,6 +71,11 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     The window is exactly the update's own shape wherever it lands, so both
     sides answer the same size question: the update whole, and the container
     without a hole that size. Only the address moves with the offsets.
+
+    The result states the window too, not the container. How big the result is
+    and how much of it this occurrence wrote are different numbers, and the
+    second is the one a boundary is asked for: the rest of the container was
+    already there, which is what the complement on the destination says.
     """
     result = ctx.local_type_of(call)
     rank = len(result.shape)
@@ -87,7 +92,7 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
             moves(WindowAccess(tuple(0 for _ in extents), extents), window),
             *(moves(identity_access(0), 1) for _ in call.args[2:]),
         ),
-        outputs=(moves(identity_access(rank), elements_of(result)),),
+        outputs=(moves(identity_access(rank), window),),
         storage_effect=_insert_slice_storage(call, ctx),
     )
 
