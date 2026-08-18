@@ -18,10 +18,10 @@ from tilefoundry.visitor_registry.access_relation import (
     StorageEffectClaim,
     build_relation,
     forward_whole,
-    identity_relations,
     register_access_relation,
     register_type_relation,
     same_placement,
+    view_relations,
 )
 from tilefoundry.visitor_registry.relation_build import build_domain, identity_map
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
@@ -62,7 +62,18 @@ def _transpose_storage(call: "Call", ctx) -> StorageEffectClaim | None:
     return forward_whole(call, 0, ctx)
 
 
-register_access_relation(Transpose)(identity_relations(1, _transpose_storage))
+def _transpose_view(call: "Call", ctx) -> "isl.multi_aff":
+    """Result axis k is source axis perm[k], which is the whole of a transpose."""
+    perm = tuple(call.target.perm)
+    dims = [f"d{index}" for index in range(len(perm))]
+    reads = [""] * len(perm)
+    for result_axis, source_axis in enumerate(perm):
+        reads[source_axis] = dims[result_axis]
+    domain = ", ".join(dims)
+    return isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}")
+
+
+register_access_relation(Transpose)(view_relations(0, _transpose_storage, _transpose_view))
 
 
 @register_type_relation(Transpose)

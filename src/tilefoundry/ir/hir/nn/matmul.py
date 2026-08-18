@@ -22,6 +22,7 @@ from tilefoundry.visitor_registry.access_relation import (
     moves,
     register_access_relation,
     register_type_relation,
+    writes,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
 from tilefoundry.visitor_registry.relation_build import shape_from_relation
@@ -75,7 +76,7 @@ def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
             moves(_ident(len(lhs_ty.shape)), elements_of(lhs_ty)),
             moves(_ident(len(rhs_ty.shape)), elements_of(rhs_ty)),
         ),
-        outputs=(moves(_ident(len(out_ty.shape)), elements_of(out_ty)),),
+        outputs=(writes(_ident(len(out_ty.shape)), elements_of(out_ty)),),
     )
 
 

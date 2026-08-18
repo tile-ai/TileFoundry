@@ -26,6 +26,7 @@ from tilefoundry.visitor_registry.access_relation import (
     moves,
     register_access_relation,
     register_type_relation,
+    writes,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
 
@@ -78,7 +79,7 @@ def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
             moves(_identity(rank), elements_of(x_ty)),
             moves(_identity(1), elements_of(w_ty)),
         ),
-        outputs=(moves(_identity(rank), elements_of(x_ty)),),
+        outputs=(writes(_identity(rank), elements_of(x_ty)),),
     )
 
 

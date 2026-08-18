@@ -30,6 +30,7 @@ from tilefoundry.visitor_registry.access_relation import (
     moves,
     register_access_relation,
     register_type_relation,
+    writes,
 )
 from tilefoundry.visitor_registry.relation_build import build_domain, identity_access
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
@@ -149,5 +150,5 @@ def _stack_access(call: "Call", ctx) -> AccessRelations:
             moves(item, elements_of(ctx.local_type_of(arg)))
             for item, arg in zip(inputs, call.args)
         ),
-        outputs=(moves(identity_access(rank), elements_of(result)),),
+        outputs=(writes(identity_access(rank), elements_of(result)),),
     )

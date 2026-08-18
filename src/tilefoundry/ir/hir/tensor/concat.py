@@ -28,18 +28,22 @@ from tilefoundry.ir.types.shard import (
 from tilefoundry.ir.types.shard.shard_layout import split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
+    AccessMode,
+    AccessQuantity,
     AccessRelationResult,
     AccessRelations,
+    BoundaryAccess,
     StorageEffectClaim,
     StorageEffectKind,
+    StorageLink,
     StorageSpan,
     build_relation,
     elements_of,
-    moves,
     register_access_relation,
     register_type_relation,
     same_placement,
     static_bytes,
+    transfers,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
@@ -126,14 +130,37 @@ def _concat_access(call: "Call", ctx) -> AccessRelations:
             )
         )
         offset += extent
+    links, offset = [], 0
+    for index, type_ in enumerate(types):
+        extent = type_.shape[axis]
+        held = elements_of(type_)
+        piece = list(dims)
+        if offset:
+            piece[axis] = f"d{axis} + {offset}"
+        links.append(
+            StorageLink(
+                kind="forward",
+                input=index,
+                source=isl.multi_aff(f"{{ [{domain_text}] -> [{domain_text}] }}"),
+                output=isl.multi_aff(f"{{ [{domain_text}] -> [{', '.join(piece)}] }}"),
+                quantity=AccessQuantity(held, held),
+            )
+        )
+        offset += extent
+    whole = elements_of(ctx.local_type_of(call))
     return AccessRelations(
         inputs=tuple(
-            moves(item, elements_of(type_)) for item, type_ in zip(inputs, types)
+            BoundaryAccess(
+                item, AccessQuantity(elements_of(type_), elements_of(type_)),
+                AccessMode.TRANSFER,
+            )
+            for item, type_ in zip(inputs, types)
         ),
         outputs=(
-            moves(
+            transfers(
                 isl.multi_aff(f"{{ [{domain_text}] -> [{domain_text}] }}"),
-                elements_of(ctx.local_type_of(call)),
+                AccessQuantity(whole, whole),
+                *links,
             ),
         ),
         storage_effect=_concat_storage(call, ctx),

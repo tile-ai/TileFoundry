@@ -27,6 +27,7 @@ from tilefoundry.visitor_registry.access_relation import (
     moves,
     register_access_relation,
     register_type_relation,
+    writes,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
 from tilefoundry.visitor_registry.relation_build import shape_from_relation
@@ -82,7 +83,7 @@ def _where_access_relation(call: "Call", ctx) -> AccessRelations:
             moves(item, elementwise_elements(arg, call, ctx))
             for item, arg in zip(maps[:-1], call.args)
         ),
-        outputs=(moves(maps[-1], elements_of(ctx.local_type_of(call))),),
+        outputs=(writes(maps[-1], elements_of(ctx.local_type_of(call))),),
     )
 
 

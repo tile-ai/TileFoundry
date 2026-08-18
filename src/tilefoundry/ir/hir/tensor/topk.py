@@ -48,6 +48,7 @@ from tilefoundry.visitor_registry.access_relation import (
     moves,
     register_access_relation,
     register_type_relation,
+    writes,
 )
 from tilefoundry.visitor_registry.relation_build import build_domain
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
@@ -269,8 +270,8 @@ def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     return AccessRelations(
         inputs=(moves(in_rel, elements_of(x_ty)),),
         outputs=(
-            moves(out_id, elements_of(fields[0])),
-            moves(out_id, elements_of(fields[1])),
+            writes(out_id, elements_of(fields[0])),
+            writes(out_id, elements_of(fields[1])),
         ),
     )
 

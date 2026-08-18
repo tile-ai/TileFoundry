@@ -18,16 +18,20 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
+    AccessMode,
+    AccessQuantity,
     AccessRelationResult,
     AccessRelations,
+    BoundaryAccess,
     StorageEffectClaim,
     StorageEffectKind,
+    StorageLink,
     elements_of,
     forward_whole,
-    moves,
     register_access_relation,
     register_type_relation,
     same_placement,
+    transfers,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
 from tilefoundry.visitor_registry.relation_build import identity_access, identity_map
@@ -200,9 +204,17 @@ def _reshard_access(call: "Call", ctx) -> AccessRelations:
     """
     rank = len(ctx.local_type_of(call).shape)
     whole = elements_of(ctx.local_type_of(call))
+    held = AccessQuantity(whole, whole)
+    link = StorageLink(
+        kind="forward",
+        input=0,
+        source=identity_access(rank),
+        output=identity_access(rank),
+        quantity=held,
+    )
     return AccessRelations(
-        inputs=(moves(identity_access(rank), whole),),
-        outputs=(moves(identity_access(rank), whole),),
+        inputs=(BoundaryAccess(identity_access(rank), held, AccessMode.TRANSFER),),
+        outputs=(transfers(identity_access(rank), held, link),),
         storage_effect=_reshard_storage(call, ctx),
     )
 

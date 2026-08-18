@@ -27,6 +27,7 @@ from tilefoundry.visitor_registry.access_relation import (
     elements_of,
     moves,
     register_access_relation,
+    writes,
 )
 from tilefoundry.visitor_registry.relation_build import identity_access
 
@@ -136,5 +137,5 @@ def _split_access(call: "Call", ctx) -> AccessRelations:
     per_part = elements_of(source) // parts
     return AccessRelations(
         inputs=(moves(identity_access(rank), elements_of(source)),),
-        outputs=tuple(moves(item, per_part) for item in outputs),
+        outputs=tuple(writes(item, per_part) for item in outputs),
     )

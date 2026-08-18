@@ -15,8 +15,8 @@ from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     elements_of,
-    moves,
     register_access_relation,
+    writes,
 )
 from tilefoundry.visitor_registry.relation_build import identity_access
 
@@ -52,5 +52,5 @@ def _zeros_access(call: "Call", ctx) -> AccessRelations:
     result = ctx.local_type_of(call)
     return AccessRelations(
         inputs=(),
-        outputs=(moves(identity_access(len(result.shape)), elements_of(result)),),
+        outputs=(writes(identity_access(len(result.shape)), elements_of(result)),),
     )

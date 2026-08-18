@@ -15,11 +15,14 @@ from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
+    AccessMode,
     AccessQuantity,
     AccessRelations,
     BoundaryAccess,
     OperandValue,
+    OutputStorage,
     StorageEffectClaim,
+    StorageLink,
     WindowAccess,
     elements_of,
     moves,
@@ -128,14 +131,25 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
     kept = AccessQuantity(
         held - written.upper, held - written.lower, written.provenance
     )
+    complement = WindowAccess(offsets, extents, complement=True)
+    preserve = StorageLink(
+        kind="preserve", input=0, source=complement, output=complement, quantity=kept
+    )
     return AccessRelations(
         inputs=(
-            BoundaryAccess(WindowAccess(offsets, extents, complement=True), kept),
+            BoundaryAccess(complement, kept, AccessMode.TRANSFER),
             moves(identity_access(0), 1),
             moves(identity_access(0), 1),
             BoundaryAccess(WindowAccess(tuple(0 for _ in cache), extents), written),
         ),
-        outputs=(BoundaryAccess(identity_access(len(cache)), written),),
+        outputs=(
+            BoundaryAccess(
+                identity_access(len(cache)),
+                written,
+                AccessMode.WRITE,
+                OutputStorage((preserve,)),
+            ),
+        ),
         storage_effect=_cache_update_storage(call, ctx),
     )
 

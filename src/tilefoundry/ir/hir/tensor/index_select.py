@@ -27,6 +27,7 @@ from tilefoundry.visitor_registry.access_relation import (
     elements_of,
     moves,
     register_access_relation,
+    writes,
 )
 
 
@@ -136,7 +137,7 @@ def _index_select_access_relation(call: "Call", ctx) -> AccessRelations:
             ),
             moves(_identity(idx_rank), elements_of(index_ty)),
         ),
-        outputs=(moves(_identity(out_rank), elements_of(ctx.local_type_of(call))),),
+        outputs=(writes(_identity(out_rank), elements_of(ctx.local_type_of(call))),),
     )
 
 

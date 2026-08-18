@@ -31,6 +31,7 @@ from tilefoundry.visitor_registry.access_relation import (
     moves,
     register_access_relation,
     register_type_relation,
+    writes,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
 
@@ -120,7 +121,7 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
             *tables,
             moves(positions, taken),
         ),
-        outputs=(moves(q_id, elements_of(q_ty)), moves(k_id, elements_of(k_ty))),
+        outputs=(writes(q_id, elements_of(q_ty)), writes(k_id, elements_of(k_ty))),
     )
 
 

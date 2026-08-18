@@ -123,6 +123,7 @@ from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     moves,
     register_access_relation,
+    writes,
 )
 from tilefoundry.visitor_registry.contexts import Cost, TrafficBytes
 from tilefoundry.visitor_registry.relation_build import identity_access
@@ -1055,7 +1056,7 @@ def test_a_relation_is_held_to_the_call_it_was_asked_about() -> None:
         def _handler(call, ctx, _in=inputs, _out=outputs) -> AccessRelations:
             return AccessRelations(
                 inputs=tuple(moves(identity_access(1), 4) for _ in range(_in)),
-                outputs=tuple(moves(identity_access(1), 4) for _ in range(_out)),
+                outputs=tuple(writes(identity_access(1), 4) for _ in range(_out)),
             )
 
         return target

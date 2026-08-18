@@ -13,9 +13,14 @@ from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
+    AccessMode,
+    AccessQuantity,
     AccessRelations,
+    BoundaryAccess,
     OperandValue,
+    OutputStorage,
     StorageEffectClaim,
+    StorageLink,
     WindowAccess,
     elements_of,
     moves,
@@ -83,16 +88,29 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     extents = tuple(update.shape)
     offsets = _offset_axes(call, rank)
     window = elements_of(update)
+    kept = elements_of(ctx.local_type_of(call.args[0])) - window
+    complement = WindowAccess(offsets, extents, complement=True)
+    preserve = StorageLink(
+        kind="preserve",
+        input=0,
+        source=complement,
+        output=complement,
+        quantity=AccessQuantity(kept, kept),
+    )
     return AccessRelations(
         inputs=(
-            moves(
-                WindowAccess(offsets, extents, complement=True),
-                elements_of(ctx.local_type_of(call.args[0])) - window,
-            ),
+            BoundaryAccess(complement, AccessQuantity(kept, kept), AccessMode.TRANSFER),
             moves(WindowAccess(tuple(0 for _ in extents), extents), window),
             *(moves(identity_access(0), 1) for _ in call.args[2:]),
         ),
-        outputs=(moves(identity_access(rank), window),),
+        outputs=(
+            BoundaryAccess(
+                identity_access(rank),
+                AccessQuantity(window, window),
+                AccessMode.WRITE,
+                OutputStorage((preserve,)),
+            ),
+        ),
         storage_effect=_insert_slice_storage(call, ctx),
     )
 

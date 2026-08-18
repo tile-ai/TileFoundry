@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 
+import isl
+
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue
@@ -32,14 +34,16 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
+    OperandValue,
     StorageEffectClaim,
     StorageEffectKind,
     StorageSpan,
+    WindowAccess,
     dense,
-    identity_relations,
     register_access_relation,
     same_placement,
     static_bytes,
+    view_relations,
 )
 
 
@@ -114,7 +118,31 @@ def _window_span(call: "Call", ctx, source, result) -> "StorageSpan | None":
     return StorageSpan(0, offset, size)
 
 
-register_access_relation(Slice)(identity_relations(2, _slice_storage))
+def _slice_view(call: "Call", ctx) -> "AccessPattern":
+    """A window reads its own extent, offset by where it starts and how it steps.
+
+    A start that only arrives at run time is not an affine coordinate, so the
+    pattern says so with a window rather than pretending to a map. A window is
+    then compared as a window, which is what lets an unbound start still be
+    proved to name the same bytes.
+    """
+    result = ctx.local_type_of(call)
+    starts = _static_window(call, ctx.local_type_of(call.args[0]))
+    if starts is None:
+        return WindowAccess(
+            tuple(OperandValue(operand=1, element=axis) for axis in range(len(result.shape))),
+            tuple(result.shape),
+        )
+    dims = [f"d{index}" for index in range(len(result.shape))]
+    reads = [
+        dims[axis] if start == 0 else f"{dims[axis]} + {start}"
+        for axis, start in enumerate(starts)
+    ]
+    domain = ", ".join(dims)
+    return isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}")
+
+
+register_access_relation(Slice)(view_relations(0, _slice_storage, _slice_view))
 
 
 def _i64(value: int) -> Constant:

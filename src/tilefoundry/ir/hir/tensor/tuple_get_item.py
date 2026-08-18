@@ -11,9 +11,9 @@ from tilefoundry.visitor_registry.access_relation import (
     StorageEffectClaim,
     StorageEffectKind,
     StorageSpan,
-    identity_relations,
     register_access_relation,
     static_bytes,
+    view_relations,
 )
 
 
@@ -46,7 +46,7 @@ def _tuple_get_item_storage(call: "Call", ctx) -> StorageEffectClaim | None:
     )
 
 
-register_access_relation(TupleGetItem)(identity_relations(1, _tuple_get_item_storage))
+register_access_relation(TupleGetItem)(view_relations(0, _tuple_get_item_storage))
 
 
 @register_typeinfer(TupleGetItem)

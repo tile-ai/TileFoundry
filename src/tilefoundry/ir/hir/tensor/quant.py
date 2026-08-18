@@ -38,6 +38,7 @@ from tilefoundry.visitor_registry.access_relation import (
     elements_of,
     moves,
     register_access_relation,
+    writes,
 )
 
 
@@ -244,8 +245,8 @@ def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelat
     return AccessRelations(
         inputs=(moves(ident, elements_of(ctx.local_type_of(call.args[0]))),),
         outputs=(
-            moves(ident, elements_of(fields[0])),
-            moves(scale_rel, elements_of(fields[1])),
+            writes(ident, elements_of(fields[0])),
+            writes(scale_rel, elements_of(fields[1])),
         ),
     )
 

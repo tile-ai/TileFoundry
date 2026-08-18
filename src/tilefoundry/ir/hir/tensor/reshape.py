@@ -26,9 +26,10 @@ from tilefoundry.visitor_registry.access_relation import (
     StorageEffectKind,
     dense,
     forward_whole,
-    identity_relations,
+    linearized_view,
     register_access_relation,
     same_placement,
+    view_relations,
 )
 
 
@@ -50,7 +51,15 @@ def _reshape_storage(call: Call, ctx) -> StorageEffectClaim | None:
     return StorageEffectClaim(StorageEffectKind.FORWARD, (0,))
 
 
-register_access_relation(Reshape)(identity_relations(1, _reshape_storage))
+def _reshape_view(call: "Call", ctx) -> "isl.multi_aff":
+    """Where a result coordinate sits in the source it was renamed from."""
+    return linearized_view(
+        tuple(ctx.local_type_of(call).shape),
+        tuple(ctx.local_type_of(call.args[0]).shape),
+    )
+
+
+register_access_relation(Reshape)(view_relations(0, _reshape_storage, _reshape_view))
 
 
 def is_induction_var_singleton_reshape(expr) -> bool:

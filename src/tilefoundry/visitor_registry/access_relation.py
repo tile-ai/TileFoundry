@@ -118,6 +118,57 @@ class AccessQuantity:
         return self.lower == self.upper
 
 
+class AccessMode(enum.Enum):
+    """What a boundary is for, which is not the same as what it costs.
+
+    ``READ`` and ``WRITE`` are the operation consuming or producing elements.
+    They are charged whether or not the bytes turn out to be somewhere they
+    already were: an add whose result lands in its operand's buffer still read
+    that operand and still wrote its result. ``TRANSFER`` is an operation whose
+    whole purpose is to move or re-address bytes, and is the only mode that can
+    come to nothing -- when its links are shown to name the same addresses.
+    """
+
+    READ = "read"
+    WRITE = "write"
+    TRANSFER = "transfer"
+
+
+@dataclass(frozen=True)
+class StorageLink:
+    """One region an output may share with an input, and how much of it.
+
+    ``source`` and ``output`` map one shared iteration domain to a coordinate on
+    each side. Two patterns rather than two byte offsets, because an offset and
+    a size cannot state an unbound window start or the mapping a transpose
+    forwards through. ``quantity`` is how much the region holds, never measured
+    off a pattern. A link is a candidate: whether these bytes really are shared
+    is the allocation's answer, and an unhonoured link is the copy instead.
+    """
+
+    kind: str
+    input: int
+    source: "AccessPattern"
+    output: "AccessPattern"
+    quantity: "AccessQuantity"
+
+    def __post_init__(self) -> None:
+        if self.kind not in ("forward", "preserve"):
+            raise ValueError(
+                f"a link either forwards a value or preserves a container, "
+                f"not {self.kind!r}"
+            )
+        if not isinstance(self.input, int) or isinstance(self.input, bool) or self.input < 0:
+            raise ValueError(f"a link names an operand by position, not {self.input!r}")
+
+
+@dataclass(frozen=True)
+class OutputStorage:
+    """Where one output's bytes may already be. No links means fresh bytes."""
+
+    links: tuple[StorageLink, ...] = ()
+
+
 @dataclass(frozen=True)
 class BoundaryAccess:
     """One boundary: where it reads, and how much it moves.
@@ -131,8 +182,14 @@ class BoundaryAccess:
 
     pattern: AccessPattern
     quantity: AccessQuantity
+    mode: AccessMode = AccessMode.READ
+    storage: OutputStorage | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.mode, AccessMode):
+            raise ValueError(f"a boundary reads, writes or transfers, not {self.mode!r}")
+        if self.storage is not None and not isinstance(self.storage, OutputStorage):
+            raise ValueError(f"a boundary's storage is an OutputStorage, not {self.storage!r}")
         if not isinstance(
             self.pattern, (isl.multi_aff, isl.map, IndexedAccess, WindowAccess)
         ):
@@ -147,8 +204,32 @@ class BoundaryAccess:
 
 
 def moves(pattern: "AccessPattern", count: int) -> BoundaryAccess:
-    """One boundary that moves a number of elements the Op can state."""
-    return BoundaryAccess(pattern, AccessQuantity(count, count))
+    """One operand read, of a size the Op can state."""
+    return BoundaryAccess(pattern, AccessQuantity(count, count), AccessMode.READ)
+
+
+def writes(pattern: "AccessPattern", count: int) -> BoundaryAccess:
+    """One result produced, of a size the Op can state.
+
+    A write is charged wherever the bytes turn out to be. An operation that
+    computed something computed it, and landing in an operand's buffer is a
+    fact about the allocation rather than about the work.
+    """
+    return BoundaryAccess(pattern, AccessQuantity(count, count), AccessMode.WRITE)
+
+
+def transfers(
+    pattern: "AccessPattern", quantity: "AccessQuantity", *links: StorageLink
+) -> BoundaryAccess:
+    """One boundary whose whole purpose is moving or re-addressing bytes.
+
+    The only mode that can come to nothing, and only when its links are shown
+    to name the same addresses. It must name at least one, or there is nothing
+    to compare and nothing said about where the bytes came from.
+    """
+    return BoundaryAccess(
+        pattern, quantity, AccessMode.TRANSFER, OutputStorage(tuple(links))
+    )
 
 
 def moves_between(
@@ -202,6 +283,13 @@ class AccessRelations:
     storage_effect: "StorageEffectClaim | None" = None
 
     def __post_init__(self) -> None:
+        """Refuse an impossible description here, rather than interpret it later.
+
+        A boundary that says it writes on the input side is a broken handler,
+        and a consumer reading it as a read hides the break behind a plausible
+        number. What needs the Call -- element width, boundary count -- belongs
+        to the registration wrapper, which has one.
+        """
         for side in ("inputs", "outputs"):
             stated = getattr(self, side)
             if not isinstance(stated, tuple) or not all(
@@ -210,6 +298,62 @@ class AccessRelations:
                 raise ValueError(f"{side} is one BoundaryAccess per boundary, got {stated!r}")
         if not self.outputs:
             raise ValueError("an operation produces at least one value to describe")
+        for index, boundary in enumerate(self.inputs):
+            if boundary.mode not in (AccessMode.READ, AccessMode.TRANSFER):
+                raise ValueError(
+                    f"input {index} says it does {boundary.mode.value}; an operand "
+                    "is read or transferred, never written"
+                )
+            if boundary.storage is not None:
+                raise ValueError(
+                    f"input {index} states where bytes live; that is an output's "
+                    "answer about its own"
+                )
+        for index, boundary in enumerate(self.outputs):
+            if boundary.mode not in (AccessMode.WRITE, AccessMode.TRANSFER):
+                raise ValueError(
+                    f"output {index} says it does {boundary.mode.value}; a result "
+                    "is written or transferred, never read"
+                )
+            links = boundary.storage.links if boundary.storage is not None else ()
+            if boundary.mode is AccessMode.TRANSFER and not links:
+                raise ValueError(
+                    f"output {index} transfers but names no source; a transfer "
+                    "states which bytes it moves or it states nothing"
+                )
+            for link in links:
+                if link.input >= len(self.inputs):
+                    raise ValueError(
+                        f"output {index} links to operand {link.input}, and this "
+                        f"call has {len(self.inputs)}"
+                    )
+                if not _shares_domain(link.source, link.output):
+                    raise ValueError(
+                        f"output {index} links two patterns over different "
+                        "domains, so no coordinate of one names a coordinate "
+                        "of the other"
+                    )
+
+
+def _shares_domain(source: "AccessPattern", output: "AccessPattern") -> bool:
+    """Whether two link patterns are indexed by one iteration domain.
+
+    The affine carriers say their own input rank. A window or a lookup carries
+    its domain in its extents, which the pattern itself compares.
+    """
+    ranks = []
+    for pattern in (source, output):
+        if isinstance(pattern, isl.multi_aff):
+            ranks.append(pattern.dim(isl.dim_type.IN))
+        elif isinstance(pattern, isl.map):
+            ranks.append(pattern.dim(isl.dim_type.IN))
+        elif isinstance(pattern, WindowAccess):
+            ranks.append(len(pattern.extents))
+        elif isinstance(pattern, IndexedAccess):
+            return False
+        else:
+            return False
+    return ranks[0] == ranks[1]
 
 
 
@@ -292,6 +436,38 @@ def _boundaries_of(call, ctx) -> tuple[int, int]:
     return len(call.args), outputs
 
 
+def _element_bytes(type_: "Type") -> int | None:
+    """Bits per element as a byte width, or ``None`` for a packed dtype.
+
+    A bool is a bit, so it has no whole number of bytes per element and two
+    boundaries of it can share storage whatever their shapes. Anything with a
+    byte width has to agree, or one side's coordinate lands mid-element of the
+    other's.
+    """
+    if not isinstance(type_, TensorType):
+        return None
+    bits = getattr(type_.dtype, "bit_width", None)
+    return bits // 8 if isinstance(bits, int) and bits >= 8 else None
+
+
+def _check_links_against(call, ctx, relations: AccessRelations, op_cls: type) -> None:
+    """Hold every storage link to the Call whose operands it names."""
+    result = ctx.type_of(call)
+    fields = result.fields if isinstance(result, TupleType) else (result,)
+    for index, boundary in enumerate(relations.outputs):
+        links = boundary.storage.links if boundary.storage is not None else ()
+        for link in links:
+            source = _element_bytes(ctx.type_of(call.args[link.input]))
+            destination = _element_bytes(fields[index])
+            if source is not None and destination is not None and source != destination:
+                raise ValueError(
+                    f"{op_cls.__name__} shares output {index} with operand "
+                    f"{link.input}, whose elements are {source} B against "
+                    f"{destination} B; one side's coordinate would land inside "
+                    "the other's element"
+                )
+
+
 def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
     """Decorator to register a GLOBAL-level access-relation handler.
 
@@ -299,9 +475,10 @@ def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
     gets a pattern: isl where the addresses are affine, ``IndexedAccess`` or
     ``WindowAccess`` where a runtime value decides them.
 
-    What comes back is held to the Call it was asked about, one entry per
-    operand and one per output, or a description of a different program reaches
-    whichever consumer indexes past the end of it.
+    What comes back is held to the Call it was asked about: one entry per
+    operand and one per output, and every link's element width against the
+    operand it names. Anything needing the Call is checked here, because the
+    record itself has no Call to ask.
     """
 
     def decorate(handler: Callable) -> Callable:
@@ -318,6 +495,7 @@ def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
                         f"boundar{'y' if stated == 1 else 'ies'} of a call with "
                         f"{wanted}"
                     )
+            _check_links_against(call, ctx, relations, op_cls)
             return relations
 
         checked.__name__ = getattr(handler, "__name__", "checked")
@@ -385,8 +563,86 @@ def measures_without_reading(call, ctx) -> AccessRelations:
 
     return AccessRelations(
         inputs=tuple(moves(_empty(arg), 0) for arg in call.args),
-        outputs=(moves(_empty(call.args[0]) if call.args else _identity(out_rank), 0),),
+        outputs=(writes(_empty(call.args[0]) if call.args else _identity(out_rank), 0),),
     )
+
+
+def linearized_view(out_shape: tuple, in_shape: tuple) -> "isl.multi_aff":
+    """Where an output coordinate sits in a source of another shape.
+
+    A reshape keeps the elements in the order they were in and renames the axes
+    over them, so one flat index answers both sides. The domain is the output's,
+    because that is the side a reader walks.
+    """
+    out_rank, in_rank = len(out_shape), len(in_shape)
+    dims = [f"d{index}" for index in range(out_rank)]
+    flat, stride = [], 1
+    for index in reversed(range(out_rank)):
+        flat.append(f"{dims[index]}" if stride == 1 else f"{stride} * {dims[index]}")
+        stride *= out_shape[index]
+    linear = " + ".join(reversed(flat)) if flat else "0"
+    reads, stride = [], 1
+    strides = []
+    for extent in reversed(in_shape):
+        strides.append(stride)
+        stride *= extent
+    for axis, step in zip(range(in_rank), reversed(strides)):
+        term = f"({linear})" if step == 1 else f"floor(({linear}) / {step})"
+        reads.append(term if in_shape[axis] == stride // step else f"({term}) mod {in_shape[axis]}")
+    domain = ", ".join(dims)
+    return isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}")
+
+
+def view_relations(
+    source: int = 0,
+    storage: "Callable[..., StorageEffectClaim | None] | None" = None,
+    mapping: "Callable[..., AccessPattern] | None" = None,
+) -> Callable[..., AccessRelations]:
+    """An Op whose whole purpose is to re-address one operand's bytes.
+
+    A reshape, a slice, a reshard, an item of a tuple: the result is those same
+    elements under another name. Both boundaries are transfers, and the output
+    names the operand it came from through one forward link, so a plan that can
+    put them at the same addresses makes this cost nothing and a plan that
+    cannot makes it a copy. Neither answer is this handler's to give.
+    """
+
+    def _handler(call, ctx) -> AccessRelations:
+        result = ctx.local_type_of(call)
+        out_rank = len(result.shape) if hasattr(result, "shape") else 0
+        moved = elements_of(result)
+        held = AccessQuantity(moved, moved)
+
+        def _rank_of(arg) -> int:
+            type_ = ctx.local_type_of(arg)
+            return len(type_.shape) if hasattr(type_, "shape") else out_rank
+
+        reads = (
+            mapping(call, ctx)
+            if mapping is not None
+            else _identity(_rank_of(call.args[source]))
+        )
+        link = StorageLink(
+            kind="forward",
+            input=source,
+            source=reads,
+            output=_identity(out_rank),
+            quantity=held,
+        )
+        return AccessRelations(
+            inputs=tuple(
+                BoundaryAccess(
+                    _identity(_rank_of(arg)),
+                    held if index == source else AccessQuantity(0, 0),
+                    AccessMode.TRANSFER if index == source else AccessMode.READ,
+                )
+                for index, arg in enumerate(call.args)
+            ),
+            outputs=(transfers(_identity(out_rank), held, link),),
+            storage_effect=None if storage is None else storage(call, ctx),
+        )
+
+    return _handler
 
 
 def identity_relations(
@@ -418,7 +674,7 @@ def identity_relations(
                 )
                 for index in range(n_inputs)
             ),
-            outputs=(moves(_identity(out_rank), elements_of(result)),),
+            outputs=(writes(_identity(out_rank), elements_of(result)),),
             storage_effect=None if storage is None else storage(call, ctx),
         )
 
@@ -550,7 +806,14 @@ __all__ = [
     "AccessRelations",
     "AccessRelationResult",
     "access_relation_registry",
+    "AccessMode",
+    "OutputStorage",
+    "StorageLink",
     "elementwise_elements",
+    "linearized_view",
+    "view_relations",
+    "transfers",
+    "writes",
     "measures_without_reading",
     "type_relation_registry",
     "register_access_relation",
