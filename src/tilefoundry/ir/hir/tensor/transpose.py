@@ -62,7 +62,7 @@ def _transpose_storage(call: "Call", ctx) -> StorageEffectClaim | None:
     return forward_whole(call, 0, ctx)
 
 
-def _transpose_view(call: "Call", ctx) -> "isl.multi_aff":
+def _transpose_view(call: "Call", ctx) -> tuple:
     """Result axis k is source axis perm[k], which is the whole of a transpose."""
     perm = tuple(call.target.perm)
     dims = [f"d{index}" for index in range(len(perm))]
@@ -70,7 +70,10 @@ def _transpose_view(call: "Call", ctx) -> "isl.multi_aff":
     for result_axis, source_axis in enumerate(perm):
         reads[source_axis] = dims[result_axis]
     domain = ", ".join(dims)
-    return isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}")
+    return (
+        isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}"),
+        isl.multi_aff(f"{{ [{domain}] -> [{domain}] }}"),
+    )
 
 
 register_access_relation(Transpose)(view_relations(0, _transpose_storage, _transpose_view))

@@ -31,6 +31,7 @@ from tilefoundry.visitor_registry.access_relation import (
     same_placement,
     view_relations,
 )
+from tilefoundry.visitor_registry.relation_build import identity_access
 
 
 @register_op
@@ -51,11 +52,12 @@ def _reshape_storage(call: Call, ctx) -> StorageEffectClaim | None:
     return StorageEffectClaim(StorageEffectKind.FORWARD, (0,))
 
 
-def _reshape_view(call: "Call", ctx) -> "isl.multi_aff":
+def _reshape_view(call: "Call", ctx) -> tuple:
     """Where a result coordinate sits in the source it was renamed from."""
-    return linearized_view(
-        tuple(ctx.local_type_of(call).shape),
-        tuple(ctx.local_type_of(call.args[0]).shape),
+    out_shape = tuple(ctx.local_type_of(call).shape)
+    return (
+        linearized_view(out_shape, tuple(ctx.local_type_of(call.args[0]).shape)),
+        identity_access(len(out_shape)),
     )
 
 

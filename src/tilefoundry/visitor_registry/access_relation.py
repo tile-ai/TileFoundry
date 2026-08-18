@@ -151,6 +151,7 @@ class StorageLink:
     source: "AccessPattern"
     output: "AccessPattern"
     quantity: "AccessQuantity"
+    input_field: int | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in ("forward", "preserve"):
@@ -160,6 +161,27 @@ class StorageLink:
             )
         if not isinstance(self.input, int) or isinstance(self.input, bool) or self.input < 0:
             raise ValueError(f"a link names an operand by position, not {self.input!r}")
+        if self.input_field is not None and (
+            not isinstance(self.input_field, int)
+            or isinstance(self.input_field, bool)
+            or self.input_field < 0
+        ):
+            raise ValueError(
+                f"a link names a field of its operand by position, not "
+                f"{self.input_field!r}"
+            )
+        for side, pattern in (("source", self.source), ("output", self.output)):
+            if not isinstance(
+                pattern, (isl.multi_aff, isl.map, IndexedAccess, WindowAccess)
+            ):
+                raise ValueError(
+                    f"a link's {side} reads through a relation, a lookup or a "
+                    f"window, not through {pattern!r}"
+                )
+        if not isinstance(self.quantity, AccessQuantity):
+            raise ValueError(
+                f"a link states how much it covers, not {self.quantity!r}"
+            )
 
 
 @dataclass(frozen=True)
@@ -167,6 +189,12 @@ class OutputStorage:
     """Where one output's bytes may already be. No links means fresh bytes."""
 
     links: tuple[StorageLink, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.links, tuple) or not all(
+            isinstance(item, StorageLink) for item in self.links
+        ):
+            raise ValueError(f"storage is a tuple of links, not {self.links!r}")
 
 
 @dataclass(frozen=True)
@@ -335,25 +363,33 @@ class AccessRelations:
                     )
 
 
+def _affine_domain(pattern: "AccessPattern") -> "isl.set | None":
+    """The set a carrier is indexed by, when it can state one."""
+    if isinstance(pattern, isl.multi_aff):
+        return isl.map.from_multi_aff(pattern).domain()
+    if isinstance(pattern, isl.map):
+        return pattern.domain()
+    return None
+
+
 def _shares_domain(source: "AccessPattern", output: "AccessPattern") -> bool:
     """Whether two link patterns are indexed by one iteration domain.
 
-    The affine carriers say their own input rank. A window or a lookup carries
-    its domain in its extents, which the pattern itself compares.
+    Two affine carriers are compared as the sets they are, not as two rank
+    numbers: a pair of rank-2 maps over different extents index different
+    programs. Two windows are compared by the extents that are their domain. A
+    lookup states no domain of its own, and is admitted -- a link through one is
+    refused later, by a prover that has no bijection to offer, rather than here
+    where refusing it would make that ruling unwritable.
     """
-    ranks = []
-    for pattern in (source, output):
-        if isinstance(pattern, isl.multi_aff):
-            ranks.append(pattern.dim(isl.dim_type.IN))
-        elif isinstance(pattern, isl.map):
-            ranks.append(pattern.dim(isl.dim_type.IN))
-        elif isinstance(pattern, WindowAccess):
-            ranks.append(len(pattern.extents))
-        elif isinstance(pattern, IndexedAccess):
-            return False
-        else:
-            return False
-    return ranks[0] == ranks[1]
+    if isinstance(source, IndexedAccess) or isinstance(output, IndexedAccess):
+        return True
+    if isinstance(source, WindowAccess) and isinstance(output, WindowAccess):
+        return source.extents == output.extents
+    left, right = _affine_domain(source), _affine_domain(output)
+    if left is None or right is None:
+        return False
+    return left.is_equal(right)
 
 
 
@@ -436,34 +472,62 @@ def _boundaries_of(call, ctx) -> tuple[int, int]:
     return len(call.args), outputs
 
 
-def _element_bytes(type_: "Type") -> int | None:
-    """Bits per element as a byte width, or ``None`` for a packed dtype.
+def _element_bits(type_: "Type") -> int | None:
+    """How wide one element of this boundary is, or ``None`` when unknown.
 
-    A bool is a bit, so it has no whole number of bytes per element and two
-    boundaries of it can share storage whatever their shapes. Anything with a
-    byte width has to agree, or one side's coordinate lands mid-element of the
-    other's.
+    Bits rather than bytes, because a bool is one bit and a packed float four:
+    reading those as "no whole number of bytes, so never mind" let a bool share
+    a coordinate with an f32, where one side's index lands 31 bits inside the
+    other's element.
     """
     if not isinstance(type_, TensorType):
         return None
     bits = getattr(type_.dtype, "bit_width", None)
-    return bits // 8 if isinstance(bits, int) and bits >= 8 else None
+    return bits if isinstance(bits, int) and bits > 0 else None
+
+
+def _field_of(type_: "Type", index: int) -> "Type | None":
+    """One field of a tuple, or the value itself when it has no fields."""
+    if isinstance(type_, TupleType):
+        return type_.fields[index] if 0 <= index < len(type_.fields) else None
+    return type_ if index == 0 else None
 
 
 def _check_links_against(call, ctx, relations: AccessRelations, op_cls: type) -> None:
     """Hold every storage link to the Call whose operands it names."""
     result = ctx.type_of(call)
-    fields = result.fields if isinstance(result, TupleType) else (result,)
     for index, boundary in enumerate(relations.outputs):
         links = boundary.storage.links if boundary.storage is not None else ()
         for link in links:
-            source = _element_bytes(ctx.type_of(call.args[link.input]))
-            destination = _element_bytes(fields[index])
-            if source is not None and destination is not None and source != destination:
+            operand = ctx.type_of(call.args[link.input])
+            if isinstance(operand, TupleType):
+                if link.input_field is None or not (
+                    0 <= link.input_field < len(operand.fields)
+                ):
+                    raise ValueError(
+                        f"{op_cls.__name__} links output {index} to operand "
+                        f"{link.input}, which holds {len(operand.fields)} fields, "
+                        f"and names field {link.input_field!r}"
+                    )
+            elif link.input_field is not None:
+                raise ValueError(
+                    f"{op_cls.__name__} links output {index} to field "
+                    f"{link.input_field} of operand {link.input}, which has no "
+                    "fields of its own"
+                )
+            source = _element_bits(_field_of(operand, link.input_field or 0))
+            destination = _element_bits(_field_of(result, index))
+            if source is None or destination is None:
                 raise ValueError(
                     f"{op_cls.__name__} shares output {index} with operand "
-                    f"{link.input}, whose elements are {source} B against "
-                    f"{destination} B; one side's coordinate would land inside "
+                    f"{link.input}, and one of them states no element width; "
+                    "bytes cannot be shared between values of unknown shape"
+                )
+            if source != destination:
+                raise ValueError(
+                    f"{op_cls.__name__} shares output {index} with operand "
+                    f"{link.input}, whose elements are {source} bits against "
+                    f"{destination}; one side's coordinate would land inside "
                     "the other's element"
                 )
 
@@ -504,6 +568,33 @@ def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
         return handler
 
     return decorate
+
+
+def storage_effect_of(relations: AccessRelations) -> "StorageEffectClaim | None":
+    """The legacy whole-Call claim, read off the per-boundary links.
+
+    One truth, two shapes. The claim predates links and still has consumers, so
+    it is derived here rather than written a second time by each handler: two
+    hand-maintained statements of one fact drift, and the drift is invisible
+    until a number is wrong. Spans stay with the handler that computes byte
+    offsets until the allocation does, which is the step that retires this.
+
+    A claim covers the whole result, so an output that shares only part of
+    itself, or a tuple whose fields disagree, has no single claim to make.
+    """
+    if len(relations.outputs) != 1:
+        return None
+    boundary = relations.outputs[0]
+    links = boundary.storage.links if boundary.storage is not None else ()
+    if not links:
+        return None
+    kinds = {link.kind for link in links}
+    if len(kinds) != 1:
+        return None
+    kind = (
+        StorageEffectKind.UPDATE if kinds == {"preserve"} else StorageEffectKind.FORWARD
+    )
+    return StorageEffectClaim(kind, tuple(link.input for link in links))
 
 
 def declared_storage(call, ctx) -> "StorageEffectClaim | None":
@@ -572,9 +663,22 @@ def linearized_view(out_shape: tuple, in_shape: tuple) -> "isl.multi_aff":
 
     A reshape keeps the elements in the order they were in and renames the axes
     over them, so one flat index answers both sides. The domain is the output's,
-    because that is the side a reader walks.
+    because that is the side a reader walks. An empty shape holds nothing, so
+    nothing of it is anywhere in the source: the answer is an empty relation
+    rather than a division by an axis of length zero.
     """
+    if any(
+        not isinstance(extent, int) or isinstance(extent, bool) or extent < 0
+        for extent in (*out_shape, *in_shape)
+    ):
+        raise ValueError(
+            f"a view relabels a shape it can count: {out_shape!r} from {in_shape!r}"
+        )
     out_rank, in_rank = len(out_shape), len(in_shape)
+    if 0 in out_shape or 0 in in_shape:
+        dims = ", ".join(f"d{index}" for index in range(out_rank))
+        reads = ", ".join("0" for _ in range(in_rank))
+        return isl.map(f"{{ [{dims}] -> [{reads}] : 1 = 0 }}")
     dims = [f"d{index}" for index in range(out_rank)]
     flat, stride = [], 1
     for index in reversed(range(out_rank)):
@@ -596,7 +700,8 @@ def linearized_view(out_shape: tuple, in_shape: tuple) -> "isl.multi_aff":
 def view_relations(
     source: int = 0,
     storage: "Callable[..., StorageEffectClaim | None] | None" = None,
-    mapping: "Callable[..., AccessPattern] | None" = None,
+    mapping: "Callable[..., tuple[AccessPattern, AccessPattern]] | None" = None,
+    field: "Callable[..., int | None] | None" = None,
 ) -> Callable[..., AccessRelations]:
     """An Op whose whole purpose is to re-address one operand's bytes.
 
@@ -617,28 +722,29 @@ def view_relations(
             type_ = ctx.local_type_of(arg)
             return len(type_.shape) if hasattr(type_, "shape") else out_rank
 
-        reads = (
+        reads, written = (
             mapping(call, ctx)
             if mapping is not None
-            else _identity(_rank_of(call.args[source]))
+            else (_identity(out_rank), _identity(out_rank))
         )
         link = StorageLink(
             kind="forward",
             input=source,
             source=reads,
-            output=_identity(out_rank),
+            output=written,
             quantity=held,
+            input_field=None if field is None else field(call, ctx),
         )
         return AccessRelations(
             inputs=tuple(
                 BoundaryAccess(
-                    _identity(_rank_of(arg)),
+                    reads if index == source else _identity(_rank_of(arg)),
                     held if index == source else AccessQuantity(0, 0),
                     AccessMode.TRANSFER if index == source else AccessMode.READ,
                 )
                 for index, arg in enumerate(call.args)
             ),
-            outputs=(transfers(_identity(out_rank), held, link),),
+            outputs=(transfers(written, held, link),),
             storage_effect=None if storage is None else storage(call, ctx),
         )
 
@@ -810,6 +916,7 @@ __all__ = [
     "OutputStorage",
     "StorageLink",
     "elementwise_elements",
+    "storage_effect_of",
     "linearized_view",
     "view_relations",
     "transfers",

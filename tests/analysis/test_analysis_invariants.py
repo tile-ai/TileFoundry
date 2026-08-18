@@ -126,12 +126,14 @@ from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
     build_relation,
     identity_relations,
+    linearized_view,
     moves,
     register_access_relation,
+    storage_effect_of,
     transfers,
     writes,
 )
-from tilefoundry.visitor_registry.contexts import Cost, TrafficBytes
+from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionScope, TrafficBytes
 from tilefoundry.visitor_registry.relation_build import identity_access
 
 REPEATS = 4
@@ -852,12 +854,16 @@ def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:
     assert _as_map(relations.inputs[0].pattern).is_equal(
         isl.map("{ [d0, d1] -> [d0, d1] }")
     )
-    assert _as_map(relations.outputs[0].pattern).is_equal(
-        isl.map("{ [d0, d1] -> [d0, d1] : 0 <= d0 < 3 }")
-    )
-    assert _as_map(relations.outputs[1].pattern).is_equal(
-        isl.map("{ [d0, d1] -> [d0 + 3, d1] : 0 <= d0 < 3 }")
-    )
+    for field, offset in enumerate((0, 3)):
+        assert _as_map(relations.outputs[field].pattern).is_equal(
+            isl.map("{ [d0, d1] -> [d0, d1] }")
+        )
+        (link,) = relations.outputs[field].storage.links
+        assert link.input == 0 and link.input_field is None
+        assert _as_map(link.source).is_equal(
+            isl.map(f"{{ [d0, d1] -> [d0 + {offset}, d1] }}")
+        )
+        assert link.quantity == AccessQuantity(15, 15)
 
     added = Call(
         type=make_tensor_type((4, 8), DType.f32),
@@ -1042,6 +1048,62 @@ def test_a_lookups_amount_does_not_move_with_the_values_it_looks_up() -> None:
     assert declared(6) == (24, 6)
 
 
+def test_the_legacy_claim_says_what_the_links_say() -> None:
+    """Two shapes of one fact, and the older one is derived rather than written.
+
+    The whole-Call claim predates per-boundary links and still has consumers.
+    Keeping both by hand is how they drift, so a claim is held to the links: it
+    may not name an operand, or a kind, that no link of that output states.
+
+    The converse does not hold. A link is a candidate -- these bytes may be
+    shared -- while the claim is a conclusion the handler reaches only when
+    placement and size already agree. A reshard across levels states its link
+    and no claim, correctly. The allocation is what retires the difference.
+    """
+    checked = set()
+    for owner in (MoEMegaKernel, FlashSplitKDecode, SquareCuda):
+        for function in owner.functions:
+            ctx = CostContext(scope=FunctionScope(owner, function))
+            for expr in postorder(function.body):
+                if not isinstance(expr, Call):
+                    continue
+                handler = access_relation_registry.lookup(type(expr.target))
+                if handler is None:
+                    continue
+                relations = handler(expr, ctx)
+                stated = relations.storage_effect
+                if stated is None:
+                    continue
+                derived = storage_effect_of(relations)
+                name = type(expr.target).__name__
+                checked.add(name)
+                assert derived is not None, (
+                    f"{name} claims {stated.kind.value} storage in operands "
+                    f"{stated.operands}, and no link of its output says so"
+                )
+                assert (stated.kind, stated.operands) == (
+                    derived.kind,
+                    derived.operands,
+                ), f"{name}: {stated!r} against {derived!r}"
+    assert {"Reshard", "Slice"} <= checked
+
+
+def test_an_empty_shape_relabels_to_an_empty_relation() -> None:
+    """A view of nothing reads nowhere, and says so rather than dividing by it.
+
+    Linearizing a reshape divides by an axis extent, and an axis of length zero
+    would make that a division by zero -- or worse, an isl expression that
+    parses and means something else. The relation is empty instead, which is
+    what a shape holding no elements actually says about where they came from.
+    """
+    assert _as_map(linearized_view((0, 3), (0, 3))).is_empty()
+    assert _as_map(linearized_view((2, 0), (0, 2))).is_empty()
+    assert not _as_map(linearized_view((2, 3), (6,))).is_empty()
+
+    with pytest.raises(ValueError, match="a view relabels a shape it can count"):
+        linearized_view((2, "ctx"), (6,))
+
+
 def test_a_relation_that_cannot_be_true_is_refused_where_it_is_written() -> None:
     """An impossible description fails at its author, not at its reader.
 
@@ -1099,9 +1161,11 @@ def test_a_relation_that_cannot_be_true_is_refused_where_it_is_written() -> None
 def test_a_link_is_held_to_the_operand_it_names() -> None:
     """Sharing bytes with an operand of another element width cannot be meant.
 
-    One side's coordinate would land inside the other's element. The record
-    cannot see this -- it has no Call and no types -- so the registration
-    wrapper, which has both, is where it is caught.
+    One side's coordinate would land inside the other's element. Compared in
+    bits, because a bool is one and a packed float four: reading those as "no
+    whole number of bytes, so never mind" let a bool share a coordinate with an
+    f32. The record cannot see this -- it has no Call and no types -- so the
+    registration wrapper, which has both, is where it is caught.
     """
 
     class _Narrows(Op):
@@ -1132,7 +1196,7 @@ def test_a_link_is_held_to_the_operand_it_names() -> None:
         target=_Narrows(),
         args=(Var(type=make_tensor_type((4,), DType.i64), name="wider"),),
     )
-    with pytest.raises(ValueError, match="whose elements are 8 B against 4 B"):
+    with pytest.raises(ValueError, match="whose elements are 64 bits against 32"):
         access_relation_registry.lookup(_Narrows)(call, TypeInferContext())
 
 

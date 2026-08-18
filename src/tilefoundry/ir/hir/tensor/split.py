@@ -23,11 +23,14 @@ from tilefoundry.ir.types.shard.shard_layout import Split as SplitAttr
 from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
+    AccessMode,
+    AccessQuantity,
     AccessRelations,
+    BoundaryAccess,
+    StorageLink,
     elements_of,
-    moves,
     register_access_relation,
-    writes,
+    transfers,
 )
 from tilefoundry.visitor_registry.relation_build import identity_access
 
@@ -124,18 +127,34 @@ def _split_access(call: "Call", ctx) -> AccessRelations:
     chunk = extent // parts
     dims = [f"d{index}" for index in range(rank)]
     domain = ", ".join(dims)
-    outputs = []
+    sources = []
     for part in range(parts):
         reads = list(dims)
         if part:
             reads[axis] = f"d{axis} + {part * chunk}"
-        outputs.append(
-            isl.map(
-                f"{{ [{domain}] -> [{', '.join(reads)}] : 0 <= d{axis} < {chunk} }}"
-            )
-        )
+        sources.append(isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}"))
     per_part = elements_of(source) // parts
+    held = AccessQuantity(per_part, per_part)
     return AccessRelations(
-        inputs=(moves(identity_access(rank), elements_of(source)),),
-        outputs=tuple(writes(item, per_part) for item in outputs),
+        inputs=(
+            BoundaryAccess(
+                identity_access(rank),
+                AccessQuantity(elements_of(source), elements_of(source)),
+                AccessMode.TRANSFER,
+            ),
+        ),
+        outputs=tuple(
+            transfers(
+                identity_access(rank),
+                held,
+                StorageLink(
+                    kind="forward",
+                    input=0,
+                    source=reads,
+                    output=identity_access(rank),
+                    quantity=held,
+                ),
+            )
+            for reads in sources
+        ),
     )

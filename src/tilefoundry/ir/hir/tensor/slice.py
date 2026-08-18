@@ -118,7 +118,7 @@ def _window_span(call: "Call", ctx, source, result) -> "StorageSpan | None":
     return StorageSpan(0, offset, size)
 
 
-def _slice_view(call: "Call", ctx) -> "AccessPattern":
+def _slice_view(call: "Call", ctx) -> tuple:
     """A window reads its own extent, offset by where it starts and how it steps.
 
     A start that only arrives at run time is not an affine coordinate, so the
@@ -128,10 +128,14 @@ def _slice_view(call: "Call", ctx) -> "AccessPattern":
     """
     result = ctx.local_type_of(call)
     starts = _static_window(call, ctx.local_type_of(call.args[0]))
+    extents = tuple(result.shape)
     if starts is None:
-        return WindowAccess(
-            tuple(OperandValue(operand=1, element=axis) for axis in range(len(result.shape))),
-            tuple(result.shape),
+        return (
+            WindowAccess(
+                tuple(OperandValue(operand=1, element=axis) for axis in range(len(extents))),
+                extents,
+            ),
+            WindowAccess(tuple(0 for _ in extents), extents),
         )
     dims = [f"d{index}" for index in range(len(result.shape))]
     reads = [
@@ -139,7 +143,10 @@ def _slice_view(call: "Call", ctx) -> "AccessPattern":
         for axis, start in enumerate(starts)
     ]
     domain = ", ".join(dims)
-    return isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}")
+    return (
+        isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}"),
+        isl.multi_aff(f"{{ [{domain}] -> [{domain}] }}"),
+    )
 
 
 register_access_relation(Slice)(view_relations(0, _slice_storage, _slice_view))

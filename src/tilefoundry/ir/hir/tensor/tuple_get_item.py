@@ -46,7 +46,7 @@ def _tuple_get_item_storage(call: "Call", ctx) -> StorageEffectClaim | None:
     )
 
 
-register_access_relation(TupleGetItem)(view_relations(0, _tuple_get_item_storage))
+register_access_relation(TupleGetItem)(view_relations(0, _tuple_get_item_storage, field=lambda call, ctx: call.target.index))
 
 
 @register_typeinfer(TupleGetItem)
