@@ -126,15 +126,13 @@ from tilefoundry.visitor_registry.access_relation import (
     StorageSpan,
     access_relation_registry,
     build_relation,
-    identity_relations,
     linearized_view,
     moves,
     register_access_relation,
-    storage_effect_of,
     transfers,
     writes,
 )
-from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionScope, TrafficBytes
+from tilefoundry.visitor_registry.contexts import Cost, TrafficBytes
 from tilefoundry.visitor_registry.relation_build import identity_access
 
 REPEATS = 4
@@ -1074,44 +1072,39 @@ def test_a_field_of_a_tuple_is_named_by_the_link_that_forwards_it() -> None:
 
 
 
-def test_the_legacy_claim_says_what_the_links_say() -> None:
-    """Two shapes of one fact, and the older one is derived rather than written.
+def test_a_claim_no_link_supports_is_refused_when_the_handler_answers() -> None:
+    """The older shape of one fact is held to the newer one, on every call.
 
-    The whole-Call claim predates per-boundary links and still has consumers.
-    Keeping both by hand is how they drift, so a claim is held to the links: it
-    may not name an operand, or a kind, that no link of that output states.
+    A whole-Call claim and per-boundary links say the same thing twice, and two
+    hand-written statements drift. Sampling a few models would only catch the
+    drift those models happen to reach, so the check is where every handler
+    passes: the registration wrapper, once per call.
 
-    The converse does not hold. A link is a candidate -- these bytes may be
-    shared -- while the claim is a conclusion the handler reaches only when
-    placement and size already agree. A reshard across levels states its link
-    and no claim, correctly. The allocation is what retires the difference.
+    The converse is allowed. A link is a candidate -- these bytes may be shared
+    -- and a claim is a conclusion the handler reaches only when placement and
+    size already agree, so a reshard across levels states its link and no claim.
     """
-    checked = set()
-    for owner in (MoEMegaKernel, FlashSplitKDecode, SquareCuda):
-        for function in owner.functions:
-            ctx = CostContext(scope=FunctionScope(owner, function))
-            for expr in postorder(function.body):
-                if not isinstance(expr, Call):
-                    continue
-                handler = access_relation_registry.lookup(type(expr.target))
-                if handler is None:
-                    continue
-                relations = handler(expr, ctx)
-                stated = relations.storage_effect
-                if stated is None:
-                    continue
-                derived = storage_effect_of(relations)
-                name = type(expr.target).__name__
-                checked.add(name)
-                assert derived is not None, (
-                    f"{name} claims {stated.kind.value} storage in operands "
-                    f"{stated.operands}, and no link of its output says so"
-                )
-                assert (stated.kind, stated.operands) == (
-                    derived.kind,
-                    derived.operands,
-                ), f"{name}: {stated!r} against {derived!r}"
-    assert {"Reshard", "Slice"} <= checked
+
+    class _Overclaims(Op):
+        pass
+
+    register_typeinfer(_Overclaims)(lambda call, ctx: make_tensor_type((4,), DType.f32))
+
+    @register_access_relation(_Overclaims)
+    def _handler(call, ctx) -> AccessRelations:
+        return AccessRelations(
+            inputs=(moves(identity_access(1), 4),),
+            outputs=(writes(identity_access(1), 4),),
+            storage_effect=StorageEffectClaim(StorageEffectKind.FORWARD, (0,)),
+        )
+
+    call = Call(
+        type=make_tensor_type((4,), DType.f32),
+        target=_Overclaims(),
+        args=(Var(type=make_tensor_type((4,), DType.f32), name="held"),),
+    )
+    with pytest.raises(ValueError, match="no link of its output says so"):
+        access_relation_registry.lookup(_Overclaims)(call, TypeInferContext())
 
 
 def test_an_empty_shape_relabels_to_an_empty_relation() -> None:
@@ -1317,8 +1310,34 @@ def test_a_storage_claim_covers_every_operand_it_names() -> None:
     def _one(call: Call, ctx) -> StorageEffectClaim:
         return StorageEffectClaim(StorageEffectKind.FORWARD, (0, 1), (StorageSpan(0, 0, size),))
 
-    register_access_relation(_ReachesBoth)(identity_relations(2, _both))
-    register_access_relation(_ReachesOne)(identity_relations(2, _one))
+    def _forwarding(claim, *operands):
+        """A handler whose links say what its legacy claim says."""
+
+        def _handler(call, ctx) -> AccessRelations:
+            held = AccessQuantity(4, 4)
+            reads = identity_access(1)
+            return AccessRelations(
+                inputs=tuple(
+                    BoundaryAccess(reads, held, AccessMode.TRANSFER)
+                    for _ in call.args
+                ),
+                outputs=(
+                    transfers(
+                        reads,
+                        held,
+                        *(
+                            StorageLink("forward", operand, reads, reads, held)
+                            for operand in operands
+                        ),
+                    ),
+                ),
+                storage_effect=claim(call, ctx),
+            )
+
+        return _handler
+
+    register_access_relation(_ReachesBoth)(_forwarding(_both, 0))
+    register_access_relation(_ReachesOne)(_forwarding(_one, 0, 1))
 
     walk = _Storage(
         type_of=lambda expr: expr.type, users={}, positions={}, caller_owned=frozenset()

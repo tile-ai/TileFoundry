@@ -532,6 +532,31 @@ def _check_links_against(call, ctx, relations: AccessRelations, op_cls: type) ->
                 )
 
 
+def _check_claim_against_links(relations: AccessRelations, op_cls: type) -> None:
+    """Hold the legacy whole-Call claim to the links of the same output.
+
+    One fact in two shapes, and the older one still has consumers. A claim that
+    no link supports is drift, and drift is invisible until a number is wrong.
+    The converse is allowed and is not drift: a link is a candidate and a claim
+    is a conclusion, so a reshard across levels states its link and no claim.
+    """
+    stated = relations.storage_effect
+    if stated is None:
+        return
+    derived = storage_effect_of(relations)
+    if derived is None:
+        raise ValueError(
+            f"{op_cls.__name__} claims {stated.kind.value} storage in operands "
+            f"{stated.operands}, and no link of its output says so"
+        )
+    if (stated.kind, stated.operands) != (derived.kind, derived.operands):
+        raise ValueError(
+            f"{op_cls.__name__} claims {stated.kind.value} storage in operands "
+            f"{stated.operands}, while its links say {derived.kind.value} in "
+            f"{derived.operands}"
+        )
+
+
 def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
     """Decorator to register a GLOBAL-level access-relation handler.
 
@@ -560,6 +585,7 @@ def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
                         f"{wanted}"
                     )
             _check_links_against(call, ctx, relations, op_cls)
+            _check_claim_against_links(relations, op_cls)
             return relations
 
         checked.__name__ = getattr(handler, "__name__", "checked")
@@ -658,7 +684,7 @@ def measures_without_reading(call, ctx) -> AccessRelations:
     )
 
 
-def linearized_view(out_shape: tuple, in_shape: tuple) -> "isl.multi_aff":
+def linearized_view(out_shape: tuple, in_shape: tuple) -> "isl.multi_aff | isl.map":
     """Where an output coordinate sits in a source of another shape.
 
     A reshape keeps the elements in the order they were in and renames the axes
