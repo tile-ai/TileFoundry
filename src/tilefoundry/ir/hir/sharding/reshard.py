@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import isl
+
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -27,6 +29,7 @@ from tilefoundry.visitor_registry.access_relation import (
     StorageEffectKind,
     StorageLink,
     elements_of,
+    factored_image,
     forward_whole,
     register_access_relation,
     register_type_relation,
@@ -202,18 +205,26 @@ def _reshard_access(call: "Call", ctx) -> AccessRelations:
     positions; neither changes which logical element the result's index came
     from, so the boundary is exactly identity and never opaque.
     """
-    rank = len(ctx.local_type_of(call).shape)
-    whole = elements_of(ctx.local_type_of(call))
+    result = ctx.local_type_of(call)
+    rank = len(result.shape)
+    whole = elements_of(result)
     held = AccessQuantity(whole, whole)
+    dims = ", ".join(f"d{index}" for index in range(rank))
+    spread = factored_image(
+        [f"d{index}" for index in range(len(ctx.type_of(call).shape))],
+        ctx.local_type_of(call.args[0]),
+        ctx.type_of(call.args[0]),
+    )
+    reads = isl.multi_aff(f"{{ [{dims}] -> [{', '.join(spread)}] }}")
     link = StorageLink(
         kind="forward",
         input=0,
-        source=identity_access(rank),
+        source=reads,
         output=identity_access(rank),
         quantity=held,
     )
     return AccessRelations(
-        inputs=(BoundaryAccess(identity_access(rank), held, AccessMode.TRANSFER),),
+        inputs=(BoundaryAccess(reads, held, AccessMode.TRANSFER),),
         outputs=(transfers(identity_access(rank), held, link),),
         storage_effect=_reshard_storage(call, ctx),
     )

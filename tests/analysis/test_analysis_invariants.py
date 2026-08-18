@@ -78,6 +78,7 @@ from tilefoundry.ir.core import (
     binding_name,
     get_metadata,
 )
+from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.kinds import BinaryKind, ReduceKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16, Wgmma_SM90_64x128x16
@@ -143,6 +144,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, TrafficBytes
 from tilefoundry.visitor_registry.relation_build import identity_access
+from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 REPEATS = 4
 B, S, H, D = 1, 5, 2, 3
@@ -906,9 +908,52 @@ def test_a_reduction_maps_the_axes_its_layout_factored() -> None:
     )
     reads = relations.inputs[0].pattern
     assert reads.dim(isl.dim_type.OUT) == 3
-    assert reads.is_equal(
-        isl.map("{ [d0, d1, d2] -> [d0, d1, r2] : d2 = 0 and 0 <= r2 < 1 }")
+    assert reads.is_equal(isl.map("{ [d0, d1, d2] -> [0, d1, 0] }"))
+
+
+def _reduced(type_, axes, keepdim, level=None, topologies=()):
+    """One Reduce's relations, with the result its own type inference derives."""
+    held = Var(type=type_, name="x")
+    target = Reduce(axes=axes, keepdim=keepdim, kind=ReduceKind.SUM)
+    inferred = TypeInferVisitor(TypeInferContext()).visit(
+        Call(type=type_, target=target, args=(held,))
     )
+    call = Call(type=inferred, target=target, args=(held,))
+    return access_relation_registry.lookup(Reduce)(
+        call, CostContext(level=level, topologies=topologies)
+    ).inputs[0].pattern
+
+
+def test_a_reduction_without_keepdim_names_the_axis_that_survived() -> None:
+    """A result coordinate names the logical axis it kept, not a position.
+
+    Dropping the reduced axes shifts the survivors down, so a result coordinate
+    and a source axis at the same number are different axes. Once a layout
+    factors things the two are not even the same count: reducing axis 1 of a
+    `(4,8,5)` whose axis 1 is split leaves the last logical axis at position 3,
+    and reading it from position 1 takes the mesh factor of a different axis.
+    """
+    assert _reduced(make_tensor_type((2, 3, 4), DType.f32), (1,), False).is_equal(
+        isl.map("{ [d0, d1] -> [d0, r1, d1] : 0 <= r1 < 3 }")
+    )
+    assert _reduced(make_tensor_type((2, 3, 4), DType.f32), (0, 2), False).is_equal(
+        isl.map("{ [d0] -> [r0, d0, r2] : 0 <= r0 < 2 and 0 <= r2 < 4 }")
+    )
+    assert _reduced(make_tensor_type((2, 3, 4), DType.f32), (1, 2), False).is_equal(
+        isl.map("{ [d0] -> [d0, r1, r2] : 0 <= r1 < 3 and 0 <= r2 < 4 }")
+    )
+
+    cta = Topology("cta", 2)
+    split = make_shard_tensor_type(
+        (4, 8, 5),
+        mesh=make_mesh((2,), ("c",), topology=cta),
+        attrs=(ShardSplit(1),),
+        dtype=DType.f32,
+    )
+    for keepdim in (False, True):
+        assert _reduced(split, (1,), keepdim, "cta", (cta,)).is_equal(
+            isl.map("{ [d0, d1, d2, d3] -> [d0, 0, r1, d3] : 0 <= r1 < 4 }")
+        )
 
 
 def test_layer_norm_reads_its_parameters_across_the_whole_suffix() -> None:
@@ -1030,10 +1075,39 @@ def test_a_grouped_convolution_reads_only_the_groups_it_computes() -> None:
     assert spanning.inputs[0].pattern.is_equal(
         isl.map(
             "{ [n, co, oh, ow, ci, kh, kw] -> "
-            "[n, floor(co/16) * 8 + ci, oh + kh - 1, ow + kw - 1] : "
+            "[0, floor(co/16) * 8 + ci, oh + kh - 1, ow + kw - 1] : "
             "0 <= oh + kh - 1 < 8 and 0 <= ow + kw - 1 < 8 }"
         )
     )
+
+
+def test_a_grouped_split_that_straddles_a_group_is_refused() -> None:
+    """A shard crossing a group boundary reads two groups; its neighbour reads one.
+
+    Twelve output channels in three groups over four shards gives every shard
+    three channels, and shards one and two straddle a boundary: the real
+    footprints are 1, 2, 2 and 1 groups. A projection here knows a shard's
+    extent and not its offset, so it would report the first participant's
+    answer for all four. Refused where the author can align the split.
+    """
+    cta = Topology("cta", 4)
+    mesh = make_mesh((4,), ("c",), topology=cta)
+    call = Call(
+        type=make_tensor_type((1, 12, 8, 8), DType.f16),
+        target=Conv2D(stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=3),
+        args=(
+            Var(type=make_tensor_type((1, 12, 8, 8), DType.f16), name="x"),
+            Var(type=make_tensor_type((12, 4, 3, 3), DType.f16), name="w"),
+            Var(
+                type=make_shard_tensor_type(
+                    (12,), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f16
+                ),
+                name="b",
+            ),
+        ),
+    )
+    with pytest.raises(VerifyError, match="can straddle a group boundary"):
+        TypeInferVisitor(TypeInferContext()).visit(call)
 
 
 def test_a_split_contraction_reads_only_its_share_of_the_channels() -> None:
@@ -1589,6 +1663,66 @@ def test_a_lookup_is_held_to_the_operand_and_the_axis_it_names() -> None:
         IndexedAccess(index_operand=-1, axis=0)
     with pytest.raises(ValueError, match="names its axis by position"):
         IndexedAccess(index_operand=0, axis=-1)
+
+
+def test_a_link_source_that_names_a_field_is_checked_against_that_field() -> None:
+    """A tuple has no rank; the field a link names does, and that is what holds.
+
+    Passing the whole tuple to the axis check made every rank zero, so a lookup
+    into a perfectly good tensor field was refused for having an axis. The field
+    is resolved the same way the element-width check resolves it.
+    """
+
+    def registered(name, axis):
+        target = type(name, (Op,), {})
+        register_typeinfer(target)(
+            lambda call, ctx: make_tensor_type((4,), DType.f32)
+        )
+
+        @register_access_relation(target)
+        def _handler(call, ctx, _axis=axis) -> AccessRelations:
+            held = AccessQuantity(4, 4)
+            return AccessRelations(
+                inputs=(
+                    BoundaryAccess(identity_access(1), held, AccessMode.TRANSFER),
+                    moves(identity_access(1), 4),
+                ),
+                outputs=(
+                    transfers(
+                        identity_access(1),
+                        held,
+                        StorageLink(
+                            "forward",
+                            0,
+                            IndexedAccess(index_operand=1, axis=_axis),
+                            identity_access(1),
+                            held,
+                            input_field=0,
+                        ),
+                    ),
+                ),
+            )
+
+        return target
+
+    def asked(target):
+        rows = make_tensor_type((4,), DType.f32)
+        call = Call(
+            type=rows,
+            target=target(),
+            args=(
+                Var(type=TupleType(fields=(rows, rows)), name="pair"),
+                Var(type=make_tensor_type((4,), DType.i64), name="index"),
+            ),
+        )
+        return access_relation_registry.lookup(target)(call, TypeInferContext())
+
+    relations = asked(registered("_LooksIntoAField", 0))
+    (link,) = relations.outputs[0].storage.links
+    assert link.input_field == 0
+
+    with pytest.raises(ValueError, match="along axis 2, and it has 1"):
+        asked(registered("_LooksPastAField", 2))
 
 
 def test_a_relation_is_held_to_the_call_it_was_asked_about() -> None:

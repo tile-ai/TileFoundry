@@ -16,12 +16,13 @@ from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
 from tilefoundry.ir.types.dim_isl import normalize_dim
 from tilefoundry.ir.types.shape_helpers import i64_const, static_dim_value
 from tilefoundry.ir.types.shard import Layout, try_c_order_strides
-from tilefoundry.ir.types.shard.shard_layout import shard_layout_of, split_target_axes
+from tilefoundry.ir.types.shard.shard_layout import Split, shard_layout_of, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
     build_relation,
+    factored_image,
     logical_axes_of,
     moves,
     register_access_relation,
@@ -160,6 +161,43 @@ def _output_shape(x, weight, stride, padding, dilation, k_h, k_w) -> tuple:
         static_height if static_height is not None else height,
         static_width if static_width is not None else width,
     )
+
+
+def _require_group_aligned_output_split(call, ctx, weight, bias, groups: int) -> None:
+    """A split of the output channels must not cut across a group.
+
+    A shard straddling a boundary reads two groups where its neighbour reads
+    one, and nothing here can tell those participants apart: a projection knows
+    a shard's extent and not its offset. Twelve channels in three groups over
+    four shards would report one footprint for all four where the real ones are
+    1, 2, 2 and 1 groups, so it is refused where the author can align it.
+    """
+    if groups == 1:
+        return
+    channels = static_dim_value(weight.shape[0])
+    if channels is None:
+        return
+    per_group = channels // groups
+    for name, type_ in (("weight", weight), ("bias", bias)):
+        layout = shard_layout_of(type_.layout)
+        if layout is None:
+            continue
+        targets = split_target_axes(layout, type_.shape)
+        for mesh_axis, attr in enumerate(layout.attrs):
+            if not isinstance(attr, Split) or targets[mesh_axis] != 0:
+                continue
+            shards = layout.layout.shape[attr.axis]
+            if not isinstance(shards, int) or shards <= 0:
+                continue
+            held = channels // shards if name == "bias" else channels // shards
+            if held == 0 or (per_group % held and held % per_group):
+                ctx.error(
+                    call,
+                    f"{name} splits {channels} output channels {shards} ways "
+                    f"across {groups} groups of {per_group}, so a participant "
+                    "can straddle a group boundary and no projection here can "
+                    "say which; align the split to the group size",
+                )
 
 
 def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
@@ -320,6 +358,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             ctx.error(call, f"output {name} extent must be positive, got {static}")
 
     _require_exact_partial_state(call, ctx, x, w, bias)
+    _require_group_aligned_output_split(call, ctx, w, bias, _groups)
     relation = build_relation(call, (x, w, bias), ctx)
     try:
         shard = derive_output_shard_layout(
@@ -398,21 +437,38 @@ def _conv2d_access(call: "Call", ctx) -> AccessRelations:
         if op.groups == 1
         else f"floor(co/{per_group_out})*{contraction}+ci"
     )
-    reached = isl.map(f"{{ [{domain}] -> [n, {channel}, {height}, {width}] : {guard} }}")
+    def spread(reads, value) -> str:
+        """One expression per position of *value* in this view."""
+        return ", ".join(
+            factored_image(reads, ctx.local_type_of(value), ctx.type_of(value))
+        )
+    reached = isl.map(
+        f"{{ [{domain}] -> "
+        f"[{spread(['n', channel, height, width], call.args[0])}] : {guard} }}"
+    )
     touched = _reachable_rows(x[2], op.stride[0], op.padding[0], op.dilation[0], k_h, result[2])
     across = _reachable_rows(x[3], op.stride[1], op.padding[1], op.dilation[1], k_w, result[3])
     return AccessRelations(
         inputs=(
             moves(reached, result[0] * contraction * groups * touched * across),
             moves(
-                isl.multi_aff(f"{{ [{domain}] -> [co, ci, kh, kw] }}"),
+                isl.multi_aff(
+                    f"{{ [{domain}] -> "
+                    f"[{spread(['co', 'ci', 'kh', 'kw'], call.args[1])}] }}"
+                ),
                 result[1] * contraction * k_h * k_w,
             ),
-            moves(isl.multi_aff(f"{{ [{domain}] -> [co] }}"), result[1]),
+            moves(
+                isl.multi_aff(f"{{ [{domain}] -> [{spread(['co'], call.args[2])}] }}"),
+                result[1],
+            ),
         ),
         outputs=(
             writes(
-                isl.multi_aff(f"{{ [{domain}] -> [n, co, oh, ow] }}"),
+                isl.multi_aff(
+                    f"{{ [{domain}] -> "
+                    f"[{spread(['n', 'co', 'oh', 'ow'], call)}] }}"
+                ),
                 result[0] * result[1] * result[2] * result[3],
             ),
         ),

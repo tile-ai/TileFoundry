@@ -101,7 +101,7 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
         inputs=(
             BoundaryAccess(complement, AccessQuantity(kept, kept), AccessMode.TRANSFER),
             moves(WindowAccess(tuple(0 for _ in extents), extents), window),
-            *(moves(identity_access(0), 1) for _ in call.args[2:]),
+            *(moves(_scalar_access(ctx, arg), 1) for arg in call.args[2:]),
         ),
         outputs=(
             BoundaryAccess(
@@ -211,3 +211,13 @@ def _eval_insert_slice(ctx):
 
 
 __all__ = ["InsertSlice"]
+
+
+def _scalar_access(ctx, arg) -> "isl.multi_aff":
+    """A scalar operand, at whatever rank its own view gives it.
+
+    A rank-0 value can arrive as a rank-1 position under a layout, and an image
+    that names no coordinate cannot be composed with one that has a position.
+    """
+    held = ctx.local_type_of(arg)
+    return identity_access(len(held.shape) if hasattr(held, "shape") else 0)

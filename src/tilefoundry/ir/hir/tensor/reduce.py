@@ -26,6 +26,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     build_relation,
     elements_of,
+    factored_image,
     logical_axes_of,
     moves,
     register_access_relation,
@@ -177,8 +178,10 @@ def _reduce_access(call: "Call", ctx) -> AccessRelations:
     The input's domain is not the result's: a reduction reads more coordinates
     than it writes, which is the whole of what it does. The extents it reads
     over are this participant's own: a reduced axis can itself be split, and then
-    each unit contributes over the piece it holds. Without `keepdim` a result
-    coordinate names the next surviving source axis, not the one at its position.
+    each unit contributes over the piece it holds. The source-to-result
+    correspondence comes from both layouts, since a result coordinate names a
+    logical axis and not a position. A reduced axis a participant holds one of
+    contributes a constant, there being nothing for a variable to range over.
     """
     source = ctx.local_type_of(call.args[0])
     result = ctx.local_type_of(call)
@@ -188,28 +191,57 @@ def _reduce_access(call: "Call", ctx) -> AccessRelations:
         axis + len(logical_source.shape) if axis < 0 else axis
         for axis in call.target.axes
     )
-    belongs = logical_axes_of(source, logical_source)
-    dims = [f"d{index}" for index in range(rank)]
+    logical_result = ctx.type_of(call)
+    produces = logical_axes_of(result, logical_result)
+
+    linear: dict[int, str] = {}
+    strides: dict[int, int] = {}
+    for position in reversed(range(len(produces))):
+        owner = produces[position]
+        extent = result.shape[position]
+        stride = strides.get(owner, 1)
+        if extent != 1:
+            term = f"d{position}" if stride == 1 else f"{stride} * d{position}"
+            linear[owner] = term if owner not in linear else f"{linear[owner]} + {term}"
+            strides[owner] = stride * extent
+
+    surviving = [
+        axis for axis in range(len(logical_source.shape)) if axis not in axes
+    ]
+    order = (
+        {axis: axis for axis in range(len(logical_source.shape))}
+        if call.target.keepdim
+        else {axis: place for place, axis in enumerate(surviving)}
+    )
+
+    held = [1] * len(logical_source.shape)
+    for position, owner in enumerate(logical_axes_of(source, logical_source)):
+        held[owner] *= source.shape[position]
+
     reads, guards = [], []
-    kept = 0
-    for axis, logical in enumerate(belongs):
-        if logical in axes:
+    for axis in range(len(logical_source.shape)):
+        if axis in axes:
+            if held[axis] == 1:
+                reads.append("0")
+                continue
             reads.append(f"r{axis}")
-            guards.append(f"0 <= r{axis} < {source.shape[axis]}")
-            if call.target.keepdim and kept < rank:
-                guards.append(f"{dims[kept]} = 0")
-                kept += 1
-            continue
-        reads.append(dims[kept] if kept < rank else "0")
-        kept += 1
-    domain = ", ".join(dims)
+            guards.append(f"0 <= r{axis} < {held[axis]}")
+        else:
+            reads.append(linear.get(order[axis], "0"))
+    if call.target.keepdim:
+        for position, owner in enumerate(produces):
+            if owner in axes and result.shape[position] != 1:
+                guards.append(f"d{position} = 0")
+
+    spread = factored_image(reads, source, logical_source)
+    dims = ", ".join(f"d{index}" for index in range(rank))
     where = " and ".join(guards)
+    image = ", ".join(spread)
     return AccessRelations(
         inputs=(
             moves(
                 isl.map(
-                    f"{{ [{domain}] -> [{', '.join(reads)}]"
-                    + (f" : {where} }}" if where else " }")
+                    f"{{ [{dims}] -> [{image}]" + (f" : {where} }}" if where else " }")
                 ),
                 elements_of(source),
             ),

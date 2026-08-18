@@ -138,8 +138,8 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
     return AccessRelations(
         inputs=(
             BoundaryAccess(complement, kept, AccessMode.TRANSFER),
-            moves(identity_access(0), 1),
-            moves(identity_access(0), 1),
+            moves(_scalar_access(ctx, call.args[1]), 1),
+            moves(_scalar_access(ctx, call.args[2]), 1),
             BoundaryAccess(WindowAccess(tuple(0 for _ in cache), extents), written),
         ),
         outputs=(
@@ -210,3 +210,13 @@ def _eval_cache_update(ctx):
 
 
 __all__ = ["CacheUpdate"]
+
+
+def _scalar_access(ctx, arg) -> "isl.multi_aff":
+    """A scalar operand, at whatever rank its own view gives it.
+
+    A rank-0 value can arrive as a rank-1 position under a layout, and an image
+    that names no coordinate cannot be composed with one that has a position.
+    """
+    held = ctx.local_type_of(arg)
+    return identity_access(len(held.shape) if hasattr(held, "shape") else 0)

@@ -579,11 +579,77 @@ def _check_lookups_against(call, ctx, relations: AccessRelations, op_cls: type) 
                 for end, pattern in (("source", link.source), ("output", link.output)):
                     if isinstance(pattern, IndexedAccess):
                         reached = (
-                            ctx.type_of(call.args[link.input])
+                            _field_of(
+                                ctx.type_of(call.args[link.input]),
+                                link.input_field or 0,
+                            )
                             if end == "source"
                             else held
                         )
                         hold(pattern, f"{side} {index}'s link {end}", reached)
+
+
+def _image_rank(pattern: "AccessPattern") -> int | None:
+    """How many coordinates an affine carrier names, or ``None`` for the others."""
+    if isinstance(pattern, isl.multi_aff):
+        return pattern.dim(isl.dim_type.OUT)
+    if isinstance(pattern, isl.map):
+        return pattern.dim(isl.dim_type.OUT)
+    return None
+
+
+def _check_image_ranks(call, ctx, relations: AccessRelations, op_cls: type) -> None:
+    """Every affine image names one coordinate per position of what it reaches.
+
+    An image is composed with a `Layout`, whose shape and strides are the value's
+    factored positions, so another rank cannot become an address at all. The rank
+    to match is this view's. A boundary that moves nothing is exempt: an Op
+    answering from a Type without reading it states an empty map of whatever
+    shape reads clearest.
+    """
+    result = ctx.local_type_of(call)
+    sides = (
+        ("input", relations.inputs, [ctx.local_type_of(arg) for arg in call.args]),
+        (
+            "output",
+            relations.outputs,
+            list(result.fields) if isinstance(result, TupleType) else [result],
+        ),
+    )
+    for side, boundaries, types in sides:
+        for index, boundary in enumerate(boundaries):
+            held = types[index] if index < len(types) else None
+            if isinstance(held, TupleType):
+                continue
+            wanted = len(held.shape) if isinstance(held, TensorType) else 0
+            if boundary.quantity.upper:
+                _hold_rank(
+                    boundary.pattern, wanted, f"{side} {index}", op_cls
+                )
+            links = boundary.storage.links if boundary.storage is not None else ()
+            for link in links:
+                if not link.quantity.upper:
+                    continue
+                source = ctx.local_type_of(call.args[link.input])
+                if link.input_field is not None and isinstance(source, TupleType):
+                    source = source.fields[link.input_field]
+                _hold_rank(
+                    link.source,
+                    len(source.shape) if isinstance(source, TensorType) else 0,
+                    f"{side} {index}'s link source",
+                    op_cls,
+                )
+                _hold_rank(link.output, wanted, f"{side} {index}'s link output", op_cls)
+
+
+def _hold_rank(pattern: "AccessPattern", wanted: int, where: str, op_cls: type) -> None:
+    """Refuse an affine image that names a different number of coordinates."""
+    stated = _image_rank(pattern)
+    if stated is not None and stated != wanted:
+        raise ValueError(
+            f"{op_cls.__name__} reads {where} at {stated} coordinates, and it "
+            f"has {wanted} in this view"
+        )
 
 
 def _check_claim_against_links(relations: AccessRelations, op_cls: type) -> None:
@@ -640,6 +706,7 @@ def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
                     )
             _check_links_against(call, ctx, relations, op_cls)
             _check_lookups_against(call, ctx, relations, op_cls)
+            _check_image_ranks(call, ctx, relations, op_cls)
             _check_claim_against_links(relations, op_cls)
             return relations
 
@@ -706,6 +773,36 @@ def logical_axes_of(local: "Type", logical: "Type") -> list[int]:
     if shape is None or len(shape) != len(local.shape):
         return list(range(len(local.shape)))
     return layout_axis_to_tensor_axis(tuple(shape), tuple(logical.shape))
+
+
+def factored_image(reads: "Sequence[str]", local: "Type", logical: "Type") -> list[str]:
+    """Spread one expression per logical axis over the positions it occupies.
+
+    A canonical `ShardLayout` factors a logical axis into several positions, and
+    an image has to name every one of them or it cannot be composed with the
+    `Layout` that turns positions into bytes. A position a participant holds one
+    of contributes a constant, because its coordinate is the participant's
+    identity rather than anything the expression varies over. The rest carry the
+    expression, delinearized across them in the order the layout states.
+    """
+    belongs = logical_axes_of(local, logical)
+    extents = list(local.shape)
+    positions: dict[int, list[int]] = {}
+    for position, owner in enumerate(belongs):
+        positions.setdefault(owner, []).append(position)
+    image = ["0"] * len(belongs)
+    for owner, held in positions.items():
+        carrying = [position for position in held if extents[position] != 1]
+        if not carrying:
+            continue
+        expression = reads[owner] if owner < len(reads) else "0"
+        stride = 1
+        for position in reversed(carrying):
+            extent = extents[position]
+            walked = expression if stride == 1 else f"floor(({expression})/{stride})"
+            image[position] = walked if position == carrying[0] else f"({walked}) mod {extent}"
+            stride *= extent
+    return image
 
 
 def elementwise_elements(arg, call, ctx) -> int:
@@ -805,10 +902,11 @@ def view_relations(
     """An Op whose whole purpose is to re-address one operand's bytes.
 
     A reshape, a slice, a reshard, an item of a tuple: the result is those same
-    elements under another name. Both boundaries are transfers, and the output
-    names the operand it came from through one forward link, so a plan that can
-    put them at the same addresses makes this cost nothing and a plan that
-    cannot makes it a copy. Neither answer is this handler's to give.
+    elements under another name, though a name whose layout may factor its axes
+    differently, so the source states its own positions. Both boundaries are
+    transfers, and the output names the operand it came from through one forward
+    link, so a plan that can put them at the same addresses makes this cost
+    nothing and one that cannot makes it a copy. Neither is this handler's call.
     """
 
     def _handler(call, ctx) -> AccessRelations:
@@ -821,11 +919,27 @@ def view_relations(
             type_ = ctx.local_type_of(arg)
             return len(type_.shape) if hasattr(type_, "shape") else out_rank
 
-        reads, written = (
-            mapping(call, ctx)
-            if mapping is not None
-            else (_identity(out_rank), _identity(out_rank))
-        )
+        if mapping is not None:
+            reads, written = mapping(call, ctx)
+        else:
+            held_type = ctx.local_type_of(call.args[source])
+            logical_source = ctx.type_of(call.args[source])
+            logical_result = ctx.type_of(call)
+            spread = factored_image(
+                [
+                    f"d{position}"
+                    for position in range(len(getattr(logical_result, "shape", ())))
+                ],
+                held_type,
+                logical_source,
+            ) if hasattr(held_type, "shape") else []
+            domain = ", ".join(f"d{index}" for index in range(out_rank))
+            reads = (
+                isl.multi_aff(f"{{ [{domain}] -> [{', '.join(spread)}] }}")
+                if spread
+                else _identity(out_rank)
+            )
+            written = _identity(out_rank)
         link = StorageLink(
             kind="forward",
             input=source,
@@ -1015,6 +1129,7 @@ __all__ = [
     "OutputStorage",
     "StorageLink",
     "elementwise_elements",
+    "factored_image",
     "logical_axes_of",
     "storage_effect_of",
     "linearized_view",
