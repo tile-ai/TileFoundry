@@ -31,7 +31,7 @@ from tilefoundry.visitor_registry.access_relation import (
     register_access_relation,
     register_type_relation,
 )
-from tilefoundry.visitor_registry.relation_build import build_domain
+from tilefoundry.visitor_registry.relation_build import build_domain, identity_access
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
@@ -128,7 +128,9 @@ def _stack_access(call: "Call", ctx) -> AccessRelations:
 
     The result has one more axis than its inputs, so an input's relation drops
     that axis rather than pretending to an index on it. Which position an input
-    lands at is the guard; how much it moves is its own size.
+    lands at is the guard; how much it moves is its own size. The result keeps
+    every axis it has: borrowing an input's map would describe a value one axis
+    short, pinned to whichever position that input landed at.
     """
     result = ctx.local_type_of(call)
     rank = len(result.shape)
@@ -147,5 +149,5 @@ def _stack_access(call: "Call", ctx) -> AccessRelations:
             moves(item, elements_of(ctx.local_type_of(arg)))
             for item, arg in zip(inputs, call.args)
         ),
-        outputs=(moves(inputs[0], elements_of(result)),),
+        outputs=(moves(identity_access(rank), elements_of(result)),),
     )

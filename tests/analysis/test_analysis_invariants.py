@@ -78,9 +78,11 @@ from tilefoundry.ir.core import (
     binding_name,
     get_metadata,
 )
+from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.nn.layer_norm import LayerNorm
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.nn.relu import ReLU
@@ -93,6 +95,8 @@ from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.quant import Quant
 from tilefoundry.ir.hir.tensor.reshape import Reshape, is_induction_var_singleton_reshape
+from tilefoundry.ir.hir.tensor.split import Split
+from tilefoundry.ir.hir.tensor.stack import Stack
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.types import (
     DType,
@@ -789,6 +793,92 @@ def test_every_boundary_states_the_movement_its_op_performs() -> None:
     assert counted(access_relation_registry.lookup(CacheUpdate)(cached, ctx)) == (
         [832, 1, 1, 192],
         [192],
+    )
+
+
+def _as_map(pattern) -> "isl.map":
+    """One comparable carrier, whichever of the two affine forms was stated."""
+    return pattern if isinstance(pattern, isl.map) else isl.map.from_multi_aff(pattern)
+
+
+def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:
+    """A quantity says how much crossed; the pattern says from where.
+
+    The amount can be right while the coordinates are wrong, and a dependence
+    reads the coordinates. Three shapes here have no identity to fall back on:
+    a result with an axis its inputs do not have, a source read in pieces by
+    several outputs, and an operand broadcast against a larger result. Reusing
+    another boundary's map in any of them describes a program nobody wrote.
+    """
+    ctx = TypeInferContext()
+
+    stacked = Call(
+        type=make_tensor_type((2, 4, 8), DType.f32),
+        target=Stack(axis=0),
+        args=(
+            Var(type=make_tensor_type((4, 8), DType.f32), name="lower"),
+            Var(type=make_tensor_type((4, 8), DType.f32), name="upper"),
+        ),
+    )
+    relations = access_relation_registry.lookup(Stack)(stacked, ctx)
+    assert _as_map(relations.inputs[0].pattern).is_equal(
+        isl.map("{ [d0, d1, d2] -> [d1, d2] : d0 = 0 }")
+    )
+    assert _as_map(relations.inputs[1].pattern).is_equal(
+        isl.map("{ [d0, d1, d2] -> [d1, d2] : d0 = 1 }")
+    )
+    assert _as_map(relations.outputs[0].pattern).is_equal(
+        isl.map("{ [d0, d1, d2] -> [d0, d1, d2] }")
+    )
+
+    parted = Call(
+        type=TupleType(
+            fields=(
+                make_tensor_type((3, 5), DType.f32),
+                make_tensor_type((3, 5), DType.f32),
+            )
+        ),
+        target=Split(axis=0, num_splits=2),
+        args=(Var(type=make_tensor_type((6, 5), DType.f32), name="whole"),),
+    )
+    relations = access_relation_registry.lookup(Split)(parted, ctx)
+    assert _as_map(relations.inputs[0].pattern).is_equal(
+        isl.map("{ [d0, d1] -> [d0, d1] }")
+    )
+    assert _as_map(relations.outputs[0].pattern).is_equal(
+        isl.map("{ [d0, d1] -> [d0, d1] : 0 <= d0 < 3 }")
+    )
+    assert _as_map(relations.outputs[1].pattern).is_equal(
+        isl.map("{ [d0, d1] -> [d0 + 3, d1] : 0 <= d0 < 3 }")
+    )
+
+    added = Call(
+        type=make_tensor_type((4, 8), DType.f32),
+        target=Binary(kind=BinaryKind.ADD),
+        args=(
+            Var(type=make_tensor_type((4, 8), DType.f32), name="whole"),
+            Var(type=make_tensor_type((8,), DType.f32), name="row"),
+        ),
+    )
+    relations = access_relation_registry.lookup(Binary)(added, ctx)
+    assert _as_map(relations.inputs[0].pattern).is_equal(
+        isl.map("{ [d0, d1] -> [d0, d1] }")
+    )
+    assert _as_map(relations.inputs[1].pattern).is_equal(
+        isl.map("{ [d0, d1] -> [d1] }")
+    )
+
+    held = Call(
+        type=make_tensor_type((4, 8), DType.f32),
+        target=Binary(kind=BinaryKind.MUL),
+        args=(
+            Var(type=make_tensor_type((4, 8), DType.f32), name="whole"),
+            Var(type=make_tensor_type((4, 1), DType.f32), name="column"),
+        ),
+    )
+    relations = access_relation_registry.lookup(Binary)(held, ctx)
+    assert _as_map(relations.inputs[1].pattern).is_equal(
+        isl.map("{ [d0, d1] -> [d0, 0] }")
     )
 
 

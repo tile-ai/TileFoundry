@@ -28,6 +28,7 @@ from tilefoundry.visitor_registry.access_relation import (
     moves,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.relation_build import identity_access
 
 
 @register_op
@@ -105,7 +106,9 @@ def _split_access(call: "Call", ctx) -> AccessRelations:
 
     The offsets are the same arithmetic the type inference uses to shape the
     parts, so a part cannot claim a run that its Type does not have. The source
-    is read once across all of them, not once per part.
+    is read once across all of them, not once per part -- and read whole, which
+    is why its own boundary is the full domain rather than the first part's map,
+    under which every later part would vanish from what the source is read for.
     """
     source = ctx.local_type_of(call.args[0])
     rank = len(source.shape)
@@ -132,6 +135,6 @@ def _split_access(call: "Call", ctx) -> AccessRelations:
         )
     per_part = elements_of(source) // parts
     return AccessRelations(
-        inputs=(moves(outputs[0], elements_of(source)),),
+        inputs=(moves(identity_access(rank), elements_of(source)),),
         outputs=tuple(moves(item, per_part) for item in outputs),
     )

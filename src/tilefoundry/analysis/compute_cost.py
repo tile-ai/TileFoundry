@@ -243,23 +243,23 @@ def _stated_movement(call: Call, cost: Cost, ctx: CostContext) -> tuple[TrafficB
     stated: list[TrafficBytes] = []
     for index, (operand, moved) in enumerate(zip(operands, cost.traffic)):
         if index == len(call.args):
-            share = _result_share(relations, ctx.local_type_of(call))
+            moving = _output_bytes(relations, ctx.local_type_of(call))
         else:
             quantity = access_elements(relations, boundary=index)
-            share = _element_share(
+            moving = _bytes_for(
                 ctx.local_type_of(operand),
                 quantity.upper if quantity is not None else None,
             )
-        if share is None:
+        if moving is None:
             stated.append(moved)
             continue
         stated.append(
-            TrafficBytes(share if moved.read else 0, share if moved.write else 0)
+            TrafficBytes(moving if moved.read else 0, moving if moved.write else 0)
         )
     return tuple(stated)
 
 
-def _result_share(relations: AccessRelations, held: Type) -> int | None:
+def _output_bytes(relations: AccessRelations, held: Type) -> int | None:
     """Bytes the result moves, taking one output boundary per field it has.
 
     A tuple result is as many boundaries as it has fields, each somewhere of its
@@ -271,16 +271,14 @@ def _result_share(relations: AccessRelations, held: Type) -> int | None:
     total = 0
     for position, field_ in enumerate(fields):
         quantity = access_elements(relations, boundary=position, output=True)
-        share = _element_share(
-            field_, quantity.upper if quantity is not None else None
-        )
-        if share is None:
+        moving = _bytes_for(field_, quantity.upper if quantity is not None else None)
+        if moving is None:
             return None
-        total += share
+        total += moving
     return total
 
 
-def _element_share(held: Type, elements: int | None) -> int | None:
+def _bytes_for(held: Type, elements: int | None) -> int | None:
     """The bytes *elements* of *held* occupy, or ``None`` when unanswerable.
 
     Taken as a share of the whole rather than as an element size, because a

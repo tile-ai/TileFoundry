@@ -25,6 +25,28 @@ def identity_access(rank: int) -> "isl.multi_aff":
     return isl.multi_aff(f"{{ [{dims}] -> [{dims}] }}") if rank else isl.multi_aff("{ [] -> [] }")
 
 
+def broadcast_access(result_shape: tuple, operand_shape: tuple) -> "isl.multi_aff":
+    """Which coordinate of an operand a result coordinate reads.
+
+    An operand of the result's own shape reads the coordinate it is at. A
+    shorter one right-aligns, dropping the leading axes it does not have; an
+    axis it holds one of is read at zero however far the result runs along it.
+    Both are still functions of the result coordinate, so both keep the
+    canonical carrier rather than becoming a map nobody has to widen.
+    """
+    rank = len(result_shape)
+    dims = [f"d{index}" for index in range(rank)]
+    offset = rank - len(operand_shape)
+    reads = [
+        "0" if operand_shape[index - offset] == 1 else dims[index]
+        for index in range(offset, rank)
+    ]
+    domain = ", ".join(dims)
+    if not reads:
+        return isl.multi_aff(f"{{ [{domain}] -> [] }}") if rank else isl.multi_aff("{ [] -> [] }")
+    return isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}")
+
+
 def elementwise_relation(n_inputs: int = 1):
     """Build a forward handler whose input and output maps are all identity."""
 
@@ -109,6 +131,8 @@ def validate_output_map_arity(output_map: "isl.map", output_shape: tuple) -> Non
 
 
 __all__ = [
+    "broadcast_access",
+    "identity_access",
     "identity_map",
     "elementwise_relation",
     "build_domain",
