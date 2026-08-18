@@ -38,6 +38,7 @@ from tilefoundry.ir.types.substitute import (
     substitute_topology_dims,
 )
 from tilefoundry.ir.visitor import ExprMutator
+from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
@@ -47,7 +48,7 @@ from .compute_cost import (
     alias_conclusions,
 )
 from .errors import AnalysisError
-from .facts import ParallelCapacityFacts, ThroughputFacts
+from .facts import ParallelCapacityFacts, PerformanceServiceFacts
 from .metadata import (
     ComputeCostMetadata,
     MemoryMetadata,
@@ -225,7 +226,6 @@ def _call_placements(
     module: Module,
     function: Function,
     level: str,
-    facts: ThroughputFacts,
 ) -> dict[int, Placement]:
     """Validate and prepare every primitive Call placement for performance."""
     selected = module.resolve_topology(level)
@@ -247,7 +247,7 @@ def _call_placements(
             result[id(expr)] = _result_placement(expr.type, selected)
         except AnalysisError as error:
             cost = _call_cost_record(expr, whole, local, aliases[id(expr)])
-            if _is_structural_occurrence(cost, facts):
+            if _is_structural_occurrence(cost):
                 result[id(expr)] = frozenset()
                 continue
             raise AnalysisError(f"performance: {describe(expr)}: {error}") from None
@@ -314,7 +314,7 @@ class PerformanceInputChecker:
         """Require a machine whose stated capacity and rates fit the question."""
         try:
             capacity = ctx.target.get_facts(ParallelCapacityFacts)
-            throughput = ctx.target.get_facts(ThroughputFacts)
+            services = ctx.target.get_facts(PerformanceServiceFacts)
         except UnsupportedCapabilityError as error:
             raise AnalysisError(f"performance: {error}") from None
         if ctx.level is None:
@@ -333,16 +333,16 @@ class PerformanceInputChecker:
                 "performance: the target must publish a positive parallel-unit "
                 f"capacity, got {units!r}"
             )
-        if throughput.rate_unit != ctx.level:
+        if services.unit != ctx.level:
             raise AnalysisError(
                 f"performance: selected topology level {ctx.level!r}, but the "
-                f"target's per-unit rates are stated for {throughput.rate_unit!r}"
+                f"target's one-unit throughputs are stated for {services.unit!r}"
             )
 
     def check_call(self, call: Call, ctx: AnalysisCheckContext) -> None:
         """Require a placement for every occurrence that will take time."""
         cost = _call_cost_record(call, ctx.whole, ctx.local, ctx.aliases.get(id(call)))
-        if _is_structural_occurrence(cost, ctx.target.get_facts(ThroughputFacts)):
+        if _is_structural_occurrence(cost):
             return
         try:
             _result_placement(call.type, ctx.selected_topology)

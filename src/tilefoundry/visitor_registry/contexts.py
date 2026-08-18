@@ -169,16 +169,18 @@ class TrafficBytes:
 class Cost:
     """Leaf-local logical work for one selected ``OpCandidate``.
 
-    ``flops`` groups leaf-local logical work by compute ``DType`` so one Op
-    can report mixed work without selecting an ALU/TensorCore
-    implementation. ``traffic`` carries one entry per operand in call order
-    with the result last, so an Op that reads part of an input says so where
-    it knows it. Neither field selects a hardware implementation, and neither
-    names a memory level: that is a function of the operand's Type.
+    ``flops`` groups leaf-local logical work by compute ``DType`` so one Op can
+    report mixed work without selecting an ALU/TensorCore implementation.
+    ``service`` counts what is not floating point at all -- a comparison, a
+    select, an integer add -- by the service it asks for, because a dtype is not
+    a kind of work. ``traffic`` carries one entry per operand in call order with
+    the result last, so an Op that reads part of an input says so where it knows
+    it. No field names a hardware implementation or a memory level.
     """
 
     flops: Mapping[DType, int]
     traffic: tuple[TrafficBytes, ...]
+    service: Mapping[str, int] = field(default_factory=dict)
 
     @property
     def bytes(self) -> int:
@@ -194,6 +196,8 @@ class Cost:
             for value in (moved.read, moved.write)
         ):
             raise ValueError("Cost traffic must be non-negative integers")
+        if any(not isinstance(value, int) or value < 0 for value in self.service.values()):
+            raise ValueError("Cost service work must be non-negative integers")
 
 
 __all__ = [

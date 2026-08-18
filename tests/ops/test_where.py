@@ -110,6 +110,12 @@ def test_where_typeinfer(case):
 
 
 def test_where_cost_counts_selection_and_materialization():
+    """A select is a select, not a floating-point operation on its result.
+
+    The result dtype is whatever was selected; the work is one selection per
+    element, which the machine serves on its scalar path. Calling it a bool
+    FLOP put work on the float pipe that never went there.
+    """
     run_cost_case(
         CostCase(
             "where",
@@ -119,7 +125,7 @@ def test_where_cost_counts_selection_and_materialization():
                 make_tensor_type((2, 3, 4), DType.f32),
                 make_tensor_type((2, 3, 4), DType.f32),
             ),
-            flops={DType.bool: 24},
+            service={"select": 24},
             traffic=(
                 TrafficBytes(read=3),
                 TrafficBytes(read=96),

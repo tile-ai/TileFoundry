@@ -458,6 +458,8 @@ class ComputeCostMetadata(IRMetadata):
     Attributes:
         flops: attribute; Flop count per compute DType name, sorted by name.
         flops_per_unit: attribute; Flop count performed by one unit of the analysed topology level.
+        service: attribute; Result count per service kind, sorted by kind.
+        service_per_unit: attribute; Result count per service kind for one unit of the analysed topology level.
         traffic: attribute; TrafficBytes per storage level name.
         traffic_per_unit: attribute; TrafficBytes per storage level name for one unit of the analysed topology level.
         operands: attribute; TrafficBytes per operand, positional against (*call.args, call); present only for a direct primitive call.
@@ -465,6 +467,8 @@ class ComputeCostMetadata(IRMetadata):
 
     flops: tuple[tuple[str, int], ...] = ()
     flops_per_unit: tuple[tuple[str, int], ...] = ()
+    service: tuple[tuple[str, int], ...] = ()
+    service_per_unit: tuple[tuple[str, int], ...] = ()
     traffic: tuple[tuple[str, TrafficBytes], ...] = ()
     traffic_per_unit: tuple[tuple[str, TrafficBytes], ...] = ()
     operands: tuple[TrafficBytes, ...] = ()
@@ -473,6 +477,8 @@ class ComputeCostMetadata(IRMetadata):
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written, then multiply by the enclosing recomputation factor. For a Function Call, take the callee's summed `flops` and multiply by the call site's factor. | No |
+| `service` | For a primitive Call, take its cost evaluator's service counts -- the results it asks a machine for that are not floating point -- and multiply by the same factor. A Function Call takes the callee's summed `service`. | No |
+| `service_per_unit` | The same evaluator over the same projected Types, multiplied by the same factor. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `flops_per_unit` | Use the same evaluator over Types projected through authored `Split`s at or coarser than the analysed level, then multiply by the same factor. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `traffic_per_unit` | Run the same evaluator over Types projected through authored `Split`s at or coarser than the analysed level, then charge and group the projected movement by storage level. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `traffic` | Multiply the evaluator's per-operand movement by the same factor, charge concrete tensor leaves to their storage levels, and group by level. A Type with leaves at several levels keeps those leaf bytes separate. A `UMAT` leaf has no residency of its own: when it appears in `Call.args`, charge its own bytes at the target's established `rmem` materialization level; when it appears only in an Op attribute, charge nothing. A Function Call takes the callee's grouped total. | No |
@@ -483,7 +489,7 @@ record, stated exactly as a Call's is. The whole program's work is not a second
 record.
 
 ```text
-compute-cost flops=<dtype>:<int>@<int>[,...] traffic=<level>:r<int>/w<int>@r<int>/w<int>[,...]
+compute-cost flops=<dtype>:<int>@<int>[,...] service=<kind>:<int>@<int>[,...] traffic=<level>:r<int>/w<int>@r<int>/w<int>[,...]
 ```
 
 Every measured Call receives this annotation. Each key pairs the whole quantity
@@ -493,7 +499,7 @@ emitted only when asked for ([cli Analyze](./cli.md#analyze)) and is absent from
 Function Call, which has no split:
 
 ```text
-compute-cost flops=<dtype>:<int>@<int>[,...] traffic=<level>:r<int>/w<int>@r<int>/w<int>[,...][ operands=<position>:r<int>/w<int>[,...]]
+compute-cost flops=<dtype>:<int>@<int>[,...] service=<kind>:<int>@<int>[,...] traffic=<level>:r<int>/w<int>@r<int>/w<int>[,...][ operands=<position>:r<int>/w<int>[,...]]
 ```
 
 Each reported Call's JSON projection is under its `compute-cost` key. `operands`
@@ -502,6 +508,8 @@ appears only for a primitive Call and contains objects in positional order:
 ```text
 {"flops": {<dtype>: <int>},
  "flops_per_unit": {<dtype>: <int>},
+ "service": {<kind>: <int>},
+ "service_per_unit": {<kind>: <int>},
  "traffic": {<level>: {"read": <int>, "write": <int>}},
  "traffic_per_unit": {<level>: {"read": <int>, "write": <int>}},
  "operands": [{"arg": <position>, "name": <name>, "type": <type>,
@@ -893,27 +901,54 @@ The family reads this target projection:
 
 ```python
 class ThroughputFacts:
-    """Carry whole-device and one-unit rates used to price work.
+    """Carry the whole-device rates a bound divides the whole program's work by.
 
     Attributes:
         peak_flops_per_second: attribute; Published compute rates by dtype.
         memory_bandwidth_bytes_per_second: attribute; Published memory bandwidth.
         bandwidth_level: attribute; Memory level whose traffic the bandwidth measures.
-        peak_flops_per_second_per_unit: attribute; Published compute rates for one unit.
-        memory_bandwidth_bytes_per_second_per_unit: attribute; One unit's bandwidth share.
-        rate_unit: attribute; Topology level the one-unit rates describe.
     """
 
     peak_flops_per_second: tuple[tuple[DType, int], ...]
     memory_bandwidth_bytes_per_second: int | None
     bandwidth_level: str
-    peak_flops_per_second_per_unit: tuple[tuple[DType, int], ...]
-    memory_bandwidth_bytes_per_second_per_unit: int | None
-    rate_unit: str
 
     def peak_for(self, dtype: DType) -> int | None: ...
-    def peak_per_unit_for(self, dtype: DType) -> int | None: ...
 ```
+
+What one unit gets through is a separate projection, read by `performance`
+rather than by `roofline`. A bound over the whole device and the time one CTA
+takes are not the same number divided: the device peaks are stated per dtype and
+per second, while the work a program asks for that is not floating point at all
+-- a comparison, a select, an integer add, a local move -- has its own published
+instruction throughput and no dtype to be filed under.
+
+```python
+class PerformanceServiceFacts:
+    """Carry everything one unit gets through, by the kind of work it is asked for.
+
+    Attributes:
+        unit_flops: attribute; One unit's floating-point rate, by dtype.
+        unit_ops: attribute; One unit's rate for each named service kind.
+        unit_bandwidth: attribute; One unit's rate for each memory level it moves at.
+        unit: attribute; Topology level these throughputs describe.
+    """
+
+    unit_flops: tuple[tuple[DType, int], ...]
+    unit_ops: tuple[tuple[str, int], ...]
+    unit_bandwidth: tuple[tuple[str, int], ...]
+    unit: str
+
+    def flops(self, dtype: DType) -> int | None: ...
+    def ops(self, kind: str) -> int | None: ...
+    def bandwidth(self, level: str) -> int | None: ...
+```
+
+The service kinds a target states are named by the operations that record them:
+`integer`, `predicate`, `select`, `transcendental` and `local-copy`. `local-copy`
+is counted in scalar moves rather than bytes -- one move per 32-bit word, so
+moving `n` bytes counts `ceil(n / 4)` -- because it stands in for the register
+and shared-memory bandwidths no vendor publishes.
 
 Requesting roofline adds the exact summed compute-cost `flops` and `traffic`,
 the memory record's per-level peak, and this verdict to the summary:
@@ -948,25 +983,32 @@ as defined in that family's section.
 - constraints:
   - `ThroughputFacts.peak_for` MUST return `None` for a dtype with no published
     rate; analysis MUST NOT substitute an assumed rate.
-  - `peak_per_unit_for` MUST return `None` for a dtype with no published
-    one-unit rate. Performance MUST reject non-zero work whose dtype has no
-    such rate and MUST NOT substitute the whole-device rate.
+  - `PerformanceServiceFacts.flops`, `ops` and `bandwidth` MUST return `None`
+    for an unstated dtype, kind or level. Performance MUST reject non-zero work
+    of that dtype, kind or level and MUST NOT substitute the whole-device rate
+    or another kind's rate.
   - `bandwidth_level` MUST select the traffic level divided by the published
     bandwidth rather than summing traffic across levels.
   - Performance local duration MUST divide `ComputeCostMetadata.flops_per_unit`
-    and the `bandwidth_level` entry of `traffic_per_unit` by the matching
-    one-unit rates. An occurrence with no work at those two and no non-zero
-    dtype MUST take zero time.
-  - Traffic at any other storage level MUST stay in `ComputeCostMetadata` and
-    MUST NOT enter the duration or refuse the occurrence: the target states one
-    bandwidth, for one level, so movement elsewhere has no service to be timed
-    against. This is a statement about what this model prices, not a claim that
-    those bytes are free; a level earns time when a target publishes a rate for
-    it or a later service model gives it one.
-  - Work whose dtype has no published one-unit rate is the opposite case and
-    MUST still refuse: it belongs on the same clock as the rest of the compute,
-    so pricing it at zero would leave a hole inside a number the reader takes
-    as whole.
+    by `unit_flops`, `service_per_unit` by `unit_ops`, and the `bandwidth_level`
+    entry of `traffic_per_unit` by `unit_bandwidth`. Compute and movement
+    overlap within one occurrence, so its duration is the greater of the two
+    sides rather than their sum.
+  - Traffic at a level with no stated one-unit bandwidth MUST be charged as the
+    scalar moves it is made of, under the `local-copy` service, whenever the
+    occurrence records no flops and no other service. An occurrence that does
+    record work already pays for reading its own operands, and MUST NOT be
+    charged a second time for the same registers.
+  - An occurrence that computes nothing and moves nothing is a view: it renames
+    what is already there and MUST take zero time. Every other occurrence takes
+    a machine time, and MUST therefore carry an execution placement.
+  - Work of a dtype or a kind the target states no one-unit throughput for MUST
+    refuse rather than price at zero: it belongs on the same clock as the rest
+    of the work, so pricing it at nothing would leave a hole inside a number the
+    reader takes as whole.
+  - A predicate MUST NOT be recorded as floating-point work. A comparison
+    records `predicate` service and a selection records `select`; neither has a
+    FLOP count, and neither MAY be priced at zero for want of one.
   - Rate-to-duration divisions MUST use exact integer ceiling division. They
     MUST NOT pass through floating-point arithmetic.
   - Roofline records MUST be attached to every reachable `Call` and `Function`.
@@ -1110,11 +1152,14 @@ model.
 - constraints:
   - A primitive Call is eligible for performance only when every tensor leaf of its
     result type carries one `ShardLayout` at the selected topology level and all
-    leaves name the same participant set. An occurrence whose `flops_per_unit`
-    are all zero and whose `traffic_per_unit` is zero at the target's published
-    bandwidth level is structural: it needs no result placement and MUST receive
-    no record, because an empty interval reads as a measurement rather than as
-    the absence of one. It still carries its producers' precedence to its
+    leaves name the same participant set. An occurrence whose `flops_per_unit`,
+    `service_per_unit` and `traffic_per_unit` are all zero is structural -- it
+    renames what is already there rather than doing anything: it needs no result
+    placement and MUST receive no record, because an empty interval reads as a
+    measurement rather than as the absence of one. Movement at a level with no
+    published bandwidth does NOT make an occurrence structural; it is charged
+    under `local-copy`, so a program staged through smem is not free for want of
+    a published smem bandwidth. It still carries its producers' precedence to its
     consumers. Inputs MUST NOT supply placement for an unplaced result.
     `Reshard` executes on the placement of its result.
   - The participant set MUST be the exact image of the result Mesh layout under

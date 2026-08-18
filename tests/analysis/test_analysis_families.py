@@ -33,6 +33,7 @@ from tilefoundry.analysis import (
     MemoryRelationKind,
     ParallelCapacityFacts,
     PerformanceMetadata,
+    PerformanceServiceFacts,
     PerformanceSummaryMetadata,
     RooflineMetadata,
     ThroughputFacts,
@@ -411,7 +412,7 @@ class _PricingBoundary:
             return tf.add(local, local)
 
     @func
-    def unrated_dtype(source: Tensor[(64,), "f32"]):
+    def serviced_predicate(source: Tensor[(64,), "f32"]):
         with Mesh(("cta",), layout=(1,), names=("tile",)) as cta:
             placed = tf.reshard(source, (64 @ cta.tile,), "gmem")
             return placed <= placed
@@ -1293,12 +1294,7 @@ def test_mega_kernel_preserves_placement_costs_and_dependency_order() -> None:
         assert layout.outer is not None
         assert (layout.outer.shape, layout.offset) == (shape, offset)
 
-    placements = _call_placements(
-        MoEMegaKernel,
-        result.function,
-        "cta",
-        MoEMegaKernel.resolve_target().get_facts(ThroughputFacts),
-    )
+    placements = _call_placements(MoEMegaKernel, result.function, "cta")
     prepared = set(placements.values())
 
     assert frozenset(range(120)) in prepared
@@ -1585,8 +1581,7 @@ def test_an_overwrite_waits_for_everything_that_read_what_it_replaces() -> None:
     )
     assert get_metadata(written, BufferAliasMetadata) == BufferAliasMetadata("update", (0,))
     assert _base_of(moved) is made and _base_of(written.args[0]) is made
-    facts = _OverwrittenAcrossGroups.resolve_target().get_facts(ThroughputFacts)
-    placements = _call_placements(_OverwrittenAcrossGroups, result.function, "cta", facts)
+    placements = _call_placements(_OverwrittenAcrossGroups, result.function, "cta")
     assert placements[id(side)].isdisjoint(placements[id(written)])
     assert (
         get_metadata(side, PerformanceMetadata).timeline.end_ns
@@ -1651,14 +1646,19 @@ def test_time_comes_from_the_rates_the_target_states_and_from_nothing_else() -> 
     could be, so pricing it as free would be a number with a hole in it.
     """
     functions = {function.name: function for function in _PricingBoundary.functions}
-    throughput = _PricingBoundary.resolve_target().get_facts(ThroughputFacts)
+    target = _PricingBoundary.resolve_target()
+    throughput = target.get_facts(ThroughputFacts)
+    target = _unplaced_structural.resolve_target()
+    services = target.get_facts(PerformanceServiceFacts)
 
     result = analyze(_PricingBoundary, functions["unpriced_only"], analysis="performance")
     costs = [get_metadata(call, ComputeCostMetadata) for call in _calls(result.function)]
     assert any(record.traffic_per_unit_at("rmem").total_bytes for record in costs)
     assert all(
-        _local_duration_ns(record, throughput, level="cta")
-        == _local_duration_ns(_priced_levels_only(record, throughput), throughput, level="cta")
+        _local_duration_ns(record, throughput, services, level="cta")
+        == _local_duration_ns(
+            _priced_levels_only(record, throughput), throughput, services, level="cta"
+        )
         for record in costs
     )
 
@@ -1671,16 +1671,31 @@ def test_time_comes_from_the_rates_the_target_states_and_from_nothing_else() -> 
         if record.traffic_per_unit_at("gmem").total_bytes
         and record.traffic_per_unit_at("rmem").total_bytes
     )
-    assert _local_duration_ns(moved, throughput, level="cta") == _local_duration_ns(
-        _priced_levels_only(moved, throughput), throughput, level="cta"
+    assert _local_duration_ns(
+        moved, throughput, services, level="cta"
+    ) == _local_duration_ns(
+        _priced_levels_only(moved, throughput), throughput, services, level="cta"
     )
 
+    computed = next(
+        record
+        for record in (
+            get_metadata(call, ComputeCostMetadata) for call in _calls(result.function)
+        )
+        if any(value for _dtype, value in record.flops_per_unit)
+    )
     with pytest.raises(
         AnalysisError,
-        match=r"^performance: target publishes no per-unit compute rate for "
-        r"dtype 'bool' at 'cta'$",
+        match=r"^performance: target states no one-unit throughput for "
+        r"dtype 'f32' at 'cta'$",
     ):
-        analyze(_PricingBoundary, functions["unrated_dtype"], analysis="performance")
+        _local_duration_ns(computed, throughput, replace(services, unit_flops=()), level="cta")
+    with pytest.raises(
+        AnalysisError,
+        match=r"^performance: target states no one-unit throughput for "
+        r"'local-copy' work at 'cta'$",
+    ):
+        _local_duration_ns(moved, throughput, replace(services, unit_ops=()), level="cta")
 
 
 def _priced_levels_only(
@@ -1715,18 +1730,36 @@ def test_a_zero_cost_structural_occurrence_carries_no_performance_record() -> No
     )
 
 
-def test_an_unplaced_structural_occurrence_ignores_unmodelled_traffic() -> None:
-    _result, entry = _run(_unplaced_structural, "performance")
+def test_a_local_materialise_costs_the_scalar_moves_it_is_made_of() -> None:
+    """Movement no vendor publishes a bandwidth for is charged, not dropped.
+
+    NVIDIA states no register or shared-memory bandwidth, and the model used to
+    read that silence as zero time: a program staged entirely through smem came
+    out free. It is charged instead as the scalar moves it is made of, one per
+    32-bit word, against a published instruction throughput. Because it now
+    takes time, it also needs a placement -- an occurrence nobody runs cannot be
+    given a duration -- and a materialise written outside any Mesh is refused
+    with the diagnostic that says where to put it.
+    """
+    _result, entry = _run(_unplaced_structural, "compute-cost")
 
     (view,) = _calls(entry)
     cost = get_metadata(view, ComputeCostMetadata)
     assert cost is not None
-    assert get_metadata(view, PerformanceMetadata) is None
     assert cost.flops_per_unit == ()
+    assert cost.service_per_unit == ()
     assert cost.traffic_per_unit_at("gmem").total_bytes == 0
     assert cost.traffic_per_unit_at("rmem") == TrafficBytes(read=8, write=8)
-    throughput = _unplaced_structural.resolve_target().get_facts(ThroughputFacts)
-    assert _local_duration_ns(cost, throughput, level="cta") == 0
+
+    target = _unplaced_structural.resolve_target()
+    services = target.get_facts(PerformanceServiceFacts)
+    words = -(-16 // 4)
+    assert _local_duration_ns(
+        cost, target.get_facts(ThroughputFacts), services, level="cta"
+    ) == -(-(words * 1_000_000_000) // services.ops("local-copy"))
+
+    with pytest.raises(AnalysisError, match=r"op=Stack: has no cta placement"):
+        _run(_unplaced_structural, "performance")
 
 
 def test_the_gpu_memory_graph_is_not_a_tree() -> None:

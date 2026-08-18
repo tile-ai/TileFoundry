@@ -24,6 +24,7 @@ from tilefoundry.target.services import Analyzer, Scheduler
 _ANALYSIS_FACTS = {
     "MemoryHierarchyFacts",
     "ParallelCapacityFacts",
+    "PerformanceServiceFacts",
     "ThroughputFacts",
 }
 
@@ -72,6 +73,7 @@ __all__ = [
     "Device",
     "MemoryHierarchyFacts",
     "ParallelCapacityFacts",
+    "PerformanceServiceFacts",
     "Scheduler",
     "Target",
     "TargetFactsError",

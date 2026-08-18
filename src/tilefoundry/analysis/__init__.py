@@ -12,6 +12,7 @@ from .facts import (
     MemoryLevelRelation,
     MemoryRelationKind,
     ParallelCapacityFacts,
+    PerformanceServiceFacts,
     ThroughputFacts,
 )
 from .metadata import (
@@ -68,6 +69,7 @@ __all__ = [
     "MemoryRelationKind",
     "OccurrenceProvenance",
     "ParallelCapacityFacts",
+    "PerformanceServiceFacts",
     "PerformanceMetadata",
     "PerformanceSummaryMetadata",
     "RooflineMetadata",

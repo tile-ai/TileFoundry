@@ -67,7 +67,7 @@ from tilefoundry.ir.types.shard import (
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 from tilefoundry.schedule.partition import build_partition_program
-from tilefoundry.target import CudaTarget, ThroughputFacts
+from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFacts
 
 CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT}
@@ -113,14 +113,16 @@ def assert_performance_contract(result: AnalysisResult) -> None:
     bound = get_metadata(fn, RooflineMetadata)
     assert bound is not None and bound.ideal_ns <= predicted_ns
 
-    throughput = result.module.resolve_target().get_facts(ThroughputFacts)
+    module_target = result.module.resolve_target()
+    throughput = module_target.get_facts(ThroughputFacts)
+    services = module_target.get_facts(PerformanceServiceFacts)
     timed = 0
     for expr in postorder(fn.body):
         if not isinstance(expr, Call) or isinstance(expr.target, Function):
             continue
         cost = get_metadata(expr, ComputeCostMetadata)
         assert cost is not None
-        duration = _local_duration_ns(cost, throughput, level=result.level)
+        duration = _local_duration_ns(cost, throughput, services, level=result.level)
         record = get_metadata(expr, PerformanceMetadata)
         if not duration:
             assert record is None

@@ -26,18 +26,26 @@ class OccurrenceProvenance(IRMetadata):
 class ComputeCostMetadata(IRMetadata):
     """Record one occurrence's work or one Function's total work.
 
-    ``flops`` and ``traffic`` state global work; their ``*_per_unit`` partners
-    apply shard projection at the requested topology level. On a Call, all
-    quantities state one occurrence and ``operands`` is positional against
-    ``(*call.args, call)``. On a Function, loops contribute their trip count and
-    ``operands`` is empty.
+    ``flops``, ``service`` and ``traffic`` state global work; their
+    ``*_per_unit`` partners apply shard projection at the requested topology
+    level. ``service`` counts what is not floating point -- comparing,
+    selecting, whole-number arithmetic, a local move -- by the service it asks
+    for. On a Call, all quantities state one occurrence and ``operands`` is
+    positional against ``(*call.args, call)``. On a Function, loops contribute
+    their trip count and ``operands`` is empty.
     """
 
     flops: tuple[tuple[str, int], ...] = ()
     flops_per_unit: tuple[tuple[str, int], ...] = ()
+    service: tuple[tuple[str, int], ...] = ()
+    service_per_unit: tuple[tuple[str, int], ...] = ()
     traffic: tuple[tuple[str, TrafficBytes], ...] = ()
     traffic_per_unit: tuple[tuple[str, TrafficBytes], ...] = ()
     operands: tuple[TrafficBytes, ...] = ()
+
+    def service_per_unit_of(self, kind: str) -> int:
+        """One unit's count of *kind*, zero when the call asks for none."""
+        return next((value for name, value in self.service_per_unit if name == kind), 0)
 
     def traffic_at(self, level: str) -> TrafficBytes:
         """Traffic at *level*, zero when the call does not touch it."""

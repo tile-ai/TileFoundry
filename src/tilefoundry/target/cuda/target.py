@@ -127,11 +127,13 @@ class CudaTarget(Target):
         from tilefoundry.analysis.facts import (  # noqa: PLC0415
             MemoryHierarchyFacts,
             ParallelCapacityFacts,
+            PerformanceServiceFacts,
             ThroughputFacts,
         )
         from tilefoundry.target.cuda.facts import (  # noqa: PLC0415
             memory_hierarchy,
             parallel_capacity,
+            performance_service,
             throughput,
         )
 
@@ -141,6 +143,8 @@ class CudaTarget(Target):
             return facts_result(self, facts_type, throughput(self, query))
         if facts_type is ParallelCapacityFacts:
             return facts_result(self, facts_type, parallel_capacity(self, query))
+        if facts_type is PerformanceServiceFacts:
+            return facts_result(self, facts_type, performance_service(self, query))
 
         from tilefoundry.schedule.pipeline import PipelineFacts  # noqa: PLC0415
 

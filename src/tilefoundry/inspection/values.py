@@ -219,6 +219,21 @@ def _paired_flops(record: ComputeCostMetadata) -> dict[str, TotalAndPerUnit[int]
     }
 
 
+def _paired_service(record: ComputeCostMetadata) -> dict[str, TotalAndPerUnit[int]]:
+    """Each service kind's work, whole and per unit, as one value.
+
+    What a machine is asked for that is not floating point: comparing, selecting,
+    integer arithmetic, a transcendental, a local move. Reported beside the flops
+    rather than folded into them, because a predicate priced as a FLOP is a
+    number about a pipe the work never went down.
+    """
+    per_unit = dict(record.service_per_unit)
+    return {
+        kind: TotalAndPerUnit(total, per_unit.get(kind, 0))
+        for kind, total in record.service
+    }
+
+
 def _paired_traffic(
     record: ComputeCostMetadata,
 ) -> dict[str, TotalAndPerUnit[TrafficBytes]]:
@@ -334,6 +349,7 @@ class PerformanceSummaryView(IRMetadata):
 comment(
     ComputeCostMetadata,
     Projection("flops", dict[str, TotalAndPerUnit[int]], _paired_flops),
+    Projection("service", dict[str, TotalAndPerUnit[int]], _paired_service),
     Projection("traffic", dict[str, TotalAndPerUnit[TrafficBytes]], _paired_traffic),
     Projection("operands", dict[str, TrafficBytes], _by_operand, opt_in=True),
 )

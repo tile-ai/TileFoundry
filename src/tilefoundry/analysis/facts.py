@@ -143,37 +143,52 @@ class MemoryHierarchyFacts:
 
 
 @dataclass(frozen=True)
+class PerformanceServiceFacts:
+    """Everything one unit gets through, by the kind of work it is asked for.
+
+    Floating-point work by dtype, movement by the level it crosses, and the work
+    that is not floating point at all by the service it asks for. A comparison,
+    a select, an integer add and a local move all take a machine time, and none
+    of them is a FLOP; a dtype is not a kind of work.
+    """
+
+    unit_flops: tuple[tuple[DType, int], ...]
+    unit_ops: tuple[tuple[str, int], ...]
+    unit_bandwidth: tuple[tuple[str, int], ...]
+    unit: str
+
+    def flops(self, dtype: DType) -> int | None:
+        """What one unit gets through of *dtype*, or ``None`` when unstated."""
+        return next((stated for named, stated in self.unit_flops if named == dtype), None)
+
+    def ops(self, kind: str) -> int | None:
+        """What one unit gets through of *kind*, or ``None`` when unstated."""
+        return next((stated for named, stated in self.unit_ops if named == kind), None)
+
+    def bandwidth(self, level: str) -> int | None:
+        """What one unit moves at *level*, or ``None`` when unstated."""
+        return next((stated for named, stated in self.unit_bandwidth if named == level), None)
+
+
+@dataclass(frozen=True)
 class ThroughputFacts:
-    """The whole-device and one-unit rates used to price work.
+    """The whole-device rates a bound divides the whole program's work by.
 
     ``bandwidth_level`` names the memory level ``memory_bandwidth`` describes,
     so the bound is computed from the traffic at that level rather than from
-    every level summed together. ``rate_unit`` names the topology level whose
-    one-unit rates price local timeline work.
+    every level summed together. What one unit gets through is a different
+    question, asked of `PerformanceServiceFacts`: a bound over the whole device
+    and the time one CTA takes are not the same number divided.
     """
 
     peak_flops_per_second: tuple[tuple[DType, int], ...]
     memory_bandwidth_bytes_per_second: int | None
     bandwidth_level: str
-    peak_flops_per_second_per_unit: tuple[tuple[DType, int], ...]
-    memory_bandwidth_bytes_per_second_per_unit: int | None
-    rate_unit: str
 
     def peak_for(self, dtype: DType) -> int | None:
         """The published rate for *dtype*, or ``None`` when there is none."""
         return next(
             (rate for entry, rate in self.peak_flops_per_second if entry == dtype),
-            None,
-        )
-
-    def peak_per_unit_for(self, dtype: DType) -> int | None:
-        """One unit's published rate for *dtype*, or ``None``."""
-        return next(
-            (
-                rate
-                for entry, rate in self.peak_flops_per_second_per_unit
-                if entry == dtype
-            ),
             None,
         )
 
@@ -198,6 +213,7 @@ __all__ = [
     "MemoryLevelRelation",
     "MemoryRelationKind",
     "ParallelCapacityFacts",
+    "PerformanceServiceFacts",
     "TARGET_MEMORY_OWNER",
     "ThroughputFacts",
 ]

@@ -645,14 +645,17 @@ class Cost:
     """Leaf-local work for one selected candidate.
 
     Attributes:
-        flops: attribute; logical work grouped by compute dtype.
+        flops: attribute; logical floating-point work grouped by compute dtype.
         traffic: attribute; per-operand traffic in argument order, with the
             result last.
+        service: attribute; results asked for that are not floating point,
+            grouped by the kind of service the machine provides.
         bytes: attribute; derived read-only traffic over every operand.
     """
 
     flops: Mapping[DType, int]
     traffic: tuple[TrafficBytes, ...]
+    service: Mapping[str, int]
 
     def bytes(self) -> int: ...
 
@@ -688,7 +691,17 @@ class CostEvaluator(ExprVisitor[Cost]): ...
     and its operand types, so it is the same on every backend; registering them
     from a target package would make one backend's presence decide whether any
     consumer can cost a program at all.
-  - `flops` MUST group leaf-local logical work by compute `DType`.
+  - `flops` MUST group leaf-local floating-point work by compute `DType`. Work
+    that is not floating point MUST NOT appear there under the dtype of its
+    result: a comparison producing `bool` is not `bool` FLOPs, and pricing it as
+    such puts work on a pipe it never went down.
+  - `service` MUST group that work by the kind of service the machine provides,
+    named for the operation rather than for a machine: `integer`, `predicate`,
+    `select`, `transcendental`, `local-copy`. A comparison MUST record
+    `predicate` and a selection MUST record `select`. Counts MUST be
+    non-negative. An evaluator MUST NOT invent a kind no target states a rate
+    for, because a consumer that cannot price a kind refuses rather than
+    substituting zero.
   - `TrafficBytes.total_bytes` and `Cost.bytes` MUST be read-only derived
     properties and MUST NOT be accepted as constructor fields.
   - `traffic` MUST carry exactly one `TrafficBytes` per operand of the call, in

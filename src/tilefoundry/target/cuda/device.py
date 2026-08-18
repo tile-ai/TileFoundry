@@ -27,6 +27,7 @@ class CudaDevice(Device):
 
     l2_capacity_bytes: int | None
     _dense_flops: tuple[tuple[DType, int], ...]
+    _service_ops: tuple[tuple[str, int], ...] = ()
 
     def _python_import_module(self) -> str:
 
@@ -40,6 +41,11 @@ class CudaDevice(Device):
     def dense_flops_per_second(self) -> dict[DType, int]:
         """Return the dense compute-throughput map."""
         return dict(self._dense_flops)
+
+    @property
+    def service_ops_per_second(self) -> dict[str, int]:
+        """What one CTA gets through of each service this device states."""
+        return dict(self._service_ops)
 
     def peak_for(self, dtype: DType) -> int:
         """Return dense device throughput for a compute ``dtype``."""

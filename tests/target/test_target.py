@@ -37,6 +37,7 @@ from tilefoundry.target import (
     CudaTarget,
     MemoryHierarchyFacts,
     ParallelCapacityFacts,
+    PerformanceServiceFacts,
     Target,
     TargetFactsError,
     ThroughputFacts,
@@ -60,8 +61,8 @@ class _NoComputeUnitRateCudaTarget(CudaTarget):
 
     def get_facts(self, facts_type: type, query: object | None = None):
         facts = super().get_facts(facts_type, query)
-        if facts_type is ThroughputFacts:
-            return replace(facts, peak_flops_per_second_per_unit=())
+        if facts_type is PerformanceServiceFacts:
+            return replace(facts, unit_flops=())
         return facts
 
 
@@ -70,10 +71,8 @@ class _NoBandwidthUnitRateCudaTarget(CudaTarget):
 
     def get_facts(self, facts_type: type, query: object | None = None):
         facts = super().get_facts(facts_type, query)
-        if facts_type is ThroughputFacts:
-            return replace(
-                facts, memory_bandwidth_bytes_per_second_per_unit=None
-            )
+        if facts_type is PerformanceServiceFacts:
+            return replace(facts, unit_bandwidth=())
         return facts
 
 
@@ -179,17 +178,29 @@ def test_document_free_target_projects_facts_and_inherits_standard_analysis() ->
 
 
 def test_cuda_projects_one_ctas_share_from_device_rates() -> None:
-    target = CudaTarget("nvidia.h200_sxm")
-    facts = target.get_facts(ThroughputFacts)
+    """One CTA's share of the float and memory peaks, and its own services.
 
-    assert facts.rate_unit == "cta"
-    assert dict(facts.peak_flops_per_second_per_unit) == {
+    The float and bandwidth numbers are the device peaks divided among the SMs.
+    The services are not a division of anything: no device-wide integer or
+    predicate peak is published, so each is stated per CTA in the hardware table
+    and arrives unchanged.
+    """
+    target = CudaTarget("nvidia.h200_sxm")
+    device = target.get_facts(ThroughputFacts)
+    services = target.get_facts(PerformanceServiceFacts)
+
+    assert services.unit == "cta"
+    assert dict(services.unit_flops) == {
         dtype: rate // target.device.sm_count
-        for dtype, rate in facts.peak_flops_per_second
+        for dtype, rate in device.peak_flops_per_second
     }
-    assert facts.memory_bandwidth_bytes_per_second_per_unit == (
-        target.device.hbm_bandwidth_bytes_per_second // target.device.sm_count
-    )
+    assert dict(services.unit_bandwidth) == {
+        device.bandwidth_level: (
+            target.device.hbm_bandwidth_bytes_per_second // target.device.sm_count
+        )
+    }
+    assert dict(services.unit_ops) == dict(target.device.service_ops_per_second)
+    assert all(rate > 0 for _kind, rate in services.unit_ops)
 
 
 @pytest.mark.parametrize(

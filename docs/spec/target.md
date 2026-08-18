@@ -58,8 +58,9 @@ def registered_targets() -> Mapping[str, type[Target]]: ...
     by inheriting a backend-specific analysis base class. A missing Facts
     projection MUST fail when the selected analyzer requests it.
   - `facts_result`, `TargetFactsError`, `TopologyLimitFacts`,
-    `MemoryHierarchyFacts`, `ThroughputFacts`, and `ParallelCapacityFacts` MUST
-    be importable from `tilefoundry.target` for provider implementations.
+    `MemoryHierarchyFacts`, `ThroughputFacts`, `PerformanceServiceFacts`, and
+    `ParallelCapacityFacts` MUST be importable from `tilefoundry.target` for
+    provider implementations.
   - `name` MUST be a non-empty class variable declared directly by every
     concrete registered Target class. It is the stable class registration
     identity, not a backend-family selector and not an instance value field.
@@ -217,10 +218,16 @@ class CudaTarget(Target):
     through the corresponding getters. These selections MUST NOT use
     `Target.name`, an exact-concrete-type table, or a second extension
     registration.
-  - CUDA's `ThroughputFacts` MUST publish one CTA's compute and HBM-bandwidth
-    rates by dividing each whole-device rate by `device.sm_count`. It MUST name
-    that rate unit `cta`; compiler policy such as `ParallelCapacityFacts` MUST
-    NOT enter this derivation.
+  - CUDA's `ThroughputFacts` MUST publish the whole-device compute and
+    HBM-bandwidth rates and nothing per unit; what one CTA gets through is
+    `PerformanceServiceFacts`.
+  - CUDA's `PerformanceServiceFacts` MUST derive `unit_flops` and
+    `unit_bandwidth` by dividing each whole-device rate by `device.sm_count`,
+    MUST take `unit_ops` from the device document unchanged, and MUST name its
+    unit `cta`; compiler policy such as `ParallelCapacityFacts` MUST NOT enter
+    this derivation. `unit_ops` is not a division of a device peak, because no
+    vendor publishes a device-wide integer, predicate, select, transcendental or
+    local-move rate to divide.
   - `topology_limit("cta")` MUST equal `device.sm_count`, and
     `topology_limit("thread")` MUST equal the architecture's corresponding
     structural limit. An unsupported name MUST be refused.
@@ -372,8 +379,10 @@ class CudaDevice(Device):
     hbm_bandwidth_bytes_per_second: int
     l2_capacity_bytes: int | None
     _dense_flops: tuple[tuple[DType, int], ...]
+    _service_ops: tuple[tuple[str, int], ...]
 
     def peak_for(self, dtype: DType) -> int: ...
+    def service_ops_per_second(self) -> tuple[tuple[str, int], ...]: ...
 ```
 
 - constraints:
@@ -394,6 +403,10 @@ class CudaDevice(Device):
     sparse peak MUST be halved and the division stated as the document's
     evidence, so no plan is priced against a rate structured sparsity is
     required to reach.
+  - `_service_ops` MUST hold one integer results/s entry per service kind the
+    installed document records, stated per CTA rather than per device. A kind
+    the document does not record MUST be absent rather than zero, so a consumer
+    that needs it refuses instead of pricing the work at nothing.
   - `l2_capacity_bytes` MUST be `None` when the installed document records no
     value for it. A recorded absence and a number are both statements about the
     product; a substituted figure would not be.
@@ -417,6 +430,17 @@ The installed `nvidia.h200_sxm` device document.
   - `throughput.f4e2m1` MUST be recorded unavailable rather than omitted: the
     Hopper tensor cores have no FP4 mode, so the product has no such rate, which
     is a fact about it and not a number nobody published.
+  - It MUST record a per-CTA service rate for each of `integer`, `predicate`,
+    `select`, `local-copy`, and `transcendental`, because a program that
+    compares, selects, indexes or moves locally asks for work no FLOP/s figure
+    prices. Each MUST state its derivation in `conditions`: the instruction
+    throughput in results/clock/SM from the vendor's arithmetic-instruction
+    table, times the clock the published `f32` peak implies
+    (`67e12 / (132 SM * 128 results/clock * 2 FLOP/result)`), stated per CTA.
+    These are peak-style analytical envelopes rather than measured
+    calibrations, and `conditions` MUST say so, along with the proxy each one
+    stands for -- `local-copy` counts one scalar move per 32-bit word because
+    NVIDIA publishes no static register or shared-memory bandwidth.
 
 #### 4.2.2 B200SXM
 

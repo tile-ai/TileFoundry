@@ -26,6 +26,7 @@ from .compute_cost import _local_duration_ns
 from .errors import AnalysisError
 from .facts import (
     ParallelCapacityFacts,
+    PerformanceServiceFacts,
     ThroughputFacts,
 )
 from .memory import _base_of
@@ -88,6 +89,7 @@ class _Scope:
 def _durations(
     fn: Function,
     facts: ThroughputFacts,
+    services: PerformanceServiceFacts,
     level: str,
 ) -> dict[int, int]:
     """Return one CTA-local duration for every primitive occurrence."""
@@ -101,7 +103,7 @@ def _durations(
                 f"{describe(expr)}: performance needs the compute-cost record this "
                 "call was never given"
             )
-        result[id(expr)] = _local_duration_ns(cost, facts, level=level)
+        result[id(expr)] = _local_duration_ns(cost, facts, services, level=level)
     return result
 
 
@@ -374,6 +376,7 @@ def analyze_performance(
     """
     placement_facts = target.get_facts(ParallelCapacityFacts)
     throughput = target.get_facts(ThroughputFacts)
+    services = target.get_facts(PerformanceServiceFacts)
     topology = module.resolve_topology(placement_facts.topology)
     topology_extent = static_dim_value(topology.size)
     if topology_extent is None:
@@ -394,8 +397,8 @@ def analyze_performance(
                 "whose buffers were placed, and this one's machine names no level "
                 "to place them against"
             )
-        placements = _call_placements(module, fn, placement_facts.topology, throughput)
-        durations = _durations(fn, throughput, placement_facts.topology)
+        placements = _call_placements(module, fn, placement_facts.topology)
+        durations = _durations(fn, throughput, services, placement_facts.topology)
         root = _schedule(fn, durations, placements)
         records = _records(root)
         for expr in postorder(fn.body):

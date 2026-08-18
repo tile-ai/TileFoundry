@@ -14,6 +14,7 @@ from tilefoundry.schedule import SchedulePlan
 from tilefoundry.target import (
     MemoryHierarchyFacts,
     ParallelCapacityFacts,
+    PerformanceServiceFacts,
     Scheduler,
     Target,
     ThroughputFacts,
@@ -75,9 +76,19 @@ class VendorNpuTarget(Target):
                 peak_flops_per_second=((DType.f32, 2_000_000_000_000_000),),
                 memory_bandwidth_bytes_per_second=2_000_000_000_000,
                 bandwidth_level="gmem",
-                peak_flops_per_second_per_unit=(),
-                memory_bandwidth_bytes_per_second_per_unit=None,
-                rate_unit="core",
+            )
+        elif facts_type is PerformanceServiceFacts:
+            value = PerformanceServiceFacts(
+                unit_flops=((DType.f32, 2_000_000_000_000_000 // 16),),
+                unit_ops=(
+                    ("integer", 1_000_000_000),
+                    ("predicate", 1_000_000_000),
+                    ("select", 1_000_000_000),
+                    ("local-copy", 1_000_000_000),
+                    ("transcendental", 250_000_000),
+                ),
+                unit_bandwidth=(("gmem", 2_000_000_000_000 // 16),),
+                unit="core",
             )
         elif facts_type is ParallelCapacityFacts:
             value = ParallelCapacityFacts("core", 16)

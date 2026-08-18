@@ -37,7 +37,6 @@ from .facts import (
     ImplicitMemoryLevelFacts,
     MemoryHierarchyFacts,
     ParallelCapacityFacts,
-    ThroughputFacts,
 )
 from .footprint import loop_footprints
 from .metadata import (
@@ -689,7 +688,7 @@ def _buffer_placements(
     """
     try:
         resolved = dict(
-            _call_placements(module, fn, selected, target.get_facts(ThroughputFacts))
+            _call_placements(module, fn, selected)
         )
     except AnalysisError:
         resolved = {}

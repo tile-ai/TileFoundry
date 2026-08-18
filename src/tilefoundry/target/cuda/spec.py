@@ -116,14 +116,29 @@ def build_cuda_architecture(document: HardwareDocument) -> CudaArchitecture:
     return architecture
 
 
+_SERVICE_KINDS = ("integer", "predicate", "select", "local-copy", "transcendental")
+
+
 def build_cuda_device(document: HardwareDocument) -> CudaDevice:
-    """Build the immutable CUDA device value from its installed document."""
+    """Build the immutable CUDA device value from its installed document.
+
+    ``_SERVICE_KINDS`` names every service a device may state a throughput for.
+    One the document leaves out is absent rather than zero, so a consumer that
+    needs it refuses instead of pricing that work at nothing.
+    """
     reader = SchemaReader(document)
     dense_flops: list[tuple[DType, int]] = []
     for dtype_name in _THROUGHPUT_DTYPE_NAMES:
         peak = reader.optional_integer(f"throughput.{dtype_name}", unit="flop/s")
         if peak is not None:
             dense_flops.append((getattr(DType, dtype_name), peak))
+    services: list[tuple[str, int]] = []
+    for kind in _SERVICE_KINDS:
+        if f"service.{kind}" not in document.facts:
+            continue
+        stated = reader.optional_integer(f"service.{kind}", unit="op/s")
+        if stated is not None:
+            services.append((kind, stated))
     device = CudaDevice(
         name=reader.text("identity.name"),
         sm_count=reader.integer("compute.sm_count", unit="count"),
@@ -134,6 +149,7 @@ def build_cuda_device(document: HardwareDocument) -> CudaDevice:
         ),
         l2_capacity_bytes=reader.optional_integer("memory.l2.capacity", unit="byte"),
         _dense_flops=tuple(dense_flops),
+        _service_ops=tuple(services),
     )
     reader.declared_unavailable("memory.l2.bandwidth")
     reader.close()

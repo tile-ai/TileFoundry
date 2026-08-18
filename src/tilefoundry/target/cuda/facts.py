@@ -17,6 +17,7 @@ from tilefoundry.analysis.facts import (
     MemoryLevelRelation,
     MemoryRelationKind,
     ParallelCapacityFacts,
+    PerformanceServiceFacts,
     ThroughputFacts,
 )
 from tilefoundry.ir.types import DType
@@ -115,13 +116,32 @@ def throughput(target: CudaTarget, query: object = None) -> ThroughputFacts:
         peak_flops_per_second=peaks,
         memory_bandwidth_bytes_per_second=device.hbm_bandwidth_bytes_per_second,
         bandwidth_level="gmem",
-        peak_flops_per_second_per_unit=tuple(
-            (dtype, rate // device.sm_count) for dtype, rate in peaks
+    )
+
+
+def performance_service(
+    target: CudaTarget, query: object = None
+) -> PerformanceServiceFacts:
+    """What one CTA gets through, for every kind of work a program asks for.
+
+    The float rates are the device peaks divided among its SMs, the same
+    division the roofline's one-unit rates use. The services are what the
+    device's own document states, and a device that states none prices no work
+    of that kind rather than pricing it at nothing.
+    """
+    device = target.device
+    return PerformanceServiceFacts(
+        unit_flops=tuple(
+            (dtype, peak // device.sm_count)
+            for dtype, peak in sorted(
+                device.dense_flops_per_second.items(), key=lambda item: item[0].name
+            )
         ),
-        memory_bandwidth_bytes_per_second_per_unit=(
-            device.hbm_bandwidth_bytes_per_second // device.sm_count
+        unit_ops=tuple(sorted(device.service_ops_per_second.items())),
+        unit_bandwidth=(
+            ("gmem", device.hbm_bandwidth_bytes_per_second // device.sm_count),
         ),
-        rate_unit="cta",
+        unit="cta",
     )
 
 

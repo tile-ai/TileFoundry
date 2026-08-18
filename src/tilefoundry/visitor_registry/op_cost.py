@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 
 from tilefoundry.ir.core import Call
-from tilefoundry.ir.core.kinds import BinaryKind
+from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16, Wgmma_SM90_64x128x16
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.clamp import Clamp
@@ -55,7 +55,7 @@ from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.where import Where
 from tilefoundry.ir.hir.tensor.zeros import Zeros
-from tilefoundry.ir.types import DType, TensorType, Type, numel, tensor_bytes
+from tilefoundry.ir.types import DType, IntegerDType, TensorType, Type, numel, tensor_bytes
 from tilefoundry.ir.types.shard import ShardLayout
 from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis
 
@@ -104,6 +104,13 @@ def _elementwise(call: Call, ctx: CostContext, *, dtype: DType | None = None) ->
                 type.dtype for type in inputs if isinstance(type, TensorType)
             )
     return Cost({result_dtype: numel(output)}, _traffic(inputs, output))
+
+
+def _serviced(call: Call, ctx: CostContext, kind: str) -> Cost:
+    """One result of *kind* per element, and no floating-point work at all."""
+    inputs = _input_types(call, ctx)
+    output = _output_type(call, ctx)
+    return Cost({}, _traffic(inputs, output), {kind: numel(output)})
 
 
 @register_cost_evaluator(MatMul)
@@ -189,18 +196,58 @@ def _rms_norm(call: Call, ctx: CostContext) -> Cost:
     return Cost({DType.f32: 8 * numel(source)}, _traffic(inputs, output))
 
 
+_PREDICATES = frozenset(
+    {
+        BinaryKind.EQ,
+        BinaryKind.NE,
+        BinaryKind.LT,
+        BinaryKind.LE,
+        BinaryKind.GT,
+        BinaryKind.GE,
+        BinaryKind.AND,
+        BinaryKind.OR,
+    }
+)
+
+
 @register_cost_evaluator(Binary)
 def _binary(call: Call, ctx: CostContext) -> Cost:
+    """Arithmetic is floating-point work; comparing and combining truths is not.
+
+    A comparison over floats produces booleans, and calling that a bool FLOP
+    asks the target for a rate no machine publishes. What it really asks for is
+    a predicate, which is a service a machine does state a throughput for.
+    ``_PREDICATES`` holds the kinds whose result is one, whatever the operands
+    were.
+    """
     kind = call.target.kind
-    dtype = DType.bool if kind in {
-        BinaryKind.EQ, BinaryKind.NE, BinaryKind.LT, BinaryKind.LE,
-        BinaryKind.GT, BinaryKind.GE, BinaryKind.AND, BinaryKind.OR,
-    } else None
-    return _elementwise(call, ctx, dtype=dtype)
+    if kind in _PREDICATES:
+        return _serviced(call, ctx, "predicate")
+    if _integral(call, ctx):
+        return _serviced(call, ctx, "integer")
+    return _elementwise(call, ctx)
+
+
+def _integral(call: Call, ctx: CostContext) -> bool:
+    """Whether this operation's result is whole numbers rather than reals."""
+    output = _output_type(call, ctx)
+    return isinstance(output, TensorType) and isinstance(output.dtype, IntegerDType)
 
 
 @register_cost_evaluator(Unary)
 def _unary(call: Call, ctx: CostContext) -> Cost:
+    """A negation is float work; negating a truth is not, and neither is an int.
+
+    The special-function kinds -- exp, log, rsqrt -- are left as float work
+    here. They are floating point, which is the measure roofline bounds, and
+    whether performance should also price them against the published
+    special-function rate is a question about two measures of one operation
+    rather than about what kind of work it is.
+    """
+    if call.target.kind is UnaryKind.NOT:
+        return _serviced(call, ctx, "predicate")
+    if _integral(call, ctx):
+        return _serviced(call, ctx, "integer")
     return _elementwise(call, ctx)
 
 
@@ -303,7 +350,8 @@ def _softmax(call: Call, ctx: CostContext) -> Cost:
 
 @register_cost_evaluator(Where)
 def _where(call: Call, ctx: CostContext) -> Cost:
-    return _elementwise(call, ctx, dtype=DType.bool)
+    """Choosing between two values it already has is a select, not arithmetic."""
+    return _serviced(call, ctx, "select")
 
 
 @register_cost_evaluator(LayerNorm)

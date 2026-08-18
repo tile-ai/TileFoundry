@@ -20,6 +20,7 @@ class CostCase:
     op: object
     inputs: tuple[TensorType, ...]
     flops: Mapping[DType, int] = field(default_factory=dict)
+    service: Mapping[str, int] = field(default_factory=dict)
     traffic: tuple[TrafficBytes, ...] = ()
     level: str | None = None
     topologies: tuple[Topology, ...] = ()
@@ -43,4 +44,5 @@ def run_cost_case(case: CostCase) -> None:
     cost = CostEvaluator(ctx).visit_Call(call)
 
     assert cost.flops == case.flops
+    assert cost.service == case.service
     assert cost.traffic == case.traffic
