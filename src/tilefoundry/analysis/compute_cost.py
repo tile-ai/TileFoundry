@@ -45,7 +45,13 @@ def _is_structural_occurrence(
     cost: ComputeCostMetadata,
     facts: ThroughputFacts,
 ) -> bool:
-    """Whether an occurrence has no work priced by the target's local rates."""
+    """Whether an occurrence asks for nothing this model puts on a clock.
+
+    Only the quantities that carry time are read: every dtype's work, and the
+    movement at the one level the target states a bandwidth for. Movement at
+    another level is recorded but is nobody's service here, so an occurrence
+    that has only that still takes no modeled time.
+    """
     return all(not value for _name, value in cost.flops_per_unit) and not (
         cost.traffic_per_unit_at(facts.bandwidth_level).total_bytes
     )
@@ -83,22 +89,7 @@ def _local_duration_ns(
             )
         compute_ns += -(-(value * scale * 1_000_000_000) // rate)
 
-    traffic = cost.traffic_per_unit_at(facts.bandwidth_level)
-    moved = traffic.total_bytes * scale
-    if not moved:
-        unmodelled = tuple(
-            name
-            for name, value in cost.traffic_per_unit
-            if name != facts.bandwidth_level and value.total_bytes
-        )
-        if unmodelled:
-            names = ", ".join(repr(name) for name in unmodelled)
-            raise AnalysisError(
-                f"timeline: occurrence traffic is only at unmodelled storage "
-                f"level(s) {names}; target bandwidth is stated for "
-                f"{facts.bandwidth_level!r}"
-            )
-
+    moved = cost.traffic_per_unit_at(facts.bandwidth_level).total_bytes * scale
     memory_ns = 0
     if moved:
         rate = facts.memory_bandwidth_bytes_per_second_per_unit

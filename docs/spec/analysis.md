@@ -909,9 +909,19 @@ as defined in that family's section.
   - `bandwidth_level` MUST select the traffic level divided by the published
     bandwidth rather than summing traffic across levels.
   - Timeline local duration MUST divide `ComputeCostMetadata.flops_per_unit`
-    and `traffic_per_unit` by the matching one-unit rates. It MUST reject
-    non-zero traffic only at storage levels for which the target publishes no
-    bandwidth, and zero work with zero traffic MUST take zero time.
+    and the `bandwidth_level` entry of `traffic_per_unit` by the matching
+    one-unit rates. An occurrence with no work at those two and no non-zero
+    dtype MUST take zero time.
+  - Traffic at any other storage level MUST stay in `ComputeCostMetadata` and
+    MUST NOT enter the duration or refuse the occurrence: the target states one
+    bandwidth, for one level, so movement elsewhere has no service to be timed
+    against. This is a statement about what this model prices, not a claim that
+    those bytes are free; a level earns time when a target publishes a rate for
+    it or a later service model gives it one.
+  - Work whose dtype has no published one-unit rate is the opposite case and
+    MUST still refuse: it belongs on the same clock as the rest of the compute,
+    so pricing it at zero would leave a hole inside a number the reader takes
+    as whole.
   - Rate-to-duration divisions MUST use exact integer ceiling division. They
     MUST NOT pass through floating-point arithmetic.
   - Roofline records MUST be attached to every reachable `Call` and `Function`.

@@ -38,7 +38,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import _mesh_image, _result_placement, _timeline_placements
-from tilefoundry.analysis.compute_cost import _call_movement
+from tilefoundry.analysis.compute_cost import _call_movement, _local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
@@ -325,12 +325,31 @@ def _placed_wide_grid(source: Tensor[(1024,), "f32"]):
         return tf.add(placed, placed)
 
 
-@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
-def _reshard_boundary(source: Tensor[(1,), "f32"]):
-    with Mesh(("cta",), layout=(1,), names=("tile",)) as cta:
-        local = tf.reshard(source, (1 @ cta.tile,), "rmem")
-        moved = tf.reshard(local, (1 @ cta.tile,), "rmem")
-        return tf.add(moved, moved)
+@module(
+    entry="unpriced_only",
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", 1),),
+)
+class _PricingBoundary:
+    @func
+    def unpriced_only(source: Tensor[(1,), "f32"]):
+        with Mesh(("cta",), layout=(1,), names=("tile",)) as cta:
+            local = tf.reshard(source, (1 @ cta.tile,), "rmem")
+            moved = tf.reshard(local, (1 @ cta.tile,), "rmem")
+            return tf.add(moved, moved)
+
+    @func
+    def mixed(source: Tensor[(64,), "f32"]):
+        with Mesh(("cta",), layout=(1,), names=("tile",)) as cta:
+            placed = tf.reshard(source, (64 @ cta.tile,), "gmem")
+            local = tf.reshard(placed, (64 @ cta.tile,), "rmem")
+            return tf.add(local, local)
+
+    @func
+    def unrated_dtype(source: Tensor[(64,), "f32"]):
+        with Mesh(("cta",), layout=(1,), names=("tile",)) as cta:
+            placed = tf.reshard(source, (64 @ cta.tile,), "gmem")
+            return placed <= placed
 
 
 @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
@@ -1396,12 +1415,59 @@ def test_nested_levels_project_independently_and_broadcast_counts_as_placed() ->
     assert _result_placement(type_, thread) == frozenset(range(4))
 
 
-def test_timeline_refuses_traffic_only_at_an_unmodelled_storage_level() -> None:
+def test_time_comes_from_the_rates_the_target_states_and_from_nothing_else() -> None:
+    """Movement at a level with no published bandwidth is recorded, not timed.
+
+    The target states one bandwidth, for one level. Movement anywhere else is
+    still worth reporting -- it is what the program does -- but it is nobody's
+    service in this model, so it neither adds time nor refuses the program.
+    Work whose dtype has no rate is the other case: it would be timed if it
+    could be, so pricing it as free would be a number with a hole in it.
+    """
+    functions = {function.name: function for function in _PricingBoundary.functions}
+    throughput = _PricingBoundary.resolve_target().get_facts(ThroughputFacts)
+
+    result = analyze(_PricingBoundary, functions["unpriced_only"], analysis="timeline")
+    costs = [get_metadata(call, ComputeCostMetadata) for call in _calls(result.function)]
+    assert any(record.traffic_per_unit_at("rmem").total_bytes for record in costs)
+    assert all(
+        _local_duration_ns(record, throughput, level="cta")
+        == _local_duration_ns(_priced_levels_only(record, throughput), throughput, level="cta")
+        for record in costs
+    )
+
+    result = analyze(_PricingBoundary, functions["mixed"], analysis="timeline")
+    moved = next(
+        record
+        for record in (
+            get_metadata(call, ComputeCostMetadata) for call in _calls(result.function)
+        )
+        if record.traffic_per_unit_at("gmem").total_bytes
+        and record.traffic_per_unit_at("rmem").total_bytes
+    )
+    assert _local_duration_ns(moved, throughput, level="cta") == _local_duration_ns(
+        _priced_levels_only(moved, throughput), throughput, level="cta"
+    )
+
     with pytest.raises(
         AnalysisError,
-        match=r"traffic is only at unmodelled storage level.*'rmem'.*'gmem'",
+        match=r"no per-unit compute rate for dtype 'bool' at 'cta'",
     ):
-        _run(_reshard_boundary, "timeline")
+        analyze(_PricingBoundary, functions["unrated_dtype"], analysis="timeline")
+
+
+def _priced_levels_only(
+    record: ComputeCostMetadata, throughput: ThroughputFacts
+) -> ComputeCostMetadata:
+    """The same record with every unpriced level's traffic dropped."""
+    return replace(
+        record,
+        traffic_per_unit=tuple(
+            (level, moved)
+            for level, moved in record.traffic_per_unit
+            if level == throughput.bandwidth_level
+        ),
+    )
 
 
 def test_a_zero_cost_structural_occurrence_carries_no_performance_record() -> None:
@@ -1432,6 +1498,8 @@ def test_an_unplaced_structural_occurrence_ignores_unmodelled_traffic() -> None:
     assert cost.flops_per_unit == ()
     assert cost.traffic_per_unit_at("gmem").total_bytes == 0
     assert cost.traffic_per_unit_at("rmem") == TrafficBytes(read=8, write=8)
+    throughput = _unplaced_structural.resolve_target().get_facts(ThroughputFacts)
+    assert _local_duration_ns(cost, throughput, level="cta") == 0
 
 
 def test_the_gpu_memory_graph_is_not_a_tree() -> None:
