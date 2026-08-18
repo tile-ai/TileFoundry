@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import isl
 import torch
 
 from tilefoundry.evaluator import TensorValue, register_eval, to_torch_dtype
@@ -25,6 +26,13 @@ from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Broadcast, Layout, ShardLayout, try_c_order_strides
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelations,
+    moves,
+    register_access_relation,
+    writes,
+)
+from tilefoundry.visitor_registry.relation_build import identity_access
 
 _FLOAT_ACCUMULATOR_COMBINATIONS = frozenset(
     {
@@ -230,3 +238,27 @@ def _eval_mma(ctx):
 
 
 __all__ = ["Mma", "Mma_SM80_16x8x16", "Wgmma_SM90_64x128x16"]
+
+
+_TILES = {"Mma_SM80_16x8x16": (16, 8, 16), "Wgmma_SM90_64x128x16": (64, 128, 16)}
+
+
+def _tile_access(call: "Call", ctx) -> AccessRelations:
+    """A fixed tile: both operands read whole, the accumulator written whole.
+
+    ``_TILES`` holds each instruction's own shape, which is what separates these
+    from a MatMul and why a projection must leave them alone: one instruction is
+    one instruction however many participants issue it.
+    """
+    m, n, k = _TILES[type(call.target).__name__]
+    return AccessRelations(
+        inputs=(
+            moves(isl.multi_aff("{ [dm, dn, dk] -> [dm, dk] }"), m * k),
+            moves(isl.multi_aff("{ [dm, dn, dk] -> [dk, dn] }"), k * n),
+        ),
+        outputs=(writes(identity_access(2), m * n),),
+    )
+
+
+register_access_relation(Mma_SM80_16x8x16)(_tile_access)
+register_access_relation(Wgmma_SM90_64x128x16)(_tile_access)

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import MISSING
+from dataclasses import MISSING, dataclass
 from dataclasses import fields as dataclass_fields
 from typing import get_args, get_origin
 
@@ -78,11 +78,13 @@ from tilefoundry.ir.core import (
     binding_name,
     get_metadata,
 )
-from tilefoundry.ir.core.kinds import BinaryKind
+from tilefoundry.ir.core.kinds import BinaryKind, ReduceKind
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16, Wgmma_SM90_64x128x16
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir.hir.nn.conv2d import Conv2D, _groups_reached
 from tilefoundry.ir.hir.nn.layer_norm import LayerNorm
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.nn.relu import ReLU
@@ -91,9 +93,13 @@ from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.hir.tensor.concat import Concat
+from tilefoundry.ir.hir.tensor.index_add import IndexAdd
+from tilefoundry.ir.hir.tensor.index_copy import IndexCopy
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.quant import Quant
+from tilefoundry.ir.hir.tensor.reduce import Reduce
+from tilefoundry.ir.hir.tensor.repeat_interleave import RepeatInterleave
 from tilefoundry.ir.hir.tensor.reshape import Reshape, is_induction_var_singleton_reshape
 from tilefoundry.ir.hir.tensor.split import Split
 from tilefoundry.ir.hir.tensor.stack import Stack
@@ -692,10 +698,10 @@ def test_a_relation_says_how_a_data_dependent_operand_is_read() -> None:
     assert isinstance(relation.inputs[0].pattern, isl.multi_aff)
     assert isinstance(relation.inputs[1].pattern, isl.multi_aff)
     assert relation.inputs[2].pattern == IndexedAccess(
-        source_operand=2, index_operand=4, source_axis=0
+        index_operand=4, axis=0
     )
     assert relation.inputs[3].pattern == IndexedAccess(
-        source_operand=3, index_operand=4, source_axis=0
+        index_operand=4, axis=0
     )
     assert isinstance(relation.inputs[4].pattern, isl.multi_aff)
     assert len(relation.outputs) == 2
@@ -807,6 +813,252 @@ def test_every_boundary_states_the_movement_its_op_performs() -> None:
 def _as_map(pattern) -> "isl.map":
     """One comparable carrier, whichever of the two affine forms was stated."""
     return pattern if isinstance(pattern, isl.map) else isl.map.from_multi_aff(pattern)
+
+
+@dataclass(frozen=True)
+class _WholeWeight:
+    """A context answering with the program's weight, whatever is asked."""
+
+    held: object
+
+    args: tuple = (None, None, None)
+
+    def type_of(self, _arg) -> object:
+        return self.held
+
+
+def _counted(relations) -> tuple[list[int], list[int]]:
+    """Every boundary's stated amount, inputs then outputs."""
+    return (
+        [item.quantity.upper for item in relations.inputs],
+        [item.quantity.upper for item in relations.outputs],
+    )
+
+
+def _asked(op, result, *operands, ctx=None):
+    """One Call's relations, built the way a consumer builds them."""
+    call = Call(
+        type=result,
+        target=op,
+        args=tuple(
+            Var(type=type_, name=f"a{index}") for index, type_ in enumerate(operands)
+        ),
+    )
+    return access_relation_registry.lookup(type(op))(call, ctx or TypeInferContext())
+
+
+def test_a_reduction_reads_the_extent_its_own_participant_holds() -> None:
+    """A reduced axis can itself be split, and then the extent is not the program's.
+
+    The result carries `Broadcast` where the reduction happened and each unit
+    contributes over the piece it holds. Multiplying by the program's extent
+    charges every one of them the whole contraction: on the 6x32 mesh below that
+    is 64 against the 2 a unit really reads.
+    """
+    whole = _asked(
+        Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM),
+        make_tensor_type((12, 1), DType.bf16),
+        make_tensor_type((12, 32), DType.bf16),
+    )
+    assert _counted(whole) == ([384], [12])
+
+    unit = _asked(
+        Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM),
+        make_tensor_type((2, 1), DType.bf16),
+        make_tensor_type((2, 1), DType.bf16),
+    )
+    assert _counted(unit) == ([2], [2])
+
+    tall = _asked(
+        Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM),
+        make_tensor_type((132, 1), DType.f32),
+        make_tensor_type((132, 128), DType.f32),
+    )
+    assert _counted(tall) == ([16_896], [132])
+
+
+def test_layer_norm_reads_its_parameters_across_the_whole_suffix() -> None:
+    """The parameters match `x.shape[axis:]`, which can be more than one axis.
+
+    A per-axis reading of a rank-2 suffix would have said 3 or 4 where the
+    answer is 12, and the verifier refuses a split at or beyond the normalized
+    axis, so that number is the same in every view a program can produce.
+    """
+    suffix = make_tensor_type((3, 4), DType.f32)
+    whole = _asked(
+        LayerNorm(axis=1, eps=1e-5),
+        make_tensor_type((132, 3, 4), DType.f32),
+        make_tensor_type((132, 3, 4), DType.f32),
+        suffix,
+        suffix,
+    )
+    assert _counted(whole) == ([1584, 12, 12], [1584])
+
+    unit = _asked(
+        LayerNorm(axis=1, eps=1e-5),
+        make_tensor_type((1, 3, 4), DType.f32),
+        make_tensor_type((1, 3, 4), DType.f32),
+        suffix,
+        suffix,
+    )
+    assert _counted(unit) == ([12, 12, 12], [12])
+
+
+def test_a_convolution_reads_the_source_once_however_often_it_depends_on_it() -> None:
+    """Overlapping windows read one element several times; that is one element.
+
+    Sixteen is how many source elements exist to be read. Thirty-six is the
+    dependence count of a 2x2 output over a 3x3 kernel, and counting those would
+    charge a convolution for arithmetic rather than for movement. A coordinate
+    outside the source is a guarded load that fetches nothing, so it is clipped
+    rather than charged.
+    """
+    relations = _asked(
+        Conv2D(stride=(1, 1), padding=(0, 0), dilation=(1, 1), groups=1),
+        make_tensor_type((1, 1, 2, 2), DType.f16),
+        make_tensor_type((1, 1, 4, 4), DType.f16),
+        make_tensor_type((1, 1, 3, 3), DType.f16),
+        make_tensor_type((1,), DType.f16),
+    )
+    assert _counted(relations) == ([16, 9, 1], [4])
+
+    padded = _asked(
+        Conv2D(stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=1),
+        make_tensor_type((1, 16, 32, 32), DType.f16),
+        make_tensor_type((1, 16, 32, 32), DType.f16),
+        make_tensor_type((32, 16, 3, 3), DType.f16),
+        make_tensor_type((32,), DType.f16),
+    )
+    assert _counted(padded) == ([16_384, 4608, 32], [32_768])
+
+
+def test_a_grouped_convolution_reads_only_the_groups_it_computes() -> None:
+    """One group's output channels read one group's input channels.
+
+    The contraction extent is a group's worth, so a participant computing one
+    group of two reads eight channels rather than sixteen. Charging the
+    program's channel count bills it `groups` times over -- 1024 where it moves
+    512. A participant sees its own output channels and the program's divisor:
+    the dividend is projected, the group size is the Op's.
+    """
+    grouped = Conv2D(stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=2)
+    whole = _asked(
+        grouped,
+        make_tensor_type((1, 32, 8, 8), DType.f16),
+        make_tensor_type((1, 16, 8, 8), DType.f16),
+        make_tensor_type((32, 8, 3, 3), DType.f16),
+        make_tensor_type((32,), DType.f16),
+    )
+    assert _counted(whole) == ([1024, 2304, 32], [2048])
+
+    whole_weight = _WholeWeight(make_tensor_type((32, 8, 3, 3), DType.f16))
+    assert _groups_reached(whole_weight, whole_weight, 32, 2) == 2
+    assert _groups_reached(whole_weight, whole_weight, 16, 2) == 1
+    assert _groups_reached(whole_weight, whole_weight, 16, 1) == 1
+
+
+def test_a_split_contraction_reads_only_its_share_of_the_channels() -> None:
+    """Each participant sums over its own input channels into a partial result.
+
+    The output does not shrink -- every participant computes a partial of the
+    whole -- while the weight and the input halve with the contraction. Reading
+    the program's channel count gives 256 and 144, exactly double what moves.
+    """
+    aligned = Conv2D(stride=(1, 1), padding=(0, 0), dilation=(1, 1), groups=1)
+    whole = _asked(
+        aligned,
+        make_tensor_type((1, 4, 6, 6), DType.f16),
+        make_tensor_type((1, 4, 8, 8), DType.f16),
+        make_tensor_type((4, 4, 3, 3), DType.f16),
+        make_tensor_type((4,), DType.f16),
+    )
+    assert _counted(whole) == ([256, 144, 4], [144])
+
+    unit = _asked(
+        aligned,
+        make_tensor_type((1, 4, 6, 6), DType.f16),
+        make_tensor_type((1, 2, 8, 8), DType.f16),
+        make_tensor_type((4, 2, 3, 3), DType.f16),
+        make_tensor_type((4,), DType.f16),
+    )
+    assert _counted(unit) == ([128, 72, 4], [144])
+
+
+def test_an_interleave_reads_each_source_element_once() -> None:
+    """Three result positions depend on one element; the element crossed once.
+
+    Four, not twelve. The Op refuses a sharded layout outright, so whole is the
+    only view a program can ask about.
+    """
+    relations = _asked(
+        RepeatInterleave(repeats=3, axis=0),
+        make_tensor_type((12,), DType.f32),
+        make_tensor_type((4,), DType.f32),
+    )
+    assert _counted(relations) == ([4], [12])
+
+
+def test_a_tile_instruction_does_not_divide_under_projection() -> None:
+    """One instruction is one instruction, however many participants issue it.
+
+    The shape is the instruction's rather than its operands', which is what
+    separates these from a MatMul, and a projection that divided them would
+    describe a smaller instruction nobody has.
+    """
+    for op, (m, n, k), expected in (
+        (
+            Mma_SM80_16x8x16(dtype_a=DType.f16, dtype_b=DType.f16, dtype_acc=DType.f32),
+            (16, 8, 16),
+            ([256, 128], [128]),
+        ),
+        (
+            Wgmma_SM90_64x128x16(
+                dtype_a=DType.f16, dtype_b=DType.f16, dtype_acc=DType.f32
+            ),
+            (64, 128, 16),
+            ([1024, 2048], [8192]),
+        ),
+    ):
+        relations = _asked(
+            op,
+            make_tensor_type((m, n), DType.f32),
+            make_tensor_type((m, k), DType.f16),
+            make_tensor_type((k, n), DType.f16),
+        )
+        assert _counted(relations) == expected
+
+
+def test_an_indexed_update_keeps_its_container_and_writes_the_rows_it_names() -> None:
+    """Which rows are written and where the container lives are two questions.
+
+    The index answers the first, so that side is a lookup. It answers nothing
+    about the second: the whole destination is preserved through one affine
+    identity link, because these are the same bytes whichever rows get
+    overwritten. A repeated index writes one row twice and an out-of-order one
+    writes no window at all, and neither changes a quantity -- there is no
+    subtraction left to go negative.
+    """
+    shapes = (
+        make_tensor_type((4, 8), DType.f32),
+        make_tensor_type((2,), DType.i64),
+        make_tensor_type((2, 8), DType.f32),
+    )
+    copied = _asked(IndexCopy(dim=0), shapes[0], *shapes)
+    assert _counted(copied) == ([32, 2, 16], [16])
+    assert copied.inputs[0].mode is AccessMode.TRANSFER
+    assert isinstance(copied.inputs[2].pattern, isl.multi_aff)
+
+    added = _asked(IndexAdd(dim=0), shapes[0], *shapes)
+    assert _counted(added) == ([16, 2, 16], [16])
+    assert added.inputs[0].mode is AccessMode.READ
+    assert added.inputs[0].pattern == IndexedAccess(index_operand=1, axis=0)
+
+    for relations in (copied, added):
+        assert relations.outputs[0].pattern == IndexedAccess(index_operand=1, axis=0)
+        (link,) = relations.outputs[0].storage.links
+        assert link.kind == "preserve" and link.quantity == AccessQuantity(32, 32)
+        assert isinstance(link.source, isl.multi_aff)
+        assert isinstance(link.output, isl.multi_aff)
 
 
 def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:

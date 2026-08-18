@@ -23,10 +23,15 @@ from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
+    AccessRelations,
     build_relation,
+    elements_of,
+    moves,
+    register_access_relation,
     register_type_relation,
+    writes,
 )
-from tilefoundry.visitor_registry.relation_build import build_domain, identity_map
+from tilefoundry.visitor_registry.relation_build import build_domain, identity_access, identity_map
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 __all__ = ["ReduceKind", "Reduce"]
@@ -162,3 +167,45 @@ def _eval_reduce(ctx):
     else:
         raise ValueError(f"evaluator: unsupported ReduceKind {kind}")
     return TensorValue(data=out, type=ctx.result_type)
+
+
+@register_access_relation(Reduce)
+def _reduce_access(call: "Call", ctx) -> AccessRelations:
+    """Every source coordinate feeding a result coordinate, read once.
+
+    The input's domain is not the result's: a reduction reads more coordinates
+    than it writes, which is the whole of what it does. The extents it reads
+    over are this participant's own -- a reduced axis can itself be split, and
+    then each unit contributes over the piece it holds, so the program's extent
+    would charge every one of them the whole contraction.
+    """
+    source = ctx.local_type_of(call.args[0])
+    result = ctx.local_type_of(call)
+    rank = len(result.shape)
+    axes = tuple(
+        axis + len(source.shape) if axis < 0 else axis for axis in call.target.axes
+    )
+    dims = [f"d{index}" for index in range(rank)]
+    reads, guards = [], []
+    for axis in range(len(source.shape)):
+        if axis in axes:
+            reads.append(f"r{axis}")
+            guards.append(f"0 <= r{axis} < {source.shape[axis]}")
+        else:
+            reads.append(dims[axis] if axis < rank else "0")
+    if call.target.keepdim:
+        guards.extend(f"{dims[axis]} = 0" for axis in axes if axis < rank)
+    domain = ", ".join(dims)
+    where = " and ".join(guards)
+    return AccessRelations(
+        inputs=(
+            moves(
+                isl.map(
+                    f"{{ [{domain}] -> [{', '.join(reads)}]"
+                    + (f" : {where} }}" if where else " }")
+                ),
+                elements_of(source),
+            ),
+        ),
+        outputs=(writes(identity_access(rank), elements_of(result)),),
+    )

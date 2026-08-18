@@ -20,8 +20,13 @@ from tilefoundry.ir.types.shard.shard_layout import shard_layout_of, split_targe
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
+    AccessRelations,
     build_relation,
+    elements_of,
+    moves,
+    register_access_relation,
     register_type_relation,
+    writes,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
 from tilefoundry.visitor_registry.shard_propagate import (
@@ -354,3 +359,102 @@ def _eval_conv2d(ctx):
         groups=ctx.op.groups,
     )
     return TensorValue(data=out, type=ctx.result_type)
+
+
+@register_access_relation(Conv2D)
+def _conv2d_access(call: "Call", ctx) -> AccessRelations:
+    """The receptive field, as the affine form the type relation already states.
+
+    A window cannot say this: its offset is a value, and here it moves affinely
+    with the output coordinate. The amount is the image that map covers, since
+    overlapping windows read one element several times and that is one element.
+    Every extent is this participant's own, the contraction axis most of all.
+    """
+    x = ctx.local_type_of(call.args[0])
+    weight = ctx.local_type_of(call.args[1])
+    bias = ctx.local_type_of(call.args[2])
+    result = ctx.local_type_of(call)
+    op = call.target
+    k_h, k_w = weight.shape[2], weight.shape[3]
+    contraction = weight.shape[1]
+    dims = ["n", "co", "oh", "ow", "ci", "kh", "kw"]
+    domain = ", ".join(dims)
+
+    def spatial(out_dim, kernel_dim, stride, pad, dilation, extent):
+        terms = [out_dim if stride == 1 else f"{stride}{out_dim}"]
+        if extent != 1:
+            terms.append(kernel_dim if dilation == 1 else f"{dilation}{kernel_dim}")
+        walked = " + ".join(terms)
+        return walked if pad == 0 else f"{walked} - {pad}"
+
+    height = spatial("oh", "kh", op.stride[0], op.padding[0], op.dilation[0], k_h)
+    width = spatial("ow", "kw", op.stride[1], op.padding[1], op.dilation[1], k_w)
+    guard = " and ".join(
+        (
+            f"0 <= {height} < {x.shape[2]}",
+            f"0 <= {width} < {x.shape[3]}",
+        )
+    )
+    reached = isl.map(f"{{ [{domain}] -> [n, ci, {height}, {width}] : {guard} }}")
+    touched = _reachable_rows(x.shape[2], op.stride[0], op.padding[0], op.dilation[0], k_h, result.shape[2])
+    across = _reachable_rows(x.shape[3], op.stride[1], op.padding[1], op.dilation[1], k_w, result.shape[3])
+    channels = contraction * _groups_reached(call, ctx, result.shape[1], op.groups)
+    return AccessRelations(
+        inputs=(
+            moves(reached, result.shape[0] * channels * touched * across),
+            moves(
+                isl.multi_aff(f"{{ [{domain}] -> [co, ci, kh, kw] }}"),
+                elements_of(weight),
+            ),
+            moves(isl.multi_aff(f"{{ [{domain}] -> [co] }}"), elements_of(bias)),
+        ),
+        outputs=(
+            writes(isl.multi_aff(f"{{ [{domain}] -> [n, co, oh, ow] }}"), elements_of(result)),
+        ),
+    )
+
+
+def _groups_reached(call: "Call", ctx, out_channels, groups: int) -> int:
+    """How many input-channel groups this participant's output channels span.
+
+    The contraction extent is one group's worth, so a participant computing two
+    groups reads two of them. Which groups those are follows from the whole
+    program's output-channel count, not this participant's: the divisor is the
+    Op's, and only the dividend is projected.
+    """
+    if groups == 1:
+        return 1
+    whole = ctx.type_of(call.args[1]).shape[0]
+    if any(
+        not isinstance(value, int) or isinstance(value, bool)
+        for value in (whole, out_channels)
+    ):
+        raise NotImplementedError(
+            f"Conv2D access_relation: grouped output channels must be static, "
+            f"got {out_channels!r} of {whole!r}"
+        )
+    per_group = whole // groups
+    return -(-out_channels // per_group)
+
+
+def _reachable_rows(extent, stride: int, pad: int, dilation: int, kernel, out_extent) -> int:
+    """How many source coordinates one axis of this participant's output reaches.
+
+    A guarded load fetches nothing outside the source, so a padded coordinate is
+    clipped away rather than charged. Only an explicit pad or materialise moves
+    those bytes.
+    """
+    if any(
+        not isinstance(value, int) or isinstance(value, bool)
+        for value in (extent, kernel, out_extent)
+    ):
+        raise NotImplementedError(
+            f"Conv2D access_relation: static extents required, got "
+            f"{(extent, kernel, out_extent)}"
+        )
+    reached = {
+        position * stride + tap * dilation - pad
+        for position in range(out_extent)
+        for tap in range(kernel)
+    }
+    return sum(1 for coordinate in reached if 0 <= coordinate < extent)

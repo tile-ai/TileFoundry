@@ -11,7 +11,22 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.hir.tensor.index_select import _norm_dim
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shard import shard_layout_of
+from tilefoundry.ir.types.shard.shard_layout import Split
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    AccessMode,
+    AccessQuantity,
+    AccessRelations,
+    BoundaryAccess,
+    IndexedAccess,
+    OutputStorage,
+    StorageLink,
+    elements_of,
+    moves,
+    register_access_relation,
+)
+from tilefoundry.visitor_registry.relation_build import identity_access
 
 
 @register_op(name="index_add")
@@ -70,7 +85,29 @@ def _infer_index_write(
 
     for name, ty in (("dst", dst_ty), ("index", index_ty), ("src", src_ty)):
         reject_partials(ctx, call, name, ty.layout)
+        _reject_splits(ctx, call, op_name, name, ty)
     return dst_ty
+
+
+def _reject_splits(ctx, call: "Call", op_name: str, name: str, type_: TensorType) -> None:
+    """Refuse a sharded operand here, where the author can still be told why.
+
+    Which rows a participant owns is decided by index *values*, so a split
+    destination needs value binding, a payload guard whose coordinates differ
+    from the destination's, and per-unit arithmetic that moves with the share --
+    three things that only work together. Until they exist, a split is refused
+    at the boundary the author wrote rather than costed as if it were whole.
+    """
+    layout = shard_layout_of(type_.layout)
+    if layout is None:
+        return
+    if any(isinstance(attr, Split) for attr in layout.attrs):
+        ctx.error(
+            call,
+            f"{op_name}: {name} is Split, and which rows a participant writes "
+            "depends on the index values; reshard it to a replicated layout "
+            "before the update",
+        )
 
 
 @register_typeinfer(IndexAdd)
@@ -94,3 +131,52 @@ def _eval_index_add(ctx):
 
 
 __all__ = ["IndexAdd"]
+
+
+@register_access_relation(IndexAdd)
+def _index_add_access(call: "Call", ctx) -> AccessRelations:
+    """The rows the index names are read, added to, and written back.
+
+    Two questions, and the index answers only one. Which rows are written is
+    chosen by its values, so that side is a lookup. Where the container lives is
+    not: the whole destination is preserved through one affine identity link,
+    because these are the same bytes whichever rows get overwritten.
+
+    The payload is affine identity over its own occurrence domain: its
+    coordinate is `i` where the destination's is `index[i]`, which is why a
+    sharded version needs two mappings on one boundary and is refused earlier.
+    """
+    dst = ctx.local_type_of(call.args[0])
+    index = ctx.local_type_of(call.args[1])
+    src = ctx.local_type_of(call.args[2])
+    rank = len(dst.shape)
+    dim = call.target.dim + rank if call.target.dim < 0 else call.target.dim
+    held = elements_of(dst)
+    touched = elements_of(src)
+    identity = identity_access(rank)
+    preserve = StorageLink(
+        kind="preserve",
+        input=0,
+        source=identity,
+        output=identity,
+        quantity=AccessQuantity(held, held),
+    )
+    return AccessRelations(
+        inputs=(
+            BoundaryAccess(
+                IndexedAccess(index_operand=1, axis=dim),
+                AccessQuantity(touched, touched),
+                AccessMode.READ,
+            ),
+            moves(identity_access(1), elements_of(index)),
+            moves(identity, touched),
+        ),
+        outputs=(
+            BoundaryAccess(
+                IndexedAccess(index_operand=1, axis=dim),
+                AccessQuantity(touched, touched),
+                AccessMode.WRITE,
+                OutputStorage((preserve,)),
+            ),
+        ),
+    )

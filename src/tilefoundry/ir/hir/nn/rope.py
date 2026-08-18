@@ -109,7 +109,7 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     taken = elements_of(pos_ty)
     tables = tuple(
         moves(
-            IndexedAccess(source_operand=operand, index_operand=4, source_axis=0),
+            IndexedAccess(index_operand=4, axis=0),
             taken * (elements_of(ctx.local_type_of(call.args[operand])) // ctx.local_type_of(call.args[operand]).shape[0]),
         )
         for operand in (2, 3)

@@ -14,9 +14,14 @@ from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
+    AccessRelations,
+    elements_of,
+    moves,
+    register_access_relation,
     register_type_relation,
+    writes,
 )
-from tilefoundry.visitor_registry.relation_build import build_domain, identity_map
+from tilefoundry.visitor_registry.relation_build import build_domain, identity_access, identity_map
 
 
 @register_op(name="repeat_interleave")
@@ -98,3 +103,31 @@ def _eval_repeat_interleave(ctx):
 
     out = torch.repeat_interleave(ctx.args[0].data, ctx.op.repeats, dim=ctx.op.axis)
     return TensorValue(data=out, type=ctx.result_type)
+
+
+@register_access_relation(RepeatInterleave)
+def _repeat_interleave_access(call: "Call", ctx) -> AccessRelations:
+    """Several result coordinates read one source coordinate, which is read once.
+
+    The pattern is many-to-one and the amount is its image. That three output
+    positions depend on one element is the pattern's business; the element still
+    crossed the boundary once.
+    """
+    source = ctx.local_type_of(call.args[0])
+    result = ctx.local_type_of(call)
+    rank = len(result.shape)
+    axis = call.target.axis + rank if call.target.axis < 0 else call.target.axis
+    repeats = call.target.repeats
+    dims = [f"d{index}" for index in range(rank)]
+    reads = list(dims)
+    reads[axis] = f"floor(d{axis} / {repeats})" if repeats != 1 else dims[axis]
+    domain = ", ".join(dims)
+    return AccessRelations(
+        inputs=(
+            moves(
+                isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}"),
+                elements_of(source),
+            ),
+        ),
+        outputs=(writes(identity_access(rank), elements_of(result)),),
+    )

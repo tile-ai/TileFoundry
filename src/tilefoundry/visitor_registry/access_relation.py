@@ -27,18 +27,26 @@ from .registries import AnalysisRegistry
 
 @dataclass(frozen=True)
 class IndexedAccess:
-    """One boundary read through the values of another operand.
+    """One boundary reached through the values of another operand.
 
-    A gather names which source coordinate it wants by the element it reads out
-    of ``index_operand``, so the address is not known here. Which operand is
-    being indexed is said outright rather than assumed, because an Op may gather
-    from more than one -- a rotation reads two tables through one set of
-    positions.
+    A gather names the coordinate it wants by an element of ``index_operand``,
+    so no address is known here. What is being indexed is the boundary this
+    pattern sits on -- boundaries are already in order and already say which
+    value they describe -- so a target field would be a second name for
+    something already said, and a sentinel for "this output" would be a third.
     """
 
-    source_operand: int
     index_operand: int
-    source_axis: int
+    axis: int
+
+    def __post_init__(self) -> None:
+        for name in ("index_operand", "axis"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(
+                    f"a lookup names its {name.replace('_', ' ')} by position, "
+                    f"not {value!r}"
+                )
 
 
 @dataclass(frozen=True)

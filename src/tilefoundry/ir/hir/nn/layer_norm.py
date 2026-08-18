@@ -15,9 +15,15 @@ from tilefoundry.ir.types.shard.shard_layout import ShardLayout, split_target_ax
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
+    AccessRelations,
+    elements_of,
+    moves,
+    register_access_relation,
     register_type_relation,
+    writes,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
+from tilefoundry.visitor_registry.relation_build import identity_access
 
 
 @register_op(name="layer_norm")
@@ -135,3 +141,31 @@ def _eval_layer_norm(ctx):
     axis = ctx.op.axis + rank if ctx.op.axis < 0 else ctx.op.axis
     out = F.layer_norm(x, tuple(x.shape[axis:]), weight, bias, ctx.op.eps)
     return TensorValue(data=out, type=ctx.result_type)
+
+
+@register_access_relation(LayerNorm)
+def _layer_norm_access(call: "Call", ctx) -> AccessRelations:
+    """Every element normalized once; the parameters read across the suffix.
+
+    The parameters match the whole normalized suffix, not one axis of it, which
+    is what the type relation already requires of them. The verifier refuses a
+    split at or beyond that axis, so their footprint is the suffix's product in
+    every view -- a participant's row spans all of it.
+    """
+    x = ctx.local_type_of(call.args[0])
+    result = ctx.local_type_of(call)
+    rank = len(result.shape)
+    axis = call.target.axis + rank if call.target.axis < 0 else call.target.axis
+    dims = [f"d{index}" for index in range(rank)]
+    suffix = ", ".join(dims[axis:]) or "0"
+    domain = ", ".join(dims)
+    across = isl.multi_aff(f"{{ [{domain}] -> [{suffix}] }}")
+    held = elements_of(ctx.local_type_of(call.args[1]))
+    return AccessRelations(
+        inputs=(
+            moves(identity_access(rank), elements_of(x)),
+            moves(across, held),
+            moves(across, elements_of(ctx.local_type_of(call.args[2]))),
+        ),
+        outputs=(writes(identity_access(rank), elements_of(result)),),
+    )

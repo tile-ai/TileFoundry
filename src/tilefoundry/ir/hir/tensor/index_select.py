@@ -132,7 +132,7 @@ def _index_select_access_relation(call: "Call", ctx) -> AccessRelations:
     return AccessRelations(
         inputs=(
             moves(
-                IndexedAccess(source_operand=0, index_operand=1, source_axis=axis),
+                IndexedAccess(index_operand=1, axis=axis),
                 elements_of(index_ty) * slice_size,
             ),
             moves(_identity(idx_rank), elements_of(index_ty)),
