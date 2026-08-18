@@ -118,7 +118,7 @@ def test_analyze_help_explains_topology_effects_and_assumptions(capsys) -> None:
 
     assert stopped.value.code == 0
     help_text = capsys.readouterr().out
-    for family in ("compute-cost", "memory", "roofline", "timeline"):
+    for family in ("compute-cost", "memory", "roofline", "performance"):
         assert family in help_text
     assert "flops_per_unit" in help_text
     assert "traffic_per_unit" in help_text
@@ -379,7 +379,7 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
         tmp_path,
         "analyze",
         f"{npu_model}:model",
-        "--timeline",
+        "--performance",
     )
     assert unplaced_npu.returncode == 1
     assert "has no core placement" in unplaced_npu.stderr
@@ -597,7 +597,7 @@ def test_analyze_binds_an_extent_on_a_root_that_reaches_a_child(tmp_path, capsys
 def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> None:
     source = Path(__file__).parents[1] / "fixtures" / "placed" / "moe_mega_kernel.py"
     selector = f"{source}:MoEMegaKernel"
-    flags = ["--compute-cost", "--memory", "--roofline", "--timeline"]
+    flags = ["--compute-cost", "--memory", "--roofline", "--performance"]
 
     assert cli.main(["analyze", selector, *flags, "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
@@ -620,13 +620,13 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
         "compute-cost",
         "memory",
         "roofline",
-        "timeline",
+        "performance",
     ]
     assert set(payload["function_records"]) == {
         "compute-cost",
         "memory",
         "roofline",
-        "timeline",
+        "performance",
     }
     assert "routed_expert(" not in annotated
     assert "shared_expert(" not in annotated
@@ -636,7 +636,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
     assert "offset=0" in annotated
     assert "offset=120" in annotated
 
-    summary = payload["function_records"]["timeline"]
+    summary = payload["function_records"]["performance"]
     cost = payload["function_records"]["compute-cost"]
     whole, unit = cost["traffic"]["gmem"], cost["traffic_per_unit"]["gmem"]
     peak = payload["function_records"]["memory"]["footprint"]
@@ -652,7 +652,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
         f"@r{unit['read']}/w{unit['write']}",
         f"# peak-footprint=gmem:{peak[0]['peak_bytes']}",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
-        "# timeline root=MoEMegaKernel::experts "
+        "# performance root=MoEMegaKernel::experts "
         f"predicted-ns={summary['timeline']['end_ns']} "
         f"waves={summary['waves']} "
         f"solver-status={summary['solver_status']}",
@@ -673,9 +673,9 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
     rows = payload["calls"]
     assert len(rows) == 7
     assert all(
-        set(row) - {"timeline"} == {"value", "compute-cost", "roofline"} for row in rows
+        set(row) - {"performance"} == {"value", "compute-cost", "roofline"} for row in rows
     )
-    timed = [index for index, row in enumerate(rows) if "timeline" in row]
+    timed = [index for index, row in enumerate(rows) if "performance" in row]
     assert timed == [1, 4, 6]
     starts = []
     for row in rows:
@@ -687,16 +687,16 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
     for index, (row, start) in enumerate(zip(rows, starts)):
         stop = starts[index + 1] - 1 if index + 1 < len(starts) else len(lines)
         statement = "\n".join(lines[start - 1 : stop])
-        if "timeline" in row:
-            timeline = row["timeline"]["timeline"]
-            assert f"timeline=[{timeline['start_ns']},{timeline['end_ns']})" in statement
+        if "performance" in row:
+            timeline = row["performance"]["timeline"]
+            assert f"performance=[{timeline['start_ns']},{timeline['end_ns']})" in statement
         else:
-            assert "; timeline=" not in statement
+            assert "; performance=" not in statement
         annotated_meshes = set(re.findall(r"@ (\w+)\.", statement.split("  # ", 1)[1]))
         assert annotated_meshes <= hoisted
         placed_meshes = set(re.findall(r"mesh=(\w+),", statement))
         if annotated_meshes and placed_meshes:
             assert annotated_meshes == placed_meshes
-    assert len([line for line in lines if "; timeline=" in line]) == len(timed)
+    assert len([line for line in lines if "; performance=" in line]) == len(timed)
     assert len({row["value"] for row in rows}) == len(rows)
     assert "units=" not in annotated

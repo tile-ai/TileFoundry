@@ -25,7 +25,7 @@ from tests.models.decode_oracle import one_ulp_at
 from tests.models.registry import cases_of
 
 LOGICAL_FAMILIES = ("compute-cost", "memory", "roofline")
-FAMILIES = (*LOGICAL_FAMILIES, "timeline")
+FAMILIES = (*LOGICAL_FAMILIES, "performance")
 
 
 SOLVER = ("--solver-timeout=60", "--solver-workers=4", "--first-plan")
@@ -128,7 +128,7 @@ def _roofline_evidence(report: dict) -> str | None:
 
 def _timeline_evidence(report: dict) -> str | None:
     """What `timeline` must have laid out and scaled by physical capacity."""
-    record = report["function_records"]["timeline"]
+    record = report["function_records"]["performance"]
     envelope = record["timeline"]
     if envelope["start_ns"] != 0 or not envelope["end_ns"] > 0:
         return f"predicted interval is {envelope!r}"
@@ -145,7 +145,7 @@ _EVIDENCE = {
     "compute-cost": _compute_cost_evidence,
     "memory": _memory_evidence,
     "roofline": _roofline_evidence,
-    "timeline": _timeline_evidence,
+    "performance": _timeline_evidence,
 }
 
 
@@ -187,11 +187,11 @@ def timeline_refused(
     rejected = tf(
         "analyze",
         static(source, case, selected.selector),
-        "--timeline",
+        "--performance",
         *dim_args(selected.dims),
     )
     assert rejected.returncode == 1, rejected.stdout + rejected.stderr
-    assert "timeline:" in rejected.stderr
+    assert "performance:" in rejected.stderr
     assert "has no" in rejected.stderr and "placement" in rejected.stderr
 
 

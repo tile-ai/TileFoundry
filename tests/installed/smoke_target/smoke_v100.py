@@ -49,14 +49,14 @@ def test_external_v100_documents_analyse_a_copied_installed_model(
         "--compute-cost",
         "--memory",
         "--roofline",
-        "--timeline",
+        "--performance",
         "--json",
     )
     assert done.returncode == 0, done.stderr
     report = json.loads(done.stdout)
 
     assert report["target"] == "vendor.v100_sxm2_32gb"
-    assert report["executed"] == ["compute-cost", "memory", "roofline", "timeline"]
+    assert report["executed"] == ["compute-cost", "memory", "roofline", "performance"]
     assert report["totals"]["flops"]["f16"] > 0
     assert report["function_records"]["roofline"]["ideal_ns"] > 0
     gmem = next(
@@ -64,11 +64,11 @@ def test_external_v100_documents_analyse_a_copied_installed_model(
         if item["level"] == "gmem"
     )
     assert gmem["peak_bytes"] < 32_000_000_000
-    timeline = report["function_records"]["timeline"]
+    timeline = report["function_records"]["performance"]
     assert timeline["waves"] == 2
     assert timeline["solver_status"] == "optimal"
     call_timelines = [
-        call["timeline"]["timeline"] for call in report["calls"] if "timeline" in call
+        call["performance"]["timeline"] for call in report["calls"] if "performance" in call
     ]
     assert call_timelines
     assert all(

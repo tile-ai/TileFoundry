@@ -17,7 +17,7 @@ import pytest
 from ortools.sat.python import cp_model
 
 import tilefoundry.analysis.compute_cost as compute_cost
-import tilefoundry.analysis.timeline as timeline_family
+import tilefoundry.analysis.performance as performance_family
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
@@ -39,7 +39,7 @@ from tilefoundry.analysis import (
     TimelineMetadata,
 )
 from tilefoundry.analysis.api import analyze
-from tilefoundry.analysis.check import _mesh_image, _result_placement, _timeline_placements
+from tilefoundry.analysis.check import _call_placements, _mesh_image, _result_placement
 from tilefoundry.analysis.compute_cost import _call_movement, _local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.memory import _base_of
@@ -987,7 +987,7 @@ def test_analysis_snapshot_drift_sentinel() -> None:
     for function in (functions["plain"], functions["split"], functions["broadcast"]):
         result = analyze(_MatmulLayouts, function, analysis="roofline")
         if function is functions["split"]:
-            split_result = result
+            split_result = analyze(_MatmulLayouts, function, analysis="memory")
         call = _calls(result.function)[-1]
         matmul_records.append(
             (
@@ -1179,7 +1179,7 @@ def test_roofline_reads_the_recorded_work_and_aggregates_before_dividing() -> No
     entry = _CudaAdd.entry_function()
     result = analyze(_CudaAdd, entry, analysis="roofline")
 
-    assert result.executed == ("compute-cost", "memory", "roofline")
+    assert result.executed == ("compute-cost", "roofline")
     call = _calls(result.function)[-1]
     cost = get_metadata(call, ComputeCostMetadata)
     bound = get_metadata(call, RooflineMetadata)
@@ -1221,12 +1221,14 @@ def test_roofline_uses_exact_integer_ceiling_above_float_precision() -> None:
 def test_timeline_refuses_unplaced_results_before_dependencies_run(monkeypatch) -> None:
     """A topology declaration does not place a value or admit dependency writes."""
     compute = analyze(_wide_grid, _entry(_wide_grid), analysis="compute-cost")
+    footprint = analyze(_wide_grid, _entry(_wide_grid), analysis="memory")
     roofline = analyze(_wide_grid, _entry(_wide_grid), analysis="roofline")
     assert get_metadata(compute.function, ComputeCostMetadata) is not None
+    assert get_metadata(footprint.function, MemoryMetadata) is not None
     assert get_metadata(roofline.function, RooflineMetadata) is not None
 
-    placed, function = _run(_placed_wide_grid, "timeline")
-    assert placed.executed == ("compute-cost", "memory", "timeline")
+    placed, function = _run(_placed_wide_grid, "performance")
+    assert placed.executed == ("compute-cost", "memory", "performance")
     assert [
         type(call.target).__name__
         for call in _calls(function)
@@ -1244,17 +1246,22 @@ def test_timeline_refuses_unplaced_results_before_dependencies_run(monkeypatch) 
         AnalysisError,
         match=r"test_analysis_families.py:.*has no cta placement",
     ):
-        _run(_wide_grid, "timeline")
+        _run(_wide_grid, "performance")
     assert not ran
 
 
 def test_mega_kernel_preserves_placement_costs_and_timeline_order() -> None:
-    """The expanded placed program keeps its slices, costs, and dependency order."""
+    """The expanded placed program keeps its slices, costs, and dependency order.
+
+    Two roots are asked for, and the four families arrive: the bound and the
+    prediction share compute-cost, and asking for both measures it once.
+    """
     result = analyze(
         MoEMegaKernel,
         MoEMegaKernel.entry_function(),
-        analysis=("compute-cost", "memory", "roofline", "timeline"),
+        analysis=("roofline", "performance"),
     )
+    assert result.executed == ("compute-cost", "roofline", "memory", "performance")
     calls = _calls(result.function)
     assert len(calls) == 7
     assert all(not isinstance(call.target, Function) for call in calls)
@@ -1273,7 +1280,7 @@ def test_mega_kernel_preserves_placement_costs_and_timeline_order() -> None:
         assert layout.outer is not None
         assert (layout.outer.shape, layout.offset) == (shape, offset)
 
-    placements = _timeline_placements(
+    placements = _call_placements(
         MoEMegaKernel,
         result.function,
         "cta",
@@ -1375,7 +1382,7 @@ def test_timeline_scales_one_local_schedule_by_root_capacity() -> None:
         analyze(
             _ScalableGrid,
             _ScalableGrid.entry_function(),
-            analysis="timeline",
+            analysis="performance",
             dims={"grid": extent},
         )
         for extent in (132, 265)
@@ -1388,7 +1395,7 @@ def test_timeline_scales_one_local_schedule_by_root_capacity() -> None:
         analyze(
             constrained,
             constrained.entry_function(),
-            analysis="timeline",
+            analysis="performance",
             dims={"grid": 265},
         )
     )
@@ -1414,13 +1421,13 @@ def test_timeline_scales_one_local_schedule_by_root_capacity() -> None:
     assert {summary.solver_status for summary in summaries} == {"optimal"}
 
     data = report(results[1])
-    assert data["function_records"]["timeline"] == {
+    assert data["function_records"]["performance"] == {
         "timeline": {"start_ns": 0, "end_ns": 45, "trips": 1, "stride_ns": 0},
         "waves": 3,
         "solver_status": "optimal",
     }
     assert all(
-        set(row["timeline"]["timeline"]) == {"start_ns", "end_ns", "trips", "stride_ns"}
+        set(row["performance"]["timeline"]) == {"start_ns", "end_ns", "trips", "stride_ns"}
         for row in data["calls"]
     )
 
@@ -1430,7 +1437,7 @@ def test_placement_projection_rejects_the_wrong_level_and_invalid_images() -> No
         AnalysisError,
         match=r"selected topology level 'cta'.*placed at level.s. 'thread'",
     ):
-        analyze(_thread_sharded, _entry(_thread_sharded), analysis="timeline")
+        analyze(_thread_sharded, _entry(_thread_sharded), analysis="performance")
 
     cta = IrTopology("cta", 8)
     outside = IrMesh(
@@ -1495,12 +1502,12 @@ def test_a_timeline_has_to_put_its_buffers_somewhere() -> None:
     roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))
 
     with pytest.raises(AnalysisError, match=r"no timeline places this program's buffers"):
-        analyze(_SharedTile, split, analysis="timeline")
+        analyze(_SharedTile, split, analysis="performance")
 
     fits = analyze(
         roomy,
         next(item for item in roomy.functions if item.name == "split"),
-        analysis="timeline",
+        analysis="performance",
     )
     summary = get_metadata(fits.function, PerformanceSummaryMetadata)
     assert summary is not None and summary.solver_status == "optimal"
@@ -1531,7 +1538,7 @@ def test_a_view_and_its_base_are_one_rectangle_to_place() -> None:
     roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))
     viewed = next(function for function in roomy.functions if function.name == "viewed")
 
-    result = analyze(roomy, viewed, analysis=("memory", "timeline"))
+    result = analyze(roomy, viewed, analysis=("memory", "performance"))
 
     tile, view, _sum = _calls(result.function)
     assert get_metadata(view, BufferAliasMetadata) == BufferAliasMetadata("forward", (0,))
@@ -1556,7 +1563,7 @@ def test_an_overwrite_waits_for_everything_that_read_what_it_replaces() -> None:
     result = analyze(
         _OverwrittenAcrossGroups,
         _OverwrittenAcrossGroups.entry_function(),
-        analysis="timeline",
+        analysis="performance",
     )
 
     _placed, made, moved, side, _joinable, _window, written, _out, _joined = _calls(
@@ -1565,7 +1572,7 @@ def test_an_overwrite_waits_for_everything_that_read_what_it_replaces() -> None:
     assert get_metadata(written, BufferAliasMetadata) == BufferAliasMetadata("update", (0,))
     assert _base_of(moved) is made and _base_of(written.args[0]) is made
     facts = _OverwrittenAcrossGroups.resolve_target().get_facts(ThroughputFacts)
-    placements = _timeline_placements(_OverwrittenAcrossGroups, result.function, "cta", facts)
+    placements = _call_placements(_OverwrittenAcrossGroups, result.function, "cta", facts)
     assert placements[id(side)].isdisjoint(placements[id(written)])
     assert (
         get_metadata(side, PerformanceMetadata).timeline.end_ns
@@ -1583,14 +1590,14 @@ def test_a_solve_that_ends_without_an_answer_says_which_and_records_nothing(
     solve = cp_model.CpSolver.Solve
 
     attached: list[object] = []
-    written = timeline_family.attach
+    written = performance_family.attach
 
     def watch(expr, record):
         attached.append(record)
         return written(expr, record)
 
-    monkeypatch.setattr(timeline_family, "attach", watch)
-    analyze(roomy, fits, analysis="timeline")
+    monkeypatch.setattr(performance_family, "attach", watch)
+    analyze(roomy, fits, analysis="performance")
     assert any(isinstance(record, PerformanceSummaryMetadata) for record in attached)
 
     for status, expected in (
@@ -1608,7 +1615,7 @@ def test_a_solve_that_ends_without_an_answer_says_which_and_records_nothing(
             owner, function = roomy, fits
         attached.clear()
         with pytest.raises(AnalysisError, match=expected):
-            analyze(owner, function, analysis="timeline")
+            analyze(owner, function, analysis="performance")
         assert attached == []
 
 
@@ -1622,14 +1629,14 @@ def test_only_addressable_levels_are_placed_by_the_solver() -> None:
     narrow = replace(_PricingBoundary, target=_NarrowRegisters("nvidia.h200_sxm"))
     function = next(item for item in narrow.functions if item.name == "unpriced_only")
 
-    result = analyze(narrow, function, analysis="timeline")
+    result = analyze(narrow, function, analysis="performance")
 
     summary = get_metadata(result.function, PerformanceSummaryMetadata)
     assert summary is not None and summary.solver_status == "optimal"
     baseline = analyze(
         _PricingBoundary,
         next(item for item in _PricingBoundary.functions if item.name == "unpriced_only"),
-        analysis="timeline",
+        analysis="performance",
     )
     assert summary.timeline == get_metadata(
         baseline.function, PerformanceSummaryMetadata
@@ -1648,7 +1655,7 @@ def test_time_comes_from_the_rates_the_target_states_and_from_nothing_else() -> 
     functions = {function.name: function for function in _PricingBoundary.functions}
     throughput = _PricingBoundary.resolve_target().get_facts(ThroughputFacts)
 
-    result = analyze(_PricingBoundary, functions["unpriced_only"], analysis="timeline")
+    result = analyze(_PricingBoundary, functions["unpriced_only"], analysis="performance")
     costs = [get_metadata(call, ComputeCostMetadata) for call in _calls(result.function)]
     assert any(record.traffic_per_unit_at("rmem").total_bytes for record in costs)
     assert all(
@@ -1657,7 +1664,7 @@ def test_time_comes_from_the_rates_the_target_states_and_from_nothing_else() -> 
         for record in costs
     )
 
-    result = analyze(_PricingBoundary, functions["mixed"], analysis="timeline")
+    result = analyze(_PricingBoundary, functions["mixed"], analysis="performance")
     moved = next(
         record
         for record in (
@@ -1672,9 +1679,10 @@ def test_time_comes_from_the_rates_the_target_states_and_from_nothing_else() -> 
 
     with pytest.raises(
         AnalysisError,
-        match=r"no per-unit compute rate for dtype 'bool' at 'cta'",
+        match=r"^performance: target publishes no per-unit compute rate for "
+        r"dtype 'bool' at 'cta'$",
     ):
-        analyze(_PricingBoundary, functions["unrated_dtype"], analysis="timeline")
+        analyze(_PricingBoundary, functions["unrated_dtype"], analysis="performance")
 
 
 def _priced_levels_only(
@@ -1692,7 +1700,7 @@ def _priced_levels_only(
 
 
 def test_a_zero_cost_structural_occurrence_carries_no_performance_record() -> None:
-    result, entry = _run(_zero_cost_view, "timeline")
+    result, entry = _run(_zero_cost_view, "performance")
 
     view = next(
         call for call in _calls(entry) if type(call.target).__name__ == "TupleGetItem"
@@ -1700,17 +1708,17 @@ def test_a_zero_cost_structural_occurrence_carries_no_performance_record() -> No
     assert get_metadata(view, PerformanceMetadata) is None
     rows = report(result)["calls"]
     assert rows and all(
-        set(row["timeline"]["timeline"]) == {"start_ns", "end_ns", "trips", "stride_ns"}
+        set(row["performance"]["timeline"]) == {"start_ns", "end_ns", "trips", "stride_ns"}
         for row in rows
     )
     assert all(
-        row["timeline"]["timeline"]["start_ns"] < row["timeline"]["timeline"]["end_ns"]
+        row["performance"]["timeline"]["start_ns"] < row["performance"]["timeline"]["end_ns"]
         for row in rows
     )
 
 
 def test_an_unplaced_structural_occurrence_ignores_unmodelled_traffic() -> None:
-    _result, entry = _run(_unplaced_structural, "timeline")
+    _result, entry = _run(_unplaced_structural, "performance")
 
     (view,) = _calls(entry)
     cost = get_metadata(view, ComputeCostMetadata)
@@ -1768,14 +1776,11 @@ def test_a_report_shows_the_requested_analyses_and_reads_the_same_either_way() -
     data = rendered.data
 
     assert data["requested"] == ["roofline"]
-    assert data["executed"] == ["compute-cost", "memory", "roofline"]
-    assert set(data["function_records"]) == {"memory", "roofline"}
-    memory = data["function_records"]["memory"]
-    assert set(memory) == {"footprint"}
-    assert all(set(item) == {"level", "peak_bytes"} for item in memory["footprint"])
+    assert data["executed"] == ["compute-cost", "roofline"]
+    assert set(data["function_records"]) == {"roofline"}
     assert data["totals"]["flops"] == {"f32": 256}
     assert all(set(call) == {"value", "roofline"} for call in data["calls"])
-    assert get_metadata(result.function, MemoryMetadata) is not None
+    assert get_metadata(result.function, MemoryMetadata) is None
     cost = get_metadata(_calls(result.function)[-1], ComputeCostMetadata)
     assert cost is not None
     asked = render_comment(cost, opt_in=frozenset({"operands"}))
@@ -1789,5 +1794,5 @@ def test_a_report_shows_the_requested_analyses_and_reads_the_same_either_way() -
     bound = payload["function_records"]["roofline"]
     assert f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}" in text
     assert "# compute-cost flops=f32:256@256 traffic=gmem:r2048/w1024@r2048/w1024" in text
-    assert "# peak-footprint=gmem:2048" in text
+    assert "# peak-footprint" not in text
     assert "operands" not in text

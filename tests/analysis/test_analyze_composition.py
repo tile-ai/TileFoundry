@@ -124,3 +124,46 @@ def test_analyze_keeps_a_provider_value_error_and_rejects_over_limit_topology() 
     )
     with pytest.raises(ValueError, match="1 <= extent <= 1024"):
         analyze(over_limit, function, analysis="roofline")
+
+
+def test_every_checker_answers_once_per_thing_before_anything_measures() -> None:
+    """Each analysis states its requirements; all of them are met before any writes.
+
+    One traversal of the program serves every checker, so a call is walked for
+    this once however many analyses asked. What a checker sees is what the
+    analyses will read: the derived program, before a record exists on it.
+    """
+    seen: list[str] = []
+
+    @dataclass
+    class _Counting:
+        selector: str
+
+        def check_target(self, ctx) -> None:
+            seen.append(f"{self.selector}:target")
+
+        def check_call(self, call, ctx) -> None:
+            seen.append(f"{self.selector}:call")
+
+        def finish(self, function, ctx) -> None:
+            seen.append(f"{self.selector}:finish")
+
+    def service(selector: str, requires: tuple[str, ...] = ()) -> Analyzer:
+        return Analyzer(
+            selector,
+            lambda *_args, _selector=selector: seen.append(f"{_selector}:run"),
+            requires=requires,
+            input_checker=_Counting(selector),
+        )
+
+    target = _AnalysisTarget((service("base"), service("top", ("base",))))
+    module, function = _module(target)
+
+    result = analyze(module, function, analysis="top")
+
+    calls = sum(1 for entry in seen if entry.endswith(":call")) // 2
+    assert calls > 0
+    assert seen[:2] == ["base:target", "top:target"]
+    assert seen[2 : 2 + 2 * calls] == ["base:call", "top:call"] * calls
+    assert seen[2 + 2 * calls :] == ["base:finish", "top:finish", "base:run", "top:run"]
+    assert result.executed == ("base", "top")

@@ -67,7 +67,7 @@ def _local_duration_ns(
     """Price one occurrence's projected work against one unit's rates."""
     if facts.rate_unit != level:
         raise AnalysisError(
-            f"timeline: selected topology level {level!r}, but the target's "
+            f"performance: selected topology level {level!r}, but the target's "
             f"per-unit rates are stated for {facts.rate_unit!r}"
         )
 
@@ -80,11 +80,11 @@ def _local_duration_ns(
             continue
         dtype = getattr(DType, name, None)
         if dtype is None:
-            raise AnalysisError(f"timeline: unknown compute dtype {name!r}")
+            raise AnalysisError(f"performance: unknown compute dtype {name!r}")
         rate = facts.peak_per_unit_for(dtype)
         if rate is None or rate <= 0:
             raise AnalysisError(
-                f"timeline: target publishes no per-unit compute rate for "
+                f"performance: target publishes no per-unit compute rate for "
                 f"dtype {name!r} at {level!r}"
             )
         compute_ns += -(-(value * scale * 1_000_000_000) // rate)
@@ -95,7 +95,7 @@ def _local_duration_ns(
         rate = facts.memory_bandwidth_bytes_per_second_per_unit
         if rate is None or rate <= 0:
             raise AnalysisError(
-                f"timeline: target publishes no per-unit bandwidth for level "
+                f"performance: target publishes no per-unit bandwidth for level "
                 f"{facts.bandwidth_level!r} at {level!r}"
             )
         memory_ns = -(-(moved * 1_000_000_000) // rate)

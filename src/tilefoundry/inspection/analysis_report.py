@@ -110,7 +110,7 @@ def _summary(
             views.extend(AdvisorySummary(Prose(note)) for note in memory.advisories)
     if "roofline" in function_records:
         views.append(get_metadata(function, RooflineMetadata))
-    if "timeline" in function_records:
+    if "performance" in function_records:
         summary = get_metadata(function, PerformanceSummaryMetadata)
         views.append(
             PerformanceSummaryView(

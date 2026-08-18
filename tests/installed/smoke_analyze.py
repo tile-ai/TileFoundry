@@ -44,9 +44,9 @@ def test_logical_analyses_run_and_timeline_requires_result_placement(tf, cmine) 
     for conclusion in ("# compute-cost flops=", "# peak-footprint=", "# roofline ideal-ns="):
         assert conclusion in done.stdout, conclusion
 
-    rejected = tf("analyze", f"{cmine}:CMine.root", "--timeline")
+    rejected = tf("analyze", f"{cmine}:CMine.root", "--performance")
     assert rejected.returncode == 1
-    assert "timeline:" in rejected.stderr
+    assert "performance:" in rejected.stderr
     assert "has no cta placement" in rejected.stderr
 
 
@@ -58,7 +58,7 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
         "--compute-cost",
         "--memory",
         "--roofline",
-        "--timeline",
+        "--performance",
         "--json",
     )
     assert done.returncode == 0, done.stderr
@@ -70,32 +70,32 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
         "--compute-cost",
         "--memory",
         "--roofline",
-        "--timeline",
+        "--performance",
     )
     assert as_text.returncode == 0, as_text.stderr
     text = as_text.stdout
     assert as_text.stderr == ""
 
-    families = ["compute-cost", "memory", "roofline", "timeline"]
+    families = ["compute-cost", "memory", "roofline", "performance"]
     assert payload["requested"] == payload["executed"] == families
     assert set(payload["function_records"]) == set(families)
     assert len(payload["calls"]) == 7
     assert all(
-        set(row) - {"timeline"} == {"value", "compute-cost", "roofline"}
+        set(row) - {"performance"} == {"value", "compute-cost", "roofline"}
         for row in payload["calls"]
     )
     assert [
-        index for index, row in enumerate(payload["calls"]) if "timeline" in row
+        index for index, row in enumerate(payload["calls"]) if "performance" in row
     ] == [1, 4, 6]
     assert text.startswith(
         "# analysis target=nvidia.h200_sxm module=MoEMegaKernel function=experts"
     )
     for conclusion in (
-        "# selection requested=compute-cost,memory,roofline,timeline",
+        "# selection requested=compute-cost,memory,roofline,performance",
         "# compute-cost flops=f32:",
         "# peak-footprint=",
         "# roofline ideal-ns=",
-        "# timeline root=MoEMegaKernel::experts predicted-ns=",
+        "# performance root=MoEMegaKernel::experts predicted-ns=",
     ):
         assert conclusion in text
 
@@ -122,7 +122,7 @@ def test_a_bare_analyze_typechecks_and_prints_only_typed_hir(tf, cmine) -> None:
     assert "compute-cost" not in done.stdout
     assert "memory peak=" not in done.stdout
     assert "roofline" not in done.stdout
-    assert "timeline=" not in done.stdout
+    assert "performance=" not in done.stdout
 
 
 def test_analyze_json_needs_an_explicit_analysis(tf, cmine) -> None:
@@ -151,7 +151,7 @@ def test_a_bare_analyze_binds_every_open_dimension(tf, tmp_path) -> None:
 
 def test_timeline_resolves_derived_execution_geometry(tf, derived_prefill) -> None:
     source = f"{derived_prefill}:DerivedPrefill.prefill"
-    unbound = tf("analyze", source, "--timeline", "--json")
+    unbound = tf("analyze", source, "--performance", "--json")
     assert unbound.returncode == 1
     assert unbound.stdout == ""
     assert "prefill_n is declared as [1, 65)" in unbound.stderr
@@ -160,7 +160,7 @@ def test_timeline_resolves_derived_execution_geometry(tf, derived_prefill) -> No
     bound = tf(
         "analyze",
         source,
-        "--timeline",
+        "--performance",
         "--dim",
         "prefill_n=17",
         "--dim",
@@ -169,7 +169,7 @@ def test_timeline_resolves_derived_execution_geometry(tf, derived_prefill) -> No
     )
     assert bound.returncode == 0, bound.stderr
     payload = json.loads(bound.stdout)
-    timeline = payload["function_records"]["timeline"]
+    timeline = payload["function_records"]["performance"]
     assert timeline == {
         "timeline": {
             "start_ns": 0,
@@ -187,17 +187,17 @@ def test_analyze_reports_only_the_analyses_that_were_requested(tf, cwide) -> Non
     assert done.returncode == 0, done.stderr
 
     assert (
-        "# selection requested=roofline executed=compute-cost,memory,roofline"
+        "# selection requested=roofline executed=compute-cost,roofline"
         in done.stdout
     )
     assert "# compute-cost flops=" in done.stdout
     assert "# roofline ideal-ns=" in done.stdout
-    assert "# peak-footprint=" in done.stdout
-    assert "# timeline " not in done.stdout
+    assert "# peak-footprint=" not in done.stdout
+    assert "# performance " not in done.stdout
     assert "; roofline ideal-ns=" in done.stdout
     assert "; memory peak=" not in done.stdout
     assert "; compute-cost" not in done.stdout
-    assert "; timeline=" not in done.stdout
+    assert "; performance=" not in done.stdout
 
 
 def test_analyze_failure_reports_line_variable_and_reason(tf, tmp_path) -> None:

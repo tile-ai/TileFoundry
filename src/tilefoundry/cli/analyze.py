@@ -24,7 +24,7 @@ EVIDENCE: dict[str, str] = {
     "compute-cost": "the logical work and traffic of every value: flops by dtype, bytes moved",
     "memory": "where that traffic lands, and the footprint it holds live against the capacity",
     "roofline": "which of compute or memory limits each value, and the limit in time",
-    "timeline": "when each value runs, and the root's physical-wave estimate",
+    "performance": "when each value runs, where its buffers fit, and the time that takes",
 }
 
 
@@ -68,7 +68,7 @@ def guidance() -> str:
                        for each storage level
         roofline       nothing. The bound is the machine's     never
                        and is unchanged by program splits
-        timeline       which level's parallel capacity the     the program shards
+        performance    which level's parallel capacity the     the program shards
                        plan is issued against
 
         Two assumptions the reported numbers rest on:
@@ -83,7 +83,7 @@ def guidance() -> str:
           tilefoundry spec analysis 2.2.1    compute-cost
           tilefoundry spec analysis 2.2.2    memory
           tilefoundry spec analysis 2.2.3    roofline
-          tilefoundry spec analysis 2.2.4    timeline
+          tilefoundry spec analysis 2.2.4    performance
         """
     )
 

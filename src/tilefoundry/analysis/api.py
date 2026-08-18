@@ -13,13 +13,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from tilefoundry.analysis.check import (
-    _resolve_program_geometry,
-    _timeline_placements,
-    check_program,
-)
+from tilefoundry.analysis.check import _resolve_program_geometry, check_program
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.facts import ParallelCapacityFacts, ThroughputFacts
 from tilefoundry.analysis.preflight import validate_authored
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.report import render_json, report_data
@@ -106,42 +101,6 @@ def _closure(target: Target, roots: tuple[str, ...]) -> tuple[Analyzer, ...]:
     return tuple(ordered)
 
 
-def _require_family_readiness(
-    module: Module,
-    function: Function,
-    target: Target,
-    level: str | None,
-    closure: tuple[Analyzer, ...],
-) -> None:
-    """Reject family-specific missing inputs before any family writes Metadata."""
-    if not any(algorithm.selector == "timeline" for algorithm in closure):
-        return
-    try:
-        facts = target.get_facts(ParallelCapacityFacts)
-    except UnsupportedCapabilityError as error:
-        raise AnalysisError(f"timeline: {error}") from None
-    if level is None:
-        raise AnalysisError(
-            "timeline: no topology level was selected, so results cannot carry "
-            "an execution placement"
-        )
-    if facts.topology != level:
-        raise AnalysisError(
-            f"timeline: selected topology level {level!r}, but the target's "
-            f"parallel capacity is stated for {facts.topology!r}"
-        )
-    capacity = facts.parallel_units
-    if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity <= 0:
-        raise AnalysisError(
-            f"timeline: the target must publish a positive parallel-unit capacity, got {capacity!r}"
-        )
-    try:
-        throughput = target.get_facts(ThroughputFacts)
-    except UnsupportedCapabilityError as error:
-        raise AnalysisError(f"timeline: {error}") from None
-    _timeline_placements(module, function, level, throughput)
-
-
 def analyze(
     module: Module,
     function: Function,
@@ -191,10 +150,9 @@ def analyze(
         level = topologies[0].name
     closure = _closure(target, roots)
 
-    function = check_program(module, function, level=level)
+    function = check_program(module, function, level=level, analyzers=closure)
     functions = reachable_functions(function)
     validate_authored(functions)
-    _require_family_readiness(module, function, target, level, closure)
 
     order: list[type[IRMetadata]] = []
     written_records: set[tuple[int, type]] = set()

@@ -743,7 +743,7 @@ def _analysed_mega() -> tuple[dict[type, list[tuple[object, object]]], tuple[obj
     result = analyze(
         MoEMegaKernel,
         MoEMegaKernel.entry_function(),
-        analysis=("compute-cost", "memory", "roofline", "timeline"),
+        analysis=("compute-cost", "memory", "roofline", "performance"),
     )
     rendered = render_analysis(result)
     function = result.function

@@ -6,7 +6,7 @@ This spec owns TileFoundry's fact layer: everything a later stage decides
 | Surface | Entry | What it states |
 |---|---|---|
 | Polyhedral model | `extract(hir) -> TileGraph` | one HIR `Function` body as isl domains, access relations and auto-inferred dependences — target-independent |
-| Program check | `check_program(module, function, level=..., budget=...)` | an inlined Function view after validating one authored program and its declared topology |
+| Program check | `check_program(module, function, level=..., budget=..., analyzers=...)` | an inlined Function view after validating one authored program, its declared topology, and what each requested analysis needs of it |
 | Composed measurement | `analyze(module, function, analysis=...)` | one or more root analyses and their union dependency closure, leaving typed Metadata on the IR |
 
 Per-Op semantic derivation — typeinfer, the forward access relation, shard
@@ -322,15 +322,15 @@ they describe: a record on a `Call` describes that call, while a record on a
 
 ### 2.2 Analysis families
 
-The first families are `compute-cost`, `memory`, `roofline`, and `timeline`.
+The first families are `compute-cost`, `memory`, `roofline`, and `performance`.
 Each owns its record types and declares its dependencies and output additions.
 
 | Selector | Requires | Owns | Attaches to | Rests on | Text summary adds | Annotates equations |
 |---|---|---|---|---|---|---|
 | `compute-cost` | - | `ComputeCostMetadata`, `BufferAliasMetadata` | `ComputeCostMetadata` on every measured Call and the Function; `BufferAliasMetadata` on every measured Call | the authored program | `compute-cost` | every measured Call |
 | `memory` | `compute-cost` | `MemoryMetadata`, `LoopFootprintMetadata` | `MemoryMetadata` on the Function; `LoopFootprintMetadata` on every `GridRegionExpr` | the authored program, `MemoryHierarchyFacts` | `peak-footprint`, `advisory` | none |
-| `roofline` | `memory`, `compute-cost` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | bounded dependency evidence, `roofline` | every measured Call |
-| `timeline` | `compute-cost` | `PerformanceMetadata`, `PerformanceSummaryMetadata` | `PerformanceMetadata` on every Call with a modeled duration; `PerformanceSummaryMetadata` on the Function | `ThroughputFacts`, `ParallelCapacityFacts` | `timeline` | every Call with a modeled duration |
+| `roofline` | `compute-cost` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | `roofline` | every measured Call |
+| `performance` | `compute-cost`, `memory` | `PerformanceMetadata`, `PerformanceSummaryMetadata` | `PerformanceMetadata` on every Call with a modeled duration; `PerformanceSummaryMetadata` on the Function | `ThroughputFacts`, `ParallelCapacityFacts`, `MemoryHierarchyFacts` | `performance` | every Call with a modeled duration |
 
 Every compact text summary begins with these two lines:
 
@@ -406,10 +406,14 @@ layer settles is which type a field holds and what its keys name:
   - A family MUST read a dependency's record rather than recompute what it
     states. A number with two derivations has two answers.
   - Before any member of a requested union closure writes Metadata, Analyze MUST
-    establish every requested root's family-specific readiness. Timeline
-    readiness requires a positive `ParallelCapacityFacts` value for the selected
-    topology and one valid result placement for every costed primitive Call.
-    Failing timeline readiness MUST NOT make the same unplaced program invalid
+    establish every requested root's family-specific readiness. Each family
+    states its own through the checker its descriptor carries, and one
+    metadata-free traversal of the derived program answers all of them.
+    Performance readiness requires a positive `ParallelCapacityFacts` value for
+    the selected topology, rates stated for that same level, and one valid
+    result placement for every occurrence that will take time. Where the buffers
+    go is not a readiness question: it is decided with the schedule.
+    Failing performance readiness MUST NOT make the same unplaced program invalid
     for `compute-cost`, `memory`, or `roofline`.
   - Global logical work, per-unit work, and lifetime order MUST remain
     target-independent. Physical capacity, hierarchy relationships, and
@@ -904,11 +908,11 @@ as defined in that family's section.
   - `ThroughputFacts.peak_for` MUST return `None` for a dtype with no published
     rate; analysis MUST NOT substitute an assumed rate.
   - `peak_per_unit_for` MUST return `None` for a dtype with no published
-    one-unit rate. Timeline MUST reject non-zero work whose dtype has no such
-    rate and MUST NOT substitute the whole-device rate.
+    one-unit rate. Performance MUST reject non-zero work whose dtype has no
+    such rate and MUST NOT substitute the whole-device rate.
   - `bandwidth_level` MUST select the traffic level divided by the published
     bandwidth rather than summing traffic across levels.
-  - Timeline local duration MUST divide `ComputeCostMetadata.flops_per_unit`
+  - Performance local duration MUST divide `ComputeCostMetadata.flops_per_unit`
     and the `bandwidth_level` entry of `traffic_per_unit` by the matching
     one-unit rates. An occurrence with no work at those two and no non-zero
     dtype MUST take zero time.
@@ -931,14 +935,15 @@ as defined in that family's section.
     `AnalysisError`.
   - `ThroughputFacts.peak_for` MUST return `None` for an unpublished dtype rate,
     and analysis MUST NOT substitute an assumed rate.
-  - The bounded dependency evidence described above MUST be the only dependency
-    data promoted into a roofline-only rendering, while `requested` MUST still
-    name only `roofline`.
+  - Roofline reads only `ComputeCostMetadata`, so a roofline-only rendering
+    reports only what roofline and that dependency wrote. No other family's
+    conclusion is promoted into it.
 
-#### 2.2.4 `timeline`
+#### 2.2.4 `performance`
 
-`timeline` places compute-cost-priced occurrences on a CTA-local nominal timeline,
-then scales the root schedule by a fixed physical parallel capacity. The records
+`performance` places compute-cost-priced occurrences on a CTA-local nominal
+timeline, holds the buffers they keep live to the levels this model addresses,
+and scales the root schedule by a fixed physical parallel capacity. The records
 it owns are named for the prediction they carry rather than for the selector, so
 that the interval stays one nested value with one meaning wherever it appears.
 
@@ -1013,7 +1018,7 @@ The family reads this target projection:
 
 ```python
 class ParallelCapacityFacts:
-    """Carry the parallel capacity assumed by timeline analysis.
+    """Carry the parallel capacity assumed by performance analysis.
 
     Attributes:
         topology: attribute; Topology level being scheduled.
@@ -1024,10 +1029,10 @@ class ParallelCapacityFacts:
     parallel_units: int
 ```
 
-Requesting timeline adds this Function verdict to the summary:
+Requesting performance adds this Function verdict to the summary:
 
 ```text
-timeline root=<Module>::<Function> predicted-ns=<int> waves=<int> solver-status=<token>
+performance root=<Module>::<Function> predicted-ns=<int> waves=<int> solver-status=<token>
 ```
 
 `root` is the report's own identity, composed by inspection from the module and
@@ -1044,12 +1049,12 @@ count is not a second key, because a reader deriving the later intervals reads i
 off the interval it is a coefficient in:
 
 ```text
-timeline=[<int>,<int>)
-timeline=[<int>t+<int>,<int>t+<int>)*<int>
+performance=[<int>,<int>)
+performance=[<int>t+<int>,<int>t+<int>)*<int>
 ```
 
 Reported Call and Function records use distinct projections under their
-`timeline` keys:
+`performance` keys:
 
 ```text
 Call: {"timeline": {"start_ns": <int>, "end_ns": <int>, "trips": <int>,
@@ -1065,7 +1070,7 @@ utilization, traffic volume, and other execution effects that this family does n
 model.
 
 - constraints:
-  - A primitive Call is eligible for timeline only when every tensor leaf of its
+  - A primitive Call is eligible for performance only when every tensor leaf of its
     result type carries one `ShardLayout` at the selected topology level and all
     leaves name the same participant set. An occurrence whose `flops_per_unit`
     are all zero and whose `traffic_per_unit` is zero at the target's published
@@ -1083,7 +1088,7 @@ model.
     end. Two positive-duration occurrences whose participant sets intersect
     MUST NOT overlap; disjoint sets MAY overlap, while a partial intersection
     serializes each whole occurrence rather than splitting it by participant.
-  - A `GridRegionExpr` MUST be represented as one structured timeline node. Its
+  - A `GridRegionExpr` MUST be represented as one structured performance node. Its
     body is solved once: `stride_ns` is that body's local makespan and the t-th
     execution of a body occurrence with first interval `[start_ns, end_ns)` is
     `[start_ns + t*stride_ns, end_ns + t*stride_ns)`, for `0 <= t < trips`.
@@ -1120,7 +1125,7 @@ model.
     `solver_status` MUST say which of the two happened, and a solve that ends
     with no answer at all -- infeasible, invalid, or out of time -- MUST raise
     `AnalysisError` saying which.
-  - Timeline is a modeled plan and MUST NOT be read as a guarantee about
+  - Performance is a modeled plan and MUST NOT be read as a guarantee about
     lowering, physical occupancy, or runtime performance.
 
 ## 3. Composed analysis
@@ -1135,7 +1140,24 @@ def check_program(
     *,
     level: str | None = None,
     budget: int = _INLINE_NODES,
+    analyzers: tuple["Analyzer", ...] = (),
 ) -> "Function": ...
+
+
+class AnalysisCheckContext:
+    """What every input check reads: the program, the machine, and the level.
+
+    Costing here is a question, not a record: nothing a context computes is
+    attached.
+    """
+
+    module: "Module"
+    function: "Function"
+    target: "Target"
+    level: str | None
+    whole: CostEvaluator
+    local: CostEvaluator
+    aliases: dict[int, object]
 
 
 class OccurrenceProvenance(IRMetadata):
@@ -1159,7 +1181,13 @@ class OccurrenceProvenance(IRMetadata):
     reason.
   - A non-`None` `level` MUST name exactly one effective Module topology.
   - Analyze and Schedule MUST call this operation before any consuming
-    algorithm.
+    algorithm. Analyze MUST pass the whole resolved dependency closure as
+    `analyzers`, so every analysis about to run states its input contract here.
+  - The `analyzers` checkers MUST be bound to the derived Function and run in
+    closure order: every `check_target`, then every `check_call` over one
+    traversal of the derived non-Function calls, then every `finish`. One
+    program MUST be walked once for this however many analyses asked, and the
+    first refusal MUST stop the gate before any analysis writes.
   - The returned Function MUST inline every reachable HIR Function call at its
     call site while retaining each `GridRegionExpr` as one loop. Its induction
     variable, carried values, and yields MUST NOT be replaced with iterations.
@@ -1295,7 +1323,7 @@ def analyze(
     analysis reads inferred types and assumes a verified function.
   - Family-specific readiness MUST be checked on that inferred inlined view and
     MUST complete before the first analysis in the dependency closure runs. In
-    particular, a timeline request that lacks result placement MUST fail before
+    particular, a performance request that lacks result placement MUST fail before
     dependency Metadata is written.
   - Re-running MUST recompute the closure and refresh the Metadata that closure
     owns. There MUST be no cross-call cache. Metadata owned by nothing in the
@@ -1323,12 +1351,26 @@ class Analyzer:
         run: attribute; Analysis implementation.
         requires: attribute; Dependency selectors.
         produces: attribute; Owned metadata classes.
+        input_checker: attribute; What this analysis needs of a program.
     """
 
     selector: str
     run: AnalysisCallable
     requires: tuple[str, ...] = ()
     produces: tuple[type[IRMetadata], ...] = ()
+    input_checker: AnalysisInputChecker = NO_INPUT_CHECK
+
+
+class AnalysisInputChecker(Protocol):
+    """What one analysis requires before any analysis writes.
+
+    Three questions answerable without reading a record: what the target must
+    state, what each call must carry, and what the function must hold.
+    """
+
+    def check_target(self, ctx: AnalysisCheckContext) -> None: ...
+    def check_call(self, call: Call, ctx: AnalysisCheckContext) -> None: ...
+    def finish(self, function: Function, ctx: AnalysisCheckContext) -> None: ...
 
 
 class Target:
@@ -1349,6 +1391,11 @@ class Target:
   - A declaration MUST be rejected when it requires itself, repeats a
     dependency, produces the same Metadata type twice, or names a `produces`
     entry that is not an `IRMetadata` subclass.
+  - `input_checker` MUST default to one that requires nothing, so an analysis
+    with no input contract is declared by leaving the field out and keeps
+    working unchanged. A checker MUST NOT attach Metadata: it states what a
+    program must already be, and every checker in a closure MUST have answered
+    before any analysis in it writes.
   - An analysis MAY change only the Metadata types its Analyzer declares.
     Ownership MUST be enforced against what reached the IR rather than against
     what the analysis reports, and MUST cover addition, replacement, and

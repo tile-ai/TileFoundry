@@ -207,7 +207,7 @@ def test_timeline_refuses_a_target_without_its_required_one_unit_rate(
     function = subject.entry_function()
 
     with pytest.raises(AnalysisError, match=missing):
-        analyze(subject, function, analysis="timeline")
+        analyze(subject, function, analysis="performance")
 
 
 def test_document_free_target_enforces_projection_and_capability_boundaries() -> None:

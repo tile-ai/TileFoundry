@@ -121,8 +121,8 @@ for _record_type in (
 ):
     declare_record(_record_type)
 
-declare_record(PerformanceMetadata, family="timeline")
-declare_record(PerformanceSummaryMetadata, family="timeline")
+declare_record(PerformanceMetadata, family="performance")
+declare_record(PerformanceSummaryMetadata, family="performance")
 
 
 def _type_text(type_: object) -> str:
@@ -213,10 +213,6 @@ def report_data(
     selected = frozenset(selected_types_)
     target = module.resolve_target()
     function_records = _records_of(function, selected)
-    if "roofline" in analyses and "memory" not in function_records:
-        support = _roofline_memory_support(function)
-        if support is not None:
-            function_records["memory"] = support
     data = {
         "target": target.identity,
         "module": module.name,
@@ -234,19 +230,6 @@ def report_data(
     ):
         data["totals"] = _work_totals(function)
     return data
-
-
-def _roofline_memory_support(function: Function) -> dict[str, object] | None:
-    """The bounded memory fact that explains a requested roofline verdict."""
-    record = get_metadata(function, MemoryMetadata)
-    if record is None:
-        return None
-    return {
-        "footprint": [
-            {"level": value.level, "peak_bytes": value.peak_bytes}
-            for value in record.footprint
-        ]
-    }
 
 
 def _call_records(

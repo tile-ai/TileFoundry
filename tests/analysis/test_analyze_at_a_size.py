@@ -68,7 +68,7 @@ from tilefoundry.target import CudaTarget
 
 CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT}
-FAMILIES = ("compute-cost", "memory", "roofline", "timeline")
+FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 QWEN3_PD_FAMILIES = ("compute-cost", "memory", "roofline")
 CORPUS_ANALYSES = [
     pytest.param(case, selected, id=selected.id) for case in CORPUS for selected in case.analyze
@@ -357,16 +357,16 @@ def test_the_result_names_the_function_that_carries_the_records(family: str) -> 
 
 def test_one_root_and_four_roots_produce_the_same_timeline_records() -> None:
     """A union closure preserves the conclusion of its independently requested root."""
-    module, authored, dims = _subject("timeline")
+    module, authored, dims = _subject("performance")
 
     result = analyze(module, authored, analysis=FAMILIES, dims=dims)
 
     assert result.analyses == FAMILIES
-    single_module, single_function, single_dims = _subject("timeline")
+    single_module, single_function, single_dims = _subject("performance")
     single = analyze(
         single_module,
         single_function,
-        analysis="timeline",
+        analysis="performance",
         dims=single_dims,
     )
     assert tuple(
@@ -405,7 +405,7 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
             analyze(
                 module,
                 module.entry_function(),
-                analysis=("compute-cost", "timeline"),
+                analysis=("compute-cost", "performance"),
                 dims={"ctx_len": extent},
             )
         )
@@ -508,14 +508,14 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
 
     rendered = render_analysis(results[0])
     lines = rendered.annotated.splitlines()
-    rows = [row for row in rendered.data["calls"] if "timeline" in row]
-    comments = [line.split("; timeline=", 1)[1] for line in lines if "; timeline=" in line]
+    rows = [row for row in rendered.data["calls"] if "performance" in row]
+    comments = [line.split("; performance=", 1)[1] for line in lines if "; performance=" in line]
     expected_comments = []
     for row in rows:
         value, line_text = row["value"].rsplit(":", 1)
         line = int(line_text)
         assert lines[line - 1].lstrip().startswith(f"{value} = ")
-        timeline = row["timeline"]["timeline"]
+        timeline = row["performance"]["timeline"]
         if timeline["trips"] > 1:
             offset = f"{timeline['stride_ns']}t+"
             expected_comments.append(
@@ -529,23 +529,23 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
     assert set(first) == {"value", "compute-cost"}
     assert first["value"] == "v0:44"
     assert lines[43].lstrip().startswith("v0 = reshard(")
-    assert "; timeline=" not in lines[47]
+    assert "; performance=" not in lines[47]
     structural = next(
         row for row in rendered.data["calls"] if row["value"].startswith("v10:")
     )
     assert set(structural) == {"value", "compute-cost"}
     assert structural["value"] == "v10:59"
-    assert "; timeline=" not in lines[58]
+    assert "; performance=" not in lines[58]
     repeated = next(row for row in rows if row["value"].startswith("v11:"))
-    assert repeated["timeline"]["timeline"] == {
+    assert repeated["performance"]["timeline"] == {
         "end_ns": 540,
         "start_ns": 539,
         "stride_ns": 920,
         "trips": 8,
     }
-    assert "timeline=[920t+539,920t+540)*8" in rendered.annotated
+    assert "performance=[920t+539,920t+540)*8" in rendered.annotated
     assert lines[82].strip() == "m = v16"
-    assert "timeline" not in lines[82]
+    assert "performance" not in lines[82]
 
 
 @pytest.mark.parametrize("ctx_len", (1, 1024))
@@ -559,7 +559,7 @@ def test_qwen_decoder_unplaced_calls_are_refused_at_each_sequence_length(
         AnalysisError,
         match=r"model.py:\d+:.*has no cta placement",
     ):
-        analyze(module, function, analysis="timeline", dims={"ctx_len": ctx_len})
+        analyze(module, function, analysis="performance", dims={"ctx_len": ctx_len})
 
 
 def test_qwen_decoder_keeps_rotary_and_kv_cache_parameters_resident() -> None:

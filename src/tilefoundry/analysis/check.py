@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from tilefoundry.ir.core import BindingMetadata, Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.module import Module, owning_module, subtree
@@ -47,7 +47,7 @@ from .compute_cost import (
     alias_conclusions,
 )
 from .errors import AnalysisError
-from .facts import ThroughputFacts
+from .facts import ParallelCapacityFacts, ThroughputFacts
 from .metadata import (
     ComputeCostMetadata,
     MemoryMetadata,
@@ -221,13 +221,13 @@ def _result_placement(type_: Type, selected: Topology) -> Placement:
     return next(iter(unique))
 
 
-def _timeline_placements(
+def _call_placements(
     module: Module,
     function: Function,
     level: str,
     facts: ThroughputFacts,
 ) -> dict[int, Placement]:
-    """Validate and prepare every primitive Call placement for timeline."""
+    """Validate and prepare every primitive Call placement for performance."""
     selected = module.resolve_topology(level)
     scope = FunctionScope(module, function)
     whole = CostEvaluator(CostContext(scope=scope))
@@ -250,8 +250,108 @@ def _timeline_placements(
             if _is_structural_occurrence(cost, facts):
                 result[id(expr)] = frozenset()
                 continue
-            raise AnalysisError(f"timeline: {describe(expr)}: {error}") from None
+            raise AnalysisError(f"performance: {describe(expr)}: {error}") from None
     return result
+
+
+@dataclass
+class AnalysisCheckContext:
+    """What every input check reads: the program, the machine, and the level.
+
+    The evaluators are bound to the derived Function the analyses will read, so
+    a check answers about the same program they do. Costing here is a question,
+    not a record: nothing this context computes is attached.
+    """
+
+    module: Module
+    function: Function
+    target: object
+    level: str | None
+    whole: CostEvaluator
+    local: CostEvaluator
+    aliases: dict[int, object]
+
+    @property
+    def selected_topology(self) -> Topology:
+        """The topology level the analyses were asked about."""
+        if self.level is None:
+            raise AnalysisError(
+                "no topology level was selected, so results cannot carry an "
+                "execution placement"
+            )
+        return self.module.resolve_topology(self.level)
+
+
+def analysis_check_context(
+    module: Module, function: Function, level: str | None
+) -> AnalysisCheckContext:
+    """Bind one context to the derived Function the analyses will read."""
+    scope = FunctionScope(module, function)
+    whole = CostEvaluator(CostContext(scope=scope))
+    local = CostEvaluator(
+        CostContext(scope=scope, level=level, topologies=module.effective_topologies())
+    )
+    return AnalysisCheckContext(
+        module=module,
+        function=function,
+        target=module.resolve_target(),
+        level=level,
+        whole=whole,
+        local=local,
+        aliases=alias_conclusions(function, whole),
+    )
+
+
+class PerformanceInputChecker:
+    """What `performance` needs before anything measures the program.
+
+    Two things, and nothing about storage: rates it can put on a clock, and a
+    placement for every occurrence that will take time. Where the buffers go is
+    the solver's question, answered against the schedule it is choosing.
+    """
+
+    def check_target(self, ctx: AnalysisCheckContext) -> None:
+        """Require a machine whose stated capacity and rates fit the question."""
+        try:
+            capacity = ctx.target.get_facts(ParallelCapacityFacts)
+            throughput = ctx.target.get_facts(ThroughputFacts)
+        except UnsupportedCapabilityError as error:
+            raise AnalysisError(f"performance: {error}") from None
+        if ctx.level is None:
+            raise AnalysisError(
+                "performance: no topology level was selected, so results cannot "
+                "carry an execution placement"
+            )
+        if capacity.topology != ctx.level:
+            raise AnalysisError(
+                f"performance: selected topology level {ctx.level!r}, but the "
+                f"target's parallel capacity is stated for {capacity.topology!r}"
+            )
+        units = capacity.parallel_units
+        if isinstance(units, bool) or not isinstance(units, int) or units <= 0:
+            raise AnalysisError(
+                "performance: the target must publish a positive parallel-unit "
+                f"capacity, got {units!r}"
+            )
+        if throughput.rate_unit != ctx.level:
+            raise AnalysisError(
+                f"performance: selected topology level {ctx.level!r}, but the "
+                f"target's per-unit rates are stated for {throughput.rate_unit!r}"
+            )
+
+    def check_call(self, call: Call, ctx: AnalysisCheckContext) -> None:
+        """Require a placement for every occurrence that will take time."""
+        cost = _call_cost_record(call, ctx.whole, ctx.local, ctx.aliases.get(id(call)))
+        if _is_structural_occurrence(cost, ctx.target.get_facts(ThroughputFacts)):
+            return
+        try:
+            _result_placement(call.type, ctx.selected_topology)
+        except AnalysisError as error:
+            raise AnalysisError(f"performance: {describe(call)}: {error}") from None
+
+    def finish(self, function: Function, ctx: AnalysisCheckContext) -> None:
+        """Nothing further: where the buffers go is decided with the schedule."""
+        return None
 
 
 def _program_dim_vars(module: Module, function: Function) -> dict[str, object]:
@@ -755,11 +855,16 @@ def check_program(
     *,
     level: str | None = None,
     budget: int = _INLINE_NODES,
+    analyzers: tuple[object, ...] = (),
 ) -> Function:
     """Prove one program holds together, then return the view analysis will read.
 
     The returned Function has no Function-call wrapper. GridRegionExpr survives
     unchanged: a loop stays a loop. The authored Module and Function are untouched.
+
+    Each analysis states what it needs of the program through its own checker,
+    and every one of them answers before any of them writes. One traversal of
+    the derived calls serves them all, so a program is walked for this once.
     """
     if isinstance(budget, bool) or not isinstance(budget, int) or budget < 0:
         raise AnalysisError(
@@ -785,7 +890,21 @@ def check_program(
     functions = reachable_functions(function)
     infer_authored_types(functions, module)
     validate_call_context(module, functions)
-    return _inline_view(module, function, budget)
+    derived = _inline_view(module, function, budget)
+    checkers = tuple(analyzer.input_checker for analyzer in analyzers)
+    if not checkers:
+        return derived
+    ctx = analysis_check_context(module, derived, level)
+    for checker in checkers:
+        checker.check_target(ctx)
+    for expr in postorder(derived.body):
+        if not isinstance(expr, Call) or isinstance(expr.target, Function):
+            continue
+        for checker in checkers:
+            checker.check_call(expr, ctx)
+    for checker in checkers:
+        checker.finish(derived, ctx)
+    return derived
 
 
-__all__ = ["check_program"]
+__all__ = ["AnalysisCheckContext", "PerformanceInputChecker", "check_program"]

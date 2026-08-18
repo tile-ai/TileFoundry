@@ -39,21 +39,23 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
         return Analyzer(
             "roofline",
             analyze_roofline,
-            requires=("memory", "compute-cost"),
+            requires=("compute-cost",),
             produces=(RooflineMetadata,),
         )
-    if selector == "timeline":
+    if selector == "performance":
+        from tilefoundry.analysis.check import PerformanceInputChecker  # noqa: PLC0415
         from tilefoundry.analysis.metadata import (  # noqa: PLC0415
             PerformanceMetadata,
             PerformanceSummaryMetadata,
         )
-        from tilefoundry.analysis.timeline import analyze_timeline  # noqa: PLC0415
+        from tilefoundry.analysis.performance import analyze_performance  # noqa: PLC0415
 
         return Analyzer(
-            "timeline",
-            analyze_timeline,
+            "performance",
+            analyze_performance,
             requires=("compute-cost", "memory"),
             produces=(PerformanceMetadata, PerformanceSummaryMetadata),
+            input_checker=PerformanceInputChecker(),
         )
     return None
 

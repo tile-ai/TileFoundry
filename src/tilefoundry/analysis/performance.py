@@ -22,7 +22,7 @@ from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.target import Target
 from tilefoundry.target.facts import TARGET_MEMORY_OWNER
 
-from .check import Placement, _result_placement, _timeline_placements
+from .check import Placement, _call_placements, _result_placement
 from .compute_cost import _local_duration_ns
 from .errors import AnalysisError
 from .facts import (
@@ -51,7 +51,7 @@ from .walk import (
     reachable_functions,
 )
 
-SELECTOR = "timeline"
+SELECTOR = "performance"
 
 _ALLOCATED_LEVELS = ("gmem", "smem")
 _INT64_LIMIT = 2**62
@@ -139,7 +139,7 @@ def _durations(
         cost = get_metadata(expr, ComputeCostMetadata)
         if cost is None:
             raise AnalysisError(
-                f"{describe(expr)}: the timeline needs the compute-cost record this "
+                f"{describe(expr)}: performance needs the compute-cost record this "
                 "call was never given"
             )
         result[id(expr)] = _local_duration_ns(cost, facts, level=level)
@@ -617,7 +617,7 @@ def _records(
     return result
 
 
-def analyze_timeline(
+def analyze_performance(
     module: Module,
     function: Function,
     target: Target,
@@ -633,16 +633,16 @@ def analyze_timeline(
     topology_extent = static_dim_value(topology.size)
     if topology_extent is None:
         raise AnalysisError(
-            f"timeline: topology {topology.name!r} has unresolved extent {topology.size!r}"
+            f"performance: topology {topology.name!r} has unresolved extent {topology.size!r}"
         )
     waves = -(-topology_extent // placement_facts.parallel_units)
     for fn in reachable_functions(function):
-        placements = _timeline_placements(module, fn, placement_facts.topology, throughput)
+        placements = _call_placements(module, fn, placement_facts.topology, throughput)
         durations = _durations(fn, throughput, placement_facts.topology)
         memory = get_metadata(fn, MemoryMetadata)
         if memory is None:
             raise AnalysisError(
-                f"function {fn.name!r}: the timeline needs the memory record this "
+                f"function {fn.name!r}: performance needs the memory record this "
                 "function was never given"
             )
         model = cp_model.CpModel()
@@ -697,4 +697,4 @@ def _buffer_placements(
     return resolved
 
 
-__all__ = ["SELECTOR", "PerformanceOptions", "analyze_timeline"]
+__all__ = ["PerformanceOptions", "SELECTOR", "analyze_performance"]

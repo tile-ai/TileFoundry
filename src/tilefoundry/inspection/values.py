@@ -353,14 +353,14 @@ comment(RooflineMetadata, "ideal_ns", "bound_by")
 comment(
     PerformanceMetadata,
     Projection("interval", TripInterval, _interval),
-    family="timeline",
+    family="performance",
 )
 comment(
     PerformanceSummaryMetadata,
     Projection("predicted_ns", int, _predicted_ns),
     Projection("waves", int, _read("waves")),
     "solver_status",
-    family="timeline",
+    family="performance",
 )
 comment(SourceSpanMetadata, Projection("span", str, _source_span), family="source")
 comment(ReportIdentity, family="analysis")
@@ -373,7 +373,7 @@ comment(
     "predicted_ns",
     Projection("waves", int, _read("waves")),
     "solver_status",
-    family="timeline",
+    family="performance",
 )
 
 

@@ -53,7 +53,7 @@ def registered_targets() -> Mapping[str, type[Target]]: ...
     bypasses both document schema validation and the `facts_result` projection
     boundary.
   - `Target.get_analyzer` MUST select the standard compute-cost, memory,
-    roofline, and timeline analyzers for every Target. Those algorithms consume
+    roofline, and performance analyzers for every Target. Those algorithms consume
     only requested Facts, so a backend reuses them by answering `get_facts`, not
     by inheriting a backend-specific analysis base class. A missing Facts
     projection MUST fail when the selected analyzer requests it.

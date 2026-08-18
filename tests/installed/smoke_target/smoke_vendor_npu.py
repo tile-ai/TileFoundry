@@ -47,9 +47,9 @@ def test_document_free_target_analyses_and_selects_its_scheduler(
     assert report["executed"] == ["compute-cost", "memory", "roofline"]
     assert report["function_records"]["roofline"]["ideal_ns"] > 0
 
-    rejected = tf("analyze", f"{model}:CMine.root", "--timeline")
+    rejected = tf("analyze", f"{model}:CMine.root", "--performance")
     assert rejected.returncode == 1
-    assert "timeline:" in rejected.stderr
+    assert "performance:" in rejected.stderr
     assert "has no core placement" in rejected.stderr
 
     scheduled = tf(
