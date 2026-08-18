@@ -19,14 +19,12 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
-    register_type_relation,
-)
-from tilefoundry.visitor_registry.alias import (
-    AliasClaim,
-    AliasContext,
-    AliasKind,
+    AccessRelations,
+    StorageClaim,
+    StorageEffect,
     forward_whole,
-    register_alias,
+    register_access_relation,
+    register_type_relation,
     same_placement,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
@@ -173,8 +171,7 @@ class Reshard(Op):
     storage = ParamDef(kind="attribute", default=None)
 
 
-@register_alias(Reshard, AliasKind.FORWARD)
-def _reshard_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
+def _reshard_storage(call: "Call", ctx) -> StorageClaim | None:
     """A reshard within one storage is a view of it; across storage it is a copy.
 
     That boundary is the op's own, stated with its cost classification: a layout
@@ -187,8 +184,24 @@ def _reshard_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
     if source.storage != result.storage:
         return None
     if not same_placement(source, result):
-        return AliasClaim((0,))
+        return StorageClaim(StorageEffect.FORWARD, (0,))
     return forward_whole(call, 0, ctx)
+
+
+@register_access_relation(Reshard)
+def _reshard_access(call: "Call", ctx) -> AccessRelations:
+    """Every logical index reads itself. Where those bytes go is a separate fact.
+
+    A reshard moves a value between storages or redistributes it across
+    positions; neither changes which logical element the result's index came
+    from, so the boundary is exactly identity and never opaque.
+    """
+    rank = len(ctx.type_of(call).shape)
+    return AccessRelations(
+        inputs=(identity_map(rank),),
+        outputs=(identity_map(rank),),
+        storage=_reshard_storage(call, ctx),
+    )
 
 
 @register_type_relation(Reshard)

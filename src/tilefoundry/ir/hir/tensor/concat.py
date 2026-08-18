@@ -29,16 +29,15 @@ from tilefoundry.ir.types.shard.shard_layout import split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
+    AccessRelations,
+    StorageClaim,
+    StorageEffect,
+    StorageSpan,
     build_relation,
+    register_access_relation,
     register_type_relation,
-)
-from tilefoundry.visitor_registry.alias import (
-    AliasClaim,
-    AliasContext,
-    AliasKind,
-    AliasSpan,
-    register_alias,
     same_placement,
+    static_bytes,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
@@ -72,8 +71,7 @@ def _axis(call: "Call", ctx: "TypeInferContext", rank: int) -> int:
     return axis
 
 
-@register_alias(Concat, AliasKind.FORWARD)
-def _concat_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
+def _concat_storage(call: "Call", ctx) -> StorageClaim | None:
     """Putting pieces side by side is free only when they already lie that way.
 
     Every input is claimed whole; composition then holds them to one base and to
@@ -81,16 +79,55 @@ def _concat_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
     and what a concatenation of unrelated values is not.
     """
     result = ctx.type_of(call)
-    spans: list[AliasSpan] = []
+    spans: list[StorageSpan] = []
     for index, arg in enumerate(call.args):
         if not same_placement(ctx.type_of(arg), result):
             return None
-        size = ctx.bytes_of(arg)
+        size = static_bytes(ctx.type_of(arg))
         if size is None or size == 0:
             return None
-        spans.append(AliasSpan(index, 0, size))
-    return AliasClaim(
-        tuple(range(len(call.args))), tuple(spans), spans_required=True
+        spans.append(StorageSpan(index, 0, size))
+    return StorageClaim(
+        StorageEffect.FORWARD,
+        tuple(range(len(call.args))),
+        tuple(spans),
+        spans_required=True,
+    )
+
+
+@register_access_relation(Concat)
+def _concat_access(call: "Call", ctx) -> AccessRelations:
+    """Each input reads its own segment of the result; the result is read whole.
+
+    The segments are the same arithmetic the forward relation states, so the two
+    cannot drift: one offset walk, one guard per input.
+    """
+    types = [ctx.type_of(arg) for arg in call.args]
+    rank = len(types[0].shape)
+    axis = _axis(call, ctx, rank)
+    extents = tuple(type_.shape[axis] for type_ in types)
+    if any(not isinstance(extent, int) or isinstance(extent, bool) for extent in extents):
+        raise NotImplementedError(
+            f"Concat access_relation: concat-axis extents must be static ints, got {extents}"
+        )
+    dims = [f"d{index}" for index in range(rank)]
+    domain_text = ", ".join(dims)
+    inputs, offset = [], 0
+    for extent in extents:
+        reads = list(dims)
+        if offset:
+            reads[axis] = f"d{axis} - {offset}"
+        inputs.append(
+            isl.map(
+                f"{{ [{domain_text}] -> [{', '.join(reads)}] : "
+                f"{offset} <= d{axis} < {offset + extent} }}"
+            )
+        )
+        offset += extent
+    return AccessRelations(
+        inputs=tuple(inputs),
+        outputs=(isl.map(f"{{ [{domain_text}] -> [{domain_text}] }}"),),
+        storage=_concat_storage(call, ctx),
     )
 
 

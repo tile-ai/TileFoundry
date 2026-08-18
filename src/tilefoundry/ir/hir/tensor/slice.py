@@ -32,17 +32,14 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
+    StorageClaim,
+    StorageEffect,
+    StorageSpan,
+    dense,
     identity_relations,
     register_access_relation,
-)
-from tilefoundry.visitor_registry.alias import (
-    AliasClaim,
-    AliasContext,
-    AliasKind,
-    AliasSpan,
-    dense,
-    register_alias,
     same_placement,
+    static_bytes,
 )
 
 
@@ -55,9 +52,6 @@ class Slice(Op):
 
     def __init__(self, **attrs):
         super().__init__(**attrs)
-
-
-register_access_relation(Slice)(identity_relations(2))
 
 
 def _static_window(call: "Call", source: TensorType) -> tuple[int, ...] | None:
@@ -82,8 +76,7 @@ def _static_window(call: "Call", source: TensorType) -> tuple[int, ...] | None:
     return tuple(value for value in values if value is not None)
 
 
-@register_alias(Slice, AliasKind.FORWARD)
-def _slice_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
+def _slice_storage(call: "Call", ctx) -> StorageClaim | None:
     """A window addresses its source; the address follows for one unbroken run.
 
     That run needs the axes past the narrowed one whole and the ones before it
@@ -93,10 +86,12 @@ def _slice_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
     """
     source, result = ctx.type_of(call.args[0]), ctx.type_of(call)
     span = _window_span(call, ctx, source, result)
-    return AliasClaim((0,)) if span is None else AliasClaim((0,), (span,))
+    if span is None:
+        return StorageClaim(StorageEffect.FORWARD, (0,))
+    return StorageClaim(StorageEffect.FORWARD, (0,), (span,))
 
 
-def _window_span(call: "Call", ctx, source, result) -> "AliasSpan | None":
+def _window_span(call: "Call", ctx, source, result) -> "StorageSpan | None":
     """Where the window sits in its source, when that is one unbroken run."""
     if not same_placement(source, result) or not dense(source):
         return None
@@ -108,7 +103,7 @@ def _window_span(call: "Call", ctx, source, result) -> "AliasSpan | None":
     axis = max(narrowed) if narrowed else 0
     if any(size != 1 for size in sizes[:axis]):
         return None
-    size = ctx.bytes_of(call)
+    size = static_bytes(ctx.type_of(call))
     if not size:
         return None
     element = size // max(math.prod(sizes), 1)
@@ -116,7 +111,10 @@ def _window_span(call: "Call", ctx, source, result) -> "AliasSpan | None":
     if strides is None:
         return None
     offset = sum(start * stride for start, stride in zip(starts, strides)) * element
-    return AliasSpan(0, offset, size)
+    return StorageSpan(0, offset, size)
+
+
+register_access_relation(Slice)(identity_relations(2, _slice_storage))
 
 
 def _i64(value: int) -> Constant:

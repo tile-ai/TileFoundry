@@ -16,6 +16,7 @@ from dataclasses import fields
 import pytest
 
 import tilefoundry
+from tilefoundry.analysis.compute_cost import _prove_storage, _Storage
 from tilefoundry.evaluator import eval_registry
 from tilefoundry.ir.core import Call, Constant, Op, Var
 from tilefoundry.ir.core.errors import VerifyError
@@ -24,13 +25,12 @@ from tilefoundry.ir.tir.memory import Copy
 from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, Return, Sequential
 from tilefoundry.ir.types import DType, TensorType, tensor_bytes
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.visitor_registry.alias import (
-    AliasClaim,
-    AliasContext,
-    AliasKind,
-    AliasSpan,
-    prove_alias,
-    register_alias,
+from tilefoundry.visitor_registry.access_relation import (
+    StorageClaim,
+    StorageEffect,
+    StorageSpan,
+    identity_relations,
+    register_access_relation,
 )
 from tilefoundry.visitor_registry.contexts import (
     CostContext,
@@ -119,13 +119,14 @@ def test_visitors_fail_closed_when_unregistered() -> None:
         CostEvaluator(CostContext()).visit_Call(call)
 
 
-def test_an_alias_claim_covers_every_operand_it_names() -> None:
+def test_a_storage_claim_covers_every_operand_it_names() -> None:
     """Addressing one operand does not conclude anything about a second.
 
     A conclusion is read as "the result lives in these operands", and its reader
     retires the movement of each. A handler that names two while proving one
     would have the reader retire bytes nothing was shown about, so the claim is
-    refused rather than trimmed to the part that held.
+    refused rather than trimmed to the part that held. An Op with no boundary
+    relation still states this: the two are one registration, not one fact.
     """
 
     class _ReachesBoth(Op):
@@ -139,21 +140,24 @@ def test_an_alias_claim_covers_every_operand_it_names() -> None:
     left = Var(type=holds, name="left")
     right = Var(type=holds, name="right")
 
-    @register_alias(_ReachesBoth, AliasKind.FORWARD)
-    def _both(call: Call, ctx: AliasContext) -> AliasClaim:
-        return AliasClaim((0,), (AliasSpan(0, 0, size),))
+    def _both(call: Call, ctx) -> StorageClaim:
+        return StorageClaim(StorageEffect.FORWARD, (0,), (StorageSpan(0, 0, size),))
 
-    @register_alias(_ReachesOne, AliasKind.FORWARD)
-    def _one(call: Call, ctx: AliasContext) -> AliasClaim:
-        return AliasClaim((0, 1), (AliasSpan(0, 0, size),))
+    def _one(call: Call, ctx) -> StorageClaim:
+        return StorageClaim(StorageEffect.FORWARD, (0, 1), (StorageSpan(0, 0, size),))
 
-    context = AliasContext(type_of=lambda expr: expr.type)
+    register_access_relation(_ReachesBoth)(identity_relations(2, _both))
+    register_access_relation(_ReachesOne)(identity_relations(2, _one))
+
+    walk = _Storage(
+        type_of=lambda expr: expr.type, users={}, positions={}, caller_owned=frozenset()
+    )
     covered = Call(type=holds, target=_ReachesBoth(), args=(left, right))
-    assert prove_alias(covered, context) == (AliasKind.FORWARD, (0,))
+    assert _prove_storage(covered, walk) == (StorageEffect.FORWARD, (0,))
 
     partial = Call(type=holds, target=_ReachesOne(), args=(left, right))
-    assert prove_alias(partial, context) is None
-    assert id(partial) not in context.bases
+    assert _prove_storage(partial, walk) is None
+    assert id(partial) not in walk.bases
 
 
 def test_where_a_walk_reads_is_one_pair_and_nothing_else() -> None:

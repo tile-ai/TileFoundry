@@ -9,16 +9,20 @@ a target's rates.
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Call, Expr, VerifyError
+from collections.abc import Callable
+from dataclasses import dataclass, field
+
+from tilefoundry.ir.core import Call, Constant, Expr, VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType, Type, tensor_bytes
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target
-from tilefoundry.visitor_registry.alias import (
-    AliasContext,
-    declared_alias,
-    prove_alias,
+from tilefoundry.visitor_registry.access_relation import (
+    StorageClaim,
+    StorageEffect,
+    declared_storage,
+    static_bytes,
 )
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
@@ -165,6 +169,76 @@ def _flops(flops: dict) -> tuple[tuple[str, int], ...]:
     return tuple(sorted((dtype.name, value) for dtype, value in flops.items()))
 
 
+@dataclass(frozen=True)
+class _Extent:
+    """Where one value's bytes sit, as an offset and length in a base buffer."""
+
+    base: Expr
+    offset: int
+    size: int
+
+
+@dataclass
+class _Storage:
+    """What one walk of a Function has settled about where values live."""
+
+    type_of: Callable[[Expr], Type]
+    users: dict[int, list[Expr]]
+    positions: dict[int, int]
+    caller_owned: frozenset[int]
+    bases: dict[int, Expr] = field(default_factory=dict)
+    extents: dict[int, _Extent] = field(default_factory=dict)
+    members: dict[int, list[Expr]] = field(default_factory=dict)
+    claims: dict[int, StorageClaim | None] = field(default_factory=dict)
+
+    def claim_of(self, call: Call) -> StorageClaim | None:
+        """What the Op says about this Call, asked once.
+
+        Asking builds the Op's relations, and three readers want the same
+        answer: what it claims, what it was aiming at, and whether it may.
+        """
+        if id(call) not in self.claims:
+            self.claims[id(call)] = declared_storage(call, self)
+        return self.claims[id(call)]
+
+    def record(self, expr: Expr, base: Expr, extent: _Extent | None = None) -> None:
+        """Remember that *expr*'s bytes belong to *base*, at *extent* if known.
+
+        Which base a value belongs to and where inside it are separate answers:
+        a claim can settle the first without the second, and everything that
+        asks who else shares this buffer needs the first either way.
+        """
+        self.bases[id(expr)] = base
+        if extent is not None:
+            self.extents[id(expr)] = extent
+        self.members.setdefault(id(base), []).append(expr)
+
+    def extent_of(self, expr: Expr) -> _Extent | None:
+        """Where *expr* sits in a base, or ``None`` when no address is known."""
+        known = self.extents.get(id(expr))
+        if known is not None:
+            return known
+        if id(expr) in self.bases:
+            return None
+        size = static_bytes(self.type_of(expr))
+        return None if size is None else _Extent(expr, 0, size)
+
+    def base_of(self, expr: Expr) -> Expr:
+        """The value that owns the bytes *expr* reads."""
+        return self.bases.get(id(expr), expr)
+
+    def last_authored_use(self, base: Expr, call: Call) -> bool:
+        """Whether *call* is the last authored reader of *base*'s alias group."""
+        here = self.positions.get(id(call))
+        if here is None:
+            return False
+        for member in (base, *self.members.get(id(base), ())):
+            for user in self.users.get(id(member), ()):
+                if user is not call and self.positions.get(id(user), -1) > here:
+                    return False
+        return True
+
+
 def alias_conclusions(fn: Function, evaluator: CostEvaluator) -> dict[int, BufferAliasMetadata]:
     """Decide, in authored order, where every Call's result bytes live.
 
@@ -173,22 +247,21 @@ def alias_conclusions(fn: Function, evaluator: CostEvaluator) -> dict[int, Buffe
     a fact about the write itself.
     """
     values = postorder(fn.body)
-    positions = {id(expr): index for index, expr in enumerate(values)}
     users: dict[int, list[Expr]] = {}
     for expr in values:
         for child in children(expr):
             users.setdefault(id(child), []).append(expr)
-    ctx = AliasContext(
+    walk = _Storage(
         type_of=evaluator.ctx.type_of,
-        users={key: tuple(value) for key, value in users.items()},
-        positions=positions,
+        users=users,
+        positions={id(expr): index for index, expr in enumerate(values)},
         caller_owned=frozenset(id(param) for param in fn.params),
     )
     conclusions: dict[int, BufferAliasMetadata] = {}
     for expr in values:
         if not isinstance(expr, Call):
             continue
-        proven = prove_alias(expr, ctx)
+        proven = _prove_storage(expr, walk)
         conclusions[id(expr)] = (
             BufferAliasMetadata()
             if proven is None
@@ -197,8 +270,117 @@ def alias_conclusions(fn: Function, evaluator: CostEvaluator) -> dict[int, Buffe
     return conclusions
 
 
+def _prove_storage(
+    call: Call, walk: _Storage
+) -> tuple[StorageEffect, tuple[int, ...]] | None:
+    """Ask the Op what it claims, and hold that claim to one base.
+
+    Spans may reach fewer operands than the claim names, so a resolved coverage
+    has to land on that same base: a conclusion covers every operand it names,
+    and its reader retires the movement of each. An overwrite is admitted only
+    once nothing that shares those bytes will read them again and they are this
+    function's to reuse, which is a fact about the walk and not about the Op.
+    """
+    claim = walk.claim_of(call)
+    if claim is None or not claim.operands:
+        return None
+    base = _one_base(call, claim.operands, walk)
+    if base is None:
+        return None
+    if claim.effect is StorageEffect.UPDATE and not _may_overwrite(call, base, walk):
+        return None
+    extent = _compose(call, claim, walk) if claim.spans else None
+    if extent is not None:
+        if extent.base is not base:
+            return None
+        walk.record(call, base, extent)
+        return claim.effect, claim.operands
+    if claim.spans_required:
+        return None
+    walk.record(call, base)
+    return claim.effect, claim.operands
+
+
+def _may_overwrite(call: Call, base: Expr, walk: _Storage) -> bool:
+    """Whether this function may reuse *base*'s bytes at this call.
+
+    A caller's parameter is not this function's to reuse, and neither is a
+    constant. Every other operand has to be somewhere else, or the write would
+    be reading what it is about to replace.
+    """
+    if id(base) in walk.caller_owned or isinstance(base, Constant):
+        return False
+    written = {id(base), *(id(member) for member in walk.members.get(id(base), ()))}
+    destinations = _destinations(call, walk)
+    for index, operand in enumerate(call.args):
+        if index not in destinations and id(operand) in written:
+            return False
+    return walk.last_authored_use(base, call)
+
+
+def _destinations(call: Call, walk: _Storage) -> frozenset[int]:
+    """Which operand positions an update claims as its destination."""
+    claim = walk.claim_of(call)
+    if claim is None or claim.effect is not StorageEffect.UPDATE:
+        return frozenset()
+    return frozenset(claim.operands)
+
+
+def _one_base(call: Call, operands: tuple[int, ...], walk: _Storage) -> Expr | None:
+    """The single base every named operand resolves to, if there is one."""
+    if not all(0 <= operand < len(call.args) for operand in operands):
+        return None
+    bases = [walk.base_of(call.args[operand]) for operand in operands]
+    first = bases[0]
+    return first if all(base is first for base in bases) else None
+
+
+def _compose(call: Call, claim: StorageClaim, walk: _Storage) -> _Extent | None:
+    """Resolve a claim's spans onto one base, covering the result exactly.
+
+    The spans are read in the order the result is laid out in, and each has to
+    begin where the previous one ended. Sorting them first would accept a claim
+    whose pieces are all there but in the wrong places, which is a different
+    result than the one being proven.
+    """
+    result_bytes = static_bytes(walk.type_of(call))
+    if result_bytes is None:
+        return None
+    resolved: list[tuple[Expr, int, int]] = []
+    for span in claim.spans:
+        if not 0 <= span.operand < len(call.args) or span.offset < 0 or span.size <= 0:
+            return None
+        operand = walk.extent_of(call.args[span.operand])
+        if operand is None or span.offset + span.size > operand.size:
+            return None
+        resolved.append((operand.base, operand.offset + span.offset, span.size))
+    base = resolved[0][0]
+    if any(item[0] is not base for item in resolved):
+        return None
+    start = cursor = resolved[0][1]
+    for _base, offset, size in resolved:
+        if offset != cursor:
+            return None
+        cursor += size
+    if cursor - start != result_bytes:
+        return None
+    return _Extent(base, start, result_bytes)
+
+
+def _declared_update(call: Call, ctx) -> int | None:
+    """Which operand this Op would have overwritten, whether or not it may.
+
+    A write whose proof did not close still says what it was aiming at, and that
+    is what decides how much of the container it has to copy instead.
+    """
+    claim = declared_storage(call, ctx)
+    if claim is None or claim.effect is not StorageEffect.UPDATE:
+        return None
+    return claim.operands[0] if len(claim.operands) == 1 else None
+
+
 def _aliased_cost(
-    call: Call, cost: Cost, alias: BufferAliasMetadata, result_type: Type
+    call: Call, cost: Cost, alias: BufferAliasMetadata, result_type: Type, ctx
 ) -> Cost:
     """Correct one operation's own cost by what the alias proof concluded.
 
@@ -210,9 +392,9 @@ def _aliased_cost(
     """
     if alias.kind == "forward" and alias.aliased_operands:
         return _without_forwarded_movement(call, cost, alias.aliased_operands)
-    destination = declared_alias(call.target)
-    if alias.kind == "produce" and destination is not None and destination.destination is not None:
-        return _with_untouched_copy(call, cost, destination.destination, result_type)
+    destination = _declared_update(call, ctx)
+    if alias.kind == "produce" and destination is not None:
+        return _with_untouched_copy(call, cost, destination, result_type)
     return cost
 
 
@@ -270,8 +452,10 @@ def _call_cost_record(
         local.ctx.local_output_type(expr),
     )
     if alias is not None:
-        whole_cost = _aliased_cost(expr, whole_cost, alias, whole.ctx.type_of(expr))
-        local_cost = _aliased_cost(expr, local_cost, alias, local_types[-1])
+        whole_cost = _aliased_cost(
+            expr, whole_cost, alias, whole.ctx.type_of(expr), whole.ctx
+        )
+        local_cost = _aliased_cost(expr, local_cost, alias, local_types[-1], whole.ctx)
     traffic_by_level, operands = _call_movement(expr, whole_cost)
     local_traffic, _local_operands = _call_movement(expr, local_cost, local_types)
     return ComputeCostMetadata(

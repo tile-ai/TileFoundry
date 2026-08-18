@@ -15,17 +15,12 @@ from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
+    StorageClaim,
     build_relation,
+    forward_whole,
     identity_relations,
     register_access_relation,
     register_type_relation,
-)
-from tilefoundry.visitor_registry.alias import (
-    AliasClaim,
-    AliasContext,
-    AliasKind,
-    forward_whole,
-    register_alias,
     same_placement,
 )
 from tilefoundry.visitor_registry.relation_build import build_domain, identity_map
@@ -36,9 +31,6 @@ from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_lay
 class Transpose(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     perm = ParamDef(kind="attribute", annotation=tuple)
-
-
-register_access_relation(Transpose)(identity_relations(1))
 
 
 def _strides(type_: TensorType) -> tuple | None:
@@ -54,8 +46,7 @@ def _strides(type_: TensorType) -> tuple | None:
     return try_c_order_strides(tuple(layout.shape))
 
 
-@register_alias(Transpose, AliasKind.FORWARD)
-def _transpose_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
+def _transpose_storage(call: "Call", ctx) -> StorageClaim | None:
     """A permutation that carried its strides along moved no byte."""
     source, result = ctx.type_of(call.args[0]), ctx.type_of(call)
     if not same_placement(source, result):
@@ -69,6 +60,9 @@ def _transpose_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
     if result_strides != tuple(source_strides[axis] for axis in perm):
         return None
     return forward_whole(call, 0, ctx)
+
+
+register_access_relation(Transpose)(identity_relations(1, _transpose_storage))
 
 
 @register_type_relation(Transpose)

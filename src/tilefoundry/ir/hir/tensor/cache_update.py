@@ -5,6 +5,8 @@ Contract and constraints: `spec hir § CacheUpdate`.
 
 from __future__ import annotations
 
+import isl
+
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Constant, Op
@@ -14,13 +16,14 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.alias import (
-    AliasClaim,
-    AliasContext,
-    AliasKind,
-    register_alias,
-    update_in_place,
+from tilefoundry.visitor_registry.access_relation import (
+    OPAQUE,
+    AccessRelations,
+    StorageClaim,
+    register_access_relation,
+    update_destination,
 )
+from tilefoundry.visitor_registry.relation_build import identity_map
 
 
 @register_op(name="cache_update")
@@ -33,10 +36,48 @@ class CacheUpdate(Op):
     new = ParamDef(kind="input", pattern=Tensor)
 
 
-@register_alias(CacheUpdate, AliasKind.UPDATE, destination=0)
-def _cache_update_alias(call: "Call", ctx: AliasContext) -> AliasClaim | None:
+def _cache_update_storage(call: "Call", ctx) -> StorageClaim | None:
     """The new rows are written into the cache; the result is that cache."""
-    return update_in_place(call, ctx, destination=0, source=3)
+    return update_destination(call, ctx, destination=0)
+
+
+def _literal(expr) -> int | None:
+    """One control's written-down value, or ``None`` when it arrives at run time."""
+    return int(expr.value) if isinstance(expr, Constant) and isinstance(expr.value, int) else None
+
+
+@register_access_relation(CacheUpdate)
+def _cache_update_access(call: "Call", ctx) -> AccessRelations:
+    """The result is the cache with rows [cur_pos, cur_pos + s) replaced.
+
+    The two controls are rank-0, so their own boundary is exact whatever they
+    hold. What they hold is what decides which rows came from where: written
+    down, that is one affine guard on the length axis; arriving at run time, the
+    two boundaries it controls are all that become opaque.
+    """
+    rank = len(ctx.type_of(call).shape)
+    identity = identity_map(rank)
+    controls = (identity_map(0), identity_map(0))
+    start, length = _literal(call.args[1]), _literal(call.args[2])
+    if start is None or length is None:
+        return AccessRelations(
+            inputs=(OPAQUE, *controls, OPAQUE),
+            outputs=(identity,),
+            storage=_cache_update_storage(call, ctx),
+        )
+    dims = [f"d{index}" for index in range(rank)]
+    domain = ", ".join(dims)
+    inside = f"{start} <= d1 < {start + length}"
+    rows = ", ".join("d1 - %d" % start if axis == 1 else f"d{axis}" for axis in range(rank))
+    return AccessRelations(
+        inputs=(
+            isl.map(f"{{ [{domain}] -> [{domain}] : not ({inside}) }}"),
+            *controls,
+            isl.map(f"{{ [{domain}] -> [{rows}] : {inside} }}"),
+        ),
+        outputs=(identity,),
+        storage=_cache_update_storage(call, ctx),
+    )
 
 
 def _is_scalar(shape) -> bool:
