@@ -226,7 +226,7 @@ class CudaTarget(Target):
     MUST take `unit_ops` from the device document unchanged, and MUST name its
     unit `cta`; compiler policy such as `ParallelCapacityFacts` MUST NOT enter
     this derivation. `unit_ops` is not a division of a device peak, because no
-    vendor publishes a device-wide integer, predicate, select, transcendental or
+    vendor publishes a device-wide integer, predicate, select, special or
     local-move rate to divide.
   - `topology_limit("cta")` MUST equal `device.sm_count`, and
     `topology_limit("thread")` MUST equal the architecture's corresponding
@@ -433,7 +433,7 @@ The installed `nvidia.h200_sxm` device document.
     Hopper tensor cores have no FP4 mode, so the product has no such rate, which
     is a fact about it and not a number nobody published.
   - It MUST record a per-CTA service rate for each of `integer`, `predicate`,
-    `select`, `local-copy`, and `transcendental`, because a program that
+    `select`, `local-copy`, and `special`, because a program that
     compares, selects, indexes or moves locally asks for work no FLOP/s figure
     prices. Each MUST state its derivation in `conditions`: the instruction
     throughput in results/clock/SM from the vendor's arithmetic-instruction

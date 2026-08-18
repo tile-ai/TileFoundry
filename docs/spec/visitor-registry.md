@@ -697,12 +697,13 @@ class CostEvaluator(ExprVisitor[Cost]): ...
     such puts work on a pipe it never went down.
   - `service` MUST group that work by the kind of service the machine provides,
     named for the operation rather than for a machine: `integer`, `predicate`,
-    `select`, `transcendental`, `local-copy`. A comparison MUST record
+    `select`, `special`, `local-copy`. A comparison MUST record
     `predicate`, a selection MUST record `select`, an operation over whole
-    numbers MUST record `integer`, and a special-function kind -- `rsqrt`,
-    `exp`, `log`, `exp2`, `log2` -- MUST record `transcendental` rather than one
-    FLOP each: the unit that answers them publishes its own rate, a fraction of
-    the float pipe's, so counting them as arithmetic prices them too fast.
+    numbers MUST record `integer`, and an operation the machine answers on its
+    special-function unit -- `rsqrt`, `exp`, `log`, `exp2`, `log2` -- MUST
+    record `special` rather than one FLOP each: that unit publishes its own
+    rate, a fraction of the float pipe's, so counting them as arithmetic prices
+    them too fast.
     Counts MUST be non-negative integers and MUST NOT be booleans. An operation
     MUST record its work once, under `flops` or under `service` but not both.
     An evaluator MUST NOT invent a kind no target states a rate for, because a

@@ -102,7 +102,7 @@ COST_CASES = [
             f"{kind.name.lower()}_is_special_function_work",
             Unary(kind=kind),
             (_REAL,),
-            service={"transcendental": 8},
+            service={"special": 8},
             traffic=(TrafficBytes(read=32), TrafficBytes(write=32)),
         )
         for kind in _SPECIAL

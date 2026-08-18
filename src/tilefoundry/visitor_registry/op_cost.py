@@ -234,7 +234,7 @@ def _integral(call: Call, ctx: CostContext) -> bool:
     return isinstance(output, TensorType) and isinstance(output.dtype, IntegerDType)
 
 
-_TRANSCENDENTAL = frozenset(
+_SPECIAL = frozenset(
     {UnaryKind.RSQRT, UnaryKind.EXP, UnaryKind.LOG, UnaryKind.EXP2, UnaryKind.LOG2}
 )
 
@@ -243,7 +243,7 @@ _TRANSCENDENTAL = frozenset(
 def _unary(call: Call, ctx: CostContext) -> Cost:
     """An exponential is not a multiply, a negated truth is not arithmetic.
 
-    ``_TRANSCENDENTAL`` holds the kinds the machine answers on its
+    ``_SPECIAL`` holds the kinds the machine answers on its
     special-function unit, at a rate of its own -- a quarter of the scalar one
     here. Counting one of those as a single FLOP would put it on the float pipe
     at four times the throughput the unit has, so it is a service rather than
@@ -251,8 +251,8 @@ def _unary(call: Call, ctx: CostContext) -> Cost:
     multiply or an add.
     """
     kind = call.target.kind
-    if kind in _TRANSCENDENTAL:
-        return _serviced(call, ctx, "transcendental")
+    if kind in _SPECIAL:
+        return _serviced(call, ctx, "special")
     if kind is UnaryKind.NOT:
         return _serviced(call, ctx, "predicate")
     if _integral(call, ctx):

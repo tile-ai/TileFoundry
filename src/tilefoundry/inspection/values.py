@@ -223,7 +223,7 @@ def _paired_service(record: ComputeCostMetadata) -> dict[str, TotalAndPerUnit[in
     """Each service kind's work, whole and per unit, as one value.
 
     What a machine is asked for that is not floating point: comparing, selecting,
-    integer arithmetic, a transcendental, a local move. Reported beside the flops
+    integer arithmetic, a reciprocal, a local move. Reported beside the flops
     rather than folded into them, because a predicate priced as a FLOP is a
     number about a pipe the work never went down.
     """

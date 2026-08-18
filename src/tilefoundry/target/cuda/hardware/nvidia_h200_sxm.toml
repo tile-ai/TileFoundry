@@ -112,9 +112,9 @@ origin = "derived"
 source = "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#throughput-of-native-arithmetic-instructions"
 conditions = "The same conservative scalar-service envelope as integer: 64 results/clock/SM times the derived 1,982,717,803 Hz effective clock, per CTA. One scalar move per 32-bit word, so a move of n bytes counts ceil(n / 4). NVIDIA publishes no static register or shared bandwidth, and this proxy is what stands in for one. A peak-style analytical throughput, not a measured calibration."
 
-[facts.service.transcendental]
+[facts.service.special]
 value = 31723484848
 unit = "op/s"
 origin = "derived"
 source = "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#throughput-of-native-arithmetic-instructions"
-conditions = "16 results/clock/SM for the approximate special-function unit at compute capability 9.0, times the derived 1,982,717,803 Hz effective clock, per CTA. The native approximate peak; a full-precision math path may be slower. A peak-style analytical throughput, not a measured calibration."
+conditions = "16 results/clock/SM at compute capability 9.0 for the row the table states as 32-bit approximate floating-point reciprocal, reciprocal square root, base-2 logarithm and base-2 exponential, times the derived 1,982,717,803 Hz effective clock, per CTA. The name is this project's, not the vendor's: the table names the instructions rather than a service. The native approximate peak; a full-precision math path may be slower. A peak-style analytical throughput, not a measured calibration."

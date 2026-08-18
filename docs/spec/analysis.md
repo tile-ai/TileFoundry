@@ -945,10 +945,12 @@ class PerformanceServiceFacts:
 ```
 
 The service kinds a target states are named by the operations that record them:
-`integer`, `predicate`, `select`, `transcendental` and `local-copy`. `local-copy`
-is counted in scalar moves rather than bytes -- one move per 32-bit word, so
-moving `n` bytes counts `ceil(n / 4)` -- because it stands in for the register
-and shared-memory bandwidths no vendor publishes.
+`integer`, `predicate`, `select`, `special` and `local-copy`. The names
+are this project's, not any vendor's -- a hardware table names instructions, not
+services -- so each MUST say in its provenance which published row it was
+derived from. `local-copy` is counted in scalar moves rather than bytes, one
+move per 32-bit word, so moving `n` bytes counts `ceil(n / 4)`: it stands in for
+the register and shared-memory bandwidths no vendor publishes.
 
 Requesting roofline adds the exact summed compute-cost `flops` and `traffic`,
 the memory record's per-level peak, and this verdict to the summary:
