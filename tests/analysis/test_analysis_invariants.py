@@ -112,17 +112,23 @@ from tilefoundry.schedule.partition import PartitionProgramError, build_partitio
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
+    AccessMode,
+    AccessQuantity,
     AccessRelations,
+    BoundaryAccess,
     IndexedAccess,
     OperandValue,
+    OutputStorage,
     StorageEffectClaim,
     StorageEffectKind,
+    StorageLink,
     StorageSpan,
     access_relation_registry,
     build_relation,
     identity_relations,
     moves,
     register_access_relation,
+    transfers,
     writes,
 )
 from tilefoundry.visitor_registry.contexts import Cost, TrafficBytes
@@ -1034,6 +1040,100 @@ def test_a_lookups_amount_does_not_move_with_the_values_it_looks_up() -> None:
 
     assert declared(3) == (12, 3)
     assert declared(6) == (24, 6)
+
+
+def test_a_relation_that_cannot_be_true_is_refused_where_it_is_written() -> None:
+    """An impossible description fails at its author, not at its reader.
+
+    A boundary that says it writes on the input side is a broken handler. A
+    consumer that quietly reads it as a read hides the break behind a number
+    that looks like every other number. Everything answerable without the Call
+    is answered here, naming the side and the index so the handler is findable.
+    """
+    reads = identity_access(1)
+    held = AccessQuantity(4, 4)
+
+    def refused(complaint: str, **kwargs):
+        with pytest.raises(ValueError, match=re.escape(complaint)):
+            AccessRelations(**kwargs)
+
+    refused(
+        "input 0 says it does write",
+        inputs=(BoundaryAccess(reads, held, AccessMode.WRITE),),
+        outputs=(writes(reads, 4),),
+    )
+    refused(
+        "output 0 says it does read",
+        inputs=(moves(reads, 4),),
+        outputs=(BoundaryAccess(reads, held, AccessMode.READ),),
+    )
+    refused(
+        "input 0 states where bytes live",
+        inputs=(BoundaryAccess(reads, held, AccessMode.READ, OutputStorage()),),
+        outputs=(writes(reads, 4),),
+    )
+    refused(
+        "output 0 transfers but names no source",
+        inputs=(moves(reads, 4),),
+        outputs=(BoundaryAccess(reads, held, AccessMode.TRANSFER, OutputStorage()),),
+    )
+
+    beyond = StorageLink("forward", 3, reads, reads, held)
+    refused(
+        "output 0 links to operand 3, and this call has 1",
+        inputs=(moves(reads, 4),),
+        outputs=(transfers(reads, held, beyond),),
+    )
+
+    crossed = StorageLink("forward", 0, identity_access(2), reads, held)
+    refused(
+        "output 0 links two patterns over different domains",
+        inputs=(moves(reads, 4),),
+        outputs=(transfers(reads, held, crossed),),
+    )
+
+    with pytest.raises(ValueError, match="a link either forwards a value"):
+        StorageLink("borrow", 0, reads, reads, held)
+
+
+def test_a_link_is_held_to_the_operand_it_names() -> None:
+    """Sharing bytes with an operand of another element width cannot be meant.
+
+    One side's coordinate would land inside the other's element. The record
+    cannot see this -- it has no Call and no types -- so the registration
+    wrapper, which has both, is where it is caught.
+    """
+
+    class _Narrows(Op):
+        pass
+
+    register_typeinfer(_Narrows)(
+        lambda call, ctx: make_tensor_type((4,), DType.f32)
+    )
+
+    @register_access_relation(_Narrows)
+    def _handler(call, ctx) -> AccessRelations:
+        held = AccessQuantity(4, 4)
+        return AccessRelations(
+            inputs=(BoundaryAccess(identity_access(1), held, AccessMode.TRANSFER),),
+            outputs=(
+                transfers(
+                    identity_access(1),
+                    held,
+                    StorageLink(
+                        "forward", 0, identity_access(1), identity_access(1), held
+                    ),
+                ),
+            ),
+        )
+
+    call = Call(
+        type=make_tensor_type((4,), DType.f32),
+        target=_Narrows(),
+        args=(Var(type=make_tensor_type((4,), DType.i64), name="wider"),),
+    )
+    with pytest.raises(ValueError, match="whose elements are 8 B against 4 B"):
+        access_relation_registry.lookup(_Narrows)(call, TypeInferContext())
 
 
 def test_a_relation_is_held_to_the_call_it_was_asked_about() -> None:
