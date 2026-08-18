@@ -98,6 +98,7 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape, is_induction_var_singleto
 from tilefoundry.ir.hir.tensor.split import Split
 from tilefoundry.ir.hir.tensor.stack import Stack
 from tilefoundry.ir.hir.tensor.topk import TopK
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import (
     DType,
     TensorType,
@@ -1046,6 +1047,31 @@ def test_a_lookups_amount_does_not_move_with_the_values_it_looks_up() -> None:
 
     assert declared(3) == (12, 3)
     assert declared(6) == (24, 6)
+
+
+def test_a_field_of_a_tuple_is_named_by_the_link_that_forwards_it() -> None:
+    """Which field, not just which operand: the two fields are different sizes.
+
+    A `TopK` produces values and their indices, four bytes an element against
+    eight. A link naming only the operand pointed at whichever field came
+    first, and the width check that would have caught it was skipped, because a
+    tuple has no width of its own. The naming is what is watched here: a
+    handler that really states two widths is refused elsewhere, since a
+    `TupleGetItem`'s result is inferred from its field and always agrees.
+    """
+    ctx = TypeInferContext()
+    values = make_tensor_type((4,), DType.f32)
+    indices = make_tensor_type((4,), DType.i64)
+    pair = Var(type=TupleType(fields=(values, indices)), name="picked")
+
+    for field, held in ((0, values), (1, indices)):
+        taken = Call(type=held, target=TupleGetItem(index=field), args=(pair,))
+        relations = access_relation_registry.lookup(TupleGetItem)(taken, ctx)
+        (link,) = relations.outputs[0].storage.links
+        assert (link.input, link.input_field) == (0, field)
+        assert link.quantity == AccessQuantity(4, 4)
+
+
 
 
 def test_the_legacy_claim_says_what_the_links_say() -> None:
