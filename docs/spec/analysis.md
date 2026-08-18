@@ -638,6 +638,15 @@ class ValueLifetime:
     last_used_at: int
     persistent: bool = False
 
+class AllocationMetadata:
+    """What deciding this function's byte addresses came to.
+
+    Attributes:
+        solver_status: attribute; `"optimal"`, `"feasible"`, `"unknown"` or `"infeasible"`.
+    """
+
+    solver_status: str
+
 class MemoryMetadata(IRMetadata):
     """One function's memory behaviour against one target's hierarchy.
 
@@ -646,13 +655,45 @@ class MemoryMetadata(IRMetadata):
         traffic: attribute; TrafficBytes per level, over the whole function.
         lifetimes: attribute; One entry per value residency.
         advisories: attribute; Capacity findings that do not invalidate the program.
+        allocation: attribute; What placing the addressable buffers came to.
     """
 
     footprint: tuple[LevelFootprint, ...] = ()
     traffic: tuple[tuple[str, TrafficBytes], ...] = ()
     lifetimes: tuple[ValueLifetime, ...] = ()
     advisories: tuple[str, ...] = ()
+    allocation: AllocationMetadata | None = None
 ```
+
+Addresses are assigned against the authored definition order, which fixes every
+buffer's lifetime before any of them is placed, so the only open question is
+where each one sits.
+
+- constraints:
+  - Buffers MUST be placed for the addressable levels `gmem` and `smem` only.
+    Residency at another level MUST NOT create a placement and MUST NOT make a
+    program unplaceable: this model stops where its addressing does.
+  - A buffer MUST be placed once per capacity domain that holds it -- the whole
+    target for a level owned target-wide, one per owning position otherwise --
+    and two buffers in one domain MUST NOT overlap in both address and lifetime
+    at once. A level owned per unit of a topology level other than the one being
+    analysed cannot be projected onto it, and MUST fail rather than be assumed.
+  - A value that lives in another value's buffer MUST NOT be placed again;
+    reading through any of them keeps that one buffer live.
+  - `allocation` MUST be absent only when no level could be projected to place
+    anything against. A function with nothing addressable to place MUST record a
+    settled `allocation`: the question was asked and there was nothing to decide.
+  - An attached `solver_status` MUST be `"optimal"` or `"feasible"`. A placement
+    that cannot be made, cannot be expressed, or does not settle in time MUST
+    raise `AnalysisError` saying which of the three happened, and MUST NOT leave
+    a record behind. A single value larger than its level remains an error for
+    the same reason: no arrangement of anything places it.
+  - Domains holding the same buffers are one question; each distinct set MUST be
+    decided once. A domain whose contents fit at once MUST be settled without
+    searching, and one whose simultaneously live bytes exceed the capacity MUST
+    be reported infeasible without searching.
+  - The addresses themselves MUST NOT be reported. They are the proof that a
+    placement exists, and no consumer reads them.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
@@ -980,12 +1021,10 @@ class PerformanceSummaryMetadata(IRMetadata):
     Attributes:
         timeline: attribute; Whole-Function envelope from zero, in ns.
         waves: attribute; Physical waves required by the root topology.
-        solver_status: attribute; `"optimal"` or `"feasible"`.
     """
 
     timeline: TimelineMetadata
     waves: int
-    solver_status: str
 ```
 
 `TimelineMetadata` is a value, not a record: it MUST NOT be attached to a Call or
@@ -995,10 +1034,10 @@ Occurrence fields are:
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `start_ns` | Start of one occurrence in the makespan-minimizing local schedule subject to producer dependencies and exact participant-set exclusion. | No |
+| `start_ns` | Start of one occurrence in the authored-order local schedule, after its producers end and after the last occurrence sharing any of its participants. | No |
 | `end_ns` | End of that occurrence's first execution. | No |
 | `trips` | One outside a loop; within a loop, the enclosing loop trip count represented by the interval. | No |
-| `stride_ns` | Zero outside a loop; within a loop, the solved makespan of one body execution. | No |
+| `stride_ns` | Zero outside a loop; within a loop, the makespan of one body execution. | No |
 
 Function summary fields are:
 
@@ -1006,7 +1045,6 @@ Function summary fields are:
 |---|---|---|
 | `timeline` | `[0, local makespan * waves)`, where the local makespan is the end of the CTA-local schedule, or zero with no work. Its duration is the prediction. | Through `waves` |
 | `waves` | `ceil(N / P)`, where `N` is the static extent of the root topology selected by `ParallelCapacityFacts.topology` and `P` is `parallel_units`. | `ParallelCapacityFacts` |
-| `solver_status` | `"optimal"` when the makespan was proved minimal, `"feasible"` when a schedule was found but not proved minimal. | No |
 
 Occurrence intervals remain CTA-local. They are not copied once per wave, and
 neither the root topology extent nor `parallel_units` changes them. The capacity
@@ -1032,7 +1070,7 @@ class ParallelCapacityFacts:
 Requesting performance adds this Function verdict to the summary:
 
 ```text
-performance root=<Module>::<Function> predicted-ns=<int> waves=<int> solver-status=<token>
+performance root=<Module>::<Function> predicted-ns=<int> waves=<int>
 ```
 
 `root` is the report's own identity, composed by inspection from the module and
@@ -1061,7 +1099,7 @@ Call: {"timeline": {"start_ns": <int>, "end_ns": <int>, "trips": <int>,
                     "stride_ns": <int>}}
 Function: {"timeline": {"start_ns": 0, "end_ns": <int>, "trips": 1,
                         "stride_ns": 0},
-           "waves": <int>, "solver_status": <str>}
+           "waves": <int>}
 ```
 
 The summary envelope's duration is a deterministic comparison estimate, not a
@@ -1094,37 +1132,22 @@ model.
     `[start_ns + t*stride_ns, end_ns + t*stride_ns)`, for `0 <= t < trips`.
     The loop spans `trips * stride_ns`; a consumer of its yield MUST wait for
     that full span. Loop-invariant values remain single occurrences outside it.
-  - Equal-makespan schedules MUST use inline occurrence order as a deterministic
-    tie-break, not as an execution dependency. On a `Function`, the summary's
+  - Occurrences MUST be laid out in inline occurrence order. Reordering
+    independent work is a schedule's decision, not an analysis's: what overlaps
+    is what the program's own placement made independent, and the reported time
+    is the time of the program as written. On a `Function`, the summary's
     `timeline` MUST start at zero and span the whole local plan, scaled by
     `waves`; there MUST be no second field restating the local makespan or the
-    scaled estimate.
+    scaled estimate, and none restating how the layout was reached -- it is
+    exact for the model it states.
   - `parallel_units` is compiler policy over hardware facts. It MUST NOT enter
-    one-unit rates or the CTA-local interval solver, and is not a program rewrite.
-  - The intervals and the addresses of the buffers they keep live MUST be
-    decided together. A schedule is only a schedule if every value it keeps live
-    has somewhere to be, so the two questions cannot be answered apart, where
-    each would be free to assume the other gave way.
-  - Buffers MUST be placed for the addressable levels `gmem` and `smem` only.
-    Traffic or residency at another level MUST NOT create a placement, and MUST
-    NOT make a program infeasible: this model stops where its addressing does.
-  - A buffer MUST be placed once per capacity domain that holds it -- the whole
-    target for a level owned target-wide, one per owning position otherwise --
-    and two buffers in one domain MUST NOT overlap in both address and lifetime
-    at once. A level owned per unit of a topology level other than the one being
-    analysed cannot be projected onto it, and MUST fail rather than be assumed.
-  - A value that lives in another value's buffer MUST NOT be placed again;
-    reading through any of them keeps that one buffer live. A value produced and
-    last read within one loop trip MUST be placed for that trip, so later trips
-    reuse the address rather than each asking for one.
-  - Capacity is a constraint on the answer, not a fact about the program:
-    changing it MAY change the timeline or leave the program with none, and MUST
-    NOT change what `memory` recorded. A program with no placement at all MUST
-    fail with `AnalysisError`, and MUST NOT leave records behind.
-  - The makespan MUST be minimized but need not be proved minimal.
-    `solver_status` MUST say which of the two happened, and a solve that ends
-    with no answer at all -- infeasible, invalid, or out of time -- MUST raise
-    `AnalysisError` saying which.
+    one-unit rates or the CTA-local layout, and is not a program rewrite.
+  - The buffers a plan keeps live MUST have been placed by `memory` before a
+    time is reported for it, which a `MemoryMetadata` carrying an `allocation`
+    is the evidence of; one without it MUST fail with `AnalysisError`. A
+    placement that failed never reaches here, because `memory` refuses it.
+    Capacity therefore changes whether there is an answer, never which answer:
+    two capacities that both admit a placement MUST produce the same intervals.
   - Performance is a modeled plan and MUST NOT be read as a guarantee about
     lowering, physical occupancy, or runtime performance.
 

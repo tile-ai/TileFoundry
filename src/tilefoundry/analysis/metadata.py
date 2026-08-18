@@ -132,6 +132,17 @@ class ValueLifetime:
 
 
 @dataclass(frozen=True)
+class AllocationMetadata:
+    """What deciding this function's byte addresses took.
+
+    The addresses themselves are proof rather than a conclusion, so none of them
+    appear here. What a reader can act on is whether the question was settled.
+    """
+
+    solver_status: str
+
+
+@dataclass(frozen=True)
 class MemoryMetadata(IRMetadata):
     """Record one function's memory behavior against a target hierarchy.
 
@@ -139,12 +150,17 @@ class MemoryMetadata(IRMetadata):
     report cache working-set and order-dependent peak overflow; only a single
     value exceeding an addressable level is an error because no schedule can
     place it.
+
+    ``allocation`` is absent when the function has no addressable buffer to
+    place at the level being analysed, which is a different answer from having
+    placed one: nothing was decided, so nothing is claimed.
     """
 
     footprint: tuple[LevelFootprint, ...] = ()
     traffic: tuple[tuple[str, TrafficBytes], ...] = ()
     lifetimes: tuple[ValueLifetime, ...] = ()
     advisories: tuple[str, ...] = ()
+    allocation: "AllocationMetadata | None" = None
 
     def level(self, name: str) -> LevelFootprint | None:
         """The footprint recorded for *name*, if the function touches it."""
@@ -205,16 +221,16 @@ class PerformanceSummaryMetadata(IRMetadata):
 
     ``timeline`` is the whole-Function envelope from zero, so its duration is
     the prediction; ``waves`` is the uniform scaling between one local wave and
-    that envelope. ``solver_status`` separates a makespan proved optimal from a
-    feasible incumbent, which are otherwise the same number.
+    that envelope. The prediction is exact for the model it states, so there is
+    nothing here about how it was reached.
     """
 
     timeline: TimelineMetadata
     waves: int
-    solver_status: str
 
 
 __all__ = [
+    "AllocationMetadata",
     "BufferAliasMetadata",
     "BufferFootprint",
     "ComputeCostMetadata",

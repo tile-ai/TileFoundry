@@ -105,7 +105,9 @@ def assert_performance_contract(result: AnalysisResult) -> None:
     fn = result.function
     summary = get_metadata(fn, PerformanceSummaryMetadata)
     assert summary is not None
-    assert summary.solver_status in ("optimal", "feasible")
+    placement = get_metadata(fn, MemoryMetadata)
+    assert placement is not None and placement.allocation is not None
+    assert placement.allocation.solver_status in ("optimal", "feasible")
     predicted_ns = summary.timeline.end_ns - summary.timeline.start_ns
     assert summary.waves > 0 and predicted_ns % summary.waves == 0
     bound = get_metadata(fn, RooflineMetadata)
@@ -539,7 +541,6 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
     assert min(record.start_ns for record in loop_timelines[0]) == 539
     assert [record.waves for record in root_summaries] == [1, 1]
     assert [record.timeline.end_ns for record in root_summaries] == [8_903, 16_263]
-    assert [record.solver_status for record in root_summaries] == ["optimal"] * 2
 
     roots = []
     for result in results:

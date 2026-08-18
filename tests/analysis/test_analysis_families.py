@@ -14,17 +14,17 @@ import json
 from dataclasses import replace
 
 import pytest
-from ortools.sat.python import cp_model
 
 import tilefoundry.analysis.compute_cost as compute_cost
-import tilefoundry.analysis.performance as performance_family
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tests.fixtures.placed.square_cuda import Model as SquareCuda
 from tests.fixtures.shapes.window_programs import WindowCost
+from tests.models.registry import CORPUS
 from tilefoundry import func, module
 from tilefoundry.analysis import (
+    AllocationMetadata,
     BufferAliasMetadata,
     ComputeCostMetadata,
     LoopFootprintMetadata,
@@ -141,6 +141,11 @@ class _RestatedCapacity(CudaTarget):
 class _RoomyShared(_RestatedCapacity):
     name = "test.roomy_shared"
     levels = {"smem": 422_400}
+
+
+class _RoomierShared(_RestatedCapacity):
+    name = "test.roomier_shared"
+    levels = {"smem": 845_000}
 
 
 class _NarrowRegisters(_RestatedCapacity):
@@ -909,25 +914,31 @@ def test_non_divisible_window_cost_is_a_full_tile_upper_bound() -> None:
     assert root_cost.flops == (("f32", 4 * 4 + 3 * 4 * 4),)
 
 
-def test_a_sharded_shared_tile_fits_once_and_advises_on_its_peak() -> None:
-    """The H200 capacity is an input fact; the peak is two live tile lifetimes."""
+def test_a_sharded_shared_tile_is_measured_once_and_placed_once() -> None:
+    """The capacity is an input fact; the claim is two tile lifetimes at once.
+
+    Both tiles are live together because the second reads the first, so the
+    claim is not something an ordering could reduce. A machine that can hold it
+    places it and reports the footprint; the one that cannot refuses, and says
+    what it was asked to hold rather than what one value cost.
+    """
     functions = {function.name: function for function in _SharedTile.functions}
-    split = functions["split"]
-    result = analyze(_SharedTile, split, analysis="memory")
+    roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))
+    result = analyze(
+        roomy,
+        next(item for item in roomy.functions if item.name == "split"),
+        analysis="memory",
+    )
 
     record = get_metadata(result.function, MemoryMetadata)
     assert record is not None
     smem = next(item for item in record.footprint if item.level == "smem")
-    assert smem.capacity_bytes == 232_448
     largest_tile = max(item.bytes for item in record.lifetimes if item.level == "smem")
-    assert smem.peak_bytes == 2 * largest_tile
-    assert any(
-        f"smem peak is {smem.peak_bytes} B" in note
-        and "order-dependent" in note
-        and "not a bound" in note
-        for note in record.advisories
-    )
+    assert smem.peak_bytes == 2 * largest_tile == smem.capacity_bytes
+    assert record.allocation == AllocationMetadata(solver_status="optimal")
 
+    with pytest.raises(AnalysisError, match=r"'smem' holds 422400 B at one point"):
+        analyze(_SharedTile, functions["split"], analysis="memory")
     with pytest.raises(AnalysisError, match=r"27878400 B in smem"):
         analyze(_SharedTile, functions["broadcast"], analysis="memory")
 
@@ -941,8 +952,9 @@ def test_memory_footprints_follow_the_owner_recorded_by_the_target() -> None:
     assert "v0" not in gmem_lifetimes
     assert gmem_lifetimes["lhs"] == tensor_bytes(matmul.params[0].type)
 
-    shared = next(fn for fn in _SharedTile.functions if fn.name == "split")
-    result = analyze(_SharedTile, shared, analysis="memory")
+    roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))
+    shared = next(fn for fn in roomy.functions if fn.name == "split")
+    result = analyze(roomy, shared, analysis="memory")
     cta_owned = get_metadata(result.function, MemoryMetadata)
     assert cta_owned is not None
     local_bytes = next(
@@ -998,8 +1010,9 @@ def test_analysis_snapshot_drift_sentinel() -> None:
     plain_cost, plain_bound = matmul_records[0]
     split_cost, _split_bound = matmul_records[1]
 
-    shared = next(function for function in _SharedTile.functions if function.name == "split")
-    shared_result = analyze(_SharedTile, shared, analysis="memory")
+    roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))
+    shared = next(function for function in roomy.functions if function.name == "split")
+    shared_result = analyze(roomy, shared, analysis="memory")
     shared_record = get_metadata(shared_result.function, MemoryMetadata)
     assert shared_record is not None
     shared_smem = shared_record.level("smem")
@@ -1372,7 +1385,6 @@ def test_mega_kernel_preserves_placement_costs_and_dependency_order() -> None:
     assert summary == PerformanceSummaryMetadata(
         timeline=TimelineMetadata(end_ns=2_676),
         waves=1,
-        solver_status="optimal",
     )
 
 
@@ -1418,13 +1430,11 @@ def test_performance_scales_one_local_schedule_by_root_capacity() -> None:
         constrained_summary.timeline.end_ns,
     ) == (15, 45, 75)
     assert {summary.timeline.start_ns for summary in summaries} == {0}
-    assert {summary.solver_status for summary in summaries} == {"optimal"}
 
     data = report(results[1])
     assert data["function_records"]["performance"] == {
         "timeline": {"start_ns": 0, "end_ns": 45, "trips": 1, "stride_ns": 0},
         "waves": 3,
-        "solver_status": "optimal",
     }
     assert all(
         set(row["performance"]["timeline"]) == {"start_ns", "end_ns", "trips", "stride_ns"}
@@ -1489,19 +1499,22 @@ def test_nested_levels_project_independently_and_broadcast_counts_as_placed() ->
     assert _result_placement(type_, thread) == frozenset(range(4))
 
 
-def test_a_timeline_has_to_put_its_buffers_somewhere() -> None:
-    """A schedule that needs more of a level than the target has is not a schedule.
+def test_a_program_whose_buffers_have_nowhere_to_sit_is_refused() -> None:
+    """Placing the buffers is what makes the rest of the answer worth having.
 
     The two shared tiles this program keeps live at once do not both fit the
     machine's shared memory, and no ordering makes them: the second is computed
-    from the first. Restating the capacity is what changes the answer, and it
-    changes only the answer -- what the memory family recorded about the program
-    is the same either way.
+    from the first. Whoever asks is refused, because memory is the family that
+    decides this and everything downstream reads what it decided. Restating the
+    capacity is what changes the answer, and it changes only the answer: the
+    lifetimes are the same either way.
     """
     split = next(function for function in _SharedTile.functions if function.name == "split")
     roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))
 
-    with pytest.raises(AnalysisError, match=r"no timeline places this program's buffers"):
+    with pytest.raises(AnalysisError, match=r"'smem' holds 422400 B at one point"):
+        analyze(_SharedTile, split, analysis="memory")
+    with pytest.raises(AnalysisError, match=r"'smem' holds 422400 B at one point"):
         analyze(_SharedTile, split, analysis="performance")
 
     fits = analyze(
@@ -1510,18 +1523,19 @@ def test_a_timeline_has_to_put_its_buffers_somewhere() -> None:
         analysis="performance",
     )
     summary = get_metadata(fits.function, PerformanceSummaryMetadata)
-    assert summary is not None and summary.solver_status == "optimal"
+    assert summary is not None
+    assert get_metadata(fits.function, MemoryMetadata).allocation.solver_status == "optimal"
     assert summary.timeline.end_ns > 0
 
-    tight = analyze(_SharedTile, split, analysis="memory")
+    wider = replace(_SharedTile, target=_RoomierShared("nvidia.h200_sxm"))
     relieved = analyze(
-        roomy,
-        next(item for item in roomy.functions if item.name == "split"),
+        wider,
+        next(item for item in wider.functions if item.name == "split"),
         analysis="memory",
     )
     assert [
         (item.binding, item.level, item.bytes, item.defined_at, item.last_used_at)
-        for item in get_metadata(tight.function, MemoryMetadata).lifetimes
+        for item in get_metadata(fits.function, MemoryMetadata).lifetimes
     ] == [
         (item.binding, item.level, item.bytes, item.defined_at, item.last_used_at)
         for item in get_metadata(relieved.function, MemoryMetadata).lifetimes
@@ -1580,43 +1594,26 @@ def test_an_overwrite_waits_for_everything_that_read_what_it_replaces() -> None:
     )
 
 
-def test_a_solve_that_ends_without_an_answer_says_which_and_records_nothing(
-    monkeypatch,
-) -> None:
-    """Three ways to end with no timeline, told apart, and none of them half-done."""
-    split = next(function for function in _SharedTile.functions if function.name == "split")
-    roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))
-    fits = next(item for item in roomy.functions if item.name == "split")
-    solve = cp_model.CpSolver.Solve
+def test_a_machine_that_places_nothing_is_not_a_machine_that_fits() -> None:
+    """No allocation record and a settled one are different answers.
 
-    attached: list[object] = []
-    written = performance_family.attach
+    This program keeps a shared-memory buffer without saying which units hold
+    it, so there is nothing to place it against: nothing was decided and nothing
+    is claimed, which is not the same as having looked and found room. The
+    buffers are still measured, because measuring them never needed an address.
+    """
+    case = next(item for item in CORPUS if item.id == "access_footprint.qkv")
+    selected = next(item for item in case.analyze if item.selector == "qkv_projection")
+    owner, function = case.resolve(case.build(), selected.selector)
+    unplaceable = analyze(owner, function, analysis="memory", dims=selected.dims)
+    record = get_metadata(unplaceable.function, MemoryMetadata)
+    assert record is not None and record.allocation is None
+    assert any(item.level == "smem" for item in record.lifetimes)
 
-    def watch(expr, record):
-        attached.append(record)
-        return written(expr, record)
-
-    monkeypatch.setattr(performance_family, "attach", watch)
-    analyze(roomy, fits, analysis="performance")
-    assert any(isinstance(record, PerformanceSummaryMetadata) for record in attached)
-
-    for status, expected in (
-        (cp_model.MODEL_INVALID, r"not a valid solver problem"),
-        (cp_model.UNKNOWN, r"no timeline within its time limit"),
-        (None, r"no timeline places this program's buffers"),
-    ):
-        if status is None:
-            monkeypatch.setattr(cp_model.CpSolver, "Solve", solve)
-            owner, function = _SharedTile, split
-        else:
-            monkeypatch.setattr(
-                cp_model.CpSolver, "Solve", lambda self, model, _status=status: _status
-            )
-            owner, function = roomy, fits
-        attached.clear()
-        with pytest.raises(AnalysisError, match=expected):
-            analyze(owner, function, analysis="performance")
-        assert attached == []
+    placed = analyze(_CudaAdd, _CudaAdd.entry_function(), analysis="memory")
+    assert get_metadata(placed.function, MemoryMetadata).allocation == AllocationMetadata(
+        solver_status="optimal"
+    )
 
 
 def test_only_addressable_levels_are_placed_by_the_solver() -> None:
@@ -1632,7 +1629,8 @@ def test_only_addressable_levels_are_placed_by_the_solver() -> None:
     result = analyze(narrow, function, analysis="performance")
 
     summary = get_metadata(result.function, PerformanceSummaryMetadata)
-    assert summary is not None and summary.solver_status == "optimal"
+    assert summary is not None
+    assert get_metadata(result.function, MemoryMetadata).allocation.solver_status == "optimal"
     baseline = analyze(
         _PricingBoundary,
         next(item for item in _PricingBoundary.functions if item.name == "unpriced_only"),

@@ -654,8 +654,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# performance root=MoEMegaKernel::experts "
         f"predicted-ns={summary['timeline']['end_ns']} "
-        f"waves={summary['waves']} "
-        f"solver-status={summary['solver_status']}",
+        f"waves={summary['waves']}",
     ]
     assert payload["totals"]["flops"] == cost["flops"]
     assert payload["totals"]["traffic"] == cost["traffic"]

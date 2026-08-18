@@ -6,7 +6,8 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, fields, is_dataclass
-from typing import get_args, get_origin, get_type_hints
+from types import UnionType
+from typing import Union, get_args, get_origin, get_type_hints
 
 from tilefoundry.analysis.facts import MemoryHierarchyFacts
 from tilefoundry.analysis.memory import cache_pressure
@@ -77,9 +78,17 @@ def render_record(record: IRMetadata, expr: object) -> dict[str, object]:
 
 
 def _reported_value(value: object, declared: object) -> object:
-    """Serialize one value according to the type its field declared."""
+    """Serialize one value according to the type its field declared.
+
+    A field that may be absent declares a union with ``None``; the value that
+    arrived is not ``None`` here, so what remains of the union is what it is.
+    """
     if value is None:
         return None
+    if get_origin(declared) in (Union, UnionType):
+        stated = [arg for arg in get_args(declared) if arg is not type(None)]
+        if len(stated) == 1:
+            declared = stated[0]
     if is_dataclass(declared) and isinstance(declared, type):
         hints = get_type_hints(declared)
         return {

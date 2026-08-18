@@ -106,8 +106,11 @@ def _compute_cost_evidence(report: dict) -> str | None:
 
 
 def _memory_evidence(report: dict) -> str | None:
-    """What `memory` must have measured: bytes moved, and per-binding lifetimes."""
+    """What `memory` must have measured: bytes moved, lifetimes, and addresses."""
     record = report["function_records"]["memory"]
+    placement = record.get("allocation")
+    if placement is None or placement["solver_status"] not in ("optimal", "feasible"):
+        return f"allocation is {placement!r}"
     gmem = record["traffic"]["gmem"]
     if not gmem.get("read", 0) > 0:
         return f"reported no gmem read ({gmem!r})"
@@ -136,8 +139,6 @@ def _performance_evidence(report: dict) -> str | None:
         return f"waves is {record['waves']!r}"
     if envelope["end_ns"] % record["waves"]:
         return f"end_ns {envelope['end_ns']!r} is not {record['waves']!r} equal waves"
-    if record["solver_status"] not in ("optimal", "feasible"):
-        return f"solver_status is {record['solver_status']!r}"
     return None
 
 

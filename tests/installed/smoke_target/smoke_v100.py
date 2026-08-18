@@ -66,7 +66,10 @@ def test_external_v100_documents_analyse_a_copied_installed_model(
     assert gmem["peak_bytes"] < 32_000_000_000
     record = report["function_records"]["performance"]
     assert record["waves"] == 2
-    assert record["solver_status"] == "optimal"
+    assert report["function_records"]["memory"]["allocation"]["solver_status"] in (
+        "optimal",
+        "feasible",
+    )
     call_records = [
         call["performance"]["timeline"] for call in report["calls"] if "performance" in call
     ]

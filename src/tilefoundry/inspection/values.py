@@ -329,7 +329,6 @@ class PerformanceSummaryView(IRMetadata):
     root: str = ""
     predicted_ns: int = 0
     waves: int = 1
-    solver_status: str = ""
 
 
 comment(
@@ -359,7 +358,6 @@ comment(
     PerformanceSummaryMetadata,
     Projection("predicted_ns", int, _predicted_ns),
     Projection("waves", int, _read("waves")),
-    "solver_status",
     family="performance",
 )
 comment(SourceSpanMetadata, Projection("span", str, _source_span), family="source")
@@ -372,7 +370,6 @@ comment(
     "root",
     "predicted_ns",
     Projection("waves", int, _read("waves")),
-    "solver_status",
     family="performance",
 )
 

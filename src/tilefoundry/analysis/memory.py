@@ -1,14 +1,18 @@
-"""Measure function residency against the target memory hierarchy.
+"""Measure function residency against the target memory hierarchy, and place it.
 
 Lifetime order comes from authored IR and residency is projected to each
-explicit level's owner. A single value exceeding a level is an error because no
-schedule can place it. Peak overflow and cache working-set overflow are
-advisories because ordering can change the former and the latter affects speed.
+explicit level's owner. A single value exceeding a level is an error; peak and
+cache overflow are advisories.
+
+``_ALLOCATED_LEVELS`` are then addressed: buffers live at once get byte ranges of
+their own within the stated capacity, and authored order already fixes the
+lifetimes. A program whose buffers cannot be placed is refused here, so a
+recorded allocation is always one that holds.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from tilefoundry.ir.core import (
     Call,
@@ -23,16 +27,21 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types import Type, local_type_of
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.target import Target
+from tilefoundry.target import Target, UnsupportedCapabilityError
 
+from .check import Placement, _call_placements, _result_placement
 from .errors import AnalysisError
 from .facts import (
     TARGET_MEMORY_OWNER,
+    ExplicitMemoryLevelFacts,
     ImplicitMemoryLevelFacts,
     MemoryHierarchyFacts,
+    ParallelCapacityFacts,
+    ThroughputFacts,
 )
 from .footprint import loop_footprints
 from .metadata import (
+    AllocationMetadata,
     BufferAliasMetadata,
     BufferFootprint,
     ComputeCostMetadata,
@@ -51,6 +60,8 @@ from .walk import (
 )
 
 SELECTOR = "memory"
+
+_ALLOCATED_LEVELS = ("gmem", "smem")
 
 
 @dataclass(frozen=True)
@@ -457,6 +468,242 @@ def _advisories(
     return tuple(notes)
 
 
+@dataclass(frozen=True)
+class MemoryOptions:
+    """How long the placement may look, and how to reproduce what it found."""
+
+    timeout_seconds: float = 60.0
+    workers: int = 1
+    random_seed: int = 0
+
+
+class _NotProjectable(Exception):
+    """No level of this program can be projected onto one that holds addresses."""
+
+
+@dataclass(frozen=True)
+class _Rectangle:
+    """One buffer's byte size and the span of the program it is live across."""
+
+    binding: str
+    size_bytes: int
+    first: int
+    last: int
+
+
+def _domains(
+    fn: Function,
+    record: MemoryMetadata,
+    facts: MemoryHierarchyFacts,
+    placements: dict[int, Placement],
+    order: list[Expr],
+    selected: str,
+) -> dict[tuple[str, object], list[_Rectangle]]:
+    """Every capacity domain that has to hold something, and what it holds.
+
+    A level the target owns is one allocation the whole program shares. A level
+    owned per unit of the level being analysed has one allocation per unit, and
+    a buffer belongs to each unit its placement names.
+    """
+    found: dict[tuple[str, object], list[_Rectangle]] = {}
+    for item in record.lifetimes:
+        level = facts.explicit(item.level)
+        if level is None or level.name not in _ALLOCATED_LEVELS:
+            continue
+        if not 0 <= item.defined_at < len(order):
+            raise AnalysisError(
+                f"function {fn.name!r}: lifetime {item.binding!r} names definition "
+                f"{item.defined_at}, which is outside this function's value order"
+            )
+        rectangle = _Rectangle(
+            binding=item.binding,
+            size_bytes=item.bytes,
+            first=0 if item.persistent else item.defined_at,
+            last=len(order) if item.persistent else max(item.last_used_at, item.defined_at) + 1,
+        )
+        base = order[item.defined_at]
+        for position in _positions(fn, base, level, placements, selected):
+            found.setdefault((level.name, position), []).append(rectangle)
+    return found
+
+
+def _positions(
+    fn: Function,
+    base: Expr,
+    level: ExplicitMemoryLevelFacts,
+    placements: dict[int, Placement],
+    selected: str,
+) -> tuple[object, ...]:
+    """Which capacity domains hold an instance of this buffer.
+
+    A level owned per unit of the level being analysed needs the program to say
+    which units hold the value. One that does not say, or a level owned per some
+    other unit, leaves nothing to place it against.
+    """
+    if level.owner == TARGET_MEMORY_OWNER:
+        return (None,)
+    if level.owner != selected or level.scope != level.owner:
+        raise _NotProjectable(level.name)
+    placement = placements.get(id(base))
+    if placement is None:
+        raise _NotProjectable(level.name)
+    return tuple(sorted(placement))
+
+
+def _needed(rectangles: list[_Rectangle]) -> int:
+    """The most bytes this domain must hold at one point in the program."""
+    edges = sorted({rectangle.first for rectangle in rectangles})
+    return max(
+        (
+            sum(
+                rectangle.size_bytes
+                for rectangle in rectangles
+                if rectangle.first <= edge < rectangle.last
+            )
+            for edge in edges
+        ),
+        default=0,
+    )
+
+
+def _place(
+    name: str,
+    capacity: int | None,
+    rectangles: list[_Rectangle],
+    options: MemoryOptions,
+) -> str:
+    """Give every buffer in one domain a byte range, or refuse the program.
+
+    A domain whose whole contents fit at once needs no search: room for all of
+    them is room for any arrangement of them. Neither does one that cannot hold
+    what is live at a single point, because nothing moves out of the way of
+    something still being read. Every way of failing to place a buffer says
+    which way it was, because they are different things to go and fix.
+    """
+    if not rectangles:
+        return "optimal"
+    if capacity is None or capacity <= 0:
+        raise AnalysisError(
+            f"the target states no usable capacity for {name!r}, so a program "
+            "that places values there cannot be shown to fit"
+        )
+    for rectangle in rectangles:
+        if rectangle.size_bytes > capacity:
+            raise AnalysisError(
+                f"a {name!r} buffer needs {rectangle.size_bytes} B, more than "
+                f"the {capacity} B the target states for that level"
+            )
+    demand = _needed(rectangles)
+    if demand > capacity:
+        raise AnalysisError(
+            f"{name!r} holds {demand} B at one point of this program, more than "
+            f"the {capacity} B the target states for that level"
+        )
+    if sum(rectangle.size_bytes for rectangle in rectangles) <= capacity:
+        return "optimal"
+
+    model = cp_model.CpModel()
+    addresses, lives = [], []
+    for index, rectangle in enumerate(rectangles):
+        offset = model.NewIntVar(0, capacity - rectangle.size_bytes, f"o{index}")
+        addresses.append(
+            model.NewIntervalVar(
+                offset, rectangle.size_bytes, offset + rectangle.size_bytes, f"a{index}"
+            )
+        )
+        lives.append(
+            model.NewIntervalVar(
+                rectangle.first, rectangle.last - rectangle.first, rectangle.last, f"l{index}"
+            )
+        )
+    model.AddNoOverlap2D(addresses, lives)
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = options.workers
+    solver.parameters.random_seed = options.random_seed
+    solver.parameters.max_time_in_seconds = options.timeout_seconds
+    status = solver.Solve(model)
+    if status == cp_model.INFEASIBLE:
+        raise AnalysisError(
+            f"no arrangement of this program's {name!r} buffers fits the "
+            f"{capacity} B the target states for that level"
+        )
+    if status == cp_model.MODEL_INVALID:
+        raise AnalysisError(f"the {name!r} placement is not a valid solver problem")
+    if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
+        raise AnalysisError(
+            f"the {name!r} placement did not settle within its time limit"
+        )
+    return "optimal" if status == cp_model.OPTIMAL else "feasible"
+
+
+def _allocate(
+    module: Module,
+    fn: Function,
+    record: MemoryMetadata,
+    facts: MemoryHierarchyFacts,
+    target: Target,
+    options: MemoryOptions,
+) -> AllocationMetadata | None:
+    """Address every buffer this function keeps live, and say what that took.
+
+    Domains holding the very same buffers are one question asked again, so each
+    distinct set is decided once. A function with nothing addressable to place
+    gets a settled record with nothing in it: the question was asked and there
+    was nothing to decide. A function whose machine names no level to place
+    anything against gets no record at all, because nothing was asked.
+    """
+    try:
+        selected = target.get_facts(ParallelCapacityFacts).topology
+        module.resolve_topology(selected)
+    except (UnsupportedCapabilityError, ValueError):
+        return None
+    placements = _buffer_placements(module, fn, target, selected)
+    order = definition_order(fn)
+    try:
+        domains = _domains(fn, record, facts, placements, order, selected)
+    except _NotProjectable:
+        return None
+    status = "optimal"
+    stated: set[tuple[str, tuple[str, ...]]] = set()
+    for (name, _position), rectangles in domains.items():
+        signature = (name, tuple(sorted(item.binding for item in rectangles)))
+        if signature in stated:
+            continue
+        stated.add(signature)
+        level = facts.explicit(name)
+        if level is None:
+            continue
+        if _place(name, level.capacity_bytes, rectangles, options) == "feasible":
+            status = "feasible"
+    return AllocationMetadata(solver_status=status)
+
+
+def _buffer_placements(
+    module: Module, fn: Function, target: Target, selected: str
+) -> dict[int, Placement]:
+    """Where every value that can own a buffer lives, parameters included.
+
+    A value with no position of its own is left out rather than refused here. A
+    level the target owns needs none, and one owned per position asks for it
+    when it comes to place something there.
+    """
+    try:
+        resolved = dict(
+            _call_placements(module, fn, selected, target.get_facts(ThroughputFacts))
+        )
+    except AnalysisError:
+        resolved = {}
+    topology = module.resolve_topology(selected)
+    for expr in (*fn.params, *postorder(fn.body)):
+        if id(expr) in resolved or not isinstance(expr, (Var, Constant)):
+            continue
+        try:
+            resolved[id(expr)] = _result_placement(expr.type, topology)
+        except AnalysisError:
+            continue
+    return resolved
+
+
 def analyze_memory(
     module: Module,
     function: Function,
@@ -466,6 +713,7 @@ def analyze_memory(
 ) -> None:
     """Attach one memory record to every Function reachable from *function*."""
     facts = target.get_facts(MemoryHierarchyFacts)
+    settings = options if isinstance(options, MemoryOptions) else MemoryOptions()
     topologies = module.effective_topologies()
     for fn in reachable_functions(function):
         try:
@@ -510,29 +758,37 @@ def analyze_memory(
                     ),
                 )
             )
+        record = MemoryMetadata(
+            footprint=_explicit_footprint(fn, residencies, peaks, persistent, facts),
+            traffic=_function_traffic(fn),
+            lifetimes=tuple(
+                ValueLifetime(
+                    binding=item.binding,
+                    level=item.level,
+                    bytes=item.bytes,
+                    defined_at=item.defined_at,
+                    last_used_at=item.last_used_at,
+                    persistent=item.persistent,
+                )
+                for item in residencies
+            ),
+            advisories=_advisories(facts, peaks, tuple(loop_records)),
+        )
         attach(
             fn,
-            MemoryMetadata(
-                footprint=_explicit_footprint(
-                    fn, residencies, peaks, persistent, facts
-                ),
-                traffic=_function_traffic(fn),
-                lifetimes=tuple(
-                    ValueLifetime(
-                        binding=item.binding,
-                        level=item.level,
-                        bytes=item.bytes,
-                        defined_at=item.defined_at,
-                        last_used_at=item.last_used_at,
-                        persistent=item.persistent,
-                    )
-                    for item in residencies
-                ),
-                advisories=_advisories(facts, peaks, tuple(loop_records)),
+            replace(
+                record,
+                allocation=_allocate(module, fn, record, facts, target, settings),
             ),
         )
-        for loop, record in loop_records:
-            attach(loop, record)
+        for loop, footprint in loop_records:
+            attach(loop, footprint)
 
 
-__all__ = ["SELECTOR", "analyze_memory", "cache_pressure", "definition_order"]
+__all__ = [
+    "MemoryOptions",
+    "SELECTOR",
+    "analyze_memory",
+    "cache_pressure",
+    "definition_order",
+]

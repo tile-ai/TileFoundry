@@ -117,7 +117,6 @@ def _summary(
                 root=f"{data['module']}::{data['function']}",
                 predicted_ns=summary.timeline.end_ns - summary.timeline.start_ns,
                 waves=summary.waves,
-                solver_status=summary.solver_status,
             )
         )
     return tuple(views)
