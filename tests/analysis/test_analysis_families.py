@@ -17,6 +17,7 @@ import pytest
 from ortools.sat.python import cp_model
 
 import tilefoundry.analysis.compute_cost as compute_cost
+import tilefoundry.analysis.timeline as timeline_family
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
@@ -1579,24 +1580,36 @@ def test_a_solve_that_ends_without_an_answer_says_which_and_records_nothing(
     split = next(function for function in _SharedTile.functions if function.name == "split")
     roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))
     fits = next(item for item in roomy.functions if item.name == "split")
+    solve = cp_model.CpSolver.Solve
+
+    attached: list[object] = []
+    written = timeline_family.attach
+
+    def watch(expr, record):
+        attached.append(record)
+        return written(expr, record)
+
+    monkeypatch.setattr(timeline_family, "attach", watch)
+    analyze(roomy, fits, analysis="timeline")
+    assert any(isinstance(record, PerformanceSummaryMetadata) for record in attached)
 
     for status, expected in (
         (cp_model.MODEL_INVALID, r"not a valid solver problem"),
         (cp_model.UNKNOWN, r"no timeline within its time limit"),
+        (None, r"no timeline places this program's buffers"),
     ):
-        monkeypatch.setattr(
-            cp_model.CpSolver, "Solve", lambda self, model, _status=status: _status
-        )
+        if status is None:
+            monkeypatch.setattr(cp_model.CpSolver, "Solve", solve)
+            owner, function = _SharedTile, split
+        else:
+            monkeypatch.setattr(
+                cp_model.CpSolver, "Solve", lambda self, model, _status=status: _status
+            )
+            owner, function = roomy, fits
+        attached.clear()
         with pytest.raises(AnalysisError, match=expected):
-            analyze(roomy, fits, analysis="timeline")
-    monkeypatch.undo()
-
-    with pytest.raises(AnalysisError, match=r"no timeline places this program's buffers"):
-        analyze(_SharedTile, split, analysis="timeline")
-    assert all(
-        get_metadata(function, PerformanceSummaryMetadata) is None
-        for function in (*_SharedTile.functions, *roomy.functions)
-    )
+            analyze(owner, function, analysis="timeline")
+        assert attached == []
 
 
 def test_only_addressable_levels_are_placed_by_the_solver() -> None:
