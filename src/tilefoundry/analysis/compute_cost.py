@@ -483,7 +483,7 @@ def _without_forwarded_movement(
             f"{result.write} B result"
         )
     traffic[-1] = TrafficBytes(result.read, result.write - retired)
-    return Cost(cost.flops, tuple(traffic))
+    return Cost(cost.flops, tuple(traffic), cost.service)
 
 
 def _with_untouched_copy(
@@ -501,7 +501,7 @@ def _with_untouched_copy(
     moved = traffic[destination]
     traffic[destination] = TrafficBytes(moved.read + untouched, moved.write)
     traffic[-1] = TrafficBytes(traffic[-1].read, whole)
-    return Cost(cost.flops, tuple(traffic))
+    return Cost(cost.flops, tuple(traffic), cost.service)
 
 
 def _call_cost_record(

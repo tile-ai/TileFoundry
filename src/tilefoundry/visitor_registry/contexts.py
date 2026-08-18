@@ -196,7 +196,10 @@ class Cost:
             for value in (moved.read, moved.write)
         ):
             raise ValueError("Cost traffic must be non-negative integers")
-        if any(not isinstance(value, int) or value < 0 for value in self.service.values()):
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in self.service.values()
+        ):
             raise ValueError("Cost service work must be non-negative integers")
 
 

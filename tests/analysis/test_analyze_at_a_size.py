@@ -549,7 +549,7 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         root = get_metadata(result.function, ComputeCostMetadata)
         assert root is not None
         roots.append(root)
-    assert [dict(root.flops)["f32"] for root in roots] == [211_936, 385_760]
+    assert [dict(root.flops)["f32"] for root in roots] == [211_360, 384_672]
 
     rendered = render_analysis(results[0])
     lines = rendered.annotated.splitlines()

@@ -41,7 +41,12 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import _call_placements, _mesh_image, _result_placement
-from tilefoundry.analysis.compute_cost import _call_movement, _local_duration_ns
+from tilefoundry.analysis.compute_cost import (
+    _call_movement,
+    _local_duration_ns,
+    _with_untouched_copy,
+    _without_forwarded_movement,
+)
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.memory import _base_of
 from tilefoundry.analysis.walk import postorder
@@ -57,6 +62,7 @@ from tilefoundry.ir.core import Call, Constant, Tuple, Var, binding_name, get_me
 from tilefoundry.ir.hir import Function, GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.tensor.slice import Slice
+from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.types import DType, TensorType, TupleType, make_tensor_type, numel, tensor_bytes
 from tilefoundry.ir.types.shard import (
     Broadcast,
@@ -866,6 +872,33 @@ def test_unmaterialized_shape_values_are_not_charged_as_attributes() -> None:
     assert traffic == ()
 
 
+def test_an_alias_correction_keeps_the_service_the_operation_asked_for() -> None:
+    """Correcting what an operation moves must not drop what it computes.
+
+    Both corrections rebuild the cost out of its traffic. A rebuild that forgets
+    the service work prices a comparison at nothing and says so in a record that
+    still has traffic and still reads as complete -- the reader has no way to
+    see the hole. The whole point of an alias proof is bytes; it has no opinion
+    about the work.
+    """
+    result_type = make_tensor_type((8,), DType.bool)
+    source = Var(type=make_tensor_type((8,)), name="source")
+    call = Call(type=result_type, target=Transpose(perm=(0,)), args=(source,))
+    cost = Cost(
+        {},
+        (TrafficBytes(read=1), TrafficBytes(write=1)),
+        {"predicate": 8},
+    )
+
+    forwarded = _without_forwarded_movement(call, cost, (0,))
+    assert forwarded.service == {"predicate": 8}
+    assert forwarded.traffic == (TrafficBytes(), TrafficBytes(write=0))
+
+    produced = _with_untouched_copy(call, cost, 0, result_type)
+    assert produced.service == {"predicate": 8}
+    assert produced.traffic[-1].write == tensor_bytes(result_type)
+
+
 def test_mixed_runtime_coordinates_are_charged_per_leaf() -> None:
     function = _RuntimeCoordinateCosts.entry_function()
     result = analyze(_RuntimeCoordinateCosts, function, analysis="compute-cost")
@@ -1085,7 +1118,7 @@ def test_analysis_snapshot_drift_sentinel() -> None:
         "shared_largest_tile_bytes": 211_200,
         "gmem_lhs_bytes": 4_325_376,
         "modest_shared_bytes": 4_096,
-        "placed_ideal_ns": (3_501, 65_447),
+        "placed_ideal_ns": (3_501, 65_194),
         "placed_traffic": (
             {
                 "gmem": {"read": 8_407_240, "write": 8_396_936},
@@ -1648,7 +1681,6 @@ def test_time_comes_from_the_rates_the_target_states_and_from_nothing_else() -> 
     functions = {function.name: function for function in _PricingBoundary.functions}
     target = _PricingBoundary.resolve_target()
     throughput = target.get_facts(ThroughputFacts)
-    target = _unplaced_structural.resolve_target()
     services = target.get_facts(PerformanceServiceFacts)
 
     result = analyze(_PricingBoundary, functions["unpriced_only"], analysis="performance")
@@ -1696,6 +1728,23 @@ def test_time_comes_from_the_rates_the_target_states_and_from_nothing_else() -> 
         r"'local-copy' work at 'cta'$",
     ):
         _local_duration_ns(moved, throughput, replace(services, unit_ops=()), level="cta")
+
+    result = analyze(_PricingBoundary, functions["serviced_predicate"], analysis="performance")
+    compared = next(
+        record
+        for record in (
+            get_metadata(call, ComputeCostMetadata) for call in _calls(result.function)
+        )
+        if record.service_per_unit_of("predicate")
+    )
+    assert not compared.flops_per_unit
+    assert _local_duration_ns(compared, throughput, services, level="cta") > 0
+    with pytest.raises(
+        AnalysisError,
+        match=r"^performance: target states no one-unit throughput for "
+        r"'predicate' work at 'cta'$",
+    ):
+        _local_duration_ns(compared, throughput, replace(services, unit_ops=()), level="cta")
 
 
 def _priced_levels_only(

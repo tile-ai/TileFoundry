@@ -1009,6 +1009,11 @@ as defined in that family's section.
   - A predicate MUST NOT be recorded as floating-point work. A comparison
     records `predicate` service and a selection records `select`; neither has a
     FLOP count, and neither MAY be priced at zero for want of one.
+  - `flops` MUST stay the measure of arithmetic that really is a multiply or an
+    add. An operation the machine answers on a separate unit at a separate
+    published rate belongs in `service`, and MUST NOT also appear in `flops`:
+    one operation is one quantity, and a roofline that counts a special-function
+    result as one FLOP states a bound the unit cannot meet.
   - Rate-to-duration divisions MUST use exact integer ceiling division. They
     MUST NOT pass through floating-point arithmetic.
   - Roofline records MUST be attached to every reachable `Call` and `Function`.

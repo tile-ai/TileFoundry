@@ -12,6 +12,7 @@ import pytest
 import torch
 
 from tests.evaluator.eval_utils import EvalCase, run_eval_case
+from tests.ops.cost_utils import CostCase, run_cost_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
@@ -22,6 +23,7 @@ from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Partial
+from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 _NEG = Unary(kind=UnaryKind.NEG)
 _EXP = Unary(kind=UnaryKind.EXP)
@@ -81,3 +83,62 @@ def test_a_unary_evaluates_to_its_oracle(name, op, drawn, oracle):
     x = drawn()
 
     run_eval_case(EvalCase(name, op, (x,), oracle(x)))
+
+
+_SPECIAL = (
+    UnaryKind.RSQRT,
+    UnaryKind.EXP,
+    UnaryKind.LOG,
+    UnaryKind.EXP2,
+    UnaryKind.LOG2,
+)
+_REAL = make_tensor_type((8,), DType.f32)
+_WHOLE = make_tensor_type((8,), DType.i32)
+_TRUTHY = make_tensor_type((8,), DType.bool)
+
+COST_CASES = [
+    *(
+        CostCase(
+            f"{kind.name.lower()}_is_special_function_work",
+            Unary(kind=kind),
+            (_REAL,),
+            service={"transcendental": 8},
+            traffic=(TrafficBytes(read=32), TrafficBytes(write=32)),
+        )
+        for kind in _SPECIAL
+    ),
+    CostCase(
+        "not_over_truths_is_a_predicate",
+        Unary(kind=UnaryKind.NOT),
+        (_TRUTHY,),
+        service={"predicate": 8},
+        traffic=(TrafficBytes(read=1), TrafficBytes(write=1)),
+    ),
+    CostCase(
+        "neg_over_whole_numbers_is_integer_work",
+        Unary(kind=UnaryKind.NEG),
+        (_WHOLE,),
+        service={"integer": 8},
+        traffic=(TrafficBytes(read=32), TrafficBytes(write=32)),
+    ),
+    CostCase(
+        "neg_over_reals_is_floating_point_work",
+        _NEG,
+        (_REAL,),
+        flops={DType.f32: 8},
+        traffic=(TrafficBytes(read=32), TrafficBytes(write=32)),
+    ),
+]
+
+
+@pytest.mark.parametrize("case", COST_CASES, ids=lambda case: case.name)
+def test_unary_charges_the_unit_that_answers_it(case):
+    """An exponential is served by a different unit than a negation.
+
+    The special-function kinds have their own published throughput, a quarter of
+    the scalar one on this architecture, so counting one as a single FLOP would
+    put it on the float pipe four times too fast. Negating a truth is not
+    arithmetic at all, and negating a whole number is not floating point.
+    """
+    run_cost_case(case)
+    assert DType.bool not in case.flops

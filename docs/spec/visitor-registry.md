@@ -698,10 +698,15 @@ class CostEvaluator(ExprVisitor[Cost]): ...
   - `service` MUST group that work by the kind of service the machine provides,
     named for the operation rather than for a machine: `integer`, `predicate`,
     `select`, `transcendental`, `local-copy`. A comparison MUST record
-    `predicate` and a selection MUST record `select`. Counts MUST be
-    non-negative. An evaluator MUST NOT invent a kind no target states a rate
-    for, because a consumer that cannot price a kind refuses rather than
-    substituting zero.
+    `predicate`, a selection MUST record `select`, an operation over whole
+    numbers MUST record `integer`, and a special-function kind -- `rsqrt`,
+    `exp`, `log`, `exp2`, `log2` -- MUST record `transcendental` rather than one
+    FLOP each: the unit that answers them publishes its own rate, a fraction of
+    the float pipe's, so counting them as arithmetic prices them too fast.
+    Counts MUST be non-negative integers and MUST NOT be booleans. An operation
+    MUST record its work once, under `flops` or under `service` but not both.
+    An evaluator MUST NOT invent a kind no target states a rate for, because a
+    consumer that cannot price a kind refuses rather than substituting zero.
   - `TrafficBytes.total_bytes` and `Cost.bytes` MUST be read-only derived
     properties and MUST NOT be accepted as constructor fields.
   - `traffic` MUST carry exactly one `TrafficBytes` per operand of the call, in

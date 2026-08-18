@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.ops.cost_utils import CostCase, run_cost_case
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
@@ -23,6 +24,7 @@ from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 _ADD = Binary(kind=BinaryKind.ADD)
 _MUL = Binary(kind=BinaryKind.MUL)
@@ -153,3 +155,67 @@ def test_lower_rank_split_right_aligns():
         out = infer_call(_ADD, lhs, rhs)
         assert out.shape == (4, 8)
         assert out.layout.attrs == (Split(1),)
+
+
+_COMPARISONS = (
+    BinaryKind.EQ,
+    BinaryKind.NE,
+    BinaryKind.LT,
+    BinaryKind.LE,
+    BinaryKind.GT,
+    BinaryKind.GE,
+)
+_TRUTH = (BinaryKind.AND, BinaryKind.OR)
+_REAL = make_tensor_type((8,), DType.f32)
+_WHOLE = make_tensor_type((8,), DType.i32)
+_TRUTHY = make_tensor_type((8,), DType.bool)
+
+COST_CASES = [
+    *(
+        CostCase(
+            f"{kind.name.lower()}_over_reals_is_a_predicate",
+            Binary(kind=kind),
+            (_REAL, _REAL),
+            service={"predicate": 8},
+            traffic=(TrafficBytes(read=32), TrafficBytes(read=32), TrafficBytes(write=1)),
+        )
+        for kind in _COMPARISONS
+    ),
+    *(
+        CostCase(
+            f"{kind.name.lower()}_over_truths_is_a_predicate",
+            Binary(kind=kind),
+            (_TRUTHY, _TRUTHY),
+            service={"predicate": 8},
+            traffic=(TrafficBytes(read=1), TrafficBytes(read=1), TrafficBytes(write=1)),
+        )
+        for kind in _TRUTH
+    ),
+    CostCase(
+        "add_over_whole_numbers_is_integer_work",
+        _ADD,
+        (_WHOLE, _WHOLE),
+        service={"integer": 8},
+        traffic=(TrafficBytes(read=32), TrafficBytes(read=32), TrafficBytes(write=32)),
+    ),
+    CostCase(
+        "add_over_reals_is_floating_point_work",
+        _ADD,
+        (_REAL, _REAL),
+        flops={DType.f32: 8},
+        traffic=(TrafficBytes(read=32), TrafficBytes(read=32), TrafficBytes(write=32)),
+    ),
+]
+
+
+@pytest.mark.parametrize("case", COST_CASES, ids=lambda case: case.name)
+def test_binary_charges_the_kind_of_work_it_asks_for(case):
+    """What a Binary costs follows from what it does, not from its result dtype.
+
+    A comparison produces booleans and asks a machine for a predicate; an add
+    over whole numbers asks for integer arithmetic; only an add over reals is a
+    FLOP. Reading the work off the result dtype produced `bool` FLOPs, a rate no
+    target publishes, so `performance` refused the program instead of timing it.
+    """
+    run_cost_case(case)
+    assert DType.bool not in case.flops

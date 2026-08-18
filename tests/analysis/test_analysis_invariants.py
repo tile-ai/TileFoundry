@@ -121,7 +121,7 @@ from tilefoundry.visitor_registry.access_relation import (
     moves,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.contexts import TrafficBytes
+from tilefoundry.visitor_registry.contexts import Cost, TrafficBytes
 from tilefoundry.visitor_registry.relation_build import identity_access
 
 REPEATS = 4
@@ -990,6 +990,22 @@ def test_a_relation_is_held_to_the_call_it_was_asked_about() -> None:
     assert (len(fits.inputs), len(fits.outputs)) == (2, 1)
     tupled = asked(described("_FitsATuple", 1, 2, pair), 1)
     assert (len(tupled.inputs), len(tupled.outputs)) == (1, 2)
+
+
+def test_a_service_count_is_a_number_of_results_and_not_a_truth() -> None:
+    """A count says how many; `True` says whether, and Python confuses the two.
+
+    `bool` is an `int` in Python, so a handler that reports a flag where a count
+    belongs passes an integer check and prices one result. The reader has no way
+    to tell that apart from an operation that really asked for one, so the field
+    refuses it at the point it is stated.
+    """
+    moved = (TrafficBytes(read=4), TrafficBytes(write=4))
+    assert Cost({}, moved, {"predicate": 0}).service == {"predicate": 0}
+
+    for refused in ({"predicate": True}, {"predicate": -1}, {"predicate": 1.0}):
+        with pytest.raises(ValueError, match="non-negative integers"):
+            Cost({}, moved, refused)
 
 
 def test_a_storage_claim_covers_every_operand_it_names() -> None:

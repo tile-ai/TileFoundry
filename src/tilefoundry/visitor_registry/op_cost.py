@@ -234,17 +234,26 @@ def _integral(call: Call, ctx: CostContext) -> bool:
     return isinstance(output, TensorType) and isinstance(output.dtype, IntegerDType)
 
 
+_TRANSCENDENTAL = frozenset(
+    {UnaryKind.RSQRT, UnaryKind.EXP, UnaryKind.LOG, UnaryKind.EXP2, UnaryKind.LOG2}
+)
+
+
 @register_cost_evaluator(Unary)
 def _unary(call: Call, ctx: CostContext) -> Cost:
-    """A negation is float work; negating a truth is not, and neither is an int.
+    """An exponential is not a multiply, a negated truth is not arithmetic.
 
-    The special-function kinds -- exp, log, rsqrt -- are left as float work
-    here. They are floating point, which is the measure roofline bounds, and
-    whether performance should also price them against the published
-    special-function rate is a question about two measures of one operation
-    rather than about what kind of work it is.
+    ``_TRANSCENDENTAL`` holds the kinds the machine answers on its
+    special-function unit, at a rate of its own -- a quarter of the scalar one
+    here. Counting one of those as a single FLOP would put it on the float pipe
+    at four times the throughput the unit has, so it is a service rather than
+    arithmetic. What is left for ``flops`` is the arithmetic that really is a
+    multiply or an add.
     """
-    if call.target.kind is UnaryKind.NOT:
+    kind = call.target.kind
+    if kind in _TRANSCENDENTAL:
+        return _serviced(call, ctx, "transcendental")
+    if kind is UnaryKind.NOT:
         return _serviced(call, ctx, "predicate")
     if _integral(call, ctx):
         return _serviced(call, ctx, "integer")

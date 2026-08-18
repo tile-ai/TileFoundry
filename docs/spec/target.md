@@ -382,7 +382,9 @@ class CudaDevice(Device):
     _service_ops: tuple[tuple[str, int], ...]
 
     def peak_for(self, dtype: DType) -> int: ...
-    def service_ops_per_second(self) -> tuple[tuple[str, int], ...]: ...
+
+    @property
+    def service_ops_per_second(self) -> dict[str, int]: ...
 ```
 
 - constraints:
