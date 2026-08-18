@@ -22,7 +22,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
     build_relation,
-    elements_of,
+    logical_axes_of,
     moves,
     register_access_relation,
     register_type_relation,
@@ -366,17 +366,16 @@ def _conv2d_access(call: "Call", ctx) -> AccessRelations:
     """The receptive field, as the affine form the type relation already states.
 
     A window cannot say this: its offset is a value, and here it moves affinely
-    with the output coordinate. The amount is the image that map covers, since
-    overlapping windows read one element several times and that is one element.
-    Every extent is this participant's own, the contraction axis most of all.
+    with the output coordinate. Every amount comes off the output's extents and
+    the contraction's rather than off an operand's shape, because a replicated
+    weight looks whole to every participant.
     """
-    x = ctx.local_type_of(call.args[0])
-    weight = ctx.local_type_of(call.args[1])
-    bias = ctx.local_type_of(call.args[2])
-    result = ctx.local_type_of(call)
+    x = _by_logical_axis(ctx, call.args[0])
+    weight = _by_logical_axis(ctx, call.args[1])
+    result = _by_logical_axis(ctx, call)
     op = call.target
-    k_h, k_w = weight.shape[2], weight.shape[3]
-    contraction = weight.shape[1]
+    k_h, k_w = weight[2], weight[3]
+    contraction = weight[1]
     dims = ["n", "co", "oh", "ow", "ci", "kh", "kw"]
     domain = ", ".join(dims)
 
@@ -390,28 +389,55 @@ def _conv2d_access(call: "Call", ctx) -> AccessRelations:
     height = spatial("oh", "kh", op.stride[0], op.padding[0], op.dilation[0], k_h)
     width = spatial("ow", "kw", op.stride[1], op.padding[1], op.dilation[1], k_w)
     guard = " and ".join(
-        (
-            f"0 <= {height} < {x.shape[2]}",
-            f"0 <= {width} < {x.shape[3]}",
-        )
+        (f"0 <= {height} < {x[2]}", f"0 <= {width} < {x[3]}")
     )
-    reached = isl.map(f"{{ [{domain}] -> [n, ci, {height}, {width}] : {guard} }}")
-    touched = _reachable_rows(x.shape[2], op.stride[0], op.padding[0], op.dilation[0], k_h, result.shape[2])
-    across = _reachable_rows(x.shape[3], op.stride[1], op.padding[1], op.dilation[1], k_w, result.shape[3])
-    channels = contraction * _groups_reached(call, ctx, result.shape[1], op.groups)
+    groups = _groups_reached(call, ctx, result[1], op.groups)
+    per_group_out = max(result[1] // groups, 1)
+    channel = (
+        "ci"
+        if op.groups == 1
+        else f"floor(co/{per_group_out})*{contraction}+ci"
+    )
+    reached = isl.map(f"{{ [{domain}] -> [n, {channel}, {height}, {width}] : {guard} }}")
+    touched = _reachable_rows(x[2], op.stride[0], op.padding[0], op.dilation[0], k_h, result[2])
+    across = _reachable_rows(x[3], op.stride[1], op.padding[1], op.dilation[1], k_w, result[3])
     return AccessRelations(
         inputs=(
-            moves(reached, result.shape[0] * channels * touched * across),
+            moves(reached, result[0] * contraction * groups * touched * across),
             moves(
                 isl.multi_aff(f"{{ [{domain}] -> [co, ci, kh, kw] }}"),
-                elements_of(weight),
+                result[1] * contraction * k_h * k_w,
             ),
-            moves(isl.multi_aff(f"{{ [{domain}] -> [co] }}"), elements_of(bias)),
+            moves(isl.multi_aff(f"{{ [{domain}] -> [co] }}"), result[1]),
         ),
         outputs=(
-            writes(isl.multi_aff(f"{{ [{domain}] -> [n, co, oh, ow] }}"), elements_of(result)),
+            writes(
+                isl.multi_aff(f"{{ [{domain}] -> [n, co, oh, ow] }}"),
+                result[0] * result[1] * result[2] * result[3],
+            ),
         ),
     )
+
+
+def _by_logical_axis(ctx, value) -> list[int]:
+    """One extent per logical axis of a value, however its layout factors them.
+
+    A canonical `ShardLayout` splits a logical axis into several positions, so
+    the projected shape is not indexable by `N`, `C`, `H`, `W`. Folding those
+    positions back onto the axes they belong to gives four numbers again, and
+    they are the participant's, which is what every quantity here is asked for.
+    """
+    local = ctx.local_type_of(value)
+    logical = ctx.type_of(value)
+    extents = [1] * len(logical.shape)
+    for position, owner in enumerate(logical_axes_of(local, logical)):
+        extent = local.shape[position]
+        if not isinstance(extent, int) or isinstance(extent, bool):
+            raise NotImplementedError(
+                f"Conv2D access_relation: static extents required, got {local.shape}"
+            )
+        extents[owner] *= extent
+    return extents
 
 
 def _groups_reached(call: "Call", ctx, out_channels, groups: int) -> int:

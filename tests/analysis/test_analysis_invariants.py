@@ -84,7 +84,7 @@ from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16, Wgmma_SM90_64x128x1
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.nn.conv2d import Conv2D, _groups_reached
+from tilefoundry.ir.hir.nn.conv2d import Conv2D
 from tilefoundry.ir.hir.nn.layer_norm import LayerNorm
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.nn.relu import ReLU
@@ -109,10 +109,13 @@ from tilefoundry.ir.types import (
     DType,
     TensorType,
     TupleType,
+    make_shard_tensor_type,
     make_tensor_type,
     tensor_bytes,
 )
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types.shard import Topology, make_mesh
+from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial
+from tilefoundry.ir.types.shard.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.schedule import ScheduleError, schedule
 from tilefoundry.schedule.partition import PartitionProgramError, build_partition_program
@@ -138,7 +141,7 @@ from tilefoundry.visitor_registry.access_relation import (
     transfers,
     writes,
 )
-from tilefoundry.visitor_registry.contexts import Cost, TrafficBytes
+from tilefoundry.visitor_registry.contexts import Cost, CostContext, TrafficBytes
 from tilefoundry.visitor_registry.relation_build import identity_access
 
 REPEATS = 4
@@ -877,6 +880,37 @@ def test_a_reduction_reads_the_extent_its_own_participant_holds() -> None:
     assert _counted(tall) == ([16_896], [132])
 
 
+def test_a_reduction_maps_the_axes_its_layout_factored() -> None:
+    """A logical axis can become several layout positions, and often does.
+
+    Splitting an axis of 12 over a mesh of 6 makes the projected shape
+    `(1, 2, 1)`: two positions for logical axis 0 and one for axis 1. Reducing
+    "axis 1" by position would reduce the mesh factor of axis 0 and carry its
+    residual through untouched -- and the amount can come out right while that
+    happens, which is why the map is what this asserts.
+    """
+    mesh = make_mesh((6, 32), ("w", "t"), topology=Topology("thread", 6 * 32))
+    source = make_shard_tensor_type(
+        (12, 32), mesh=mesh, attrs=(ShardSplit(0), ShardSplit(1)), dtype=DType.bf16
+    )
+    result = make_shard_tensor_type(
+        (12, 1), mesh=mesh, attrs=(ShardSplit(0), Broadcast()), dtype=DType.bf16
+    )
+    call = Call(
+        type=result,
+        target=Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM),
+        args=(Var(type=source, name="x"),),
+    )
+    relations = access_relation_registry.lookup(Reduce)(
+        call, CostContext(level="thread", topologies=(Topology("thread", 6 * 32),))
+    )
+    reads = relations.inputs[0].pattern
+    assert reads.dim(isl.dim_type.OUT) == 3
+    assert reads.is_equal(
+        isl.map("{ [d0, d1, d2] -> [d0, d1, r2] : d2 = 0 and 0 <= r2 < 1 }")
+    )
+
+
 def test_layer_norm_reads_its_parameters_across_the_whole_suffix() -> None:
     """The parameters match `x.shape[axis:]`, which can be more than one axis.
 
@@ -924,7 +958,7 @@ def test_a_convolution_reads_the_source_once_however_often_it_depends_on_it() ->
 
     padded = _asked(
         Conv2D(stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=1),
-        make_tensor_type((1, 16, 32, 32), DType.f16),
+        make_tensor_type((1, 32, 32, 32), DType.f16),
         make_tensor_type((1, 16, 32, 32), DType.f16),
         make_tensor_type((32, 16, 3, 3), DType.f16),
         make_tensor_type((32,), DType.f16),
@@ -932,56 +966,93 @@ def test_a_convolution_reads_the_source_once_however_often_it_depends_on_it() ->
     assert _counted(padded) == ([16_384, 4608, 32], [32_768])
 
 
+_CONV_CTA = Topology("cta", 2)
+_CONV_MESH = make_mesh((2,), ("c",), topology=_CONV_CTA)
+
+
+def _sharded(shape, attrs, dtype=DType.f16):
+    return make_shard_tensor_type(shape, mesh=_CONV_MESH, attrs=attrs, dtype=dtype)
+
+
+def _projected(op, result, *operands):
+    """Both views of one Call, through the context an analysis really uses."""
+    call = Call(
+        type=result,
+        target=op,
+        args=tuple(Var(type=t, name=f"a{i}") for i, t in enumerate(operands)),
+    )
+    views = []
+    for level in (None, "cta"):
+        relations = access_relation_registry.lookup(type(op))(
+            call, CostContext(level=level, topologies=(_CONV_CTA,))
+        )
+        views.append((_counted(relations), relations))
+    return views
+
+
+def test_a_convolution_projects_onto_the_channels_this_participant_computes() -> None:
+    """A replicated weight still looks whole; only its own channels are read.
+
+    Every amount comes off the output's extents and the contraction's, never off
+    an operand's shape, because a weight nobody sharded projects to all 4608 of
+    itself while the participant reads the 2304 belonging to the sixteen output
+    channels it has. The split is driven by the bias, whose only axis is the
+    output channel, which is the shape this IR actually builds.
+    """
+    (whole, _), (unit, _) = _projected(
+        Conv2D(stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=1),
+        _sharded((1, 32, 32, 32), (ShardSplit(1),)),
+        make_tensor_type((1, 16, 32, 32), DType.f16),
+        make_tensor_type((32, 16, 3, 3), DType.f16),
+        _sharded((32,), (ShardSplit(0),)),
+    )
+    assert whole == ([16_384, 4608, 32], [32_768])
+    assert unit == ([16_384, 2304, 16], [16_384])
+
+
 def test_a_grouped_convolution_reads_only_the_groups_it_computes() -> None:
     """One group's output channels read one group's input channels.
 
     The contraction extent is a group's worth, so a participant computing one
-    group of two reads eight channels rather than sixteen. Charging the
-    program's channel count bills it `groups` times over -- 1024 where it moves
-    512. A participant sees its own output channels and the program's divisor:
-    the dividend is projected, the group size is the Op's.
+    group of two reads eight channels rather than sixteen: 512, where the
+    program's channel count would bill 1024. The map says which eight, through
+    the group offset the type relation already uses.
     """
-    grouped = Conv2D(stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=2)
-    whole = _asked(
-        grouped,
-        make_tensor_type((1, 32, 8, 8), DType.f16),
+    (whole, spanning), (unit, _) = _projected(
+        Conv2D(stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=2),
+        _sharded((1, 32, 8, 8), (ShardSplit(1),)),
         make_tensor_type((1, 16, 8, 8), DType.f16),
         make_tensor_type((32, 8, 3, 3), DType.f16),
-        make_tensor_type((32,), DType.f16),
+        _sharded((32,), (ShardSplit(0),)),
     )
-    assert _counted(whole) == ([1024, 2304, 32], [2048])
-
-    whole_weight = _WholeWeight(make_tensor_type((32, 8, 3, 3), DType.f16))
-    assert _groups_reached(whole_weight, whole_weight, 32, 2) == 2
-    assert _groups_reached(whole_weight, whole_weight, 16, 2) == 1
-    assert _groups_reached(whole_weight, whole_weight, 16, 1) == 1
+    assert whole == ([1024, 2304, 32], [2048])
+    assert unit == ([512, 1152, 16], [1024])
+    assert spanning.inputs[0].pattern.is_equal(
+        isl.map(
+            "{ [n, co, oh, ow, ci, kh, kw] -> "
+            "[n, floor(co/16) * 8 + ci, oh + kh - 1, ow + kw - 1] : "
+            "0 <= oh + kh - 1 < 8 and 0 <= ow + kw - 1 < 8 }"
+        )
+    )
 
 
 def test_a_split_contraction_reads_only_its_share_of_the_channels() -> None:
     """Each participant sums over its own input channels into a partial result.
 
     The output does not shrink -- every participant computes a partial of the
-    whole -- while the weight and the input halve with the contraction. Reading
-    the program's channel count gives 256 and 144, exactly double what moves.
+    whole, which is what the `Partial(sum)` says -- while the weight and the
+    input halve with the contraction. Reading the program's channel count gives
+    256 and 144, exactly double what moves.
     """
-    aligned = Conv2D(stride=(1, 1), padding=(0, 0), dilation=(1, 1), groups=1)
-    whole = _asked(
-        aligned,
-        make_tensor_type((1, 4, 6, 6), DType.f16),
-        make_tensor_type((1, 4, 8, 8), DType.f16),
-        make_tensor_type((4, 4, 3, 3), DType.f16),
-        make_tensor_type((4,), DType.f16),
+    (whole, _), (unit, _) = _projected(
+        Conv2D(stride=(1, 1), padding=(0, 0), dilation=(1, 1), groups=1),
+        _sharded((1, 4, 6, 6), (Partial("sum"),)),
+        _sharded((1, 4, 8, 8), (ShardSplit(1),)),
+        _sharded((4, 4, 3, 3), (ShardSplit(1),)),
+        _sharded((4,), (Partial("sum"),)),
     )
-    assert _counted(whole) == ([256, 144, 4], [144])
-
-    unit = _asked(
-        aligned,
-        make_tensor_type((1, 4, 6, 6), DType.f16),
-        make_tensor_type((1, 2, 8, 8), DType.f16),
-        make_tensor_type((4, 2, 3, 3), DType.f16),
-        make_tensor_type((4,), DType.f16),
-    )
-    assert _counted(unit) == ([128, 72, 4], [144])
+    assert whole == ([256, 144, 4], [144])
+    assert unit == ([128, 72, 4], [144])
 
 
 def test_an_interleave_reads_each_source_element_once() -> None:
@@ -1469,6 +1540,55 @@ def test_a_link_is_held_to_the_operand_it_names() -> None:
     )
     with pytest.raises(ValueError, match="whose elements are 64 bits against 32"):
         access_relation_registry.lookup(_Narrows)(call, TypeInferContext())
+
+
+def test_a_lookup_is_held_to_the_operand_and_the_axis_it_names() -> None:
+    """Two non-negative numbers say nothing checkable until there is a Call.
+
+    A lookup states which operand's values choose its coordinates and along
+    which axis, and neither can be verified against a record that has no
+    operands and no Types. Both are verified where they can be, and a handler
+    naming an operand nobody passed or an axis the boundary does not have is
+    refused rather than left for whichever consumer indexes past the end.
+    """
+
+    def registered(name, pattern_for):
+        target = type(name, (Op,), {})
+        register_typeinfer(target)(
+            lambda call, ctx: make_tensor_type((4,), DType.f32)
+        )
+
+        @register_access_relation(target)
+        def _handler(call, ctx, _pattern=pattern_for) -> AccessRelations:
+            return AccessRelations(
+                inputs=(
+                    BoundaryAccess(_pattern(), AccessQuantity(4, 4), AccessMode.READ),
+                ),
+                outputs=(writes(identity_access(1), 4),),
+            )
+
+        return target
+
+    def asked(target):
+        call = Call(
+            type=make_tensor_type((4,), DType.f32),
+            target=target(),
+            args=(Var(type=make_tensor_type((4,), DType.f32), name="held"),),
+        )
+        return access_relation_registry.lookup(target)(call, TypeInferContext())
+
+    absent = registered("_LooksUpNobody", lambda: IndexedAccess(index_operand=3, axis=0))
+    with pytest.raises(ValueError, match="through operand 3, and this call has 1"):
+        asked(absent)
+
+    beyond = registered("_LooksUpTooFar", lambda: IndexedAccess(index_operand=0, axis=2))
+    with pytest.raises(ValueError, match="along axis 2, and it has 1"):
+        asked(beyond)
+
+    with pytest.raises(ValueError, match="names its index operand by position"):
+        IndexedAccess(index_operand=-1, axis=0)
+    with pytest.raises(ValueError, match="names its axis by position"):
+        IndexedAccess(index_operand=0, axis=-1)
 
 
 def test_a_relation_is_held_to_the_call_it_was_asked_about() -> None:

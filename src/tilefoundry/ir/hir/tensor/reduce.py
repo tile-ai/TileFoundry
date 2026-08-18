@@ -26,6 +26,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     build_relation,
     elements_of,
+    logical_axes_of,
     moves,
     register_access_relation,
     register_type_relation,
@@ -175,26 +176,32 @@ def _reduce_access(call: "Call", ctx) -> AccessRelations:
 
     The input's domain is not the result's: a reduction reads more coordinates
     than it writes, which is the whole of what it does. The extents it reads
-    over are this participant's own -- a reduced axis can itself be split, and
-    then each unit contributes over the piece it holds, so the program's extent
-    would charge every one of them the whole contraction.
+    over are this participant's own: a reduced axis can itself be split, and then
+    each unit contributes over the piece it holds. Without `keepdim` a result
+    coordinate names the next surviving source axis, not the one at its position.
     """
     source = ctx.local_type_of(call.args[0])
     result = ctx.local_type_of(call)
+    logical_source = ctx.type_of(call.args[0])
     rank = len(result.shape)
     axes = tuple(
-        axis + len(source.shape) if axis < 0 else axis for axis in call.target.axes
+        axis + len(logical_source.shape) if axis < 0 else axis
+        for axis in call.target.axes
     )
+    belongs = logical_axes_of(source, logical_source)
     dims = [f"d{index}" for index in range(rank)]
     reads, guards = [], []
-    for axis in range(len(source.shape)):
-        if axis in axes:
+    kept = 0
+    for axis, logical in enumerate(belongs):
+        if logical in axes:
             reads.append(f"r{axis}")
             guards.append(f"0 <= r{axis} < {source.shape[axis]}")
-        else:
-            reads.append(dims[axis] if axis < rank else "0")
-    if call.target.keepdim:
-        guards.extend(f"{dims[axis]} = 0" for axis in axes if axis < rank)
+            if call.target.keepdim and kept < rank:
+                guards.append(f"{dims[kept]} = 0")
+                kept += 1
+            continue
+        reads.append(dims[kept] if kept < rank else "0")
+        kept += 1
     domain = ", ".join(dims)
     where = " and ".join(guards)
     return AccessRelations(

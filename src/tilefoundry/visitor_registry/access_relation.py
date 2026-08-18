@@ -20,7 +20,7 @@ import isl
 from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
 from tilefoundry.ir.types.shard import Layout, try_c_order_strides
 from tilefoundry.ir.types.shard.int_tuple import flatten
-from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
+from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis, shard_layout_of
 
 from .registries import AnalysisRegistry
 
@@ -540,6 +540,52 @@ def _check_links_against(call, ctx, relations: AccessRelations, op_cls: type) ->
                 )
 
 
+def _check_lookups_against(call, ctx, relations: AccessRelations, op_cls: type) -> None:
+    """Hold every lookup to the operand it indexes through and the axis it names.
+
+    A lookup says nothing checkable on its own -- two non-negative numbers -- so
+    the record cannot refuse an index operand that is not there or an axis the
+    boundary's own Type does not have. Here both are known.
+    """
+    result = ctx.type_of(call)
+    sides = (
+        ("input", relations.inputs, [ctx.type_of(arg) for arg in call.args]),
+        (
+            "output",
+            relations.outputs,
+            list(result.fields) if isinstance(result, TupleType) else [result],
+        ),
+    )
+    def hold(lookup: IndexedAccess, where: str, held) -> None:
+        if lookup.index_operand >= len(call.args):
+            raise ValueError(
+                f"{op_cls.__name__} indexes {where} through operand "
+                f"{lookup.index_operand}, and this call has {len(call.args)}"
+            )
+        rank = len(held.shape) if isinstance(held, TensorType) else 0
+        if lookup.axis >= rank:
+            raise ValueError(
+                f"{op_cls.__name__} indexes {where} along axis {lookup.axis}, "
+                f"and it has {rank}"
+            )
+
+    for side, boundaries, types in sides:
+        for index, boundary in enumerate(boundaries):
+            held = types[index] if index < len(types) else None
+            if isinstance(boundary.pattern, IndexedAccess):
+                hold(boundary.pattern, f"{side} {index}", held)
+            links = boundary.storage.links if boundary.storage is not None else ()
+            for link in links:
+                for end, pattern in (("source", link.source), ("output", link.output)):
+                    if isinstance(pattern, IndexedAccess):
+                        reached = (
+                            ctx.type_of(call.args[link.input])
+                            if end == "source"
+                            else held
+                        )
+                        hold(pattern, f"{side} {index}'s link {end}", reached)
+
+
 def _check_claim_against_links(relations: AccessRelations, op_cls: type) -> None:
     """Hold the legacy whole-Call claim to the links of the same output.
 
@@ -593,6 +639,7 @@ def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
                         f"{wanted}"
                     )
             _check_links_against(call, ctx, relations, op_cls)
+            _check_lookups_against(call, ctx, relations, op_cls)
             _check_claim_against_links(relations, op_cls)
             return relations
 
@@ -641,6 +688,24 @@ def declared_storage(call, ctx) -> "StorageEffectClaim | None":
     """
     handler = access_relation_registry.lookup(type(call.target))
     return None if handler is None else handler(call, ctx).storage_effect
+
+
+def logical_axes_of(local: "Type", logical: "Type") -> list[int]:
+    """Which logical axis each axis of a projected Type belongs to.
+
+    A canonical `ShardLayout` factors a logical axis into several layout
+    positions -- an extent of 12 over a mesh of 6 becomes `(6, 2)` -- and the
+    projected Type keeps those positions. So the projected rank is not the
+    authored rank and an Op's own axis numbers do not index it: reducing "axis
+    1" by position would reduce the mesh factor of axis 0 and carry its residual
+    through. Amounts can stay right while that happens; a mapping cannot.
+    """
+    layout = getattr(local, "layout", None)
+    inner = getattr(layout, "layout", None)
+    shape = getattr(inner, "shape", None) or getattr(layout, "shape", None)
+    if shape is None or len(shape) != len(local.shape):
+        return list(range(len(local.shape)))
+    return layout_axis_to_tensor_axis(tuple(shape), tuple(logical.shape))
 
 
 def elementwise_elements(arg, call, ctx) -> int:
@@ -950,6 +1015,7 @@ __all__ = [
     "OutputStorage",
     "StorageLink",
     "elementwise_elements",
+    "logical_axes_of",
     "storage_effect_of",
     "linearized_view",
     "view_relations",
