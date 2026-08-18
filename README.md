@@ -19,6 +19,7 @@
 <p align="center">
   <a href="https://pypi.org/project/tilefoundry/"><img src="https://img.shields.io/pypi/v/tilefoundry.svg" alt="PyPI"></a>
   <a href="https://codecov.io/gh/tile-ai/TileFoundry"><img src="https://codecov.io/gh/tile-ai/TileFoundry/branch/main/graph/badge.svg" alt="Coverage"></a>
+  <a href="https://github.com/tile-ai/TileOPs/pulls?q=is%3Apr+is%3Amerged+label%3Afoundry"><img src="https://img.shields.io/github/issues-search/tile-ai/TileOPs?query=is%3Apr%20is%3Amerged%20label%3Afoundry&amp;label=Shipped%20to%20TileOPs&amp;color=8250df&amp;logo=github" alt="TileFoundry optimizations shipped to TileOPs"></a>
   <a href="https://github.com/tile-ai/TileFoundry/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
