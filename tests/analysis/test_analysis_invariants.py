@@ -94,12 +94,19 @@ from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.quant import Quant
 from tilefoundry.ir.hir.tensor.reshape import Reshape, is_induction_var_singleton_reshape
 from tilefoundry.ir.hir.tensor.topk import TopK
-from tilefoundry.ir.types import DType, TensorType, make_tensor_type, tensor_bytes
+from tilefoundry.ir.types import (
+    DType,
+    TensorType,
+    TupleType,
+    make_tensor_type,
+    tensor_bytes,
+)
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.schedule import ScheduleError, schedule
 from tilefoundry.schedule.partition import PartitionProgramError, build_partition_program
 from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessQuantity,
     AccessRelations,
@@ -111,9 +118,11 @@ from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
     build_relation,
     identity_relations,
+    moves,
     register_access_relation,
 )
 from tilefoundry.visitor_registry.contexts import TrafficBytes
+from tilefoundry.visitor_registry.relation_build import identity_access
 
 REPEATS = 4
 B, S, H, D = 1, 5, 2, 3
@@ -933,6 +942,54 @@ def test_a_lookups_amount_does_not_move_with_the_values_it_looks_up() -> None:
 
     assert declared(3) == (12, 3)
     assert declared(6) == (24, 6)
+
+
+def test_a_relation_is_held_to_the_call_it_was_asked_about() -> None:
+    """One entry per operand and one per output, checked against that Call.
+
+    A handler describes an Op in general and is asked about one Call in
+    particular, so the two are compared where they still can be. A description
+    that skips an operand or invents an output would otherwise be found by
+    whichever consumer indexed past the end of it, which is a long way from
+    where the mistake is.
+    """
+    holds = make_tensor_type((4,), DType.f32)
+    pair = TupleType(fields=(holds, holds))
+
+    def described(name: str, inputs: int, outputs: int, result):
+        target = type(name, (Op,), {})
+        register_typeinfer(target)(lambda call, ctx, _r=result: _r)
+
+        @register_access_relation(target)
+        def _handler(call, ctx, _in=inputs, _out=outputs) -> AccessRelations:
+            return AccessRelations(
+                inputs=tuple(moves(identity_access(1), 4) for _ in range(_in)),
+                outputs=tuple(moves(identity_access(1), 4) for _ in range(_out)),
+            )
+
+        return target
+
+    def asked(target, operands: int) -> AccessRelations:
+        call = Call(
+            type=holds,
+            target=target(),
+            args=tuple(Var(type=holds, name=f"a{index}") for index in range(operands)),
+        )
+        return access_relation_registry.lookup(target)(call, TypeInferContext())
+
+    for name, inputs, outputs, result, operands, complaint in (
+        ("_SkipsAnOperand", 1, 1, holds, 2, "1 input boundary of a call with 2"),
+        ("_InventsAnOutput", 1, 2, holds, 1, "2 output boundaries of a call with 1"),
+        ("_SkipsAField", 1, 1, pair, 1, "1 output boundary of a call with 2"),
+        ("_InventsAField", 1, 3, pair, 1, "3 output boundaries of a call with 2"),
+    ):
+        with pytest.raises(ValueError, match=re.escape(complaint)):
+            asked(described(name, inputs, outputs, result), operands)
+
+    fits = asked(described("_Fits", 2, 1, holds), 2)
+    assert (len(fits.inputs), len(fits.outputs)) == (2, 1)
+    tupled = asked(described("_FitsATuple", 1, 2, pair), 1)
+    assert (len(tupled.inputs), len(tupled.outputs)) == (1, 2)
 
 
 def test_a_storage_claim_covers_every_operand_it_names() -> None:

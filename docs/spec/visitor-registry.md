@@ -455,7 +455,10 @@ def register_access_relation(op_cls: type): ...
     contract as a range naming its `provenance`, and a consumer taking `upper`
     MUST say that it did. Widening to the whole operand is not such a range.
   - `inputs` has one entry per input arg in argument order; `outputs` has one
-    per output, and an operation with no output describes nothing.
+    per output, which for a `TupleType` result is one per field. Registration
+    MUST hold what a handler returns to the Call it was asked about and refuse a
+    count that does not match, because a description of a different program is
+    otherwise found by whichever consumer indexes past the end of it.
   - A quantity MUST be a non-negative whole number of elements, and a pattern
     MUST be one of the stated carriers. Construction MUST refuse anything else
     rather than let it reach a consumer, and an Op whose own contract is

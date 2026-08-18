@@ -281,15 +281,51 @@ access_relation_registry: AnalysisRegistry = AnalysisRegistry("access_relation")
 type_relation_registry: AnalysisRegistry = AnalysisRegistry("type_relation")
 
 
+def _boundaries_of(call, ctx) -> tuple[int, int]:
+    """How many boundaries this Call has on each side.
+
+    A tuple result is as many boundaries as it has fields, because each field is
+    somewhere of its own that a reader can ask about.
+    """
+    result = ctx.type_of(call)
+    outputs = len(result.fields) if isinstance(result, TupleType) else 1
+    return len(call.args), outputs
+
+
 def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
     """Decorator to register a GLOBAL-level access-relation handler.
 
     The handler signature is ``(call, ctx) -> AccessRelations``. Every boundary
-    gets a relation: ``isl.multi_aff`` / ``isl.map`` where the addresses are
-    affine, ``IndexedAccess`` or ``WindowAccess`` where a runtime value decides
-    them. The same value states where the result's bytes live.
+    gets a pattern: isl where the addresses are affine, ``IndexedAccess`` or
+    ``WindowAccess`` where a runtime value decides them.
+
+    What comes back is held to the Call it was asked about, one entry per
+    operand and one per output, or a description of a different program reaches
+    whichever consumer indexes past the end of it.
     """
-    return access_relation_registry.decorator()(op_cls)
+
+    def decorate(handler: Callable) -> Callable:
+        def checked(call, ctx) -> AccessRelations:
+            relations = handler(call, ctx)
+            wanted_inputs, wanted_outputs = _boundaries_of(call, ctx)
+            for side, stated, wanted in (
+                ("input", len(relations.inputs), wanted_inputs),
+                ("output", len(relations.outputs), wanted_outputs),
+            ):
+                if stated != wanted:
+                    raise ValueError(
+                        f"{op_cls.__name__} describes {stated} {side} "
+                        f"boundar{'y' if stated == 1 else 'ies'} of a call with "
+                        f"{wanted}"
+                    )
+            return relations
+
+        checked.__name__ = getattr(handler, "__name__", "checked")
+        checked.__doc__ = handler.__doc__
+        access_relation_registry.register(op_cls, checked)
+        return handler
+
+    return decorate
 
 
 def declared_storage(call, ctx) -> "StorageEffectClaim | None":
