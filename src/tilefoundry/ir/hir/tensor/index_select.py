@@ -20,8 +20,8 @@ from tilefoundry.ir.types.shard.shard_layout import (
 )
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    OPAQUE,
     AccessRelations,
+    IndexedAccess,
     register_access_relation,
 )
 
@@ -111,15 +111,17 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_access_relation(IndexSelect)
 def _index_select_access_relation(call: "Call", ctx) -> AccessRelations:
-    """GLOBAL level: IndexSelect pulls per-index slices.
+    """GLOBAL level: IndexSelect pulls one source slice per index element.
 
-    The access pattern is data-dependent on the index arg, so input data is
-    OPAQUE while the index and output relations are identities.
+    Which slice is decided by the value read out of the index, so the source
+    boundary names that operand rather than an address. How many it reads does
+    not depend on those values: one slice per index element, every time.
     """
     idx_rank = len(ctx.type_of(call.args[1]).shape)
     out_rank = len(ctx.type_of(call).shape)
+    axis = _norm_dim(call.target.dim, len(ctx.type_of(call.args[0]).shape))
     return AccessRelations(
-        inputs=(OPAQUE, _identity(idx_rank)),
+        inputs=(IndexedAccess(index_operand=1, source_axis=axis), _identity(idx_rank)),
         outputs=(_identity(out_rank),),
     )
 

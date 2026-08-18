@@ -30,8 +30,8 @@ from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
-    StorageClaim,
-    StorageEffect,
+    StorageEffectClaim,
+    StorageEffectKind,
     StorageSpan,
     build_relation,
     register_access_relation,
@@ -71,7 +71,7 @@ def _axis(call: "Call", ctx: "TypeInferContext", rank: int) -> int:
     return axis
 
 
-def _concat_storage(call: "Call", ctx) -> StorageClaim | None:
+def _concat_storage(call: "Call", ctx) -> StorageEffectClaim | None:
     """Putting pieces side by side is free only when they already lie that way.
 
     Every input is claimed whole; composition then holds them to one base and to
@@ -87,8 +87,8 @@ def _concat_storage(call: "Call", ctx) -> StorageClaim | None:
         if size is None or size == 0:
             return None
         spans.append(StorageSpan(index, 0, size))
-    return StorageClaim(
-        StorageEffect.FORWARD,
+    return StorageEffectClaim(
+        StorageEffectKind.FORWARD,
         tuple(range(len(call.args))),
         tuple(spans),
         spans_required=True,
@@ -127,7 +127,7 @@ def _concat_access(call: "Call", ctx) -> AccessRelations:
     return AccessRelations(
         inputs=tuple(inputs),
         outputs=(isl.map(f"{{ [{domain_text}] -> [{domain_text}] }}"),),
-        storage=_concat_storage(call, ctx),
+        storage_effect=_concat_storage(call, ctx),
     )
 
 

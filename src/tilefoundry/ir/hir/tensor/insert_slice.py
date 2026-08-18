@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import isl
-
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue
 from tilefoundry.ir.core import Constant, Op, Tuple
@@ -15,9 +13,10 @@ from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    OPAQUE,
     AccessRelations,
-    StorageClaim,
+    OperandValue,
+    StorageEffectClaim,
+    WindowAccess,
     register_access_relation,
     update_destination,
 )
@@ -34,59 +33,54 @@ class InsertSlice(Op):
     offsets = ParamDef(kind="input", pattern=Scalar)
 
 
-def _insert_slice_storage(call: "Call", ctx) -> StorageClaim | None:
+def _insert_slice_storage(call: "Call", ctx) -> StorageEffectClaim | None:
     """The window is written into dst; the result is that same buffer."""
     return update_destination(call, ctx, destination=0)
 
 
-def _literal_offsets(call: "Call") -> tuple[int, ...] | None:
-    """The window's per-axis offsets, when every one of them is written down.
+def _offset_axes(call: "Call", rank: int) -> tuple:
+    """Where the window starts on each axis, by value or by reference.
 
-    An offset that arrives as a runtime value has no number to build a map from,
-    and this carrier cannot bind one to an isl parameter yet.
+    The offsets arrive either as one tuple naming every axis or as one rank-0
+    scalar starting the window on axis zero, and a literal is worth keeping as a
+    number: an address that is written down is not a runtime value.
     """
-    found = []
-    for offset in call.args[2:]:
-        if not isinstance(offset, Constant) or not isinstance(offset.value, int):
-            return None
-        found.append(int(offset.value))
-    return tuple(found)
+    given = call.args[2]
+    if isinstance(given, Tuple):
+        elements = given.elements
+        return tuple(
+            int(item.value)
+            if isinstance(item, Constant) and isinstance(item.value, int)
+            else OperandValue(operand=2, element=axis)
+            for axis, item in enumerate(elements)
+        )
+    start = (
+        int(given.value)
+        if isinstance(given, Constant) and isinstance(given.value, int)
+        else OperandValue(operand=2)
+    )
+    return (start, *(0 for _ in range(rank - 1)))
 
 
 @register_access_relation(InsertSlice)
 def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     """The result is dst with a window replaced, so every index reads itself.
 
-    Where the window sits decides which of the two the index came from. Written
-    down, that is one affine guard per axis on each side; arriving at run time,
-    it is the one thing here that cannot be said exactly, and only the two
-    boundaries it controls become opaque.
+    The window is exactly the update's own shape wherever it lands, so both
+    sides answer the same size question: the update whole, and the container
+    without a hole that size. Only the address moves with the offsets.
     """
     rank = len(ctx.type_of(call).shape)
-    identity = identity_map(rank)
-    offsets = _literal_offsets(call)
-    if offsets is None:
-        return AccessRelations(
-            inputs=(OPAQUE, OPAQUE, *(identity_map(0) for _ in call.args[2:])),
-            outputs=(identity,),
-            storage=_insert_slice_storage(call, ctx),
-        )
-    sizes = tuple(ctx.type_of(call.args[1]).shape)
-    dims = [f"d{index}" for index in range(rank)]
-    domain = ", ".join(dims)
-    inside = " and ".join(
-        f"{start} <= d{axis} < {start + size}"
-        for axis, (start, size) in enumerate(zip(offsets, sizes))
-    )
-    window = ", ".join(f"d{axis} - {start}" for axis, start in enumerate(offsets))
+    extents = tuple(ctx.type_of(call.args[1]).shape)
+    offsets = _offset_axes(call, rank)
     return AccessRelations(
         inputs=(
-            isl.map(f"{{ [{domain}] -> [{domain}] : not ({inside}) }}"),
-            isl.map(f"{{ [{domain}] -> [{window}] : {inside} }}"),
+            WindowAccess(offsets, extents, complement=True),
+            WindowAccess(tuple(0 for _ in extents), extents),
             *(identity_map(0) for _ in call.args[2:]),
         ),
-        outputs=(identity,),
-        storage=_insert_slice_storage(call, ctx),
+        outputs=(identity_map(rank),),
+        storage_effect=_insert_slice_storage(call, ctx),
     )
 
 

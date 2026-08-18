@@ -15,7 +15,7 @@ from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
-    StorageClaim,
+    StorageEffectClaim,
     build_relation,
     forward_whole,
     identity_relations,
@@ -46,7 +46,7 @@ def _strides(type_: TensorType) -> tuple | None:
     return try_c_order_strides(tuple(layout.shape))
 
 
-def _transpose_storage(call: "Call", ctx) -> StorageClaim | None:
+def _transpose_storage(call: "Call", ctx) -> StorageEffectClaim | None:
     """A permutation that carried its strides along moved no byte."""
     source, result = ctx.type_of(call.args[0]), ctx.type_of(call)
     if not same_placement(source, result):

@@ -16,22 +16,13 @@ from dataclasses import fields
 import pytest
 
 import tilefoundry
-from tilefoundry.analysis.compute_cost import _prove_storage, _Storage
 from tilefoundry.evaluator import eval_registry
 from tilefoundry.ir.core import Call, Constant, Op, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.tir.memory import Copy
 from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, Return, Sequential
-from tilefoundry.ir.types import DType, TensorType, tensor_bytes
-from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.visitor_registry.access_relation import (
-    StorageClaim,
-    StorageEffect,
-    StorageSpan,
-    identity_relations,
-    register_access_relation,
-)
+from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.visitor_registry.contexts import (
     CostContext,
     FunctionScope,
@@ -117,47 +108,6 @@ def test_visitors_fail_closed_when_unregistered() -> None:
         CodegenVisitor(_Ctx(), codegen_cuda_registry, backend="cuda").emit_expr(call)
     with pytest.raises(VerifyError, match="no cost evaluator registered for _UnknownOp"):
         CostEvaluator(CostContext()).visit_Call(call)
-
-
-def test_a_storage_claim_covers_every_operand_it_names() -> None:
-    """Addressing one operand does not conclude anything about a second.
-
-    A conclusion is read as "the result lives in these operands", and its reader
-    retires the movement of each. A handler that names two while proving one
-    would have the reader retire bytes nothing was shown about, so the claim is
-    refused rather than trimmed to the part that held. An Op with no boundary
-    relation still states this: the two are one registration, not one fact.
-    """
-
-    class _ReachesBoth(Op):
-        pass
-
-    class _ReachesOne(Op):
-        pass
-
-    holds = TensorType(shape=(4,), dtype=DType.f32, layout=None, storage=StorageKind.GMEM)
-    size = tensor_bytes(holds)
-    left = Var(type=holds, name="left")
-    right = Var(type=holds, name="right")
-
-    def _both(call: Call, ctx) -> StorageClaim:
-        return StorageClaim(StorageEffect.FORWARD, (0,), (StorageSpan(0, 0, size),))
-
-    def _one(call: Call, ctx) -> StorageClaim:
-        return StorageClaim(StorageEffect.FORWARD, (0, 1), (StorageSpan(0, 0, size),))
-
-    register_access_relation(_ReachesBoth)(identity_relations(2, _both))
-    register_access_relation(_ReachesOne)(identity_relations(2, _one))
-
-    walk = _Storage(
-        type_of=lambda expr: expr.type, users={}, positions={}, caller_owned=frozenset()
-    )
-    covered = Call(type=holds, target=_ReachesBoth(), args=(left, right))
-    assert _prove_storage(covered, walk) == (StorageEffect.FORWARD, (0,))
-
-    partial = Call(type=holds, target=_ReachesOne(), args=(left, right))
-    assert _prove_storage(partial, walk) is None
-    assert id(partial) not in walk.bases
 
 
 def test_where_a_walk_reads_is_one_pair_and_nothing_else() -> None:

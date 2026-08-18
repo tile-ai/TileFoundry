@@ -38,6 +38,7 @@ from tilefoundry.analysis import (
     check_program,
     extract,
 )
+from tilefoundry.analysis.compute_cost import _prove_storage, _Storage
 from tilefoundry.analysis.footprint import _local_type as footprint_local_type
 from tilefoundry.analysis.preflight import validate_authored
 from tilefoundry.analysis.walk import loop_scopes, postorder, values_of
@@ -64,6 +65,8 @@ from tilefoundry.inspection.values import (
 from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
+    Constant,
+    Op,
     SourceSpanMetadata,
     TotalAndPerUnit,
     TripInterval,
@@ -80,21 +83,29 @@ from tilefoundry.ir.hir.nn.relu import ReLU
 from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
+from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.quant import Quant
 from tilefoundry.ir.hir.tensor.reshape import Reshape, is_induction_var_singleton_reshape
 from tilefoundry.ir.hir.tensor.topk import TopK
-from tilefoundry.ir.types import DType, TensorType, make_tensor_type
+from tilefoundry.ir.types import DType, TensorType, make_tensor_type, tensor_bytes
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.schedule import ScheduleError, schedule
 from tilefoundry.schedule.partition import PartitionProgramError, build_partition_program
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.access_relation import (
-    OPAQUE,
+    AccessQuantity,
     AccessRelations,
+    IndexedAccess,
+    StorageEffectClaim,
+    StorageEffectKind,
+    StorageSpan,
+    access_elements,
     access_relation_registry,
     build_relation,
+    identity_relations,
+    register_access_relation,
 )
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
@@ -631,14 +642,15 @@ def test_a_data_dependent_read_is_a_relation_and_not_a_function() -> None:
     assert len(picked.outputs) == 1
 
 
-def test_a_relation_says_which_operands_it_cannot_describe() -> None:
-    """OPAQUE is a statement, not a gap.
+def test_a_relation_says_how_a_data_dependent_operand_is_read() -> None:
+    """A table read through positions is a lookup, not an unknown.
 
-    At this level a rotation's tables are indexed by data, so the relation
-    reports them as opaque rather than inventing an affine access for them; q and
-    k it does describe, and it describes both of its outputs. Everything
-    downstream depends on being able to tell "unknown" from "identity", and a
-    relation that returned an identity for an unknown access would be believed.
+    At this level a rotation's tables are indexed by data, so the relation names
+    the operand those indices come from rather than inventing an affine access
+    or giving up. Which entry it lands on is not known here; how many it reads
+    is, and that is what a cost asks. q and k it describes affinely, and both of
+    its outputs. Telling a lookup from an identity is the safety property: a
+    relation that returned an identity for a lookup would be believed.
     """
     heads = make_tensor_type((1, 4, HEAD_DIM), DType.bf16)
     tables = make_tensor_type((4096, HEAD_DIM), DType.bf16)
@@ -655,9 +667,119 @@ def test_a_relation_says_which_operands_it_cannot_describe() -> None:
     assert len(relation.inputs) == 5
     assert isinstance(relation.inputs[0], isl.multi_aff)
     assert isinstance(relation.inputs[1], isl.multi_aff)
-    assert relation.inputs[2:] == (OPAQUE, OPAQUE, OPAQUE)
+    lookup = IndexedAccess(index_operand=4, source_axis=0)
+    assert relation.inputs[2:4] == (lookup, lookup)
+    assert isinstance(relation.inputs[4], isl.multi_aff)
     assert len(relation.outputs) == 2
     assert all(isinstance(item, isl.multi_aff) for item in relation.outputs)
+
+
+def test_every_relation_says_how_much_it_reads() -> None:
+    """What a boundary touches is a number, whatever decides the addresses.
+
+    A gather reads one source slice per index element, so which entries the
+    index names changes nothing and how many it names changes it in proportion.
+    A window reads its own extent and its complement the rest, neither of which
+    moves when the offset does. An unbound row count is still bounded by what
+    the cache can hold, which is a range rather than the whole cache. That is
+    why a lookup is written down instead of left unsaid.
+    """
+    ctx = TypeInferContext()
+    table = Var(type=make_tensor_type((4096, HEAD_DIM), DType.bf16), name="table")
+    held: list[object] = [table]
+
+    def gathered(values: tuple[int, ...]):
+        index = Var(type=make_tensor_type((len(values),), DType.i32), name="index")
+        call = Call(
+            type=make_tensor_type((len(values), HEAD_DIM), DType.bf16),
+            target=IndexSelect(dim=0),
+            args=(table, index),
+        )
+        held.extend((index, call))
+        relations = access_relation_registry.lookup(IndexSelect)(call, ctx)
+        return access_elements(relations, call, ctx, boundary=0)
+
+    ordered, repeated, backwards = (0, 1, 2), (7, 7, 7), (9, 2, 5)
+    assert gathered(ordered) == gathered(repeated) == gathered(backwards)
+    assert gathered(ordered) == AccessQuantity(3 * HEAD_DIM, 3 * HEAD_DIM)
+    assert gathered((0,) * 12).upper == 12 * HEAD_DIM
+
+    def i32(value: int) -> Constant:
+        return Constant(type=make_tensor_type((), DType.i32), value=value)
+
+    cache_shape, rows = (2, 512, 4, HEAD_DIM), 8
+    cache = Var(type=make_tensor_type(cache_shape, DType.bf16), name="cache")
+    fresh = Var(
+        type=make_tensor_type((2, rows, 4, HEAD_DIM), DType.bf16), name="new"
+    )
+
+    def updated(length):
+        call = Call(
+            type=make_tensor_type(cache_shape, DType.bf16),
+            target=CacheUpdate(),
+            args=(cache, i32(0), length, fresh),
+        )
+        held.extend((length, call))
+        relations = access_relation_registry.lookup(CacheUpdate)(call, ctx)
+        return (
+            access_elements(relations, call, ctx, boundary=3),
+            access_elements(relations, call, ctx, boundary=0),
+            access_elements(relations, call, ctx, boundary=0, output=True),
+        )
+
+    whole = 2 * 512 * 4 * HEAD_DIM
+    per_row = 2 * 4 * HEAD_DIM
+    written, kept, produced = updated(i32(rows))
+    assert written == AccessQuantity(rows * per_row, rows * per_row)
+    assert kept == AccessQuantity(whole - written.upper, whole - written.upper)
+    assert produced == AccessQuantity(whole, whole)
+    assert updated(i32(1))[0] == AccessQuantity(per_row, per_row)
+
+    open_rows, open_kept, _ = updated(Var(type=make_tensor_type((), DType.i32), name="s"))
+    assert not open_rows.exact
+    assert (open_rows.lower, open_rows.upper) == (per_row, rows * per_row)
+    assert open_kept == AccessQuantity(whole - rows * per_row, whole - per_row)
+
+
+def test_a_storage_claim_covers_every_operand_it_names() -> None:
+    """Addressing one operand does not conclude anything about a second.
+
+    A conclusion is read as "the result lives in these operands", and its reader
+    retires the movement of each. A handler that names two while proving one
+    would have the reader retire bytes nothing was shown about, so the claim is
+    refused rather than trimmed to the part that held. An Op with no boundary
+    relation still states this: the two are one registration, not one fact.
+    """
+
+    class _ReachesBoth(Op):
+        pass
+
+    class _ReachesOne(Op):
+        pass
+
+    holds = make_tensor_type((4,), DType.f32)
+    size = tensor_bytes(holds)
+    left = Var(type=holds, name="left")
+    right = Var(type=holds, name="right")
+
+    def _both(call: Call, ctx) -> StorageEffectClaim:
+        return StorageEffectClaim(StorageEffectKind.FORWARD, (0,), (StorageSpan(0, 0, size),))
+
+    def _one(call: Call, ctx) -> StorageEffectClaim:
+        return StorageEffectClaim(StorageEffectKind.FORWARD, (0, 1), (StorageSpan(0, 0, size),))
+
+    register_access_relation(_ReachesBoth)(identity_relations(2, _both))
+    register_access_relation(_ReachesOne)(identity_relations(2, _one))
+
+    walk = _Storage(
+        type_of=lambda expr: expr.type, users={}, positions={}, caller_owned=frozenset()
+    )
+    covered = Call(type=holds, target=_ReachesBoth(), args=(left, right))
+    assert _prove_storage(covered, walk) == (StorageEffectKind.FORWARD, (0,))
+
+    partial = Call(type=holds, target=_ReachesOne(), args=(left, right))
+    assert _prove_storage(partial, walk) is None
+    assert id(partial) not in walk.bases
 
 
 def test_a_quantised_scale_is_written_once_per_group() -> None:

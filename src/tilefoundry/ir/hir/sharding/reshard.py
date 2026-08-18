@@ -20,8 +20,8 @@ from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
-    StorageClaim,
-    StorageEffect,
+    StorageEffectClaim,
+    StorageEffectKind,
     forward_whole,
     register_access_relation,
     register_type_relation,
@@ -171,7 +171,7 @@ class Reshard(Op):
     storage = ParamDef(kind="attribute", default=None)
 
 
-def _reshard_storage(call: "Call", ctx) -> StorageClaim | None:
+def _reshard_storage(call: "Call", ctx) -> StorageEffectClaim | None:
     """A reshard within one storage is a view of it; across storage it is a copy.
 
     That boundary is the op's own, stated with its cost classification: a layout
@@ -184,7 +184,7 @@ def _reshard_storage(call: "Call", ctx) -> StorageClaim | None:
     if source.storage != result.storage:
         return None
     if not same_placement(source, result):
-        return StorageClaim(StorageEffect.FORWARD, (0,))
+        return StorageEffectClaim(StorageEffectKind.FORWARD, (0,))
     return forward_whole(call, 0, ctx)
 
 
@@ -200,7 +200,7 @@ def _reshard_access(call: "Call", ctx) -> AccessRelations:
     return AccessRelations(
         inputs=(identity_map(rank),),
         outputs=(identity_map(rank),),
-        storage=_reshard_storage(call, ctx),
+        storage_effect=_reshard_storage(call, ctx),
     )
 
 

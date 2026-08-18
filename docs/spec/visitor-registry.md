@@ -2,9 +2,9 @@
 
 The derived-visitor pattern: every `analysis` / `verify` / `codegen`
 walker is the same template — **base visitor + custom Context +
-per-class registry**. This spec defines the template and its six
+per-class registry**. This spec defines the template and its five
 instances (`typeinfer` / `verify` / `codegen_<target>` / `cost` /
-`hir_lowering` / `alias`).
+`hir_lowering`).
 
 The settled split:
 
@@ -127,7 +127,6 @@ instances split as follows:
 | **codegen_\<target\>** | `(Call, CodegenContext) -> str` | `(Stmt, CodegenContext) -> None` | Both sides are emitted |
 | **cost** | `(Call, CostContext) -> Cost` | `(Stmt, CostContext) -> Cost` (optional) | Recursive-local logical work |
 | **hir_lowering** | `(lowerer, Op, Call) -> Var` | — | HIR-to-TIR lowering; see [§11](#11-instance-5--hir_lowering) |
-| **alias** | `(Call, AliasContext) -> AliasClaim \| None` | — | Where a result's bytes live; see [§12](#12-instance-6--alias) |
 
 Generic control-flow / binding Stmts (`For` / `If` / `While` /
 `LetStmt` / `Sequential` / `MeshScope` / `Return`) are handled by
@@ -336,22 +335,70 @@ returns its result, or `None` when the op has no registered builder.
 
 A second, independent registry over the same Op classes. Where `type_relation`
 ([§4.1](#41-forward-relation-service--type_relation)) returns one iteration domain plus one map per boundary and drives
-typeinfer, this one classifies each boundary on its own and admits a boundary
-the affine framework cannot express at all.
+typeinfer, this one classifies each boundary on its own, and says where the
+result's bytes live on the same value.
 
 ```python
-AccessRelation = Union["isl.multi_aff", "isl.map", OpaqueRelation]
+AccessRelation = Union["isl.multi_aff", "isl.map", IndexedAccess, WindowAccess]
 
-class OpaqueRelation:
-    """Marker for a boundary the affine framework cannot express."""
+class IndexedAccess:
+    """A boundary read through the values of another operand.
 
-OPAQUE: OpaqueRelation      # the single instance
+    Attributes:
+        index_operand: attribute; Which operand's elements name the coordinates.
+        source_axis: attribute; The axis of this boundary they index.
+    """
+
+    index_operand: int
+    source_axis: int
+
+class WindowAccess:
+    """A boundary read or written as a window of fixed extent.
+
+    Attributes:
+        offset_operands: attribute; Which operands say where the window sits.
+        extents: attribute; How big it is, which the offsets do not change.
+        complement: attribute; The container outside the window instead.
+    """
+
+    offset_operands: tuple[int, ...]
+    extents: tuple[ShapeDim, ...]
+    complement: bool = False
+
+class StorageEffectKind(enum.Enum):
+    PRODUCE = "produce"
+    FORWARD = "forward"
+    UPDATE = "update"
+
+class StorageSpan:
+    operand: int
+    offset: int
+    size: int
+
+class StorageEffectClaim:
+    """What one Op says about its own result's bytes. Not a proof."""
+
+    kind: StorageEffectKind = StorageEffectKind.PRODUCE
+    operands: tuple[int, ...] = ()
+    spans: tuple[StorageSpan, ...] = ()
+    spans_required: bool = False
 
 class AccessRelations:
     """One relation per boundary value, in boundary order."""
 
     inputs: tuple[AccessRelation, ...]
     outputs: tuple[AccessRelation, ...]
+    storage_effect: StorageEffectClaim | None = None
+
+class AccessQuantity:
+    """How many elements a boundary touches, exactly or within a range."""
+
+    lower: int
+    upper: int
+
+def access_elements(
+    relation: AccessRelation, call: "Call", ctx, *, boundary: int
+) -> AccessQuantity | None: ...
 ```
 
 Registry + decorator:
@@ -363,14 +410,26 @@ def register_access_relation(op_cls: type): ...
 - constraints:
   - The canonical carrier is `isl.multi_aff`. An `isl.map` is allowed where the
     relation is reduction-like or otherwise many-to-one.
-  - A boundary whose access pattern is data-dependent, or otherwise outside
-    `isl.multi_aff` / `isl.map`, MUST carry `OPAQUE` rather than an
-    approximation. `OpaqueRelation` is a distinct type from either isl carrier
-    so a consumer can never read "opaque" as "identity".
-  - `OpaqueRelation` is a singleton: every construction returns the same
-    instance, and it round-trips through pickling as that instance.
+  - A boundary whose addresses come from a runtime value MUST carry
+    `IndexedAccess` or `WindowAccess`, naming the operands that decide them.
+    Each is a distinct type from either isl carrier, so a consumer can never
+    read a lookup as an identity. There MUST be no way to register a boundary
+    that says nothing, and no generic whole-boundary fallback: a boundary
+    nobody can price is a boundary nobody can schedule.
+  - Every relation MUST answer `access_elements`. How much a boundary touches
+    MUST NOT depend on values nobody has bound: a gather reads one source slice
+    per index element, a window reads its own extent and its complement the
+    rest. A count that genuinely does depend on an unbound value MUST come from
+    the Op's own contract as a range, and a consumer taking `upper` MUST say
+    that it did. Widening to the whole operand is not such a range.
   - `inputs` has one entry per input arg in argument order; `outputs` has one
     per output.
+  - `storage_effect` states where the result's bytes live and is a claim, not a
+    proof: an Op that omits it produces its own bytes, and an identity relation
+    alone never establishes an alias. Whether a claim holds over a whole
+    function -- one base, exact coverage, whose buffer it is, who still reads
+    it -- is settled by the consumer that walks the function, and is recorded by
+    `compute-cost` as `BufferAliasMetadata`.
 
 The two registries are peers, not layers: a given Op MAY register with either,
 both, or neither. The polyhedral model ([analysis §1](./analysis.md#1-polyhedral-model))
@@ -652,7 +711,7 @@ populated. Re-imports are idempotent (Python caches the module;
 
 ## 10. Defining a new extensible analysis
 
-When adding a per-node-class extensible analysis (say "alias
+When adding a per-node-class extensible analysis (say "liveness
 analysis on top of typeinfer", or "emit for a new target"), follow
 the four-step recipe.
 
@@ -661,16 +720,16 @@ the four-step recipe.
 ```python
 # example
 @dataclass
-class AliasContext(TypeInferContext):
-    alias_sets: dict[Var, set[Var]] = field(default_factory=dict)
+class LivenessContext(TypeInferContext):
+    live_sets: dict[Var, set[Var]] = field(default_factory=dict)
 ```
 
 ### Step 2 — declare a registry + decorator
 
 ```python
 # example
-alias_registry: AnalysisRegistry[type[Op]]   # the new analysis's registry
-def register_alias(op_cls: type[Op]): ...     # decorator: register a handler for one Op class
+liveness_registry: AnalysisRegistry[type[Op]]   # the new analysis's registry
+def register_liveness(op_cls: type[Op]): ...     # decorator: register a handler for one Op class
 ```
 
 Pick `type[Op]` for an analysis that walks `Call`s, `type[Stmt]` for
@@ -682,7 +741,7 @@ needed.
 ```python
 # example
 class AliasVisitor(ExprVisitor[None]):
-    def __init__(self, ctx: AliasContext, registry: AnalysisRegistry = alias_registry): ...   # explicit binding
+    def __init__(self, ctx: LivenessContext, registry: AnalysisRegistry = liveness_registry): ...   # explicit binding
     def visit_Call(self, call: Call) -> None: ...   # look up type(call.target), invoke, then recurse
 ```
 
@@ -690,9 +749,9 @@ class AliasVisitor(ExprVisitor[None]):
 
 ```python
 # example
-# an alias handler keys on the Op class and returns None:
-@register_alias(Reshape)
-def _(call: Call, ctx: AliasContext) -> None: ...
+# a liveness handler keys on the Op class and returns None:
+@register_liveness(Reshape)
+def _(call: Call, ctx: LivenessContext) -> None: ...
 ```
 
 These four steps are what the extensible instances in this spec are doing.
@@ -724,83 +783,3 @@ def register_hir_lowering(op_cls: type[Op]): ...
   - The registry and decorator are public from `tilefoundry.visitor_registry`.
     Concrete handlers remain beside the pass or target-owned op that defines
     the lowering; see [passes §7.1](./passes.md#71-hirtotirpass).
-
-## 12. Instance 6 — `alias`
-
-`alias_registry` answers one question per Op: which of a Call's operands its
-result's bytes live in, and where inside them. It states no cost. An Op's cost
-evaluator reports what that operation moves, and this registry reports whether
-the result is somewhere those bytes already were; the analysis layer that reads
-both decides what the pair means.
-
-```python
-class AliasKind(enum.Enum):
-    """What an Op claims about where its result's bytes live.
-
-    Attributes:
-        PRODUCE: attribute; the result owns its own bytes.
-        FORWARD: attribute; the result is its operands' bytes.
-        UPDATE: attribute; the result is the destination's bytes, overwritten.
-    """
-
-    PRODUCE = "produce"
-    FORWARD = "forward"
-    UPDATE = "update"
-
-@dataclass(frozen=True)
-class AliasSpan:
-    """One run of bytes inside one operand's own buffer.
-
-    Attributes:
-        operand: attribute; operand position the run is inside.
-        offset: attribute; byte offset of the run in that operand.
-        size: attribute; length of the run, in bytes.
-    """
-
-    operand: int
-    offset: int
-    size: int
-
-@dataclass(frozen=True)
-class AliasClaim:
-    """Which operands a result lives in, and where inside them if known.
-
-    Attributes:
-        operands: attribute; operand positions the result lives in.
-        spans: attribute; the runs the result is made of, empty when no address follows.
-        spans_required: attribute; whether the claim holds only where its spans do.
-    """
-
-    operands: tuple[int, ...]
-    spans: tuple[AliasSpan, ...] = ()
-    spans_required: bool = False
-
-alias_registry: AnalysisRegistry[type[Op]]
-def register_alias(op_cls: type[Op], kind: AliasKind, *, destination: int | None = None): ...
-```
-
-- constraints:
-  - Handler signature is `(call: Call, ctx: AliasContext) -> AliasClaim | None`.
-    Returning `None` claims nothing, which is the same conclusion as having no
-    handler at all.
-  - An Op with no registered handler MUST conclude `PRODUCE`. An operation whose
-    indexing happens to be the identity MUST NOT alias its operand on that
-    ground alone; only a registered claim can.
-  - A claim MUST be held to one base: every named operand MUST resolve to the
-    same owning value, or the conclusion falls back to `PRODUCE`. Spans MAY
-    reach fewer operands than the claim names, so a resolved coverage MUST also
-    land on that same base; a conclusion covers every operand it names.
-  - Spans MUST cover the result exactly -- one unbroken run, no gap and no
-    overlap -- read in the order the result lays them out, so a claim whose
-    pieces are all present but permuted MUST fall back to `PRODUCE`. A claim
-    with no spans still concludes which base it lives in, but states no
-    address, so it MUST NOT serve as a piece of another claim's coverage.
-  - `spans_required` marks a claim that is only true because of where its
-    pieces sit, so unresolved spans MUST make it `PRODUCE`. Without it, spans
-    are an address the claim offers when it can: unresolved spans leave the
-    claim standing on its named operands, which is what re-indexing one operand
-    is whether or not its address is known.
-  - `destination` names the operand an `UPDATE` overwrites. An `UPDATE` MUST NOT
-    close over a value the enclosing function does not own.
-  - A handler MUST NOT attach metadata, and MUST NOT depend on any analysis
-    having run: it reads the Types and attributes its own Op already states.

@@ -5,8 +5,6 @@ Contract and constraints: `spec hir § CacheUpdate`.
 
 from __future__ import annotations
 
-import isl
-
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Constant, Op
@@ -17,9 +15,10 @@ from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    OPAQUE,
     AccessRelations,
-    StorageClaim,
+    OperandValue,
+    StorageEffectClaim,
+    WindowAccess,
     register_access_relation,
     update_destination,
 )
@@ -36,47 +35,61 @@ class CacheUpdate(Op):
     new = ParamDef(kind="input", pattern=Tensor)
 
 
-def _cache_update_storage(call: "Call", ctx) -> StorageClaim | None:
+def _cache_update_storage(call: "Call", ctx) -> StorageEffectClaim | None:
     """The new rows are written into the cache; the result is that cache."""
     return update_destination(call, ctx, destination=0)
 
 
-def _literal(expr) -> int | None:
-    """One control's written-down value, or ``None`` when it arrives at run time."""
-    return int(expr.value) if isinstance(expr, Constant) and isinstance(expr.value, int) else None
+def _static(extent) -> int | None:
+    """One extent as a number, when it is one."""
+    return extent if isinstance(extent, int) and not isinstance(extent, bool) else None
+
+
+def _rows(expr, capacity, supplied) -> object:
+    """How many rows this update writes: the number, or the value that says it.
+
+    ``s`` is a runtime scalar, and what it may be is the Op's own contract: at
+    least one row, and no more than either the cache holds or ``new`` brought.
+    That range is what keeps a quantity a quantity instead of charging the whole
+    cache for a handful of rows.
+    """
+    if isinstance(expr, Constant) and isinstance(expr.value, int):
+        return int(expr.value)
+    limits = [value for value in (_static(capacity), _static(supplied)) if value is not None]
+    return OperandValue(operand=2, bound=(1, min(limits)) if limits else None)
 
 
 @register_access_relation(CacheUpdate)
 def _cache_update_access(call: "Call", ctx) -> AccessRelations:
-    """The result is the cache with rows [cur_pos, cur_pos + s) replaced.
+    """The result is the cache with ``s`` rows replaced at ``cur_pos``.
 
-    The two controls are rank-0, so their own boundary is exact whatever they
-    hold. What they hold is what decides which rows came from where: written
-    down, that is one affine guard on the length axis; arriving at run time, the
-    two boundaries it controls are all that become opaque.
+    How many rows move is ``s`` and where they land is ``cur_pos``; only the
+    first is a quantity, and it is the same one wherever the second points. The
+    two controls are rank-0, so their own boundaries are plain identities.
     """
-    rank = len(ctx.type_of(call).shape)
-    identity = identity_map(rank)
-    controls = (identity_map(0), identity_map(0))
-    start, length = _literal(call.args[1]), _literal(call.args[2])
-    if start is None or length is None:
-        return AccessRelations(
-            inputs=(OPAQUE, *controls, OPAQUE),
-            outputs=(identity,),
-            storage=_cache_update_storage(call, ctx),
-        )
-    dims = [f"d{index}" for index in range(rank)]
-    domain = ", ".join(dims)
-    inside = f"{start} <= d1 < {start + length}"
-    rows = ", ".join("d1 - %d" % start if axis == 1 else f"d{axis}" for axis in range(rank))
+    cache = tuple(ctx.type_of(call.args[0]).shape)
+    supplied = tuple(ctx.type_of(call.args[3]).shape)
+    rows = _rows(
+        call.args[2],
+        cache[1] if len(cache) > 1 else None,
+        supplied[1] if len(supplied) > 1 else None,
+    )
+    extents = (cache[0], rows, *cache[2:])
+    start = (
+        int(call.args[1].value)
+        if isinstance(call.args[1], Constant) and isinstance(call.args[1].value, int)
+        else OperandValue(operand=1)
+    )
+    offsets = (0, start, *(0 for _ in cache[2:]))
     return AccessRelations(
         inputs=(
-            isl.map(f"{{ [{domain}] -> [{domain}] : not ({inside}) }}"),
-            *controls,
-            isl.map(f"{{ [{domain}] -> [{rows}] : {inside} }}"),
+            WindowAccess(offsets, extents, complement=True),
+            identity_map(0),
+            identity_map(0),
+            WindowAccess(tuple(0 for _ in cache), extents),
         ),
-        outputs=(identity,),
-        storage=_cache_update_storage(call, ctx),
+        outputs=(identity_map(len(cache)),),
+        storage_effect=_cache_update_storage(call, ctx),
     )
 
 

@@ -554,9 +554,9 @@ class BufferAliasMetadata(IRMetadata):
 ```
 
 - constraints:
-  - The conclusion MUST come from the alias proofs of
-    [visitor-registry §12](./visitor-registry.md#12-instance-6--alias) and MUST be
-    written by this family alone. An Op that could forward or update but whose
+  - The conclusion MUST come from the storage-effect claims of
+    [visitor-registry §4.2](./visitor-registry.md#42-per-boundary-relation-service--access_relation)
+    and MUST be written by this family alone. An Op that could forward or update but whose
     proof did not close MUST be recorded as `"produce"`.
   - Every position in `aliased_operands` MUST resolve to the same base, so a
     reader following those operand edges reaches one value. `"produce"` MUST

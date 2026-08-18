@@ -24,9 +24,9 @@ from tilefoundry.ir.hir._shard_checks import check_multilinear_partials, reject_
 from tilefoundry.ir.types import TupleType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    OPAQUE,
     AccessRelationResult,
     AccessRelations,
+    IndexedAccess,
     register_access_relation,
     register_type_relation,
 )
@@ -85,8 +85,8 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
 
     Inputs:
       - q, k: per-element identity (rotation is per (token, head, head_dim/2 pair))
-      - cos_cache, sin_cache: indexed by pos_ids → opaque (data-dependent index)
-      - pos_ids: opaque (1D index input feeding cache lookup)
+      - cos_cache, sin_cache: one row per position, named by pos_ids
+      - pos_ids: read whole, once per output row
 
     Outputs:
       - q_rope, k_rope: per-element identity vs Q / K respectively.
@@ -101,8 +101,10 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     q_id = _ident(len(q_ty.shape))
     k_id = _ident(len(k_ty.shape))
 
+    positions = _ident(len(ctx.type_of(call.args[4]).shape))
+    lookup = IndexedAccess(index_operand=4, source_axis=0)
     return AccessRelations(
-        inputs=(q_id, k_id, OPAQUE, OPAQUE, OPAQUE),
+        inputs=(q_id, k_id, lookup, lookup, positions),
         outputs=(q_id, k_id),
     )
 

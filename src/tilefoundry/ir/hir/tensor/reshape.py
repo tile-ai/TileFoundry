@@ -22,8 +22,8 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    StorageClaim,
-    StorageEffect,
+    StorageEffectClaim,
+    StorageEffectKind,
     dense,
     forward_whole,
     identity_relations,
@@ -38,7 +38,7 @@ class Reshape(Op):
     new_shape = ParamDef(kind="attribute", annotation=tuple)
 
 
-def _reshape_storage(call: Call, ctx) -> StorageClaim | None:
+def _reshape_storage(call: Call, ctx) -> StorageEffectClaim | None:
     """A reshape re-indexes its input; it never moves the elements.
 
     The address only follows through when both sides describe one dense run, so
@@ -47,7 +47,7 @@ def _reshape_storage(call: Call, ctx) -> StorageClaim | None:
     source, result = ctx.type_of(call.args[0]), ctx.type_of(call)
     if same_placement(source, result) and dense(source) and dense(result):
         return forward_whole(call, 0, ctx)
-    return StorageClaim(StorageEffect.FORWARD, (0,))
+    return StorageEffectClaim(StorageEffectKind.FORWARD, (0,))
 
 
 register_access_relation(Reshape)(identity_relations(1, _reshape_storage))

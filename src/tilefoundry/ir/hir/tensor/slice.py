@@ -32,8 +32,8 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    StorageClaim,
-    StorageEffect,
+    StorageEffectClaim,
+    StorageEffectKind,
     StorageSpan,
     dense,
     identity_relations,
@@ -76,7 +76,7 @@ def _static_window(call: "Call", source: TensorType) -> tuple[int, ...] | None:
     return tuple(value for value in values if value is not None)
 
 
-def _slice_storage(call: "Call", ctx) -> StorageClaim | None:
+def _slice_storage(call: "Call", ctx) -> StorageEffectClaim | None:
     """A window addresses its source; the address follows for one unbroken run.
 
     That run needs the axes past the narrowed one whole and the ones before it
@@ -87,8 +87,8 @@ def _slice_storage(call: "Call", ctx) -> StorageClaim | None:
     source, result = ctx.type_of(call.args[0]), ctx.type_of(call)
     span = _window_span(call, ctx, source, result)
     if span is None:
-        return StorageClaim(StorageEffect.FORWARD, (0,))
-    return StorageClaim(StorageEffect.FORWARD, (0,), (span,))
+        return StorageEffectClaim(StorageEffectKind.FORWARD, (0,))
+    return StorageEffectClaim(StorageEffectKind.FORWARD, (0,), (span,))
 
 
 def _window_span(call: "Call", ctx, source, result) -> "StorageSpan | None":
