@@ -90,6 +90,15 @@ class _CudaAdd:
         return tf.add(source, source)
 
 
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 32),))
+class _NoParallelLevel:
+    """A program that never names the level its machine runs work at."""
+
+    @func
+    def main(source: Tensor[(256,), "f32"]):
+        return tf.add(source, source)
+
+
 @module(entry="main", target=AmxTarget(), topologies=(Topology("core", 4),))
 class _AmxAdd:
     @func
@@ -1641,23 +1650,44 @@ def test_an_overwrite_waits_for_everything_that_read_what_it_replaces() -> None:
 def test_a_machine_that_places_nothing_is_not_a_machine_that_fits() -> None:
     """No allocation record and a settled one are different answers.
 
-    This program keeps a shared-memory buffer without saying which units hold
-    it, so there is nothing to place it against: nothing was decided and nothing
-    is claimed, which is not the same as having looked and found room. The
-    buffers are still measured, because measuring them never needed an address.
+    This program never names the level its machine runs work at, so there is no
+    unit for a buffer to belong to and nothing to place it against: nothing was
+    decided and nothing is claimed, which is not the same as having looked and
+    found room. The buffers are still measured, because measuring them never
+    needed an address.
     """
-    case = next(item for item in CORPUS if item.id == "access_footprint.qkv")
-    selected = next(item for item in case.analyze if item.selector == "qkv_projection")
-    owner, function = case.resolve(case.build(), selected.selector)
-    unplaceable = analyze(owner, function, analysis="memory", dims=selected.dims)
+    unplaceable = analyze(_NoParallelLevel, _NoParallelLevel.entry_function(), analysis="memory")
     record = get_metadata(unplaceable.function, MemoryMetadata)
     assert record is not None and record.allocation is None
-    assert any(item.level == "smem" for item in record.lifetimes)
+    assert record.lifetimes
 
     placed = analyze(_CudaAdd, _CudaAdd.entry_function(), analysis="memory")
     assert get_metadata(placed.function, MemoryMetadata).allocation == AllocationMetadata(
         solver_status="optimal"
     )
+
+
+def test_one_value_it_cannot_place_does_not_unplace_the_rest() -> None:
+    """A value states its own positions, whatever a value beside it states.
+
+    Performance refuses a whole program it cannot place every value of, and this
+    one carries a view with no layout, so it is refused that reading. Placing
+    buffers is a narrower question: each value that holds bytes says where it
+    runs, and the ones here do, down to the shared-memory tiles the loop keeps.
+    Discarding all of them because a neighbour was refused reported a machine
+    that places nothing about a program every buffer of which has an address.
+    """
+    case = next(item for item in CORPUS if item.id == "access_footprint.qkv")
+    selected = next(item for item in case.analyze if item.selector == "qkv_projection")
+    owner, function = case.resolve(case.build(), selected.selector)
+    with pytest.raises(AnalysisError, match="has no cta placement"):
+        _call_placements(owner, analyze(owner, function, analysis="memory",
+                                        dims=selected.dims).function, "cta")
+
+    result = analyze(owner, function, analysis="memory", dims=selected.dims)
+    record = get_metadata(result.function, MemoryMetadata)
+    assert record.allocation == AllocationMetadata(solver_status="optimal")
+    assert any(item.level == "smem" for item in record.lifetimes)
 
 
 def test_only_addressable_levels_are_placed_by_the_solver() -> None:

@@ -140,6 +140,34 @@ class ValueLifetime:
 
 
 @dataclass(frozen=True)
+class BufferRef:
+    """Where one value's bytes are, and how a coordinate of it becomes a byte.
+
+    ``size`` is the bytes of this range, and the refs a value owns tile its
+    allocation in ``offset`` order. A value living in another's bytes names that
+    whole allocation instead, because where inside it the value starts is what
+    the operation's storage links state. Both are decided once for the whole
+    function: what a participant sees of a buffer narrows under projection, but
+    where the buffer is does not. ``shape`` and ``layout`` are the value's at
+    the level's owner, the coordinate space offset and size are stated against.
+    """
+
+    buffer_id: int
+    level: str
+    offset: int
+    size: int
+    shape: tuple = ()
+    layout: object = None
+
+
+@dataclass(frozen=True)
+class BufferAllocationMetadata(IRMetadata):
+    """Where each of one value's fields lives. One entry for a plain Tensor."""
+
+    fields: tuple[BufferRef, ...] = ()
+
+
+@dataclass(frozen=True)
 class AllocationMetadata:
     """What deciding this function's byte addresses took.
 

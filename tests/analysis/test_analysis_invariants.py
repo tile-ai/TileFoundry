@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import MISSING, dataclass
+from dataclasses import MISSING, dataclass, replace
 from dataclasses import fields as dataclass_fields
 from typing import get_args, get_origin
 
@@ -25,6 +25,7 @@ from tests.evaluator.eval_utils import EvalCase, run_eval_case
 from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.logical.gqa_static import static_online_attend
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
+from tests.fixtures.placed.gqa_decode import GqaOnline
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tests.fixtures.placed.square_cuda import Model as SquareCuda
@@ -40,10 +41,17 @@ from tilefoundry.analysis import (
     check_program,
     extract,
 )
+from tilefoundry.analysis.buffer_plan import BufferPlan, PlannedBuffer, build_buffer_plan
 from tilefoundry.analysis.compute_cost import _prove_storage, _Storage
 from tilefoundry.analysis.footprint import _local_type as footprint_local_type
+from tilefoundry.analysis.memory import definition_order
+from tilefoundry.analysis.metadata import (
+    BufferAllocationMetadata,
+    BufferRef,
+    MemoryMetadata,
+)
 from tilefoundry.analysis.preflight import validate_authored
-from tilefoundry.analysis.walk import loop_scopes, postorder, values_of
+from tilefoundry.analysis.walk import loop_scopes, postorder, tensor_types, values_of
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamically
 from tilefoundry.inspection.analysis_report import render_analysis
@@ -112,6 +120,7 @@ from tilefoundry.ir.types import (
     DType,
     TensorType,
     TupleType,
+    local_type_of,
     make_shard_tensor_type,
     make_tensor_type,
     tensor_bytes,
@@ -2260,3 +2269,131 @@ def test_a_reported_record_keys_every_field_by_its_own_name() -> None:
                 stated = reported.get(key.replace("-", "_"))
                 if isinstance(stated, int | str):
                     assert value == str(stated), (key, value, stated)
+
+
+def _planned() -> tuple[object, object]:
+    """The decode program's buffers, whole and as one participant sees them.
+
+    Eight CTAs share one allocation. Query heads are the interesting axis: 32 of
+    them, factored `(4, 8)` and split on the 8, so a CTA holds four heads that
+    are eight apart rather than four in a row.
+    """
+    aimed = replace(
+        GqaOnline, target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 8),)
+    )
+    result = analyze(
+        aimed, aimed.entry_function(), analysis="memory", level="cta", dims={"ctx_len": 1024}
+    )
+    plan = build_buffer_plan(result.function, "cta")
+    return plan, result.function
+
+
+def test_a_participant_owns_the_positions_its_layout_gave_it() -> None:
+    """What a shard holds is a run of layout positions, not a run of an axis.
+
+    Thirty-two heads over eight CTAs is four heads each, and which four depends
+    on which position the mesh divides. Here the axis is factored `(4, 8)` and
+    the 8 is divided, so CTA 3 holds heads 3, 11, 19 and 27. Stated as a logical
+    range that would be heads 12 through 15: the right count of the wrong data,
+    which is why the domain is written in positions.
+    """
+    plan, _ = _planned()
+    heads = next(item for item in plan.buffers if item.extents == (1, 1, 4, 8, 128))
+    assert heads.ref.shape == (1, 1, 32, 128)
+
+    mine = next(
+        item
+        for item in plan.project(3).buffers
+        if (item.binding, item.field) == (heads.binding, heads.field)
+    )
+    assert mine.origin == (0, 0, 0, 3, 0)
+    assert mine.extents == (1, 1, 4, 1, 128)
+    assert mine.domain.is_equal(
+        isl.set("{ [0, 0, i2, 3, i4] : 0 <= i2 < 4 and 0 <= i4 < 128 }")
+    )
+
+
+def test_a_shard_is_a_view_of_one_buffer_and_not_a_buffer_of_its_own() -> None:
+    """Projection narrows what a participant sees, never where the bytes are.
+
+    Every participant names the same buffer at the same address, so a reader
+    that adds up per-participant traffic against buffer numbers is adding up
+    one allocation. Together they cover it exactly, because a shard that no
+    one holds is a byte no one wrote and one two hold is one counted twice.
+    """
+    plan, _ = _planned()
+    whole = {(item.binding, item.field): item for item in plan.buffers}
+    covered: dict[tuple[str, int], object] = {}
+    for participant in range(8):
+        for item in plan.project(participant).buffers:
+            key = (item.binding, item.field)
+            assert item.ref == whole[key].ref
+            seen = covered.get(key)
+            covered[key] = item.domain if seen is None else seen.union(item.domain)
+    assert set(covered) == set(whole)
+    for key, union in covered.items():
+        assert union.is_equal(whole[key].domain)
+
+
+def test_a_participants_share_of_a_buffer_is_the_type_it_was_given() -> None:
+    """The plan and the type system project the same program the same way.
+
+    They are separate derivations -- one from the mesh coordinate a position is
+    divided by, one from the local shape the type carries -- and a difference
+    between them would mean an access relation written against one and priced
+    against the other.
+    """
+    plan, function = _planned()
+    topologies = (Topology("cta", 8),)
+    stated: dict[str, list[tuple[int, ...]]] = {}
+    for expr in definition_order(function):
+        if get_metadata(expr, BufferAllocationMetadata) is None:
+            continue
+        local = local_type_of(expr.type, level="cta", topologies=topologies)
+        name = expr.name if isinstance(expr, Var) else binding_name(expr)
+        stated[name] = [tuple(leaf.shape) for leaf in tensor_types(local)]
+    assert stated
+    for participant in range(8):
+        for item in plan.project(participant).buffers:
+            assert item.extents == stated[item.binding][item.field]
+
+
+def test_a_buffer_no_participant_holds_is_not_in_that_participants_plan() -> None:
+    """A mesh that names some participants leaves the rest nothing to see."""
+    mesh = make_mesh((2,), ("c",), topology=Topology("cta", 4))
+    held = make_shard_tensor_type((8,), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32)
+    item = PlannedBuffer(
+        binding="x",
+        field=0,
+        ref=BufferRef(0, "gmem", 0, 32, (8,), held.layout),
+        origin=(0, 0),
+        extents=(2, 4),
+    )
+    plan = BufferPlan(level="cta", buffers=(item,))
+    assert plan.project(1).buffers[0].origin == (1, 0)
+    assert plan.project(3).buffers == ()
+
+
+def test_the_fields_of_one_value_tile_the_allocation_it_was_given() -> None:
+    """An address means something only if the bytes behind it are the value's.
+
+    A value's leaves are laid out consecutively inside the allocation its
+    lifetime was sized by, so the last one ends exactly where that allocation
+    does. A gap would mean bytes charged to a value no field of it occupies, and
+    an overrun would mean two values sharing bytes neither one placed.
+    """
+    plan, function = _planned()
+    record = get_metadata(function, MemoryMetadata)
+    sizes = {(item.level, item.binding): item.bytes for item in record.lifetimes}
+    owned: dict[tuple[str, str], list[BufferRef]] = {}
+    for item in plan.buffers:
+        key = (item.ref.level, item.binding)
+        if key in sizes:
+            owned.setdefault(key, []).append(item.ref)
+    assert owned
+    for (level, binding), refs in owned.items():
+        cursor = refs[0].offset
+        for ref in refs:
+            assert ref.offset == cursor, (binding, level)
+            cursor += ref.size
+        assert cursor - refs[0].offset == sizes[(level, binding)], (binding, level)

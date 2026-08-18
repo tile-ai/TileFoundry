@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from ortools.sat.python import cp_model
+
 from tilefoundry.ir.core import (
     Call,
     Constant,
@@ -25,8 +27,9 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.types import Type, local_type_of
+from tilefoundry.ir.types import Type, local_type_of, tensor_bytes
 from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target, UnsupportedCapabilityError
 
 from .check import Placement, _call_placements, _result_placement
@@ -42,7 +45,9 @@ from .footprint import loop_footprints
 from .metadata import (
     AllocationMetadata,
     BufferAliasMetadata,
+    BufferAllocationMetadata,
     BufferFootprint,
+    BufferRef,
     ComputeCostMetadata,
     LevelFootprint,
     LoopFootprintMetadata,
@@ -56,6 +61,7 @@ from .walk import (
     children,
     postorder,
     reachable_functions,
+    tensor_types,
 )
 
 SELECTOR = "memory"
@@ -97,14 +103,44 @@ def _is_view(expr: Expr) -> bool:
     return alias is not None and alias.kind in ("forward", "update")
 
 
-def _base_of(expr: Expr, seen: frozenset[int] = frozenset()) -> Expr:
+def _carried_origins(fn: Function) -> dict[int, Expr]:
+    """Where a loop-shaped value's bytes come from.
+
+    A loop that updates a buffer names the value it is updating once per
+    iteration, and those names are the loop's own. No iteration allocates, so
+    the buffer a carried value stands for is the one the loop was entered with.
+
+    A loop's own result is followed to what it yielded rather than assumed to be
+    what it started from: a body that updates in place reaches the same buffer
+    through the alias it proved, and one that does not reaches its own.
+    """
+    found: dict[int, Expr] = {}
+    if fn.body is None:
+        return found
+    for expr in postorder(fn.body):
+        if not isinstance(expr, GridRegionExpr):
+            continue
+        for carried, init in zip(expr.carried_args, expr.init_args, strict=False):
+            found[id(carried)] = init
+        if len(expr.yield_values) == 1:
+            found[id(expr)] = expr.yield_values[0]
+    return found
+
+
+def _base_of(
+    expr: Expr,
+    seen: frozenset[int] = frozenset(),
+    carried: dict[int, Expr] | None = None,
+) -> Expr:
     """Follow the proven operand edges to the value that owns the bytes."""
     if id(expr) in seen:
         raise AnalysisError(f"{binding_name(expr) or 'a value'} aliases itself")
+    if carried is not None and id(expr) in carried:
+        return _base_of(carried[id(expr)], seen | {id(expr)}, carried)
     alias = get_metadata(expr, BufferAliasMetadata)
     if alias is None or not alias.aliased_operands:
         return expr
-    return _base_of(expr.args[alias.aliased_operands[0]], seen | {id(expr)})
+    return _base_of(expr.args[alias.aliased_operands[0]], seen | {id(expr)}, carried)
 
 
 def _label(expr: Expr, position: int) -> str:
@@ -570,17 +606,19 @@ def _place(
     capacity: int | None,
     rectangles: list[_Rectangle],
     options: MemoryOptions,
-) -> str:
+) -> tuple[str, dict[str, int]]:
     """Give every buffer in one domain a byte range, or refuse the program.
 
     A domain whose whole contents fit at once needs no search: room for all of
-    them is room for any arrangement of them. Neither does one that cannot hold
-    what is live at a single point, because nothing moves out of the way of
-    something still being read. Every way of failing to place a buffer says
-    which way it was, because they are different things to go and fix.
+    them is room for any arrangement of them, so they are stacked in the order
+    the program defines them. Neither does one that cannot hold what is live at
+    a single point, because nothing moves out of the way of something still
+    being read. Every way of failing to place a buffer says which way it was,
+    because those are different things to fix. The byte ranges are returned
+    rather than only counted: an address a reader can act on is the point.
     """
     if not rectangles:
-        return "optimal"
+        return "optimal", {}
     if capacity is None or capacity <= 0:
         raise AnalysisError(
             f"the target states no usable capacity for {name!r}, so a program "
@@ -599,12 +637,17 @@ def _place(
             f"the {capacity} B the target states for that level"
         )
     if sum(rectangle.size_bytes for rectangle in rectangles) <= capacity:
-        return "optimal"
+        stacked, cursor = {}, 0
+        for rectangle in rectangles:
+            stacked[rectangle.binding] = cursor
+            cursor += rectangle.size_bytes
+        return "optimal", stacked
 
     model = cp_model.CpModel()
-    addresses, lives = [], []
+    addresses, lives, offsets = [], [], []
     for index, rectangle in enumerate(rectangles):
         offset = model.NewIntVar(0, capacity - rectangle.size_bytes, f"o{index}")
+        offsets.append(offset)
         addresses.append(
             model.NewIntervalVar(
                 offset, rectangle.size_bytes, offset + rectangle.size_bytes, f"a{index}"
@@ -632,7 +675,18 @@ def _place(
         raise AnalysisError(
             f"the {name!r} placement did not settle within its time limit"
         )
-    return "optimal" if status == cp_model.OPTIMAL else "feasible"
+    placed = {
+        rectangle.binding: solver.Value(offset) for rectangle, offset in zip(rectangles, offsets)
+    }
+    return ("optimal" if status == cp_model.OPTIMAL else "feasible"), placed
+
+
+@dataclass(frozen=True)
+class _Allocation:
+    """One function's settled addresses, and what settling them took."""
+
+    metadata: AllocationMetadata
+    addresses: dict[tuple[str, str], int]
 
 
 def _allocate(
@@ -642,14 +696,16 @@ def _allocate(
     facts: MemoryHierarchyFacts,
     target: Target,
     options: MemoryOptions,
-) -> AllocationMetadata | None:
+) -> _Allocation | None:
     """Address every buffer this function keeps live, and say what that took.
 
     Domains holding the very same buffers are one question asked again, so each
     distinct set is decided once. A function with nothing addressable to place
     gets a settled record with nothing in it: the question was asked and there
     was nothing to decide. A function whose machine names no level to place
-    anything against gets no record at all, because nothing was asked.
+    anything against gets no record at all, because nothing was asked. A buffer
+    several domains of one level hold has one address, because it is one buffer,
+    and domains that disagree about where it is are refused here.
     """
     try:
         selected = target.get_facts(ParallelCapacityFacts).topology
@@ -663,6 +719,7 @@ def _allocate(
     except _NotProjectable:
         return None
     status = "optimal"
+    addresses: dict[tuple[str, str], int] = {}
     stated: set[tuple[str, tuple[str, ...]]] = set()
     for (name, _position), rectangles in domains.items():
         signature = (name, tuple(sorted(item.binding for item in rectangles)))
@@ -672,9 +729,98 @@ def _allocate(
         level = facts.explicit(name)
         if level is None:
             continue
-        if _place(name, level.capacity_bytes, rectangles, options) == "feasible":
+        settled, placed = _place(name, level.capacity_bytes, rectangles, options)
+        if settled == "feasible":
             status = "feasible"
-    return AllocationMetadata(solver_status=status)
+        for binding, offset in placed.items():
+            held = addresses.setdefault((name, binding), offset)
+            if held != offset:
+                raise AnalysisError(
+                    f"function {fn.name!r}: {binding!r} is placed at byte {held} "
+                    f"in one {name!r} domain and at byte {offset} in another, so "
+                    "it has no single address to state"
+                )
+    return _Allocation(AllocationMetadata(solver_status=status), addresses)
+
+
+def _address_buffers(
+    fn: Function,
+    record: MemoryMetadata,
+    allocation: _Allocation,
+    facts: MemoryHierarchyFacts,
+    *,
+    topology_levels: tuple[str, ...],
+    topologies: tuple[Topology, ...],
+) -> None:
+    """Give each value the addresses its own bytes were placed at.
+
+    Buffers are numbered in definition order so the same program numbers them
+    the same way twice. A tuple's leaves tile one allocation in the order the
+    type states them, because that allocation was sized as their sum. A value
+    living in another's bytes names that whole allocation rather than a range of
+    its own, and where inside it the value starts is what the operation's own
+    storage links state. A value only some of whose leaves were placed gets no
+    record, and neither does one whose owner this order does not name.
+    """
+    order = definition_order(fn)
+    labels = _unique_labels(order)
+    carried = _carried_origins(fn)
+    sizes = {(item.level, item.binding): item.bytes for item in record.lifetimes}
+    numbers: dict[tuple[str, str], int] = {}
+    for expr in order:
+        if _is_view(expr):
+            continue
+        for level in bytes_by_storage(expr.type):
+            key = (level, labels[id(expr)])
+            if key in allocation.addresses and key not in numbers:
+                numbers[key] = len(numbers)
+
+    for expr in order:
+        try:
+            owner = _base_of(expr, carried=carried) if _is_view(expr) else expr
+        except AnalysisError:
+            continue
+        if id(owner) not in labels:
+            continue
+        binding = labels[id(owner)]
+        cursors: dict[str, int] = {}
+        refs: list[BufferRef] = []
+        for leaf in tensor_types(expr.type):
+            if leaf.storage is StorageKind.UMAT:
+                refs = []
+                break
+            level = str(leaf.storage)
+            number = numbers.get((level, binding))
+            if number is None:
+                refs = []
+                break
+            declared = facts.explicit(level)
+            held = (
+                leaf
+                if declared is None
+                else _type_at_owner(
+                    leaf,
+                    owner=declared.owner,
+                    topology_levels=topology_levels,
+                    topologies=topologies,
+                )
+            )
+            base = allocation.addresses[(level, binding)]
+            own = owner is expr
+            refs.append(
+                BufferRef(
+                    buffer_id=number,
+                    level=level,
+                    offset=base + (cursors.get(level, 0) if own else 0),
+                    size=tensor_bytes(held) if own else sizes[(level, binding)],
+                    shape=tuple(held.shape),
+                    layout=held.layout,
+                )
+            )
+            if own:
+                cursors[level] = cursors.get(level, 0) + tensor_bytes(held)
+        if refs:
+            attach(expr, BufferAllocationMetadata(fields=tuple(refs)))
 
 
 def _buffer_placements(
@@ -684,7 +830,11 @@ def _buffer_placements(
 
     A value with no position of its own is left out rather than refused here. A
     level the target owns needs none, and one owned per position asks for it
-    when it comes to place something there.
+    when it comes to place something there. The whole-program reading that
+    performance requires refuses all of a program it cannot place every value
+    of, which is a stricter question than this one: a value whose own type names
+    its positions can be placed whatever a value elsewhere does, so each is
+    asked again on its own rather than left out with a refused neighbour.
     """
     try:
         resolved = dict(
@@ -694,7 +844,7 @@ def _buffer_placements(
         resolved = {}
     topology = module.resolve_topology(selected)
     for expr in (*fn.params, *postorder(fn.body)):
-        if id(expr) in resolved or not isinstance(expr, (Var, Constant)):
+        if id(expr) in resolved:
             continue
         try:
             resolved[id(expr)] = _result_placement(expr.type, topology)
@@ -773,13 +923,23 @@ def analyze_memory(
             ),
             advisories=_advisories(facts, peaks, tuple(loop_records)),
         )
+        allocation = _allocate(module, fn, record, facts, target, settings)
         attach(
             fn,
             replace(
                 record,
-                allocation=_allocate(module, fn, record, facts, target, settings),
+                allocation=None if allocation is None else allocation.metadata,
             ),
         )
+        if allocation is not None:
+            _address_buffers(
+                fn,
+                record,
+                allocation,
+                facts,
+                topology_levels=target.topology_levels,
+                topologies=topologies,
+            )
         for loop, footprint in loop_records:
             attach(loop, footprint)
 
