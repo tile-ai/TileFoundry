@@ -13,7 +13,11 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import register_type_relation
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+    register_type_relation,
+)
 from tilefoundry.visitor_registry.relation_build import elementwise_relation
 
 
@@ -41,3 +45,6 @@ def _eval_silu(ctx):
 
 
 __all__ = ["Silu"]
+
+
+register_access_relation(Silu)(identity_relations(1))

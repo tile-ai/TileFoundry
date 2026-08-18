@@ -93,8 +93,8 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     Outputs:
       - q_rope, k_rope: per-element identity vs Q / K respectively.
     """
-    q_ty = ctx.type_of(call.args[0])
-    k_ty = ctx.type_of(call.args[1])
+    q_ty = ctx.local_type_of(call.args[0])
+    k_ty = ctx.local_type_of(call.args[1])
 
     def _ident(rank: int) -> "isl.multi_aff":
         dims = ", ".join(f"i{i}" for i in range(rank))
@@ -103,13 +103,13 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     q_id = _ident(len(q_ty.shape))
     k_id = _ident(len(k_ty.shape))
 
-    pos_ty = ctx.type_of(call.args[4])
+    pos_ty = ctx.local_type_of(call.args[4])
     positions = _ident(len(pos_ty.shape))
     taken = elements_of(pos_ty)
     tables = tuple(
         moves(
             IndexedAccess(source_operand=operand, index_operand=4, source_axis=0),
-            taken * (elements_of(ctx.type_of(call.args[operand])) // ctx.type_of(call.args[operand]).shape[0]),
+            taken * (elements_of(ctx.local_type_of(call.args[operand])) // ctx.local_type_of(call.args[operand]).shape[0]),
         )
         for operand in (2, 3)
     )

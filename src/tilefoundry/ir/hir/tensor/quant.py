@@ -225,7 +225,7 @@ def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelat
     - output ``x_scale`` reduces over the in-group offset (last dim divided by
       ``group``); expressed as an isl map ``[..., j] -> [..., j // group]``.
     """
-    x_ty = ctx.type_of(call.args[0])
+    x_ty = ctx.local_type_of(call.args[0])
     rank = len(x_ty.shape)
     group = call.target.group
 
@@ -240,9 +240,9 @@ def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelat
         out_dims = (outer + ", ") if outer else ""
         scale_rel = isl.map(f"{{ [{dims}] -> [{out_dims}floor({last}/{group})] }}")
 
-    fields = ctx.type_of(call).fields
+    fields = ctx.local_type_of(call).fields
     return AccessRelations(
-        inputs=(moves(ident, elements_of(ctx.type_of(call.args[0]))),),
+        inputs=(moves(ident, elements_of(ctx.local_type_of(call.args[0]))),),
         outputs=(
             moves(ident, elements_of(fields[0])),
             moves(scale_rel, elements_of(fields[1])),

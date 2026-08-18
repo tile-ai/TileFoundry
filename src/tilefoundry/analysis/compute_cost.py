@@ -15,13 +15,16 @@ from dataclasses import dataclass, field
 from tilefoundry.ir.core import Call, Constant, Expr, VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types import DType, Type, tensor_bytes
+from tilefoundry.ir.types import DType, TensorType, Type, tensor_bytes
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry.access_relation import (
     StorageEffectClaim,
     StorageEffectKind,
+    access_elements,
+    access_relation_registry,
     declared_storage,
+    elements_of,
     static_bytes,
 )
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionScope
@@ -221,6 +224,58 @@ def _call_movement(
     return levels, tuple(charged)
 
 
+def _stated_movement(call: Call, cost: Cost, ctx: CostContext) -> tuple[TrafficBytes, ...] | None:
+    """Per-operand movement as the Op's own access relation states it.
+
+    A Type says how big a value is, not how much of it this occurrence touches.
+    The two agree while every operand is sharded the way the result is, and part
+    company the moment one is not. The relation is asked instead, in this
+    context's window, so one handler answers for the whole program and for one
+    unit. Only the amount comes from it: which direction an operand moves stays
+    the cost's answer. ``None`` for an Op with no relation yet.
+    """
+    handler = access_relation_registry.lookup(type(call.target))
+    if handler is None:
+        return None
+    relations = handler(call, ctx)
+    operands = (*call.args, call)
+    stated: list[TrafficBytes] = []
+    for index, (operand, moved) in enumerate(zip(operands, cost.traffic)):
+        is_result = index == len(call.args)
+        quantity = access_elements(
+            relations,
+            boundary=0 if is_result else index,
+            output=is_result,
+        )
+        held = ctx.local_type_of(call) if is_result else ctx.local_type_of(operand)
+        share = _element_share(held, quantity.upper if quantity is not None else None)
+        if share is None:
+            stated.append(moved)
+            continue
+        stated.append(
+            TrafficBytes(share if moved.read else 0, share if moved.write else 0)
+        )
+    return tuple(stated)
+
+
+def _element_share(held: Type, elements: int | None) -> int | None:
+    """The bytes *elements* of *held* occupy, or ``None`` when unanswerable.
+
+    Taken as a share of the whole rather than as an element size, because a
+    packed dtype has no whole number of bytes per element and a bool boundary
+    would round to nothing.
+    """
+    if elements is None or not isinstance(held, TensorType):
+        return None
+    try:
+        whole = elements_of(held)
+    except ValueError:
+        return None
+    if whole <= 0:
+        return 0
+    return tensor_bytes(held) * elements // whole
+
+
 def _flops(flops: dict) -> tuple[tuple[str, int], ...]:
     return tuple(sorted((dtype.name, value) for dtype, value in flops.items()))
 
@@ -246,6 +301,14 @@ class _Storage:
     extents: dict[int, _Extent] = field(default_factory=dict)
     members: dict[int, list[Expr]] = field(default_factory=dict)
     claims: dict[int, StorageEffectClaim | None] = field(default_factory=dict)
+
+    def local_type_of(self, expr: Expr) -> Type:
+        """Types as written: a storage claim is about the whole value.
+
+        Where a value's bytes live is one fact for the program, not one per
+        participant, so this walk asks the relations in no topology window.
+        """
+        return self.type_of(expr)
 
     def claim_of(self, call: Call) -> StorageEffectClaim | None:
         """What the Op says about this Call, asked once.
@@ -524,6 +587,9 @@ def _call_cost_record(
         whole_cost = _aliased_cost(expr, whole_cost, settled, whole.ctx.type_of(expr))
         local_cost = _aliased_cost(expr, local_cost, settled, local_types[-1])
     traffic_by_level, operands = _call_movement(expr, whole_cost)
+    stated = _stated_movement(expr, local_cost, local.ctx)
+    if stated is not None:
+        local_cost = Cost(local_cost.flops, stated, local_cost.service)
     local_traffic, _local_operands = _call_movement(expr, local_cost, local_types)
     return ComputeCostMetadata(
         flops=_flops(whole_cost.flops),

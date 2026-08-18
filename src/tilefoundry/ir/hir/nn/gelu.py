@@ -11,7 +11,11 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
-from tilefoundry.visitor_registry.access_relation import register_type_relation
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+    register_type_relation,
+)
 from tilefoundry.visitor_registry.relation_build import elementwise_relation
 
 _COMMUTES_WITH = frozenset()
@@ -46,3 +50,6 @@ def _eval_gelu(ctx):
         data=torch.nn.functional.gelu(ctx.args[0].data, approximate=ctx.op.approximate),
         type=ctx.result_type,
     )
+
+
+register_access_relation(Gelu)(identity_relations(1))

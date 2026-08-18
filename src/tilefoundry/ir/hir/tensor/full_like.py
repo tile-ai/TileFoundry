@@ -18,6 +18,10 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+)
 
 
 @register_op(name="full_like")
@@ -38,3 +42,6 @@ def _eval_full_like(ctx):
     x = ctx.args[0].data
     data = torch.full_like(x, float(ctx.op.value), dtype=to_torch_dtype(ctx.result_type.dtype))
     return TensorValue(data=data, type=ctx.result_type)
+
+
+register_access_relation(FullLike)(identity_relations(1))

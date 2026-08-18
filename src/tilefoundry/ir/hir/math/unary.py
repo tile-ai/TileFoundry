@@ -20,6 +20,8 @@ from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
+    identity_relations,
+    register_access_relation,
     register_type_relation,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
@@ -108,3 +110,6 @@ def _eval_unary(ctx):
 
 
 __all__ = ["Unary"]
+
+
+register_access_relation(Unary)(identity_relations(1))

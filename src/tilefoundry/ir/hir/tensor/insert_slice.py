@@ -72,9 +72,9 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     sides answer the same size question: the update whole, and the container
     without a hole that size. Only the address moves with the offsets.
     """
-    result = ctx.type_of(call)
+    result = ctx.local_type_of(call)
     rank = len(result.shape)
-    update = ctx.type_of(call.args[1])
+    update = ctx.local_type_of(call.args[1])
     extents = tuple(update.shape)
     offsets = _offset_axes(call, rank)
     window = elements_of(update)
@@ -82,7 +82,7 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
         inputs=(
             moves(
                 WindowAccess(offsets, extents, complement=True),
-                elements_of(ctx.type_of(call.args[0])) - window,
+                elements_of(ctx.local_type_of(call.args[0])) - window,
             ),
             moves(WindowAccess(tuple(0 for _ in extents), extents), window),
             *(moves(identity_access(0), 1) for _ in call.args[2:]),

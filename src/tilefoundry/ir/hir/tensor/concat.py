@@ -104,7 +104,7 @@ def _concat_access(call: "Call", ctx) -> AccessRelations:
     The segments are the same arithmetic the forward relation states, so the two
     cannot drift: one offset walk, one guard per input.
     """
-    types = [ctx.type_of(arg) for arg in call.args]
+    types = [ctx.local_type_of(arg) for arg in call.args]
     rank = len(types[0].shape)
     axis = _axis(call, ctx, rank)
     extents = tuple(type_.shape[axis] for type_ in types)
@@ -133,7 +133,7 @@ def _concat_access(call: "Call", ctx) -> AccessRelations:
         outputs=(
             moves(
                 isl.multi_aff(f"{{ [{domain_text}] -> [{domain_text}] }}"),
-                elements_of(ctx.type_of(call)),
+                elements_of(ctx.local_type_of(call)),
             ),
         ),
         storage_effect=_concat_storage(call, ctx),

@@ -480,7 +480,7 @@ class ComputeCostMetadata(IRMetadata):
 | `service` | For a primitive Call, take its cost evaluator's service counts -- the results it asks a machine for that are not floating point -- and multiply by the same factor. A Function Call takes the callee's summed `service`. | No |
 | `service_per_unit` | The same evaluator over the same projected Types, multiplied by the same factor. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `flops_per_unit` | Use the same evaluator over Types projected through authored `Split`s at or coarser than the analysed level, then multiply by the same factor. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
-| `traffic_per_unit` | Run the same evaluator over Types projected through authored `Split`s at or coarser than the analysed level, then charge and group the projected movement by storage level. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `traffic_per_unit` | Ask the Op's access relation, in the analysed level's window, how much each boundary moves, and charge that at the levels the operand's projected Type names. Which direction an operand moves stays the evaluator's answer. An Op with no registered relation falls back to the evaluator over projected Types. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `traffic` | Multiply the evaluator's per-operand movement by the same factor, charge concrete tensor leaves to their storage levels, and group by level. A Type with leaves at several levels keeps those leaf bytes separate. A `UMAT` leaf has no residency of its own: when it appears in `Call.args`, charge its own bytes at the target's established `rmem` materialization level; when it appears only in an Op attribute, charge nothing. A Function Call takes the callee's grouped total. | No |
 | `operands` | Multiply each evaluator entry by the same factor and keep order `(*call.args, call)`. A Function Call has no operand split. | No |
 
@@ -522,6 +522,16 @@ appears only for a primitive Call and contains objects in positional order:
     not the direct sum of the one-occurrence Call records.
   - An op with no registered cost evaluator MUST raise `AnalysisError`.
   - Missing program geometry MUST NOT be replaced with a target capacity.
+  - `traffic_per_unit` MUST be the amount the Op's own access relation states
+    for each boundary, asked in the analysed level's window. Projecting an
+    operand's Type is not enough: a value nobody sharded projects to the whole
+    of itself, so charging that to every participant multiplies one read by the
+    number of them. An elementwise boundary MUST therefore charge a participant
+    no more than it produces and no more than the operand holds, which is what
+    makes a broadcast operand cost its own size.
+  - A relation MUST answer the same way for the whole program and for one unit,
+    from one registration. A second handler for the per-unit question would be
+    two statements of one fact, kept equal by hand.
   - The enclosing recomputation factor MUST be the product of the authored loop
     trip counts for loops whose induction variable or carried argument the Call
     transitively reads. A loop-invariant Call MUST keep a factor of one. The

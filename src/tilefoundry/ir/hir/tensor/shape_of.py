@@ -11,6 +11,10 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    measures_without_reading,
+    register_access_relation,
+)
 
 
 @register_op(name="shape_of")
@@ -29,3 +33,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 def _eval_shape_of(ctx):
     data = torch.tensor(tuple(ctx.args[0].data.shape), dtype=torch.int64)
     return TensorValue(data=data, type=ctx.result_type)
+
+
+register_access_relation(ShapeOf)(measures_without_reading)

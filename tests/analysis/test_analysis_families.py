@@ -437,6 +437,14 @@ def _no_op_reshard(source: Tensor[(1,), "f32"]):
     return tf.reshard(source)
 
 
+@func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
+def _replicated_source(x: Tensor[(16896,), "f32"], bias: Tensor[(1,), "f32"]):
+    with Mesh(("cta",), layout=(132,), names=("block",)) as m:
+        local = tf.reshard(x, (16896 @ m.block,), "rmem")
+        spread = tf.reshard(bias, (1,), "rmem")
+        return tf.reshard(tf.add(local, spread), (16896 @ m.block,), "gmem")
+
+
 @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
 def _unplaced_structural(source: Tensor[(), "i64", None, "rmem"]):
     return tf.stack(source, axis=0)
@@ -1876,3 +1884,39 @@ def test_a_report_shows_the_requested_analyses_and_reads_the_same_either_way() -
     assert "# compute-cost flops=f32:256@256 traffic=gmem:r2048/w1024@r2048/w1024" in text
     assert "# peak-footprint" not in text
     assert "operands" not in text
+
+
+def test_a_participant_is_charged_the_share_of_a_source_it_actually_reads() -> None:
+    """A source nobody sharded is still read one tile at a time.
+
+    A replicated value projects to the whole of itself, so charging that to
+    every participant multiplied one read by the number of them: 132 CTAs were
+    each billed the entire 67,584-byte source to fetch the 512 bytes they
+    wanted. The Op's access relation is asked instead, in the same window.
+
+    The broadcast operand keeps the rule honest the other way: one element read
+    by every participant is one element, not the result's worth.
+    """
+    result, entry = _run(_replicated_source, "performance")
+    calls = _calls(entry)
+    loaded = next(
+        call
+        for call in calls
+        if type(call.target).__name__ == "Reshard"
+        and get_metadata(call, ComputeCostMetadata).traffic_at("gmem").read == 67_584
+    )
+    added = next(call for call in calls if type(call.target).__name__ == "Binary")
+
+    cost = get_metadata(loaded, ComputeCostMetadata)
+    assert cost.traffic_per_unit_at("gmem") == TrafficBytes(read=512)
+    assert cost.traffic_at("gmem") == TrafficBytes(read=67_584)
+    assert cost.traffic_per_unit_at("rmem") == TrafficBytes(write=512)
+
+    broadcast = get_metadata(added, ComputeCostMetadata)
+    assert broadcast.traffic_per_unit_at("rmem") == TrafficBytes(read=516, write=512)
+
+    record = get_metadata(loaded, PerformanceMetadata)
+    services = _replicated_source.resolve_target().get_facts(PerformanceServiceFacts)
+    tile_ns = -(-(512 * 1_000_000_000) // services.bandwidth("gmem"))
+    assert record.timeline.end_ns - record.timeline.start_ns == tile_ns
+    del result

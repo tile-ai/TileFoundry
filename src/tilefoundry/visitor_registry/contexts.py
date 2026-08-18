@@ -84,6 +84,16 @@ class TypeInferContext:
         self.cache[key] = computed
         return computed
 
+    def local_type_of(self, expr: Expr) -> Type:
+        """Return ``expr``'s Type as written, there being no window here.
+
+        A context with a topology window overrides this. Asking the question of
+        every context is what lets one registered handler answer both the whole
+        program's quantities and one unit's, instead of two handlers that have
+        to be kept saying the same thing.
+        """
+        return self.type_of(expr)
+
     def error(self, node: Union[Expr, Stmt], msg: str) -> NoReturn:
         if isinstance(node, Call):
             name = type(node.target).__name__

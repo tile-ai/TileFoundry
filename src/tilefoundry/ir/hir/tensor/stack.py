@@ -24,7 +24,11 @@ from tilefoundry.ir.types.shard import (
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
+    AccessRelations,
     build_relation,
+    elements_of,
+    moves,
+    register_access_relation,
     register_type_relation,
 )
 from tilefoundry.visitor_registry.relation_build import build_domain
@@ -116,3 +120,32 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 def _eval_stack(ctx):
     data = torch.stack(tuple(arg.data for arg in ctx.args), dim=ctx.op.axis)
     return TensorValue(data=data, type=ctx.result_type)
+
+
+@register_access_relation(Stack)
+def _stack_access(call: "Call", ctx) -> AccessRelations:
+    """Each input writes one position of the new axis, and is read whole.
+
+    The result has one more axis than its inputs, so an input's relation drops
+    that axis rather than pretending to an index on it. Which position an input
+    lands at is the guard; how much it moves is its own size.
+    """
+    result = ctx.local_type_of(call)
+    rank = len(result.shape)
+    axis = _axis(call, ctx, rank - 1)
+    dims = [f"d{index}" for index in range(rank)]
+    domain = ", ".join(dims)
+    reads = ", ".join(dim for index, dim in enumerate(dims) if index != axis)
+    inputs = tuple(
+        isl.map(f"{{ [{domain}] -> [{reads}] : d{axis} = {position} }}")
+        if rank > 1
+        else isl.map(f"{{ [{domain}] -> [] : d{axis} = {position} }}")
+        for position in range(len(call.args))
+    )
+    return AccessRelations(
+        inputs=tuple(
+            moves(item, elements_of(ctx.local_type_of(arg)))
+            for item, arg in zip(inputs, call.args)
+        ),
+        outputs=(moves(inputs[0], elements_of(result)),),
+    )

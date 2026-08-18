@@ -60,9 +60,9 @@ def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
     GLOBAL black-box — declare identity multi_aff (the K-dim reduction is
     internal to the op semantics at this level).
     """
-    lhs_ty = ctx.type_of(call.args[0])
-    rhs_ty = ctx.type_of(call.args[1])
-    out_ty = ctx.type_of(call)
+    lhs_ty = ctx.local_type_of(call.args[0])
+    rhs_ty = ctx.local_type_of(call.args[1])
+    out_ty = ctx.local_type_of(call)
 
     def _ident(rank: int) -> "isl.multi_aff":
         if rank == 0:

@@ -108,8 +108,8 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
     first is a quantity, and it is the same one wherever the second points. The
     two controls are rank-0, so their own boundaries are plain identities.
     """
-    cache = tuple(ctx.type_of(call.args[0]).shape)
-    supplied = tuple(ctx.type_of(call.args[3]).shape)
+    cache = tuple(ctx.local_type_of(call.args[0]).shape)
+    supplied = tuple(ctx.local_type_of(call.args[3]).shape)
     rows = _rows(
         call.args[2],
         cache[1] if len(cache) > 1 else None,
@@ -122,7 +122,7 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
         else OperandValue(operand=1)
     )
     offsets = (0, start, *(0 for _ in cache[2:]))
-    held = elements_of(ctx.type_of(call.args[0]))
+    held = elements_of(ctx.local_type_of(call.args[0]))
     per_row = held // cache[1] if isinstance(cache[1], int) and cache[1] else 0
     written = _written(rows, per_row, _limit(cache, supplied))
     kept = AccessQuantity(

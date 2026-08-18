@@ -12,6 +12,13 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelations,
+    elements_of,
+    moves,
+    register_access_relation,
+)
+from tilefoundry.visitor_registry.relation_build import identity_access
 
 
 @register_op
@@ -32,3 +39,18 @@ def _eval_zeros(ctx):
     shape = tuple(resolve_dim(d, ctx.dim_bindings) for d in ctx.op.type.shape)
     data = torch.zeros(shape, dtype=to_torch_dtype(ctx.op.type.dtype), device=ctx.device)
     return TensorValue(data=data, type=ctx.result_type)
+
+
+@register_access_relation(Zeros)
+def _zeros_access(call: "Call", ctx) -> AccessRelations:
+    """Nothing is read; every element of the result is written.
+
+    A zero has no source, so there is no input boundary to describe -- which is
+    the whole of what this Op does and why it is worth stating rather than
+    leaving to a default that would invent one.
+    """
+    result = ctx.local_type_of(call)
+    return AccessRelations(
+        inputs=(),
+        outputs=(moves(identity_access(len(result.shape)), elements_of(result)),),
+    )

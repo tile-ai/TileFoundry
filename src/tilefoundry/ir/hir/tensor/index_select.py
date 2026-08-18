@@ -121,10 +121,10 @@ def _index_select_access_relation(call: "Call", ctx) -> AccessRelations:
     boundary names that operand rather than an address. How many it reads does
     not depend on those values: one slice per index element, every time.
     """
-    idx_rank = len(ctx.type_of(call.args[1]).shape)
-    out_rank = len(ctx.type_of(call).shape)
-    axis = _norm_dim(call.target.dim, len(ctx.type_of(call.args[0]).shape))
-    index_ty, source_ty = ctx.type_of(call.args[1]), ctx.type_of(call.args[0])
+    idx_rank = len(ctx.local_type_of(call.args[1]).shape)
+    out_rank = len(ctx.local_type_of(call).shape)
+    axis = _norm_dim(call.target.dim, len(ctx.local_type_of(call.args[0]).shape))
+    index_ty, source_ty = ctx.local_type_of(call.args[1]), ctx.local_type_of(call.args[0])
     slice_size = math.prod(
         extent for position, extent in enumerate(source_ty.shape) if position != axis
     )
@@ -136,7 +136,7 @@ def _index_select_access_relation(call: "Call", ctx) -> AccessRelations:
             ),
             moves(_identity(idx_rank), elements_of(index_ty)),
         ),
-        outputs=(moves(_identity(out_rank), elements_of(ctx.type_of(call))),),
+        outputs=(moves(_identity(out_rank), elements_of(ctx.local_type_of(call))),),
     )
 
 

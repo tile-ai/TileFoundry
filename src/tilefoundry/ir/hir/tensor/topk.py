@@ -250,7 +250,7 @@ def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     multi_aff. Output values/indices are leading-dims identity with a new
     independent topk axis.
     """
-    x_ty = ctx.type_of(call.args[0])
+    x_ty = ctx.local_type_of(call.args[0])
     rank = len(x_ty.shape)
     axis = call.target.axis
     if axis < 0:
@@ -265,7 +265,7 @@ def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
         in_rel = isl.map(f"{{ [j] -> [i{axis}] }}")
 
     out_id = isl.multi_aff(f"{{ [{out_dims}] -> [{out_dims}] }}")
-    fields = ctx.type_of(call).fields
+    fields = ctx.local_type_of(call).fields
     return AccessRelations(
         inputs=(moves(in_rel, elements_of(x_ty)),),
         outputs=(

@@ -70,8 +70,8 @@ def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
     treated as identity at GLOBAL black-box; reduction is internal to the
     op).
     """
-    x_ty = ctx.type_of(call.args[0])
-    w_ty = ctx.type_of(call.args[1])
+    x_ty = ctx.local_type_of(call.args[0])
+    w_ty = ctx.local_type_of(call.args[1])
     rank = len(x_ty.shape)
     return AccessRelations(
         inputs=(

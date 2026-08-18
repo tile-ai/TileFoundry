@@ -340,10 +340,22 @@ def declared_storage(call, ctx) -> "StorageEffectClaim | None":
     return None if handler is None else handler(call, ctx).storage_effect
 
 
-def _read_once(arg, ctx) -> int:
-    """One whole operand, which is what an elementwise access moves."""
-    type_ = ctx.type_of(arg)
-    return elements_of(type_) if isinstance(type_, TensorType) else 0
+def elementwise_elements(arg, call, ctx) -> int:
+    """What one participant reads of *arg* to produce its share of *call*.
+
+    A participant reads no more of an operand than it produces, and no more than
+    the operand holds -- the second half being what makes a broadcast operand
+    cost its own smaller size. The bound matters most where an operand is not
+    sharded at all: a replicated source projects to the whole of itself, and
+    charging that to every participant multiplies one read by the number of them.
+    """
+    type_ = ctx.local_type_of(arg)
+    if not isinstance(type_, TensorType):
+        return 0
+    produced = ctx.local_type_of(call)
+    if not isinstance(produced, TensorType):
+        return elements_of(type_)
+    return min(elements_of(type_), elements_of(produced))
 
 
 def _identity(rank: int) -> "isl.multi_aff":
@@ -351,6 +363,30 @@ def _identity(rank: int) -> "isl.multi_aff":
         return isl.multi_aff("{ [] -> [] }")
     dims = ", ".join(f"i{i}" for i in range(rank))
     return isl.multi_aff(f"{{ [{dims}] -> [{dims}] }}")
+
+
+def measures_without_reading(call, ctx) -> AccessRelations:
+    """An Op that answers from a value's Type rather than from its elements.
+
+    A rank, a shape, a name for the same value at another level: the answer is
+    already in the Type, so no coordinate is read. The relation says that -- an
+    empty map, nothing crossing -- rather than an identity claiming a read the
+    Op never performs.
+    """
+    result = ctx.local_type_of(call)
+    out_rank = len(result.shape) if hasattr(result, "shape") else 0
+
+    def _empty(arg) -> "isl.map":
+        type_ = ctx.local_type_of(arg)
+        in_rank = len(type_.shape) if hasattr(type_, "shape") else 0
+        reads = ", ".join(f"i{index}" for index in range(in_rank))
+        domain = ", ".join(f"d{index}" for index in range(out_rank))
+        return isl.map(f"{{ [{domain}] -> [{reads}] : 1 = 0 }}")
+
+    return AccessRelations(
+        inputs=tuple(moves(_empty(arg), 0) for arg in call.args),
+        outputs=(moves(_empty(call.args[0]) if call.args else _identity(out_rank), 0),),
+    )
 
 
 def identity_relations(
@@ -367,16 +403,19 @@ def identity_relations(
     """
 
     def _handler(call, ctx) -> AccessRelations:
-        out_rank = len(ctx.type_of(call).shape)
+        result = ctx.local_type_of(call)
+        out_rank = len(result.shape)
 
         def _rank_of(arg) -> int:
-            ty = ctx.type_of(arg)
+            ty = ctx.local_type_of(arg)
             return len(ty.shape) if hasattr(ty, "shape") else out_rank
 
-        result = ctx.type_of(call)
         return AccessRelations(
             inputs=tuple(
-                moves(_identity(_rank_of(call.args[index])), _read_once(call.args[index], ctx))
+                moves(
+                    _identity(_rank_of(call.args[index])),
+                    elementwise_elements(call.args[index], call, ctx),
+                )
                 for index in range(n_inputs)
             ),
             outputs=(moves(_identity(out_rank), elements_of(result)),),
@@ -511,6 +550,8 @@ __all__ = [
     "AccessRelations",
     "AccessRelationResult",
     "access_relation_registry",
+    "elementwise_elements",
+    "measures_without_reading",
     "type_relation_registry",
     "register_access_relation",
     "register_type_relation",

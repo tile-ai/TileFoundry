@@ -9,6 +9,10 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    measures_without_reading,
+    register_access_relation,
+)
 
 
 @register_op
@@ -46,3 +50,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 def _eval_local(ctx):
 
     return ctx.args[0]
+
+
+register_access_relation(Local)(measures_without_reading)

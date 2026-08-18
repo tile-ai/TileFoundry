@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import isl
 import torch
 
 from tilefoundry.evaluator.registry import register_eval
@@ -21,6 +22,12 @@ from tilefoundry.ir.types.shard import (
 from tilefoundry.ir.types.shard.shard_layout import Split as SplitAttr
 from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelations,
+    elements_of,
+    moves,
+    register_access_relation,
+)
 
 
 @register_op
@@ -89,4 +96,42 @@ def _eval_split(ctx):
             TensorValue(data=part, type=field_type)
             for part, field_type in zip(parts, ctx.result_type.fields)
         )
+    )
+
+
+@register_access_relation(Split)
+def _split_access(call: "Call", ctx) -> AccessRelations:
+    """Each part reads its own run of the split axis, offset by the parts before it.
+
+    The offsets are the same arithmetic the type inference uses to shape the
+    parts, so a part cannot claim a run that its Type does not have. The source
+    is read once across all of them, not once per part.
+    """
+    source = ctx.local_type_of(call.args[0])
+    rank = len(source.shape)
+    axis = call.target.axis + rank if call.target.axis < 0 else call.target.axis
+    extent = source.shape[axis]
+    parts = call.target.num_splits
+    if not isinstance(extent, int) or isinstance(extent, bool) or extent % parts:
+        raise NotImplementedError(
+            f"Split access_relation: axis {axis} extent {extent!r} does not "
+            f"divide into {parts} static parts"
+        )
+    chunk = extent // parts
+    dims = [f"d{index}" for index in range(rank)]
+    domain = ", ".join(dims)
+    outputs = []
+    for part in range(parts):
+        reads = list(dims)
+        if part:
+            reads[axis] = f"d{axis} + {part * chunk}"
+        outputs.append(
+            isl.map(
+                f"{{ [{domain}] -> [{', '.join(reads)}] : 0 <= d{axis} < {chunk} }}"
+            )
+        )
+    per_part = elements_of(source) // parts
+    return AccessRelations(
+        inputs=(moves(outputs[0], elements_of(source)),),
+        outputs=tuple(moves(item, per_part) for item in outputs),
     )

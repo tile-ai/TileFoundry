@@ -198,8 +198,8 @@ def _reshard_access(call: "Call", ctx) -> AccessRelations:
     positions; neither changes which logical element the result's index came
     from, so the boundary is exactly identity and never opaque.
     """
-    rank = len(ctx.type_of(call).shape)
-    whole = elements_of(ctx.type_of(call))
+    rank = len(ctx.local_type_of(call).shape)
+    whole = elements_of(ctx.local_type_of(call))
     return AccessRelations(
         inputs=(moves(identity_access(rank), whole),),
         outputs=(moves(identity_access(rank), whole),),
