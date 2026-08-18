@@ -810,6 +810,22 @@ def logical_coordinates(local: "Type", logical: "Type") -> dict[int, str]:
     return linear
 
 
+def holds_whole_axis(local: "Type", logical: "Type", axis: int) -> bool:
+    """Whether a participant holds all of one logical axis.
+
+    An Op that narrows or divides an axis states its offsets against the whole
+    of it. A participant holding a slice of that axis would need to know which
+    slice -- its own offset -- to say where those offsets land, and a projection
+    has extents and no offsets. So the question is asked, and the Op refuses
+    what it cannot say rather than answering for the first participant.
+    """
+    held = 1
+    for position, owner in enumerate(logical_axes_of(local, logical)):
+        if owner == axis:
+            held *= local.shape[position]
+    return held == logical.shape[axis]
+
+
 def factored_window(
     offsets: "Sequence[object]", extents: "Sequence[object]", local: "Type", logical: "Type"
 ) -> tuple[tuple, tuple]:
@@ -1242,6 +1258,7 @@ __all__ = [
     "logical_axes_of",
     "logical_coordinates",
     "factored_window",
+    "holds_whole_axis",
     "self_image",
     "storage_effect_of",
     "linearized_view",

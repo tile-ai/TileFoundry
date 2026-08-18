@@ -21,6 +21,7 @@ from tilefoundry.ir.types.shard import (
 )
 from tilefoundry.ir.types.shard.shard_layout import Split as SplitAttr
 from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis
+from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessMode,
@@ -29,10 +30,13 @@ from tilefoundry.visitor_registry.access_relation import (
     BoundaryAccess,
     StorageLink,
     elements_of,
+    factored_image,
+    holds_whole_axis,
+    logical_coordinates,
     register_access_relation,
+    self_image,
     transfers,
 )
-from tilefoundry.visitor_registry.relation_build import identity_access
 
 
 @register_op
@@ -106,55 +110,72 @@ def _eval_split(ctx):
 
 @register_access_relation(Split)
 def _split_access(call: "Call", ctx) -> AccessRelations:
-    """Each part reads its own run of the split axis, offset by the parts before it.
+    """Each part reads its own run of the split axis, offset by those before it.
 
-    The offsets are the same arithmetic the type inference uses to shape the
-    parts, so a part cannot claim a run that its Type does not have. The source
-    is read once across all of them, not once per part -- and read whole, which
-    is why its own boundary is the full domain rather than the first part's map,
-    under which every later part would vanish from what the source is read for.
+    The offset is on a logical axis, so each part's own coordinates are rebuilt
+    per logical axis, shifted there, and only then spread over the source's
+    positions. The source is read once across all the parts, and read whole,
+    which is why its own boundary is the full domain rather than the first
+    part's map -- under that, every later part would vanish.
     """
     source = ctx.local_type_of(call.args[0])
-    rank = len(source.shape)
+    logical_source = ctx.type_of(call.args[0])
+    result = ctx.type_of(call)
+    fields = result.fields if isinstance(result, TupleType) else (result,)
+    rank = len(logical_source.shape)
     axis = call.target.axis + rank if call.target.axis < 0 else call.target.axis
-    extent = source.shape[axis]
     parts = call.target.num_splits
+    extent = logical_source.shape[axis]
     if not isinstance(extent, int) or isinstance(extent, bool) or extent % parts:
         raise NotImplementedError(
             f"Split access_relation: axis {axis} extent {extent!r} does not "
             f"divide into {parts} static parts"
         )
+    if not holds_whole_axis(source, logical_source, axis):
+        raise NotImplementedError(
+            f"Split access_relation: axis {axis} is divided into {parts} parts "
+            "and is itself split across participants, so which part a "
+            "participant holds depends on an offset a projection does not carry"
+        )
     chunk = extent // parts
-    dims = [f"d{index}" for index in range(rank)]
-    domain = ", ".join(dims)
-    sources = []
-    for part in range(parts):
-        reads = list(dims)
-        if part:
-            reads[axis] = f"d{axis} + {part * chunk}"
-        sources.append(isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}"))
-    per_part = elements_of(source) // parts
-    held = AccessQuantity(per_part, per_part)
+
+    sources, outputs, held = [], [], []
+    for part, field in enumerate(fields):
+        local_field = (
+            field
+            if getattr(ctx, "level", None) is None
+            else local_type_of(field, level=ctx.level, topologies=ctx.topologies)
+        )
+        carried = logical_coordinates(local_field, field)
+        reads = [carried.get(index, "0") for index in range(rank)]
+        walked = reads[axis]
+        reads[axis] = walked if not part else f"{walked} + {part * chunk}"
+        domain = ", ".join(f"d{index}" for index in range(len(local_field.shape)))
+        image = ", ".join(factored_image(reads, source, logical_source))
+        sources.append(isl.multi_aff(f"{{ [{domain}] -> [{image}] }}"))
+        outputs.append(self_image(local_field, field))
+        held.append(elements_of(local_field))
+
     return AccessRelations(
         inputs=(
             BoundaryAccess(
-                identity_access(rank),
+                self_image(source, logical_source),
                 AccessQuantity(elements_of(source), elements_of(source)),
                 AccessMode.TRANSFER,
             ),
         ),
         outputs=tuple(
             transfers(
-                identity_access(rank),
-                held,
+                written,
+                AccessQuantity(moved, moved),
                 StorageLink(
                     kind="forward",
                     input=0,
                     source=reads,
-                    output=identity_access(rank),
-                    quantity=held,
+                    output=written,
+                    quantity=AccessQuantity(moved, moved),
                 ),
             )
-            for reads in sources
+            for reads, written, moved in zip(sources, outputs, held)
         ),
     )

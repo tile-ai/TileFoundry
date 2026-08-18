@@ -103,8 +103,10 @@ from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.hir.tensor.repeat_interleave import RepeatInterleave
 from tilefoundry.ir.hir.tensor.reshape import Reshape, is_induction_var_singleton_reshape
 from tilefoundry.ir.hir.tensor.split import Split
+from tilefoundry.ir.hir.tensor.split import Split as SplitOp
 from tilefoundry.ir.hir.tensor.stack import Stack
 from tilefoundry.ir.hir.tensor.topk import TopK
+from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import (
     DType,
@@ -1204,6 +1206,127 @@ def test_an_indexed_update_keeps_its_container_and_writes_the_rows_it_names() ->
         assert link.kind == "preserve" and link.quantity == AccessQuantity(32, 32)
         assert isinstance(link.source, isl.multi_aff)
         assert isinstance(link.output, isl.multi_aff)
+
+
+def test_a_view_and_the_value_it_renames_state_the_same_coordinates() -> None:
+    """The repros I claimed and did not check: a link that must compare equal.
+
+    A forward link is honoured when both sides name the same bytes, so a view
+    whose source and output images differ is a copy however plainly it is a
+    renaming. Each of these was said to be fixed a round before it was, because
+    the tests covered a different shape than the claim did.
+    """
+    cta = Topology("cta", 2)
+    mesh = make_mesh((2,), ("c",), topology=cta)
+
+    def split(shape):
+        return make_shard_tensor_type(
+            shape, mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32
+        )
+
+    def linked(op, source):
+        held = Var(type=source, name="x")
+        inferred = TypeInferVisitor(TypeInferContext()).visit(
+            Call(type=source, target=op, args=(held,))
+        )
+        call = Call(type=inferred, target=op, args=(held,))
+        relations = access_relation_registry.lookup(type(op))(
+            call, CostContext(level="cta", topologies=(cta,))
+        )
+        return relations.outputs[0].storage.links[0]
+
+    held = split((8,))
+    same = linked(Reshard(layout=held.layout, storage=held.storage), held)
+    assert _as_map(same.source).is_equal(isl.map("{ [d0, d1] -> [0, d1] }"))
+    assert _as_map(same.source).is_equal(_as_map(same.output))
+
+    turned = linked(Transpose(perm=(0, 1)), split((8, 4)))
+    assert _as_map(turned.source).is_equal(_as_map(turned.output))
+
+    parted = access_relation_registry.lookup(SplitOp)(
+        _split_call(split((8, 4))), CostContext(level="cta", topologies=(cta,))
+    )
+    for field, offset in enumerate((0, 2)):
+        (link,) = parted.outputs[field].storage.links
+        assert _as_map(link.source).is_equal(
+            isl.map(f"{{ [d0, d1, d2] -> [0, d1, d2 + {offset}] }}")
+        )
+
+
+def _split_call(source):
+    """A two-way split of `source` along its last axis."""
+    held = Var(type=source, name="x")
+    op = SplitOp(axis=1, num_splits=2)
+    inferred = TypeInferVisitor(TypeInferContext()).visit(
+        Call(type=source, target=op, args=(held,))
+    )
+    return Call(type=inferred, target=op, args=(held,))
+
+
+def test_a_divided_axis_the_layout_also_divides_is_refused() -> None:
+    """Which part a participant holds needs an offset a projection has not got.
+
+    Splitting an axis two ways over a source already handed out two ways gives
+    each participant one whole part -- but saying which one means knowing where
+    that participant starts, and a projection carries extents alone.
+    """
+    cta = Topology("cta", 2)
+    source = make_shard_tensor_type(
+        (8, 4),
+        mesh=make_mesh((2,), ("c",), topology=cta),
+        attrs=(ShardSplit(0),),
+        dtype=DType.f32,
+    )
+    held = Var(type=source, name="x")
+    op = SplitOp(axis=0, num_splits=2)
+    inferred = TypeInferVisitor(TypeInferContext()).visit(
+        Call(type=source, target=op, args=(held,))
+    )
+    call = Call(type=inferred, target=op, args=(held,))
+
+    access_relation_registry.lookup(SplitOp)(call, CostContext())
+    with pytest.raises(NotImplementedError, match="itself split across participants"):
+        access_relation_registry.lookup(SplitOp)(
+            call, CostContext(level="cta", topologies=(cta,))
+        )
+
+
+def test_a_cache_whose_rows_are_split_is_refused() -> None:
+    """`cur_pos` is stated against the whole row axis, so a slice of it cannot say.
+
+    A batch split is fine and stays fine: each participant writes its own rows
+    at the same position. Splitting the rows themselves is the one that needs an
+    offset nothing here carries.
+    """
+    cta = Topology("cta", 2)
+    mesh = make_mesh((2,), ("c",), topology=cta)
+
+    def split(shape, axis):
+        return make_shard_tensor_type(
+            shape, mesh=mesh, attrs=(ShardSplit(axis),), dtype=DType.bf16
+        )
+
+    i32 = make_tensor_type((), DType.i32)
+    controls = (Constant(type=i32, value=0), Constant(type=i32, value=4))
+
+    batched = (
+        Var(type=split((4, 16, 2, 8), 0), name="cache"),
+        *controls,
+        Var(type=split((4, 4, 2, 8), 0), name="new"),
+    )
+    TypeInferVisitor(TypeInferContext()).visit(
+        Call(type=batched[0].type, target=CacheUpdate(), args=batched)
+    )
+
+    rowwise = (
+        Var(type=split((1, 16, 2, 8), 1), name="cache"),
+        *controls,
+        Var(type=split((1, 4, 2, 8), 1), name="new"),
+    )
+    with pytest.raises(VerifyError, match="the row axis is Split across participants"):
+        TypeInferVisitor(TypeInferContext()).visit(
+            Call(type=rowwise[0].type, target=CacheUpdate(), args=rowwise)
+        )
 
 
 def test_a_window_is_stated_in_the_positions_its_layout_made() -> None:

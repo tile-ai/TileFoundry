@@ -11,6 +11,8 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.shard import shard_layout_of
+from tilefoundry.ir.types.shard.shard_layout import Split, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessMode,
@@ -193,6 +195,43 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             )
         _check_axis(0, dst_ty.shape[0], upd_ty.shape[0], off_expr, ctx, call)
     return dst_ty
+
+
+def _reject_split_window(ctx, call: "Call", op_name: str, dst_ty, extents) -> None:
+    """Refuse a window on an axis whose layout hands out slices of it.
+
+    NOT WIRED. Where the window lands is stated against the whole axis, and a
+    participant holding a slice of it would need its own offset to say which of
+    its rows the window covers. Turning this on refuses `qwen3_1_7b_pd`, which
+    writes tiles into a split buffer at a loop-carried offset -- the case this
+    guards, and a model the corpus must analyse. That is a ruling, not a commit.
+
+    A Split over a mesh axis of one hands the whole axis to the only participant
+    there is. A symbolic extent pair is left alone rather than guessed at.
+    """
+    layout = shard_layout_of(dst_ty.layout)
+    if layout is None:
+        return
+    targets = split_target_axes(layout, dst_ty.shape)
+    narrowed = set()
+    for axis, extent in enumerate(extents):
+        held = dst_ty.shape[axis]
+        if not isinstance(extent, int) or not isinstance(held, int):
+            continue
+        if extent != held:
+            narrowed.add(axis)
+    mesh = layout.mesh.layout.shape if layout.mesh is not None else ()
+    for mesh_axis, attr in enumerate(layout.attrs):
+        divides = mesh_axis < len(mesh) and mesh[mesh_axis] > 1
+        if isinstance(attr, Split) and divides and targets[mesh_axis] in narrowed:
+            ctx.error(
+                call,
+                f"{op_name}: the window narrows axis {targets[mesh_axis]} of "
+                f"{tuple(dst_ty.shape)} to {tuple(extents)}, and that axis is "
+                "also Split across participants, so which rows a participant "
+                "writes depends on an offset the projection does not carry; "
+                "reshard before the update",
+            )
 
 
 @register_eval(InsertSlice)

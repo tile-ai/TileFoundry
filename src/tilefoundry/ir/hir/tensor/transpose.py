@@ -23,9 +23,10 @@ from tilefoundry.visitor_registry.access_relation import (
     register_access_relation,
     register_type_relation,
     same_placement,
+    self_image,
     view_relations,
 )
-from tilefoundry.visitor_registry.relation_build import build_domain, identity_access, identity_map
+from tilefoundry.visitor_registry.relation_build import build_domain, identity_map
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
@@ -82,7 +83,7 @@ def _transpose_view(call: "Call", ctx) -> tuple:
     image = ", ".join(factored_image(reads, source, ctx.type_of(call.args[0])))
     return (
         isl.multi_aff(f"{{ [{domain}] -> [{image}] }}"),
-        identity_access(len(result.shape)),
+        self_image(result, ctx.type_of(call)),
     )
 
 

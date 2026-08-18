@@ -13,6 +13,8 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shard import shard_layout_of
+from tilefoundry.ir.types.shard.shard_layout import Split, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessMode,
@@ -203,7 +205,33 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     cap, s_cap = cache_ty.shape[1], new_ty.shape[1]
     if isinstance(cap, int) and isinstance(s_cap, int) and s_cap > cap:
         ctx.error(call, f"S_CAP {s_cap} exceeds cache capacity {cap}")
+    _reject_split_rows(ctx, call, cache_ty)
     return cache_ty
+
+
+def _reject_split_rows(ctx, call: "Call", cache_ty) -> None:
+    """Refuse a cache whose row axis is handed out in slices.
+
+    `cur_pos` is stated against the whole row axis, and a participant holding a
+    slice of it would need its own offset to say which of its rows the update
+    covers -- a projection carries extents and not offsets. Every other axis may
+    be split freely: a batch shard writes its own rows at the same position.
+    """
+    layout = shard_layout_of(cache_ty.layout)
+    if layout is None:
+        return
+    targets = split_target_axes(layout, cache_ty.shape)
+    mesh = layout.mesh.layout.shape if layout.mesh is not None else ()
+    for mesh_axis, attr in enumerate(layout.attrs):
+        divides = mesh_axis < len(mesh) and mesh[mesh_axis] > 1
+        if isinstance(attr, Split) and divides and targets[mesh_axis] == 1:
+            ctx.error(
+                call,
+                "CacheUpdate: the row axis is Split across participants, and "
+                "cur_pos is stated against the whole of it, so which rows a "
+                "participant writes depends on an offset the projection does "
+                "not carry; reshard before the update",
+            )
 
 
 @register_eval(CacheUpdate)
