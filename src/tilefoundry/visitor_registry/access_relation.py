@@ -590,11 +590,22 @@ def _check_lookups_against(call, ctx, relations: AccessRelations, op_cls: type) 
 
 
 def _image_rank(pattern: "AccessPattern") -> int | None:
-    """How many coordinates an affine carrier names, or ``None`` for the others."""
-    if isinstance(pattern, isl.multi_aff):
+    """How many coordinates a carrier names, or ``None`` when it names none.
+
+    A window names one offset and one extent per coordinate, so it answers the
+    same question an affine image does and is held to the same rank. Both being
+    checked is what keeps a boundary from carrying a logical window against a
+    factored image of the same value.
+    """
+    if isinstance(pattern, (isl.multi_aff, isl.map)):
         return pattern.dim(isl.dim_type.OUT)
-    if isinstance(pattern, isl.map):
-        return pattern.dim(isl.dim_type.OUT)
+    if isinstance(pattern, WindowAccess):
+        if len(pattern.offsets) != len(pattern.extents):
+            raise ValueError(
+                f"a window states {len(pattern.offsets)} offsets and "
+                f"{len(pattern.extents)} extents"
+            )
+        return len(pattern.extents)
     return None
 
 
@@ -775,6 +786,91 @@ def logical_axes_of(local: "Type", logical: "Type") -> list[int]:
     return layout_axis_to_tensor_axis(tuple(shape), tuple(logical.shape))
 
 
+def logical_coordinates(local: "Type", logical: "Type") -> dict[int, str]:
+    """One expression per logical axis, rebuilt from the positions holding it.
+
+    The inverse of `factored_image`: a domain is indexed by a projected Type's
+    positions, and an Op reasons about the logical axes those positions came
+    from. A position a participant holds one of contributes nothing, its
+    coordinate being fixed; the rest are recombined in the order the layout
+    states them.
+    """
+    belongs = logical_axes_of(local, logical)
+    linear: dict[int, str] = {}
+    strides: dict[int, int] = {}
+    for position in reversed(range(len(belongs))):
+        owner = belongs[position]
+        extent = local.shape[position]
+        if extent == 1:
+            continue
+        stride = strides.get(owner, 1)
+        term = f"d{position}" if stride == 1 else f"{stride} * d{position}"
+        linear[owner] = term if owner not in linear else f"{linear[owner]} + {term}"
+        strides[owner] = stride * extent
+    return linear
+
+
+def factored_window(
+    offsets: "Sequence[object]", extents: "Sequence[object]", local: "Type", logical: "Type"
+) -> tuple[tuple, tuple]:
+    """Project one logical window onto the positions a layout factored.
+
+    A window is stated per logical axis and a projected Type has one entry per
+    position, so the lengths disagree the moment anything is split. A window
+    covering a whole axis leaves every position of it whole. One that narrows an
+    axis lands on the single position varying over it. An axis whose layout
+    leaves several varying is refused: the window would have to be shown to
+    align with the split first, and guessing is how a participant ends up
+    charged for rows its neighbour holds.
+    """
+    belongs = logical_axes_of(local, logical)
+    positions: dict[int, list[int]] = {}
+    for position, owner in enumerate(belongs):
+        positions.setdefault(owner, []).append(position)
+    spread_offsets: list[object] = [0] * len(belongs)
+    spread_extents: list[object] = list(local.shape)
+    for axis, held in positions.items():
+        offset = offsets[axis] if axis < len(offsets) else 0
+        extent = extents[axis] if axis < len(extents) else None
+        whole = 1
+        for position in held:
+            whole *= local.shape[position]
+        if offset == 0 and (extent is None or extent == whole):
+            continue
+        carrying = [position for position in held if local.shape[position] != 1]
+        if len(carrying) == 1:
+            spread_offsets[carrying[0]] = offset
+            spread_extents[carrying[0]] = extent if extent is not None else whole
+            continue
+        if True:
+            raise NotImplementedError(
+                f"a window of {extent!r} at {offset!r} on logical axis {axis} of "
+                f"{tuple(logical.shape)} cannot be projected: its layout gives "
+                f"that axis {len(carrying)} varying positions in "
+                f"{tuple(local.shape)}, and "
+                "the window has not been shown to align with the split"
+            )
+    return tuple(spread_offsets), tuple(spread_extents)
+
+
+def self_image(local: "Type", logical: "Type") -> "isl.multi_aff":
+    """A value read at its own coordinates, with its fixed positions written down.
+
+    An identity over every position claims coordinates a participant does not
+    have: a position it holds one of is that participant's identity, and only
+    zero is in it. Writing the constant makes two names of the same bytes
+    compare equal instead of differing on an axis neither can vary.
+    """
+    rank = len(local.shape)
+    domain = ", ".join(f"d{index}" for index in range(rank))
+    carried = logical_coordinates(local, logical)
+    reads = [carried.get(axis, "0") for axis in range(len(logical.shape))]
+    image = ", ".join(factored_image(reads, local, logical))
+    if not rank:
+        return isl.multi_aff("{ [] -> [] }")
+    return isl.multi_aff(f"{{ [{domain}] -> [{image}] }}")
+
+
 def factored_image(reads: "Sequence[str]", local: "Type", logical: "Type") -> list[str]:
     """Spread one expression per logical axis over the positions it occupies.
 
@@ -925,21 +1021,34 @@ def view_relations(
             held_type = ctx.local_type_of(call.args[source])
             logical_source = ctx.type_of(call.args[source])
             logical_result = ctx.type_of(call)
-            spread = factored_image(
-                [
-                    f"d{position}"
-                    for position in range(len(getattr(logical_result, "shape", ())))
-                ],
-                held_type,
-                logical_source,
-            ) if hasattr(held_type, "shape") else []
+            carried = (
+                logical_coordinates(result, logical_result)
+                if hasattr(logical_result, "shape")
+                else {}
+            )
+            spread = (
+                factored_image(
+                    [
+                        carried.get(axis, "0")
+                        for axis in range(len(getattr(logical_result, "shape", ())))
+                    ],
+                    held_type,
+                    logical_source,
+                )
+                if hasattr(held_type, "shape")
+                else []
+            )
             domain = ", ".join(f"d{index}" for index in range(out_rank))
             reads = (
                 isl.multi_aff(f"{{ [{domain}] -> [{', '.join(spread)}] }}")
                 if spread
                 else _identity(out_rank)
             )
-            written = _identity(out_rank)
+            written = (
+                self_image(result, logical_result)
+                if hasattr(logical_result, "shape")
+                else _identity(out_rank)
+            )
         link = StorageLink(
             kind="forward",
             input=source,
@@ -1131,6 +1240,9 @@ __all__ = [
     "elementwise_elements",
     "factored_image",
     "logical_axes_of",
+    "logical_coordinates",
+    "factored_window",
+    "self_image",
     "storage_effect_of",
     "linearized_view",
     "view_relations",

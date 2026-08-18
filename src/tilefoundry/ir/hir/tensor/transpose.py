@@ -17,13 +17,15 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     StorageEffectClaim,
     build_relation,
+    factored_image,
     forward_whole,
+    logical_coordinates,
     register_access_relation,
     register_type_relation,
     same_placement,
     view_relations,
 )
-from tilefoundry.visitor_registry.relation_build import build_domain, identity_map
+from tilefoundry.visitor_registry.relation_build import build_domain, identity_access, identity_map
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
@@ -63,16 +65,24 @@ def _transpose_storage(call: "Call", ctx) -> StorageEffectClaim | None:
 
 
 def _transpose_view(call: "Call", ctx) -> tuple:
-    """Result axis k is source axis perm[k], which is the whole of a transpose."""
+    """Result axis k is source axis perm[k], stated in both sides' positions.
+
+    The permutation is over logical axes, and a layout may factor either side
+    into more positions than that. So the result's own coordinates are rebuilt
+    per logical axis, permuted, and spread over the source's positions.
+    """
     perm = tuple(call.target.perm)
-    dims = [f"d{index}" for index in range(len(perm))]
-    reads = [""] * len(perm)
+    result = ctx.local_type_of(call)
+    source = ctx.local_type_of(call.args[0])
+    carried = logical_coordinates(result, ctx.type_of(call))
+    reads = ["0"] * len(perm)
     for result_axis, source_axis in enumerate(perm):
-        reads[source_axis] = dims[result_axis]
-    domain = ", ".join(dims)
+        reads[source_axis] = carried.get(result_axis, "0")
+    domain = ", ".join(f"d{index}" for index in range(len(result.shape)))
+    image = ", ".join(factored_image(reads, source, ctx.type_of(call.args[0])))
     return (
-        isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}"),
-        isl.multi_aff(f"{{ [{domain}] -> [{domain}] }}"),
+        isl.multi_aff(f"{{ [{domain}] -> [{image}] }}"),
+        identity_access(len(result.shape)),
     )
 
 

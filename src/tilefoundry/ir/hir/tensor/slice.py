@@ -40,8 +40,11 @@ from tilefoundry.visitor_registry.access_relation import (
     StorageSpan,
     WindowAccess,
     dense,
+    factored_image,
+    logical_coordinates,
     register_access_relation,
     same_placement,
+    self_image,
     static_bytes,
     view_relations,
 )
@@ -119,33 +122,42 @@ def _window_span(call: "Call", ctx, source, result) -> "StorageSpan | None":
 
 
 def _slice_view(call: "Call", ctx) -> tuple:
-    """A window reads its own extent, offset by where it starts and how it steps.
+    """A window reads its own extent, offset by where it starts.
 
-    A start that only arrives at run time is not an affine coordinate, so the
-    pattern says so with a window rather than pretending to a map. A window is
-    then compared as a window, which is what lets an unbound start still be
-    proved to name the same bytes.
+    The offsets are per logical axis, so the result's coordinates are rebuilt
+    per logical axis, shifted there, and only then spread over the source's
+    positions -- a layout may give either side more positions than the Op has
+    axes. A start that only arrives at run time is not an affine coordinate, so
+    the pattern says so with a window rather than pretending to a map, and a
+    window is then compared as a window.
     """
     result = ctx.local_type_of(call)
-    starts = _static_window(call, ctx.local_type_of(call.args[0]))
+    logical_result = ctx.type_of(call)
+    source = ctx.local_type_of(call.args[0])
+    logical_source = ctx.type_of(call.args[0])
+    starts = _static_window(call, logical_source)
     extents = tuple(result.shape)
     if starts is None:
         return (
             WindowAccess(
-                tuple(OperandValue(operand=1, element=axis) for axis in range(len(extents))),
+                tuple(
+                    OperandValue(operand=1, element=axis) for axis in range(len(extents))
+                ),
                 extents,
             ),
             WindowAccess(tuple(0 for _ in extents), extents),
         )
-    dims = [f"d{index}" for index in range(len(result.shape))]
-    reads = [
-        dims[axis] if start == 0 else f"{dims[axis]} + {start}"
-        for axis, start in enumerate(starts)
-    ]
-    domain = ", ".join(dims)
+    carried = logical_coordinates(result, logical_result)
+    reads = []
+    for axis in range(len(logical_source.shape)):
+        walked = carried.get(axis, "0")
+        start = starts[axis] if axis < len(starts) else 0
+        reads.append(walked if not start else f"{walked} + {start}")
+    domain = ", ".join(f"d{index}" for index in range(len(result.shape)))
+    image = ", ".join(factored_image(reads, source, logical_source))
     return (
-        isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}"),
-        isl.multi_aff(f"{{ [{domain}] -> [{domain}] }}"),
+        isl.multi_aff(f"{{ [{domain}] -> [{image}] }}"),
+        self_image(result, logical_result),
     )
 
 

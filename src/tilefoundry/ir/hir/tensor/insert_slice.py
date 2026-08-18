@@ -23,6 +23,8 @@ from tilefoundry.visitor_registry.access_relation import (
     StorageLink,
     WindowAccess,
     elements_of,
+    factored_window,
+    logical_axes_of,
     moves,
     register_access_relation,
     update_destination,
@@ -74,19 +76,23 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     """The result is dst with a window replaced, so every index reads itself.
 
     The window is exactly the update's own shape wherever it lands, so both
-    sides answer the same size question: the update whole, and the container
-    without a hole that size. Only the address moves with the offsets.
-
-    The result states the window too, not the container. How big the result is
-    and how much of it this occurrence wrote are different numbers, and the
-    second is the one a boundary is asked for: the rest of the container was
-    already there, which is what the complement on the destination says.
+    sides answer the same size question, and only the address moves with the
+    offsets. Those extents are the ones this participant holds, folded onto the
+    logical axes the offsets are stated against. The result states the window
+    rather than the container: how big it is and how much of it this occurrence
+    wrote are different numbers, and the rest was already there.
     """
     result = ctx.local_type_of(call)
-    rank = len(result.shape)
+    logical_result = ctx.type_of(call)
+    rank = len(logical_result.shape)
     update = ctx.local_type_of(call.args[1])
-    extents = tuple(update.shape)
-    offsets = _offset_axes(call, rank)
+    logical_update = ctx.type_of(call.args[1])
+    held_update = [1] * len(logical_update.shape)
+    for position, owner in enumerate(logical_axes_of(update, logical_update)):
+        held_update[owner] *= update.shape[position]
+    offsets, extents = factored_window(
+        _offset_axes(call, rank), tuple(held_update), result, logical_result
+    )
     window = elements_of(update)
     kept = elements_of(ctx.local_type_of(call.args[0])) - window
     complement = WindowAccess(offsets, extents, complement=True)
@@ -100,12 +106,15 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     return AccessRelations(
         inputs=(
             BoundaryAccess(complement, AccessQuantity(kept, kept), AccessMode.TRANSFER),
-            moves(WindowAccess(tuple(0 for _ in extents), extents), window),
+            moves(
+                WindowAccess(tuple(0 for _ in update.shape), tuple(update.shape)),
+                window,
+            ),
             *(moves(_scalar_access(ctx, arg), 1) for arg in call.args[2:]),
         ),
         outputs=(
             BoundaryAccess(
-                identity_access(rank),
+                identity_access(len(result.shape)),
                 AccessQuantity(window, window),
                 AccessMode.WRITE,
                 OutputStorage((preserve,)),

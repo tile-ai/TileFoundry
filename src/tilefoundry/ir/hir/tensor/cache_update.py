@@ -25,6 +25,8 @@ from tilefoundry.visitor_registry.access_relation import (
     StorageLink,
     WindowAccess,
     elements_of,
+    factored_window,
+    logical_axes_of,
     moves,
     register_access_relation,
     update_destination,
@@ -110,24 +112,37 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
     How many rows move is ``s`` and where they land is ``cur_pos``; only the
     first is a quantity, and it is the same one wherever the second points. The
     two controls are rank-0, so their own boundaries are plain identities.
+    Everything is counted by logical axis rather than by position: the row axis
+    keeps its extent while a batch split shrinks the rest, and reading position
+    one as the rows makes a participant answer with whatever its layout put
+    there.
     """
-    cache = tuple(ctx.local_type_of(call.args[0]).shape)
-    supplied = tuple(ctx.local_type_of(call.args[3]).shape)
+    local_cache = ctx.local_type_of(call.args[0])
+    local_new = ctx.local_type_of(call.args[3])
+    logical_cache = ctx.type_of(call.args[0])
+    logical_new = ctx.type_of(call.args[3])
+
+    cache = _by_logical_axis(local_cache, logical_cache)
+    supplied = _by_logical_axis(local_new, logical_new)
     rows = _rows(
         call.args[2],
         cache[1] if len(cache) > 1 else None,
         supplied[1] if len(supplied) > 1 else None,
     )
-    extents = (cache[0], rows, *cache[2:])
     start = (
         int(call.args[1].value)
         if isinstance(call.args[1], Constant) and isinstance(call.args[1].value, int)
         else OperandValue(operand=1)
     )
-    offsets = (0, start, *(0 for _ in cache[2:]))
-    held = elements_of(ctx.local_type_of(call.args[0]))
+    offsets, extents = factored_window(
+        (0, start, *(0 for _ in cache[2:])),
+        (cache[0], rows, *cache[2:]),
+        local_cache,
+        logical_cache,
+    )
+    held = elements_of(local_cache)
     per_row = held // cache[1] if isinstance(cache[1], int) and cache[1] else 0
-    written = _written(rows, per_row, _limit(cache, supplied))
+    written = _written(rows, per_row, _limit(tuple(cache), tuple(supplied)))
     kept = AccessQuantity(
         held - written.upper, held - written.lower, written.provenance
     )
@@ -140,11 +155,13 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
             BoundaryAccess(complement, kept, AccessMode.TRANSFER),
             moves(_scalar_access(ctx, call.args[1]), 1),
             moves(_scalar_access(ctx, call.args[2]), 1),
-            BoundaryAccess(WindowAccess(tuple(0 for _ in cache), extents), written),
+            BoundaryAccess(
+                WindowAccess(tuple(0 for _ in extents), extents), written
+            ),
         ),
         outputs=(
             BoundaryAccess(
-                identity_access(len(cache)),
+                identity_access(len(local_cache.shape)),
                 written,
                 AccessMode.WRITE,
                 OutputStorage((preserve,)),
@@ -220,3 +237,11 @@ def _scalar_access(ctx, arg) -> "isl.multi_aff":
     """
     held = ctx.local_type_of(arg)
     return identity_access(len(held.shape) if hasattr(held, "shape") else 0)
+
+
+def _by_logical_axis(local, logical) -> list:
+    """One extent per logical axis of a value, folding the positions it factored."""
+    extents = [1] * len(logical.shape)
+    for position, owner in enumerate(logical_axes_of(local, logical)):
+        extents[owner] *= local.shape[position]
+    return extents

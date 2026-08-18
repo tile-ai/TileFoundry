@@ -1206,6 +1206,76 @@ def test_an_indexed_update_keeps_its_container_and_writes_the_rows_it_names() ->
         assert isinstance(link.output, isl.multi_aff)
 
 
+def test_a_window_is_stated_in_the_positions_its_layout_made() -> None:
+    """A window is per logical axis and a projected Type is per position.
+
+    The two lengths disagree the moment anything is split, and nothing was
+    checking it: a window of two offsets rode along beside an image of three
+    coordinates, and a cache reported the row count its layout happened to put
+    at position one. The row axis keeps its own extent while a batch split
+    shrinks the rest, which is what tells the two apart.
+    """
+    cta = Topology("cta", 2)
+    mesh = make_mesh((2,), ("c",), topology=cta)
+
+    def split(shape, dtype=DType.f32):
+        return make_shard_tensor_type(
+            shape, mesh=mesh, attrs=(ShardSplit(0),), dtype=dtype
+        )
+
+    i64 = make_tensor_type((), DType.i64)
+    offsets = Tuple(
+        type=i64,
+        elements=(Constant(type=i64, value=0), Constant(type=i64, value=3)),
+    )
+    written = InsertSlice()
+    held = tuple(
+        Var(type=type_, name=name)
+        for type_, name in ((split((4, 8)), "dst"), (split((4, 2)), "upd"))
+    )
+    inferred = TypeInferVisitor(TypeInferContext()).visit(
+        Call(type=held[0].type, target=written, args=(*held, offsets))
+    )
+    call = Call(type=inferred, target=written, args=(*held, offsets))
+    whole, unit = (
+        access_relation_registry.lookup(InsertSlice)(
+            call, CostContext(level=level, topologies=(cta,))
+        )
+        for level in (None, "cta")
+    )
+    assert (whole.inputs[0].pattern.offsets, whole.inputs[0].pattern.extents) == (
+        (0, 3),
+        (4, 2),
+    )
+    assert (unit.inputs[0].pattern.offsets, unit.inputs[0].pattern.extents) == (
+        (0, 0, 3),
+        (1, 2, 2),
+    )
+
+    cache = CacheUpdate()
+    i32 = make_tensor_type((), DType.i32)
+    rows = (
+        Var(type=split((4, 16, 2, 8), DType.bf16), name="cache"),
+        Constant(type=i32, value=0),
+        Constant(type=i32, value=4),
+        Var(type=split((4, 4, 2, 8), DType.bf16), name="new"),
+    )
+    inferred = TypeInferVisitor(TypeInferContext()).visit(
+        Call(type=rows[0].type, target=cache, args=rows)
+    )
+    call = Call(type=inferred, target=cache, args=rows)
+    whole, unit = (
+        access_relation_registry.lookup(CacheUpdate)(
+            call, CostContext(level=level, topologies=(cta,))
+        )
+        for level in (None, "cta")
+    )
+    assert whole.inputs[0].pattern.extents == (4, 4, 2, 8)
+    assert whole.inputs[3].quantity.upper == 256
+    assert unit.inputs[0].pattern.extents == (1, 2, 4, 2, 8)
+    assert unit.inputs[3].quantity.upper == 128
+
+
 def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:
     """A quantity says how much crossed; the pattern says from where.
 

@@ -31,13 +31,15 @@ from tilefoundry.visitor_registry.access_relation import (
     elements_of,
     factored_image,
     forward_whole,
+    logical_coordinates,
     register_access_relation,
     register_type_relation,
     same_placement,
+    self_image,
     transfers,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
-from tilefoundry.visitor_registry.relation_build import identity_access, identity_map
+from tilefoundry.visitor_registry.relation_build import identity_map
 
 
 def _dim_mul(a, b):
@@ -210,22 +212,25 @@ def _reshard_access(call: "Call", ctx) -> AccessRelations:
     whole = elements_of(result)
     held = AccessQuantity(whole, whole)
     dims = ", ".join(f"d{index}" for index in range(rank))
+    logical = ctx.type_of(call)
+    carried = logical_coordinates(result, logical)
     spread = factored_image(
-        [f"d{index}" for index in range(len(ctx.type_of(call).shape))],
+        [carried.get(axis, "0") for axis in range(len(logical.shape))],
         ctx.local_type_of(call.args[0]),
         ctx.type_of(call.args[0]),
     )
     reads = isl.multi_aff(f"{{ [{dims}] -> [{', '.join(spread)}] }}")
+    written = self_image(result, logical)
     link = StorageLink(
         kind="forward",
         input=0,
         source=reads,
-        output=identity_access(rank),
+        output=written,
         quantity=held,
     )
     return AccessRelations(
         inputs=(BoundaryAccess(reads, held, AccessMode.TRANSFER),),
-        outputs=(transfers(identity_access(rank), held, link),),
+        outputs=(transfers(written, held, link),),
         storage_effect=_reshard_storage(call, ctx),
     )
 
