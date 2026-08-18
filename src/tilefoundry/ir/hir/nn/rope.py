@@ -27,6 +27,8 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
     IndexedAccess,
+    elements_of,
+    moves,
     register_access_relation,
     register_type_relation,
 )
@@ -101,11 +103,24 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     q_id = _ident(len(q_ty.shape))
     k_id = _ident(len(k_ty.shape))
 
-    positions = _ident(len(ctx.type_of(call.args[4]).shape))
-    lookup = IndexedAccess(index_operand=4, source_axis=0)
+    pos_ty = ctx.type_of(call.args[4])
+    positions = _ident(len(pos_ty.shape))
+    taken = elements_of(pos_ty)
+    tables = tuple(
+        moves(
+            IndexedAccess(source_operand=operand, index_operand=4, source_axis=0),
+            taken * (elements_of(ctx.type_of(call.args[operand])) // ctx.type_of(call.args[operand]).shape[0]),
+        )
+        for operand in (2, 3)
+    )
     return AccessRelations(
-        inputs=(q_id, k_id, lookup, lookup, positions),
-        outputs=(q_id, k_id),
+        inputs=(
+            moves(q_id, elements_of(q_ty)),
+            moves(k_id, elements_of(k_ty)),
+            *tables,
+            moves(positions, taken),
+        ),
+        outputs=(moves(q_id, elements_of(q_ty)), moves(k_id, elements_of(k_ty))),
     )
 
 

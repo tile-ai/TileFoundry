@@ -22,6 +22,8 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
     build_relation,
+    elements_of,
+    moves,
     register_access_relation,
     register_type_relation,
 )
@@ -74,7 +76,13 @@ def _where_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
 def _where_access_relation(call: "Call", ctx) -> AccessRelations:
     input_types = tuple(ctx.type_of(arg) for arg in call.args)
     _, maps, _ = _maps(tuple(type_.shape for type_ in input_types))
-    return AccessRelations(inputs=maps[:-1], outputs=(maps[-1],))
+    return AccessRelations(
+        inputs=tuple(
+            moves(item, elements_of(ctx.type_of(arg)))
+            for item, arg in zip(maps[:-1], call.args)
+        ),
+        outputs=(moves(maps[-1], elements_of(ctx.type_of(call))),),
+    )
 
 
 def _data_relation(relation: AccessRelationResult) -> AccessRelationResult:

@@ -22,6 +22,8 @@ from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
+    elements_of,
+    moves,
     register_access_relation,
     register_type_relation,
 )
@@ -69,10 +71,14 @@ def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
     op).
     """
     x_ty = ctx.type_of(call.args[0])
+    w_ty = ctx.type_of(call.args[1])
     rank = len(x_ty.shape)
     return AccessRelations(
-        inputs=(_identity(rank), _identity(1)),
-        outputs=(_identity(rank),),
+        inputs=(
+            moves(_identity(rank), elements_of(x_ty)),
+            moves(_identity(1), elements_of(w_ty)),
+        ),
+        outputs=(moves(_identity(rank), elements_of(x_ty)),),
     )
 
 

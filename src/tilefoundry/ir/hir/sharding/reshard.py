@@ -22,7 +22,9 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     StorageEffectClaim,
     StorageEffectKind,
+    elements_of,
     forward_whole,
+    moves,
     register_access_relation,
     register_type_relation,
     same_placement,
@@ -197,9 +199,10 @@ def _reshard_access(call: "Call", ctx) -> AccessRelations:
     from, so the boundary is exactly identity and never opaque.
     """
     rank = len(ctx.type_of(call).shape)
+    whole = elements_of(ctx.type_of(call))
     return AccessRelations(
-        inputs=(identity_map(rank),),
-        outputs=(identity_map(rank),),
+        inputs=(moves(identity_map(rank), whole),),
+        outputs=(moves(identity_map(rank), whole),),
         storage_effect=_reshard_storage(call, ctx),
     )
 

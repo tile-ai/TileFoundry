@@ -16,10 +16,12 @@ from typing import get_args, get_origin
 
 import isl
 import pytest
+import torch
 
 import tilefoundry.analysis.api as analysis_api
 import tilefoundry.cli.analyze as cli_analyze
 from tests.analysis.test_analysis_families import _oversized_working_set
+from tests.evaluator.eval_utils import EvalCase, run_eval_case
 from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.logical.gqa_static import static_online_attend
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
@@ -70,6 +72,7 @@ from tilefoundry.ir.core import (
     SourceSpanMetadata,
     TotalAndPerUnit,
     TripInterval,
+    Tuple,
     TypeInferContext,
     Var,
     binding_name,
@@ -79,12 +82,15 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.nn.layer_norm import LayerNorm
+from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.nn.relu import ReLU
 from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
+from tilefoundry.ir.hir.tensor.concat import Concat
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
+from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.quant import Quant
 from tilefoundry.ir.hir.tensor.reshape import Reshape, is_induction_var_singleton_reshape
 from tilefoundry.ir.hir.tensor.topk import TopK
@@ -95,13 +101,11 @@ from tilefoundry.schedule import ScheduleError, schedule
 from tilefoundry.schedule.partition import PartitionProgramError, build_partition_program
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.access_relation import (
-    AccessQuantity,
     AccessRelations,
     IndexedAccess,
     StorageEffectClaim,
     StorageEffectKind,
     StorageSpan,
-    access_elements,
     access_relation_registry,
     build_relation,
     identity_relations,
@@ -632,13 +636,12 @@ def test_a_data_dependent_read_is_a_relation_and_not_a_function() -> None:
     """
     logits = _relations(TopK(k=8), (1, 128))
     assert len(logits.inputs) == 1
-    assert isinstance(logits.inputs[0], isl.map)
-
+    assert isinstance(logits.inputs[0].pattern, isl.map)
     assert len(logits.outputs) == 2
-    assert all(isinstance(item, isl.multi_aff) for item in logits.outputs)
+    assert all(isinstance(item.pattern, isl.multi_aff) for item in logits.outputs)
 
     picked = _relations(ArgMax(), (1, 151936))
-    assert isinstance(picked.inputs[0], isl.map)
+    assert isinstance(picked.inputs[0].pattern, isl.map)
     assert len(picked.outputs) == 1
 
 
@@ -646,11 +649,10 @@ def test_a_relation_says_how_a_data_dependent_operand_is_read() -> None:
     """A table read through positions is a lookup, not an unknown.
 
     At this level a rotation's tables are indexed by data, so the relation names
-    the operand those indices come from rather than inventing an affine access
-    or giving up. Which entry it lands on is not known here; how many it reads
-    is, and that is what a cost asks. q and k it describes affinely, and both of
-    its outputs. Telling a lookup from an identity is the safety property: a
-    relation that returned an identity for a lookup would be believed.
+    the operand those indices come from and the operand being indexed. Which
+    entry it lands on is not known here; telling a lookup from an identity is
+    the safety property, because a relation that returned an identity for a
+    lookup would be believed.
     """
     heads = make_tensor_type((1, 4, HEAD_DIM), DType.bf16)
     tables = make_tensor_type((4096, HEAD_DIM), DType.bf16)
@@ -665,80 +667,159 @@ def test_a_relation_says_how_a_data_dependent_operand_is_read() -> None:
     )
 
     assert len(relation.inputs) == 5
-    assert isinstance(relation.inputs[0], isl.multi_aff)
-    assert isinstance(relation.inputs[1], isl.multi_aff)
-    lookup = IndexedAccess(index_operand=4, source_axis=0)
-    assert relation.inputs[2:4] == (lookup, lookup)
-    assert isinstance(relation.inputs[4], isl.multi_aff)
+    assert isinstance(relation.inputs[0].pattern, isl.multi_aff)
+    assert isinstance(relation.inputs[1].pattern, isl.multi_aff)
+    assert relation.inputs[2].pattern == IndexedAccess(
+        source_operand=2, index_operand=4, source_axis=0
+    )
+    assert relation.inputs[3].pattern == IndexedAccess(
+        source_operand=3, index_operand=4, source_axis=0
+    )
+    assert isinstance(relation.inputs[4].pattern, isl.multi_aff)
     assert len(relation.outputs) == 2
-    assert all(isinstance(item, isl.multi_aff) for item in relation.outputs)
+    assert all(isinstance(item.pattern, isl.multi_aff) for item in relation.outputs)
 
 
-def test_every_relation_says_how_much_it_reads() -> None:
-    """What a boundary touches is a number, whatever decides the addresses.
+def test_every_boundary_states_the_movement_its_op_performs() -> None:
+    """Hand-counted, boundary by boundary, because nothing derives this.
 
-    A gather reads one source slice per index element, so which entries the
-    index names changes nothing and how many it names changes it in proportion.
-    A window reads its own extent and its complement the rest, neither of which
-    moves when the offset does. An unbound row count is still bounded by what
-    the cache can hold, which is a range rather than the whole cache. That is
-    why a lookup is written down instead of left unsaid.
+    A pattern says where a value came from and a quantity says how much crossed;
+    the second does not follow from the first. Every output of a scan depends on
+    the whole input the scan reads once, and a matrix product's result domain
+    says nothing about how big its operands were. So each Op states its own, and
+    each is checked here against a number worked out by hand.
     """
-    ctx = TypeInferContext()
-    table = Var(type=make_tensor_type((4096, HEAD_DIM), DType.bf16), name="table")
-    held: list[object] = [table]
 
-    def gathered(values: tuple[int, ...]):
-        index = Var(type=make_tensor_type((len(values),), DType.i32), name="index")
-        call = Call(
-            type=make_tensor_type((len(values), HEAD_DIM), DType.bf16),
-            target=IndexSelect(dim=0),
-            args=(table, index),
+    def counted(relations) -> tuple[list[int], list[int]]:
+        return (
+            [item.quantity.upper for item in relations.inputs],
+            [item.quantity.upper for item in relations.outputs],
         )
-        held.extend((index, call))
-        relations = access_relation_registry.lookup(IndexSelect)(call, ctx)
-        return access_elements(relations, call, ctx, boundary=0)
 
-    ordered, repeated, backwards = (0, 1, 2), (7, 7, 7), (9, 2, 5)
-    assert gathered(ordered) == gathered(repeated) == gathered(backwards)
-    assert gathered(ordered) == AccessQuantity(3 * HEAD_DIM, 3 * HEAD_DIM)
-    assert gathered((0,) * 12).upper == 12 * HEAD_DIM
+    scanned = _relations(TopK(k=8), (1, 128))
+    assert counted(scanned) == ([128], [8, 8])
 
-    def i32(value: int) -> Constant:
-        return Constant(type=make_tensor_type((), DType.i32), value=value)
+    picked = _relations(ArgMax(), (1, 128))
+    assert counted(picked) == ([128], [1])
 
-    cache_shape, rows = (2, 512, 4, HEAD_DIM), 8
-    cache = Var(type=make_tensor_type(cache_shape, DType.bf16), name="cache")
-    fresh = Var(
-        type=make_tensor_type((2, rows, 4, HEAD_DIM), DType.bf16), name="new"
+    product = _relations(
+        MatMul(),
+        (2, 3),
+        Var(type=make_tensor_type((3, 4), DType.bf16), name="rhs"),
+    )
+    assert counted(product) == ([6, 12], [8])
+
+    rotated = _relations(
+        RoPE(),
+        (1, 5, 8),
+        Var(type=make_tensor_type((1, 5, 8), DType.bf16), name="k"),
+        Var(type=make_tensor_type((4096, 4), DType.bf16), name="cos"),
+        Var(type=make_tensor_type((4096, 4), DType.bf16), name="sin"),
+        Var(type=make_tensor_type((5,), DType.i32), name="pos"),
+    )
+    assert counted(rotated) == ([40, 40, 20, 20, 5], [40, 40])
+
+    ctx = TypeInferContext()
+    joined = Call(
+        type=make_tensor_type((7, 4), DType.bf16),
+        target=Concat(axis=0),
+        args=(
+            Var(type=make_tensor_type((3, 4), DType.bf16), name="head"),
+            Var(type=make_tensor_type((4, 4), DType.bf16), name="tail"),
+        ),
+    )
+    assert counted(access_relation_registry.lookup(Concat)(joined, ctx)) == (
+        [12, 16],
+        [28],
     )
 
-    def updated(length):
+    gathered = Call(
+        type=make_tensor_type((3, 8), DType.bf16),
+        target=IndexSelect(dim=0),
+        args=(
+            Var(type=make_tensor_type((64, 8), DType.bf16), name="table"),
+            Var(type=make_tensor_type((3,), DType.i32), name="index"),
+        ),
+    )
+    assert counted(access_relation_registry.lookup(IndexSelect)(gathered, ctx)) == (
+        [24, 3],
+        [24],
+    )
+
+    written = Call(
+        type=make_tensor_type((4, 6), DType.bf16),
+        target=InsertSlice(),
+        args=(
+            Var(type=make_tensor_type((4, 6), DType.bf16), name="dst"),
+            Var(type=make_tensor_type((2, 6), DType.bf16), name="update"),
+            Tuple(
+                type=make_tensor_type((), DType.i64),
+                elements=(
+                    Constant(type=make_tensor_type((), DType.i64), value=1),
+                    Constant(type=make_tensor_type((), DType.i64), value=0),
+                ),
+            ),
+        ),
+    )
+    assert counted(access_relation_registry.lookup(InsertSlice)(written, ctx)) == (
+        [12, 12, 1],
+        [24],
+    )
+
+    cached = Call(
+        type=make_tensor_type((2, 16, 4, 8), DType.bf16),
+        target=CacheUpdate(),
+        args=(
+            Var(type=make_tensor_type((2, 16, 4, 8), DType.bf16), name="cache"),
+            Constant(type=make_tensor_type((), DType.i32), value=0),
+            Constant(type=make_tensor_type((), DType.i32), value=3),
+            Var(type=make_tensor_type((2, 5, 4, 8), DType.bf16), name="new"),
+        ),
+    )
+    assert counted(access_relation_registry.lookup(CacheUpdate)(cached, ctx)) == (
+        [832, 1, 1, 192],
+        [1024],
+    )
+
+
+def test_a_lookups_amount_does_not_move_with_the_values_it_looks_up() -> None:
+    """The same index shape reads the same amount, whatever it points at.
+
+    The three index vectors here really are different -- run them and the
+    results differ -- and a longer one really does read more. That is the claim
+    a lookup makes: which rows it lands on is a runtime fact, how many rows it
+    reads is not.
+    """
+    table = torch.arange(24, dtype=torch.float32).reshape(6, 4)
+    ordered, repeated, backwards = (
+        torch.tensor([0, 1, 2], dtype=torch.int32),
+        torch.tensor([4, 4, 4], dtype=torch.int32),
+        torch.tensor([5, 0, 3], dtype=torch.int32),
+    )
+    produced = []
+    for index in (ordered, repeated, backwards):
+        run_eval_case(
+            EvalCase("", IndexSelect(dim=0), (table, index), torch.index_select(table, 0, index))
+        )
+        produced.append(torch.index_select(table, 0, index))
+    assert not torch.equal(produced[0], produced[1])
+    assert not torch.equal(produced[0], produced[2])
+
+    def declared(length: int) -> tuple[int, ...]:
+        ctx = TypeInferContext()
         call = Call(
-            type=make_tensor_type(cache_shape, DType.bf16),
-            target=CacheUpdate(),
-            args=(cache, i32(0), length, fresh),
+            type=make_tensor_type((length, 4), DType.f32),
+            target=IndexSelect(dim=0),
+            args=(
+                Var(type=make_tensor_type((6, 4), DType.f32), name="table"),
+                Var(type=make_tensor_type((length,), DType.i32), name="index"),
+            ),
         )
-        held.extend((length, call))
-        relations = access_relation_registry.lookup(CacheUpdate)(call, ctx)
-        return (
-            access_elements(relations, call, ctx, boundary=3),
-            access_elements(relations, call, ctx, boundary=0),
-            access_elements(relations, call, ctx, boundary=0, output=True),
-        )
+        relations = access_relation_registry.lookup(IndexSelect)(call, ctx)
+        return tuple(item.quantity.upper for item in relations.inputs)
 
-    whole = 2 * 512 * 4 * HEAD_DIM
-    per_row = 2 * 4 * HEAD_DIM
-    written, kept, produced = updated(i32(rows))
-    assert written == AccessQuantity(rows * per_row, rows * per_row)
-    assert kept == AccessQuantity(whole - written.upper, whole - written.upper)
-    assert produced == AccessQuantity(whole, whole)
-    assert updated(i32(1))[0] == AccessQuantity(per_row, per_row)
-
-    open_rows, open_kept, _ = updated(Var(type=make_tensor_type((), DType.i32), name="s"))
-    assert not open_rows.exact
-    assert (open_rows.lower, open_rows.upper) == (per_row, rows * per_row)
-    assert open_kept == AccessQuantity(whole - rows * per_row, whole - per_row)
+    assert declared(3) == (12, 3)
+    assert declared(6) == (24, 6)
 
 
 def test_a_storage_claim_covers_every_operand_it_names() -> None:
@@ -793,10 +874,10 @@ def test_a_quantised_scale_is_written_once_per_group() -> None:
     relation = _relations(Quant(group=128), (1, 2048))
 
     assert len(relation.inputs) == 1
-    assert isinstance(relation.inputs[0], isl.multi_aff)
+    assert isinstance(relation.inputs[0].pattern, isl.multi_aff)
 
     assert len(relation.outputs) == 2
-    scale = relation.outputs[1]
+    scale = relation.outputs[1].pattern
     assert isinstance(scale, isl.map)
     assert "128" in str(scale)
 

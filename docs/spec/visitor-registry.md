@@ -339,30 +339,45 @@ typeinfer, this one classifies each boundary on its own, and says where the
 result's bytes live on the same value.
 
 ```python
-AccessRelation = Union["isl.multi_aff", "isl.map", IndexedAccess, WindowAccess]
+AccessPattern = Union["isl.multi_aff", "isl.map", IndexedAccess, WindowAccess]
 
 class IndexedAccess:
     """A boundary read through the values of another operand.
 
     Attributes:
+        source_operand: attribute; Which operand is being indexed.
         index_operand: attribute; Which operand's elements name the coordinates.
-        source_axis: attribute; The axis of this boundary they index.
+        source_axis: attribute; The axis of the source they index.
     """
 
+    source_operand: int
     index_operand: int
     source_axis: int
 
-class WindowAccess:
-    """A boundary read or written as a window of fixed extent.
+class OperandValue:
+    """One runtime number an access depends on, and what it may be.
 
     Attributes:
-        offset_operands: attribute; Which operands say where the window sits.
-        extents: attribute; How big it is, which the offsets do not change.
+        operand: attribute; Which operand carries the value.
+        element: attribute; Which field, when that operand is a tuple.
+        bound: attribute; The Op's own contract for what the value may be.
+    """
+
+    operand: int
+    element: int | None = None
+    bound: tuple[int, int] | None = None
+
+class WindowAccess:
+    """A boundary read or written as a window, one entry per axis.
+
+    Attributes:
+        offsets: attribute; Where the window starts on each axis.
+        extents: attribute; How far it runs, which the offsets do not change.
         complement: attribute; The container outside the window instead.
     """
 
-    offset_operands: tuple[int, ...]
-    extents: tuple[ShapeDim, ...]
+    offsets: tuple[OperandValue | int, ...]
+    extents: tuple[OperandValue | ShapeDim, ...]
     complement: bool = False
 
 class StorageEffectKind(enum.Enum):
@@ -383,21 +398,34 @@ class StorageEffectClaim:
     spans: tuple[StorageSpan, ...] = ()
     spans_required: bool = False
 
-class AccessRelations:
-    """One relation per boundary value, in boundary order."""
-
-    inputs: tuple[AccessRelation, ...]
-    outputs: tuple[AccessRelation, ...]
-    storage_effect: StorageEffectClaim | None = None
-
 class AccessQuantity:
-    """How many elements a boundary touches, exactly or within a range."""
+    """How much one boundary moves in one execution, exactly or within a range.
+
+    Attributes:
+        lower: attribute; The fewest elements it can move.
+        upper: attribute; The most.
+        provenance: attribute; Which Op invariant a range came from.
+    """
 
     lower: int
     upper: int
+    provenance: str | None = None
+
+class BoundaryAccess:
+    """One boundary: where it reads, and how much it moves."""
+
+    pattern: AccessPattern
+    quantity: AccessQuantity
+
+class AccessRelations:
+    """One `BoundaryAccess` per boundary value, in boundary order."""
+
+    inputs: tuple[BoundaryAccess, ...]
+    outputs: tuple[BoundaryAccess, ...]
+    storage_effect: StorageEffectClaim | None = None
 
 def access_elements(
-    relation: AccessRelation, call: "Call", ctx, *, boundary: int
+    relations: AccessRelations, *, boundary: int, output: bool = False
 ) -> AccessQuantity | None: ...
 ```
 
@@ -416,12 +444,16 @@ def register_access_relation(op_cls: type): ...
     read a lookup as an identity. There MUST be no way to register a boundary
     that says nothing, and no generic whole-boundary fallback: a boundary
     nobody can price is a boundary nobody can schedule.
-  - Every relation MUST answer `access_elements`. How much a boundary touches
-    MUST NOT depend on values nobody has bound: a gather reads one source slice
-    per index element, a window reads its own extent and its complement the
-    rest. A count that genuinely does depend on an unbound value MUST come from
-    the Op's own contract as a range, and a consumer taking `upper` MUST say
-    that it did. Widening to the whole operand is not such a range.
+  - Every boundary MUST state its own `quantity`, and it MUST NOT be derived
+    from the pattern. A pattern is a dependence and a quantity is a movement:
+    every output of a scan depends on the whole input the scan reads once, and
+    a matrix product's result domain says nothing about how large its operands
+    were. `access_elements` reads back what the Op said and computes nothing.
+  - A quantity MUST NOT depend on values nobody has bound: a gather reads one
+    source slice per index element, a window reads its own extent and its
+    complement the rest. One that genuinely does MUST come from the Op's own
+    contract as a range naming its `provenance`, and a consumer taking `upper`
+    MUST say that it did. Widening to the whole operand is not such a range.
   - `inputs` has one entry per input arg in argument order; `outputs` has one
     per output.
   - `storage_effect` states where the result's bytes live and is a claim, not a

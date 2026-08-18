@@ -44,6 +44,8 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
     build_relation,
+    elements_of,
+    moves,
     register_access_relation,
     register_type_relation,
 )
@@ -263,7 +265,14 @@ def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
         in_rel = isl.map(f"{{ [j] -> [i{axis}] }}")
 
     out_id = isl.multi_aff(f"{{ [{out_dims}] -> [{out_dims}] }}")
-    return AccessRelations(inputs=(in_rel,), outputs=(out_id, out_id))
+    fields = ctx.type_of(call).fields
+    return AccessRelations(
+        inputs=(moves(in_rel, elements_of(x_ty)),),
+        outputs=(
+            moves(out_id, elements_of(fields[0])),
+            moves(out_id, elements_of(fields[1])),
+        ),
+    )
 
 
 def _local_dim_bindings(x: "TensorValue") -> dict:

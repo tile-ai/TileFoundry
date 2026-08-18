@@ -18,6 +18,8 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
     build_relation,
+    elements_of,
+    moves,
     register_access_relation,
     register_type_relation,
 )
@@ -69,8 +71,11 @@ def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
         return isl.multi_aff(f"{{ [{dims}] -> [{dims}] }}")
 
     return AccessRelations(
-        inputs=(_ident(len(lhs_ty.shape)), _ident(len(rhs_ty.shape))),
-        outputs=(_ident(len(out_ty.shape)),),
+        inputs=(
+            moves(_ident(len(lhs_ty.shape)), elements_of(lhs_ty)),
+            moves(_ident(len(rhs_ty.shape)), elements_of(rhs_ty)),
+        ),
+        outputs=(moves(_ident(len(out_ty.shape)), elements_of(out_ty)),),
     )
 
 

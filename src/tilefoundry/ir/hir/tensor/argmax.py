@@ -29,6 +29,8 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
     build_relation,
+    elements_of,
+    moves,
     register_access_relation,
     register_type_relation,
 )
@@ -139,7 +141,10 @@ def _argmax_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRela
     else:
         in_rel = isl.map(f"{{ [] -> [{in_dims}] }}")
         out_id = isl.multi_aff("{ [] -> [] }")
-    return AccessRelations(inputs=(in_rel,), outputs=(out_id,))
+    return AccessRelations(
+        inputs=(moves(in_rel, elements_of(x_ty)),),
+        outputs=(moves(out_id, elements_of(ctx.type_of(call))),),
+    )
 
 
 __all__ = ["ArgMax"]

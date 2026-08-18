@@ -34,6 +34,8 @@ from tilefoundry.visitor_registry.access_relation import (
     StorageEffectKind,
     StorageSpan,
     build_relation,
+    elements_of,
+    moves,
     register_access_relation,
     register_type_relation,
     same_placement,
@@ -125,8 +127,15 @@ def _concat_access(call: "Call", ctx) -> AccessRelations:
         )
         offset += extent
     return AccessRelations(
-        inputs=tuple(inputs),
-        outputs=(isl.map(f"{{ [{domain_text}] -> [{domain_text}] }}"),),
+        inputs=tuple(
+            moves(item, elements_of(type_)) for item, type_ in zip(inputs, types)
+        ),
+        outputs=(
+            moves(
+                isl.map(f"{{ [{domain_text}] -> [{domain_text}] }}"),
+                elements_of(ctx.type_of(call)),
+            ),
+        ),
         storage_effect=_concat_storage(call, ctx),
     )
 

@@ -1,9 +1,9 @@
 """Register what one operation reads, writes, and where its result's bytes live.
 
-Boundary handlers return one relation per boundary value: an isl relation where
-the addresses are affine, an ``IndexedAccess`` or ``WindowAccess`` where a
-runtime value decides them. All of them say how much is read, and there is no
-way to say nothing.
+Boundary handlers return one ``BoundaryAccess`` per boundary: a pattern saying
+where it reads -- isl where that is affine, ``IndexedAccess`` or
+``WindowAccess`` where a runtime value decides it -- and, separately, how much
+it moves. Neither is inferred from the other.
 
 The same registration says whether the result owns its bytes or reuses an
 operand's, as a claim about that Op's own types. Whoever walks the function
@@ -30,11 +30,13 @@ class IndexedAccess:
     """One boundary read through the values of another operand.
 
     A gather names which source coordinate it wants by the element it reads out
-    of ``index_operand``, so the address is not known here. How much it reads is:
-    one slice of the source per index element. That is what a cost or a
-    footprint asks for, so this states the pattern rather than giving up on it.
+    of ``index_operand``, so the address is not known here. Which operand is
+    being indexed is said outright rather than assumed, because an Op may gather
+    from more than one -- a rotation reads two tables through one set of
+    positions.
     """
 
+    source_operand: int
     index_operand: int
     source_axis: int
 
@@ -70,7 +72,7 @@ class WindowAccess:
     complement: bool = False
 
 
-AccessRelation = Union["isl.multi_aff", "isl.map", IndexedAccess, WindowAccess]
+AccessPattern = Union["isl.multi_aff", "isl.map", IndexedAccess, WindowAccess]
 
 
 
@@ -79,21 +81,104 @@ AccessRelation = Union["isl.multi_aff", "isl.map", IndexedAccess, WindowAccess]
 
 
 @dataclass(frozen=True)
+class AccessQuantity:
+    """How many elements one boundary moves in one execution of an Op.
+
+    ``lower`` and ``upper`` are equal whenever the Op can say the number. When
+    they differ, ``provenance`` names the invariant the range came from, so a
+    reader can check it rather than trust it; a prediction takes ``upper`` and
+    says that it did.
+    """
+
+    lower: int
+    upper: int
+    provenance: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.lower > self.upper:
+            raise ValueError(
+                f"an access of {self.lower}..{self.upper} elements runs backwards"
+            )
+        if self.lower != self.upper and not self.provenance:
+            raise ValueError(
+                f"an access of {self.lower}..{self.upper} elements is a range, so it "
+                "must name the invariant it came from"
+            )
+
+    @property
+    def exact(self) -> bool:
+        """Whether one number answers this, rather than a range."""
+        return self.lower == self.upper
+
+
+@dataclass(frozen=True)
+class BoundaryAccess:
+    """One boundary: where it reads, and how much it moves.
+
+    The two are separate answers. A pattern says which coordinates a value came
+    from and is what a dependence needs; a quantity says how much crossed the
+    boundary and is what a cost needs. Neither follows from the other -- every
+    output of a scan depends on the whole input the scan reads once -- so the Op
+    states both rather than having one inferred from the other.
+    """
+
+    pattern: AccessPattern
+    quantity: AccessQuantity
+
+
+def moves(pattern: "AccessPattern", count: int) -> BoundaryAccess:
+    """One boundary that moves a number of elements the Op can state."""
+    return BoundaryAccess(pattern, AccessQuantity(count, count))
+
+
+def moves_between(
+    pattern: "AccessPattern", lower: int, upper: int, provenance: str
+) -> BoundaryAccess:
+    """One boundary whose amount an unbound value leaves within a range."""
+    return BoundaryAccess(pattern, AccessQuantity(lower, upper, provenance))
+
+
+def elements_of(type_: "Type") -> int:
+    """How many elements one boundary value holds."""
+    if not isinstance(type_, TensorType):
+        raise ValueError(f"{type_!r} is not one tensor boundary")
+    counted = 1
+    for extent in type_.shape:
+        if not isinstance(extent, int) or isinstance(extent, bool) or extent < 0:
+            raise ValueError(f"{type_!r} has no concrete element count")
+        counted *= extent
+    return counted
+
+
+def access_elements(
+    relations: AccessRelations, *, boundary: int, output: bool = False
+) -> AccessQuantity | None:
+    """What the Op said this boundary moves.
+
+    Read back, never re-derived: the handler is the only thing that knows what
+    its Op does, and a second opinion computed from the pattern would be a
+    guess wearing the same type.
+    """
+    chosen = relations.outputs if output else relations.inputs
+    return chosen[boundary].quantity if 0 <= boundary < len(chosen) else None
+
+
+@dataclass(frozen=True)
 class AccessRelations:
     """Per-Call access relations.
 
     One relation per boundary value, in boundary order.
 
-    - ``inputs``: one entry per input arg of the Call (in argument order).
-    - ``outputs``: one entry per output. Single-output ops have len 1;
-      tuple-output ops have one entry per tuple field.
+    - ``inputs``: one `BoundaryAccess` per input arg, in argument order.
+    - ``outputs``: one per output. Single-output ops have len 1; tuple-output
+      ops have one entry per tuple field.
     - ``storage_effect``: where the result's bytes live. An Op that says nothing
       produces its own, because reading an operand at the same indices is not
       the same as being that operand.
     """
 
-    inputs: tuple[AccessRelation, ...]
-    outputs: tuple[AccessRelation, ...]
+    inputs: tuple[BoundaryAccess, ...]
+    outputs: tuple[BoundaryAccess, ...]
     storage_effect: "StorageEffectClaim | None" = None
 
 
@@ -189,6 +274,12 @@ def declared_storage(call, ctx) -> "StorageEffectClaim | None":
     return None if handler is None else handler(call, ctx).storage_effect
 
 
+def _read_once(arg, ctx) -> int:
+    """One whole operand, which is what an elementwise access moves."""
+    type_ = ctx.type_of(arg)
+    return elements_of(type_) if isinstance(type_, TensorType) else 0
+
+
 def _identity(rank: int) -> "isl.multi_aff":
     if rank == 0:
         return isl.multi_aff("{ [] -> [] }")
@@ -216,163 +307,17 @@ def identity_relations(
             ty = ctx.type_of(arg)
             return len(ty.shape) if hasattr(ty, "shape") else out_rank
 
-        inputs = tuple(_identity(_rank_of(call.args[i])) for i in range(n_inputs))
+        result = ctx.type_of(call)
         return AccessRelations(
-            inputs=inputs,
-            outputs=(_identity(out_rank),),
+            inputs=tuple(
+                moves(_identity(_rank_of(call.args[index])), _read_once(call.args[index], ctx))
+                for index in range(n_inputs)
+            ),
+            outputs=(moves(_identity(out_rank), elements_of(result)),),
             storage_effect=None if storage is None else storage(call, ctx),
         )
 
     return _handler
-
-
-@dataclass(frozen=True)
-class AccessQuantity:
-    """How many elements one boundary touches, and how well that is known.
-
-    ``lower`` and ``upper`` are equal whenever the count does not depend on a
-    value nobody has bound yet. When they differ the range comes from the Op's
-    own contract, which is a smaller thing to say than "all of it" and a
-    checkable one: a prediction takes ``upper`` and says that it did.
-    """
-
-    lower: int
-    upper: int
-
-    @property
-    def exact(self) -> bool:
-        """Whether one number answers this, rather than a range."""
-        return self.lower == self.upper
-
-
-def _elements(shape: tuple) -> int | None:
-    """How many elements a shape holds, or ``None`` when it is not concrete."""
-    total = 1
-    for extent in shape:
-        if not isinstance(extent, int) or isinstance(extent, bool) or extent < 0:
-            return None
-        total *= extent
-    return total
-
-
-def _span(value, ctx, call) -> tuple[int, int] | None:
-    """One axis extent as the range it may take, or ``None`` when unknowable."""
-    if isinstance(value, int) and not isinstance(value, bool):
-        return (value, value)
-    if isinstance(value, OperandValue):
-        return value.bound
-    return None
-
-
-def _window_span(relation: WindowAccess, container: tuple, ctx, call):
-    """How many elements the window covers, as a range over its axes."""
-    if len(relation.extents) != len(container):
-        return None
-    low = high = 1
-    for axis, extent in enumerate(relation.extents):
-        span = _span(extent, ctx, call)
-        if span is None:
-            return None
-        limit = container[axis]
-        if not isinstance(limit, int) or isinstance(limit, bool):
-            return None
-        low *= min(span[0], limit)
-        high *= min(span[1], limit)
-    return low, high
-
-
-def access_elements(
-    relations: AccessRelations, call, ctx, *, boundary: int, output: bool = False
-) -> AccessQuantity | None:
-    """How many elements one boundary of *call* touches in one execution.
-
-    Boundaries are numbered within their side: ``boundary`` indexes ``inputs``
-    unless ``output`` is set. Every kind of relation answers this, which is the
-    point of not having a way to say nothing. An affine boundary is counted from
-    the relation itself over the result's iteration domain, a gather reads one
-    source slice per index element, and a window reads its own extent -- or, for
-    a complement, everything the window leaves.
-    """
-    chosen = relations.outputs if output else relations.inputs
-    if not 0 <= boundary < len(chosen):
-        return None
-    relation = chosen[boundary]
-    if isinstance(relation, IndexedAccess):
-        return _indexed_elements(relation, call, ctx)
-    if isinstance(relation, WindowAccess):
-        return _windowed_elements(relation, call, ctx, boundary, output)
-    return _affine_elements(relation, call, ctx)
-
-
-def _shape_of(type_) -> tuple | None:
-    """One boundary value's shape, or ``None`` when it does not have one."""
-    return tuple(type_.shape) if isinstance(type_, TensorType) else None
-
-
-def _indexed_elements(relation: IndexedAccess, call, ctx) -> AccessQuantity | None:
-    """One source slice per index element, whatever the index elements hold."""
-    if relation.index_operand >= len(call.args):
-        return None
-    indices = _elements(_shape_of(ctx.type_of(call.args[relation.index_operand])) or ())
-    source = _shape_of(ctx.type_of(call.args[0]))
-    if indices is None or source is None or not 0 <= relation.source_axis < len(source):
-        return None
-    rest = _elements(
-        tuple(
-            extent for axis, extent in enumerate(source) if axis != relation.source_axis
-        )
-    )
-    if rest is None:
-        return None
-    return AccessQuantity(indices * rest, indices * rest)
-
-
-def _windowed_elements(
-    relation: WindowAccess, call, ctx, boundary: int, output: bool
-) -> AccessQuantity | None:
-    """The window itself, or the container without it."""
-    holder = ctx.type_of(call) if output else ctx.type_of(call.args[boundary])
-    container = _shape_of(holder)
-    if container is None:
-        return None
-    whole = _elements(container)
-    span = _window_span(relation, container, ctx, call)
-    if whole is None or span is None:
-        return None
-    low, high = span
-    if relation.complement:
-        return AccessQuantity(max(whole - high, 0), max(whole - low, 0))
-    return AccessQuantity(low, high)
-
-
-def _affine_elements(relation, call, ctx) -> AccessQuantity | None:
-    """How many accesses the relation itself states over the result domain.
-
-    The domain is one point per element of the result, and the relation maps
-    each of those to what it reads. Counting the relation rather than the
-    operand is what makes a many-to-one read cost less than the operand and a
-    broadcast cost more than one point.
-    """
-    domain = _shape_of(ctx.type_of(call))
-    points = _elements(domain or ())
-    if points is None:
-        return None
-    if isinstance(relation, isl.multi_aff):
-        return AccessQuantity(points, points)
-    if not isinstance(relation, isl.map):
-        return None
-    reached = relation.intersect_domain(_domain_set(domain or ()))
-    counted = int(str(reached.wrap().count_val()))
-    return AccessQuantity(counted, counted)
-
-
-def _domain_set(shape: tuple) -> "isl.set":
-    """One iteration point per element of *shape*."""
-    if not shape:
-        return isl.set("{ [] }")
-    dims = ", ".join(f"d{index}" for index in range(len(shape)))
-    bounds = " and ".join(f"0 <= d{index} < {extent}" for index, extent in enumerate(shape))
-    return isl.set(f"{{ [{dims}] : {bounds} }}")
 
 
 def static_bytes(type_: "Type") -> int | None:
@@ -487,12 +432,16 @@ __all__ = [
     "same_placement",
     "static_bytes",
     "update_destination",
+    "AccessPattern",
     "AccessQuantity",
+    "BoundaryAccess",
     "IndexedAccess",
+    "elements_of",
+    "moves",
+    "moves_between",
     "OperandValue",
     "access_elements",
     "WindowAccess",
-    "AccessRelation",
     "AccessRelations",
     "AccessRelationResult",
     "access_relation_registry",

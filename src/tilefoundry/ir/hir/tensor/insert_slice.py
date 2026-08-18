@@ -17,6 +17,8 @@ from tilefoundry.visitor_registry.access_relation import (
     OperandValue,
     StorageEffectClaim,
     WindowAccess,
+    elements_of,
+    moves,
     register_access_relation,
     update_destination,
 )
@@ -70,16 +72,22 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     sides answer the same size question: the update whole, and the container
     without a hole that size. Only the address moves with the offsets.
     """
-    rank = len(ctx.type_of(call).shape)
-    extents = tuple(ctx.type_of(call.args[1]).shape)
+    result = ctx.type_of(call)
+    rank = len(result.shape)
+    update = ctx.type_of(call.args[1])
+    extents = tuple(update.shape)
     offsets = _offset_axes(call, rank)
+    window = elements_of(update)
     return AccessRelations(
         inputs=(
-            WindowAccess(offsets, extents, complement=True),
-            WindowAccess(tuple(0 for _ in extents), extents),
-            *(identity_map(0) for _ in call.args[2:]),
+            moves(
+                WindowAccess(offsets, extents, complement=True),
+                elements_of(ctx.type_of(call.args[0])) - window,
+            ),
+            moves(WindowAccess(tuple(0 for _ in extents), extents), window),
+            *(moves(identity_map(0), 1) for _ in call.args[2:]),
         ),
-        outputs=(identity_map(rank),),
+        outputs=(moves(identity_map(rank), elements_of(result)),),
         storage_effect=_insert_slice_storage(call, ctx),
     )
 

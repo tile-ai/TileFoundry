@@ -35,6 +35,8 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    elements_of,
+    moves,
     register_access_relation,
 )
 
@@ -238,9 +240,13 @@ def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelat
         out_dims = (outer + ", ") if outer else ""
         scale_rel = isl.map(f"{{ [{dims}] -> [{out_dims}floor({last}/{group})] }}")
 
+    fields = ctx.type_of(call).fields
     return AccessRelations(
-        inputs=(ident,),
-        outputs=(ident, scale_rel),
+        inputs=(moves(ident, elements_of(ctx.type_of(call.args[0]))),),
+        outputs=(
+            moves(ident, elements_of(fields[0])),
+            moves(scale_rel, elements_of(fields[1])),
+        ),
     )
 
 

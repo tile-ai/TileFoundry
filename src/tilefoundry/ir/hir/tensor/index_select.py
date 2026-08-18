@@ -22,6 +22,8 @@ from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     IndexedAccess,
+    elements_of,
+    moves,
     register_access_relation,
 )
 
@@ -120,9 +122,17 @@ def _index_select_access_relation(call: "Call", ctx) -> AccessRelations:
     idx_rank = len(ctx.type_of(call.args[1]).shape)
     out_rank = len(ctx.type_of(call).shape)
     axis = _norm_dim(call.target.dim, len(ctx.type_of(call.args[0]).shape))
+    index_ty, source_ty = ctx.type_of(call.args[1]), ctx.type_of(call.args[0])
+    slice_size = elements_of(source_ty) // source_ty.shape[axis]
     return AccessRelations(
-        inputs=(IndexedAccess(index_operand=1, source_axis=axis), _identity(idx_rank)),
-        outputs=(_identity(out_rank),),
+        inputs=(
+            moves(
+                IndexedAccess(source_operand=0, index_operand=1, source_axis=axis),
+                elements_of(index_ty) * slice_size,
+            ),
+            moves(_identity(idx_rank), elements_of(index_ty)),
+        ),
+        outputs=(moves(_identity(out_rank), elements_of(ctx.type_of(call))),),
     )
 
 
