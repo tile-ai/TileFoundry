@@ -9,9 +9,20 @@ from tilefoundry.visitor_registry.isl_utility import to_dim, to_domain
 
 
 def identity_map(rank: int) -> "isl.map":
-    """Identity access map for a tensor of *rank*."""
+    """Identity access map for a tensor of *rank*, as a forward-relation carrier."""
     dims = ", ".join(f"d{i}" for i in range(rank))
     return isl.map(f"{{ [{dims}] -> [{dims}] }}")
+
+
+def identity_access(rank: int) -> "isl.multi_aff":
+    """Identity boundary for a tensor of *rank*.
+
+    One element per element is a function, so it takes the canonical carrier: a
+    reader that received a map would have to ask whether this access might be
+    many-to-one, which it never is.
+    """
+    dims = ", ".join(f"d{index}" for index in range(rank))
+    return isl.multi_aff(f"{{ [{dims}] -> [{dims}] }}") if rank else isl.multi_aff("{ [] -> [] }")
 
 
 def elementwise_relation(n_inputs: int = 1):

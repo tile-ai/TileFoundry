@@ -22,7 +22,7 @@ from tilefoundry.visitor_registry.access_relation import (
     register_access_relation,
     update_destination,
 )
-from tilefoundry.visitor_registry.relation_build import identity_map
+from tilefoundry.visitor_registry.relation_build import identity_access
 
 
 @register_op(name="insert_slice")
@@ -85,9 +85,9 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
                 elements_of(ctx.type_of(call.args[0])) - window,
             ),
             moves(WindowAccess(tuple(0 for _ in extents), extents), window),
-            *(moves(identity_map(0), 1) for _ in call.args[2:]),
+            *(moves(identity_access(0), 1) for _ in call.args[2:]),
         ),
-        outputs=(moves(identity_map(rank), elements_of(result)),),
+        outputs=(moves(identity_access(rank), elements_of(result)),),
         storage_effect=_insert_slice_storage(call, ctx),
     )
 

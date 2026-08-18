@@ -95,6 +95,13 @@ class AccessQuantity:
     provenance: str | None = None
 
     def __post_init__(self) -> None:
+        for name in ("lower", "upper"):
+            edge = getattr(self, name)
+            if not isinstance(edge, int) or isinstance(edge, bool) or edge < 0:
+                raise ValueError(
+                    f"an access moves a non-negative whole number of elements, "
+                    f"and its {name} is {edge!r}"
+                )
         if self.lower > self.upper:
             raise ValueError(
                 f"an access of {self.lower}..{self.upper} elements runs backwards"
@@ -124,6 +131,19 @@ class BoundaryAccess:
 
     pattern: AccessPattern
     quantity: AccessQuantity
+
+    def __post_init__(self) -> None:
+        if not isinstance(
+            self.pattern, (isl.multi_aff, isl.map, IndexedAccess, WindowAccess)
+        ):
+            raise ValueError(
+                f"a boundary reads through a relation, a lookup or a window, "
+                f"not through {self.pattern!r}"
+            )
+        if not isinstance(self.quantity, AccessQuantity):
+            raise ValueError(
+                f"a boundary states how much it moves, not {self.quantity!r}"
+            )
 
 
 def moves(pattern: "AccessPattern", count: int) -> BoundaryAccess:
@@ -180,6 +200,16 @@ class AccessRelations:
     inputs: tuple[BoundaryAccess, ...]
     outputs: tuple[BoundaryAccess, ...]
     storage_effect: "StorageEffectClaim | None" = None
+
+    def __post_init__(self) -> None:
+        for side in ("inputs", "outputs"):
+            stated = getattr(self, side)
+            if not isinstance(stated, tuple) or not all(
+                isinstance(item, BoundaryAccess) for item in stated
+            ):
+                raise ValueError(f"{side} is one BoundaryAccess per boundary, got {stated!r}")
+        if not self.outputs:
+            raise ValueError("an operation produces at least one value to describe")
 
 
 

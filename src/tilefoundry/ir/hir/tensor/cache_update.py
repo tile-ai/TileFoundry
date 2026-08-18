@@ -26,7 +26,7 @@ from tilefoundry.visitor_registry.access_relation import (
     register_access_relation,
     update_destination,
 )
-from tilefoundry.visitor_registry.relation_build import identity_map
+from tilefoundry.visitor_registry.relation_build import identity_access
 
 
 @register_op(name="cache_update")
@@ -42,6 +42,19 @@ class CacheUpdate(Op):
 def _cache_update_storage(call: "Call", ctx) -> StorageEffectClaim | None:
     """The new rows are written into the cache; the result is that cache."""
     return update_destination(call, ctx, destination=0)
+
+
+def _limit(cache: tuple, supplied: tuple) -> int | None:
+    """The most rows one call may write: the fewer of what each side states."""
+    stated = [
+        value
+        for value in (
+            _static(cache[1] if len(cache) > 1 else None),
+            _static(supplied[1] if len(supplied) > 1 else None),
+        )
+        if value is not None
+    ]
+    return min(stated) if stated else None
 
 
 def _static(extent) -> int | None:
@@ -63,17 +76,27 @@ def _rows(expr, capacity, supplied) -> object:
     return OperandValue(operand=2, bound=(1, min(limits)) if limits else None)
 
 
-def _written(rows, per_row: int, supplied) -> AccessQuantity:
-    """How many elements the update writes, or the range ``s`` leaves it in."""
+def _written(rows, per_row: int, limit: int | None) -> AccessQuantity:
+    """How many elements the update writes, or the range ``s`` leaves it in.
+
+    ``1 <= s <= new.len`` and ``cur_pos + s <= cache.len`` are this Op's own
+    contract, so a written-down ``s`` outside it describes no program and is
+    refused here rather than turned into a negative complement downstream.
+    """
+    if not isinstance(limit, int):
+        raise ValueError("CacheUpdate: the rows it may write have no stated bound")
     if isinstance(rows, int):
+        if not 1 <= rows <= limit:
+            raise ValueError(
+                f"CacheUpdate writes {rows} rows, and this call may write "
+                f"between 1 and {limit}"
+            )
         return AccessQuantity(rows * per_row, rows * per_row)
-    highest = rows.bound[1] if rows.bound else supplied
-    if not isinstance(highest, int):
-        raise ValueError("CacheUpdate: the rows it writes have no stated bound")
     return AccessQuantity(
         per_row,
-        highest * per_row,
-        "CacheUpdate writes between one row and what new supplies",
+        limit * per_row,
+        "CacheUpdate writes between one row and the fewer of what new supplies "
+        "and what the cache holds",
     )
 
 
@@ -101,18 +124,18 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
     offsets = (0, start, *(0 for _ in cache[2:]))
     held = elements_of(ctx.type_of(call.args[0]))
     per_row = held // cache[1] if isinstance(cache[1], int) and cache[1] else 0
-    written = _written(rows, per_row, supplied[1] if len(supplied) > 1 else None)
+    written = _written(rows, per_row, _limit(cache, supplied))
     kept = AccessQuantity(
         held - written.upper, held - written.lower, written.provenance
     )
     return AccessRelations(
         inputs=(
             BoundaryAccess(WindowAccess(offsets, extents, complement=True), kept),
-            moves(identity_map(0), 1),
-            moves(identity_map(0), 1),
+            moves(identity_access(0), 1),
+            moves(identity_access(0), 1),
             BoundaryAccess(WindowAccess(tuple(0 for _ in cache), extents), written),
         ),
-        outputs=(moves(identity_map(len(cache)), held),),
+        outputs=(moves(identity_access(len(cache)), held),),
         storage_effect=_cache_update_storage(call, ctx),
     )
 

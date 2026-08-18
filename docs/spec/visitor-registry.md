@@ -455,7 +455,12 @@ def register_access_relation(op_cls: type): ...
     contract as a range naming its `provenance`, and a consumer taking `upper`
     MUST say that it did. Widening to the whole operand is not such a range.
   - `inputs` has one entry per input arg in argument order; `outputs` has one
-    per output.
+    per output, and an operation with no output describes nothing.
+  - A quantity MUST be a non-negative whole number of elements, and a pattern
+    MUST be one of the stated carriers. Construction MUST refuse anything else
+    rather than let it reach a consumer, and an Op whose own contract is
+    violated by a written-down value MUST refuse there rather than report an
+    impossible amount.
   - `storage_effect` states where the result's bytes live and is a claim, not a
     proof: an Op that omits it produces its own bytes, and an identity relation
     alone never establishes an alias. Whether a claim holds over a whole

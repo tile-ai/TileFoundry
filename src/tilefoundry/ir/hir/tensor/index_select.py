@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import isl
 import torch
 
@@ -123,7 +125,9 @@ def _index_select_access_relation(call: "Call", ctx) -> AccessRelations:
     out_rank = len(ctx.type_of(call).shape)
     axis = _norm_dim(call.target.dim, len(ctx.type_of(call.args[0]).shape))
     index_ty, source_ty = ctx.type_of(call.args[1]), ctx.type_of(call.args[0])
-    slice_size = elements_of(source_ty) // source_ty.shape[axis]
+    slice_size = math.prod(
+        extent for position, extent in enumerate(source_ty.shape) if position != axis
+    )
     return AccessRelations(
         inputs=(
             moves(

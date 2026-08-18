@@ -101,8 +101,10 @@ from tilefoundry.schedule import ScheduleError, schedule
 from tilefoundry.schedule.partition import PartitionProgramError, build_partition_program
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.access_relation import (
+    AccessQuantity,
     AccessRelations,
     IndexedAccess,
+    OperandValue,
     StorageEffectClaim,
     StorageEffectKind,
     StorageSpan,
@@ -780,6 +782,117 @@ def test_every_boundary_states_the_movement_its_op_performs() -> None:
         [832, 1, 1, 192],
         [1024],
     )
+
+
+def test_a_windows_amount_does_not_move_with_where_it_lands() -> None:
+    """Where a window sits is a runtime fact; how much it covers is not.
+
+    A literal offset, an offset that arrives as a value, and an offset a loop
+    counts out all place the same window, so the update and the container around
+    it move the same bytes each time -- including at the ends, where a window
+    flush against a boundary is still its own size. What the offset does change
+    is the pattern, which is where a reader looks to find out.
+    """
+
+    def written(offset) -> tuple[list[int], list[int], object]:
+        ctx = TypeInferContext()
+        call = Call(
+            type=make_tensor_type((4, 6), DType.bf16),
+            target=InsertSlice(),
+            args=(
+                Var(type=make_tensor_type((4, 6), DType.bf16), name="dst"),
+                Var(type=make_tensor_type((2, 6), DType.bf16), name="update"),
+                offset,
+            ),
+        )
+        relations = access_relation_registry.lookup(InsertSlice)(call, ctx)
+        return (
+            [item.quantity.upper for item in relations.inputs],
+            [item.quantity.upper for item in relations.outputs],
+            relations.inputs[0].pattern,
+        )
+
+    def axes(*values) -> Tuple:
+        return Tuple(
+            type=make_tensor_type((), DType.i64),
+            elements=tuple(
+                value
+                if isinstance(value, Var)
+                else Constant(type=make_tensor_type((), DType.i64), value=value)
+                for value in values
+            ),
+        )
+
+    top, middle, bottom = written(axes(0, 0)), written(axes(1, 0)), written(axes(2, 0))
+    assert top[:2] == middle[:2] == bottom[:2] == ([12, 12, 1], [24])
+    assert top[2].offsets == (0, 0)
+    assert bottom[2].offsets == (2, 0)
+
+    runtime = written(axes(Var(type=make_tensor_type((), DType.i64), name="row"), 0))
+    assert runtime[:2] == top[:2]
+    assert runtime[2].offsets == (OperandValue(operand=2, element=0), 0)
+
+    induction = Var(type=make_tensor_type((), DType.i64), name="row")
+    body = Call(
+        type=make_tensor_type((4, 6), DType.bf16),
+        target=InsertSlice(),
+        args=(
+            Var(type=make_tensor_type((4, 6), DType.bf16), name="dst"),
+            Var(type=make_tensor_type((2, 6), DType.bf16), name="update"),
+            axes(induction, 0),
+        ),
+    )
+    loop = GridRegionExpr(
+        type=body.type,
+        induction_var=induction,
+        carried_args=(),
+        init_args=(),
+        body=body,
+        yield_values=(body,),
+        extent=3,
+        step=1,
+    )
+    counted = written(loop.body.args[2])
+    assert counted[:2] == top[:2]
+    assert counted[2].offsets == (OperandValue(operand=2, element=0), 0)
+
+
+def test_an_unbound_row_count_states_its_range_and_where_it_came_from() -> None:
+    """An `s` nobody bound is still bounded, and says by what.
+
+    The Op's own contract is that it writes at least one row and no more than
+    the fewer of what `new` brought and what the cache holds. That is a range a
+    reader can check, and the complement is the same range read from the other
+    side; charging the whole cache would be neither.
+    """
+    ctx = TypeInferContext()
+    call = Call(
+        type=make_tensor_type((2, 16, 4, 8), DType.bf16),
+        target=CacheUpdate(),
+        args=(
+            Var(type=make_tensor_type((2, 16, 4, 8), DType.bf16), name="cache"),
+            Var(type=make_tensor_type((), DType.i32), name="cur_pos"),
+            Var(type=make_tensor_type((), DType.i32), name="s"),
+            Var(type=make_tensor_type((2, 5, 4, 8), DType.bf16), name="new"),
+        ),
+    )
+    relations = access_relation_registry.lookup(CacheUpdate)(call, ctx)
+    per_row, held = 2 * 4 * 8, 2 * 16 * 4 * 8
+
+    update = relations.inputs[3]
+    assert update.quantity.lower == per_row
+    assert update.quantity.upper == 5 * per_row
+    assert "new supplies" in update.quantity.provenance
+    assert update.pattern.extents[1] == OperandValue(operand=2, bound=(1, 5))
+
+    kept = relations.inputs[0]
+    assert (kept.quantity.lower, kept.quantity.upper) == (
+        held - 5 * per_row,
+        held - per_row,
+    )
+    assert kept.pattern.complement
+    assert kept.pattern.offsets[1] == OperandValue(operand=1)
+    assert relations.outputs[0].quantity == AccessQuantity(held, held)
 
 
 def test_a_lookups_amount_does_not_move_with_the_values_it_looks_up() -> None:

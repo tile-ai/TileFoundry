@@ -132,7 +132,7 @@ def _concat_access(call: "Call", ctx) -> AccessRelations:
         ),
         outputs=(
             moves(
-                isl.map(f"{{ [{domain_text}] -> [{domain_text}] }}"),
+                isl.multi_aff(f"{{ [{domain_text}] -> [{domain_text}] }}"),
                 elements_of(ctx.type_of(call)),
             ),
         ),

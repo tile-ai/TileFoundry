@@ -1181,11 +1181,14 @@ class CacheUpdate(Op):
   - A `cache` carrying `Partial(reduction)` on a mesh axis requires `new` to
     carry the identical mesh and per-mesh-axis state; a complete `cache`
     rejects a `new` carrying `Partial`. Typeinfer rejects either mismatch.
-  - No affine access relation is registered because the data-dependent write
-    boundaries are opaque to the polyhedral footprint path. The cost evaluator
-    instead supplies the traffic consumed by memory and roofline analysis: no
-    traffic for the untouched `cache`, one read for each runtime scalar, and a
-    `new`-bounded read and result write.
+  - The registered boundary relation states the write as a window: the result
+    and the two scalar controls are exact identities, while the cache and `new`
+    boundaries name the operands that place the window. How much each moves does
+    not depend on where it lands -- `s` rows written, the rest of the cache
+    kept. An `s` that is not written down MUST carry the range this Op's own
+    contract gives it, at least one row and no more than the fewer of
+    `new.len` and `cache.len`; a written-down `s` outside that range MUST be
+    refused. The cost evaluator supplies the same traffic it always did.
 
 ##### TopK
 ```python

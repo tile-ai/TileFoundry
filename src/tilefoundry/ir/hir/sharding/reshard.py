@@ -30,7 +30,7 @@ from tilefoundry.visitor_registry.access_relation import (
     same_placement,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
-from tilefoundry.visitor_registry.relation_build import identity_map
+from tilefoundry.visitor_registry.relation_build import identity_access, identity_map
 
 
 def _dim_mul(a, b):
@@ -201,8 +201,8 @@ def _reshard_access(call: "Call", ctx) -> AccessRelations:
     rank = len(ctx.type_of(call).shape)
     whole = elements_of(ctx.type_of(call))
     return AccessRelations(
-        inputs=(moves(identity_map(rank), whole),),
-        outputs=(moves(identity_map(rank), whole),),
+        inputs=(moves(identity_access(rank), whole),),
+        outputs=(moves(identity_access(rank), whole),),
         storage_effect=_reshard_storage(call, ctx),
     )
 
