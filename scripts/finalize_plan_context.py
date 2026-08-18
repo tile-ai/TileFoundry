@@ -3,8 +3,12 @@
 
 Input is ``docs/plans/<name>.md``. hygiene: required CLI path template.
 Related Files select milestone acceptance criteria and final-tree gates.
-Handwritten content is preserved; misplaced markers or incomplete milestone
-structure fail validation.
+Handwritten content is preserved; a plan that breaks the template's structure
+fails validation instead of being rewritten.
+
+Structure comes from a CommonMark parse rather than a line scan: a plan quotes
+command output whose lines begin with `#`, and a scan would read one as a heading
+and end the section it belongs to.
 """
 
 from __future__ import annotations
@@ -12,8 +16,11 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from markdown_it import MarkdownIt
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
@@ -24,357 +31,364 @@ from get_policy import filter_policies, load_policies  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = REPO_ROOT / "docs" / "policies" / "project-policy.json"
 
-MILESTONE_AC_START = "<!-- policy_ac:start -->"
-MILESTONE_AC_END = "<!-- policy_ac:end -->"
-FINAL_GATE_START = "<!-- final_gate:start -->"
-FINAL_GATE_END = "<!-- final_gate:end -->"
+AC_START, AC_END = "<!-- policy_ac:start -->", "<!-- policy_ac:end -->"
+GATE_START, GATE_END = "<!-- final_gate:start -->", "<!-- final_gate:end -->"
 
-
-INLINE_POLICY_TAG_RE = re.compile(
-    r"<!--\s+(?:policy_ac|policy_final|policy_rules|policy_knowledge):\s+[\w\-]+\s+-->"
+HEADINGS: dict[int, set[str]] = {
+    2: {"Description", "Milestones", "Final Gate"},
+    4: {"Depends", "Target State Design", "Related Files"},
+    5: {"Delivered", "Accepted by"},
+}
+CODE_LANGS = frozenset(
+    "bash c c++ cc cpp cs csharp go java javascript js kotlin py python rs rust "
+    "sh shell swift ts typescript zsh".split()
 )
-POLICY_CHECK_RE = re.compile(r"^\s*-\s+\[([ xX])\].*<!--\s+policy_(?:ac|final):\s+([\w\-]+)\s+-->")
-CODE_SPAN_RE = re.compile(r"`[^`]*`")
-FENCE_RE = re.compile(r"^\s*(```+|~~~+)")
-TAGGED_FENCE_RE = re.compile(r"^\s*(?:```+|~~~+)\s*([A-Za-z0-9_+#.-]*)\s*$")
 
-CODE_FENCE_LANGUAGES = frozenset(
-    {
-        "bash",
-        "c",
-        "c++",
-        "cc",
-        "cpp",
-        "cs",
-        "csharp",
-        "go",
-        "java",
-        "javascript",
-        "js",
-        "kotlin",
-        "py",
-        "python",
-        "rs",
-        "rust",
-        "sh",
-        "shell",
-        "swift",
-        "ts",
-        "typescript",
-        "zsh",
-    }
-)
+CHECKBOX_RE = re.compile(r"^\s*-\s+\[([ xX])\].*<!--\s+policy_(?:ac|final):\s+([\w\-]+)\s+-->")
+COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+CITATION_RE = re.compile(r"`[^`\s]*/[^`\s]*\.[^`\s]*`")
+DECISION_RE = re.compile(r"^D(\d+)\s+.*?\s--\s+\S")
+SUPERSEDES_RE = re.compile(r"\bSupersedes\s+D(\d+)\b")
 
 
 class FinalizeError(Exception):
     """Report a validation failure clearly through a nonzero CLI exit."""
 
 
-def _strip_inline_comments(text: str) -> str:
-    return re.sub(r"<!--.*?-->", "", text)
+@dataclass(frozen=True)
+class Section:
+    """One heading and the lines under it, up to the next heading of its depth."""
+
+    level: int
+    title: str
+    head: int
+    end: int
 
 
-def _split_lines(text: str) -> list[str]:
+def _front_matter_lines(lines: list[str]) -> int:
+    """How many leading lines the YAML block occupies.
 
-    return text.split("\n")
-
-
-def _join_lines(lines: list[str]) -> str:
-    return "\n".join(lines)
-
-
-def _mask_fenced(lines: list[str]) -> list[str]:
-    """The same lines with fenced blocks blanked, positions preserved.
-
-    Structure is read off this copy, so a fenced line is content whatever it
-    starts with. A plan quotes command output whose lines begin with `#`, and
-    reading one as a heading would end the section it belongs to.
+    CommonMark reads the closing `---` as a setext underline, so the block is cut
+    off before parsing and its length is added back to every token's position.
     """
-    masked: list[str] = []
-    in_fence = False
-    for line in lines:
-        if FENCE_RE.match(line):
-            in_fence = not in_fence
-            masked.append("")
-            continue
-        masked.append("" if in_fence else line)
-    return masked
+    if not lines or lines[0].strip() != "---":
+        return 0
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            return i + 1
+    return 0
 
 
-def _heading_level(line: str) -> int | None:
-    m = re.match(r"^(#{1,6})\s", line)
-    return len(m.group(1)) if m else None
+class Plan:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.text = path.read_text()
+        self.lines = self.text.split("\n")
+        offset = _front_matter_lines(self.lines)
+        tokens = MarkdownIt("commonmark").parse("\n".join(self.lines[offset:]))
+        for token in tokens:
+            if token.map is not None:
+                token.map = [token.map[0] + offset, token.map[1] + offset]
+        self.tokens = tokens
+        self.sections = self._outline()
 
-
-def _heading_text(line: str) -> str:
-    return re.sub(r"^#{1,6}\s+", "", line).rstrip()
-
-
-def _find_section(
-    lines: list[str], level: int, name: str, start: int = 0, end: int | None = None
-) -> tuple[int, int] | None:
-    """Find the bounds of a heading matching *level* and *name*.
-
-    Matching is case-sensitive, with surrounding whitespace ignored. The
-    result is ``(heading_index, body_end_exclusive)``. Body ends at the next
-    heading with level <= *level* or at *end*.
-    """
-    if end is None:
-        end = len(lines)
-    for i in range(start, end):
-        lvl = _heading_level(lines[i])
-        if lvl == level and _heading_text(lines[i]) == name:
-            j = i + 1
-            while j < end:
-                jl = _heading_level(lines[j])
-                if jl is not None and jl <= level:
+    def _outline(self) -> list[Section]:
+        heads: list[tuple[int, str, int]] = []
+        for index, token in enumerate(self.tokens):
+            if token.type == "heading_open" and token.map is not None:
+                heads.append((int(token.tag[1]), self.tokens[index + 1].content.strip(), token.map[0]))
+        out: list[Section] = []
+        for position, (level, title, head) in enumerate(heads):
+            end = len(self.lines)
+            for deeper_level, _, deeper_head in heads[position + 1 :]:
+                if deeper_level <= level:
+                    end = deeper_head
                     break
-                j += 1
-            return (i, j)
-    return None
+            out.append(Section(level, title, head, end))
+        return out
 
-
-def _list_bullets(lines: list[str], start: int, end: int) -> list[str]:
-    out = []
-    for i in range(start, end):
-        line = lines[i]
-        m = re.match(r"^\s*-\s+(.*?)\s*$", line)
-        if m:
-            text = _strip_inline_comments(m.group(1)).strip()
-            if text:
-                out.append(text)
-    return out
-
-
-def _policy_check_states(lines: list[str], start: int, end: int) -> dict[str, bool]:
-    """Return generated checklist completion keyed by its stable marker."""
-    states: dict[str, bool] = {}
-    for line in lines[start + 1 : end]:
-        match = POLICY_CHECK_RE.match(line)
-        if match:
-            states[match.group(2)] = match.group(1).lower() == "x"
-    return states
-
-
-def _related_files_from_section(
-    lines: list[str], section_start: int, section_end: int
-) -> list[str]:
-    """Collect bullets verbatim from a Related Files section.
-
-    Empty and comment-only lines are skipped. This does not interpret
-    ``inherit:`` — that
-    is resolved at a higher level so callers can detect explicit
-    inheritance vs. concrete paths.
-    """
-    return _list_bullets(lines, section_start + 1, section_end)
-
-
-_PATH_FROM_BULLET_RE = re.compile(r"`([^`]+)`")
-
-
-def _strip_path_bullet(item: str) -> str:
-    """Extract the leading repository-relative path from a bullet.
-
-    Related Files commonly uses ``- `<path>` — short description``
-    so the matcher pulls the FIRST backtick-wrapped span; an item
-    without backticks is taken whole (after whitespace strip).
-    """
-    s = item.strip()
-    m = _PATH_FROM_BULLET_RE.match(s)
-    if m:
-        return m.group(1)
-    return s
-
-
-class PlanModel:
-    def __init__(self, plan_path: Path) -> None:
-        self.path = plan_path
-        self.text = plan_path.read_text()
-        self.lines = _split_lines(self.text)
-
-        self.scan = _mask_fenced(self.lines)
-        self._parse()
-
-    def _parse(self) -> None:
-        lines = self.scan
-
-        self.plan_related_files: list[str] = []
-
-        self.final_gate_start_idx = self._require_unique_line(FINAL_GATE_START)
-        self.final_gate_end_idx = self._require_unique_line(FINAL_GATE_END)
-        if self.final_gate_end_idx <= self.final_gate_start_idx:
-            raise FinalizeError(f"{self.path}: `final_gate:end` precedes `final_gate:start`.")
-        self.final_gate_states = _policy_check_states(
-            lines, self.final_gate_start_idx, self.final_gate_end_idx
+    def find(self, level: int, title: str, within: Section | None = None) -> Section | None:
+        lo = 0 if within is None else within.head
+        hi = len(self.lines) if within is None else within.end
+        return next(
+            (s for s in self.sections if s.level == level and s.title == title and lo <= s.head < hi),
+            None,
         )
 
-        for name in ("Description", "Milestones", "Final Gate"):
-            span = _find_section(lines, 2, name)
-            if span is None:
-                raise FinalizeError(f"{self.path}: missing required `## {name}` section.")
+    def milestones(self) -> list[Section]:
+        block = self.find(2, "Milestones")
+        if block is None:
+            return []
+        return [
+            s
+            for s in self.sections
+            if s.level == 3 and s.title.startswith("Milestone ") and block.head < s.head < block.end
+        ]
 
-        milestones_span = _find_section(lines, 2, "Milestones")
-        assert milestones_span is not None
-        self.milestones: list[dict[str, Any]] = []
-        i = milestones_span[0] + 1
-        end = milestones_span[1]
-        while i < end:
-            lvl = _heading_level(lines[i])
-            if lvl == 3 and lines[i].startswith("### Milestone "):
-                ms_start = i
+    def body(self, section: Section) -> list[str]:
+        """The section's lines with its heading, HTML comments, and blanks dropped."""
+        text = COMMENT_RE.sub("", "\n".join(self.lines[section.head + 1 : section.end]))
+        return [line for line in text.split("\n") if line.strip()]
 
-                j = i + 1
-                while j < end:
-                    jl = _heading_level(lines[j])
-                    if jl is not None and jl <= 3:
-                        break
-                    j += 1
-                self.milestones.append(self._parse_milestone(ms_start, j))
-                i = j
-            else:
-                i += 1
+    def _tokens_in(self, section: Section, kind: str) -> list[Any]:
+        return [
+            t
+            for t in self.tokens
+            if t.type == kind and t.map is not None and section.head < t.map[0] < section.end
+        ]
 
-        if not self.milestones:
-            raise FinalizeError(
-                f"{self.path}: `## Milestones` block contains no `### Milestone …` entries."
-            )
+    def fence_languages(self, section: Section) -> list[str]:
+        return [t.info.strip().split()[0].lower() if t.info.strip() else "" for t in self._tokens_in(section, "fence")]
 
-        seen: set[str] = set()
-        for m in self.milestones:
-            for path in m["related_files"]:
-                if path not in seen:
-                    seen.add(path)
-                    self.plan_related_files.append(path)
+    def bullets(self, section: Section) -> list[str]:
+        """One entry per list item in *section*, comments and markup stripped.
 
-    def _require_unique_line(self, marker: str) -> int:
-        idxs = [i for i, line in enumerate(self.scan) if line.strip() == marker]
-        if not idxs:
-            raise FinalizeError(
-                f"{self.path}: marker {marker!r} missing — finalize_plan_context "
-                "expects the template's marker pair."
-            )
-        if len(idxs) > 1:
-            raise FinalizeError(
-                f"{self.path}: marker {marker!r} appears {len(idxs)} times (expected exactly one)."
-            )
-        return idxs[0]
-
-    def _parse_milestone(self, ms_start: int, ms_end: int) -> dict[str, Any]:
-        """Locate one milestone's sections and its policy-criteria markers.
-
-        A milestone with no `##### Accepted by` returns without marker indices;
-        `_require_acceptance` is what reports that, because it holds the contract
-        text the author needs in order to make the call.
+        The item's text is the first ``inline`` token after its opener; counting
+        list depth instead would have to reckon with closers, which carry no
+        position and so cannot be told apart from another section's.
         """
-        lines = self.scan
-        name = _heading_text(lines[ms_start])
+        out: list[str] = []
+        for index, token in enumerate(self.tokens):
+            if token.type != "list_item_open" or token.map is None:
+                continue
+            if not section.head < token.map[0] < section.end:
+                continue
+            inline = next(
+                (t for t in self.tokens[index + 1 :] if t.type == "inline"), None
+            )
+            if inline is None:
+                continue
+            text = COMMENT_RE.sub("", inline.content).strip()
+            if text:
+                out.append(text)
+        return out
 
-        sections: dict[str, tuple[int, int]] = {}
-        for required in (
-            "Depends",
-            "Target State Design",
-            "Related Files",
-            "Plan",
-        ):
-            span = _find_section(lines, 4, required, ms_start + 1, ms_end)
-            if span is None:
-                raise FinalizeError(f"{self.path}: milestone {name!r} missing `#### {required}`.")
+    def marker(self, literal: str) -> int:
+        found = [
+            t.map[0]
+            for t in self.tokens
+            if t.type == "html_block" and t.map is not None and t.content.strip() == literal
+        ]
+        if len(found) != 1:
+            raise FinalizeError(
+                f"{self.path}: marker {literal!r} appears {len(found)} times; "
+                "the template pairs it exactly once."
+            )
+        return found[0]
 
-            body = [
-                ln
-                for ln in self.lines[span[0] + 1 : span[1]]
-                if ln.strip()
-                and ln.strip()
-                not in (
-                    MILESTONE_AC_START,
-                    MILESTONE_AC_END,
-                )
-            ]
-            if not body:
-                raise FinalizeError(f"{self.path}: milestone {name!r} has empty `#### {required}`.")
-            sections[required] = span
+    def checkbox_states(self, start: int, end: int) -> dict[str, bool]:
+        states: dict[str, bool] = {}
+        for line in self.lines[start + 1 : end]:
+            match = CHECKBOX_RE.match(line)
+            if match:
+                states[match.group(2)] = match.group(1).lower() == "x"
+        return states
 
-        related = sections["Related Files"]
-        rel_items = _related_files_from_section(lines, related[0], related[1])
-        effective_paths: list[str] = []
-        for item in rel_items:
-            if item.lower() == "inherit: top-level":
+    def related_files(self, milestone: Section) -> list[str]:
+        section = self.find(4, "Related Files", milestone)
+        if section is None:
+            return []
+        out: list[str] = []
+        for item in self.bullets(section):
+            match = re.match(r"`([^`]+)`", item)
+            out.append(match.group(1) if match else item)
+        return out
+
+
+
+def check_headings(plan: Plan) -> None:
+    """Only the sections the template names may appear.
+
+    A section the template does not name is where a second statement of acceptance,
+    a design note belonging in the spec, or a status log accumulates -- each of them
+    a source that will later disagree with the one the template names. Depth 3 is
+    free, because that is how `## Description` is grouped.
+    """
+    for section in plan.sections:
+        if section.level in (1, 3):
+            continue
+        allowed = HEADINGS.get(section.level)
+        if allowed is None:
+            raise FinalizeError(
+                f"{plan.path}:{section.head + 1}: heading depth {section.level} is not used "
+                f"by the plan template: `{'#' * section.level} {section.title}`"
+            )
+        if section.title not in allowed:
+            raise FinalizeError(
+                f"{plan.path}:{section.head + 1}: `{'#' * section.level} {section.title}` is not "
+                f"a section the plan template defines. Allowed at this depth: "
+                f"{', '.join(sorted(allowed))}."
+            )
+
+
+def check_skeleton(plan: Plan) -> None:
+    """The three top sections exist and `## Milestones` holds at least one."""
+    for title in ("Description", "Milestones", "Final Gate"):
+        if plan.find(2, title) is None:
+            raise FinalizeError(f"{plan.path}: missing required `## {title}` section.")
+    if not plan.milestones():
+        raise FinalizeError(
+            f"{plan.path}: `## Milestones` block contains no `### Milestone …` entries."
+        )
+    for milestone in plan.milestones():
+        for title in ("Depends", "Target State Design", "Related Files"):
+            if plan.find(4, title, milestone) is None:
                 raise FinalizeError(
-                    f"{self.path}: milestone {name!r} says `inherit: top-level`, "
-                    "but there is no plan-level `Related Files` to inherit from -- "
-                    "the plan's touch surface is the union of its milestones'. "
-                    "List the paths this milestone touches."
+                    f"{plan.path}: milestone {milestone.title!r} has no `#### {title}`."
                 )
-            effective_paths.append(_strip_path_bullet(item))
 
-        tsd_start, tsd_end = sections["Target State Design"]
-        ac_section = _find_section(lines, 5, "Accepted by", tsd_start + 1, tsd_end)
-        if ac_section is None:
-            return {
-                "name": name,
-                "related_files": effective_paths,
-                "target_state_section": sections["Target State Design"],
-                "ac_section": None,
-                "policy_ac_start_idx": None,
-                "policy_ac_end_idx": None,
-                "policy_states": {},
-            }
 
-        ac_start = ac_end = None
-        for k in range(ac_section[0] + 1, ac_section[1]):
-            t = lines[k].strip()
-            if t == MILESTONE_AC_START:
-                ac_start = k
-            elif t == MILESTONE_AC_END:
-                ac_end = k
-        if ac_start is None or ac_end is None:
+def check_acceptance(plan: Plan, policies: list[dict[str, Any]]) -> None:
+    """Every milestone states how its target state is accepted.
+
+    The delivered shape and the way it is accepted are settled together while the
+    plan is written. A milestone that omits the second half would leave that choice
+    to whoever implements it, so finalizing fails and prints the contract.
+    """
+    guidance = next((p["guidance"] for p in policies if p.get("guidance")), [])
+    for milestone in plan.milestones():
+        design = plan.find(4, "Target State Design", milestone)
+        assert design is not None
+        for title in ("Delivered", "Accepted by"):
+            section = plan.find(5, title, design)
+            if section is None or not plan.body(section):
+                detail = "\n".join(guidance)
+                raise FinalizeError(
+                    f"{plan.path}: milestone {milestone.title!r} has no `##### {title}` "
+                    f"under `#### Target State Design`." + (f"\n\n{detail}" if detail else "")
+                )
+
+
+def check_delivered_shape(plan: Plan) -> None:
+    """Every milestone shows its delivered surface as code.
+
+    A predicate or an access map written as prose makes each reader rebuild it, and
+    two readers rebuild it differently -- which is how a milestone gets built as
+    something the plan never said. A `text` block is printed output, which is what
+    the shape produces rather than the shape.
+    """
+    for milestone in plan.milestones():
+        design = plan.find(4, "Target State Design", milestone)
+        section = None if design is None else plan.find(5, "Delivered", design)
+        if section is None:
+            continue
+        languages = plan.fence_languages(section)
+        if any(language in CODE_LANGS for language in languages):
+            continue
+        seen = (
+            "no fenced block at all"
+            if not languages
+            else "only " + ", ".join(f"```{lang or '<untagged>'}" for lang in languages)
+        )
+        raise FinalizeError(
+            f"{plan.path}: milestone {milestone.title!r} states its `##### Delivered` in "
+            f"prose ({seen}). The template asks for the delivered surface in code or "
+            f"compact pseudocode, in a block tagged with a programming language "
+            f"({', '.join(sorted(CODE_LANGS))})."
+        )
+
+
+def check_current_state(plan: Plan) -> None:
+    """The state the plan is built on is stated, and every claim points somewhere.
+
+    A claim with nothing to point at is the one that turns out to be wrong, and the
+    design built on it moves once it does. A citation makes the author's check cheap:
+    spot-check three of them.
+    """
+    description = plan.find(2, "Description")
+    assert description is not None
+    section = plan.find(3, "Current state", description)
+    if section is None or not plan.body(section):
+        raise FinalizeError(
+            f"{plan.path}: `## Description` has no `### Current state`. State what the code "
+            "does today, one bullet per claim, before the design that rests on it."
+        )
+    items = plan.bullets(section)
+    if not items:
+        raise FinalizeError(
+            f"{plan.path}: `### Current state` states no bullets; one claim per bullet."
+        )
+    bare = [item for item in items if not CITATION_RE.search(item)]
+    if bare:
+        raise FinalizeError(
+            f"{plan.path}: `### Current state` has {len(bare)} claim(s) citing nothing. "
+            f"Each needs a `path` or `path:line` in backticks. First: {bare[0][:80]!r}"
+        )
+
+
+def check_decisions(plan: Plan) -> None:
+    """Settled questions are recorded once and superseded rather than rewritten.
+
+    Rewriting the record erases the position it replaced, so a reader cannot tell
+    whether the root moved or only a detail did. Ids must resolve, because a
+    supersede pointing at nothing is a rewrite wearing the shape of a record.
+    """
+    description = plan.find(2, "Description")
+    assert description is not None
+    section = plan.find(3, "Decisions", description)
+    if section is None or not plan.body(section):
+        raise FinalizeError(
+            f"{plan.path}: `## Description` has no `### Decisions`. Record each settled "
+            "question, or state `None.` when the plan settled nothing an implementer "
+            "would otherwise choose alone."
+        )
+    if [line.strip() for line in plan.body(section)] == ["None."]:
+        return
+    items = plan.bullets(section)
+    ids: list[int] = []
+    for item in items:
+        match = DECISION_RE.match(item)
+        if match is None:
             raise FinalizeError(
-                f"{self.path}: milestone {name!r} is missing the "
-                f"`policy_ac:start`/`policy_ac:end` marker pair inside "
-                f"`##### Accepted by`."
+                f"{plan.path}: `### Decisions` record does not read as "
+                f"`- D<n> <question> -- <choice>, because <reason>.`: {item[:80]!r}"
             )
-        if ac_end <= ac_start:
-            raise FinalizeError(
-                f"{self.path}: milestone {name!r}: `policy_ac:end` precedes `policy_ac:start`."
-            )
-
-        return {
-            "name": name,
-            "related_files": effective_paths,
-            "target_state_section": sections["Target State Design"],
-            "ac_section": ac_section,
-            "policy_ac_start_idx": ac_start,
-            "policy_ac_end_idx": ac_end,
-            "policy_states": _policy_check_states(lines, ac_start, ac_end),
-        }
-
-
-def _refs_phrase(refs: list[dict[str, str]]) -> str:
-    parts = [f"`{r['path']} § {r['section']}`" for r in refs]
-    return ", ".join(parts)
+        ids.append(int(match.group(1)))
+    if not ids:
+        raise FinalizeError(f"{plan.path}: `### Decisions` is neither `None.` nor any record.")
+    duplicated = {i for i in ids if ids.count(i) > 1}
+    if duplicated:
+        raise FinalizeError(
+            f"{plan.path}: `### Decisions` reuses id(s) {sorted(duplicated)}; each record is one id."
+        )
+    for item in items:
+        for referenced in SUPERSEDES_RE.findall(item):
+            if int(referenced) not in ids:
+                raise FinalizeError(
+                    f"{plan.path}: `### Decisions` supersedes D{referenced}, which no record "
+                    f"states. A supersede names the record it replaces: {item[:80]!r}"
+                )
 
 
-def render_policy_ac_body(matched: list[dict[str, Any]], states: dict[str, bool]) -> list[str]:
+
+def render_items(
+    matched: list[dict[str, Any]], states: dict[str, bool], *, field: str, tag: str
+) -> list[str]:
+    """One checkbox per criterion the matched policies contribute.
+
+    A criterion the author already ticked keeps its mark, so finalizing a plan
+    mid-implementation does not silently reopen what is done.
+    """
     items: list[str] = []
-    for p in matched:
-        for n, ac in enumerate(p.get("ac") or []):
-            marker = f"{p['id']}-{n}"
+    for policy in matched:
+        for index, criterion in enumerate(policy.get(field) or []):
+            marker = f"{policy['id']}-{index}"
             check = "x" if states.get(marker, False) else " "
-            items.append(f"- [{check}] {ac} <!-- policy_ac: {marker} -->")
+            items.append(f"- [{check}] {criterion} <!-- {tag}: {marker} -->")
     return items
 
 
-def render_final_gate_body(
+def render_final_gate(
     matched: list[dict[str, Any]], policies: list[dict[str, Any]], states: dict[str, bool]
 ) -> list[str]:
-    items: list[str] = []
-    for p in matched:
-        for n, ac in enumerate(p.get("final_ac") or []):
-            marker = f"{p['id']}-{n}"
-            check = "x" if states.get(marker, False) else " "
-            items.append(f"- [{check}] {ac} <!-- policy_final: {marker} -->")
-    cf = next((p for p in policies if p.get("id") == "clang_format"), None)
-    if cf is not None and cf not in matched:
+    """The repository-wide gates, plus the one that records a gate as not applying.
+
+    A plan touching no C++ says so rather than leaving the clang-format gate absent,
+    because absent reads as forgotten.
+    """
+    items = render_items(matched, states, field="final_ac", tag="policy_final")
+    clang = next((p for p in policies if p.get("id") == "clang_format"), None)
+    if clang is not None and clang not in matched:
         marker = "clang_format-na"
         check = "x" if states.get(marker, False) else " "
         items.append(
@@ -384,252 +398,93 @@ def render_final_gate_body(
     return items
 
 
-def _replace_range(lines: list[str], start_idx: int, end_idx: int, body: list[str]) -> list[str]:
-    """Replace a range's contents while preserving its marker lines.
-
-    The replaced slice is `lines[start_idx + 1 : end_idx]`.
-    """
-    return lines[: start_idx + 1] + body + lines[end_idx:]
-
-
-PLAN_HEADINGS = {
-    2: {"Description", "Milestones", "Final Gate"},
-    4: {"Depends", "Target State Design", "Related Files", "Plan"},
-    5: {"Delivered", "Accepted by"},
-}
-
-
-def _require_known_headings(path: Path, scan: list[str]) -> None:
-    """Reject a heading the template does not define.
-
-    A plan carries the decisions an agent must not make alone, and nothing else.
-    A section the template does not name is where a second statement of acceptance,
-    a design note belonging in the spec, or a status log accumulates -- each of them
-    a source that will later disagree with the one the template names. Scope
-    boundaries and ordering rationale are part of the problem, so they belong in
-    `## Description`.
-    """
-    for index, line in enumerate(scan, start=1):
-        level = _heading_level(line)
-        if level is None or level in (1, 3):
-            continue
-        known = PLAN_HEADINGS.get(level)
-        if known is None:
-            raise FinalizeError(
-                f"{path}:{index}: heading depth {level} is not used by the "
-                f"plan template: {line.strip()!r}"
-            )
-        text = _heading_text(line)
-        if text not in known:
-            raise FinalizeError(
-                f"{path}:{index}: `{line.strip()}` is not a section the plan "
-                f"template defines. Allowed at this depth: "
-                f"{', '.join(sorted(known))}."
-            )
-
-
-def _require_acceptance(plan: "PlanModel", policies: list[dict[str, Any]]) -> None:
-    """Every milestone states how its target state is accepted.
-
-    The delivered shape and the way it is accepted are settled together while the
-    plan is written. A milestone that omits the second half would leave that
-    choice to whoever implements it, so finalizing fails and prints the contract
-    the author needs in order to make the call.
-    """
-    guidance = next(
-        (p["guidance"] for p in policies if p.get("guidance")),
-        [],
-    )
-    for milestone in plan.milestones:
-        start, end = milestone["target_state_section"]
-        for required in ("Delivered", "Accepted by"):
-            span = _find_section(plan.scan, 5, required, start + 1, end)
-            body = (
-                [ln for ln in plan.lines[span[0] + 1 : span[1]] if ln.strip()]
-                if span is not None
-                else []
-            )
-            if not body:
-                detail = "\n".join(guidance)
-                raise FinalizeError(
-                    f"{plan.path}: milestone {milestone['name']!r} has no "
-                    f"`##### {required}` under `#### Target State Design`."
-                    + (f"\n\n{detail}" if detail else "")
-                )
-
-
-def _opening_fence_tags(body: list[str]) -> list[str]:
-    """The language tag of every fenced block opened in *body*.
-
-    Fence state is tracked so a closing fence, which carries no tag, is never read
-    as a second block with an empty one.
-    """
-    tags: list[str] = []
-    inside = False
-    for line in body:
-        match = TAGGED_FENCE_RE.match(line)
-        if match is None:
-            continue
-        if inside:
-            inside = False
-            continue
-        inside = True
-        tags.append(match.group(1).lower())
-    return tags
-
-
-def _require_delivered_shape(plan: "PlanModel") -> None:
-    """Every milestone shows its delivered surface as code.
-
-    A predicate or an access map written as prose makes each reader rebuild it, and
-    two readers rebuild it differently -- which is how a milestone gets built as
-    something the plan never said. The template already carries a fenced block here,
-    so this holds authors to it and to one of ``CODE_FENCE_LANGUAGES``: a ``text``
-    block is printed output, which is what the shape produces rather than the shape.
-    A milestone with no ``Delivered`` at all is left to
-    :func:`_require_acceptance`, so one missing section is not reported twice.
-    """
-    for milestone in plan.milestones:
-        start, end = milestone["target_state_section"]
-        span = _find_section(plan.scan, 5, "Delivered", start + 1, end)
-        if span is None:
-            continue
-        tags = _opening_fence_tags(plan.lines[span[0] + 1 : span[1]])
-        if any(tag in CODE_FENCE_LANGUAGES for tag in tags):
-            continue
-        seen = (
-            "no fenced block at all"
-            if not tags
-            else "only " + ", ".join(f"```{tag or '<untagged>'}" for tag in tags)
-        )
-        raise FinalizeError(
-            f"{plan.path}: milestone {milestone['name']!r} states its "
-            f"`##### Delivered` in prose ({seen}).\n\n"
-            "The template asks for the delivered surface in code or compact "
-            "pseudocode, in a block tagged with a programming language "
-            f"({', '.join(sorted(CODE_FENCE_LANGUAGES))}). A ```text block is "
-            "printed output, which is what the shape produces rather than the "
-            "shape itself, so it does not satisfy this."
-        )
-
-
 def finalize_plan(
-    plan_path: Path,
-    *,
-    policy_path: Path = DEFAULT_POLICY,
-    role: str = "implementer",
-    write: bool = True,
+    plan_path: Path, *, policy_path: Path = DEFAULT_POLICY, write: bool = True
 ) -> tuple[str, str]:
-    """Rewrite *plan_path* to canonical form.
-
-    Returns the ``(before, after)`` text pair.
-
-    When *write* is False the plan file is not modified — useful for
-    dry-runs in tests and for the ``--check`` mode.
-    """
-    plan = PlanModel(plan_path)
+    """Rewrite *plan_path* to canonical form, returning the ``(before, after)`` pair."""
+    plan = Plan(plan_path)
     policies = load_policies(policy_path)
-    _require_acceptance(plan, policies)
-    _require_delivered_shape(plan)
+    check_headings(plan)
+    check_skeleton(plan)
+    check_acceptance(plan, policies)
+    check_delivered_shape(plan)
+    check_current_state(plan)
+    check_decisions(plan)
 
-    plan_matched = filter_policies(policies, plan.plan_related_files)
-
+    every_related: list[str] = []
     rewrites: list[tuple[int, int, list[str]]] = []
-    for m in plan.milestones:
-        matched = filter_policies(policies, m["related_files"])
-        body = render_policy_ac_body(matched, m["policy_states"])
-        rewrites.append((m["policy_ac_start_idx"], m["policy_ac_end_idx"], body))
+    for milestone in plan.milestones():
+        related = plan.related_files(milestone)
+        every_related.extend(related)
+        start = _paired_marker(plan, milestone, AC_START)
+        end = _paired_marker(plan, milestone, AC_END)
+        states = plan.checkbox_states(start, end)
+        rewrites.append(
+            (start, end, render_items(filter_policies(policies, related), states, field="ac", tag="policy_ac"))
+        )
+
+    gate_start, gate_end = plan.marker(GATE_START), plan.marker(GATE_END)
+    if gate_end <= gate_start:
+        raise FinalizeError(f"{plan_path}: `final_gate:end` precedes `final_gate:start`.")
     rewrites.append(
         (
-            plan.final_gate_start_idx,
-            plan.final_gate_end_idx,
-            render_final_gate_body(plan_matched, policies, plan.final_gate_states),
+            gate_start,
+            gate_end,
+            render_final_gate(
+                filter_policies(policies, every_related),
+                policies,
+                plan.checkbox_states(gate_start, gate_end),
+            ),
         )
     )
-    rewrites.sort(key=lambda r: r[0], reverse=True)
 
-    new_lines = list(plan.lines)
-    for start, end, body in rewrites:
-        new_lines = _replace_range(new_lines, start, end, body)
-
-    allowed: list[tuple[int, int]] = []
-    final_gate_start = next(
-        i for i, line in enumerate(new_lines) if line.strip() == FINAL_GATE_START
-    )
-    final_gate_end = next(i for i, line in enumerate(new_lines) if line.strip() == FINAL_GATE_END)
-    allowed.append((final_gate_start, final_gate_end))
-    ac_starts = [i for i, line in enumerate(new_lines) if line.strip() == MILESTONE_AC_START]
-    ac_ends = [i for i, line in enumerate(new_lines) if line.strip() == MILESTONE_AC_END]
-    if len(ac_starts) != len(ac_ends):
-        raise FinalizeError(
-            f"{plan_path}: unbalanced `policy_ac` marker pairs after rewrite "
-            f"(starts={len(ac_starts)}, ends={len(ac_ends)})."
-        )
-    for s, e in zip(sorted(ac_starts), sorted(ac_ends)):
-        allowed.append((s, e))
-
-    diagnostics: list[str] = []
-    in_fence = False
-    for i, line in enumerate(new_lines):
-        if FENCE_RE.match(line):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
-        stripped_line = CODE_SPAN_RE.sub("", line)
-        if not INLINE_POLICY_TAG_RE.search(stripped_line):
-            continue
-        if any(lo < i < hi for lo, hi in allowed):
-            continue
-        diagnostics.append(
-            f"{plan_path}: line {i + 1}: stray policy marker outside any "
-            f"allowed range: {line.strip()!r}"
-        )
-    if diagnostics:
-        raise FinalizeError("\n".join(diagnostics))
-
-    before = plan.text
-    after = _join_lines(new_lines)
-
-    if before.endswith("\n") and not after.endswith("\n"):
-        after = after + "\n"
-    if write and after != before:
+    lines = list(plan.lines)
+    for start, end, body in sorted(rewrites, key=lambda r: r[0], reverse=True):
+        lines = lines[: start + 1] + body + lines[end:]
+    after = "\n".join(lines)
+    if write and after != plan.text:
         plan_path.write_text(after)
-    return before, after
+    return plan.text, after
+
+
+def _paired_marker(plan: Plan, milestone: Section, literal: str) -> int:
+    """The one occurrence of *literal* inside *milestone*'s `##### Accepted by`."""
+    found = [
+        t.map[0]
+        for t in plan.tokens
+        if t.type == "html_block"
+        and t.map is not None
+        and t.content.strip() == literal
+        and milestone.head < t.map[0] < milestone.end
+    ]
+    if len(found) != 1:
+        raise FinalizeError(
+            f"{plan.path}: milestone {milestone.title!r} holds {len(found)} {literal!r} "
+            "markers; the template pairs them exactly once inside `##### Accepted by`."
+        )
+    return found[0]
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("plan", type=Path, help="Path to docs/plans/<name>.md")
-    p.add_argument(
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    parser.add_argument("plan", type=Path, help="Path to docs/plans/<name>.md")
+    parser.add_argument(
         "--policy",
         type=Path,
         default=DEFAULT_POLICY,
         help=f"Policy JSON path (default: {DEFAULT_POLICY}).",
     )
-    p.add_argument(
-        "--role",
-        choices=("implementer", "reviewer"),
-        default="implementer",
-        help="Role used to filter rules / knowledge refs for the "
-        "plan-level Preflight block (default: implementer).",
-    )
-    p.add_argument(
+    parser.add_argument(
         "--check",
         action="store_true",
         help="Validate only; exit non-zero if a rewrite would change the file.",
     )
-    args = p.parse_args(argv)
+    args = parser.parse_args(argv)
 
     try:
-        before, after = finalize_plan(
-            args.plan,
-            policy_path=args.policy,
-            role=args.role,
-            write=not args.check,
-        )
-    except FinalizeError as exc:
-        sys.stderr.write(f"{exc}\n")
+        before, after = finalize_plan(args.plan, policy_path=args.policy, write=not args.check)
+    except FinalizeError as error:
+        sys.stderr.write(f"{error}\n")
         return 2
 
     if args.check and before != after:

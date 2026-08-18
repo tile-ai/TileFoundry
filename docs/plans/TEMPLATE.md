@@ -4,25 +4,51 @@ component: <component name>
 target_repo: tilefoundry
 ---
 
-<!-- Pass 1 settles the intended result and each milestone's Target State Design;
-     Plan steps stay coarse. Pass 2 audits the repository, resolves references and
-     quantifiers, fixes Related Files, makes the steps executable, and finalizes.
-     Do not state a count or reference that has not been checked.
+<!-- Read this before writing any of the plan below.
 
-     What a milestone leaves behind is settled here, with the author, before it is
-     dispatched -- the delivered code and the way it is accepted alike. Anything an
-     agent would otherwise decide alone at implementation time is a question for
-     pass 1.
+     Pass 1 -- audit the repository and probe what is not yet known. Write
+     `### Current state`, and nothing else yet.
 
-     Only the headings below may appear. finalize_plan_context.py rejects any
-     other one, so a thought with no home here belongs in the code, the spec, or a
-     message -- not in the plan. -->
+     Pass 2 -- write each milestone's `##### Delivered` shape. Then stop and show
+     the author those shapes. No prose exists yet, so a shape that is not what the
+     author meant costs ten lines to redirect rather than a document to rewrite.
+
+     Pass 3 -- write the rest, then run scripts/finalize_plan_context.py.
+
+     Append to `### Decisions` as each question is settled. Never edit an accepted
+     record; append one that supersedes it.
+
+     Settle with the author anything an agent would otherwise decide alone at
+     implementation time -- the delivered code and the way it is accepted alike.
+
+     Use only the headings below. -->
 
 # [TYPE][component] <short description>
 
 ## Description
-<!-- Explain the problem, intended result, and constraints in the shape this plan
-     needs. -->
+<!-- The problem and the intended result. Only what the reader needs before the
+     current state. -->
+
+### Current state
+<!-- State the mechanism the code implements today: what is there, and what is
+     missing. No design and no proposal -- the gap is the finding, not the fix.
+
+     One bullet per claim, each citing a path in backticks. A claim with nothing to
+     point at is the one that turns out to be wrong, and the design resting on it
+     moves once it does. -->
+- `<dir>/<file>.py:<line>` <what it does today>
+- `<dir>/<file>.py` <a number a probe produced, and what it means>
+
+### Decisions
+<!-- Append-only. One settled question per record, never edited once accepted:
+     when the answer changes, append a record that supersedes the earlier one.
+     `None.` when the plan settled nothing an implementer would otherwise choose.
+
+     A record is where "why a new one rather than the existing one" gets answered.
+     A new file, class, registry entry, analysis family, or test belongs here with
+     its reason, because that is the choice a reader most often disagrees with. -->
+- D1 <question> -- <choice>, because <reason>.
+- D2 <question> -- <choice>, because <reason>. Supersedes D1: <what changed>.
 
 ## Milestones
 
@@ -60,14 +86,10 @@ target_repo: tilefoundry
 <!-- policy_ac:end -->
 
 #### Related Files
-<!-- Files this milestone touches. List owning docs/spec/*.md files when it
-     changes a public contract. -->
+<!-- Files this milestone touches. `filter_policies` reads them to choose which
+     acceptance criteria this milestone inherits, so a missing path silently drops
+     one. List owning docs/spec/*.md files when it changes a public contract. -->
 - <path>
-
-#### Plan
-<!-- Pass 1 leaves coarse steps; pass 2 resolves real files, call sites, and order. -->
-- [ ] step 0.1 <action with affected files>
-- [ ] step 0.2 <action>
 
 ## Final Gate
 
