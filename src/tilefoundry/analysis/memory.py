@@ -132,6 +132,18 @@ def _unique_labels(order: list[Expr]) -> dict[int, str]:
     return labels
 
 
+def definition_order(fn: Function) -> list[Expr]:
+    """Every value of *fn* in the one order its lifetimes are indexed by.
+
+    Parameters come first: the function did not produce them, so they are
+    already resident when it is entered.
+    """
+    return [
+        *fn.params,
+        *(expr for expr in postorder(fn.body) if isinstance(expr, (Call, Constant))),
+    ]
+
+
 def _residencies(
     fn: Function,
     *,
@@ -146,10 +158,7 @@ def _residencies(
     function cannot reclaim storage its caller owns, so every parameter stays
     resident past its last reader for the whole function.
     """
-    order: list[Expr] = [
-        *fn.params,
-        *(expr for expr in postorder(fn.body) if isinstance(expr, (Call, Constant))),
-    ]
+    order = definition_order(fn)
     position = {id(expr): index for index, expr in enumerate(order)}
     last_use = dict(position)
     for consumer in order:
@@ -526,4 +535,4 @@ def analyze_memory(
             attach(loop, record)
 
 
-__all__ = ["SELECTOR", "analyze_memory", "cache_pressure"]
+__all__ = ["SELECTOR", "analyze_memory", "cache_pressure", "definition_order"]

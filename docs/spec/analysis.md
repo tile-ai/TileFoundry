@@ -1096,6 +1096,30 @@ model.
     scaled estimate.
   - `parallel_units` is compiler policy over hardware facts. It MUST NOT enter
     one-unit rates or the CTA-local interval solver, and is not a program rewrite.
+  - The intervals and the addresses of the buffers they keep live MUST be
+    decided together. A schedule is only a schedule if every value it keeps live
+    has somewhere to be, so the two questions cannot be answered apart, where
+    each would be free to assume the other gave way.
+  - Buffers MUST be placed for the addressable levels `gmem` and `smem` only.
+    Traffic or residency at another level MUST NOT create a placement, and MUST
+    NOT make a program infeasible: this model stops where its addressing does.
+  - A buffer MUST be placed once per capacity domain that holds it -- the whole
+    target for a level owned target-wide, one per owning position otherwise --
+    and two buffers in one domain MUST NOT overlap in both address and lifetime
+    at once. A level owned per unit of a topology level other than the one being
+    analysed cannot be projected onto it, and MUST fail rather than be assumed.
+  - A value that lives in another value's buffer MUST NOT be placed again;
+    reading through any of them keeps that one buffer live. A value produced and
+    last read within one loop trip MUST be placed for that trip, so later trips
+    reuse the address rather than each asking for one.
+  - Capacity is a constraint on the answer, not a fact about the program:
+    changing it MAY change the timeline or leave the program with none, and MUST
+    NOT change what `memory` recorded. A program with no placement at all MUST
+    fail with `AnalysisError`, and MUST NOT leave records behind.
+  - The makespan MUST be minimized but need not be proved minimal.
+    `solver_status` MUST say which of the two happened, and a solve that ends
+    with no answer at all -- infeasible, invalid, or out of time -- MUST raise
+    `AnalysisError` saying which.
   - Timeline is a modeled plan and MUST NOT be read as a guarantee about
     lowering, physical occupancy, or runtime performance.
 

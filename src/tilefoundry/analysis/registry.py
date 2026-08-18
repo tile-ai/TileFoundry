@@ -52,7 +52,7 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
         return Analyzer(
             "timeline",
             analyze_timeline,
-            requires=("compute-cost",),
+            requires=("compute-cost", "memory"),
             produces=(PerformanceMetadata, PerformanceSummaryMetadata),
         )
     return None

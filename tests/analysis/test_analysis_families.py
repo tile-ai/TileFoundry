@@ -40,6 +40,7 @@ from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import _mesh_image, _result_placement, _timeline_placements
 from tilefoundry.analysis.compute_cost import _call_movement, _local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.analysis.memory import _base_of
 from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
 from tilefoundry.inspection.analysis_report import (
@@ -114,6 +115,35 @@ class _ConstrainedCudaTarget(CudaTarget):
         if facts_type is ParallelCapacityFacts:
             return replace(facts, parallel_units=64)
         return facts
+
+
+class _RestatedCapacity(CudaTarget):
+    """An H200 whose addressable levels hold what a test needs to say."""
+
+    name = "test.restated_capacity"
+    levels: dict[str, int] = {}
+
+    def get_facts(self, facts_type: type, query: object | None = None):
+        facts = super().get_facts(facts_type, query)
+        if facts_type is not MemoryHierarchyFacts:
+            return facts
+        return replace(
+            facts,
+            explicit_levels=tuple(
+                replace(level, capacity_bytes=self.levels.get(level.name, level.capacity_bytes))
+                for level in facts.explicit_levels
+            ),
+        )
+
+
+class _RoomyShared(_RestatedCapacity):
+    name = "test.roomy_shared"
+    levels = {"smem": 422_400}
+
+
+class _NarrowRegisters(_RestatedCapacity):
+    name = "test.narrow_registers"
+    levels = {"rmem": 4}
 
 
 _GRID = DimVar("grid", 1, 397)
@@ -346,6 +376,16 @@ class _PricingBoundary:
             return tf.add(local, local)
 
     @func
+    def overwritten(source: Tensor[(64,), "f32"], patch: Tensor[(16,), "f32"]):
+        with Mesh(("cta",), layout=(1,), names=("tile",)) as cta:
+            placed = tf.reshard(source, (64 @ cta.tile,), "gmem")
+            window = tf.reshard(patch, (16 @ cta.tile,), "gmem")
+            made = tf.add(placed, placed)
+            side = tf.add(made, made)
+            written = tf.insert_slice(made, window, (0,))
+            return tf.add(side, written)
+
+    @func
     def unrated_dtype(source: Tensor[(64,), "f32"]):
         with Mesh(("cta",), layout=(1,), names=("tile",)) as cta:
             placed = tf.reshard(source, (64 @ cta.tile,), "gmem")
@@ -400,6 +440,13 @@ class _SharedTile:
         with Mesh(("cta",), layout=(132,), names=("tile",)) as _cta:
             local = tf.reshard(source, (1056, 6600), "smem")
             return tf.add(local, local)
+
+    @func
+    def viewed(source: Tensor[(1056, 6600), "f32"]):
+        with Mesh(("cta",), layout=(132,), names=("tile",)) as cta:
+            local = tf.reshard(source, (1056 @ cta.tile, 6600), "smem")
+            view = tf.reshape(local, new_shape=(1056, 100, 66))
+            return tf.add(view, view)
 
 
 @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("thread", 4),))
@@ -1159,7 +1206,7 @@ def test_timeline_refuses_unplaced_results_before_dependencies_run(monkeypatch) 
     assert get_metadata(roofline.function, RooflineMetadata) is not None
 
     placed, function = _run(_placed_wide_grid, "timeline")
-    assert placed.executed == ("compute-cost", "timeline")
+    assert placed.executed == ("compute-cost", "memory", "timeline")
     assert [
         type(call.target).__name__
         for call in _calls(function)
@@ -1413,6 +1460,110 @@ def test_nested_levels_project_independently_and_broadcast_counts_as_placed() ->
 
     assert _result_placement(type_, cta) == frozenset((0, 1))
     assert _result_placement(type_, thread) == frozenset(range(4))
+
+
+def test_a_timeline_has_to_put_its_buffers_somewhere() -> None:
+    """A schedule that needs more of a level than the target has is not a schedule.
+
+    The two shared tiles this program keeps live at once do not both fit the
+    machine's shared memory, and no ordering makes them: the second is computed
+    from the first. Restating the capacity is what changes the answer, and it
+    changes only the answer -- what the memory family recorded about the program
+    is the same either way.
+    """
+    split = next(function for function in _SharedTile.functions if function.name == "split")
+    roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))
+
+    with pytest.raises(AnalysisError, match=r"no timeline places this program's buffers"):
+        analyze(_SharedTile, split, analysis="timeline")
+
+    fits = analyze(
+        roomy,
+        next(item for item in roomy.functions if item.name == "split"),
+        analysis="timeline",
+    )
+    summary = get_metadata(fits.function, PerformanceSummaryMetadata)
+    assert summary is not None and summary.solver_status == "optimal"
+    assert summary.timeline.end_ns > 0
+
+    tight = analyze(_SharedTile, split, analysis="memory")
+    relieved = analyze(
+        roomy,
+        next(item for item in roomy.functions if item.name == "split"),
+        analysis="memory",
+    )
+    assert [
+        (item.binding, item.level, item.bytes, item.defined_at, item.last_used_at)
+        for item in get_metadata(tight.function, MemoryMetadata).lifetimes
+    ] == [
+        (item.binding, item.level, item.bytes, item.defined_at, item.last_used_at)
+        for item in get_metadata(relieved.function, MemoryMetadata).lifetimes
+    ]
+
+
+def test_a_view_and_its_base_are_one_rectangle_to_place() -> None:
+    """Shared memory holds the tile once, however many names read it.
+
+    The same room that holds the tile and the result holds a view of the tile as
+    well, because the view is the tile. Giving the view an address of its own
+    would need half again as much and this program would not fit.
+    """
+    roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))
+    viewed = next(function for function in roomy.functions if function.name == "viewed")
+
+    result = analyze(roomy, viewed, analysis=("memory", "timeline"))
+
+    tile, view, _sum = _calls(result.function)
+    assert get_metadata(view, BufferAliasMetadata) == BufferAliasMetadata("forward", (0,))
+    record = get_metadata(result.function, MemoryMetadata)
+    assert record is not None
+    assert record.level("smem").peak_bytes == _RoomyShared.levels["smem"]
+    assert [item.binding for item in record.lifetimes if item.level == "smem"] == [
+        binding_name(tile),
+        binding_name(_sum),
+    ]
+    assert get_metadata(result.function, PerformanceSummaryMetadata) is not None
+
+
+def test_an_overwrite_waits_for_everything_that_read_what_it_replaces() -> None:
+    """Reusing a buffer means the old contents are gone, so the last reader goes first."""
+    function = next(
+        item for item in _PricingBoundary.functions if item.name == "overwritten"
+    )
+
+    result = analyze(_PricingBoundary, function, analysis="timeline")
+
+    _placed, made, side, _window, written, _joined = _calls(result.function)
+    assert get_metadata(written, BufferAliasMetadata) == BufferAliasMetadata("update", (0,))
+    assert _base_of(written.args[0]) is made
+    assert (
+        get_metadata(side, PerformanceMetadata).timeline.end_ns
+        <= get_metadata(written, PerformanceMetadata).timeline.start_ns
+    )
+
+
+def test_only_addressable_levels_are_placed_by_the_solver() -> None:
+    """Registers hold what they hold; this model does not place them.
+
+    The two register values here are live at once and each is as big as the
+    level the target states, so a solver that packed registers would call this
+    impossible. It is not: allocation stops at the levels this model addresses.
+    """
+    narrow = replace(_PricingBoundary, target=_NarrowRegisters("nvidia.h200_sxm"))
+    function = next(item for item in narrow.functions if item.name == "unpriced_only")
+
+    result = analyze(narrow, function, analysis="timeline")
+
+    summary = get_metadata(result.function, PerformanceSummaryMetadata)
+    assert summary is not None and summary.solver_status == "optimal"
+    baseline = analyze(
+        _PricingBoundary,
+        next(item for item in _PricingBoundary.functions if item.name == "unpriced_only"),
+        analysis="timeline",
+    )
+    assert summary.timeline == get_metadata(
+        baseline.function, PerformanceSummaryMetadata
+    ).timeline
 
 
 def test_time_comes_from_the_rates_the_target_states_and_from_nothing_else() -> None:
