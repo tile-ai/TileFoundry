@@ -242,7 +242,7 @@ class Qwen3_1_7B_DecoderLayer:
         w_up: ConstTensor[(1, config.hidden_size, config.intermediate_size), _DT],
         w_down: ConstTensor[(1, config.intermediate_size, config.hidden_size), _DT],
     ) -> Tensor[(1, S, config.hidden_size), _DT]:
-        # The same MLP with every result explicitly placed for timeline.
+        # The same MLP with every result explicitly placed for performance.
         with Mesh(("cta",), layout=(132,), names=("tile",)) as _cta:
             placed = tf.reshard(hidden, (1, S, config.hidden_size), "gmem")
             hidden_norm32 = tf.cast(placed, dtype="f32")

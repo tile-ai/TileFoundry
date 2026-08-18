@@ -32,7 +32,7 @@ class Open:
 '''
 
 
-def test_logical_analyses_run_and_timeline_requires_result_placement(tf, cmine) -> None:
+def test_logical_analyses_run_and_performance_requires_result_placement(tf, cmine) -> None:
     done = tf(
         "analyze",
         f"{cmine}:CMine.root",
@@ -149,7 +149,7 @@ def test_a_bare_analyze_binds_every_open_dimension(tf, tmp_path) -> None:
     assert "# analysis " not in bound.stdout
 
 
-def test_timeline_resolves_derived_execution_geometry(tf, derived_prefill) -> None:
+def test_performance_resolves_derived_execution_geometry(tf, derived_prefill) -> None:
     source = f"{derived_prefill}:DerivedPrefill.prefill"
     unbound = tf("analyze", source, "--performance", "--json")
     assert unbound.returncode == 1
@@ -169,11 +169,11 @@ def test_timeline_resolves_derived_execution_geometry(tf, derived_prefill) -> No
     )
     assert bound.returncode == 0, bound.stderr
     payload = json.loads(bound.stdout)
-    timeline = payload["function_records"]["performance"]
-    assert timeline == {
+    record = payload["function_records"]["performance"]
+    assert record == {
         "timeline": {
             "start_ns": 0,
-            "end_ns": timeline["timeline"]["end_ns"],
+            "end_ns": record["timeline"]["end_ns"],
             "trips": 1,
             "stride_ns": 0,
         },

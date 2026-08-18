@@ -126,8 +126,8 @@ def _roofline_evidence(report: dict) -> str | None:
     return None
 
 
-def _timeline_evidence(report: dict) -> str | None:
-    """What `timeline` must have laid out and scaled by physical capacity."""
+def _performance_evidence(report: dict) -> str | None:
+    """What `performance` must have laid out and scaled by physical capacity."""
     record = report["function_records"]["performance"]
     envelope = record["timeline"]
     if envelope["start_ns"] != 0 or not envelope["end_ns"] > 0:
@@ -145,7 +145,7 @@ _EVIDENCE = {
     "compute-cost": _compute_cost_evidence,
     "memory": _memory_evidence,
     "roofline": _roofline_evidence,
-    "performance": _timeline_evidence,
+    "performance": _performance_evidence,
 }
 
 
@@ -154,13 +154,13 @@ def analysed_every_family(
 ) -> dict:
     """Judge every family the selected function is ready to run.
 
-    ``FunctionCase.timeline`` marks an explicitly placed analysis witness. Other
+    ``FunctionCase.performance`` marks an explicitly placed analysis witness. Other
     shipped functions keep their logical three-family conclusions and must make a
-    separate timeline request fail for missing result placement.
+    separate performance request fail for missing result placement.
     """
     selected = [item for item in case.analyze if item.selector == selector]
     assert len(selected) == 1, f"{case.id}: analysis selector {selector!r} is not unique"
-    families = FAMILIES if selected[0].timeline else LOGICAL_FAMILIES
+    families = FAMILIES if selected[0].performance else LOGICAL_FAMILIES
     report = reported(tf, source, case, selector, families, dims)
     assert report["executed"] == list(families), (
         f"asked for {list(families)}, the command ran {report['executed']}"
@@ -177,7 +177,7 @@ def analysed_every_family(
     return report
 
 
-def timeline_refused(
+def performance_refused(
     tf,
     source: Path,
     case: ModelCase,

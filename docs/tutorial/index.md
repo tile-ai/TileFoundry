@@ -19,7 +19,7 @@ implementation is source code, and either can be pointed at any command.
   runtime, the target.
 - `tilefoundry check --help` — the comparison predicates and their bounds, with the
   arithmetic for choosing a tolerance.
-- `tilefoundry analyze --help` — flops, traffic, roofline bounds, a timeline.
+- `tilefoundry analyze --help` — flops, traffic, roofline bounds, a predicted time.
 - `tilefoundry schedule --help` — placement, resharding and timing for one topology
   level.
 - `tilefoundry models` — the models already described, and their authored source to

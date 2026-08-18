@@ -64,21 +64,21 @@ def test_external_v100_documents_analyse_a_copied_installed_model(
         if item["level"] == "gmem"
     )
     assert gmem["peak_bytes"] < 32_000_000_000
-    timeline = report["function_records"]["performance"]
-    assert timeline["waves"] == 2
-    assert timeline["solver_status"] == "optimal"
-    call_timelines = [
+    record = report["function_records"]["performance"]
+    assert record["waves"] == 2
+    assert record["solver_status"] == "optimal"
+    call_records = [
         call["performance"]["timeline"] for call in report["calls"] if "performance" in call
     ]
-    assert call_timelines
+    assert call_records
     assert all(
         set(call) == {"start_ns", "end_ns", "trips", "stride_ns"}
-        for call in call_timelines
+        for call in call_records
     )
-    assert all(call["end_ns"] > call["start_ns"] for call in call_timelines)
-    assert timeline["timeline"] == {
+    assert all(call["end_ns"] > call["start_ns"] for call in call_records)
+    assert record["timeline"] == {
         "start_ns": 0,
-        "end_ns": 2 * max(call["end_ns"] for call in call_timelines),
+        "end_ns": 2 * max(call["end_ns"] for call in call_records),
         "trips": 1,
         "stride_ns": 0,
     }

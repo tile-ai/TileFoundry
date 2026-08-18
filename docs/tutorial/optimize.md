@@ -14,7 +14,7 @@ The authored HIR stays the reference. Everything here is written beside it.
    choosing a tolerance.
 
 3. **Ask for evidence when you want it.** `analyze` reports what the authored
-   program costs: flops, traffic, roofline bounds, a timeline. `schedule` proposes
+   program costs: flops, traffic, roofline bounds, a predicted time. `schedule` proposes
    a plan for one topology level you name: placement, resharding, timing. Both read
    the authored source, both are optional, and neither decides anything.
    `tilefoundry analyze --help` and `tilefoundry schedule --help` say what each

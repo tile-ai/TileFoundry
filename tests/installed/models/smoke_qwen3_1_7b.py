@@ -166,7 +166,7 @@ def test_the_decode_step_and_the_cache_entry_it_hands_back(
 
 
 def test_the_placed_mlp_matches_the_reference(tf, shipped_source, tmp_path) -> None:
-    """The timeline witness keeps the shipped MLP's numerical boundary."""
+    """The performance witness keeps the shipped MLP's numerical boundary."""
     drawn = reference.decode_step_inputs(ctx_len=0, device="cpu")
     want = reference.mlp_reference(drawn.layer, drawn.hidden_new)
 

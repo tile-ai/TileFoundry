@@ -1218,7 +1218,7 @@ def test_roofline_uses_exact_integer_ceiling_above_float_precision() -> None:
     assert bound.ideal_ns == 1_492_537_313_434
 
 
-def test_timeline_refuses_unplaced_results_before_dependencies_run(monkeypatch) -> None:
+def test_performance_refuses_unplaced_results_before_dependencies_run(monkeypatch) -> None:
     """A topology declaration does not place a value or admit dependency writes."""
     compute = analyze(_wide_grid, _entry(_wide_grid), analysis="compute-cost")
     footprint = analyze(_wide_grid, _entry(_wide_grid), analysis="memory")
@@ -1250,7 +1250,7 @@ def test_timeline_refuses_unplaced_results_before_dependencies_run(monkeypatch) 
     assert not ran
 
 
-def test_mega_kernel_preserves_placement_costs_and_timeline_order() -> None:
+def test_mega_kernel_preserves_placement_costs_and_dependency_order() -> None:
     """The expanded placed program keeps its slices, costs, and dependency order.
 
     Two roots are asked for, and the four families arrive: the bound and the
@@ -1376,7 +1376,7 @@ def test_mega_kernel_preserves_placement_costs_and_timeline_order() -> None:
     )
 
 
-def test_timeline_scales_one_local_schedule_by_root_capacity() -> None:
+def test_performance_scales_one_local_schedule_by_root_capacity() -> None:
     """Root geometry and capacity scale waves, never occurrence intervals."""
     results = [
         analyze(

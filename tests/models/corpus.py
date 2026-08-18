@@ -218,7 +218,7 @@ class FunctionCase:
     context length. A model with no open dimension states none, and that is not
     the same as a model that has one and cannot be asked -- see `SizedCase`.
 
-    `timeline` marks an analysis witness whose costed Call results explicitly
+    `performance` marks an analysis witness whose costed Call results explicitly
     carry placement at the selected topology level.
     """
 
@@ -228,7 +228,7 @@ class FunctionCase:
     gate: CapabilityGate = field(default_factory=CapabilityGate)
     topology: str | None = None
     dims: Mapping[str, int] | None = None
-    timeline: bool = False
+    performance: bool = False
 
 
 @dataclass(frozen=True)

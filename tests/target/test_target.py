@@ -199,7 +199,7 @@ def test_cuda_projects_one_ctas_share_from_device_rates() -> None:
         (_NoBandwidthUnitRateCudaTarget, r"level 'gmem'.*'cta'"),
     ),
 )
-def test_timeline_refuses_a_target_without_its_required_one_unit_rate(
+def test_performance_refuses_a_target_without_its_required_one_unit_rate(
     target_type: type[CudaTarget], missing: str
 ) -> None:
     target = target_type("nvidia.h200_sxm")

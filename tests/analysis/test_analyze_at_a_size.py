@@ -24,6 +24,7 @@ from tests.models.corpus import FunctionCase, ModelCase
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tests.models.registry import CORPUS
 from tilefoundry.analysis import (
+    AnalysisResult,
     ComputeCostMetadata,
     LoopFootprintMetadata,
     MemoryMetadata,
@@ -32,11 +33,13 @@ from tilefoundry.analysis import (
     RooflineMetadata,
     analyze,
 )
+from tilefoundry.analysis.compute_cost import _local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.walk import enclosing_trips, postorder, tensor_types
 from tilefoundry.inspection.analysis_report import render_analysis
 from tilefoundry.ir.core import Call, Constant, get_metadata
 from tilefoundry.ir.core.kinds import BinaryKind
+from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.sharding.local import Local
@@ -64,7 +67,7 @@ from tilefoundry.ir.types.shard import (
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 from tilefoundry.schedule.partition import build_partition_program
-from tilefoundry.target import CudaTarget
+from tilefoundry.target import CudaTarget, ThroughputFacts
 
 CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT}
@@ -91,18 +94,57 @@ def _subject(family: str):
     return module, module.entry_function(), DIMS
 
 
+def assert_performance_contract(result: AnalysisResult) -> None:
+    """Every performance conclusion traces back to what it was derived from.
+
+    The prediction contains each occurrence it timed and is no faster than the
+    ideal bound. An occurrence's duration is its own compute-cost record priced
+    at the target's stated rates, so nothing here is a second opinion about how
+    long a resource takes, and a solve that proved nothing says so.
+    """
+    fn = result.function
+    summary = get_metadata(fn, PerformanceSummaryMetadata)
+    assert summary is not None
+    assert summary.solver_status in ("optimal", "feasible")
+    predicted_ns = summary.timeline.end_ns - summary.timeline.start_ns
+    assert summary.waves > 0 and predicted_ns % summary.waves == 0
+    bound = get_metadata(fn, RooflineMetadata)
+    assert bound is not None and bound.ideal_ns <= predicted_ns
+
+    throughput = result.module.resolve_target().get_facts(ThroughputFacts)
+    timed = 0
+    for expr in postorder(fn.body):
+        if not isinstance(expr, Call) or isinstance(expr.target, Function):
+            continue
+        cost = get_metadata(expr, ComputeCostMetadata)
+        assert cost is not None
+        duration = _local_duration_ns(cost, throughput, level=result.level)
+        record = get_metadata(expr, PerformanceMetadata)
+        if not duration:
+            assert record is None
+            continue
+        timed += 1
+        assert record is not None
+        assert summary.timeline.start_ns <= record.timeline.start_ns
+        assert record.timeline.end_ns <= summary.timeline.end_ns
+        assert record.timeline.end_ns - record.timeline.start_ns == duration
+    assert bool(timed) is bool(predicted_ns)
+
+
 @pytest.mark.parametrize(("case", "selected"), CORPUS_ANALYSES)
 def test_every_corpus_function_analyzes_from_source(
     case: ModelCase, selected: FunctionCase
 ) -> None:
     module = case.build()
     owner, function = case.resolve(module, selected.selector)
-    families = FAMILIES if selected.timeline else QWEN3_PD_FAMILIES
+    families = FAMILIES if selected.performance else QWEN3_PD_FAMILIES
 
     result = analyze(owner, function, analysis=families, dims=selected.dims)
 
     assert result.module is owner
     assert result.metadata_types
+    if selected.performance:
+        assert_performance_contract(result)
 
 
 @pytest.mark.parametrize("family", FAMILIES)
@@ -355,7 +397,7 @@ def test_the_result_names_the_function_that_carries_the_records(family: str) -> 
     assert residual_dims(result.function) == ()
 
 
-def test_one_root_and_four_roots_produce_the_same_timeline_records() -> None:
+def test_one_root_and_four_roots_produce_the_same_performance_records() -> None:
     """A union closure preserves the conclusion of its independently requested root."""
     module, authored, dims = _subject("performance")
 
@@ -412,7 +454,7 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
 
     loop_casts = []
     loop_timelines = []
-    root_timelines = []
+    root_summaries = []
     for result, extent in zip(results, (8, 16)):
         trips = enclosing_trips(result.function.body)
         costs = []
@@ -468,9 +510,9 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         )
         assert yielded_starts and min(yielded_starts) >= loop_end
 
-        root_timeline = get_metadata(result.function, PerformanceSummaryMetadata)
-        assert root_timeline is not None
-        root_timelines.append(root_timeline)
+        root_summary = get_metadata(result.function, PerformanceSummaryMetadata)
+        assert root_summary is not None
+        root_summaries.append(root_summary)
 
     assert loop_casts[0] == loop_casts[1]
     assert [record.flops for record in loop_casts[0]] == [(("f32", 512),)] * 2
@@ -495,9 +537,9 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         )
     ] * 2
     assert min(record.start_ns for record in loop_timelines[0]) == 539
-    assert [record.waves for record in root_timelines] == [1, 1]
-    assert [record.timeline.end_ns for record in root_timelines] == [8_903, 16_263]
-    assert [record.solver_status for record in root_timelines] == ["optimal"] * 2
+    assert [record.waves for record in root_summaries] == [1, 1]
+    assert [record.timeline.end_ns for record in root_summaries] == [8_903, 16_263]
+    assert [record.solver_status for record in root_summaries] == ["optimal"] * 2
 
     roots = []
     for result in results:
