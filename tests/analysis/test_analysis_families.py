@@ -14,6 +14,7 @@ import json
 from dataclasses import replace
 
 import pytest
+from ortools.sat.python import cp_model
 
 import tilefoundry.analysis.compute_cost as compute_cost
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
@@ -300,6 +301,34 @@ class _IndexSelected:
         return tf.index_select(table, rows, dim=0)
 
 
+@module(entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4),))
+class _OverwrittenAcrossGroups:
+    """A view of an overwritten buffer, read where the overwrite does not run.
+
+    The reader sits on the CTAs the write does not touch, so nothing about
+    participants keeps the two apart. What has to keep them apart is that they
+    are the same bytes: the reader reads a reshard of the buffer the write
+    replaces.
+    """
+
+    @func
+    def main(source: Tensor[(64,), "f32"], patch: Tensor[(32,), "f32"]):
+        with Mesh(("cta",), layout=(4,), names=("tile",)) as cta:
+            with cta[2:] as high:
+                placed = tf.reshard(source, (64 @ high.tile,), "gmem")
+                made = tf.add(placed, placed)
+            with cta[:2] as low:
+                moved = tf.reshard(made, (64 @ low.tile,), "gmem")  # noqa: F821
+                side = tf.add(moved, moved)
+            with cta[2:] as again:
+                window = tf.reshard(patch, (32 @ again.tile,), "gmem")
+                written = tf.insert_slice(made, window, (0,))  # noqa: F821
+            return tf.add(
+                tf.reshard(side, (64,), "gmem"),  # noqa: F821
+                tf.reshard(written, (64,), "gmem"),  # noqa: F821
+            )
+
+
 @module(entry="plain", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
 class _MatmulLayouts:
     @func
@@ -374,16 +403,6 @@ class _PricingBoundary:
             placed = tf.reshard(source, (64 @ cta.tile,), "gmem")
             local = tf.reshard(placed, (64 @ cta.tile,), "rmem")
             return tf.add(local, local)
-
-    @func
-    def overwritten(source: Tensor[(64,), "f32"], patch: Tensor[(16,), "f32"]):
-        with Mesh(("cta",), layout=(1,), names=("tile",)) as cta:
-            placed = tf.reshard(source, (64 @ cta.tile,), "gmem")
-            window = tf.reshard(patch, (16 @ cta.tile,), "gmem")
-            made = tf.add(placed, placed)
-            side = tf.add(made, made)
-            written = tf.insert_slice(made, window, (0,))
-            return tf.add(side, written)
 
     @func
     def unrated_dtype(source: Tensor[(64,), "f32"]):
@@ -1526,19 +1545,57 @@ def test_a_view_and_its_base_are_one_rectangle_to_place() -> None:
 
 
 def test_an_overwrite_waits_for_everything_that_read_what_it_replaces() -> None:
-    """Reusing a buffer means the old contents are gone, so the last reader goes first."""
-    function = next(
-        item for item in _PricingBoundary.functions if item.name == "overwritten"
+    """Every name for a buffer is that buffer, wherever the reader happens to run.
+
+    The reader here holds a reshard of the tile, not the tile the write was
+    handed, and it runs on the CTAs the write does not touch. Nothing about
+    participants keeps the two apart, so if the write did not wait it would
+    replace the bytes mid-read.
+    """
+    result = analyze(
+        _OverwrittenAcrossGroups,
+        _OverwrittenAcrossGroups.entry_function(),
+        analysis="timeline",
     )
 
-    result = analyze(_PricingBoundary, function, analysis="timeline")
-
-    _placed, made, side, _window, written, _joined = _calls(result.function)
+    _placed, made, moved, side, _joinable, _window, written, _out, _joined = _calls(
+        result.function
+    )
     assert get_metadata(written, BufferAliasMetadata) == BufferAliasMetadata("update", (0,))
-    assert _base_of(written.args[0]) is made
+    assert _base_of(moved) is made and _base_of(written.args[0]) is made
+    facts = _OverwrittenAcrossGroups.resolve_target().get_facts(ThroughputFacts)
+    placements = _timeline_placements(_OverwrittenAcrossGroups, result.function, "cta", facts)
+    assert placements[id(side)].isdisjoint(placements[id(written)])
     assert (
         get_metadata(side, PerformanceMetadata).timeline.end_ns
         <= get_metadata(written, PerformanceMetadata).timeline.start_ns
+    )
+
+
+def test_a_solve_that_ends_without_an_answer_says_which_and_records_nothing(
+    monkeypatch,
+) -> None:
+    """Three ways to end with no timeline, told apart, and none of them half-done."""
+    split = next(function for function in _SharedTile.functions if function.name == "split")
+    roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))
+    fits = next(item for item in roomy.functions if item.name == "split")
+
+    for status, expected in (
+        (cp_model.MODEL_INVALID, r"not a valid solver problem"),
+        (cp_model.UNKNOWN, r"no timeline within its time limit"),
+    ):
+        monkeypatch.setattr(
+            cp_model.CpSolver, "Solve", lambda self, model, _status=status: _status
+        )
+        with pytest.raises(AnalysisError, match=expected):
+            analyze(roomy, fits, analysis="timeline")
+    monkeypatch.undo()
+
+    with pytest.raises(AnalysisError, match=r"no timeline places this program's buffers"):
+        analyze(_SharedTile, split, analysis="timeline")
+    assert all(
+        get_metadata(function, PerformanceSummaryMetadata) is None
+        for function in (*_SharedTile.functions, *roomy.functions)
     )
 
 

@@ -165,22 +165,46 @@ def _producer_ids(expr: Expr, schedulable: set[int]) -> set[int]:
     return {producer for child in children(expr) for producer in _producer_ids(child, schedulable)}
 
 
-def _overwritten_readers(call: Call, users: dict[int, list[Expr]]) -> set[int]:
+def _overwritten_readers(
+    call: Call,
+    values: list[Expr],
+    users: dict[int, list[Expr]],
+    positions: dict[int, int],
+    schedulable: set[int],
+) -> set[int]:
     """Everything that read the buffer an in-place write is about to overwrite.
 
     The write reuses those bytes, so it cannot start while anything still needs
-    what they held. Def-use ordering does not say this on its own: a reader of
-    the old value is not a producer of the new one.
+    what they held, and def-use ordering does not say this: a reader of the old
+    value is not a producer of the new one. Every name for those bytes counts, so
+    a view of the buffer is walked too. The write is the group's last authored
+    use, which is what made it a write, so every such reader precedes it.
     """
     alias = get_metadata(call, BufferAliasMetadata)
     if alias is None or alias.kind != "update":
         return set()
     base = _base_of(call.args[alias.aliased_operands[0]])
+    here = positions[id(call)]
+    group = [base, *(expr for expr in values if expr is not call and _base_of(expr) is base)]
     readers: set[int] = set()
-    for reader in users.get(id(base), ()):
-        if reader is not call and isinstance(reader, Call):
-            readers.add(id(reader))
+    for member in group:
+        for reader in _schedulable_users(member, users, schedulable):
+            if reader is not call and positions.get(id(reader), -1) < here:
+                readers.add(id(reader))
     return readers
+
+
+def _schedulable_users(
+    expr: Expr, users: dict[int, list[Expr]], schedulable: set[int]
+) -> list[Expr]:
+    """The occurrences that read *expr*, through anything that is not one itself."""
+    found: list[Expr] = []
+    for user in users.get(id(expr), ()):
+        if id(user) in schedulable:
+            found.append(user)
+        else:
+            found.extend(_schedulable_users(user, users, schedulable))
+    return found
 
 
 def _build_scopes(
@@ -259,7 +283,9 @@ def _build_scopes(
             if isinstance(expr, GridRegionExpr):
                 producers.update(child_external[id(expr)])
             else:
-                producers.update(_overwritten_readers(expr, users))
+                producers.update(
+                    _overwritten_readers(expr, values, users, source_index, schedulable)
+                )
             for producer in producers:
                 resolved = representative(producer, scope)
                 if scope_of[resolved] == scope:
