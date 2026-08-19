@@ -37,6 +37,7 @@ from .metadata import (
     PerformanceMetadata,
     PerformanceSummaryMetadata,
     TimelineMetadata,
+    TrafficMetadata,
 )
 from .walk import (
     attach,
@@ -103,7 +104,13 @@ def _durations(
                 f"{describe(expr)}: performance needs the compute-cost record this "
                 "call was never given"
             )
-        result[id(expr)] = _local_duration_ns(cost, facts, services, level=level)
+        result[id(expr)] = _local_duration_ns(
+            cost,
+            facts,
+            services,
+            moved=get_metadata(expr, TrafficMetadata),
+            level=level,
+        )
     return result
 
 

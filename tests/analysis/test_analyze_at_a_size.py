@@ -31,6 +31,7 @@ from tilefoundry.analysis import (
     PerformanceMetadata,
     PerformanceSummaryMetadata,
     RooflineMetadata,
+    TrafficMetadata,
     analyze,
 )
 from tilefoundry.analysis.compute_cost import _local_duration_ns
@@ -122,7 +123,13 @@ def assert_performance_contract(result: AnalysisResult) -> None:
             continue
         cost = get_metadata(expr, ComputeCostMetadata)
         assert cost is not None
-        duration = _local_duration_ns(cost, throughput, services, level=result.level)
+        duration = _local_duration_ns(
+            cost,
+            throughput,
+            services,
+            moved=get_metadata(expr, TrafficMetadata),
+            level=result.level,
+        )
         record = get_metadata(expr, PerformanceMetadata)
         if not duration:
             assert record is None
@@ -314,8 +321,9 @@ def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
         assert worker_layout.attrs == (Broadcast(), Split(axis=0))
         assert window.target.sizes[1] == BLOCK
         record = get_metadata(window, ComputeCostMetadata)
+        record_moved = get_metadata(window, TrafficMetadata)
         assert record is not None
-        assert record.traffic_at("rmem").read > 0
+        assert record_moved.at("rmem").read > 0
 
     first_offset = slices[0].args[1].elements[1].args[1]
     second_offset = slices[1].args[1].elements[1].args[1]
@@ -336,7 +344,7 @@ def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
     assert len(kv_windows) == 2
     trips = enclosing_trips(result.function.body)
     assert all(
-        trips.get(id(window), 1) * get_metadata(window, ComputeCostMetadata).traffic_at("gmem").read
+        trips.get(id(window), 1) * get_metadata(window, TrafficMetadata).at("gmem").read
         == cache_bytes // WORKERS
         for window in kv_windows
     )
@@ -473,7 +481,7 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
             if isinstance(expr.target, Reshape):
                 cost = get_metadata(expr, ComputeCostMetadata)
                 assert cost is not None
-                structural.append((cost, record))
+                structural.append((cost, record, get_metadata(expr, TrafficMetadata)))
             if isinstance(expr.target, Cast):
                 cost = get_metadata(expr, ComputeCostMetadata)
                 assert cost is not None
@@ -483,11 +491,11 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         assert len(structural) == 1
         assert {record.trips for record in timelines} == {extent}
         assert {record.stride_ns for record in timelines} == {920}
-        structural_cost, structural_record = structural[0]
+        structural_cost, structural_record, structural_moved = structural[0]
         assert structural_record is None
         assert structural_cost.flops_per_unit == ()
-        assert structural_cost.traffic_per_unit_at("gmem").total_bytes == 0
-        assert structural_cost.traffic_per_unit == ()
+        assert structural_moved.per_unit_at("gmem").total_bytes == 0
+        assert structural_moved.per_unit == ()
         loop_casts.append(tuple(costs))
         loop_timelines.append(tuple(timelines))
 

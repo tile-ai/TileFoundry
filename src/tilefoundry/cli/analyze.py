@@ -62,10 +62,10 @@ def guidance() -> str:
 
         family         what --topology changes                 pass it when
         ------------   --------------------------------------  ---------------------
-        compute-cost   flops_per_unit and traffic_per_unit.    the program shards
-                       flops and traffic stay global
-        memory         nothing. Footprint follows its owner    never
-                       for each storage level
+        compute-cost   flops_per_unit and service_per_unit.    the program shards
+                       flops and service stay global
+        memory         traffic_per_unit. Footprint follows     the program shards
+                       its owner for each storage level
         roofline       nothing. The bound is the machine's     never
                        and is unchanged by program splits
         performance    which level's parallel capacity the     the program shards

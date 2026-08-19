@@ -36,6 +36,7 @@ from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
 )
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
+from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .check import Placement, _call_placements, _result_placement
 from .errors import AnalysisError
@@ -53,7 +54,6 @@ from .metadata import (
     BufferAllocationMetadata,
     BufferFootprint,
     BufferRef,
-    ComputeCostMetadata,
     LevelFootprint,
     LoopFootprintMetadata,
     MemoryMetadata,
@@ -61,10 +61,12 @@ from .metadata import (
     TrafficMetadata,
     ValueLifetime,
 )
+from .movement import add_traffic, alias_conclusions, call_traffic
 from .walk import (
     attach,
     bytes_by_storage,
     children,
+    enclosing_trips,
     postorder,
     reachable_functions,
     tensor_types,
@@ -302,17 +304,6 @@ def _peaks(
         for level, amount in live.items():
             peaks[level] = max(peaks.get(level, 0), amount)
     return peaks
-
-
-def _function_traffic(fn: Function) -> tuple[tuple[str, TrafficBytes], ...]:
-    """Multiplicity-aware traffic from the compute-cost root record."""
-    record = get_metadata(fn, ComputeCostMetadata)
-    if record is None:
-        raise AnalysisError(
-            f"function {fn.name!r}: memory needs the compute-cost root record "
-            "this function was never given"
-        )
-    return record.traffic
 
 
 def _explicit_footprint(
@@ -1047,24 +1038,44 @@ def _buffer_placements(
     return resolved
 
 
-def _record_traffic(fn: Function) -> None:
-    """Carry the settled movement of every occurrence under this family.
+def _record_movement(
+    module: Module,
+    fn: Function,
+    level: str | None,
+    topologies: tuple[Topology, ...],
+) -> None:
+    """Say what every occurrence moves, and whose bytes it moved them into.
 
-    The bytes were counted once, when the cost of each occurrence was settled,
-    and counting them again from where their buffers landed would be a second
-    answer to a question that already has one. What this adds is whose record it
-    is: a reader asking what a program moves asks the family that knows where
-    its values live, and gets the same numbers either way.
+    The Op's own registered evaluator answers how much crossed each boundary,
+    and the alias proof answers whether the crossing was a copy: an operation
+    shown to forward or update another was given that value's bytes and moved
+    none of them. The function's own total is the same bytes counted as often
+    as its loops repeat them.
     """
+    scope = FunctionScope(module, fn)
+    whole = CostEvaluator(CostContext(scope=scope))
+    local = CostEvaluator(
+        CostContext(scope=scope, level=level, topologies=topologies)
+    )
+    settled = alias_conclusions(fn, whole)
+    trips = enclosing_trips(fn.body)
+    totals: dict[str, TrafficBytes] = {}
+    shares: dict[str, TrafficBytes] = {}
     for expr in postorder(fn.body) if fn.body is not None else ():
         if not isinstance(expr, Call):
             continue
-        cost = get_metadata(expr, ComputeCostMetadata)
-        if cost is not None:
-            attach(expr, TrafficMetadata(cost.traffic, cost.traffic_per_unit))
-    total = get_metadata(fn, ComputeCostMetadata)
-    if total is not None:
-        attach(fn, TrafficMetadata(total.traffic, total.traffic_per_unit))
+        conclusion = settled[id(expr)]
+        attach(expr, conclusion.alias)
+        moved = call_traffic(expr, whole, local, conclusion)
+        attach(expr, moved)
+        add_traffic(totals, shares, moved, trips.get(id(expr), 1))
+    attach(
+        fn,
+        TrafficMetadata(
+            whole=tuple(sorted(totals.items())),
+            per_unit=tuple(sorted(shares.items())),
+        ),
+    )
 
 
 def analyze_memory(
@@ -1079,6 +1090,7 @@ def analyze_memory(
     settings = options if isinstance(options, MemoryOptions) else MemoryOptions()
     topologies = module.effective_topologies()
     for fn in reachable_functions(function):
+        _record_movement(module, fn, level, topologies)
         try:
             residencies, length = _residencies(
                 fn,
@@ -1123,7 +1135,6 @@ def analyze_memory(
             )
         record = MemoryMetadata(
             footprint=_explicit_footprint(fn, residencies, peaks, persistent, facts),
-            traffic=_function_traffic(fn),
             lifetimes=tuple(
                 ValueLifetime(
                     binding=item.binding,
@@ -1156,7 +1167,7 @@ def analyze_memory(
                 topology_levels=target.topology_levels,
                 topologies=topologies,
             )
-        _record_traffic(fn)
+
         for loop, footprint in loop_records:
             attach(loop, footprint)
 

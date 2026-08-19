@@ -21,7 +21,7 @@ from tests.ops.typeinfer_utils import (
     run_typeinfer_case,
 )
 from tilefoundry import func, module
-from tilefoundry.analysis import ComputeCostMetadata
+from tilefoundry.analysis import ComputeCostMetadata, TrafficMetadata
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import Mesh, Tensor, tf
@@ -219,18 +219,19 @@ def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
         TrafficBytes(write=_WINDOW_BYTES // 2),
     )
 
-    result = analyze(_KVCacheAppend, entry, analysis="compute-cost", level="cta")
+    result = analyze(_KVCacheAppend, entry, analysis=("compute-cost", "memory"), level="cta")
     analysed_update = next(
         expr
         for expr in postorder(result.function.body)
         if isinstance(expr, Call) and isinstance(expr.target, CacheUpdate)
     )
     record = get_metadata(analysed_update, ComputeCostMetadata)
+    moved = get_metadata(analysed_update, TrafficMetadata)
     assert result.level == "cta"
     assert record is not None
     assert record.flops == record.flops_per_unit == ()
     cache_bytes = 2 * 64 * 4 * 8 * 2
-    assert record.operands == (
+    assert moved.operands == (
         TrafficBytes(read=cache_bytes - _WINDOW_BYTES),
         TrafficBytes(read=4),
         TrafficBytes(read=4),

@@ -327,9 +327,9 @@ Each owns its record types and declares its dependencies and output additions.
 
 | Selector | Requires | Owns | Attaches to | Rests on | Text summary adds | Annotates equations |
 |---|---|---|---|---|---|---|
-| `compute-cost` | - | `ComputeCostMetadata`, `BufferAliasMetadata` | `ComputeCostMetadata` on every measured Call and the Function; `BufferAliasMetadata` on every measured Call | the authored program | `compute-cost` | every measured Call |
-| `memory` | `compute-cost` | `MemoryMetadata`, `LoopFootprintMetadata` | `MemoryMetadata` on the Function; `LoopFootprintMetadata` on every `GridRegionExpr` | the authored program, `MemoryHierarchyFacts` | `peak-footprint`, `advisory` | none |
-| `roofline` | `compute-cost` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | `roofline` | every measured Call |
+| `compute-cost` | - | `ComputeCostMetadata` | every measured Call and the Function | the authored program | `compute-cost` | every measured Call |
+| `memory` | - | `MemoryMetadata`, `TrafficMetadata`, `LoopFootprintMetadata`, `BufferAliasMetadata`, `BufferAllocationMetadata` | `MemoryMetadata` on the Function; `TrafficMetadata` and `BufferAliasMetadata` on every measured Call and the Function; `LoopFootprintMetadata` on every `GridRegionExpr` | the authored program, `MemoryHierarchyFacts` | `peak-footprint`, `traffic`, `advisory` | none |
+| `roofline` | `compute-cost`, `memory` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | `roofline` | every measured Call |
 | `performance` | `compute-cost`, `memory` | `PerformanceMetadata`, `PerformanceSummaryMetadata` | `PerformanceMetadata` on every Call with a modeled duration; `PerformanceSummaryMetadata` on the Function | `ThroughputFacts`, `ParallelCapacityFacts`, `MemoryHierarchyFacts` | `performance` | every Call with a modeled duration |
 
 Every compact text summary begins with these two lines:
@@ -460,17 +460,24 @@ class ComputeCostMetadata(IRMetadata):
         flops_per_unit: attribute; Flop count performed by one unit of the analysed topology level.
         service: attribute; Result count per service kind, sorted by kind.
         service_per_unit: attribute; Result count per service kind for one unit of the analysed topology level.
-        traffic: attribute; TrafficBytes per storage level name.
-        traffic_per_unit: attribute; TrafficBytes per storage level name for one unit of the analysed topology level.
-        operands: attribute; TrafficBytes per operand, positional against (*call.args, call); present only for a direct primitive call.
     """
 
     flops: tuple[tuple[str, int], ...] = ()
     flops_per_unit: tuple[tuple[str, int], ...] = ()
     service: tuple[tuple[str, int], ...] = ()
     service_per_unit: tuple[tuple[str, int], ...] = ()
-    traffic: tuple[tuple[str, TrafficBytes], ...] = ()
-    traffic_per_unit: tuple[tuple[str, TrafficBytes], ...] = ()
+
+class TrafficMetadata(IRMetadata):
+    """What one Call moves, or what one Function moves over all its trips.
+
+    Attributes:
+        whole: attribute; TrafficBytes per storage level name.
+        per_unit: attribute; TrafficBytes per storage level name for one unit of the analysed topology level.
+        operands: attribute; TrafficBytes per operand, positional against (*call.args, call); present only for a direct primitive call.
+    """
+
+    whole: tuple[tuple[str, TrafficBytes], ...] = ()
+    per_unit: tuple[tuple[str, TrafficBytes], ...] = ()
     operands: tuple[TrafficBytes, ...] = ()
 ```
 
@@ -698,14 +705,12 @@ class MemoryMetadata(IRMetadata):
 
     Attributes:
         footprint: attribute; One row per level the function places values in.
-        traffic: attribute; TrafficBytes per level, over the whole function.
         lifetimes: attribute; One entry per value residency.
         advisories: attribute; Capacity findings that do not invalidate the program.
         allocation: attribute; What placing the addressable buffers came to.
     """
 
     footprint: tuple[LevelFootprint, ...] = ()
-    traffic: tuple[tuple[str, TrafficBytes], ...] = ()
     lifetimes: tuple[ValueLifetime, ...] = ()
     advisories: tuple[str, ...] = ()
     allocation: AllocationMetadata | None = None

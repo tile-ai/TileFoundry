@@ -10,6 +10,7 @@ from tilefoundry.analysis.metadata import (
     MemoryMetadata,
     PerformanceSummaryMetadata,
     RooflineMetadata,
+    TrafficMetadata,
 )
 from tilefoundry.analysis.report import _type_text as _type_text
 from tilefoundry.analysis.report import (
@@ -103,6 +104,9 @@ def _summary(
     ]
     if "totals" in data:
         views.append(get_metadata(function, ComputeCostMetadata) or ComputeCostMetadata())
+        moved = get_metadata(function, TrafficMetadata)
+        if moved is not None:
+            views.append(moved)
     if "memory" in function_records:
         memory = get_metadata(function, MemoryMetadata)
         views.append(MemorySummary(peak_footprint(memory)))

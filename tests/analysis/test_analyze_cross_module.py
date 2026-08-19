@@ -17,7 +17,7 @@ from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tilefoundry import func, module
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.metadata import BufferAliasMetadata, ComputeCostMetadata
+from tilefoundry.analysis.metadata import ComputeCostMetadata, TrafficMetadata
 from tilefoundry.analysis.walk import postorder, reachable_functions, tensor_types
 from tilefoundry.dsl import ConstTensor, DimVar, Tensor, Topology, tf
 from tilefoundry.ir.core import Call, get_metadata
@@ -31,21 +31,23 @@ _H200 = "nvidia.h200_sxm"
 _CTA = (Topology("cta", 132),)
 
 
-def _matmul_records(result) -> tuple[ComputeCostMetadata, ...]:
-    """The work records on the inlined MatMul occurrences."""
+def _matmul_records(result) -> tuple[tuple[ComputeCostMetadata, TrafficMetadata], ...]:
+    """Both halves of the record on each inlined MatMul occurrence."""
     records = []
     for expr in postorder(result.function.body):
         if not isinstance(expr, Call) or not isinstance(expr.target, MatMul):
             continue
         record = get_metadata(expr, ComputeCostMetadata)
+        moved = get_metadata(expr, TrafficMetadata)
         assert record is not None
-        records.append(record)
+        records.append((record, moved))
     return tuple(records)
 
 
 def _flops(records) -> dict[str, int]:
     total: dict[str, int] = {}
-    for record in records:
+    for item in records:
+        record = item[0] if isinstance(item, tuple) else item
         for name, value in record.flops:
             total[name] = total.get(name, 0) + value
     return total
@@ -53,9 +55,10 @@ def _flops(records) -> dict[str, int]:
 
 def _traffic(records) -> dict[str, int]:
     total: dict[str, int] = {}
-    for record in records:
-        for name, moved in record.traffic:
-            total[name] = total.get(name, 0) + moved.total_bytes
+    for _record, moved in records:
+        assert moved is not None, "traffic was asked of a run that did not measure it"
+        for name, bytes_ in moved.whole:
+            total[name] = total.get(name, 0) + bytes_.total_bytes
     return total
 
 
@@ -116,8 +119,8 @@ def test_the_weight_traffic_of_a_fused_root_is_what_its_callees_read() -> None:
         ) -> Tensor[(4, 8), "f32"]:
             return tf.matmul(x, w)
 
-    direct_result = analyze(_Direct, _Direct.entry_function(), analysis="compute-cost")
-    fused_result = analyze(CrossModule, CrossModule.entry_function(), analysis="compute-cost")
+    direct_result = analyze(_Direct, _Direct.entry_function(), analysis=("compute-cost", "memory"))
+    fused_result = analyze(CrossModule, CrossModule.entry_function(), analysis=("compute-cost", "memory"))
     direct = _traffic(_matmul_records(direct_result))
     fused = _traffic(_matmul_records(fused_result))
 
@@ -165,18 +168,18 @@ def test_a_child_declaring_the_caller_hierarchy_is_accepted() -> None:
     result = analyze(
         _Agreeing,
         _Agreeing.entry_function(),
-        analysis="compute-cost",
+        analysis=("compute-cost", "memory"),
         dims={"child_topology_extent": 132},
     )
-    assert result.metadata_types == (ComputeCostMetadata, BufferAliasMetadata)
+    assert set(result.metadata_types) >= {ComputeCostMetadata, TrafficMetadata}
 
 
 @pytest.mark.parametrize("name,root", REFERENCE_PROGRAMS, ids=[n for n, _ in REFERENCE_PROGRAMS])
 def test_each_reference_program_is_one_analysable_kernel(name, root) -> None:
     """The shared programs measure as one root each; what a call means is not restated."""
-    result = analyze(root, root.entry_function(), analysis="compute-cost")
+    result = analyze(root, root.entry_function(), analysis=("compute-cost", "memory"))
 
-    assert result.metadata_types == (ComputeCostMetadata, BufferAliasMetadata)
+    assert set(result.metadata_types) >= {ComputeCostMetadata, TrafficMetadata}
 
 
 def _placed_primitives(fn) -> list[tuple[str, object]]:

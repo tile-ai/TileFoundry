@@ -38,17 +38,18 @@ from tilefoundry.analysis import (
     RooflineMetadata,
     ThroughputFacts,
     TimelineMetadata,
+    TrafficMetadata,
 )
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import _call_placements, _mesh_image, _result_placement
-from tilefoundry.analysis.compute_cost import (
+from tilefoundry.analysis.compute_cost import _local_duration_ns
+from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.analysis.memory import _base_of
+from tilefoundry.analysis.movement import (
     _call_movement,
-    _local_duration_ns,
     _with_untouched_copy,
     _without_forwarded_movement,
 )
-from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.memory import _base_of
 from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
 from tilefoundry.inspection.analysis_report import (
@@ -547,30 +548,32 @@ def _cost_of(function) -> ComputeCostMetadata:
 
 def test_compute_cost_stops_at_the_selected_topology_level() -> None:
     entry = _entry(_thread_sharded)
-    cta_result = analyze(_thread_sharded, entry, analysis="compute-cost")
+    cta_result = analyze(_thread_sharded, entry, analysis=("compute-cost", "memory"))
 
     record = get_metadata(_calls(cta_result.function)[-1], ComputeCostMetadata)
+    record_moved = get_metadata(_calls(cta_result.function)[-1], TrafficMetadata)
     assert record is not None
     assert cta_result.level == "cta"
     assert record.flops == (("f32", 8),)
     assert record.flops_per_unit == (("f32", 8),)
-    traffic = record.traffic
+    traffic = record_moved.whole
 
-    thread_result = analyze(_thread_sharded, entry, analysis="compute-cost", level="thread")
+    thread_result = analyze(_thread_sharded, entry, analysis=("compute-cost", "memory"), level="thread")
     record = get_metadata(_calls(thread_result.function)[-1], ComputeCostMetadata)
+    record_moved = get_metadata(_calls(thread_result.function)[-1], TrafficMetadata)
     assert record is not None
     assert thread_result.level == "thread"
     assert record.flops == (("f32", 8),)
     assert record.flops_per_unit == (("f32", 2),)
-    assert record.traffic == traffic
+    assert record_moved.whole == traffic
 
 
 def test_an_unsharded_call_reports_the_same_global_and_per_unit_work() -> None:
     cuda_entry = _CudaAdd.entry_function()
     amx_entry = _AmxAdd.entry_function()
 
-    cuda = analyze(_CudaAdd, cuda_entry, analysis="compute-cost")
-    amx = analyze(_AmxAdd, amx_entry, analysis="compute-cost")
+    cuda = analyze(_CudaAdd, cuda_entry, analysis=("compute-cost", "memory"))
+    amx = analyze(_AmxAdd, amx_entry, analysis=("compute-cost", "memory"))
 
     call = _calls(cuda.function)[-1]
     record = get_metadata(call, ComputeCostMetadata)
@@ -589,15 +592,12 @@ def test_matmul_layout_changes_only_the_per_unit_work() -> None:
         cost = get_metadata(call, ComputeCostMetadata)
         bound = get_metadata(call, RooflineMetadata)
         assert cost is not None and bound is not None
-        records.append((cost, bound))
+        records.append((cost, bound, get_metadata(_calls(result.function)[-1], TrafficMetadata)))
 
     (
-        (plain_cost, plain_bound),
-        (split_cost, split_bound),
-        (
-            broadcast_cost,
-            broadcast_bound,
-        ),
+        (plain_cost, plain_bound, plain_moved),
+        (split_cost, split_bound, split_moved),
+        (broadcast_cost, broadcast_bound, broadcast_moved),
     ) = records
     total_flops = plain_cost.flops[0]
     assert split_cost.flops == broadcast_cost.flops == (total_flops,)
@@ -607,13 +607,13 @@ def test_matmul_layout_changes_only_the_per_unit_work() -> None:
         total_flops[0],
         total_flops[1],
     )
-    assert split_cost.traffic == plain_cost.traffic == broadcast_cost.traffic
+    assert split_moved.whole == plain_moved.whole == broadcast_moved.whole
     assert split_bound == plain_bound == broadcast_bound
 
 
 def test_function_call_carries_the_callee_per_unit_work() -> None:
     entry = _NestedSplitAdd.entry_function()
-    result = analyze(_NestedSplitAdd, entry, analysis="compute-cost")
+    result = analyze(_NestedSplitAdd, entry, analysis=("compute-cost", "memory"))
 
     record = get_metadata(_calls(result.function)[-1], ComputeCostMetadata)
     assert record is not None
@@ -640,7 +640,7 @@ def test_the_two_operations_a_decoder_stops_on_cost_what_they_do() -> None:
     as nothing at all, reads differently.
     """
     rotated = _Rotated.entry_function()
-    rotated_result = analyze(_Rotated, rotated, analysis="compute-cost")
+    rotated_result = analyze(_Rotated, rotated, analysis=("compute-cost", "memory"))
     rotation = get_metadata(
         next(
             call
@@ -654,34 +654,33 @@ def test_the_two_operations_a_decoder_stops_on_cost_what_they_do() -> None:
     assert rotation.flops == (("f32", 3 * 2 * 64),)
 
     allocated = _Allocated.entry_function()
-    allocated_result = analyze(_Allocated, allocated, analysis="compute-cost")
-    zeros = get_metadata(
-        next(
-            call
-            for call in _calls(allocated_result.function)
-            if type(call.target).__name__ == "Zeros"
-        ),
-        ComputeCostMetadata,
+    allocated_result = analyze(_Allocated, allocated, analysis=("compute-cost", "memory"))
+    zeroing = next(
+        call
+        for call in _calls(allocated_result.function)
+        if type(call.target).__name__ == "Zeros"
     )
+    zeros = get_metadata(zeroing, ComputeCostMetadata)
     assert zeros is not None
     assert zeros.flops == ()
-    traffic = zeros.traffic_at("gmem")
+    traffic = get_metadata(zeroing, TrafficMetadata).at("gmem")
     assert traffic.write == 64 * 4
     assert traffic.read == 0
 
 
 def test_index_select_reads_the_rows_it_names_and_not_the_table() -> None:
-    result, function = _run(_IndexSelected, "compute-cost")
+    result, function = _run(_IndexSelected, ("compute-cost", "memory"))
 
     record = get_metadata(_calls(function)[-1], ComputeCostMetadata)
+    record_moved = get_metadata(_calls(function)[-1], TrafficMetadata)
     assert record is not None
-    traffic = record.traffic_at("gmem")
+    traffic = record_moved.at("gmem")
     rows = 4 * 64 * 4
     assert traffic.read == rows + 4 * 4
     assert traffic.write == rows
 
     payload = json.loads(render_json(report(result)))
-    table, indices, produced = payload["calls"][-1]["compute-cost"]["operands"]
+    table, indices, produced = payload["calls"][-1]["traffic"]["operands"]
     assert table == {
         "arg": 0,
         "name": "table",
@@ -699,7 +698,7 @@ def test_an_evaluator_that_misses_an_operand_is_refused(monkeypatch) -> None:
     )
 
     with pytest.raises(AnalysisError, match="op=Binary: cost reports 0 operands, the call has 3"):
-        _run(_wide_grid, "compute-cost")
+        _run(_wide_grid, "memory")
 
 
 def test_memory_holds_parameters_resident_past_their_last_reader() -> None:
@@ -723,52 +722,58 @@ def test_movement_costs_follow_each_operations_materialization() -> None:
 
     for name in ("row", "column"):
         function = functions[name]
-        result = analyze(_MovementCosts, function, analysis="memory")
+        result = analyze(_MovementCosts, function, analysis=("compute-cost", "memory"))
         (move,) = _calls(result.function)
         record = get_metadata(move, ComputeCostMetadata)
+        record_moved = get_metadata(move, TrafficMetadata)
         assert record is not None
-        assert record.traffic_at("gmem").total_bytes == 0
+        assert record_moved.at("gmem").total_bytes == 0
         footprint = get_metadata(result.function, MemoryMetadata)
         assert footprint is not None
         assert all(item.persistent for item in footprint.lifetimes)
 
     materialized = functions["materialized"]
-    result = analyze(_MovementCosts, materialized, analysis="memory")
+    result = analyze(_MovementCosts, materialized, analysis=("compute-cost", "memory"))
     transpose, reshape = _calls(result.function)
     transpose_cost = get_metadata(transpose, ComputeCostMetadata)
+    transpose_cost_moved = get_metadata(transpose, TrafficMetadata)
     reshape_cost = get_metadata(reshape, ComputeCostMetadata)
+    reshape_cost_moved = get_metadata(reshape, TrafficMetadata)
     assert transpose_cost is not None
     moved = 1024 * 2048 * 4
-    assert transpose_cost.traffic_at("gmem") == TrafficBytes(read=moved, write=moved)
+    assert transpose_cost_moved.at("gmem") == TrafficBytes(read=moved, write=moved)
     assert reshape_cost is not None
-    assert reshape_cost.traffic_at("gmem").total_bytes == 0
+    assert reshape_cost_moved.at("gmem").total_bytes == 0
     footprint = get_metadata(result.function, MemoryMetadata)
     assert footprint is not None
     assert any(not item.persistent and item.bytes == moved for item in footprint.lifetimes)
 
     copied = functions["copied"]
-    result = analyze(_MovementCosts, copied, analysis="compute-cost")
+    result = analyze(_MovementCosts, copied, analysis=("compute-cost", "memory"))
     selected, concat = _calls(result.function)
     selected_cost = get_metadata(selected, ComputeCostMetadata)
+    selected_cost_moved = get_metadata(selected, TrafficMetadata)
     concat_cost = get_metadata(concat, ComputeCostMetadata)
+    concat_cost_moved = get_metadata(concat, TrafficMetadata)
     assert selected_cost is not None
     selected_bytes = 256 * 2048 * 4
-    assert selected_cost.traffic_at("gmem").total_bytes == 0
+    assert selected_cost_moved.at("gmem").total_bytes == 0
     assert concat_cost is not None
     assert get_metadata(concat, BufferAliasMetadata) == BufferAliasMetadata("produce")
-    assert concat_cost.traffic_at("gmem") == TrafficBytes(
+    assert concat_cost_moved.at("gmem") == TrafficBytes(
         read=2 * selected_bytes,
         write=2 * selected_bytes,
     )
 
-    result = analyze(_MovementCosts, functions["tiled"], analysis="memory")
+    result = analyze(_MovementCosts, functions["tiled"], analysis=("compute-cost", "memory"))
     *windows, joined = _calls(result.function)
     assert get_metadata(joined, BufferAliasMetadata) == BufferAliasMetadata(
         "forward", (0, 1)
     )
     joined_cost = get_metadata(joined, ComputeCostMetadata)
+    joined_cost_moved = get_metadata(joined, TrafficMetadata)
     assert joined_cost is not None
-    assert joined_cost.traffic_at("gmem").total_bytes == 0
+    assert joined_cost_moved.at("gmem").total_bytes == 0
     footprint = get_metadata(result.function, MemoryMetadata)
     assert footprint is not None
     assert all(item.persistent for item in footprint.lifetimes)
@@ -776,11 +781,11 @@ def test_movement_costs_follow_each_operations_materialization() -> None:
         get_metadata(window, BufferAliasMetadata).kind == "forward" for window in windows
     )
 
-    result = analyze(_MovementCosts, functions["swapped"], analysis="compute-cost")
+    result = analyze(_MovementCosts, functions["swapped"], analysis=("compute-cost", "memory"))
     swapped = _calls(result.function)[-1]
     assert get_metadata(swapped, BufferAliasMetadata) == BufferAliasMetadata("produce")
     whole = 1024 * 2048 * 4
-    assert get_metadata(swapped, ComputeCostMetadata).traffic_at("gmem") == TrafficBytes(
+    assert get_metadata(swapped, TrafficMetadata).at("gmem") == TrafficBytes(
         read=whole, write=whole
     )
 
@@ -794,7 +799,7 @@ def test_an_in_place_write_reuses_its_destination_only_when_nothing_reads_it_aga
     result = analyze(_MovementCosts, functions["overwritten"], analysis="memory")
     _made, write = _calls(result.function)
     assert get_metadata(write, BufferAliasMetadata) == BufferAliasMetadata("update", (0,))
-    assert get_metadata(write, ComputeCostMetadata).traffic_at("gmem") == TrafficBytes(
+    assert get_metadata(write, TrafficMetadata).at("gmem") == TrafficBytes(
         read=window, write=window
     )
     reused = get_metadata(result.function, MemoryMetadata)
@@ -805,7 +810,7 @@ def test_an_in_place_write_reuses_its_destination_only_when_nothing_reads_it_aga
         result = analyze(_MovementCosts, functions[name], analysis="memory")
         write = _calls(result.function)[position]
         assert get_metadata(write, BufferAliasMetadata) == BufferAliasMetadata("produce")
-        assert get_metadata(write, ComputeCostMetadata).traffic_at(
+        assert get_metadata(write, TrafficMetadata).at(
             "gmem"
         ) == TrafficBytes(read=whole, write=whole)
         materialized = get_metadata(result.function, MemoryMetadata)
@@ -817,7 +822,7 @@ def test_an_in_place_write_reuses_its_destination_only_when_nothing_reads_it_aga
     result = analyze(_MovementCosts, functions["donated"], analysis="memory")
     (write,) = _calls(result.function)
     assert get_metadata(write, BufferAliasMetadata) == BufferAliasMetadata("produce")
-    assert get_metadata(write, ComputeCostMetadata).traffic_at("gmem") == TrafficBytes(
+    assert get_metadata(write, TrafficMetadata).at("gmem") == TrafficBytes(
         read=whole, write=whole
     )
 
@@ -840,23 +845,25 @@ def test_a_view_keeps_the_buffer_it_reads_alive() -> None:
 
 
 def test_reshard_costs_no_op_and_cross_storage_copy() -> None:
-    no_op, no_op_function = _run(_no_op_reshard, "compute-cost")
-    assert no_op.executed == ("compute-cost",)
+    no_op, no_op_function = _run(_no_op_reshard, ("compute-cost", "memory"))
+    assert no_op.executed == ("compute-cost", "memory")
     no_op_cost = get_metadata(_calls(no_op_function)[0], ComputeCostMetadata)
+    no_op_cost_moved = get_metadata(_calls(no_op_function)[0], TrafficMetadata)
     assert no_op_cost is not None
-    assert no_op_cost.traffic == ()
-    assert no_op_cost.operands == (TrafficBytes(), TrafficBytes())
+    assert no_op_cost_moved.whole == ()
+    assert no_op_cost_moved.operands == (TrafficBytes(), TrafficBytes())
 
-    copied = analyze(SquareCuda, SquareCuda.entry_function(), analysis="compute-cost")
+    copied = analyze(SquareCuda, SquareCuda.entry_function(), analysis=("compute-cost", "memory"))
     copied_in = _calls(copied.function)[0]
     copied_cost = get_metadata(copied_in, ComputeCostMetadata)
+    copied_cost_moved = get_metadata(copied_in, TrafficMetadata)
     assert copied_cost is not None
     moved = 168 * 4
-    assert copied_cost.traffic == (
+    assert copied_cost_moved.whole == (
         ("gmem", TrafficBytes(read=moved)),
         ("rmem", TrafficBytes(write=moved)),
     )
-    assert copied_cost.operands == (
+    assert copied_cost_moved.operands == (
         TrafficBytes(read=moved),
         TrafficBytes(write=moved),
     )
@@ -926,7 +933,7 @@ def test_an_alias_correction_keeps_the_service_the_operation_asked_for() -> None
 
 def test_mixed_runtime_coordinates_are_charged_per_leaf() -> None:
     function = _RuntimeCoordinateCosts.entry_function()
-    result = analyze(_RuntimeCoordinateCosts, function, analysis="compute-cost")
+    result = analyze(_RuntimeCoordinateCosts, function, analysis=("compute-cost", "memory"))
 
     (slice_call,) = _calls(result.function)
     starts = slice_call.args[1]
@@ -935,25 +942,27 @@ def test_mixed_runtime_coordinates_are_charged_per_leaf() -> None:
         "umat",
     )
     record = get_metadata(slice_call, ComputeCostMetadata)
+    record_moved = get_metadata(slice_call, TrafficMetadata)
     assert record is not None
-    assert record.traffic == (
+    assert record_moved.whole == (
         ("gmem", TrafficBytes(read=8)),
         ("rmem", TrafficBytes(read=8)),
     )
-    assert record.operands[1] == TrafficBytes(read=16)
+    assert record_moved.operands[1] == TrafficBytes(read=16)
 
 
 def test_typed_arange_operands_are_charged_at_their_declared_storage() -> None:
     function = _UnmaterializedIndexTensorCosts.entry_function()
-    result = analyze(_UnmaterializedIndexTensorCosts, function, analysis="compute-cost")
+    result = analyze(_UnmaterializedIndexTensorCosts, function, analysis=("compute-cost", "memory"))
 
     (binary,) = [call for call in _calls(result.function) if isinstance(call.target, Binary)]
     assert tuple(arg.type.shape for arg in binary.args) == ((1, 128), (128, 1))
     assert all(arg.type.storage is StorageKind.GMEM for arg in binary.args)
     record = get_metadata(binary, ComputeCostMetadata)
+    record_moved = get_metadata(binary, TrafficMetadata)
     assert record is not None
-    assert record.traffic == (("gmem", TrafficBytes(read=2_048, write=2_048)),)
-    assert record.operands == (
+    assert record_moved.whole == (("gmem", TrafficBytes(read=2_048, write=2_048)),)
+    assert record_moved.operands == (
         TrafficBytes(read=1_024),
         TrafficBytes(read=1_024),
         TrafficBytes(write=2_048),
@@ -962,7 +971,7 @@ def test_typed_arange_operands_are_charged_at_their_declared_storage() -> None:
 
 def test_non_divisible_window_cost_is_a_full_tile_upper_bound() -> None:
     function = WindowCost.entry_function()
-    result = analyze(WindowCost, function, analysis="compute-cost")
+    result = analyze(WindowCost, function, analysis=("compute-cost", "memory"))
     adds = [call for call in _calls(result.function) if isinstance(call.target, Binary)]
     loop_cost = get_metadata(adds[-1], ComputeCostMetadata)
     root_cost = get_metadata(result.function, ComputeCostMetadata)
@@ -1115,7 +1124,7 @@ def test_analysis_snapshot_drift_sentinel() -> None:
         dims={"ctx": 4096},
     )
     flash_slices = tuple(
-        get_metadata(expr, ComputeCostMetadata).traffic
+        get_metadata(expr, TrafficMetadata).whole
         for expr in postorder(flash.function.body)
         if isinstance(expr, Call) and isinstance(expr.target, Slice)
     )
@@ -1251,7 +1260,7 @@ def test_roofline_reads_the_recorded_work_and_aggregates_before_dividing() -> No
     entry = _CudaAdd.entry_function()
     result = analyze(_CudaAdd, entry, analysis="roofline")
 
-    assert result.executed == ("compute-cost", "roofline")
+    assert result.executed == ("compute-cost", "memory", "roofline")
     call = _calls(result.function)[-1]
     cost = get_metadata(call, ComputeCostMetadata)
     bound = get_metadata(call, RooflineMetadata)
@@ -1333,7 +1342,7 @@ def test_mega_kernel_preserves_placement_costs_and_dependency_order() -> None:
         MoEMegaKernel.entry_function(),
         analysis=("roofline", "performance"),
     )
-    assert result.executed == ("compute-cost", "roofline", "memory", "performance")
+    assert result.executed == ("compute-cost", "memory", "roofline", "performance")
     calls = _calls(result.function)
     assert len(calls) == 7
     assert all(not isinstance(call.target, Function) for call in calls)
@@ -1363,18 +1372,21 @@ def test_mega_kernel_preserves_placement_costs_and_dependency_order() -> None:
     assert len(views) == 4
     for view in views:
         view_cost = get_metadata(view, ComputeCostMetadata)
+        view_cost_moved = get_metadata(view, TrafficMetadata)
         assert view_cost is not None
-        assert view_cost.traffic == ()
-        assert view_cost.traffic_per_unit == ()
-        assert view_cost.operands == (TrafficBytes(), TrafficBytes())
+        assert view_cost_moved.whole == ()
+        assert view_cost_moved.per_unit == ()
+        assert view_cost_moved.operands == (TrafficBytes(), TrafficBytes())
 
     call_costs = [get_metadata(call, ComputeCostMetadata) for call in calls]
+    call_moved = [get_metadata(call, TrafficMetadata) for call in calls]
     assert all(call_cost is not None for call_cost in call_costs)
     summed = TrafficBytes(
-        read=sum(call_cost.traffic_at("gmem").read for call_cost in call_costs),
-        write=sum(call_cost.traffic_at("gmem").write for call_cost in call_costs),
+        read=sum(moved.at("gmem").read for moved in call_moved),
+        write=sum(moved.at("gmem").write for moved in call_moved),
     )
     root_cost = get_metadata(result.function, ComputeCostMetadata)
+    root_cost_moved = get_metadata(result.function, TrafficMetadata)
     memory = get_metadata(result.function, MemoryMetadata)
     roofline = get_metadata(result.function, RooflineMetadata)
     assert root_cost is not None
@@ -1384,11 +1396,11 @@ def test_mega_kernel_preserves_placement_costs_and_dependency_order() -> None:
     assert dict(root_cost.flops) == {
         "f32": sum(dict(call_cost.flops).get("f32", 0) for call_cost in call_costs)
     }
-    assert root_cost.traffic_at("gmem") == summed == TrafficBytes(
+    assert root_cost_moved.at("gmem") == summed == TrafficBytes(
         read=122_880,
         write=92_160,
     )
-    assert memory.traffic == (("gmem", summed),)
+    assert get_metadata(result.function, TrafficMetadata).at("gmem") == summed
     assert (roofline.memory_ns, roofline.ideal_ns, roofline.bound_by) == (
         45,
         45,
@@ -1403,13 +1415,14 @@ def test_mega_kernel_preserves_placement_costs_and_dependency_order() -> None:
     assert positive_per_unit == [64, 640, 7_680]
     relu = next(call for call in calls if type(call.target).__name__ == "ReLU")
     cost = get_metadata(relu, ComputeCostMetadata)
+    cost_moved = get_metadata(relu, TrafficMetadata)
     assert cost is not None
-    assert cost.traffic == (("gmem", TrafficBytes(read=30_720, write=30_720)),)
-    assert cost.traffic_per_unit == (("gmem", TrafficBytes(read=256, write=256)),)
-    assert cost.traffic_per_unit_at("gmem") == TrafficBytes(read=256, write=256)
+    assert cost_moved.whole == (("gmem", TrafficBytes(read=30_720, write=30_720)),)
+    assert cost_moved.per_unit == (("gmem", TrafficBytes(read=256, write=256)),)
+    assert cost_moved.per_unit_at("gmem") == TrafficBytes(read=256, write=256)
     assert (
         "traffic=gmem:r30720/w30720@r256/w256"
-        in render_comment(cost, opt_in=frozenset({"operands"}))
+        in render_comment(cost_moved, opt_in=frozenset({"operands"}))
     )
 
     records = tuple(get_metadata(call, PerformanceMetadata) for call in calls)
@@ -1730,29 +1743,39 @@ def test_time_comes_from_the_rates_the_target_states_and_from_nothing_else() -> 
     services = target.get_facts(PerformanceServiceFacts)
 
     result = analyze(_PricingBoundary, functions["unpriced_only"], analysis="performance")
-    costs = [get_metadata(call, ComputeCostMetadata) for call in _calls(result.function)]
-    assert any(record.traffic_per_unit_at("rmem").total_bytes for record in costs)
+    priced = _calls(result.function)
+    costs = [get_metadata(call, ComputeCostMetadata) for call in priced]
+    moves = [get_metadata(call, TrafficMetadata) for call in priced]
+    assert any(moved.per_unit_at("rmem").total_bytes for moved in moves)
     assert all(
-        _local_duration_ns(record, throughput, services, level="cta")
+        _local_duration_ns(record, throughput, services, moved=bytes_, level="cta")
         == _local_duration_ns(
-            _priced_levels_only(record, throughput), throughput, services, level="cta"
+            record,
+            throughput,
+            services,
+            moved=_priced_levels_only(bytes_, throughput),
+            level="cta",
         )
-        for record in costs
+        for record, bytes_ in zip(costs, moves)
     )
 
     result = analyze(_PricingBoundary, functions["mixed"], analysis="performance")
-    moved = next(
-        record
-        for record in (
-            get_metadata(call, ComputeCostMetadata) for call in _calls(result.function)
-        )
-        if record.traffic_per_unit_at("gmem").total_bytes
-        and record.traffic_per_unit_at("rmem").total_bytes
+    mixed = next(
+        call
+        for call in _calls(result.function)
+        if get_metadata(call, TrafficMetadata).per_unit_at("gmem").total_bytes
+        and get_metadata(call, TrafficMetadata).per_unit_at("rmem").total_bytes
     )
+    work = get_metadata(mixed, ComputeCostMetadata)
+    moved = get_metadata(mixed, TrafficMetadata)
     assert _local_duration_ns(
-        moved, throughput, services, level="cta"
+        work, throughput, services, moved=moved, level="cta"
     ) == _local_duration_ns(
-        _priced_levels_only(moved, throughput), throughput, services, level="cta"
+        work,
+        throughput,
+        services,
+        moved=_priced_levels_only(moved, throughput),
+        level="cta",
     )
 
     computed = next(
@@ -1773,7 +1796,9 @@ def test_time_comes_from_the_rates_the_target_states_and_from_nothing_else() -> 
         match=r"^performance: target states no one-unit throughput for "
         r"'local-copy' work at 'cta'$",
     ):
-        _local_duration_ns(moved, throughput, replace(services, unit_ops=()), level="cta")
+        _local_duration_ns(
+            work, throughput, replace(services, unit_ops=()), moved=moved, level="cta"
+        )
 
     result = analyze(_PricingBoundary, functions["serviced_predicate"], analysis="performance")
     compared = next(
@@ -1794,14 +1819,14 @@ def test_time_comes_from_the_rates_the_target_states_and_from_nothing_else() -> 
 
 
 def _priced_levels_only(
-    record: ComputeCostMetadata, throughput: ThroughputFacts
-) -> ComputeCostMetadata:
+    record: TrafficMetadata, throughput: ThroughputFacts
+) -> TrafficMetadata:
     """The same record with every unpriced level's traffic dropped."""
     return replace(
         record,
-        traffic_per_unit=tuple(
+        per_unit=tuple(
             (level, moved)
-            for level, moved in record.traffic_per_unit
+            for level, moved in record.per_unit
             if level == throughput.bandwidth_level
         ),
     )
@@ -1836,21 +1861,26 @@ def test_a_local_materialise_costs_the_scalar_moves_it_is_made_of() -> None:
     given a duration -- and a materialise written outside any Mesh is refused
     with the diagnostic that says where to put it.
     """
-    _result, entry = _run(_unplaced_structural, "compute-cost")
+    _result, entry = _run(_unplaced_structural, ("compute-cost", "memory"))
 
     (view,) = _calls(entry)
     cost = get_metadata(view, ComputeCostMetadata)
+    cost_moved = get_metadata(view, TrafficMetadata)
     assert cost is not None
     assert cost.flops_per_unit == ()
     assert cost.service_per_unit == ()
-    assert cost.traffic_per_unit_at("gmem").total_bytes == 0
-    assert cost.traffic_per_unit_at("rmem") == TrafficBytes(read=8, write=8)
+    assert cost_moved.per_unit_at("gmem").total_bytes == 0
+    assert cost_moved.per_unit_at("rmem") == TrafficBytes(read=8, write=8)
 
     target = _unplaced_structural.resolve_target()
     services = target.get_facts(PerformanceServiceFacts)
     words = -(-16 // 4)
     assert _local_duration_ns(
-        cost, target.get_facts(ThroughputFacts), services, level="cta"
+        cost,
+        target.get_facts(ThroughputFacts),
+        services,
+        moved=cost_moved,
+        level="cta",
     ) == -(-(words * 1_000_000_000) // services.ops("local-copy"))
 
     with pytest.raises(AnalysisError, match=r"op=Stack: has no cta placement"):
@@ -1902,24 +1932,26 @@ def test_a_report_shows_the_requested_analyses_and_reads_the_same_either_way() -
     data = rendered.data
 
     assert data["requested"] == ["roofline"]
-    assert data["executed"] == ["compute-cost", "roofline"]
+    assert data["executed"] == ["compute-cost", "memory", "roofline"]
     assert set(data["function_records"]) == {"roofline"}
     assert data["totals"]["flops"] == {"f32": 256}
     assert all(set(call) == {"value", "roofline"} for call in data["calls"])
-    assert get_metadata(result.function, MemoryMetadata) is None
+    assert get_metadata(result.function, MemoryMetadata) is not None
     cost = get_metadata(_calls(result.function)[-1], ComputeCostMetadata)
+    cost_moved = get_metadata(_calls(result.function)[-1], TrafficMetadata)
     assert cost is not None
-    asked = render_comment(cost, opt_in=frozenset({"operands"}))
+    asked = render_comment(cost_moved, opt_in=frozenset({"operands"}))
     assert " operands=0:r" in asked
     assert ",result:r" in asked
-    assert "operands" not in render_comment(cost)
+    assert "operands" not in render_comment(cost_moved)
 
     payload = json.loads(render_json(data))
     assert payload == data
     text = render_text(rendered)
     bound = payload["function_records"]["roofline"]
     assert f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}" in text
-    assert "# compute-cost flops=f32:256@256 traffic=gmem:r2048/w1024@r2048/w1024" in text
+    assert "# compute-cost flops=f32:256@256" in text
+    assert "# traffic traffic=gmem:r2048/w1024@r2048/w1024" in text
     assert "# peak-footprint" not in text
     assert "operands" not in text
 
@@ -1941,17 +1973,18 @@ def test_a_participant_is_charged_the_share_of_a_source_it_actually_reads() -> N
         call
         for call in calls
         if type(call.target).__name__ == "Reshard"
-        and get_metadata(call, ComputeCostMetadata).traffic_at("gmem").read == 67_584
+        and get_metadata(call, TrafficMetadata).at("gmem").read == 67_584
     )
     added = next(call for call in calls if type(call.target).__name__ == "Binary")
 
-    cost = get_metadata(loaded, ComputeCostMetadata)
-    assert cost.traffic_per_unit_at("gmem") == TrafficBytes(read=512)
-    assert cost.traffic_at("gmem") == TrafficBytes(read=67_584)
-    assert cost.traffic_per_unit_at("rmem") == TrafficBytes(write=512)
+    cost_moved = get_metadata(loaded, TrafficMetadata)
+    assert cost_moved.per_unit_at("gmem") == TrafficBytes(read=512)
+    assert cost_moved.at("gmem") == TrafficBytes(read=67_584)
+    assert cost_moved.per_unit_at("rmem") == TrafficBytes(write=512)
 
-    broadcast = get_metadata(added, ComputeCostMetadata)
-    assert broadcast.traffic_per_unit_at("rmem") == TrafficBytes(read=516, write=512)
+
+    broadcast_moved = get_metadata(added, TrafficMetadata)
+    assert broadcast_moved.per_unit_at("rmem") == TrafficBytes(read=516, write=512)
 
     record = get_metadata(loaded, PerformanceMetadata)
     services = _replicated_source.resolve_target().get_facts(PerformanceServiceFacts)
@@ -1970,12 +2003,12 @@ def test_a_tuple_result_moves_what_every_field_of_it_states() -> None:
     to 48, where the first field alone would say 16. The source is replicated,
     so the read side is one participant's share.
     """
-    _result, entry = _run(_replicated_tuple, "compute-cost")
+    _result, entry = _run(_replicated_tuple, ("compute-cost", "memory"))
 
     chosen = next(call for call in _calls(entry) if type(call.target).__name__ == "TopK")
-    cost = get_metadata(chosen, ComputeCostMetadata)
-    assert cost.traffic_at("rmem") == TrafficBytes(read=67_584, write=6_336)
-    assert cost.traffic_per_unit_at("rmem") == TrafficBytes(read=512, write=48)
+    cost_moved = get_metadata(chosen, TrafficMetadata)
+    assert cost_moved.at("rmem") == TrafficBytes(read=67_584, write=6_336)
+    assert cost_moved.per_unit_at("rmem") == TrafficBytes(read=512, write=48)
 
 
 def test_an_alias_correction_outlives_the_movement_the_relation_stated() -> None:
@@ -1990,19 +2023,19 @@ def test_an_alias_correction_outlives_the_movement_the_relation_stated() -> None
     """
     functions = {function.name: function for function in _MovementCosts.functions}
 
-    result = analyze(_MovementCosts, functions["tiled"], analysis="compute-cost")
+    result = analyze(_MovementCosts, functions["tiled"], analysis="memory")
     *_windows, joined = _calls(result.function)
     assert get_metadata(joined, BufferAliasMetadata).kind == "forward"
-    forwarded = get_metadata(joined, ComputeCostMetadata)
-    assert forwarded.traffic_per_unit_at("gmem") == TrafficBytes()
-    assert forwarded.traffic_at("gmem") == TrafficBytes()
+    forwarded_moved = get_metadata(joined, TrafficMetadata)
+    assert forwarded_moved.per_unit_at("gmem") == TrafficBytes()
+    assert forwarded_moved.at("gmem") == TrafficBytes()
 
-    result = analyze(_MovementCosts, functions["read_after_write"], analysis="compute-cost")
+    result = analyze(_MovementCosts, functions["read_after_write"], analysis=("compute-cost", "memory"))
     written = next(
         call for call in _calls(result.function) if type(call.target).__name__ == "InsertSlice"
     )
     assert get_metadata(written, BufferAliasMetadata).kind == "produce"
-    carried = get_metadata(written, ComputeCostMetadata)
+    carried_moved = get_metadata(written, TrafficMetadata)
     whole = 1024 * 2048 * 4
-    assert carried.traffic_per_unit_at("gmem") == TrafficBytes(read=whole, write=whole)
-    assert carried.traffic_at("gmem") == TrafficBytes(read=whole, write=whole)
+    assert carried_moved.per_unit_at("gmem") == TrafficBytes(read=whole, write=whole)
+    assert carried_moved.at("gmem") == TrafficBytes(read=whole, write=whole)

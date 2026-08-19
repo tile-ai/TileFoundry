@@ -51,9 +51,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.buffer_plan import BufferPlan, PlannedBuffer, build_buffer_plan
 from tilefoundry.analysis.check import _call_placements
-from tilefoundry.analysis.compute_cost import _bytes_for, _prove_storage, _Storage
 from tilefoundry.analysis.footprint import _local_type as footprint_local_type
-from tilefoundry.analysis.memory import _record_traffic
 from tilefoundry.analysis.metadata import (
     BufferAllocationMetadata,
     BufferRef,
@@ -61,6 +59,7 @@ from tilefoundry.analysis.metadata import (
     MemoryMetadata,
     TrafficMetadata,
 )
+from tilefoundry.analysis.movement import _bytes_for, _prove_storage, _Storage
 from tilefoundry.analysis.preflight import validate_authored
 from tilefoundry.analysis.walk import (
     attach,
@@ -2639,14 +2638,14 @@ def _occurrences(function):
     ]
 
 
-def test_the_bytes_this_family_states_are_the_bytes_already_settled() -> None:
-    """Moving a record is not recounting what it holds.
+def test_the_two_families_answer_about_different_halves_of_one_call() -> None:
+    """Work and movement are one declaration read twice, not two declarations.
 
-    The cost of every occurrence settled what it moves, whole and per unit, and
-    the function's total already counts each as often as its loops repeat it.
-    Attaching that under the family that knows where values live says whose
-    record it is; a second count of the same bytes would be a second answer,
-    and two answers to one question drift.
+    An Op states its flops, its typed service and its movement once. Which
+    family reports which half is a question about ownership, and the halves do
+    not overlap: a record of work states no bytes, and a record of movement
+    states no flops. Both are asked of the same occurrence, so every priced
+    Call carries one of each.
     """
     placed = replace(
         GqaOnline,
@@ -2662,15 +2661,15 @@ def test_the_bytes_this_family_states_are_the_bytes_already_settled() -> None:
         for expr in (result.function, *postorder(result.function.body)):
             cost = get_metadata(expr, ComputeCostMetadata)
             moved = get_metadata(expr, TrafficMetadata)
-            if cost is None:
-                assert moved is None, "bytes were stated for an occurrence nothing priced"
+            if cost is None and moved is None:
                 continue
-            assert moved is not None, "an occurrence was priced and left without a record"
-            assert moved.whole == cost.traffic
-            assert moved.per_unit == cost.traffic_per_unit
+            assert cost is not None and moved is not None, (
+                "one half of an occurrence was recorded without the other"
+            )
+            assert not hasattr(cost, "traffic"), "the work record still states bytes"
+            assert not hasattr(moved, "flops"), "the movement record still states work"
             checked += 1
         assert checked > 1, "this program stated no cost to carry"
-
 
 def test_a_derived_answer_does_not_survive_into_a_program_that_cannot_give_it() -> None:
     """An answer belongs to the analysis that reached it, not to the program.

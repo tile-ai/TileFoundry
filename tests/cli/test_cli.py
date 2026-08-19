@@ -624,6 +624,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
     ]
     assert set(payload["function_records"]) == {
         "compute-cost",
+        "traffic",
         "memory",
         "roofline",
         "performance",
@@ -638,7 +639,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
 
     summary = payload["function_records"]["performance"]
     cost = payload["function_records"]["compute-cost"]
-    whole, unit = cost["traffic"]["gmem"], cost["traffic_per_unit"]["gmem"]
+    moved = payload["function_records"]["traffic"]
     peak = payload["function_records"]["memory"]["footprint"]
     bound = payload["function_records"]["roofline"]
     assert header.splitlines() == [
@@ -647,9 +648,12 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
         f"# selection requested={','.join(payload['requested'])} "
         f"executed={','.join(payload['executed'])}",
         "# compute-cost "
-        f"flops=f32:{cost['flops']['f32']}@{cost['flops_per_unit']['f32']} "
-        f"traffic=gmem:r{whole['read']}/w{whole['write']}"
-        f"@r{unit['read']}/w{unit['write']}",
+        f"flops=f32:{cost['flops']['f32']}@{cost['flops_per_unit']['f32']}",
+        "# traffic "
+        f"traffic=gmem:r{moved['whole']['gmem']['read']}"
+        f"/w{moved['whole']['gmem']['write']}"
+        f"@r{moved['per_unit']['gmem']['read']}"
+        f"/w{moved['per_unit']['gmem']['write']}",
         f"# peak-footprint=gmem:{peak[0]['peak_bytes']}",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# performance root=MoEMegaKernel::experts "
@@ -657,7 +661,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
         f"waves={summary['waves']}",
     ]
     assert payload["totals"]["flops"] == cost["flops"]
-    assert payload["totals"]["traffic"] == cost["traffic"]
+    assert payload["totals"]["traffic"] == moved["whole"]
 
     hoisted = {
         line.split(" = ", 1)[0] for line in lines if " = Mesh((Topology(" in line
@@ -672,7 +676,8 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
     rows = payload["calls"]
     assert len(rows) == 7
     assert all(
-        set(row) - {"performance"} == {"value", "compute-cost", "roofline"} for row in rows
+        set(row) - {"performance"} == {"value", "compute-cost", "traffic", "roofline"}
+        for row in rows
     )
     timed = [index for index, row in enumerate(rows) if "performance" in row]
     assert timed == [1, 4, 6]

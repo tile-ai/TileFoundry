@@ -42,11 +42,7 @@ from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
-from .compute_cost import (
-    _call_cost_record,
-    _is_structural_occurrence,
-    alias_conclusions,
-)
+from .compute_cost import _call_cost_record, _is_structural_occurrence
 from .errors import AnalysisError
 from .facts import ParallelCapacityFacts, PerformanceServiceFacts
 from .metadata import (
@@ -59,6 +55,7 @@ from .metadata import (
     RooflineMetadata,
     TrafficMetadata,
 )
+from .movement import alias_conclusions, call_traffic
 from .preflight import infer_authored_types, validate_call_context
 from .walk import describe, postorder, reachable_functions, tensor_types
 
@@ -250,8 +247,9 @@ def _call_placements(
         try:
             result[id(expr)] = _result_placement(expr.type, selected)
         except AnalysisError as error:
-            cost = _call_cost_record(expr, whole, local, aliases[id(expr)])
-            if _is_structural_occurrence(cost):
+            cost = _call_cost_record(expr, whole, local)
+            moved = call_traffic(expr, whole, local, aliases[id(expr)])
+            if _is_structural_occurrence(cost, moved):
                 result[id(expr)] = frozenset()
                 continue
             raise AnalysisError(f"performance: {describe(expr)}: {error}") from None
@@ -345,8 +343,9 @@ class PerformanceInputChecker:
 
     def check_call(self, call: Call, ctx: AnalysisCheckContext) -> None:
         """Require a placement for every occurrence that will take time."""
-        cost = _call_cost_record(call, ctx.whole, ctx.local, ctx.aliases.get(id(call)))
-        if _is_structural_occurrence(cost):
+        cost = _call_cost_record(call, ctx.whole, ctx.local)
+        moved = call_traffic(call, ctx.whole, ctx.local, ctx.aliases.get(id(call)))
+        if _is_structural_occurrence(cost, moved):
             return
         try:
             _result_placement(call.type, ctx.selected_topology)

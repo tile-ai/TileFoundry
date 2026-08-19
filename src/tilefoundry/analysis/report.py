@@ -18,6 +18,7 @@ from tilefoundry.analysis.metadata import (
     PerformanceMetadata,
     PerformanceSummaryMetadata,
     RooflineMetadata,
+    TrafficMetadata,
 )
 from tilefoundry.analysis.walk import postorder, tensor_types
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
@@ -157,7 +158,7 @@ def _operand_name(operand: object) -> str:
 
 
 def _operands(
-    record: ComputeCostMetadata, expr: object
+    record: TrafficMetadata, expr: object
 ) -> list[dict[str, object]] | None:
     """Each recorded amount, against the operand it was charged to."""
     if not isinstance(expr, Call) or not record.operands:
@@ -175,7 +176,7 @@ def _operands(
     ]
 
 
-expr_field(ComputeCostMetadata, "operands", _operands)
+expr_field(TrafficMetadata, "operands", _operands)
 
 
 def _records_of(expr: object, selected: frozenset[type[IRMetadata]]) -> dict[str, object]:
@@ -298,12 +299,17 @@ def _loop_records(
 
 
 def _work_totals(function: Function) -> dict[str, object]:
-    """The multiplicity-aware work recorded on the Function root."""
+    """The multiplicity-aware work and movement recorded on the Function root.
+
+    Two families answer here, each about its own half, so a report states what
+    a program asks of the machine beside what it moves through it.
+    """
     record = get_metadata(function, ComputeCostMetadata)
-    if record is None:
-        return {"flops": {}, "traffic": {}}
-    reported = render_record(record, function)
-    return {"flops": reported["flops"], "traffic": reported["traffic"]}
+    moved = get_metadata(function, TrafficMetadata)
+    return {
+        "flops": {} if record is None else render_record(record, function)["flops"],
+        "traffic": {} if moved is None else render_record(moved, function)["whole"],
+    }
 
 
 def render_json(data: dict[str, object]) -> str:

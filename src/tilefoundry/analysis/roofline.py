@@ -16,7 +16,12 @@ from tilefoundry.target import Target
 
 from .errors import AnalysisError
 from .facts import ThroughputFacts
-from .metadata import ComputeCostMetadata, RooflineMetadata, TrafficBytes
+from .metadata import (
+    ComputeCostMetadata,
+    RooflineMetadata,
+    TrafficBytes,
+    TrafficMetadata,
+)
 from .walk import attach, describe, postorder, reachable_functions
 
 SELECTOR = "roofline"
@@ -90,16 +95,19 @@ def _bound(compute_ns: int, memory_ns: int, *, has_work: bool) -> RooflineMetada
 
 
 def _cost_bound(
-    cost: ComputeCostMetadata, facts: ThroughputFacts, *, scale: int = 1
+    cost: ComputeCostMetadata, moved: TrafficMetadata | None, facts: ThroughputFacts
 ) -> RooflineMetadata:
-    """Bound one compute-cost record after applying an execution count."""
-    flops = tuple((name, value * scale) for name, value in cost.flops)
-    traffic = cost.traffic_at(facts.bandwidth_level)
-    traffic = TrafficBytes(traffic.read * scale, traffic.write * scale)
+    """Bound one occurrence from the work it does and the bytes it moves.
+
+    Whole-device work against whole-device rates: the flops the target publishes
+    a peak for, and the bytes at the level it publishes a bandwidth for. Typed
+    service has no whole-device rate to divide by and so does not enter a bound.
+    """
+    traffic = TrafficBytes() if moved is None else moved.at(facts.bandwidth_level)
     return _bound(
-        _compute_ns(flops, facts),
+        _compute_ns(cost.flops, facts),
         _memory_ns(traffic, facts),
-        has_work=bool(cost.flops or cost.traffic),
+        has_work=bool(cost.flops or (moved is not None and moved.whole)),
     )
 
 
@@ -122,14 +130,14 @@ def analyze_roofline(
                     f"{describe(expr)}: roofline needs the compute-cost record "
                     "this call was never given"
                 )
-            attach(expr, _cost_bound(cost, facts))
+            attach(expr, _cost_bound(cost, get_metadata(expr, TrafficMetadata), facts))
         total = get_metadata(fn, ComputeCostMetadata)
         if total is None:
             raise AnalysisError(
                 f"function {fn.name!r}: roofline needs the compute-cost root "
                 "record this function was never given"
             )
-        attach(fn, _cost_bound(total, facts))
+        attach(fn, _cost_bound(total, get_metadata(fn, TrafficMetadata), facts))
 
 
 __all__ = ["SELECTOR", "analyze_roofline"]

@@ -23,6 +23,7 @@ from tilefoundry.analysis.metadata import (
     PerformanceMetadata,
     PerformanceSummaryMetadata,
     RooflineMetadata,
+    TrafficMetadata,
 )
 from tilefoundry.analysis.report import (
     declare_record,
@@ -235,16 +236,17 @@ def _paired_service(record: ComputeCostMetadata) -> dict[str, TotalAndPerUnit[in
 
 
 def _paired_traffic(
-    record: ComputeCostMetadata,
+    record: TrafficMetadata,
 ) -> dict[str, TotalAndPerUnit[TrafficBytes]]:
     """Each level's traffic, whole and per unit, as one value."""
+    per_unit = dict(record.per_unit)
     return {
-        level: TotalAndPerUnit(moved, record.traffic_per_unit_at(level))
-        for level, moved in record.traffic
+        level: TotalAndPerUnit(moved, per_unit.get(level, TrafficBytes()))
+        for level, moved in record.whole
     }
 
 
-def _by_operand(record: ComputeCostMetadata) -> dict[str, TrafficBytes]:
+def _by_operand(record: TrafficMetadata) -> dict[str, TrafficBytes]:
     """What each operand moved, positional against ``(*call.args, call)``."""
     last = len(record.operands) - 1
     return {
@@ -350,6 +352,9 @@ comment(
     ComputeCostMetadata,
     Projection("flops", dict[str, TotalAndPerUnit[int]], _paired_flops),
     Projection("service", dict[str, TotalAndPerUnit[int]], _paired_service),
+)
+comment(
+    TrafficMetadata,
     Projection("traffic", dict[str, TotalAndPerUnit[TrafficBytes]], _paired_traffic),
     Projection("operands", dict[str, TrafficBytes], _by_operand, opt_in=True),
 )

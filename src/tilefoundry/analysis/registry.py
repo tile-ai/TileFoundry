@@ -9,33 +9,31 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
     """Construct the one standard analysis service named by *selector*."""
     if selector == "compute-cost":
         from tilefoundry.analysis.compute_cost import analyze_compute_cost  # noqa: PLC0415
-        from tilefoundry.analysis.metadata import (  # noqa: PLC0415
-            BufferAliasMetadata,
-            ComputeCostMetadata,
-        )
+        from tilefoundry.analysis.metadata import ComputeCostMetadata  # noqa: PLC0415
 
         return Analyzer(
             "compute-cost",
             analyze_compute_cost,
-            produces=(ComputeCostMetadata, BufferAliasMetadata),
+            produces=(ComputeCostMetadata,),
         )
     if selector == "memory":
         from tilefoundry.analysis.memory import analyze_memory  # noqa: PLC0415
         from tilefoundry.analysis.metadata import (  # noqa: PLC0415
+            BufferAliasMetadata,
             BufferAllocationMetadata,
             LoopFootprintMetadata,
             MemoryMetadata,
-            TrafficMetadata,  # noqa: PLC0415
+            TrafficMetadata,
         )
 
         return Analyzer(
             "memory",
             analyze_memory,
-            requires=("compute-cost",),
             produces=(
                 MemoryMetadata,
                 LoopFootprintMetadata,
                 BufferAllocationMetadata,
+                BufferAliasMetadata,
                 TrafficMetadata,
             ),
         )
@@ -46,7 +44,7 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
         return Analyzer(
             "roofline",
             analyze_roofline,
-            requires=("compute-cost",),
+            requires=("compute-cost", "memory"),
             produces=(RooflineMetadata,),
         )
     if selector == "performance":
