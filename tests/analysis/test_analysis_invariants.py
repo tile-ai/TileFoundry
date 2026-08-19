@@ -3223,3 +3223,82 @@ def test_a_record_the_spec_declares_has_the_fields_it_declares() -> None:
                 f"{name}.{stated}"
             )
     assert checked > 10, "the spec declared almost nothing to compare against"
+
+
+def test_a_link_is_asked_by_as_many_coordinates_as_its_output_has() -> None:
+    """A link answers for one coordinate of its output, so it is asked by all of them.
+
+    A map indexed by fewer is a link to some other value, and it composes with
+    this occurrence without complaining: the reader finds out only when the
+    spaces refuse to meet, by which point the answer has been a conservative
+    charge rather than a refused handler for however long.
+    """
+
+    class _AsksTooFew(Op):
+        pass
+
+    register_typeinfer(_AsksTooFew)(lambda call, ctx: make_tensor_type((2, 2), DType.f32))
+
+    @register_access_relation(_AsksTooFew)
+    def _handler(call, ctx) -> AccessRelations:
+        held = AccessQuantity(4, 4)
+        return AccessRelations(
+            inputs=(
+                BoundaryAccess(identity_access(1), held, AccessMode.TRANSFER),
+            ),
+            outputs=(
+                transfers(
+                    identity_access(2),
+                    held,
+                    StorageLink("forward", 0, identity_access(1), held),
+                ),
+            ),
+        )
+
+    call = Call(
+        type=make_tensor_type((2, 2), DType.f32),
+        target=_AsksTooFew(),
+        args=(Var(type=make_tensor_type((4,), DType.f32), name="x"),),
+    )
+    with pytest.raises(ValueError, match="from 1 coordinates, and it has 2"):
+        access_relation_registry.lookup(_AsksTooFew)(call, CostContext())
+
+
+def test_a_link_that_states_both_ranks_is_taken() -> None:
+    """The shapes a real op states are the ones the check is meant to admit.
+
+    A concat's link answers for a coordinate of the whole and names one of the
+    piece it came from; a split's answers for a coordinate of a piece and names
+    one of the whole. Both are indexed by their own output and land in their own
+    input, at the same rank, which is what the check asks and no more.
+    """
+    held = make_tensor_type((6, 5), DType.f32)
+    piece = make_tensor_type((3, 5), DType.f32)
+
+    joined = Call(
+        type=held,
+        target=Concat(axis=0),
+        args=(Var(type=piece, name="a"), Var(type=piece, name="b")),
+    )
+    relations = access_relation_registry.lookup(Concat)(joined, TypeInferContext())
+    for index, offset in enumerate((0, 3)):
+        (link,) = [
+            item
+            for item in relations.outputs[0].storage.links
+            if item.input == index
+        ]
+        assert _as_map(link.where).is_equal(
+            isl.map(f"{{ [d0, d1] -> [d0 - {offset}, d1] }}")
+        )
+        assert link.where.dim(isl.dim_type.IN) == 2
+        assert link.where.dim(isl.dim_type.OUT) == 2
+
+    parted = access_relation_registry.lookup(SplitOp)(
+        _split_call(make_tensor_type((6, 4), DType.f32)), TypeInferContext()
+    )
+    for field, offset in enumerate((0, 2)):
+        (link,) = parted.outputs[field].storage.links
+        assert _as_map(link.where).is_equal(
+            isl.map(f"{{ [d0, d1] -> [d0, d1 + {offset}] }}")
+        )
+        assert link.where.dim(isl.dim_type.IN) == 2

@@ -606,6 +606,8 @@ def _check_image_ranks(call, ctx, relations: AccessRelations, op_cls: type) -> N
                     f"{side} {index}'s link",
                     op_cls,
                 )
+                _hold_domain(link.where, wanted, f"{side} {index}'s link", op_cls)
+
 
 
 def _hold_rank(pattern: "AccessPattern", wanted: int, where: str, op_cls: type) -> None:
@@ -614,6 +616,35 @@ def _hold_rank(pattern: "AccessPattern", wanted: int, where: str, op_cls: type) 
     if stated is not None and stated != wanted:
         raise ValueError(
             f"{op_cls.__name__} reads {where} at {stated} coordinates, and it "
+            f"has {wanted} in this view"
+        )
+
+
+def _domain_rank(pattern: "AccessPattern") -> int | None:
+    """How many coordinates a carrier is asked by, or None when it says none.
+
+    A window is asked by one offset and one extent per coordinate of the value
+    it is a window of, which is the same question an affine domain answers.
+    """
+    if isinstance(pattern, (isl.multi_aff, isl.map)):
+        return pattern.dim(isl.dim_type.IN)
+    if isinstance(pattern, WindowAccess):
+        return _image_rank(pattern)
+    return None
+
+
+def _hold_domain(pattern: "AccessPattern", wanted: int, where: str, op_cls: type) -> None:
+    """Refuse a link asked by a different number of coordinates than it has.
+
+    A link answers for one coordinate of its output, so it is asked by as many
+    as that output has. One asked by fewer is a link to some other value, and
+    the reader that composes it with this occurrence finds that out too late to
+    say whose bytes it was talking about.
+    """
+    stated = _domain_rank(pattern)
+    if stated is not None and stated != wanted:
+        raise ValueError(
+            f"{op_cls.__name__} links {where} from {stated} coordinates, and it "
             f"has {wanted} in this view"
         )
 
