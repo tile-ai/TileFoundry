@@ -53,6 +53,7 @@ from tilefoundry.analysis.memory import _record_traffic
 from tilefoundry.analysis.metadata import (
     BufferAllocationMetadata,
     BufferRef,
+    ComputeCostMetadata,
     MemoryMetadata,
 )
 from tilefoundry.analysis.preflight import validate_authored
@@ -2864,12 +2865,28 @@ def test_a_total_counts_work_a_unit_does_not_do_only_where_it_happened() -> None
         assert moved.write <= here.get(level, [0, 0])[1]
 
 
+def _totalled(target, cost=None):
+    """One occurrence of *target* alone in a function, and what totalling it gave."""
+    held = make_tensor_type((4,), DType.f32)
+    source = Var(type=held, name="held")
+    body = Call(type=held, target=target, args=(source,))
+    if cost is not None:
+        attach(body, cost)
+    function = Function(
+        type=held, name="main", params=(source,), body=body, return_type=held
+    )
+    _record_traffic(function, FunctionScope(_NoParallelLevel, function), None, ())
+    return body, function
+
+
 def test_a_total_missing_one_of_its_parts_is_not_stated_at_all() -> None:
     """A sum that left something out reads as a smaller program.
 
-    One occurrence nobody can answer for makes the function's total an unknown
-    rather than a smaller number, so it is not stated and a reader asking for
-    it is told nothing instead of told wrong.
+    An occurrence nobody can answer for makes the function's total an unknown
+    rather than a smaller number, so it is not stated and a reader asking for it
+    is told nothing instead of told wrong. An Op that states no accesses at all
+    counts the same way when it was going to move something: silence about an
+    occurrence that moves bytes is not the same as an occurrence that does not.
     """
 
     class _Declines(Op):
@@ -2881,12 +2898,22 @@ def test_a_total_missing_one_of_its_parts_is_not_stated_at_all() -> None:
     def _declines(call, ctx) -> AccessRelations:
         raise NotImplementedError("this Op does not state relations at this shape")
 
-    held = make_tensor_type((4,), DType.f32)
-    source = Var(type=held, name="held")
-    body = Call(type=held, target=_Declines(), args=(source,))
-    function = Function(
-        type=held, name="main", params=(source,), body=body, return_type=held
+    class _MovesWithoutSaying(Op):
+        pass
+
+    register_typeinfer(_MovesWithoutSaying)(
+        lambda call, ctx: make_tensor_type((4,), DType.f32)
     )
-    _record_traffic(function, FunctionScope(_NoParallelLevel, function), None, ())
-    assert get_metadata(body, TrafficMetadata) is None
+
+    refused, function = _totalled(_Declines())
+    assert get_metadata(refused, TrafficMetadata) is None
     assert get_metadata(function, TrafficMetadata) is None
+
+    moving = ComputeCostMetadata(traffic=(("gmem", TrafficBytes(16, 0)),))
+    silent, function = _totalled(_MovesWithoutSaying(), moving)
+    assert get_metadata(silent, TrafficMetadata) is None
+    assert get_metadata(function, TrafficMetadata) is None
+
+    still, function = _totalled(_MovesWithoutSaying(), ComputeCostMetadata())
+    assert get_metadata(still, TrafficMetadata) is None
+    assert get_metadata(function, TrafficMetadata) == TrafficMetadata()

@@ -1064,6 +1064,8 @@ def _record_traffic(
             continue
         handler = access_relation_registry.lookup(type(expr.target))
         if handler is None:
+            if _owes_an_answer(expr):
+                complete = False
             continue
         held = (placements or {}).get(id(expr))
         try:
@@ -1087,6 +1089,19 @@ def _record_traffic(
         _add_traffic(shares, moved.per_unit, repeats)
     if complete:
         attach(fn, TrafficMetadata(whole=_totalled(totals), per_unit=_totalled(shares)))
+
+
+def _owes_an_answer(expr: Expr) -> bool:
+    """Whether an occurrence with no relation was still going to move bytes.
+
+    An Op that states no accesses can still be one that moves something, and
+    counting a function's bytes without it gives a total that is short by
+    however much it moved. What says whether it moved anything is the cost
+    already recorded for it; an occurrence with no cost record has not been
+    shown to move nothing either.
+    """
+    cost = get_metadata(expr, ComputeCostMetadata)
+    return cost is None or bool(cost.traffic)
 
 
 def _add_traffic(
