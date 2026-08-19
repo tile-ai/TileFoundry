@@ -440,13 +440,32 @@ def _entry(plan: BufferPlan, value, field: int | None) -> PlannedBuffer | None:
 
 
 def _strides(ref) -> tuple | None:
-    """One buffer's element strides, in the positions it is addressed by."""
-    layout = ref.layout
+    """One buffer's element strides, in the positions it is addressed by.
+
+    A layout wrapped in a distribution or shifted by a constant still steps the
+    way the layout underneath it steps, so the wrappers are unwrapped rather
+    than read for strides they do not carry.
+    """
+    return _stepping(ref.layout)
+
+
+def _stepping(layout) -> tuple | None:
+    """The element strides of whatever layout finally states them."""
+    if layout is None:
+        return None
+    if isinstance(layout, ComposedLayout):
+        return None if layout.inner is not None else _stepping(layout.outer)
     inner = getattr(layout, "layout", None)
-    strides = getattr(inner if inner is not None else layout, "strides", None)
+    if inner is not None:
+        return _stepping(inner)
+    strides = getattr(layout, "strides", None)
     if strides is None:
         return None
-    return tuple(strides) if all(isinstance(item, int) for item in strides) else None
+    return (
+        tuple(strides)
+        if all(isinstance(item, int) and not isinstance(item, bool) for item in strides)
+        else None
+    )
 
 
 def _seated(ref) -> "int | None":
@@ -457,12 +476,20 @@ def _seated(ref) -> "int | None":
     bytes. A composition this cannot read is not a zero shift, so it answers
     with nothing rather than with the front of the buffer.
     """
-    layout = ref.layout
+    return _shift(ref.layout)
+
+
+def _shift(layout) -> "int | None":
+    """Every constant shift between one value's coordinates and its buffer."""
+    if layout is None:
+        return 0
     if isinstance(layout, ComposedLayout):
         if layout.inner is not None or not isinstance(layout.offset, int):
             return None
-        return layout.offset
-    return 0
+        deeper = _shift(layout.outer)
+        return None if deeper is None else layout.offset + deeper
+    inner = getattr(layout, "layout", None)
+    return 0 if inner is None else _shift(inner)
 
 
 def _address_map(pattern, ref, payload: int, domain: tuple) -> "isl.map | None":

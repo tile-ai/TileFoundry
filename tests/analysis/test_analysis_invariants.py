@@ -126,6 +126,7 @@ from tilefoundry.ir.types import (
     tensor_bytes,
 )
 from tilefoundry.ir.types.shard import Layout, Topology, make_mesh
+from tilefoundry.ir.types.shard.layout import ComposedLayout
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial
 from tilefoundry.ir.types.shard.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.storage import StorageKind
@@ -2595,6 +2596,39 @@ def test_two_segments_of_one_buffer_are_not_one_address() -> None:
         _address_map(reading, back, 8, (4,))
     )
     assert _seat(front, 8) == (0, (8,)) and _seat(back, 8) == (32, (8,))
+
+
+def test_a_view_shifted_into_its_buffer_is_proved_by_where_it_was_shifted() -> None:
+    """A constant shift is part of an address, and a readable one is readable.
+
+    A static slice carries its offset by composing the layout with a constant,
+    and the layout underneath it is the one that states the strides. Reading the
+    composition for strides it does not carry answers nothing, and nothing is
+    not a proof: a rename that really did land on the same bytes gets charged
+    for copying them.
+    """
+    outer = Layout(shape=(4,), strides=(1,))
+    shifted = BufferRef(
+        buffer_id=9,
+        level="gmem",
+        offset=0,
+        size=32,
+        shape=(4,),
+        layout=ComposedLayout(inner=None, offset=2, outer=outer),
+    )
+    further = replace(
+        shifted, layout=ComposedLayout(inner=None, offset=3, outer=outer)
+    )
+    assert _seat(shifted, 8) == (16, (8,))
+    assert _seat(further, 8) == (24, (8,))
+
+    reading = isl.multi_aff("{ [i] -> [i] }")
+    assert _address_map(reading, shifted, 8, (4,)).is_equal(
+        _address_map(reading, replace(shifted), 8, (4,))
+    )
+    assert not _address_map(reading, shifted, 8, (4,)).is_equal(
+        _address_map(reading, further, 8, (4,))
+    )
 
 
 def test_a_unit_that_holds_none_of_a_value_is_not_a_unit_that_moves_none() -> None:
