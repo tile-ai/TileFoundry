@@ -24,6 +24,7 @@ import tilefoundry.analysis.api as analysis_api
 import tilefoundry.analysis.metadata as analysis_records
 import tilefoundry.analysis.traffic as analysis_traffic
 import tilefoundry.cli.analyze as cli_analyze
+import tilefoundry.visitor_registry.access_relation as access_relation
 from tests.analysis.test_analysis_families import (
     CORPUS,
     _NoParallelLevel,
@@ -3172,11 +3173,9 @@ def test_a_value_nobody_can_place_does_not_place_the_one_that_renames_it() -> No
         )
 
 
-def _spec_records():
-    """Every dataclass the analysis spec declares, as name to field list."""
-    text = (
-        Path(__file__).resolve().parents[2] / "docs" / "spec" / "analysis.md"
-    ).read_text()
+def _spec_records(page="analysis.md"):
+    """Every dataclass one spec page declares, as name to field list."""
+    text = (Path(__file__).resolve().parents[2] / "docs" / "spec" / page).read_text()
     found = {}
     for block in re.findall(r"```python\n(.*?)```", text, re.S):
         try:
@@ -3201,28 +3200,44 @@ def test_a_record_the_spec_declares_has_the_fields_it_declares() -> None:
 
     A field the implementation widened and the spec did not says a value is
     invalid that the implementation emits, and a reader writing against the spec
-    builds something that breaks on the first program that hits it. Comparing
-    the two is the only thing that keeps a written shape a shape.
+    builds something that breaks on the first program that hits it. A record the
+    spec still describes in a shape nobody builds any more is the same thing
+    read the other way. Comparing them is what keeps a written shape a shape.
     """
     checked = 0
-    for name, declared in sorted(_spec_records().items()):
-        real = getattr(analysis_records, name, None) or getattr(analysis_traffic, name, None)
+    pages = {
+        "analysis.md": (analysis_records, analysis_traffic),
+        "visitor-registry.md": (access_relation,),
+    }
+    for page, modules in pages.items():
+        checked += _held_to_the_code(_spec_records(page), modules)
+    assert checked > 15, "the spec declared almost nothing to compare against"
+
+
+def _bare(annotation: str) -> str:
+    """One annotation with the quoting and spacing a forward reference adds."""
+    return annotation.replace(" ", "").replace("'", "").replace('"', "")
+
+
+def _held_to_the_code(declared_records, modules) -> int:
+    """How many of *declared_records* matched a dataclass one module builds."""
+    checked = 0
+    for name, declared in sorted(declared_records.items()):
+        real = next(
+            (found for found in (getattr(item, name, None) for item in modules) if found),
+            None,
+        )
         if real is None or not dataclass_fields(real):
             continue
         checked += 1
         actual = [
-            (
-                item.name,
-                (item.type if isinstance(item.type, str) else str(item.type)).strip("'\""),
-            )
+            (item.name, item.type if isinstance(item.type, str) else str(item.type))
             for item in dataclass_fields(real)
         ]
         assert [name for name, _ in declared] == [name for name, _ in actual], name
         for (stated, written), (_held, real_type) in zip(declared, actual):
-            assert written.replace(" ", "") == real_type.replace(" ", ""), (
-                f"{name}.{stated}"
-            )
-    assert checked > 10, "the spec declared almost nothing to compare against"
+            assert _bare(written) == _bare(real_type), f"{name}.{stated}"
+    return checked
 
 
 def test_a_link_is_asked_by_as_many_coordinates_as_its_output_has() -> None:

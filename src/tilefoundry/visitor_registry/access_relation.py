@@ -18,6 +18,7 @@ from typing import Callable, Union
 import isl
 
 from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
+from tilefoundry.ir.types.shape_dim import ShapeDim
 from tilefoundry.ir.types.shard import Layout, try_c_order_strides
 from tilefoundry.ir.types.shard.int_tuple import flatten
 from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis, shard_layout_of
@@ -76,7 +77,7 @@ class WindowAccess:
     """
 
     offsets: tuple["OperandValue | int", ...]
-    extents: tuple["OperandValue | object", ...]
+    extents: tuple["OperandValue | ShapeDim", ...]
     complement: bool = False
 
 

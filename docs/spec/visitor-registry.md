@@ -345,14 +345,12 @@ class IndexedAccess:
     """A boundary read through the values of another operand.
 
     Attributes:
-        source_operand: attribute; Which operand is being indexed.
         index_operand: attribute; Which operand's elements name the coordinates.
-        source_axis: attribute; The axis of the source they index.
+        axis: attribute; The axis of this boundary's own value they index.
     """
 
-    source_operand: int
     index_operand: int
-    source_axis: int
+    axis: int
 
 class OperandValue:
     """One runtime number an access depends on, and what it may be.
@@ -411,11 +409,47 @@ class AccessQuantity:
     upper: int
     provenance: str | None = None
 
+class AccessMode(enum.Enum):
+    READ = "read"
+    WRITE = "write"
+    TRANSFER = "transfer"
+
+class StorageLink:
+    """One region an output may share with an input, and how much of it.
+
+    Attributes:
+        kind: attribute; `"forward"` for the result's own bytes, `"preserve"` for a container's.
+        input: attribute; Which operand the region is shared with.
+        where: attribute; One output coordinate to the input coordinate holding it.
+        quantity: attribute; How many elements the region holds.
+        input_field: attribute; Which field of a tuple operand, when it is one.
+    """
+
+    kind: str
+    input: int
+    where: AccessPattern
+    quantity: AccessQuantity
+    input_field: int | None = None
+
+class OutputStorage:
+    """Where one output's bytes may already be. No links means fresh bytes."""
+
+    links: tuple[StorageLink, ...] = ()
+
 class BoundaryAccess:
-    """One boundary: where it reads, and how much it moves."""
+    """One boundary: where it reads, how much it moves, and what for.
+
+    Attributes:
+        pattern: attribute; Which coordinates of its own value it reaches.
+        quantity: attribute; How many elements crossed it.
+        mode: attribute; Whether it consumes, produces, or re-addresses them.
+        storage: attribute; An output's links to the bytes it may already be in.
+    """
 
     pattern: AccessPattern
     quantity: AccessQuantity
+    mode: AccessMode = AccessMode.READ
+    storage: OutputStorage | None = None
 
 class AccessRelations:
     """One `BoundaryAccess` per boundary value, in boundary order."""
@@ -464,12 +498,31 @@ def register_access_relation(op_cls: type): ...
     rather than let it reach a consumer, and an Op whose own contract is
     violated by a written-down value MUST refuse there rather than report an
     impossible amount.
-  - `storage_effect` states where the result's bytes live and is a claim, not a
-    proof: an Op that omits it produces its own bytes, and an identity relation
-    alone never establishes an alias. Whether a claim holds over a whole
-    function -- one base, exact coverage, whose buffer it is, who still reads
-    it -- is settled by the consumer that walks the function, and is recorded by
-    `compute-cost` as `BufferAliasMetadata`.
+  - Every boundary MUST state a `mode`. An input MUST be `READ` or `TRANSFER`
+    and an output `WRITE` or `TRANSFER`. `READ` and `WRITE` are charged whether
+    or not the bytes turn out to be where they already were; `TRANSFER` is the
+    only mode that can come to nothing, and only when its links are shown to
+    name the same addresses.
+  - Only an output MUST carry `storage`, and a `TRANSFER` output MUST carry at
+    least one link: a boundary whose whole purpose is to re-address bytes that
+    names none of them says nothing. An output with no links produces its own
+    bytes.
+  - A link's `where` MUST read one coordinate of its output and answer with the
+    coordinate of its input holding it, so it MUST be asked by as many
+    coordinates as that output has and MUST name as many as that input has.
+    Both are held at registration, because a link asked by the wrong number is
+    a link to some other value and composes without complaining.
+  - A link MUST state its own `quantity`, which is how much the linked region
+    holds and is never measured off `where`. It MUST name `input_field` when
+    its operand is a tuple, because which field it took decides which bytes it
+    is, and MUST NOT when the operand is one tensor.
+  - `storage_effect` is the older whole-Call form of the same subject and states
+    where the result's bytes live as a claim, not a proof: an Op that omits it
+    produces its own bytes, and an identity relation alone never establishes an
+    alias. Per-region statements belong in the links, which can say what a claim
+    cannot -- an unbound window start, a transposed mapping, one field of
+    several. Whether either holds over a whole function is settled by the
+    consumer that walks it.
 
 The two registries are peers, not layers: a given Op MAY register with either,
 both, or neither. The polyhedral model ([analysis §1](./analysis.md#1-polyhedral-model))
