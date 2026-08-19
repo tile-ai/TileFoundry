@@ -62,11 +62,12 @@ from .metadata import (
     TrafficBytes,
     ValueLifetime,
 )
-from .traffic import lower_traffic
+from .traffic import TrafficMetadata, lower_traffic
 from .walk import (
     attach,
     bytes_by_storage,
     children,
+    enclosing_trips,
     postorder,
     reachable_functions,
     tensor_types,
@@ -1044,15 +1045,20 @@ def _record_traffic(
 ) -> None:
     """Give every occurrence the bytes its own relations say it moves.
 
-    A participant that does not run one does none of its movement, which is a
-    share of zero rather than a refusal. One whose movement cannot be stated is
-    left without a record instead of an empty one, no answer and zero being
-    different things. What is heard as no answer is what says so: a handler
-    failing its own contract reaches whoever asked.
+    A participant that does not run one does none of its movement, a share of
+    zero rather than a refusal, and one whose movement cannot be stated is left
+    without a record instead of an empty one. The function's own total is the
+    same bytes counted as often as the loops repeat them, stated only when every
+    occurrence that owed an answer gave one: a total missing a part of itself
+    reads as a smaller program rather than as an incomplete count.
     """
     plan = build_buffer_plan(fn, level)
     whole = CostContext(scope=scope)
     unit = CostContext(scope=scope, level=level, topologies=topologies)
+    trips = enclosing_trips(fn.body)
+    totals: dict[str, list[int]] = {}
+    shares: dict[str, list[int]] = {}
+    complete = True
     for expr in postorder(fn.body) if fn.body is not None else ():
         if not isinstance(expr, Call) or isinstance(expr.target, Function):
             continue
@@ -1073,8 +1079,33 @@ def _record_traffic(
                 umat_level=_UMAT_LEVEL,
             )
         except (AnalysisError, NotImplementedError, isl.Error):
+            complete = False
             continue
         attach(expr, moved)
+        repeats = trips.get(id(expr), 1)
+        _add_traffic(totals, moved.whole, repeats)
+        _add_traffic(shares, moved.per_unit, repeats)
+    if complete:
+        attach(fn, TrafficMetadata(whole=_totalled(totals), per_unit=_totalled(shares)))
+
+
+def _add_traffic(
+    into: dict[str, list[int]],
+    stated: tuple[tuple[str, TrafficBytes], ...],
+    repeats: int,
+) -> None:
+    """Add one occurrence's bytes to a function's, as often as it happens."""
+    for level, moved in stated:
+        running = into.setdefault(level, [0, 0])
+        running[0] += moved.read * repeats
+        running[1] += moved.write * repeats
+
+
+def _totalled(found: dict[str, list[int]]) -> tuple[tuple[str, TrafficBytes], ...]:
+    """One function's totals per level, in a stable order."""
+    return tuple(
+        (level, TrafficBytes(read, write)) for level, (read, write) in sorted(found.items())
+    )
 
 
 def analyze_memory(

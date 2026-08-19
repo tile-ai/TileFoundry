@@ -20,7 +20,11 @@ import torch
 
 import tilefoundry.analysis.api as analysis_api
 import tilefoundry.cli.analyze as cli_analyze
-from tests.analysis.test_analysis_families import _NoParallelLevel, _oversized_working_set
+from tests.analysis.test_analysis_families import (
+    CORPUS,
+    _NoParallelLevel,
+    _oversized_working_set,
+)
 from tests.evaluator.eval_utils import EvalCase, run_eval_case
 from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.logical.gqa_static import static_online_attend
@@ -62,6 +66,7 @@ from tilefoundry.analysis.walk import (
     attach,
     describe,
     detach,
+    enclosing_trips,
     loop_scopes,
     postorder,
     tensor_types,
@@ -2784,3 +2789,104 @@ def test_a_handler_that_breaks_its_own_contract_is_not_an_op_nothing_can_be_said
             continue
         with pytest.raises(expected, match="should not have"):
             _record_traffic(function, scope, None, ())
+
+
+def test_a_function_moves_its_occurrences_as_often_as_its_loops_repeat_them() -> None:
+    """A total is the bytes counted again for every trip that moves them.
+
+    One occurrence inside a loop of 24 moves what it moves 24 times, and the
+    rule for saying so lives here rather than in each reader: two readers with
+    two copies of it drift. The boundaries are not repeated with it -- which
+    operand moved what belongs to the occurrence, not to the total.
+    """
+    case = next(item for item in CORPUS if item.id == "access_footprint.grouped_moe")
+    selected = case.analyze[0]
+    owner, entry = case.resolve(case.build(), selected.selector)
+    result = analyze(owner, entry, analysis=("compute-cost", "memory"), dims=selected.dims)
+    function = result.function
+
+    record = get_metadata(function, TrafficMetadata)
+    assert record is not None and record.boundaries == ()
+
+    trips = enclosing_trips(function.body)
+    counted: dict[str, list[int]] = {}
+    repeated = 0
+    for expr in _occurrences(function):
+        moved = get_metadata(expr, TrafficMetadata)
+        assert moved is not None
+        times = trips.get(id(expr), 1)
+        repeated = times if times > repeated else repeated
+        for level, bytes_ in moved.whole:
+            running = counted.setdefault(level, [0, 0])
+            running[0] += bytes_.read * times
+            running[1] += bytes_.write * times
+    assert repeated > 1, "no occurrence of this program is repeated by a loop"
+    assert dict(record.whole) == {
+        level: TrafficBytes(*moved) for level, moved in counted.items()
+    }
+    assert dict(record.whole)["rmem"] == TrafficBytes(8 * 24, 0)
+
+
+def test_a_total_counts_work_a_unit_does_not_do_only_where_it_happened() -> None:
+    """The program moved it; this unit did not. The total says both.
+
+    Each expert here runs on its own slice of the machine, so an occurrence of
+    one is work the other's units never do. It belongs in what the program
+    moves and in none of what a unit moves, and a total that confused the two
+    would either lose the work or charge it to everybody.
+    """
+    result = analyze(
+        MoEMegaKernel, MoEMegaKernel.entry_function(), analysis=("compute-cost", "memory")
+    )
+    function = result.function
+    record = get_metadata(function, TrafficMetadata)
+    assert record is not None
+
+    places = _call_placements(MoEMegaKernel, function, "cta")
+    elsewhere, here = {}, {}
+    for expr in _occurrences(function):
+        moved = get_metadata(expr, TrafficMetadata)
+        into = here if 0 in places.get(id(expr), {0}) else elsewhere
+        for level, bytes_ in moved.whole:
+            running = into.setdefault(level, [0, 0])
+            running[0] += bytes_.read
+            running[1] += bytes_.write
+    assert elsewhere, "every occurrence of this program runs on the first participant"
+
+    for level, moved in record.whole:
+        counted = [
+            here.get(level, [0, 0])[side] + elsewhere.get(level, [0, 0])[side]
+            for side in (0, 1)
+        ]
+        assert (moved.read, moved.write) == tuple(counted)
+    for level, moved in record.per_unit:
+        assert moved.read <= here.get(level, [0, 0])[0]
+        assert moved.write <= here.get(level, [0, 0])[1]
+
+
+def test_a_total_missing_one_of_its_parts_is_not_stated_at_all() -> None:
+    """A sum that left something out reads as a smaller program.
+
+    One occurrence nobody can answer for makes the function's total an unknown
+    rather than a smaller number, so it is not stated and a reader asking for
+    it is told nothing instead of told wrong.
+    """
+
+    class _Declines(Op):
+        pass
+
+    register_typeinfer(_Declines)(lambda call, ctx: make_tensor_type((4,), DType.f32))
+
+    @register_access_relation(_Declines)
+    def _declines(call, ctx) -> AccessRelations:
+        raise NotImplementedError("this Op does not state relations at this shape")
+
+    held = make_tensor_type((4,), DType.f32)
+    source = Var(type=held, name="held")
+    body = Call(type=held, target=_Declines(), args=(source,))
+    function = Function(
+        type=held, name="main", params=(source,), body=body, return_type=held
+    )
+    _record_traffic(function, FunctionScope(_NoParallelLevel, function), None, ())
+    assert get_metadata(body, TrafficMetadata) is None
+    assert get_metadata(function, TrafficMetadata) is None
