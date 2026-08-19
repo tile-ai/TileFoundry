@@ -36,10 +36,11 @@ def _is_structural_occurrence(
     """Whether an occurrence asks for nothing this model puts on a clock.
 
     An occurrence that computes nothing and moves nothing is a view: it renames
-    what is already there. Everything else takes a machine time. Movement at a
-    level the target publishes no bandwidth for is still movement -- it is
-    charged as the local copies it is made of rather than dropped, so a program
-    staged through smem is not free because NVIDIA publishes no smem bandwidth.
+    what is already there. Everything else did something. Movement at a level
+    the target publishes no bandwidth for is still movement, so an occurrence
+    that made some is not structural and still owes an execution placement --
+    its duration is nought because no rate was published for those bytes, which
+    is not the same answer as having moved none.
     """
     return (
         all(not value for _name, value in cost.flops_per_unit)

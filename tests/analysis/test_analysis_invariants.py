@@ -51,6 +51,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.buffer_plan import BufferPlan, PlannedBuffer, build_buffer_plan
 from tilefoundry.analysis.check import _call_placements
+from tilefoundry.analysis.facts import ThroughputFacts
 from tilefoundry.analysis.footprint import _local_type as footprint_local_type
 from tilefoundry.analysis.metadata import (
     BufferAliasMetadata,
@@ -63,7 +64,7 @@ from tilefoundry.analysis.metadata import (
 from tilefoundry.analysis.movement import _bytes_for, _prove_storage, _Storage
 from tilefoundry.analysis.performance import analyze_performance
 from tilefoundry.analysis.preflight import validate_authored
-from tilefoundry.analysis.roofline import analyze_roofline
+from tilefoundry.analysis.roofline import _cost_bound, analyze_roofline
 from tilefoundry.analysis.walk import (
     attach,
     describe,
@@ -2673,6 +2674,36 @@ def test_the_two_families_answer_about_different_halves_of_one_call() -> None:
             assert not hasattr(moved, "flops"), "the movement record still states work"
             checked += 1
         assert checked > 1, "this program stated no cost to carry"
+
+def test_a_bound_divides_only_what_the_target_published_a_rate_for() -> None:
+    """A nanosecond is owed by what could have been priced, not by everything.
+
+    Bytes at a level no vendor rates are stated and left untimed, so a bound
+    that answers one nanosecond for them reports a floor the machine never
+    promised. A dtype whose rate is simply absent is the opposite case: the work
+    is of a kind this prices, the number is missing, and the bound says so.
+    """
+    facts = CudaTarget("nvidia.h200_sxm").get_facts(ThroughputFacts)
+    assert facts.bandwidth_level == "gmem"
+
+    for level in ("rmem", "smem"):
+        local = TrafficMetadata(whole=((level, TrafficBytes(read=8, write=8)),))
+        bound = _cost_bound(ComputeCostMetadata(), local, facts)
+        assert (bound.ideal_ns, bound.bound_by) == (0, "none"), (
+            f"{level} bytes nobody rated were given a nanosecond"
+        )
+
+    crossed = TrafficMetadata(whole=(("gmem", TrafficBytes(read=4096)),))
+    assert _cost_bound(ComputeCostMetadata(), crossed, facts).bound_by == "memory"
+    computed = ComputeCostMetadata(flops=(("f32", 4096),))
+    assert _cost_bound(computed, TrafficMetadata(), facts).bound_by == "compute"
+
+    unrated = ComputeCostMetadata(flops=(("f4e2m1", 4096),))
+    priced = _cost_bound(unrated, TrafficMetadata(), facts)
+    assert (priced.ideal_ns, priced.bound_by) == (1, "unrated"), (
+        "work of a kind this prices lost its floor along with the rate"
+    )
+
 
 def test_a_bound_is_refused_where_half_of_what_it_divides_is_missing() -> None:
     """A dependency that was declared is one whose answer may be relied on.

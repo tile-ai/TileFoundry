@@ -987,8 +987,8 @@ class RooflineMetadata(IRMetadata):
 |---|---|---|
 | `compute_ns` | For each recorded dtype with a published rate, round `flops * 1e9 / rate` up to ns and sum the dtype times. A Function uses its summed flops, not a sum of per-Call times. | `ThroughputFacts.peak_flops_per_second` |
 | `memory_ns` | Add reads and writes at `bandwidth_level`, multiply by `1e9 / memory_bandwidth_bytes_per_second`, and round up to ns; zero when no bandwidth is published or no bytes move. A Function uses its summed traffic, not a sum of per-Call times. | `ThroughputFacts.bandwidth_level` and `memory_bandwidth_bytes_per_second` |
-| `ideal_ns` | Maximum of `compute_ns` and `memory_ns`; one ns when recorded work exists but neither published rate yields a bound, otherwise zero for no work. | Through the two times |
-| `bound_by` | `none` for no bound, `balanced` for equal nonzero times, `memory` when memory is greater, `compute` when compute is greater, and `unrated` for the one-ns unpublished-work bound. | Through the two times |
+| `ideal_ns` | Maximum of `compute_ns` and `memory_ns`; one ns when the occurrence records nonzero flops or nonzero `bandwidth_level` traffic and neither published rate yields a bound, otherwise zero. Traffic at any other level is stated and does not earn a bound: no rate was published for it, so none is owed. | Through the two times |
+| `bound_by` | `none` for no bound, which includes an occurrence whose only movement is at a level with no published bandwidth, `balanced` for equal nonzero times, `memory` when memory is greater, `compute` when compute is greater, and `unrated` for the one-ns bound owed by work this prices whose rate is missing. | Through the two times |
 
 The family reads this target projection:
 

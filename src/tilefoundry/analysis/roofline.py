@@ -101,12 +101,18 @@ def _cost_bound(
 
     Whole-device work against whole-device rates: the flops the target publishes
     a peak for, and the bytes at the level it publishes a bandwidth for. Typed
-    service has no whole-device rate to divide by and so does not enter a bound.
+    service has no whole-device rate to divide by and so does not enter a bound,
+    and neither do bytes at a level with no published bandwidth: what asks for a
+    nanosecond is what this could have priced, so a dtype whose rate is missing
+    still owes one and a level nobody rated does not.
     """
+    crossed = moved.at(facts.bandwidth_level)
     return _bound(
         _compute_ns(cost.flops, facts),
-        _memory_ns(moved.at(facts.bandwidth_level), facts),
-        has_work=bool(cost.flops or moved.whole),
+        _memory_ns(crossed, facts),
+        has_work=bool(
+            any(value for _name, value in cost.flops) or crossed.total_bytes
+        ),
     )
 
 
