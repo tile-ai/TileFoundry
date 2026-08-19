@@ -741,9 +741,16 @@ where each one sits.
   - Every value whose bytes were placed MUST carry a `BufferAllocationMetadata`
     naming the buffer each of its leaves is in. A value only some of whose
     leaves could be placed MUST carry none: a partial address is not one. Values
-    sharing a `buffer_id` are in one allocation; the refs a value owns tile it
-    in `offset` order, and a value living in another's bytes names that
-    allocation rather than a range of its own.
+    sharing a `buffer_id` are in one allocation, and the refs a value owns tile
+    it in `offset` order.
+  - A value living in another's bytes MUST state its own range when the
+    operation producing it says where it begins, and MUST state an `offset` of
+    `None` over the containing allocation's size when nothing does. The two are
+    different answers: an exactly known view range is a range, and an unresolved
+    one is a value somewhere in those bytes. Nothing MUST be measured from an
+    absent offset -- a value renaming an unresolved one is unresolved too, and
+    an address MUST NOT be recovered by measuring from the front of the buffer
+    that contains it.
   - A level held per unit of work rather than shared is not searched for
     addresses, and a value there MUST still receive a `buffer_id` of its own.
     Two such values are two buffers however their offsets read.

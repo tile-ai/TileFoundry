@@ -143,18 +143,18 @@ class ValueLifetime:
 class BufferRef:
     """Where one value's bytes are, and how a coordinate of it becomes a byte.
 
-    ``size`` is the bytes of this range, and the refs a value owns tile its
-    allocation in ``offset`` order. A value living in another's bytes names that
-    whole allocation instead, because where inside it the value starts is what
-    the operation's storage links state. Both are decided once for the whole
-    function: what a participant sees of a buffer narrows under projection, but
-    where the buffer is does not. ``shape`` and ``layout`` are the value's at
-    the level's owner, the coordinate space offset and size are stated against.
+    ``offset`` and ``size`` are the range this value occupies, and the refs a
+    value owns tile its allocation in ``offset`` order. A value living in
+    another's bytes states its own range when its operation says where it
+    begins, and an ``offset`` of ``None`` when nothing does: it is somewhere in
+    ``size`` bytes of that buffer rather than at the front of them, and nothing
+    may be measured from an offset that is not there. ``shape`` and ``layout``
+    are the value's at the level's owner, the space they are stated against.
     """
 
     buffer_id: int
     level: str
-    offset: int
+    offset: int | None
     size: int
     shape: tuple = ()
     layout: object = None

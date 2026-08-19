@@ -418,12 +418,13 @@ def _seat(ref, payload: int) -> "tuple | None":
     """Where one value sits in its buffer and how its coordinates step there.
 
     Two values of one buffer name the same bytes only if they start at the same
-    byte and step the same way. Either being unreadable is not a match, because
-    an address nobody can state has not been shown to equal another.
+    byte and step the same way. Either being unreadable is not a match, and a
+    value only known to be somewhere in its buffer is unreadable: an address
+    nobody can state has not been shown to equal another.
     """
     strides = _strides(ref)
     seated = _seated(ref)
-    if strides is None or seated is None:
+    if strides is None or seated is None or ref.offset is None:
         return None
     return (ref.offset + seated * payload, tuple(stride * payload for stride in strides))
 

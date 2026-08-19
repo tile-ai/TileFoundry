@@ -209,6 +209,19 @@ class _TakesAField:
         return add(second, second)  # noqa: F405
 
 
+@module(
+    entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4),)
+)
+class _RenamesWhatItCannotPlace:
+    """A window nobody can place, windowed again by one that could be placed."""
+
+    @func
+    def main(source: Tensor[(8, 4), "f32"], start: Tensor[(), "i64"]):
+        first = source[start : start + 4, :]
+        second = first[1:3, :]
+        return add(second, second)  # noqa: F405
+
+
 REPEATS = 4
 B, S, H, D = 1, 5, 2, 3
 
@@ -2440,7 +2453,8 @@ def test_the_fields_of_one_value_tile_the_allocation_it_was_given() -> None:
     allocation does. A gap would mean bytes charged to a value no field of it
     occupies, and an overrun would mean two values sharing bytes neither one
     placed. Leaves in different buffers are a value naming other values' bytes
-    rather than holding any, and tile nothing.
+    rather than holding any, and tile nothing; neither does a value only known
+    to be somewhere in a buffer, which has no offset to tile from.
     """
     plan, function = _planned()
     record = get_metadata(function, MemoryMetadata)
@@ -2453,6 +2467,8 @@ def test_the_fields_of_one_value_tile_the_allocation_it_was_given() -> None:
     for (_value, level), held in owned.items():
         refs = [item.ref for item in sorted(held, key=lambda item: item.field)]
         if len({ref.buffer_id for ref in refs}) != 1:
+            continue
+        if any(ref.offset is None for ref in refs):
             continue
         cursor = refs[0].offset
         for ref in refs:
@@ -3133,3 +3149,32 @@ def test_naming_bytes_is_not_reading_them() -> None:
     assert [item.quantity.upper for item in naming.inputs] == [4, 0]
 
     assert _insert_slice_controls((10,), (4,), start) == [10 - 4, 4, 1]
+
+
+def test_a_value_nobody_can_place_does_not_place_the_one_that_renames_it() -> None:
+    """A distance from an unknown address is another unknown address.
+
+    A window whose start arrives as a value is somewhere in the buffer it names
+    and nowhere in particular. Measuring the next window from the front of that
+    buffer answers with a number, and the number is wrong by wherever the first
+    one really began -- and a wrong number that looks like an address gets used
+    to prove two values are the same bytes.
+    """
+    result = analyze(
+        _RenamesWhatItCannotPlace,
+        _RenamesWhatItCannotPlace.entry_function(),
+        analysis=("compute-cost", "memory"),
+    )
+    windows = [
+        expr
+        for expr in postorder(result.function.body)
+        if isinstance(expr, Call) and isinstance(expr.target, SliceOp)
+    ]
+    assert len(windows) == 2
+    for expr in windows:
+        held = get_metadata(expr, BufferAllocationMetadata)
+        assert held is not None
+        assert [ref.offset for ref in held.fields] == [None]
+        assert get_metadata(expr, TrafficMetadata).whole, (
+            "a window that could not be placed was scored as already in place"
+        )

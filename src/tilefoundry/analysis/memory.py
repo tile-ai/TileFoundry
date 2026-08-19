@@ -946,8 +946,12 @@ def _displaced(
     The link's two sides read one iteration, so the distance between the bytes
     they name is a function of it; a renaming is the case where that distance
     does not vary. A displacement that would put the value outside the bytes it
-    renames is not one, whatever the arithmetic says.
+    renames is not one, whatever the arithmetic says. A distance from a value
+    that is itself only somewhere in its buffer is no address either, and the
+    front of the buffer it happens to be measured against is not one.
     """
+    if source.offset is None:
+        return None
     payloads = (_element_bytes(source_leaf), _element_bytes(output_leaf))
     if None in payloads:
         return None
@@ -1020,7 +1024,7 @@ def _renamed(
             BufferRef(
                 buffer_id=ref.buffer_id,
                 level=level,
-                offset=ref.offset if placed is None else placed,
+                offset=placed,
                 size=ref.size if placed is None else tensor_bytes(held),
                 shape=tuple(held.shape),
                 layout=held.layout,
@@ -1274,7 +1278,7 @@ def analyze_memory(
                 record,
                 allocation,
                 facts,
-                CostContext(scope=scope),
+                CostContext(scope=scope, level=level, topologies=topologies),
                 topology_levels=target.topology_levels,
                 topologies=topologies,
             )
