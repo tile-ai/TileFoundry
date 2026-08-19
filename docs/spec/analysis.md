@@ -666,6 +666,8 @@ class BufferRef:
         size: attribute; How many bytes this range covers, or the allocation it is somewhere in.
         shape: attribute; The extents the offset and size are stated against.
         layout: attribute; How a coordinate of those extents becomes an address.
+        anchor: attribute; Which region of that allocation this value is measured from.
+        displacement: attribute; How far into that region it begins.
     """
 
     buffer_id: int
@@ -674,6 +676,8 @@ class BufferRef:
     size: int
     shape: tuple = ()
     layout: object = None
+    anchor: int = 0
+    displacement: int = 0
 
 class BufferAllocationMetadata(IRMetadata):
     """Where each of one value's fields lives; one entry for a plain Tensor.
@@ -758,6 +762,19 @@ where each one sits.
     absent offset -- a value renaming an unresolved one is unresolved too, and
     an address MUST NOT be recovered by measuring from the front of the buffer
     that contains it.
+  - Two ranges MUST be read as the same bytes only when they are measured from
+    the same place. A value that states an `offset` is measured from its
+    allocation, one that does not is measured from its `anchor`, and the two
+    MUST NOT be compared: an unplaced value has no absolute address to hold
+    against a placed one. Sharing an allocation stays necessary in both cases,
+    so a `buffer_id` MUST agree before an `anchor` or an `offset` is read.
+  - A value renaming an unresolved one at a distance its operation fixes MUST
+    inherit that value's `anchor` and carry its `displacement` plus that
+    distance, and one whose distance no proof settles MUST anchor a region of
+    its own. Renaming does not learn an address, and it does not lose the
+    relation either: a chain of views over one unplaced value MUST still be
+    shown to be each other, and two views nothing relates MUST NOT be, however
+    alike their displacements read.
   - A level held per unit of work rather than shared is not searched for
     addresses, and a value there MUST still receive a `buffer_id` of its own.
     Two such values are two buffers however their offsets read.

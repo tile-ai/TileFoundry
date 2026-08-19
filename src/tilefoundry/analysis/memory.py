@@ -795,11 +795,19 @@ def _address_buffers(
             numbers.setdefault(id(expr), {}).setdefault(level, minted)
             minted += 1
 
+    anchors = [minted]
+
+    def mint() -> int:
+        """A place of its own for a value nothing can place absolutely."""
+        anchors[0] += 1
+        return anchors[0]
+
     stated: dict[int, tuple[BufferRef, ...]] = {}
     for expr in walk:
         refs = _refs_of(
             expr,
             ctx=ctx,
+            mint=mint,
             stated=stated,
             numbers=numbers,
             labels=labels,
@@ -852,6 +860,7 @@ def _refs_of(
     expr: Expr,
     *,
     ctx,
+    mint,
     stated: dict[int, tuple[BufferRef, ...]],
     numbers: dict[int, dict[str, int]],
     labels: dict[int, str],
@@ -877,7 +886,7 @@ def _refs_of(
             return None
         field, link = _renaming(expr, ctx, owner)
         return _renamed(
-            expr, held, field, link, expr, ctx, facts, topology_levels, topologies
+            expr, held, field, link, expr, ctx, mint, facts, topology_levels, topologies
         )
     minted = numbers.get(id(owner))
     if minted is None:
@@ -895,14 +904,17 @@ def _refs_of(
         held = _at_owner(leaf, level, facts, topology_levels, topologies)
         base = addresses.get((level, named), 0) if named else 0
         whole = sizes.get((level, named)) if named else None
+        placed = base + (cursors.get(level, 0) if own else 0)
         refs.append(
             BufferRef(
                 buffer_id=number,
                 level=level,
-                offset=base + (cursors.get(level, 0) if own else 0),
+                offset=placed,
                 size=tensor_bytes(held) if own or whole is None else whole,
                 shape=tuple(held.shape),
                 layout=held.layout,
+                anchor=number,
+                displacement=placed,
             )
         )
         if own:
@@ -945,32 +957,33 @@ def _displaced(
 
     The link's two sides read one iteration, so the distance between the bytes
     they name is a function of it; a renaming is the case where that distance
-    does not vary. A displacement that would put the value outside the bytes it
-    renames is not one, whatever the arithmetic says. A distance from a value
-    that is itself only somewhere in its buffer is no address either, and the
-    front of the buffer it happens to be measured against is not one.
+    does not vary. It is measured from the value being renamed rather than from
+    the buffer, so it holds whether or not anything places that value: how far
+    into something you are does not depend on knowing where that something is.
+    A distance that would put the value outside what it renames is not one.
     """
-    if source.offset is None:
-        return None
     payloads = (_element_bytes(source_leaf), _element_bytes(output_leaf))
     if None in payloads:
         return None
     domain = tuple(getattr(ctx.local_type_of(expr), "shape", ()) or ())
-    seat = BufferRef(
-        buffer_id=source.buffer_id,
-        level=source.level,
+    front = replace(
+        source, offset=0, displacement=0, shape=tuple(source_leaf.shape)
+    )
+    seat = replace(
+        source,
         offset=0,
+        displacement=0,
         size=source.size,
         shape=tuple(output_leaf.shape),
         layout=output_leaf.layout,
     )
-    placed = view_displacement(link, source, payloads[0], seat, payloads[1], domain)
-    if placed is None:
+    apart = view_displacement(link, front, payloads[0], seat, payloads[1], domain)
+    if apart is None:
         return None
     held = tensor_bytes(output_leaf)
-    if placed < source.offset or placed + held > source.offset + source.size:
+    if apart < 0 or apart + held > source.size:
         return None
-    return placed
+    return apart
 
 
 def _element_bytes(leaf) -> "int | None":
@@ -988,6 +1001,7 @@ def _renamed(
     link,
     call: Expr,
     ctx,
+    mint,
     facts: MemoryHierarchyFacts,
     topology_levels: tuple[str, ...],
     topologies: tuple[Topology, ...],
@@ -1015,17 +1029,33 @@ def _renamed(
             return None
         held = _at_owner(leaf, level, facts, topology_levels, topologies)
         source = _leaf_at(link, call, ctx, facts, topology_levels, topologies)
-        placed = (
+        apart = (
             None
             if link is None or source is None or len(leaves) != 1
             else _displaced(link, ref, source, held, call, ctx)
         )
+        if apart is None:
+            refs.append(
+                BufferRef(
+                    buffer_id=ref.buffer_id,
+                    level=level,
+                    offset=None,
+                    size=ref.size,
+                    anchor=mint(),
+                    displacement=0,
+                    shape=tuple(held.shape),
+                    layout=held.layout,
+                )
+            )
+            continue
         refs.append(
             BufferRef(
                 buffer_id=ref.buffer_id,
                 level=level,
-                offset=placed,
-                size=ref.size if placed is None else tensor_bytes(held),
+                offset=None if ref.offset is None else ref.offset + apart,
+                size=tensor_bytes(held),
+                anchor=ref.anchor,
+                displacement=ref.displacement + apart,
                 shape=tuple(held.shape),
                 layout=held.layout,
             )

@@ -410,7 +410,7 @@ def _same_address(link, field: int | None, call, plan: BufferPlan, domain: tuple
     output = _entry(plan, call, field)
     if source is None or output is None:
         return False
-    if (source.ref.buffer_id, source.ref.level) != (output.ref.buffer_id, output.ref.level):
+    if _frame(source.ref) != _frame(output.ref):
         return False
     where = describe(call)
     reading = _widths(link, field, call, ctx, where)
@@ -418,9 +418,10 @@ def _same_address(link, field: int | None, call, plan: BufferPlan, domain: tuple
         return False
     source_bytes, output_bytes = reading
     if isinstance(link.where, WindowAccess):
-        return not link.where.offsets or _seat(source.ref, source_bytes) == _seat(
-            output.ref, output_bytes
+        apart = _window_shift(
+            link.where, source.ref, source_bytes, output.ref, output_bytes
         )
+        return apart == 0
     left = _address_map(link.where, source.ref, source_bytes, domain)
     right = _address_map(_reading(domain), output.ref, output_bytes, domain)
     return left is not None and right is not None and left.is_equal(right)
@@ -432,19 +433,72 @@ def _reading(domain: tuple) -> "isl.multi_aff":
     return isl.multi_aff(f"{{ [{names}] -> [{names}] }}" if names else "{ [] -> [] }")
 
 
+def _frame(ref) -> tuple:
+    """The place one value's addresses are measured from.
+
+    Two addresses say the same thing only when both are measured from the same
+    place: the same allocation, the same region of it, and both stated the same
+    way. A placed value measures from its allocation and an unplaced one from
+    the region it anchored, so the two are never held against each other -- an
+    unplaced value has no absolute address to compare. Sharing an allocation
+    stays necessary either way, a distance into one buffer saying nothing about
+    another.
+    """
+    placed = ref.offset is not None
+    return (placed, ref.buffer_id, ref.level, ref.anchor)
+
+
+def _base(ref) -> int:
+    """Where one value begins, measured in its own frame."""
+    return ref.displacement if ref.offset is None else ref.offset
+
+
 def _seat(ref, payload: int) -> "tuple | None":
     """Where one value sits in its buffer and how its coordinates step there.
 
-    Two values of one buffer name the same bytes only if they start at the same
-    byte and step the same way. Either being unreadable is not a match, and a
-    value only known to be somewhere in its buffer is unreadable: an address
-    nobody can state has not been shown to equal another.
+    Two values name the same bytes only if they begin at the same distance into
+    the place they are both measured from and step the same way. A placed value
+    measures that from its allocation and an unplaced one from the region it
+    anchored, so two renamings of something nobody placed can still be shown to
+    be each other. Either being unreadable is not a match, and neither distance
+    means anything until ``_frame`` says the two are measured alike.
     """
     strides = _strides(ref)
     seated = _seated(ref)
-    if strides is None or seated is None or ref.offset is None:
+    if strides is None or seated is None:
         return None
-    return (ref.offset + seated * payload, tuple(stride * payload for stride in strides))
+    return (
+        _base(ref) + seated * payload,
+        tuple(stride * payload for stride in strides),
+    )
+
+
+def _window_shift(where, source, source_bytes: int, output, output_bytes: int):
+    """How far into what it reads a window's own coordinates begin, in bytes.
+
+    A window states where it starts rather than mapping a coordinate, so the
+    distance is read off that start instead of out of a relation. Its complement
+    is the region the window left alone, which is answered at its own
+    coordinates and so begins where it began. Two sides that step differently
+    are not one value seen twice, and a start that arrives as a value at run
+    time fixes no distance at all.
+    """
+    seats = (_seat(source, source_bytes), _seat(output, output_bytes))
+    if None in seats:
+        return None
+    (base, stepping), (against, steps) = seats
+    if stepping != steps:
+        return None
+    apart = base - against
+    if where.complement or not where.offsets:
+        return apart
+    if len(where.offsets) != len(stepping):
+        return None
+    for offset, step in zip(where.offsets, stepping):
+        if not isinstance(offset, int) or isinstance(offset, bool):
+            return None
+        apart += offset * step
+    return apart
 
 
 def _widths(link, field: int | None, call, ctx, where: str) -> "tuple[int, int] | None":
@@ -557,6 +611,8 @@ def view_displacement(link, source, source_bytes: int, output, output_bytes: int
     distance. One that varies is not a displacement of the value but a mapping
     through it, and a window whose start is a run-time value fixes nothing.
     """
+    if isinstance(link.where, WindowAccess):
+        return _window_shift(link.where, source, source_bytes, output, output_bytes)
     reading = _address_map(link.where, source, source_bytes, domain)
     written = _address_map(_reading(domain), output, output_bytes, domain)
     if reading is None or written is None:

@@ -65,9 +65,11 @@ from tilefoundry.analysis.preflight import validate_authored
 from tilefoundry.analysis.traffic import (
     TrafficMetadata,
     _address_map,
+    _frame,
     _moved_bytes,
     _seat,
     _strides,
+    _window_shift,
     lower_traffic,
 )
 from tilefoundry.analysis.walk import (
@@ -176,6 +178,7 @@ from tilefoundry.visitor_registry.access_relation import (
     StorageEffectKind,
     StorageLink,
     StorageSpan,
+    WindowAccess,
     access_relation_registry,
     build_relation,
     linearized_view,
@@ -226,6 +229,19 @@ class _RenamesWhatItCannotPlace:
         first = source[start : start + 4, :]
         second = first[1:3, :]
         return add(second, second)  # noqa: F405
+
+
+@module(
+    entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4),)
+)
+class _RenamesAnUnplacedWindowAtNoDistance:
+    """A window nobody can place, re-indexed without moving off its front."""
+
+    @func
+    def main(source: Tensor[(8, 4), "f32"], start: Tensor[(), "i64"]):
+        first = source[start : start + 4, :]
+        flat = reshape(first, (16,))  # noqa: F405
+        return add(flat, flat)  # noqa: F405
 
 
 REPEATS = 4
@@ -2647,6 +2663,112 @@ def test_two_segments_of_one_buffer_are_not_one_address() -> None:
     assert _seat(front, 8) == (0, (8,)) and _seat(back, 8) == (32, (8,))
 
 
+def test_two_buffers_at_one_offset_are_not_one_address() -> None:
+    """Sharing an offset is not sharing an allocation.
+
+    Two values each at the front of their own buffer read alike in every number
+    an address is made of, and are not each other. Dropping the allocation from
+    that comparison scores copying one onto the other as free, which is the
+    whole of a transfer between two buffers.
+    """
+    held = Layout(shape=(4,), strides=(1,))
+    here = BufferRef(buffer_id=1, level="gmem", offset=0, size=16, shape=(4,), layout=held)
+    there = replace(here, buffer_id=2)
+
+    assert _seat(here, 4) == _seat(there, 4)
+    assert _frame(here) != _frame(there)
+
+
+def test_an_unplaced_value_is_not_comparable_with_a_placed_one() -> None:
+    """A distance from nowhere is not an address.
+
+    A value nobody places begins some way into a region whose own address is
+    open, and a placed one begins a known way into its buffer. The two numbers
+    are stated against different things, so reading them as one says two values
+    are the same bytes on the strength of a coincidence.
+    """
+    held = Layout(shape=(4,), strides=(1,))
+    placed = BufferRef(
+        buffer_id=3, level="gmem", offset=16, size=16, shape=(4,), layout=held,
+        anchor=3, displacement=16,
+    )
+    open_ = replace(placed, offset=None, anchor=9, displacement=16)
+
+    assert _seat(placed, 4) == _seat(open_, 4)
+    assert _frame(placed) != _frame(open_)
+
+
+def test_two_regions_nobody_placed_are_each_their_own() -> None:
+    """Two unknowns are not one unknown.
+
+    Two windows a run-time value places are each somewhere in the buffer they
+    name, and nothing relates where. Both begin at the front of whatever they
+    anchored, so their displacements agree, and agreeing about a distance from
+    two different places says nothing at all.
+    """
+    held = Layout(shape=(4,), strides=(1,))
+    one = BufferRef(
+        buffer_id=5, level="gmem", offset=None, size=64, shape=(4,), layout=held,
+        anchor=11, displacement=0,
+    )
+    other = replace(one, anchor=12)
+
+    assert _seat(one, 4) == _seat(other, 4)
+    assert _frame(one) != _frame(other)
+    assert _frame(one) == _frame(replace(one))
+
+
+def test_a_renaming_of_something_unplaced_is_measured_from_what_it_renames() -> None:
+    """What a proof settles is the distance, and the distance is the address.
+
+    A value a fixed distance into one nobody placed shares that value's region,
+    so the two are comparable and differ by exactly that distance. Renaming does
+    not learn where either really is, and it does not give up the relation
+    between them either.
+    """
+    held = Layout(shape=(4,), strides=(1,))
+    parent = BufferRef(
+        buffer_id=6, level="gmem", offset=None, size=64, shape=(4,), layout=held,
+        anchor=13, displacement=0,
+    )
+    into = replace(parent, displacement=16)
+    beside = replace(parent, displacement=32)
+
+    assert _frame(parent) == _frame(into) == _frame(beside)
+    assert _seat(parent, 4) == (0, (4,))
+    assert _seat(into, 4) == (16, (4,))
+    assert _seat(into, 4) != _seat(beside, 4)
+
+
+def test_a_window_states_its_distance_rather_than_mapping_a_coordinate() -> None:
+    """A window says where it starts, so the distance is read off the start.
+
+    The part a window leaves alone is answered at its own coordinates and so
+    begins where the container began: an update that writes into one region
+    preserves the rest in place and copies nothing. A window that does start
+    somewhere is that far in, and one whose start arrives as a value at run time
+    is nowhere in particular -- reading all three as the container itself scores
+    a real copy as free.
+    """
+    held = Layout(shape=(8,), strides=(1,))
+    whole = BufferRef(
+        buffer_id=4, level="gmem", offset=0, size=32, shape=(8,), layout=held,
+        anchor=4, displacement=0,
+    )
+
+    preserved = WindowAccess(offsets=(2,), extents=(3,), complement=True)
+    assert _window_shift(preserved, whole, 4, whole, 4) == 0
+
+    started = WindowAccess(offsets=(2,), extents=(3,))
+    assert _window_shift(started, whole, 4, whole, 4) == 8
+
+    opened = WindowAccess(offsets=(OperandValue(operand=1),), extents=(3,))
+    assert _window_shift(opened, whole, 4, whole, 4) is None
+
+    stepped = replace(whole, layout=Layout(shape=(8,), strides=(2,)))
+    assert _window_shift(preserved, whole, 4, stepped, 4) is None
+
+
 def test_a_view_shifted_into_its_buffer_is_proved_by_where_it_was_shifted() -> None:
     """A constant shift is part of an address, and a readable one is readable.
 
@@ -3154,14 +3276,53 @@ def test_naming_bytes_is_not_reading_them() -> None:
     assert _insert_slice_controls((10,), (4,), start) == [10 - 4, 4, 1]
 
 
+def test_re_indexing_something_unplaced_keeps_the_region_it_was_measured_from() -> None:
+    """Renaming at no distance at all is still renaming.
+
+    Reading a window nobody could place under other extents moves nothing: it
+    begins where that window begins and covers the same bytes. Nothing here
+    learns where those bytes are, so the re-indexing states no address either --
+    what it keeps is the region it shares, without which it would be charged for
+    copying a value onto itself.
+    """
+    result = analyze(
+        _RenamesAnUnplacedWindowAtNoDistance,
+        _RenamesAnUnplacedWindowAtNoDistance.entry_function(),
+        analysis=("compute-cost", "memory"),
+    )
+    windows = [
+        expr
+        for expr in postorder(result.function.body)
+        if isinstance(expr, Call) and isinstance(expr.target, (SliceOp, Reshape))
+    ]
+    assert [type(expr.target).__name__ for expr in windows] == ["Slice", "Reshape"]
+    opened, flat = (
+        get_metadata(expr, BufferAllocationMetadata).fields[0] for expr in windows
+    )
+
+    assert (opened.offset, flat.offset) == (None, None), (
+        "re-indexing an unplaced window invented an address for it"
+    )
+    assert (flat.buffer_id, flat.anchor) == (opened.buffer_id, opened.anchor)
+    assert flat.displacement == opened.displacement == 0
+    assert get_metadata(windows[0], TrafficMetadata).whole, (
+        "a window whose start nothing settles was scored as already in place"
+    )
+    assert get_metadata(windows[1], TrafficMetadata).whole == (), (
+        "re-indexing a value onto its own bytes was charged for moving them"
+    )
+
+
 def test_a_value_nobody_can_place_does_not_place_the_one_that_renames_it() -> None:
     """A distance from an unknown address is another unknown address.
 
     A window whose start arrives as a value is somewhere in the buffer it names
-    and nowhere in particular. Measuring the next window from the front of that
-    buffer answers with a number, and the number is wrong by wherever the first
-    one really began -- and a wrong number that looks like an address gets used
-    to prove two values are the same bytes.
+    and nowhere in particular, so measuring the next from the front of that
+    buffer answers with a number wrong by wherever the first really began. What
+    the second does know is how far into the first it begins, a relation between
+    the two and not an address for either: it moves nothing and is charged
+    nothing, while the window nobody could place is charged for the copy nothing
+    ruled out.
     """
     result = analyze(
         _RenamesWhatItCannotPlace,
@@ -3174,13 +3335,22 @@ def test_a_value_nobody_can_place_does_not_place_the_one_that_renames_it() -> No
         if isinstance(expr, Call) and isinstance(expr.target, SliceOp)
     ]
     assert len(windows) == 2
-    for expr in windows:
-        held = get_metadata(expr, BufferAllocationMetadata)
-        assert held is not None
-        assert [ref.offset for ref in held.fields] == [None]
-        assert get_metadata(expr, TrafficMetadata).whole, (
-            "a window that could not be placed was scored as already in place"
-        )
+    held = [get_metadata(expr, BufferAllocationMetadata) for expr in windows]
+    assert all(item is not None for item in held)
+    assert [ref.offset for item in held for ref in item.fields] == [None, None]
+
+    opened, into = (item.fields[0] for item in held)
+    assert opened.anchor == into.anchor and opened.buffer_id == into.buffer_id, (
+        "a window measured from another lost the region it was measured from"
+    )
+    assert (opened.displacement, into.displacement) == (0, 16)
+
+    assert get_metadata(windows[0], TrafficMetadata).whole, (
+        "a window whose start nothing settles was scored as already in place"
+    )
+    assert get_metadata(windows[1], TrafficMetadata).whole == (), (
+        "a window a fixed distance into another was charged for being it"
+    )
 
 
 def _spec_records(page="analysis.md"):
