@@ -743,21 +743,18 @@ where each one sits.
     leaves could be placed MUST carry none: a partial address is not one. Values
     sharing a `buffer_id` are in one allocation, and the refs a value owns tile
     it in `offset` order.
-  - What an occurrence moves MUST be stated whether or not its buffers were
-    placed. Addresses are what proves a transfer came to nothing, so a boundary
-    no allocation places MUST be charged for the copy nothing ruled out rather
-    than left unstated: an unproven move is a move. A function with no
-    `allocation` therefore still carries traffic, which is a different question
-    from whether a time may be reported for it
+  - What an occurrence moves MUST be stated whether or not an address was
+    settled for its buffers. What proves a transfer came to nothing is the
+    placement having put its output in the allocation the link names, so a
+    boundary the placement puts nowhere MUST be charged for the copy nothing
+    ruled out. A function with no `allocation` therefore still carries traffic,
+    which is a different question from whether a time may be reported for it
     ([§2.2.4](#224-performance)), and the two MUST NOT be read as one.
-  - A value living in another's bytes MUST state its own range when the
-    operation producing it says where it begins, and MUST state an `offset` of
-    `None` over the containing allocation's size when nothing does. The two are
-    different answers: an exactly known view range is a range, and an unresolved
-    one is a value somewhere in those bytes. Nothing MUST be measured from an
-    absent offset -- a value renaming an unresolved one is unresolved too, and
-    an address MUST NOT be recovered by measuring from the front of the buffer
-    that contains it.
+  - A value living in another's bytes MUST state an `offset` of `None` over the
+    containing allocation's size: it is somewhere in those bytes, and where it
+    sits and whether it moved are different questions. An address MUST NOT be
+    recovered by measuring from the front of the buffer that contains it, which
+    is wrong by wherever the containing value really began.
   - Whether a boundary moved bytes MUST be read off the placement rather than
     decided again. A value shown to forward or update another is given that
     value's allocation and not one of its own, and a value living in another's

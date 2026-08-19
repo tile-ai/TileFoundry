@@ -272,11 +272,11 @@ def lower_traffic(
 
     Both readings come from the same boundaries, one asked of the program and
     one of a unit of it. How much crossed a boundary is the Op's own answer, and
-    which level it crossed at is where the value lives. Addresses are what
-    proves a transfer came to nothing, so a boundary the plan cannot place is
-    charged for the copy it has not been shown to avoid: an unproven move is a
-    move. What is still refused is a unit running an occurrence while holding no
-    part of a value the plan did place, whose bytes come from another unit.
+    which level it crossed at is where the value lives. What proves a transfer
+    came to nothing is the placement having put its output in the allocation the
+    link names, so a boundary the plan places nowhere is charged for the copy
+    nothing ruled out. Refused outright is a unit running an occurrence while
+    holding no part of a value the plan did place.
     """
     unit_domain = tuple(getattr(unit_ctx.local_type_of(call), "shape", ()) or ())
     boundaries: list[BoundaryTraffic] = []
@@ -287,7 +287,7 @@ def lower_traffic(
         (side, index): boundary
         for side, index, _field, boundary, _value in _rows_of(call, unit_relations, ctx)
     }
-    settled = _settled(unit_relations, plan, call, unit_domain, unit_ctx)
+    settled = _settled(unit_relations, plan, call)
     for side, index, field, boundary, value in rows:
         where = f"{describe(call)}: {side} {index}"
         mine = unit_rows.get((side, index))
@@ -352,17 +352,14 @@ def _settled(
     relations: AccessRelations,
     plan: BufferPlan,
     call,
-    domain: tuple,
-    ctx,
 ) -> "set[tuple[str, int]]":
     """The boundaries whose bytes were already where the operation put them.
 
     A read or a write charges what it moved whether or not the bytes were
     already where they ended up: an operation that read an operand read it. A
     transfer is the one thing that can come to nothing, and only when every link
-    it is made of names the same addresses on both sides. This is asked of one
-    unit's relations, because those state their coordinates in the positions the
-    buffers are addressed by.
+    it is made of put its output in the allocation that link names -- a boundary
+    made of several links comes to nothing only if all of them did.
     """
     proven: set[tuple[str, int]] = set()
     sides = [("input", index, item) for index, item in enumerate(relations.inputs)]
@@ -372,7 +369,7 @@ def _settled(
             continue
         links = _links_for(side, boundary, relations)
         if links and all(
-            _same_address(link, output, call, plan, domain, ctx) for link, output in links
+            _lives_in_it(link, output, call, plan) for link, output in links
         ):
             proven.add((side, index))
     return proven
@@ -396,14 +393,14 @@ def _links_for(
     return found
 
 
-def _same_address(link, field: int | None, call, plan: BufferPlan, domain: tuple, ctx) -> bool:
-    """Whether a link's two sides name the same bytes.
+def _lives_in_it(link, field: int | None, call, plan: BufferPlan) -> bool:
+    """Whether this link's output was given the operand's allocation.
 
-    The placement already answered this. A value whose operation was shown to
-    forward or update another was never given a buffer of its own: it was given
-    that other value's, and a value living in another's bytes did not move to
-    get there. One that could not be shown to do so was allocated separately,
-    and a link between two allocations is a copy however alike the two read.
+    The placement already answered this, and answered it once. A value whose
+    operation was shown to forward or update another was never given a buffer
+    of its own: it was given that other value's, and a value living in another's
+    bytes did not move to get there. One that could not be shown to do so was
+    allocated separately, and a link between two allocations is a copy.
     """
     source = _entry(plan, call.args[link.input], link.input_field)
     output = _entry(plan, call, field)
