@@ -62,7 +62,7 @@ from .metadata import (
     TrafficBytes,
     ValueLifetime,
 )
-from .traffic import TrafficMetadata, lower_traffic
+from .traffic import TrafficMetadata, lower_traffic, view_displacement
 from .walk import (
     attach,
     bytes_by_storage,
@@ -875,8 +875,9 @@ def _refs_of(
         held = stated.get(id(owner))
         if held is None:
             return None
+        field, link = _renaming(expr, ctx, owner)
         return _renamed(
-            expr, held, _span_of(expr, ctx), facts, topology_levels, topologies
+            expr, held, field, link, expr, ctx, facts, topology_levels, topologies
         )
     minted = numbers.get(id(owner))
     if minted is None:
@@ -909,37 +910,80 @@ def _refs_of(
     return tuple(refs)
 
 
-def _span_of(expr: Expr, ctx) -> "int | None":
-    """Which field of the value it renames this one took.
+def _renaming(expr: Expr, ctx, operand: Expr) -> "tuple[int | None, object]":
+    """The one link by which this value renames *operand*, and the field it took.
 
-    An operation that takes one field of several names it in the link that
-    forwards it, and that is what decides which buffer the field is in. The
-    field is named as a field rather than as a byte, so a tuple whose earlier
-    fields have no static size is still placeable. One that renames the whole of
-    what it reads names nothing, and starts at the front.
+    A renaming states which operand it is of and, when that operand is a tuple,
+    which field. Anything else -- several links to one operand, or none -- is
+    not one renaming, and nothing about where its bytes are follows from it.
     """
     if ctx is None or not isinstance(expr, Call):
-        return None
+        return None, None
     handler = access_relation_registry.lookup(type(expr.target))
     if handler is None:
-        return None
+        return None, None
     try:
         relations = handler(expr, ctx)
     except (AnalysisError, NotImplementedError, ValueError):
-        return None
-    named = {
-        link.input_field
+        return None, None
+    where = [index for index, arg in enumerate(expr.args) if arg is operand]
+    found = [
+        link
         for output in relations.outputs
         for link in (output.storage.links if output.storage else ())
-        if link.input_field is not None
-    }
-    return named.pop() if len(named) == 1 else None
+        if link.input in where
+    ]
+    if len(found) != 1:
+        return None, None
+    return found[0].input_field, found[0]
+
+
+def _displaced(
+    link, source: BufferRef, source_leaf, output_leaf, expr: Expr, ctx
+) -> "int | None":
+    """Where in its source a renamed value begins, or None when that is open.
+
+    The link's two sides read one iteration, so the distance between the bytes
+    they name is a function of it; a renaming is the case where that distance
+    does not vary. A displacement that would put the value outside the bytes it
+    renames is not one, whatever the arithmetic says.
+    """
+    payloads = (_element_bytes(source_leaf), _element_bytes(output_leaf))
+    if None in payloads:
+        return None
+    domain = tuple(getattr(ctx.local_type_of(expr), "shape", ()) or ())
+    seat = BufferRef(
+        buffer_id=source.buffer_id,
+        level=source.level,
+        offset=0,
+        size=source.size,
+        shape=tuple(output_leaf.shape),
+        layout=output_leaf.layout,
+    )
+    placed = view_displacement(link, source, payloads[0], seat, payloads[1], domain)
+    if placed is None:
+        return None
+    held = tensor_bytes(output_leaf)
+    if placed < source.offset or placed + held > source.offset + source.size:
+        return None
+    return placed
+
+
+def _element_bytes(leaf) -> "int | None":
+    """One element of *leaf* in bytes, or None when it is not whole bytes."""
+    bits = getattr(getattr(leaf, "dtype", None), "bit_width", None)
+    if not isinstance(bits, int) or bits <= 0 or bits % 8:
+        return None
+    return bits // 8
 
 
 def _renamed(
     expr: Expr,
     owner: tuple[BufferRef, ...],
     start: "int | None",
+    link,
+    call: Expr,
+    ctx,
     facts: MemoryHierarchyFacts,
     topology_levels: tuple[str, ...],
     topologies: tuple[Topology, ...],
@@ -948,8 +992,10 @@ def _renamed(
 
     A value that renames all of another has its leaves, one for one. A value
     that renames one field of several is placed by the field its own operation
-    named, because which field it took is what decides which buffer it is in and
-    naming the first would be a guess that reads like an address.
+    named, because which field it took decides which buffer it is in. Where in
+    that buffer it begins follows from the link's own two sides, when they stay
+    a fixed distance apart; when they do not, the value is somewhere in those
+    bytes and this does not say where.
     """
     leaves = tensor_types(expr.type)
     if len(leaves) != len(owner):
@@ -964,17 +1010,37 @@ def _renamed(
         if level != ref.level:
             return None
         held = _at_owner(leaf, level, facts, topology_levels, topologies)
+        source = _leaf_at(link, call, ctx, facts, topology_levels, topologies)
+        placed = (
+            None
+            if link is None or source is None or len(leaves) != 1
+            else _displaced(link, ref, source, held, call, ctx)
+        )
         refs.append(
             BufferRef(
                 buffer_id=ref.buffer_id,
                 level=level,
-                offset=ref.offset,
-                size=ref.size,
+                offset=ref.offset if placed is None else placed,
+                size=ref.size if placed is None else tensor_bytes(held),
                 shape=tuple(held.shape),
                 layout=held.layout,
             )
         )
     return tuple(refs)
+
+
+def _leaf_at(link, call, ctx, facts, topology_levels, topologies):
+    """The tensor a link reads from, as the unit owning its level holds it."""
+    if link is None or not isinstance(call, Call) or link.input >= len(call.args):
+        return None
+    leaves = tensor_types(ctx.type_of(call.args[link.input]))
+    index = 0 if link.input_field is None else link.input_field
+    if not 0 <= index < len(leaves):
+        return None
+    leaf = leaves[index]
+    if leaf.storage is StorageKind.UMAT:
+        return None
+    return _at_owner(leaf, str(leaf.storage), facts, topology_levels, topologies)
 
 
 def _from_field(

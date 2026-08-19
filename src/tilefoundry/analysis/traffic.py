@@ -528,4 +528,31 @@ def _address_map(pattern, ref, payload: int, domain: tuple) -> "isl.map | None":
         return None
 
 
-__all__ = ["BoundaryTraffic", "TrafficMetadata", "lower_traffic"]
+def view_displacement(link, source, source_bytes: int, output, output_bytes: int, domain: tuple):
+    """Where in its source a renamed value begins, in bytes, when that is fixed.
+
+    A link's two sides read one iteration domain, so the distance between the
+    bytes they name is a function of that domain. A renaming is the case where
+    that distance does not vary: the value sits at one place in the buffer, and
+    the place is the distance. One that varies is not a displacement of the
+    value but a mapping through it, and one side that cannot be addressed at all
+    -- a window whose start is a run-time value -- fixes nothing.
+    """
+    reading = _address_map(link.source, source, source_bytes, domain)
+    written = _address_map(link.output, output, output_bytes, domain)
+    if reading is None or written is None:
+        return None
+    try:
+        apart = (
+            reading.flat_range_product(written)
+            .apply_range(isl.map("{ [a, b] -> [a - b] }"))
+            .range()
+        )
+        if not apart.is_singleton():
+            return None
+        return int(str(apart.max_val(isl.aff("{ [x] -> [x] }"))))
+    except (isl.Error, ValueError):
+        return None
+
+
+__all__ = ["BoundaryTraffic", "TrafficMetadata", "lower_traffic", "view_displacement"]

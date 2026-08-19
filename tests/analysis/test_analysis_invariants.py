@@ -35,7 +35,7 @@ from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tests.fixtures.placed.square_cuda import Model as SquareCuda
 from tests.fixtures.shapes.matmul_programs import gemm_rms_norm
 from tests.fixtures.shapes.scaled_modules import PairedScaledParent
-from tilefoundry import func
+from tilefoundry import func, module
 from tilefoundry.analysis import (
     AnalysisError,
     LoopFootprintMetadata,
@@ -132,6 +132,7 @@ from tilefoundry.ir.hir.tensor.quant import Quant
 from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.hir.tensor.repeat_interleave import RepeatInterleave
 from tilefoundry.ir.hir.tensor.reshape import Reshape, is_induction_var_singleton_reshape
+from tilefoundry.ir.hir.tensor.slice import Slice as SliceOp
 from tilefoundry.ir.hir.tensor.split import Split
 from tilefoundry.ir.hir.tensor.split import Split as SplitOp
 from tilefoundry.ir.hir.tensor.stack import Stack
@@ -180,6 +181,33 @@ from tilefoundry.visitor_registry.access_relation import (
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionScope, TrafficBytes
 from tilefoundry.visitor_registry.relation_build import identity_access
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
+
+
+@module(
+    entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4),)
+)
+class _RenamesTwice:
+    """A window of a window, so a displacement has to compose with one."""
+
+    @func
+    def main(source: Tensor[(32,), "f32"]):
+        first = source[8:24]
+        second = first[4:12]
+        return add(second, second)  # noqa: F405
+
+
+@module(
+    entry="main", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4),)
+)
+class _TakesAField:
+    """One field of several, so a displacement has to pick the right buffer."""
+
+    @func
+    def main(source: Tensor[(32,), "f32"]):
+        parts = split(source, axis=0, num_splits=2)  # noqa: F405
+        second = parts[1]
+        return add(second, second)  # noqa: F405
+
 
 REPEATS = 4
 B, S, H, D = 1, 5, 2, 3
@@ -2956,3 +2984,87 @@ def test_a_value_that_states_no_layout_is_dense_in_its_own_coordinates() -> None
         _address_map(reading, shifted, 4, (4, 8, 2))
     )
     assert _address_map(reading, unbound, 4, (4, 8, 2)) is None
+
+
+def test_a_window_is_placed_where_its_own_link_says_it_begins() -> None:
+    """A view of a view is somewhere inside the value neither of them copied.
+
+    Its own operation says where it begins, as the distance between the two
+    sides of the link that forwards it, and that distance composes: a window
+    eight elements into a buffer, windowed again four elements in, is twelve
+    elements in. Both are renamings, and a renaming that lands on the bytes it
+    renames moves none of them.
+    """
+    result = analyze(
+        _RenamesTwice, _RenamesTwice.entry_function(), analysis=("compute-cost", "memory")
+    )
+    windows = [
+        expr
+        for expr in postorder(result.function.body)
+        if isinstance(expr, Call) and isinstance(expr.target, SliceOp)
+    ]
+    assert len(windows) == 2
+    outer, inner = (get_metadata(expr, BufferAllocationMetadata) for expr in windows)
+    assert [(ref.offset, ref.size) for ref in outer.fields] == [(8 * 4, 16 * 4)]
+    assert [(ref.offset, ref.size) for ref in inner.fields] == [((8 + 4) * 4, 8 * 4)]
+    assert outer.fields[0].buffer_id == inner.fields[0].buffer_id
+
+    for expr in windows:
+        assert get_metadata(expr, TrafficMetadata).whole == ()
+
+
+def test_a_window_whose_start_is_only_known_at_run_time_is_charged() -> None:
+    """Where a run-time window lands is not a distance anything here can take.
+
+    Its two sides read the same coordinates by different names, and the names
+    are values. Nothing about them is fixed before the program runs, so nothing
+    proves the bytes are already where they end up, and the copy is charged
+    rather than assumed away.
+    """
+    case = next(item for item in CORPUS if item.id == "deepseek_v4_flash")
+    selected = next(item for item in case.analyze if item.selector == "mla_kv_update")
+    owner, entry = case.resolve(case.build(), selected.selector)
+    result = analyze(owner, entry, analysis=("compute-cost", "memory"), dims=selected.dims)
+
+    placed, open_ = [], []
+    for expr in postorder(result.function.body):
+        if not isinstance(expr, Call) or not isinstance(expr.target, SliceOp):
+            continue
+        (placed if get_metadata(expr, TrafficMetadata).whole == () else open_).append(expr)
+    assert placed, "no window of this program was shown to be where it already is"
+    assert open_, "no window of this program was left to be charged"
+    for expr in open_:
+        moved = get_metadata(expr, TrafficMetadata)
+        assert all(bytes_.read and bytes_.write for _level, bytes_ in moved.whole)
+
+
+def test_a_field_is_placed_in_the_buffer_that_field_is_in() -> None:
+    """Taking the second of two is not taking the first of them.
+
+    Which field a value took decides which bytes it is, and the link that
+    forwards it names that field. Sixteen floats into a thirty-two float value,
+    the second half begins where the first one ends, and a reader given the
+    first would be reading somebody else's numbers at the right size.
+    """
+    result = analyze(
+        _TakesAField, _TakesAField.entry_function(), analysis=("compute-cost", "memory")
+    )
+    taken = next(
+        expr
+        for expr in postorder(result.function.body)
+        if isinstance(expr, Call) and isinstance(expr.target, TupleGetItem)
+    )
+    parts = next(
+        expr
+        for expr in postorder(result.function.body)
+        if isinstance(expr, Call) and isinstance(expr.target, SplitOp)
+    )
+    fields = get_metadata(parts, BufferAllocationMetadata).fields
+    mine = get_metadata(taken, BufferAllocationMetadata).fields
+
+    assert [ref.size for ref in fields] == [16 * 4, 16 * 4]
+    assert fields[1].offset == fields[0].offset + 16 * 4
+    assert [(ref.buffer_id, ref.offset, ref.size) for ref in mine] == [
+        (fields[1].buffer_id, fields[1].offset, fields[1].size)
+    ]
+    assert get_metadata(taken, TrafficMetadata).whole == ()
