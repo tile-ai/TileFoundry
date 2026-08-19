@@ -44,7 +44,7 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .compute_cost import _call_cost_record, _is_structural_occurrence
 from .errors import AnalysisError
-from .facts import ParallelCapacityFacts, PerformanceServiceFacts
+from .facts import ParallelCapacityFacts, PerformanceServiceFacts, ThroughputFacts
 from .metadata import (
     BufferAliasMetadata,
     BufferAllocationMetadata,
@@ -225,6 +225,19 @@ def _result_placement(type_: Type, selected: Topology) -> Placement:
     return next(iter(unique))
 
 
+def _timed_level(target: object) -> str | None:
+    """The one storage level this target publishes a bandwidth for, if any.
+
+    A machine that states no throughputs times nothing, which is a different
+    answer from timing zero: with no level to price, only the work an occurrence
+    computes can put it on a clock.
+    """
+    try:
+        return target.get_facts(ThroughputFacts).bandwidth_level
+    except (UnsupportedCapabilityError, AttributeError):
+        return None
+
+
 def _call_placements(
     module: Module,
     function: Function,
@@ -232,6 +245,7 @@ def _call_placements(
 ) -> dict[int, Placement]:
     """Validate and prepare every primitive Call placement for performance."""
     selected = module.resolve_topology(level)
+    timed = _timed_level(module.resolve_target())
     scope = FunctionScope(module, function)
     whole = CostEvaluator(CostContext(scope=scope))
     local = CostEvaluator(
@@ -251,7 +265,7 @@ def _call_placements(
         except AnalysisError as error:
             cost = _call_cost_record(expr, whole, local)
             moved = call_traffic(expr, whole, local, aliases[id(expr)])
-            if _is_structural_occurrence(cost, moved):
+            if _is_structural_occurrence(cost, moved, bandwidth_level=timed):
                 result[id(expr)] = frozenset()
                 continue
             raise AnalysisError(f"performance: {describe(expr)}: {error}") from None
@@ -347,7 +361,9 @@ class PerformanceInputChecker:
         """Require a placement for every occurrence that will take time."""
         cost = _call_cost_record(call, ctx.whole, ctx.local)
         moved = call_traffic(call, ctx.whole, ctx.local, ctx.aliases.get(id(call)))
-        if _is_structural_occurrence(cost, moved):
+        if _is_structural_occurrence(
+            cost, moved, bandwidth_level=_timed_level(ctx.target)
+        ):
             return
         try:
             _result_placement(call.type, ctx.selected_topology)

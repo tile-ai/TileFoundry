@@ -1098,12 +1098,13 @@ as defined in that family's section.
     not one this may invent, and an instruction throughput standing in for a
     bandwidth prices a move as though it were arithmetic. A model that does time
     those bytes states its own rate for them.
-  - An occurrence that computes nothing and moves nothing is a view: it renames
-    what is already there and MUST take zero time. Every other occurrence did
-    something and MUST therefore carry an execution placement, whether or not
-    this model can put a clock on it: one whose only work is traffic at a level
-    with no published bandwidth still ran somewhere, and its duration MAY be
-    zero without making it a view.
+  - Having moved bytes and having work this can time are different questions.
+    What decides the second is the quantities a rate exists for: nonzero
+    `flops_per_unit`, nonzero `service_per_unit`, or nonzero `traffic_per_unit`
+    at `bandwidth_level`. An occurrence with none of them MUST take zero time
+    and MUST NOT be required to carry an execution placement -- there is no
+    interval to lay on a participant. Its movement at any other level MUST still
+    be recorded: it is untimed, not absent.
   - Work of a dtype or a kind the target states no one-unit throughput for MUST
     refuse rather than price at zero: it belongs on the same clock as the rest
     of the work, so pricing it at nothing would leave a hole inside a number the
@@ -1259,14 +1260,15 @@ model.
 - constraints:
   - A primitive Call is eligible for performance only when every tensor leaf of its
     result type carries one `ShardLayout` at the selected topology level and all
-    leaves name the same participant set. An occurrence whose `flops_per_unit`,
-    `service_per_unit` and `traffic_per_unit` are all zero is structural -- it
-    renames what is already there rather than doing anything: it needs no result
-    placement and MUST receive no record, because an empty interval reads as a
-    measurement rather than as the absence of one. Movement at a level with no
-    published bandwidth does NOT make an occurrence structural: it moved bytes,
-    and the record says so even though this model puts no clock on them. It
-    still carries its producers' precedence to its consumers. Inputs MUST NOT supply placement for an unplaced result.
+    leaves name the same participant set. An occurrence with no nonzero
+    `flops_per_unit`, no nonzero `service_per_unit` and no nonzero
+    `traffic_per_unit` at `bandwidth_level` is structural to this model: it
+    needs no result placement and MUST receive no record, because an empty
+    interval reads as a measurement rather than as the absence of one. Movement
+    at another level does not change that and MUST NOT be dropped from
+    `TrafficMetadata` because of it -- structural here means nothing to time,
+    not nothing done. It still carries its producers' precedence to its
+    consumers. Inputs MUST NOT supply placement for an unplaced result.
     `Reshard` executes on the placement of its result.
   - The participant set MUST be the exact image of the result Mesh layout under
     [shard §5](./shard.md#5-mesh), not an extent inferred from a topology or an

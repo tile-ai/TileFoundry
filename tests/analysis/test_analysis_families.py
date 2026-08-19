@@ -1895,18 +1895,16 @@ def test_a_zero_cost_structural_occurrence_carries_no_performance_record() -> No
 
 
 def test_a_local_materialise_states_bytes_this_model_puts_no_clock_on() -> None:
-    """Movement no vendor publishes a bandwidth for is stated and left untimed.
+    """Having moved bytes and having timed work are different questions.
 
-    NVIDIA states no register or shared-memory bandwidth. This model reports
-    those bytes rather than dropping them, and does not invent a rate to time
-    them by: standing an instruction throughput in for a bandwidth prices a
-    move as if it were arithmetic. What it still owes is a placement, because
-    an occurrence nobody runs is not one this can measure, so a materialise
-    written outside any Mesh is refused with the diagnostic that says where to
-    put it.
+    NVIDIA states no register or shared-memory bandwidth, and standing an
+    instruction throughput in for one prices a move as if it were arithmetic.
+    This model reports those bytes and invents no rate for them, so there is no
+    interval, and with no interval nothing to lay on a participant: it asks for
+    no placement either, which is not the same as saying it moved nothing. A
+    model that does rate them brings interval and placement back together.
     """
     _result, entry = _run(_unplaced_structural, ("compute-cost", "memory"))
-
     (view,) = _calls(entry)
     cost = get_metadata(view, ComputeCostMetadata)
     cost_moved = get_metadata(view, TrafficMetadata)
@@ -1914,7 +1912,9 @@ def test_a_local_materialise_states_bytes_this_model_puts_no_clock_on() -> None:
     assert cost.flops_per_unit == ()
     assert cost.service_per_unit == ()
     assert cost_moved.per_unit_at("gmem").total_bytes == 0
-    assert cost_moved.per_unit_at("rmem") == TrafficBytes(read=8, write=8)
+    assert cost_moved.per_unit_at("rmem") == TrafficBytes(read=8, write=8), (
+        "the bytes it moved stopped being recorded along with their rate"
+    )
 
     target = _unplaced_structural.resolve_target()
     services = target.get_facts(PerformanceServiceFacts)
@@ -1922,16 +1922,23 @@ def test_a_local_materialise_states_bytes_this_model_puts_no_clock_on() -> None:
     assert _local_duration_ns(
         cost, throughput, services, moved=cost_moved, level="cta"
     ) == 0, "bytes at a level nobody rated were given a time anyway"
-    assert not _is_structural_occurrence(cost, cost_moved), (
-        "an occurrence that moved bytes was called a view for lack of a rate"
-    )
+    assert _is_structural_occurrence(
+        cost, cost_moved, bandwidth_level=throughput.bandwidth_level
+    ), "an occurrence with nothing to time was still asked to be laid on a clock"
     bound = _cost_bound(cost, cost_moved, throughput)
     assert (bound.ideal_ns, bound.bound_by) == (0, "none"), (
         "a bound owed a nanosecond to bytes no rate was published for"
     )
 
-    with pytest.raises(AnalysisError, match=r"op=Stack: has no cta placement"):
-        _run(_unplaced_structural, "performance")
+    timed = analyze(
+        _unplaced_structural, _entry(_unplaced_structural), analysis="performance"
+    )
+    (placed,) = _calls(timed.function)
+    assert get_metadata(placed, PerformanceMetadata) is None, (
+        "an occurrence this model puts no clock on was given an interval"
+    )
+    assert get_metadata(placed, TrafficMetadata).per_unit_at("rmem").total_bytes == 16
+
 
 
 def test_the_gpu_memory_graph_is_not_a_tree() -> None:

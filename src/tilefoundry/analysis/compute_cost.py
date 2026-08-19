@@ -31,23 +31,27 @@ SELECTOR = "compute-cost"
 
 
 def _is_structural_occurrence(
-    cost: ComputeCostMetadata, moved: "TrafficMetadata | None" = None
+    cost: ComputeCostMetadata,
+    moved: "TrafficMetadata | None" = None,
+    *,
+    bandwidth_level: str | None = None,
 ) -> bool:
     """Whether an occurrence asks for nothing this model puts on a clock.
 
-    An occurrence that computes nothing and moves nothing is a view: it renames
-    what is already there. Everything else did something. Movement at a level
-    the target publishes no bandwidth for is still movement, so an occurrence
-    that made some is not structural and still owes an execution placement --
-    its duration is nought because no rate was published for those bytes, which
-    is not the same answer as having moved none.
+    Only what could take time is counted: the flops, the typed service, and the
+    bytes at the one level a bandwidth is published for. Movement at any other
+    level is still movement and still recorded -- what it is not is work this
+    model can lay on a timeline, so it neither earns a duration nor asks for a
+    placement to be laid at. Having moved bytes and having timed work are
+    different questions, and this is the second one.
     """
     return (
         all(not value for _name, value in cost.flops_per_unit)
         and all(not value for _kind, value in cost.service_per_unit)
-        and all(
-            not bytes_.total_bytes
-            for _level, bytes_ in (moved.per_unit if moved is not None else ())
+        and not (
+            moved.per_unit_at(bandwidth_level).total_bytes
+            if moved is not None and bandwidth_level is not None
+            else 0
         )
     )
 
@@ -76,7 +80,7 @@ def _local_duration_ns(
             f"one-unit throughputs are stated for {services.unit!r}"
         )
 
-    if _is_structural_occurrence(cost, moved):
+    if _is_structural_occurrence(cost, moved, bandwidth_level=facts.bandwidth_level):
         return 0
 
     compute_ns = 0
