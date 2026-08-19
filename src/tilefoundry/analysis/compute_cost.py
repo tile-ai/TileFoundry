@@ -1,10 +1,10 @@
 """How much work the authored program asks for.
 
-This family reads the program and nothing else. Flops come from each op's
-registered cost evaluator and bytes from the logical types its operands and
-result carry, so the record it leaves is the same on every backend. What that
-work costs in time is a separate question, asked by the roofline family against
-a target's rates.
+This family reads the program and nothing else. Flops and typed service come
+from each op's registered cost evaluator, so the record it leaves is the same on
+every backend. What that work moves is the memory family's half of the same
+declaration, and what it costs in time is a separate question again, asked
+against a target's rates.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from tilefoundry.ir.core import Call, VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
@@ -29,7 +28,6 @@ from .walk import (
 )
 
 SELECTOR = "compute-cost"
-_UMAT_CONSUMPTION_LEVEL = str(StorageKind.RMEM)
 
 
 def _is_structural_occurrence(

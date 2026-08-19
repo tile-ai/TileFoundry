@@ -2694,6 +2694,20 @@ def test_a_bound_is_refused_where_half_of_what_it_divides_is_missing() -> None:
         with pytest.raises(AnalysisError, match="traffic record"):
             run(SquareCuda, result.function, SquareCuda.resolve_target(), "cta", None)
 
+    result = analyze(
+        SquareCuda, SquareCuda.entry_function(), analysis=("compute-cost", "memory")
+    )
+    assert all(
+        get_metadata(expr, TrafficMetadata) is not None
+        for expr in postorder(result.function.body)
+        if isinstance(expr, Call)
+    ), "this case is about the total, so every occurrence must still state its own"
+    detach(result.function, TrafficMetadata)
+    with pytest.raises(AnalysisError, match="traffic root record"):
+        analyze_roofline(
+            SquareCuda, result.function, SquareCuda.resolve_target(), "cta", None
+        )
+
 
 def test_a_conclusion_moved_between_families_is_still_a_derived_one() -> None:
     """Which family reaches an answer does not make the answer the program's.

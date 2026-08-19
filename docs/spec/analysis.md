@@ -736,6 +736,10 @@ where each one sits.
     leaves could be placed MUST carry none: a partial address is not one. Values
     sharing a `buffer_id` are in one allocation, and the refs a value owns tile
     it in `offset` order.
+  - A Call's `whole`, `per_unit` and `operands` MUST state one occurrence. Only
+    the Function record counts an occurrence as often as its authored loops
+    repeat it, and its `operands` MUST be empty: which operand moved what
+    belongs to the occurrence, not to the total.
   - What an occurrence moves MUST be counted once, from the Op's own registered
     evaluator, and MUST NOT be counted again from where the buffers landed. A
     function with no `allocation` therefore still carries traffic, which is a
@@ -785,9 +789,9 @@ where each one sits.
 | `MemoryMetadata.footprint` | One `LevelFootprint` per occupied storage level. | As above |
 | `MemoryMetadata.lifetimes` | Every value residency except a `Reshape`, which aliases its input. | As above |
 | `MemoryMetadata.advisories` | Explicit peak overflow, cache/shared-capacity division, and same-scope authored-loop access-footprint findings. | `MemoryHierarchyFacts` |
-| `TrafficMetadata.whole` | Multiply the Op evaluator's per-operand movement by the occurrence's trip factor, correct it by the alias proof, charge concrete tensor leaves to their storage levels, and group by level. A Type with leaves at several levels keeps those leaf bytes separate. A `UMAT` leaf has no residency of its own: when it appears in `Call.args`, charge its own bytes at the target's established `rmem` materialization level; when it appears only in an Op attribute, charge nothing. A Function Call takes the callee's grouped total. | No |
-| `TrafficMetadata.per_unit` | Ask the Op's access relation, in the analysed level's window, how much each boundary moves, and charge that at the levels the operand's projected Type names. Which direction an operand moves stays the evaluator's answer. An Op with no registered relation falls back to the evaluator over projected Types. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
-| `TrafficMetadata.operands` | Multiply each evaluator entry by the same factor and keep order `(*call.args, call)`. A Function Call has no operand split. | No |
+| `TrafficMetadata.whole` | On a Call, take the Op evaluator's per-operand movement for one occurrence, correct it by the alias proof, charge concrete tensor leaves to their storage levels, and group by level. On a Function, sum those over every reachable occurrence, each counted as often as its authored loops repeat it. A Type with leaves at several levels keeps those leaf bytes separate. A `UMAT` leaf has no residency of its own: when it appears in `Call.args`, charge its own bytes at the target's established `rmem` materialization level; when it appears only in an Op attribute, charge nothing. A Function Call takes the callee's grouped total. | No |
+| `TrafficMetadata.per_unit` | The same one occurrence, asked of the Op's access relation in the analysed level's window, charged at the levels the operand's projected Type names. On a Function, summed over occurrences with the same repetition. Which direction an operand moves stays the evaluator's answer. An Op with no registered relation falls back to the evaluator over projected Types. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `TrafficMetadata.operands` | One occurrence's evaluator entries in order `(*call.args, call)`. Empty on a Function and on a Function Call, neither of which has a split. | No |
 
 The target-aware loop projection is report data rather than another metadata
 record. `LoopFootprintMetadata` remains target-independent:
@@ -1041,9 +1045,13 @@ derived from. `local-copy` is counted in scalar moves rather than bytes, one
 move per 32-bit word, so moving `n` bytes counts `ceil(n / 4)`: it stands in for
 the register and shared-memory bandwidths no vendor publishes.
 
-Requesting roofline adds the Function's exact summed `flops` and the bytes the
-memory family counted, the memory record's per-level peak, and this verdict to
-the summary:
+Requesting roofline adds this verdict and the Function's own work line to the
+summary. The two quantities the bound divides -- the summed `flops` and the
+bandwidth-level bytes -- are promoted as `totals`, because they are the evidence
+for the verdict rather than a dependency's own conclusion. Nothing else its
+dependencies wrote is promoted: no footprint, no advisory, and no separate
+traffic line. Asking for `memory` is what states those
+([§2.2.2](#222-memory)).
 
 ```text
 roofline ideal-ns=<int> bound-by=<resource>
