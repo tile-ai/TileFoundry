@@ -1894,6 +1894,97 @@ def test_a_zero_cost_structural_occurrence_carries_no_performance_record() -> No
     )
 
 
+def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> None:
+    """A hole inside a number reads as a program that does less than it does.
+
+    Three ways the target can fail to price what a program asks for, and none of
+    them may be answered with nothing: rates stated for the wrong unit, a dtype
+    with no throughput, and the one level a bandwidth was meant for having none.
+    Each says which quantity and which level, because that is what a reader has
+    to go and publish.
+    """
+    target = _PricingBoundary.resolve_target()
+    throughput = target.get_facts(ThroughputFacts)
+    services = target.get_facts(PerformanceServiceFacts)
+    result = analyze(
+        _PricingBoundary, _PricingBoundary.functions[0], analysis=("compute-cost", "memory")
+    )
+    records = [get_metadata(call, ComputeCostMetadata) for call in _calls(result.function)]
+    work = next(
+        record
+        for record in records
+        if record is not None and any(v for _n, v in record.flops_per_unit)
+    )
+
+    with pytest.raises(
+        AnalysisError,
+        match=r"^performance: selected topology level 'thread', but the target's "
+        r"one-unit throughputs are stated for 'cta'$",
+    ):
+        _local_duration_ns(work, throughput, services, level="thread")
+
+    with pytest.raises(AnalysisError, match=r"unknown compute dtype 'f9e9m9'"):
+        _local_duration_ns(
+            replace(work, flops_per_unit=(("f9e9m9", 8),)),
+            throughput,
+            services,
+            level="cta",
+        )
+
+    crossed = TrafficMetadata(
+        per_unit=((throughput.bandwidth_level, TrafficBytes(read=4096)),)
+    )
+    with pytest.raises(
+        AnalysisError,
+        match=rf"no one-unit throughput for level '{throughput.bandwidth_level}' at 'cta'",
+    ):
+        _local_duration_ns(
+            ComputeCostMetadata(),
+            throughput,
+            replace(services, unit_bandwidth=()),
+            moved=crossed,
+            level="cta",
+        )
+
+
+def test_one_unit_takes_the_same_time_however_many_units_there_are() -> None:
+    """A per-unit interval is one unit's, so counting the units cannot lengthen it.
+
+    This value is held whole by every participant rather than divided among
+    them, so one unit does the same work whether it is alone or one of a hundred
+    and twenty. An interval that grew with the count would be the whole device's
+    time wearing a unit's name, and the timeline would then say the program got
+    slower for being spread out.
+    """
+    target = _CudaAdd.resolve_target()
+    throughput = target.get_facts(ThroughputFacts)
+    services = target.get_facts(PerformanceServiceFacts)
+
+    measured = {}
+    for units in (1, 120):
+        spread = replace(_CudaAdd, topologies=(Topology("cta", units),))
+        result = analyze(
+            spread, spread.entry_function(), analysis=("compute-cost", "memory")
+        )
+        priced = _calls(result.function)[-1]
+        work = get_metadata(priced, ComputeCostMetadata)
+        moved = get_metadata(priced, TrafficMetadata)
+        measured[units] = (
+            work.flops_per_unit,
+            moved.per_unit,
+            _local_duration_ns(work, throughput, services, moved=moved, level="cta"),
+        )
+
+    alone, crowd = measured[1], measured[120]
+    assert alone[0] == crowd[0] and alone[1] == crowd[1], (
+        "this value was divided after all, so the two are not the same local work"
+    )
+    assert alone[2] > 0
+    assert alone[2] == crowd[2], (
+        "one unit's interval changed with how many units were declared"
+    )
+
+
 def test_a_local_materialise_states_bytes_this_model_puts_no_clock_on() -> None:
     """Having moved bytes and having timed work are different questions.
 
