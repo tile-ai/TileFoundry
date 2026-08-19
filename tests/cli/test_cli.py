@@ -382,7 +382,7 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
         "--performance",
     )
     assert unplaced_npu.returncode == 1
-    assert "has no core placement" in unplaced_npu.stderr
+    assert "has no core execution domain" in unplaced_npu.stderr
     scheduled_npu = _run_cli(
         registry,
         tmp_path,

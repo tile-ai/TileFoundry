@@ -32,7 +32,7 @@ class Open:
 '''
 
 
-def test_logical_analyses_run_and_performance_requires_result_placement(tf, cmine) -> None:
+def test_logical_analyses_run_and_performance_requires_an_execution_domain(tf, cmine) -> None:
     done = tf(
         "analyze",
         f"{cmine}:CMine.root",
@@ -47,7 +47,7 @@ def test_logical_analyses_run_and_performance_requires_result_placement(tf, cmin
     rejected = tf("analyze", f"{cmine}:CMine.root", "--performance")
     assert rejected.returncode == 1
     assert "performance:" in rejected.stderr
-    assert "has no cta placement" in rejected.stderr
+    assert "has no cta execution domain" in rejected.stderr
 
 
 def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
@@ -78,10 +78,10 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf) -> None:
 
     families = ["compute-cost", "memory", "roofline", "performance"]
     assert payload["requested"] == payload["executed"] == families
-    assert set(payload["function_records"]) == set(families)
+    assert set(payload["function_records"]) == {*families, "traffic"}
     assert len(payload["calls"]) == 7
     assert all(
-        set(row) - {"performance"} == {"value", "compute-cost", "roofline"}
+        set(row) - {"performance"} == {"value", "compute-cost", "roofline", "traffic"}
         for row in payload["calls"]
     )
     assert [
@@ -186,7 +186,7 @@ def test_analyze_reports_only_the_analyses_that_were_requested(tf, cwide) -> Non
     assert done.returncode == 0, done.stderr
 
     assert (
-        "# selection requested=roofline executed=compute-cost,roofline"
+        "# selection requested=roofline executed=compute-cost,memory,roofline"
         in done.stdout
     )
     assert "# compute-cost flops=" in done.stdout

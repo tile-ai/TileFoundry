@@ -1013,10 +1013,13 @@ class _HirBodyVisitor(BaseExprVisitor):
 
 
         self.env.push_frame()
+        scopes = self._mesh_scopes
+        self._mesh_scopes = (*scopes, mesh)
         try:
             self.env.define(name, mesh)
             body_result = self._visit_chain(list(node.body), 0, require_return=False)
         finally:
+            self._mesh_scopes = scopes
             suite_frame = self.env.pop_frame()
         for bound_name, bound_value in suite_frame.items():
             if bound_name != name:

@@ -40,4 +40,5 @@ class MoEMegaKernel:
 
     @func
     def experts(tokens: Tensor[(120, 64), "f32"]):
-        return tf.add(routed_expert(tokens), shared_expert(tokens))  # noqa: F821
+        with Mesh(("cta",), layout=(132,), names=("tile",)) as _whole:
+            return tf.add(routed_expert(tokens), shared_expert(tokens))  # noqa: F821

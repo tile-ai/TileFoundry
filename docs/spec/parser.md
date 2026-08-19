@@ -333,7 +333,11 @@ in what it lowers to:
   parser synthesizes the invariant index vector and its local view. Such a coordinate
   may index an unplaced tensor in a runtime slice; indexing an already placed tensor
   is rejected because its data-dependent mesh ownership is unresolved.
-  It is not a tensor-binding scope and emits **no IR node**. Ordinary
+  It is not a tensor-binding scope and emits **no IR node**, but every `Call`
+  built inside `suite` records the enclosing stack of these scopes, outermost
+  first, as `ExecutionDomainMetadata`
+  ([core-ir §2](./core-ir.md#2-expr)): where an occurrence was written is what
+  says which participants run it, and nothing else on the Call says it. Ordinary
   values assigned inside `suite` follow normal function-body visibility
   (not confined); `return` inside `suite` returns from the enclosing
   `@func` (no mesh-region result), and a `@func` MUST NOT be defined
@@ -1087,7 +1091,7 @@ Python statements that the parser folds into a single `Expr` tree.
 | `x + y` | `Call(Binary(kind=ADD), (x, y))`; the parser maps Python AST `BinOp` / `Compare` / `BoolOp` directly to a `Binary` instance with the matching `BinaryKind`. `UnaryOp` USub / Not maps similarly to `Unary(kind=NEG)` / `Unary(kind=NOT)`. AST `@` (matmul) routes to `MatMul` (a real Op, not kinded). |
 | `foo(a, b)` | `Call(target_op, args)` where `target_op` is constructed by the resolved schema's `builder` ([§4.2](#42-closure-then-registry-callee-resolution) / [§4.3](#43-opschema-and-overload-resolution)). For surface aliases (e.g. `add` / `cmp_eq` / `neg`), the alias's builder returns the kinded target Op (`Binary(kind=...)` / `Unary(kind=...)`); for real Ops, the default builder is the Op class itself. |
 | `for i in tile(...)` / `for i in range(...)` | `GridRegionExpr` (see [§1.7](#17-for-i-in-tile--for-i-in-range-hir-only) and below). |
-| `with Mesh(...) as m` | Push `m` onto the parser-lexical stack; pop on exit. No IR node. |
+| `with Mesh(...) as m` | Push `m` onto the parser-lexical stack; pop on exit. No IR node. Every `Call` built inside carries the stack as `ExecutionDomainMetadata`. |
 | `return expr` | Sets `Function.body`. A `return` without a value is rejected. |
 | `return (a, b)` / `return a, b` | A literal tuple return (both spellings are the same AST) folds to a core `Tuple` body ([core-ir §2.2](./core-ir.md#22-var--constant--tuple)); `Function.return_type` is the `TupleType` of the element types. Callers destructure via the existing tuple-unpack rule (`o, s = f(...)`). |
 | `pass` | Accepted only as the **entire** body: sets `Function.body = None`, declaring a dispatch prototype whose implementations are registered via `.specialize`

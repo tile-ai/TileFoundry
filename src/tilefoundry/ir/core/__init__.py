@@ -6,6 +6,7 @@ from .errors import VerifyError
 from .expr import Call, Constant, Expr, Tuple, Var
 from .metadata import (
     BindingMetadata,
+    ExecutionDomainMetadata,
     IRMetadata,
     SourceSpanMetadata,
     binding_name,
@@ -36,6 +37,7 @@ __all__ = [
     "Tuple",
     "IRMetadata",
     "BindingMetadata",
+    "ExecutionDomainMetadata",
     "SourceSpanMetadata",
     "binding_name",
     "diagnostic_location",

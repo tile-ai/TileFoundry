@@ -264,6 +264,17 @@ class BindingMetadata(IRMetadata):
 
     name: str
 
+class ExecutionDomainMetadata(IRMetadata):
+    """Describe the Mesh scopes an occurrence was authored inside.
+
+    Attributes:
+        scopes: attribute; Enclosing Mesh scopes, outermost first.
+    """
+
+    scopes: tuple["Mesh", ...] = ()
+
+    def at(self, level: str) -> "Mesh | None": ...
+
 class SourceSpanMetadata(IRMetadata):
     """Describe an authored source range.
 
@@ -292,6 +303,16 @@ class SourceSpanMetadata(IRMetadata):
     `loc=` syntax and inferred assignment names to this metadata; there is no
     parallel `Expr.loc` field.
   - `SourceSpanMetadata` records the parser source range before type inference.
+  - `ExecutionDomainMetadata` records the `with Mesh(...)` scopes a `Call` was
+    written inside, outermost first
+    ([parser §1.6](./parser.md#16-with-mesh-as-m)). `at(level)` returns the
+    innermost scope naming *level*, or `None` when none does. It states where
+    the work ran, which is not what the result's layout states -- a value laid
+    out across threads may have been produced by work one CTA did -- so the two
+    MUST NOT be derived from each other. A rebuild that binds a dimension MUST
+    restate these scopes at the bound extents, exactly as it restates types: a
+    concrete program whose own execution domain is still a range has no
+    positions to count.
 
 ```python
 class Expr:

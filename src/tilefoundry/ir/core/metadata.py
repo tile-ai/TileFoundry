@@ -16,6 +16,26 @@ class BindingMetadata(IRMetadata):
 
 
 @dataclass(frozen=True)
+class ExecutionDomainMetadata(IRMetadata):
+    """The Mesh scopes an occurrence was authored inside, outermost first.
+
+    Which participants run an occurrence is a fact about where it was written,
+    not about the layout its result happens to carry: a value may be laid out
+    across threads while the work that produced it runs on one CTA. The stack is
+    kept as authored so a reader can ask about any level of it.
+    """
+
+    scopes: tuple["Mesh", ...] = ()
+
+    def at(self, level: str) -> "Mesh | None":
+        """The innermost scope naming *level*, or None when none does."""
+        for mesh in reversed(self.scopes):
+            if any(topology.name == level for topology in mesh.topologies):
+                return mesh
+        return None
+
+
+@dataclass(frozen=True)
 class SourceSpanMetadata(IRMetadata):
     """Source location for a parser-authored expression."""
 
@@ -79,6 +99,7 @@ def remove_metadata(expr: "Expr", cls: type[IRMetadata]) -> "Expr":
 __all__ = [
     "IRMetadata",
     "BindingMetadata",
+    "ExecutionDomainMetadata",
     "SourceSpanMetadata",
     "binding_name",
     "diagnostic_location",

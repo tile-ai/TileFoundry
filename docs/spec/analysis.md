@@ -411,7 +411,7 @@ layer settles is which type a field holds and what its keys name:
     metadata-free traversal of the derived program answers all of them.
     Performance readiness requires a positive `ParallelCapacityFacts` value for
     the selected topology, rates stated for that same level, and one valid
-    result placement for every occurrence that will take time. Where the buffers
+    execution placement for every occurrence that will take time. Where the buffers
     go is not a readiness question: it is decided with the schedule.
     Failing performance readiness MUST NOT make the same unplaced program invalid
     for `compute-cost`, `memory`, or `roofline`.
@@ -1258,19 +1258,25 @@ utilization, traffic volume, and other execution effects that this family does n
 model.
 
 - constraints:
-  - A primitive Call is eligible for performance only when every tensor leaf of its
-    result type carries one `ShardLayout` at the selected topology level and all
-    leaves name the same participant set. An occurrence with no nonzero
+  - A primitive Call is eligible for performance only when it was authored
+    inside a `Mesh` naming the selected topology level, recorded as
+    `ExecutionDomainMetadata` ([core-ir §2](./core-ir.md#2-expr)). That Mesh is
+    where the work ran. The layout its result carries says where that result's
+    bytes were put, which is a different question, so a result carrying no
+    `ShardLayout` at the selected level MUST NOT unplace the occurrence that
+    produced it. Where the result type does carry that level on every tensor
+    leaf, the two MUST name the same participant set: a result placed where the
+    work that made it never ran is a program this MUST refuse. An occurrence
+    with no nonzero
     `flops_per_unit`, no nonzero `service_per_unit` and no nonzero
     `traffic_per_unit` at `bandwidth_level` is structural to this model: it
-    needs no result placement and MUST receive no record, because an empty
+    needs no execution placement and MUST receive no record, because an empty
     interval reads as a measurement rather than as the absence of one. Movement
     at another level does not change that and MUST NOT be dropped from
     `TrafficMetadata` because of it -- structural here means nothing to time,
     not nothing done. It still carries its producers' precedence to its
-    consumers. Inputs MUST NOT supply placement for an unplaced result.
-    `Reshard` executes on the placement of its result.
-  - The participant set MUST be the exact image of the result Mesh layout under
+    consumers. Inputs MUST NOT supply placement for an unplaced occurrence.
+  - The participant set MUST be the exact image of that Mesh's layout under
     [shard §5](./shard.md#5-mesh), not an extent inferred from a topology or an
     operand. A `Broadcast` shard attribute still names placement: attributes
     describe distribution while the Mesh describes which positions participate.
@@ -1509,8 +1515,8 @@ def analyze(
     analysis reads inferred types and assumes a verified function.
   - Family-specific readiness MUST be checked on that inferred inlined view and
     MUST complete before the first analysis in the dependency closure runs. In
-    particular, a performance request that lacks result placement MUST fail before
-    dependency Metadata is written.
+    particular, a performance request that lacks an execution placement MUST
+    fail before dependency Metadata is written.
   - Re-running MUST recompute the closure and refresh the Metadata that closure
     owns. There MUST be no cross-call cache. Metadata owned by nothing in the
     closure MUST be left untouched.

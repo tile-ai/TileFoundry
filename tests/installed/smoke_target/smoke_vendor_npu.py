@@ -50,7 +50,7 @@ def test_document_free_target_analyses_and_selects_its_scheduler(
     rejected = tf("analyze", f"{model}:CMine.root", "--performance")
     assert rejected.returncode == 1
     assert "performance:" in rejected.stderr
-    assert "has no core placement" in rejected.stderr
+    assert "has no core execution domain" in rejected.stderr
 
     scheduled = tf(
         "schedule",

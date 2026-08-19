@@ -5,7 +5,16 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
-from tilefoundry.ir.core import BindingMetadata, Call, Constant, Expr, Tuple, Var
+from tilefoundry.ir.core import (
+    BindingMetadata,
+    Call,
+    Constant,
+    ExecutionDomainMetadata,
+    Expr,
+    Tuple,
+    Var,
+    get_metadata,
+)
 from tilefoundry.ir.core.module import Module, owning_module, subtree
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir._call_binding import binding_for
@@ -238,6 +247,37 @@ def _timed_level(target: object) -> str | None:
         return None
 
 
+def _execution_placement(expr: Call, selected: Topology) -> Placement:
+    """Which participants run one occurrence, from where it was authored.
+
+    An occurrence runs on the participants of the Mesh it was written inside.
+    The layout its result carries says where that result's bytes were put, which
+    is a different question: a value laid out across threads may well have been
+    produced by work one CTA did. Where both answer, they MUST agree -- a result
+    placed somewhere its own work never ran is a program this cannot read.
+    """
+    domain = get_metadata(expr, ExecutionDomainMetadata)
+    lexical = domain.at(selected.name) if domain is not None else None
+    if lexical is None:
+        raise AnalysisError(
+            f"has no {selected.name} execution domain; it was authored outside "
+            f"any {selected.name} Mesh, and where its result was laid out does "
+            "not say where the work ran. Write it inside a Mesh of that level"
+        )
+    running = _mesh_image(lexical, selected)
+    try:
+        carried = _result_placement(expr.type, selected)
+    except AnalysisError:
+        return running
+    if carried != running:
+        raise AnalysisError(
+            f"runs on {selected.name} positions {sorted(running)} but its result "
+            f"is laid out on {sorted(carried)}; a result cannot be placed where "
+            "the work that made it never ran"
+        )
+    return running
+
+
 def _call_placements(
     module: Module,
     function: Function,
@@ -261,7 +301,7 @@ def _call_placements(
         if not isinstance(expr, Call) or isinstance(expr.target, Function):
             continue
         try:
-            result[id(expr)] = _result_placement(expr.type, selected)
+            result[id(expr)] = _execution_placement(expr, selected)
         except AnalysisError as error:
             cost = _call_cost_record(expr, whole, local)
             moved = call_traffic(expr, whole, local, aliases[id(expr)])
@@ -366,7 +406,7 @@ class PerformanceInputChecker:
         ):
             return
         try:
-            _result_placement(call.type, ctx.selected_topology)
+            _execution_placement(call, ctx.selected_topology)
         except AnalysisError as error:
             raise AnalysisError(f"performance: {describe(call)}: {error}") from None
 

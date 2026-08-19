@@ -220,20 +220,21 @@ def _reduce_access(call: "Call", ctx) -> AccessRelations:
 
     reads, guards = [], []
     for axis in range(len(logical_source.shape)):
-        if axis in axes:
-            if held[axis] == 1:
-                reads.append("0")
-                continue
-            reads.append(f"r{axis}")
-            guards.append(f"0 <= r{axis} < {held[axis]}")
-        else:
-            reads.append(linear.get(order[axis], "0"))
+        reads.append("0" if axis in axes else linear.get(order[axis], "0"))
     if call.target.keepdim:
         for position, owner in enumerate(produces):
             if owner in axes and result.shape[position] != 1:
                 guards.append(f"d{position} = 0")
 
     spread = factored_image(reads, source, logical_source)
+    for position, owner in enumerate(logical_axes_of(source, logical_source)):
+        if owner not in axes:
+            continue
+        extent = source.shape[position]
+        if extent == 1:
+            continue
+        spread[position] = f"r{position}"
+        guards.append(f"0 <= r{position} < {extent}")
     dims = ", ".join(f"d{index}" for index in range(rank))
     where = " and ".join(guards)
     image = ", ".join(spread)

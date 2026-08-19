@@ -10,12 +10,18 @@ disagree with itself.
 
 from __future__ import annotations
 
+import importlib
 import json
+import pkgutil
+import sys
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
+import tests.fixtures.placed as placed
 import tilefoundry.analysis.compute_cost as compute_cost
+from tests.fixtures.placed.derived_prefill import DerivedPrefill
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
@@ -41,7 +47,13 @@ from tilefoundry.analysis import (
     TrafficMetadata,
 )
 from tilefoundry.analysis.api import analyze
-from tilefoundry.analysis.check import _call_placements, _mesh_image, _result_placement
+from tilefoundry.analysis.check import (
+    _call_placements,
+    _execution_placement,
+    _mesh_image,
+    _program_dim_vars,
+    _result_placement,
+)
 from tilefoundry.analysis.compute_cost import (
     _is_structural_occurrence,
     _local_duration_ns,
@@ -54,7 +66,7 @@ from tilefoundry.analysis.movement import (
 )
 from tilefoundry.analysis.performance import _storage_of
 from tilefoundry.analysis.roofline import _cost_bound
-from tilefoundry.analysis.walk import postorder
+from tilefoundry.analysis.walk import describe, postorder
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
 from tilefoundry.inspection.analysis_report import (
     render_analysis,
@@ -63,7 +75,16 @@ from tilefoundry.inspection.analysis_report import (
     report,
 )
 from tilefoundry.inspection.values import render_comment
-from tilefoundry.ir.core import Call, Constant, Tuple, Var, binding_name, get_metadata
+from tilefoundry.ir.core import (
+    Call,
+    Constant,
+    ExecutionDomainMetadata,
+    Tuple,
+    Var,
+    binding_name,
+    get_metadata,
+)
+from tilefoundry.ir.core.module import Module, function_selectors, select, subtree
 from tilefoundry.ir.hir import Function, GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.tensor.slice import Slice
@@ -81,6 +102,7 @@ from tilefoundry.ir.types.shard import (
 from tilefoundry.ir.types.shard import (
     Topology as IrTopology,
 )
+from tilefoundry.ir.types.shard.layout_algebra import size
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import AmxTarget, CudaTarget
 from tilefoundry.visitor_registry import cost_evaluator_registry
@@ -1329,7 +1351,7 @@ def test_performance_refuses_unplaced_results_before_dependencies_run(monkeypatc
     monkeypatch.setattr(compute_cost, "analyze_compute_cost", unexpected)
     with pytest.raises(
         AnalysisError,
-        match=r"test_analysis_families.py:.*has no cta placement",
+        match=r"test_analysis_families.py:.*has no cta execution domain",
     ):
         _run(_wide_grid, "performance")
     assert not ran
@@ -1514,11 +1536,22 @@ def test_performance_scales_one_local_schedule_by_root_capacity() -> None:
 
 
 def test_placement_projection_rejects_the_wrong_level_and_invalid_images() -> None:
+    with pytest.raises(AnalysisError, match="has no cta execution domain"):
+        analyze(_thread_sharded, _entry(_thread_sharded), analysis="performance")
+
+    thread_only = make_tensor_type(
+        (8,),
+        layout=ShardLayout(
+            Layout((8,), (1,)),
+            (Broadcast(),),
+            IrMesh((IrTopology("thread", 4),), Layout((4,), (1,))),
+        ),
+    )
     with pytest.raises(
         AnalysisError,
         match=r"selected topology level 'cta'.*placed at level.s. 'thread'",
     ):
-        analyze(_thread_sharded, _entry(_thread_sharded), analysis="performance")
+        _result_placement(thread_only, IrTopology("cta", 8))
 
     cta = IrTopology("cta", 8)
     outside = IrMesh(
@@ -1727,27 +1760,212 @@ def test_a_machine_that_places_nothing_is_not_a_machine_that_fits() -> None:
     )
 
 
-def test_one_value_it_cannot_place_does_not_unplace_the_rest() -> None:
-    """A value states its own positions, whatever a value beside it states.
+def test_a_view_with_no_layout_still_runs_where_it_was_written() -> None:
+    """Where an occurrence runs is where it was authored, not what it produced.
 
-    Performance refuses a whole program it cannot place every value of, and this
-    one carries a view with no layout, so it is refused that reading. Placing
-    buffers is a narrower question: each value that holds bytes says where it
-    runs, and the ones here do, down to the shared-memory tiles the loop keeps.
-    Discarding all of them because a neighbour was refused reported a machine
-    that places nothing about a program every buffer of which has an address.
+    Three of this program's occurrences hand back a view carrying no layout at
+    all, and a reading that asked the result type where the work ran had to
+    refuse the whole program over them. The Mesh they were written inside
+    answers instead, so every occurrence is placed and the program is priced.
+    Placing buffers stays the narrower question it was: each value that holds
+    bytes says where it sits, down to the shared-memory tiles the loop keeps.
     """
     case = next(item for item in CORPUS if item.id == "access_footprint.qkv")
     selected = next(item for item in case.analyze if item.selector == "qkv_projection")
     owner, function = case.resolve(case.build(), selected.selector)
-    with pytest.raises(AnalysisError, match="has no cta placement"):
-        _call_placements(owner, analyze(owner, function, analysis="memory",
-                                        dims=selected.dims).function, "cta")
-
     result = analyze(owner, function, analysis="memory", dims=selected.dims)
+    calls = [
+        call
+        for call in _calls(result.function)
+        if not isinstance(call.target, Function)
+    ]
+    topology = owner.resolve_topology("cta")
+    viewed = [call for call in calls if _cannot_be_placed_by_type(call, topology)]
+    assert [type(call.target).__name__ for call in viewed] == [
+        "Slice",
+        "Slice",
+        "InsertSlice",
+    ]
+    assert len(_call_placements(owner, result.function, "cta")) == len(calls)
+
     record = get_metadata(result.function, MemoryMetadata)
     assert record.allocation == AllocationMetadata(solver_status="optimal")
     assert any(item.level == "smem" for item in record.lifetimes)
+    priced = analyze(owner, function, analysis="performance", dims=selected.dims)
+    assert get_metadata(priced.function, PerformanceSummaryMetadata) is not None
+
+
+def _cannot_be_placed_by_type(call: Call, topology: IrTopology) -> bool:
+    """Whether this occurrence's own result type says nothing about where it ran."""
+    try:
+        _result_placement(call.type, topology)
+    except AnalysisError:
+        return True
+    return False
+
+
+def test_the_innermost_scope_naming_a_level_is_the_one_that_ran_it() -> None:
+    """A nest of Meshes answers about the level asked for, from the inside out.
+
+    An occurrence written inside a thread Mesh inside a CTA Mesh ran on both,
+    and which one is meant depends entirely on the level being asked about. The
+    stack is kept as authored so each question reaches its own answer, and a
+    level nobody named has none rather than the nearest thing to one.
+    """
+    cta = IrMesh((IrTopology("cta", 2),), Layout((2,), (1,)))
+    thread = IrMesh((IrTopology("thread", 4),), Layout((4,), (1,)))
+    inner = IrMesh((IrTopology("cta", 8),), Layout((8,), (1,)))
+    domain = ExecutionDomainMetadata((cta, thread, inner))
+
+    assert domain.at("cta") is inner
+    assert domain.at("thread") is thread
+    assert domain.at("warp") is None
+    assert ExecutionDomainMetadata().at("cta") is None
+
+
+def test_a_result_cannot_be_placed_where_the_work_that_made_it_never_ran() -> None:
+    """Both answers are kept, and where they disagree the program is refused.
+
+    A layout says where a result's bytes were put and a Mesh says where the work
+    was written, so where a result carries the selected level at all the two are
+    claims about one thing and cannot differ. Taking either one silently would
+    be picking which half of a contradiction to believe.
+    """
+    cta = IrTopology("cta", 8)
+    left = IrMesh((cta,), ComposedLayout(None, 0, Layout((4,), (1,))))
+    right = IrMesh((cta,), ComposedLayout(None, 4, Layout((4,), (1,))))
+    placed = make_tensor_type(
+        (8,), layout=ShardLayout(Layout((8,), (1,)), (Broadcast(),), right)
+    )
+    call = Call(
+        type=placed,
+        target=Transpose(perm=(0,)),
+        args=(Var(type=placed, name="x"),),
+        metadata=(ExecutionDomainMetadata((left,)),),
+    )
+    with pytest.raises(AnalysisError, match="cannot be placed where the work"):
+        _execution_placement(call, cta)
+
+    agreeing = replace(call, metadata=(ExecutionDomainMetadata((right,)),))
+    assert _execution_placement(agreeing, cta) == _result_placement(placed, cta)
+
+
+def test_an_execution_domain_is_restated_at_the_extents_it_is_asked_at() -> None:
+    """A program authored over a range says where it runs at the size chosen.
+
+    The Mesh a Call was written inside is a value like the types beside it, and
+    this one names a CTA count derived from an authored dimension. Carried
+    through a specialization untouched it would leave a concrete program whose
+    own account of where it runs is still a range, which is a domain with no
+    positions to count.
+    """
+    result = analyze(
+        DerivedPrefill,
+        DerivedPrefill.entry_function(),
+        analysis="performance",
+        dims={"prefill_n": 64, "topology_only": 128},
+    )
+    scopes = [
+        get_metadata(call, ExecutionDomainMetadata) for call in _calls(result.function)
+    ]
+    assert scopes and all(scope is not None for scope in scopes)
+    assert {scope.at("cta").topologies[0].size for scope in scopes} == {8}
+    assert {size(scope.at("cta").layout) for scope in scopes} == {8}
+    assert all(
+        get_metadata(call, PerformanceMetadata) is not None
+        or _is_structural_occurrence(get_metadata(call, ComputeCostMetadata))
+        for call in _calls(result.function)
+    )
+
+
+def _placed_fixture_roots() -> list[tuple[str, str, Module]]:
+    """Every reusable placed program, by the file and name it is published under.
+
+    Walked rather than listed, so a fixture added to the package joins the census
+    instead of quietly escaping it. A Module reached as somebody's child is not a
+    root: it is asked about through the parent whose machine it inherits. One of
+    these files names its neighbour the way a script does, because the CLI loads
+    them by path, so the package directory is on the path while they import.
+    """
+    found: list[tuple[str, str, Module]] = []
+    sys.path.insert(0, str(Path(placed.__path__[0])))
+    try:
+        for info in sorted(pkgutil.iter_modules(placed.__path__), key=lambda i: i.name):
+            source = importlib.import_module(f"{placed.__name__}.{info.name}")
+            named = [
+                (name, value)
+                for name in dir(source)
+                if not name.startswith("_")
+                and isinstance(value := getattr(source, name), Module)
+            ]
+            children = {
+                id(child)
+                for _n, owner in named
+                for child in subtree(owner)
+                if child is not owner
+            }
+            found.extend(
+                (info.name, name, value)
+                for name, value in named
+                if id(value) not in children
+            )
+    finally:
+        sys.path.pop(0)
+    return found
+
+
+def test_every_placed_fixture_says_where_each_of_its_occurrences_ran() -> None:
+    """The whole placed corpus, at a size, with no occurrence left unplaced.
+
+    A program that names CTAs and is aimed at a machine that runs them is a
+    performance question, and every one of them has to answer it: an execution
+    domain that only the fixtures somebody remembered to check carry is one the
+    next authored program will be missing. A dimension left open is asked at a
+    size its own declaration admits, because counting elements needs a number.
+    A CPU root is not a smaller version of this question -- its machine runs no
+    CTAs -- so it is named and left out rather than counted as passing.
+    """
+    machine = CudaTarget("nvidia.h200_sxm")
+    asked: list[str] = []
+    outside: list[str] = []
+    for file, name, root in _placed_fixture_roots():
+        try:
+            root.resolve_target()
+        except (AnalysisError, TypeError, ValueError):
+            root = replace(root, target=machine)
+        if "cta" not in root.resolve_target().topology_levels:
+            outside.append(f"{file}.{name}")
+            continue
+        for selector, function in function_selectors(root):
+            owner = select(root, selector)
+            declared = _program_dim_vars(owner, function)
+            dims = {
+                dim: max(int(var.lo), min(128, int(var.hi) - 1))
+                for dim, var in sorted(declared.items())
+            }
+            result = analyze(
+                owner,
+                function,
+                analysis=("compute-cost", "memory", "roofline", "performance"),
+                level="cta",
+                dims=dims or None,
+            )
+            calls = _calls(result.function)
+            undomained = [
+                describe(call)
+                for call in calls
+                if get_metadata(call, ExecutionDomainMetadata) is None
+                or get_metadata(call, ExecutionDomainMetadata).at("cta") is None
+            ]
+            assert not undomained, f"{file}.{name}.{selector}: {undomained}"
+            assert calls
+            assert (
+                get_metadata(result.function, PerformanceSummaryMetadata) is not None
+            ), f"{file}.{name}.{selector} was placed but got no summary"
+            asked.append(f"{file}.{name}.{selector}")
+
+    assert len(asked) == 19, asked
+    assert len(outside) == 6, outside
 
 
 def test_only_addressable_levels_are_placed_by_the_solver() -> None:

@@ -106,12 +106,17 @@ def _compute_cost_evidence(report: dict) -> str | None:
 
 
 def _memory_evidence(report: dict) -> str | None:
-    """What `memory` must have measured: bytes moved, lifetimes, and addresses."""
+    """What `memory` must have measured: bytes moved, lifetimes, and addresses.
+
+    The bytes are the family's own record rather than a field of its footprint:
+    what a program moves and what it must hold at once are two answers, reported
+    as two.
+    """
     record = report["function_records"]["memory"]
     placement = record.get("allocation")
     if placement is None or placement["solver_status"] not in ("optimal", "feasible"):
         return f"allocation is {placement!r}"
-    gmem = record["traffic"]["gmem"]
+    gmem = report["function_records"]["traffic"]["whole"]["gmem"]
     if not gmem.get("read", 0) > 0:
         return f"reported no gmem read ({gmem!r})"
     if not record["lifetimes"]:
@@ -157,7 +162,7 @@ def analysed_every_family(
 
     ``FunctionCase.performance`` marks an explicitly placed analysis witness. Other
     shipped functions keep their logical three-family conclusions and must make a
-    separate performance request fail for missing result placement.
+    separate performance request fail for a missing execution domain.
     """
     selected = [item for item in case.analyze if item.selector == selector]
     assert len(selected) == 1, f"{case.id}: analysis selector {selector!r} is not unique"
@@ -184,7 +189,7 @@ def performance_refused(
     case: ModelCase,
     selected: FunctionCase,
 ) -> None:
-    """One unplaced shipped-model function must identify missing placement."""
+    """One unplaced shipped-model function must identify the domain it lacks."""
     rejected = tf(
         "analyze",
         static(source, case, selected.selector),
@@ -193,7 +198,7 @@ def performance_refused(
     )
     assert rejected.returncode == 1, rejected.stdout + rejected.stderr
     assert "performance:" in rejected.stderr
-    assert "has no" in rejected.stderr and "placement" in rejected.stderr
+    assert "has no" in rejected.stderr and "execution domain" in rejected.stderr
 
 
 def scheduled(tf, source: Path, case: ModelCase, planned: FunctionCase, *, topology: str = ""):
@@ -224,7 +229,7 @@ def lifetimes(
 def traffic_read(tf, source: Path, case: ModelCase, selector: str, dims: Mapping[str, int]) -> int:
     """How many bytes the memory analysis says one function reads from gmem."""
     report = reported(tf, source, case, selector, ("memory",), dims)
-    return report["function_records"]["memory"]["traffic"]["gmem"]["read"]
+    return report["function_records"]["traffic"]["whole"]["gmem"]["read"]
 
 
 def one_rounding(want) -> tuple[str, dict[str, float]]:

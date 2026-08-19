@@ -307,9 +307,16 @@ def _elaborate_from_bound_types(
                     pinned.append(new_target)
             if dims is not None:
                 new_target = _substitute_op_dims(new_target, dims)
-            if not args_changed and new_target is call_expr.target:
+            new_metadata = _substitute_authored_dims(call_expr.metadata, dims)
+            if (
+                not args_changed
+                and new_target is call_expr.target
+                and new_metadata is call_expr.metadata
+            ):
                 return call_expr
-            rebuilt = dataclasses.replace(call_expr, args=new_args, target=new_target)
+            rebuilt = dataclasses.replace(
+                call_expr, args=new_args, target=new_target, metadata=new_metadata
+            )
             return self._retyped(rebuilt)
 
         def visit_GridRegionExpr(self, grid: GridRegionExpr) -> Expr:
@@ -423,6 +430,36 @@ def _specialize_callee(
     if all(new is param.type for new, param in zip(bound, callee.params)):
         return callee
     return _elaborate_from_bound_types(callee, bound, ctx, dims=dims)
+
+
+def _substitute_authored_dims(
+    metadata: "tuple[IRMetadata, ...]", dims: "Mapping[str, int] | None"
+) -> "tuple[IRMetadata, ...]":
+    """*metadata* with what the author stated restated at the bound extents.
+
+    An execution domain names the Mesh a Call was written inside, and a Mesh
+    written over a range says so until something binds it. Carrying it through
+    a specialization untouched would leave the program concrete and its own
+    account of where it runs still a range, which is a domain nothing can count
+    positions in.
+    """
+    if dims is None or not metadata:
+        return metadata
+    from tilefoundry.ir.core.metadata import ExecutionDomainMetadata  # noqa: PLC0415
+    from tilefoundry.ir.types.substitute import substitute_mesh_dims  # noqa: PLC0415
+
+    rebuilt = tuple(
+        dataclasses.replace(
+            item,
+            scopes=tuple(substitute_mesh_dims(mesh, dims) for mesh in item.scopes),
+        )
+        if isinstance(item, ExecutionDomainMetadata)
+        else item
+        for item in metadata
+    )
+    if all(new is old for new, old in zip(rebuilt, metadata)):
+        return metadata
+    return rebuilt
 
 
 def _substitute_op_dims(target: object, dims: "Mapping[str, int]") -> object:

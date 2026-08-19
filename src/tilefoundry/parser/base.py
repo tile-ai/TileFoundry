@@ -12,6 +12,7 @@ from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
     Constant,
+    ExecutionDomainMetadata,
     Expr,
     IRMetadata,
     SourceSpanMetadata,
@@ -336,6 +337,7 @@ class BaseExprVisitor:
         self._tile_windows: dict[int, tuple[Any, Any]] = {}
         self._active_source_node: ast.AST | None = None
         self._active_binding_hint: str | None = None
+        self._mesh_scopes: tuple[Any, ...] = ()
         self.source_filename = "<string>"
 
     def _tuple_expr_expr(self, node: ast.Tuple):
@@ -419,6 +421,8 @@ class BaseExprVisitor:
             metadata.append(span)
         if self._active_binding_hint is not None:
             metadata.append(BindingMetadata(self._active_binding_hint))
+        if self._mesh_scopes:
+            metadata.append(ExecutionDomainMetadata(self._mesh_scopes))
         return tuple(metadata)
 
     @staticmethod

@@ -243,20 +243,55 @@ __all__ = ["Mma", "Mma_SM80_16x8x16", "Wgmma_SM90_64x128x16"]
 _TILES = {"Mma_SM80_16x8x16": (16, 8, 16), "Wgmma_SM90_64x128x16": (64, 128, 16)}
 
 
+def _whole_read(held: "Type", rank: int) -> "isl.map":
+    """Every coordinate of one operand, whatever the result coordinate is.
+
+    A tile instruction reads its operands entire, so no result coordinate picks
+    out part of one. The positions are the ones this view states rather than the
+    two an instruction is written in: a fragment held across a mesh keeps the
+    positions that mesh factored it into, and an image that named fewer could
+    not be composed with the layout that turns them into bytes.
+    """
+    terms, guards = [], []
+    for position, extent in enumerate(held.shape):
+        if extent == 1:
+            terms.append("0")
+            continue
+        terms.append(f"p{position}")
+        guards.append(f"0 <= p{position} < {extent}")
+    dims = ", ".join(f"d{index}" for index in range(rank))
+    image = ", ".join(terms) if terms else "0"
+    where = " and ".join(guards)
+    return isl.map(f"{{ [{dims}] -> [{image}]" + (f" : {where} }}" if where else " }"))
+
+
+def _viewed(ctx):
+    """How this context names a value's shape, whichever context it is.
+
+    The alias walk asks the same handler without a projection of its own, so it
+    answers with the type the program states rather than one a level narrowed.
+    """
+    local = getattr(ctx, "local_type_of", None)
+    return local if callable(local) else ctx.type_of
+
+
 def _tile_access(call: "Call", ctx) -> AccessRelations:
     """A fixed tile: both operands read whole, the accumulator written whole.
 
-    ``_TILES`` holds each instruction's own shape, which is what separates these
-    from a MatMul and why a projection must leave them alone: one instruction is
-    one instruction however many participants issue it.
+    ``_TILES`` holds each instruction's own count, which is what separates these
+    from a MatMul: one instruction moves one instruction's elements however many
+    participants issue it. Where those elements sit is the view's answer, so the
+    patterns are stated over the positions this view gives the operands.
     """
     m, n, k = _TILES[type(call.target).__name__]
+    held = _viewed(ctx)
+    rank = len(held(call).shape)
     return AccessRelations(
         inputs=(
-            moves(isl.multi_aff("{ [dm, dn, dk] -> [dm, dk] }"), m * k),
-            moves(isl.multi_aff("{ [dm, dn, dk] -> [dk, dn] }"), k * n),
+            moves(_whole_read(held(call.args[0]), rank), m * k),
+            moves(_whole_read(held(call.args[1]), rank), k * n),
         ),
-        outputs=(writes(identity_access(2), m * n),),
+        outputs=(writes(identity_access(rank), m * n),),
     )
 
 

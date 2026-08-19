@@ -658,7 +658,7 @@ def test_qwen_decoder_unplaced_calls_are_refused_at_each_sequence_length(
 
     with pytest.raises(
         AnalysisError,
-        match=r"model.py:\d+:.*has no cta placement",
+        match=r"model.py:\d+:.*has no cta execution domain",
     ):
         analyze(module, function, analysis="performance", dims={"ctx_len": ctx_len})
 
