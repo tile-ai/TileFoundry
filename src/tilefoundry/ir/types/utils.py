@@ -14,6 +14,7 @@ from .shard import (
     Split,
     Topology,
     canonical_shard_layout,
+    level_axes,
     shard_layout_of,
 )
 from .tensor_type import TensorType, TupleType, Type
@@ -160,20 +161,20 @@ def _local_layout_shape(
         _nested_layout_shape(layout.layout, selected_level=selected_level, topologies=topologies)
     )
     declared = {topology.name: index for index, topology in enumerate(topologies)}
-    if len(layout.mesh.topologies) > 1:
-        raise ValueError(
-            "local_type_of: one mesh names multiple topology levels; "
-            "a level boundary cannot assign its position count"
-        )
-    (topology,) = layout.mesh.topologies
-    topology_level = declared.get(topology.name)
-    if topology_level is None:
-        raise ValueError(f"local_type_of: shard uses undeclared topology level {topology.name!r}")
+    axis_level: dict[int, int] = {}
+    for topology, axes in zip(layout.mesh.topologies, level_axes(layout.mesh)):
+        level = declared.get(topology.name)
+        if level is None:
+            raise ValueError(
+                f"local_type_of: shard uses undeclared topology level {topology.name!r}"
+            )
+        for mesh_axis in axes:
+            axis_level[mesh_axis] = level
     mesh_shape = layout.mesh.layout.shape
     for mesh_axis, attr in enumerate(layout.attrs):
         if not isinstance(attr, Split):
             continue
-        if topology_level > selected_level:
+        if axis_level.get(mesh_axis, selected_level) > selected_level:
             continue
         if mesh_axis >= len(mesh_shape):
             raise ValueError("local_type_of: shard attribute exceeds mesh layout rank")

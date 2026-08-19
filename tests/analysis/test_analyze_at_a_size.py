@@ -18,6 +18,7 @@ import pytest
 
 from tests.fixtures.placed.flash_split_k_decode import BLOCK, HEADS, WORKERS, FlashSplitKDecode
 from tests.fixtures.placed.gqa_decode import MAX_CTX, GqaOnline
+from tests.fixtures.placed.mha_decode_paged import LongerCache, ShorterCache
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tests.fixtures.placed.qwen3_1_7b_pd import PrefillLayer
 from tests.models.corpus import (
@@ -238,6 +239,56 @@ def test_qwen3_pd_states_its_bound_and_its_loop_footprints_at_each_size(
     ]
     assert loop_footprints and all(record.footprints for record in loop_footprints)
     assert any(not record.known for record in loop_footprints) is (dims["seq"] != 1)
+
+
+def _predicted_ns(module, dims=None) -> int:
+    """What the four families together say one program takes."""
+    result = analyze(
+        module, module.entry_function(), analysis=FAMILIES, level="cta", dims=dims
+    )
+    summary = get_metadata(result.function, PerformanceSummaryMetadata)
+    assert summary is not None
+    return summary.timeline.end_ns - summary.timeline.start_ns
+
+
+@pytest.mark.parametrize(
+    ("less", "more", "why"),
+    [
+        pytest.param(
+            (ShorterCache, None),
+            (LongerCache, None),
+            "twice the KV cache to attend over",
+            id="paged-mha-kv-512-vs-1024",
+        ),
+        pytest.param(
+            (PrefillLayer, {"ctx_len": 512, "seq": 1}),
+            (PrefillLayer, {"ctx_len": 4608, "seq": 1}),
+            "nine times the context to decode against",
+            id="qwen3-decode-ctx-512-vs-4608",
+        ),
+        pytest.param(
+            (PrefillLayer, {"ctx_len": 0, "seq": 512}),
+            (PrefillLayer, {"ctx_len": 512, "seq": 512}),
+            "a history to attend over as well as the prompt",
+            id="qwen3-prefill-history-none-vs-512",
+        ),
+    ],
+)
+def test_more_work_is_never_predicted_to_take_less_time(less, more, why: str) -> None:
+    """The one direction a prediction cannot go, on programs that differ in size.
+
+    Each pair is one program at two sizes, and the larger reads more or computes
+    more than the smaller. A model that returned the shorter time for it would be
+    wrong in a way no absolute number can show, because both numbers would still
+    look plausible on their own. This is a bound, not a calibration: how much
+    longer is a question about a machine nobody has measured here.
+    """
+    smaller = _predicted_ns(*less)
+    larger = _predicted_ns(*more)
+
+    assert smaller > 0 and larger >= smaller, (
+        f"{why}: predicted {larger} ns against {smaller} ns"
+    )
 
 
 @pytest.mark.parametrize(

@@ -183,6 +183,7 @@ def _resolve_tensor_type(
     *,
     mesh_resolver=None,
     default_mesh: Mesh | None = None,
+    mesh_order: "tuple[Mesh, ...]" = (),
     name_resolver=None,
 ) -> TensorType:
     """Resolve tensor annotations identically for HIR and TIR functions.
@@ -205,6 +206,7 @@ def _resolve_tensor_type(
         closure=bindings,
         mesh_resolver=mesh_resolver,
         default_mesh=default_mesh,
+        mesh_order=mesh_order,
     )
     if result is not None:
         return canonicalize_dims(result)
@@ -571,6 +573,7 @@ class BaseExprVisitor:
                 self.closure,
                 mesh_resolver=self._resolve_body_mesh,
                 default_mesh=self._current_default_mesh(),
+                mesh_order=self._mesh_scopes,
                 name_resolver=self.env.lookup,
             )
         if isinstance(node.value, ast.Name):
@@ -1370,6 +1373,7 @@ class BaseExprVisitor:
                     ShardLayout,
                     mesh_resolver=self._resolve_body_mesh,
                     default_mesh=self._current_default_mesh(),
+                    mesh_order=self._mesh_scopes,
                     closure=self.closure,
                 )
             except LayoutSugarError:
@@ -1428,6 +1432,7 @@ class BaseExprVisitor:
                 ShardLayout,
                 mesh_resolver=self._resolve_body_mesh,
                 default_mesh=self._current_default_mesh(),
+                mesh_order=self._mesh_scopes,
                 closure=self.closure,
             )
         if annotation is Layout:

@@ -80,14 +80,12 @@ class Compare:
 
 @module(entry="kernel", target=_H200, topologies=(Topology("cta", B * H * SPLIT),))
 class Levels:
-    """TF-MESH-LEVELS: the one form of this placement that is accepted today.
+    """TF-MESH-LEVELS: the CTA half of the placement, on its own.
 
-    A warp-specialized kernel's placement is per-CTA *and* per-lane. This states
-    the CTA half; the lane half is what the finding is about, and its two refused
-    forms are absent on purpose. One CTA+thread `Mesh` is refused by
-    `local_type_of`, and two nested single-level meshes are refused at decoration
-    time, which would make this whole file unimportable. They join it with the
-    fix, because a fixture that cannot be imported states nothing.
+    A warp-specialized kernel is placed per CTA *and* per lane. This says only
+    the first half, and is the control the two forms that say both are read
+    against: all three place the same CTAs and predict the same time, because
+    the lane structure is a fact about what happens inside one of them.
     """
 
     @func
@@ -97,3 +95,59 @@ class Levels:
             return tf.reshard(
                 tf.square(t), (B @ g.seq, KV @ g.split, H @ g.head, D), "gmem"
             )
+
+
+@module(entry="kernel", target=_H200,
+        topologies=(Topology("cta", B * H * SPLIT), Topology("thread", WARPS * LANES)))
+class LevelsOnOneMesh:
+    """TF-MESH-LEVELS: both halves, on one Mesh naming both levels.
+
+    The axes are handed to the levels left to right and the boundary is where
+    their extents multiply to the CTA count, so `(seq, head, split)` are the
+    CTAs and `(warp, lane)` are the threads inside one. This is the form the
+    round's own scaffold template used.
+    """
+
+    @func
+    def kernel(x: Tensor[(B, KV, H, D), "f16"]) -> Tensor[(B, KV, H, D), "f16"]:
+        with Mesh(
+            ("cta", "thread"),
+            layout=(B, H, SPLIT, WARPS, LANES),
+            names=("seq", "head", "split", "warp", "lane"),
+        ) as m:
+            t = tf.reshard(
+                x, (B @ m.seq, KV @ (m.split, m.warp), H @ m.head, D @ m.lane), "rmem"
+            )
+            return tf.reshard(
+                tf.square(t),
+                (B @ m.seq, KV @ (m.split, m.warp), H @ m.head, D @ m.lane),
+                "gmem",
+            )
+
+
+@module(entry="kernel", target=_H200,
+        topologies=(Topology("cta", B * H * SPLIT), Topology("thread", WARPS * LANES)))
+class LevelsNested:
+    """TF-MESH-LEVELS: both halves, as two single-level Meshes nested in one another.
+
+    Which level distributes which is not something a layout can be read for, so
+    it is taken from the scopes the layout is written inside. The lane mesh is
+    entered within the CTA mesh, and a layout naming axes of both says the CTA
+    owns a tile and the lane owns part of that tile -- the same placement the
+    one-Mesh form states, said the other way round.
+    """
+
+    @func
+    def kernel(x: Tensor[(B, KV, H, D), "f16"]) -> Tensor[(B, KV, H, D), "f16"]:
+        with Mesh(("cta",), layout=(B, H, SPLIT), names=("seq", "head", "split")) as g:
+            with Mesh(("thread",), layout=(WARPS, LANES), names=("warp", "lane")) as m:
+                t = tf.reshard(
+                    x,
+                    (B @ g.seq, KV @ (g.split, m.warp), H @ g.head, D @ m.lane),
+                    "rmem",
+                )
+                return tf.reshard(
+                    tf.square(t),
+                    (B @ g.seq, KV @ (g.split, m.warp), H @ g.head, D @ m.lane),
+                    "gmem",
+                )

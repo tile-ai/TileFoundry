@@ -16,6 +16,7 @@ from dataclasses import replace
 import pytest
 
 import tilefoundry.analysis.compute_cost as compute_cost
+from tests.fixtures.placed import performance_findings as findings
 from tests.fixtures.placed.derived_prefill import DerivedPrefill
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
@@ -505,6 +506,16 @@ def _multi_topology_mesh(source: Tensor[(4,), "f32"]):
         return tf.add(local, local)
 
 
+@func(
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", 2), Topology("thread", 2)),
+)
+def _segmented_mesh(source: Tensor[(8,), "f32"]):
+    with Mesh(("cta", "thread"), layout=(2, 2), names=("block", "lane")) as mesh:
+        local = tf.reshard(source, (8 @ (mesh.block, mesh.lane),), "rmem")
+        return tf.reshard(tf.add(local, local), (8 @ (mesh.block, mesh.lane),), "gmem")
+
+
 @module(entry="split", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 132),))
 class _SharedTile:
     @func
@@ -641,12 +652,65 @@ def test_function_call_carries_the_callee_per_unit_work() -> None:
     assert record.flops_per_unit == (("f32", 64),)
 
 
-def test_analysis_refuses_a_position_count_for_a_multi_topology_mesh() -> None:
-    with pytest.raises(
-        AnalysisError,
-        match="one mesh names multiple topology levels",
-    ):
+def test_a_mesh_naming_two_levels_is_segmented_where_its_axes_land() -> None:
+    """One Mesh may name both levels, and its axes say where the boundary is.
+
+    A warp-specialized kernel is placed per CTA and per lane at once, and one
+    mesh naming both states that in one place. Its axes are handed to the levels
+    left to right, so the boundary is where their extents multiply to the CTA
+    count; the CTA projection reads that segment and the lane axes divide out.
+    An axis that straddles the boundary is refused rather than halved: four
+    positions across two CTAs of two lanes could be either half of it.
+    """
+    with pytest.raises(AnalysisError, match="do not land on the boundary of level 'cta'"):
         _run(_multi_topology_mesh, "compute-cost")
+
+    placed, function = _run(_segmented_mesh, "performance")
+    assert placed.executed[-1] == "performance"
+    calls = _calls(function)
+    assert calls and all(
+        get_metadata(call, ExecutionDomainMetadata).at("cta") is not None for call in calls
+    )
+    cta = IrTopology("cta", 2)
+    assert _mesh_image(
+        get_metadata(calls[-1], ExecutionDomainMetadata).at("cta"), cta
+    ) == frozenset((0, 1))
+
+
+def test_saying_where_the_lanes_are_does_not_move_the_ctas() -> None:
+    """Three spellings of one placement, held to the same answer.
+
+    A warp-specialized kernel is placed per CTA and per lane. It can say only the
+    CTA half, or say both on one Mesh naming both levels, or say both as a lane
+    Mesh nested inside a CTA Mesh. Those are three ways of writing one program,
+    so the CTA participants and the predicted time have to come out the same:
+    what the lanes do is what happens inside a CTA, and a reading that let it
+    change which CTAs run would be pricing the spelling rather than the program.
+    """
+    answers = {}
+    for name in ("Levels", "LevelsOnOneMesh", "LevelsNested"):
+        root = getattr(findings, name)
+        result = analyze(
+            root,
+            root.entry_function(),
+            analysis=("compute-cost", "memory", "roofline", "performance"),
+            level="cta",
+        )
+        summary = get_metadata(result.function, PerformanceSummaryMetadata)
+        assert summary is not None
+        places = {
+            _mesh_image(
+                get_metadata(call, ExecutionDomainMetadata).at("cta"),
+                root.resolve_topology("cta"),
+            )
+            for call in _calls(result.function)
+        }
+        assert len(places) == 1
+        answers[name] = (summary.timeline.end_ns, next(iter(places)))
+
+    assert len(set(answers.values())) == 1, answers
+    (_ns, placement), *_ = answers.values()
+    assert placement == frozenset(range(128))
 
 
 def test_the_two_operations_a_decoder_stops_on_cost_what_they_do() -> None:
@@ -1884,7 +1948,7 @@ def test_the_placed_inventory_takes_the_whole_directory() -> None:
     analyses run; a count is not an answer, so this runs nothing.
     """
     roots = placed_fixture_roots()
-    assert len(roots) == 27
+    assert len(roots) == 29
 
     outside = []
     for file, name, published in roots:
@@ -1905,11 +1969,11 @@ def test_the_placed_inventory_takes_the_whole_directory() -> None:
     ]
 
     cases = placed_cases()
-    assert len(roots) - len(outside) == 21, "the roots that answer for CTAs"
-    assert len({case.id.rsplit("[", 1)[0] for case in cases}) == 27, (
+    assert len(roots) - len(outside) == 23, "the roots that answer for CTAs"
+    assert len({case.id.rsplit("[", 1)[0] for case in cases}) == 29, (
         "one row per selector those roots expose, not one per root"
     )
-    assert len(cases) == 30, "and one case per stated set of sizes"
+    assert len(cases) == 32, "and one case per stated set of sizes"
 
 
 def test_only_addressable_levels_are_placed_by_the_solver() -> None:

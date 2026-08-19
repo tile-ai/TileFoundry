@@ -31,7 +31,14 @@ from tilefoundry.ir.hir.specialize import (
 )
 from tilefoundry.ir.types import Type, callable_type_for
 from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.shard import ComposedLayout, Layout, Mesh, ShardLayout, Topology
+from tilefoundry.ir.types.shard import (
+    ComposedLayout,
+    Layout,
+    Mesh,
+    ShardLayout,
+    Topology,
+    level_projection,
+)
 from tilefoundry.ir.types.shard.layout_algebra import (
     NotProjectable,
     apply,
@@ -94,19 +101,23 @@ def _layout_shards(layout: object) -> tuple[ShardLayout, ...]:
 
 
 def _mesh_image(mesh: Mesh, selected: Topology) -> Placement:
-    """The exact selected-topology positions named by one Mesh."""
+    """The exact selected-topology positions named by one Mesh.
+
+    A Mesh may name more than one level, and then its axes are that many
+    consecutive segments: the positions of one level are the axes up to and
+    including its own, with the positions below it divided out. A thread is a
+    position within its CTA, and asking where the CTA is means asking that
+    question of the part of the mesh that says so.
+    """
     actual = tuple(topology.name for topology in mesh.topologies)
-    if len(mesh.topologies) != 1:
-        raise AnalysisError(
-            f"one placement Mesh names topology levels {actual}; selected level "
-            f"{selected.name!r} requires one level whose positions can be projected"
-        )
-    (mesh_topology,) = mesh.topologies
-    if mesh_topology.name != selected.name:
+    named = [topology for topology in mesh.topologies if topology.name == selected.name]
+    if not named:
+        levels = ", ".join(repr(name) for name in actual)
         raise AnalysisError(
             f"selected topology level {selected.name!r}, but the result Mesh is "
-            f"placed at level {mesh_topology.name!r}"
+            f"placed at level(s) {levels}"
         )
+    (mesh_topology,) = named
     selected_size = static_dim_value(selected.size)
     mesh_size = static_dim_value(mesh_topology.size)
     if selected_size is None or selected_size <= 0:
@@ -121,7 +132,15 @@ def _mesh_image(mesh: Mesh, selected: Topology) -> Placement:
             f"{selected.size!r}"
         )
 
-    layout = mesh.layout
+    if len(mesh.topologies) == 1:
+        layout = mesh.layout
+    else:
+        try:
+            layout = level_projection(mesh, selected.name)
+        except ValueError as error:
+            raise AnalysisError(
+                f"the {selected.name!r} result Mesh is not projectable: {error}"
+            ) from None
     try:
         if isinstance(layout, Layout):
             count = size(layout)

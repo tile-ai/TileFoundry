@@ -21,7 +21,7 @@ from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
 from tilefoundry.ir.types.shape_dim import ShapeDim
 from tilefoundry.ir.types.shard import c_order_strides
 from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.mesh import Mesh
+from tilefoundry.ir.types.shard.mesh import Mesh, composed
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
     Partial,
@@ -318,6 +318,7 @@ def _parse_shard_layout_sugar(
     *,
     default_mesh: Mesh | None = None,
     closure: dict[str, Any] | None = None,
+    mesh_order: "tuple[Mesh, ...]" = (),
 ) -> ShardLayout:
     """Parse placement and value-state sugar into a shard layout.
 
@@ -343,60 +344,89 @@ def _parse_shard_layout_sugar(
         _parse_value_state(value_set_node, mesh_resolver) if value_set_node is not None else []
     )
 
-    shape: list[int] = []
-
-    resolved_mesh: Mesh | None = None
+    named: list[Mesh] = []
     for _d, mesh, _mi, _k, _r in parsed:
-        if mesh is None:
-            continue
-        if resolved_mesh is None:
-            resolved_mesh = mesh
-        elif id(mesh) != id(resolved_mesh):
-            raise VerifyError("all layout dims must reference the same mesh")
+        if mesh is not None and not any(item is mesh for item in named):
+            named.append(mesh)
     for mesh, _mi, _r in value_states:
-        if resolved_mesh is None:
-            resolved_mesh = mesh
-        elif id(mesh) != id(resolved_mesh):
-            raise VerifyError("value-state mesh must match the layout mesh")
+        if not any(item is mesh for item in named):
+            named.append(mesh)
 
-    if resolved_mesh is None:
-        if default_mesh is not None:
-            resolved_mesh = default_mesh
-        else:
+    if not named:
+        if default_mesh is None:
             raise VerifyError(
                 "all-Broadcast ShardLayout sugar requires a mesh from "
                 "context; use verbose ShardLayout(...) to disambiguate"
             )
+        named = [default_mesh]
+    ordered = _nesting_order(named, mesh_order)
 
-    mesh_rank = len(resolved_mesh.layout.shape)
-    attrs_list: list[ShardAttr] = [Broadcast() for _ in range(mesh_rank)]
-
-    for dim, _mesh, m_axis, kind, _reduction in parsed:
+    shape: list[int] = []
+    axis_of: list[int | None] = []
+    for dim, _mesh, _m_axis, _kind, _reduction in parsed:
         if dim is not None:
             shape.append(dim)
-        layout_axis = len(shape) - 1
-        if kind == "split":
+            axis_of.append(len(shape) - 1)
+        else:
+            axis_of.append(None)
+
+    attrs_list: list[ShardAttr] = []
+    for mesh in ordered:
+        mesh_rank = len(mesh.layout.shape)
+        own: list[ShardAttr] = [Broadcast() for _ in range(mesh_rank)]
+        for index, (_dim, item_mesh, m_axis, kind, _reduction) in enumerate(parsed):
+            if kind != "split" or item_mesh is not mesh:
+                continue
+            layout_axis = axis_of[index]
             if m_axis is None or m_axis >= mesh_rank:
                 raise VerifyError(f"layout dim {layout_axis}: invalid mesh axis {m_axis}")
-            if not isinstance(attrs_list[m_axis], Broadcast):
+            if not isinstance(own[m_axis], Broadcast):
                 raise VerifyError(
                     f"mesh axis {m_axis} already bound; "
                     f"one layout dim per mesh axis ({spec_ref_render(_SHARD_ATTR)})"
                 )
-            attrs_list[m_axis] = Split(layout_axis)
+            own[m_axis] = Split(layout_axis)
+        for item_mesh, m_axis, reduction in value_states:
+            if item_mesh is not mesh:
+                continue
+            if m_axis >= mesh_rank:
+                raise VerifyError(f"value-state: invalid mesh axis {m_axis}")
+            if not isinstance(own[m_axis], Broadcast):
+                raise VerifyError(f"mesh axis {m_axis} already bound")
+            own[m_axis] = Partial(reduction or "sum")
+        attrs_list.extend(own)
 
-    for _mesh, m_axis, reduction in value_states:
-        if m_axis >= mesh_rank:
-            raise VerifyError(f"value-state: invalid mesh axis {m_axis}")
-        if not isinstance(attrs_list[m_axis], Broadcast):
-            raise VerifyError(f"mesh axis {m_axis} already bound")
-        attrs_list[m_axis] = Partial(reduction or "sum")
-
+    try:
+        resolved_mesh = composed(tuple(ordered))
+    except ValueError as error:
+        raise VerifyError(str(error)) from None
     return ShardLayout(
         layout=Layout(shape=tuple(shape), strides=strides),
         attrs=tuple(attrs_list),
         mesh=resolved_mesh,
     )
+
+
+def _nesting_order(named: list[Mesh], mesh_order: "tuple[Mesh, ...]") -> list[Mesh]:
+    """The meshes one layout names, outermost scope first.
+
+    A value can be distributed at more than one level at once -- a CTA owns a
+    tile and a lane owns part of that tile -- and saying so takes both meshes.
+    Which is inside which is not something a layout can be read for, so it is
+    taken from the scopes the layout was written in; two meshes that are not
+    nested have no such answer and are refused rather than ordered by guess.
+    """
+    if len(named) == 1:
+        return named
+    position = {id(mesh): index for index, mesh in enumerate(mesh_order)}
+    missing = [mesh for mesh in named if id(mesh) not in position]
+    if missing:
+        raise VerifyError(
+            "a layout naming several meshes needs them nested in one another, so "
+            "which distributes which is stated rather than guessed; "
+            f"{len(missing)} of them is not a scope this layout is written inside"
+        )
+    return sorted(named, key=lambda mesh: position[id(mesh)])
 
 
 def _split_layout_outer(
@@ -693,6 +723,7 @@ def _parse_tensor_type_sugar(
     *,
     mesh_resolver: MeshResolver | None = None,
     default_mesh: Mesh | None = None,
+    mesh_order: "tuple[Mesh, ...]" = (),
 ) -> TensorType | None:
     """Parse a ``Tensor[...]`` or ``ConstTensor[...]`` type literal."""
     if not isinstance(node, ast.Subscript):
@@ -723,7 +754,11 @@ def _parse_tensor_type_sugar(
     embedded_layout = _has_sugar(elts[0])
     if embedded_layout:
         layout = _parse_shard_layout_sugar(
-            elts[0], resolver, default_mesh=default_mesh, closure=closure
+            elts[0],
+            resolver,
+            default_mesh=default_mesh,
+            closure=closure,
+            mesh_order=mesh_order,
         )
 
     if len(elts) >= 3:
@@ -782,6 +817,7 @@ def parse_sugar(
     closure: dict[str, Any] | None = None,
     mesh_resolver: MeshResolver | None = None,
     default_mesh: Mesh | None = None,
+    mesh_order: "tuple[Mesh, ...]" = (),
 ) -> Layout | ShardLayout | TensorType | None:
     """Parse one type-directed layout or tensor-type sugar form."""
     closure = closure or {}
@@ -798,6 +834,7 @@ def parse_sugar(
             mesh_resolver,
             default_mesh=default_mesh,
             closure=closure,
+            mesh_order=mesh_order,
         )
     if expected is TensorType:
         return _parse_tensor_type_sugar(
@@ -805,6 +842,7 @@ def parse_sugar(
             closure,
             mesh_resolver=mesh_resolver,
             default_mesh=default_mesh,
+            mesh_order=mesh_order,
         )
     raise TypeError(f"unsupported sugar result type {expected!r}")
 

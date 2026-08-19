@@ -271,6 +271,16 @@ of size `dim / ∏(mesh_extents)`. The remainder axis is always
 appended last; the mesh-axis order in the tuple determines the tensor
 axis order.
 
+**Several meshes in one layout.** A value may be distributed at more than one
+level at once -- a CTA owns a tile and a lane owns part of that tile -- and
+saying so names axes of more than one Mesh. Those meshes MUST be the enclosing
+`with Mesh(...)` scopes, and they compose outermost first
+([shard §5](./shard.md#5-mesh)) into the one Mesh the resulting `ShardLayout`
+carries, so this and one Mesh naming both levels produce the same IR. Which is
+inside which MUST come from the scopes rather than from the layout: a layout
+naming a mesh that is not a scope it is written inside is refused, because there
+is nothing that says how the two nest.
+
 **Canonicalization (single-mesh-axis form)**. Surface sugar
 `N @ m.a` where `N > mesh_extent(a)` MUST be expanded at parse time
 into the factorised pair `(mesh_extent(a) @ m.a, N // mesh_extent(a))`

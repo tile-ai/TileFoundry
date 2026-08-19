@@ -271,15 +271,30 @@ full sequence is always `topologies`.
     sizes equals `size(mesh.layout)`. Mesh-scope verification asserts this
     predicate; Mesh construction and slicing do not, so a derived slice
     remains a record of its parent scope.
+  - A Mesh naming several levels segments its layout axes between them, left to
+    right in the order it names them: a level takes axes until their extents
+    multiply to exactly its own `Topology.size`. An axis that straddles a
+    boundary MUST be refused rather than divided, because a level boundary
+    cannot assign the positions of an axis it runs through. Every axis MUST
+    belong to one level.
+  - The layout of the positions one level has is the axes up to and including
+    that level's segment, with their strides divided by the product of the sizes
+    of the levels below it; a stride that division does not divide exactly MUST
+    be refused. A Mesh naming one level states its own layout and is not
+    projected. A Mesh naming several MUST NOT also be sliced.
+  - Nested single-level Mesh scopes compose to exactly that shape: the axes join
+    outermost first and each outer stride is scaled by the positions below it.
+    A value distributed at two levels at once may therefore be written either
+    way, and both state one placement.
   - A reader that asks for a position count by topology name reads
     `size(mesh.layout)`. It accepts a Mesh with one topology only; a
     multi-topology Mesh is rejected rather than projecting its layout onto a
     guessed level.
   - A reader that asks for an exact participant set at a selected topology level
-    MUST accept a one-topology Mesh for that same level only. For a plain
-    `Layout`, the set is `{apply(layout, c) | 0 <= c < size(layout)}`. For a
-    sliced `ComposedLayout`, it is
-    `{image(layout, c) | 0 <= c < size(layout.outer)}`.
+    MUST take that level's projected layout as above, and MUST refuse a Mesh
+    that names no such level. For a plain `Layout`, the set is
+    `{apply(layout, c) | 0 <= c < size(layout)}`. For a sliced `ComposedLayout`,
+    it is `{image(layout, c) | 0 <= c < size(layout.outer)}`.
   - That image MUST be static, positive, inverse-projectable, duplicate-free,
     and contained in `[0, selected_topology.size)`. A plain Mesh MUST cover the
     complete selected domain. A strict subdomain MUST use a sliced Mesh so its
