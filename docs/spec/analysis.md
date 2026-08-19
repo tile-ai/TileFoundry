@@ -1283,6 +1283,13 @@ model.
     `[start_ns + t*stride_ns, end_ns + t*stride_ns)`, for `0 <= t < trips`.
     The loop spans `trips * stride_ns`; a consumer of its yield MUST wait for
     that full span. Loop-invariant values remain single occurrences outside it.
+  - An occurrence that writes into a value already holding bytes MUST start no
+    earlier than every reader of those bytes ends. Which values are those bytes
+    MUST be read off the allocation the memory family decided -- values sharing
+    a `buffer_id` are one buffer under several names, including the name a loop
+    carries it forward under. Following the write's own operand edges instead
+    reaches only the names it was handed, and a reader of the rest would still
+    be reading when the write replaced them.
   - Occurrences MUST be laid out in inline occurrence order. Reordering
     independent work is a schedule's decision, not an analysis's: what overlaps
     is what the program's own placement made independent, and the reported time

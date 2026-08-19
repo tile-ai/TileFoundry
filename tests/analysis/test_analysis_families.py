@@ -47,12 +47,12 @@ from tilefoundry.analysis.compute_cost import (
     _local_duration_ns,
 )
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.memory import _base_of
 from tilefoundry.analysis.movement import (
     _call_movement,
     _with_untouched_copy,
     _without_forwarded_movement,
 )
+from tilefoundry.analysis.performance import _storage_of
 from tilefoundry.analysis.roofline import _cost_bound
 from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
@@ -1637,6 +1637,45 @@ def test_a_view_and_its_base_are_one_rectangle_to_place() -> None:
     assert get_metadata(result.function, PerformanceSummaryMetadata) is not None
 
 
+def test_a_buffer_carried_round_a_loop_is_the_same_buffer_to_a_write() -> None:
+    """A loop hands its buffer forward under a new name, and it is the same one.
+
+    An in-place write inside a loop replaces bytes the previous trip is still a
+    reader of, and the name it reads them under is the one the loop carried, not
+    an operand of the write. Following only the write's own operand edges never
+    reaches that name; asking which allocation holds the bytes does, because
+    that is the question the family that placed them already answered.
+    """
+    case = next(item for item in CORPUS if item.id == "access_footprint.grouped_moe")
+    selected = case.analyze[0]
+    owner, entry = case.resolve(case.build(), selected.selector)
+    result = analyze(
+        owner, entry, analysis=("compute-cost", "memory"), dims=selected.dims
+    )
+    values = list(postorder(result.function.body))
+
+    updates = [
+        call
+        for call in values
+        if isinstance(call, Call)
+        and (get_metadata(call, BufferAliasMetadata) or BufferAliasMetadata()).kind
+        == "update"
+    ]
+    assert updates, "this program was expected to write into a destination"
+    for write in updates:
+        alias = get_metadata(write, BufferAliasMetadata)
+        written = _storage_of(write.args[alias.aliased_operands[0]])
+        assert written, "the destination of a write was never given an allocation"
+        carried = [
+            expr
+            for expr in values
+            if isinstance(expr, GridRegionExpr) and _storage_of(expr) & written
+        ]
+        assert carried, (
+            "no loop-carried name of the written buffer was read as that buffer"
+        )
+
+
 def test_an_overwrite_waits_for_everything_that_read_what_it_replaces() -> None:
     """Every name for a buffer is that buffer, wherever the reader happens to run.
 
@@ -1655,7 +1694,11 @@ def test_an_overwrite_waits_for_everything_that_read_what_it_replaces() -> None:
         result.function
     )
     assert get_metadata(written, BufferAliasMetadata) == BufferAliasMetadata("update", (0,))
-    assert _base_of(moved) is made and _base_of(written.args[0]) is made
+    held = _storage_of(made)
+    assert held, "the tile this write reuses was never given an allocation"
+    assert _storage_of(moved) & held and _storage_of(written.args[0]) & held, (
+        "a name for the written buffer was not read as that buffer"
+    )
     placements = _call_placements(_OverwrittenAcrossGroups, result.function, "cta")
     assert placements[id(side)].isdisjoint(placements[id(written)])
     assert (

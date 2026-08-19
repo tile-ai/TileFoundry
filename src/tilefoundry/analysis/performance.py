@@ -29,9 +29,9 @@ from .facts import (
     PerformanceServiceFacts,
     ThroughputFacts,
 )
-from .memory import _base_of
 from .metadata import (
     BufferAliasMetadata,
+    BufferAllocationMetadata,
     ComputeCostMetadata,
     MemoryMetadata,
     PerformanceMetadata,
@@ -123,6 +123,17 @@ def _producer_ids(expr: Expr, schedulable: set[int]) -> set[int]:
     return {producer for child in children(expr) for producer in _producer_ids(child, schedulable)}
 
 
+def _storage_of(expr: Expr) -> frozenset[int]:
+    """Which allocations hold one value's bytes, as the memory family numbered them.
+
+    Values sharing an allocation are one buffer under several names, which is
+    the question a write about to reuse those bytes has to ask. Asking the
+    record rather than walking the operand edges again keeps one answer to it.
+    """
+    held = get_metadata(expr, BufferAllocationMetadata)
+    return frozenset(field.buffer_id for field in held.fields) if held is not None else frozenset()
+
+
 def _overwritten_readers(
     call: Call,
     values: list[Expr],
@@ -141,9 +152,15 @@ def _overwritten_readers(
     alias = get_metadata(call, BufferAliasMetadata)
     if alias is None or alias.kind != "update":
         return set()
-    base = _base_of(call.args[alias.aliased_operands[0]])
+    written = _storage_of(call.args[alias.aliased_operands[0]])
+    if not written:
+        return set()
     here = positions[id(call)]
-    group = [base, *(expr for expr in values if expr is not call and _base_of(expr) is base)]
+    group = [
+        expr
+        for expr in values
+        if expr is not call and _storage_of(expr) & written
+    ]
     readers: set[int] = set()
     for member in group:
         for reader in _schedulable_users(member, users, schedulable):
