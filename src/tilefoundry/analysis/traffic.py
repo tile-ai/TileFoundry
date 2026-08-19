@@ -4,9 +4,9 @@ One lowering answers twice: for the program, and for one unit of it. A unit's
 answer is the relation asked of a unit, already the projection onto one
 participant -- the program's window is never intersected to arrive at it. The
 plan is for the buffer: which one a boundary is in, where a unit's coordinates
-sit in it, and whether a link's two sides are the same bytes. An access this
-cannot place is refused rather than reported as nothing, a buffer with no
-address and a unit moving what it holds no part of alike.
+sit in it, and whether a link is the same bytes on both sides. It says what can
+be proved, not what may be charged: an access it cannot place is charged for the
+copy nobody ruled out, and only a unit reading what another holds is refused.
 """
 
 from __future__ import annotations
@@ -256,11 +256,11 @@ def lower_traffic(
 
     Both readings come from the same boundaries, one asked of the program and
     one of a unit of it. How much crossed a boundary is the Op's own answer, and
-    which level it crossed at is where the value lives. A boundary whose value
-    has no address is refused, an occurrence that cannot be located not having
-    been shown to move nothing, and one that moved nothing gets no row at all.
-    One participant is asked: every participant holds the same extents of a
-    value and differs only in where they start.
+    which level it crossed at is where the value lives. Addresses are what
+    proves a transfer came to nothing, so a boundary the plan cannot place is
+    charged for the copy it has not been shown to avoid: an unproven move is a
+    move. What is still refused is a unit running an occurrence while holding no
+    part of a value the plan did place, whose bytes come from another unit.
     """
     unit_domain = tuple(getattr(unit_ctx.local_type_of(call), "shape", ()) or ())
     boundaries: list[BoundaryTraffic] = []
@@ -288,22 +288,16 @@ def lower_traffic(
             level = umat_level
         else:
             level = str(leaf.storage)
-            if not plan.of(value):
-                raise AnalysisError(
-                    f"{where} names a value with no address, so the bytes it "
-                    "moves cannot be attributed to a buffer"
-                )
             wanted = 0 if field is None else field
             owned = plan.owned(value, participant, wanted) if runs else None
-            if owned is None:
-                if share:
-                    raise AnalysisError(
-                        f"{where} moves {share} elements of a value this "
-                        "participant holds no part of, so the bytes come from "
-                        "somewhere this does not model"
-                    )
-            else:
+            if owned is not None:
                 _within(mine, owned, unit_domain, where)
+            elif runs and share and plan.of(value):
+                raise AnalysisError(
+                    f"{where} moves {share} elements of a value this "
+                    "participant holds no part of, so the bytes come from "
+                    "somewhere this does not model"
+                )
         payload = _element_bytes(leaf)
         read, write = (moving, 0) if side == "input" else (0, moving)
         boundaries.append(

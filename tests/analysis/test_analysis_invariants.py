@@ -2550,32 +2550,30 @@ def test_a_unit_moves_the_share_of_a_buffer_it_was_given() -> None:
         assert record.per_unit == record.whole
 
 
-def test_an_occurrence_with_no_address_is_refused_rather_than_charged_nothing() -> None:
-    """A buffer nobody placed is a question unanswered, not an answer of zero.
+def test_an_occurrence_nobody_placed_is_charged_for_the_copy_nobody_ruled_out() -> None:
+    """Addresses prove a move came to nothing; without them nothing is proven.
 
-    This program never names the level its machine runs work at, so nothing it
-    keeps has an address. Its occurrences move real bytes, and reporting none of
-    them would read as a program that is free to run.
+    This program's machine places nothing it keeps, so no two values can be
+    shown to be the same bytes. What follows is that every transfer is a copy,
+    not that the program moves nothing: an unproven move is a move, and the
+    occurrence still says how much it moved.
     """
     result = analyze(
         _NoParallelLevel, _NoParallelLevel.entry_function(), analysis=("compute-cost", "memory")
     )
     function = result.function
-    plan = build_buffer_plan(function, "cta")
-    assert plan.buffers == ()
+    assert get_metadata(function, MemoryMetadata).allocation is None
+    assert build_buffer_plan(function, "cta").buffers == ()
 
-    scope = FunctionScope(_NoParallelLevel, function)
-    ctx = CostContext(scope=scope)
-    call = next(
-        expr
-        for expr in postorder(function.body)
-        if isinstance(expr, Call) and access_relation_registry.lookup(type(expr.target))
-    )
-    relations = access_relation_registry.lookup(type(call.target))(call, ctx)
-    with pytest.raises(AnalysisError, match="no address"):
-        lower_traffic(
-            call, relations, relations, plan, ctx, ctx, participant=0, umat_level="gmem"
-        )
+    stated = _occurrences(function)
+    assert stated
+    for expr in stated:
+        moved = get_metadata(expr, TrafficMetadata)
+        assert moved is not None and moved.whole
+
+    total = get_metadata(function, TrafficMetadata)
+    assert total is not None
+    assert dict(total.whole) == {"gmem": TrafficBytes(2 * 256 * 4, 256 * 4)}
 
 
 def _matmul_relations(lhs_shape, rhs_shape, out_shape):
@@ -2738,19 +2736,26 @@ def test_a_unit_that_holds_none_of_a_value_is_not_a_unit_that_moves_none() -> No
 def test_an_occurrence_this_cannot_state_carries_no_record_rather_than_an_empty_one() -> None:
     """Saying nothing and saying zero are different, and both get said.
 
-    A program whose machine places nothing has no address for anything it keeps,
-    so no occurrence of it can be told what it moved. An empty record there
-    would claim they moved nothing, when what happened is that nobody could say.
-    A program that can be told states a row for every boundary that moved and
-    none for those that did not, so its rows and its totals agree.
+    An Op that states no relations at this shape leaves its occurrence with
+    nothing said about it, and an empty record there would claim it moved
+    nothing. A program that can be told states a row for every boundary that
+    moved and none for those that did not, so its rows and its totals agree.
     """
-    unplaceable = analyze(
-        _NoParallelLevel, _NoParallelLevel.entry_function(), analysis=("compute-cost", "memory")
+
+    class _DeclinesHere(Op):
+        pass
+
+    register_typeinfer(_DeclinesHere)(
+        lambda call, ctx: make_tensor_type((4,), DType.f32)
     )
-    silent = _occurrences(unplaceable.function)
-    assert silent
-    for expr in silent:
-        assert get_metadata(expr, TrafficMetadata) is None
+
+    @register_access_relation(_DeclinesHere)
+    def _declines(call, ctx) -> AccessRelations:
+        raise NotImplementedError("this Op does not state relations at this shape")
+
+    silent, function = _totalled(_DeclinesHere())
+    assert get_metadata(silent, TrafficMetadata) is None
+    assert get_metadata(function, TrafficMetadata) is None
 
     result = analyze(
         MoEMegaKernel, MoEMegaKernel.entry_function(), analysis=("compute-cost", "memory")
@@ -2765,32 +2770,36 @@ def test_an_occurrence_this_cannot_state_carries_no_record_rather_than_an_empty_
         assert bool(record.whole) == bool(record.boundaries)
         moving += bool(record.boundaries)
     assert moving, "every occurrence this program states moved nothing"
-
-
 def test_a_derived_answer_does_not_survive_into_a_program_that_cannot_give_it() -> None:
     """An answer belongs to the analysis that reached it, not to the program.
 
-    A record left on an authored call travels into every view built from it
-    unless it is known to be derived. This program's machine places nothing, so
-    no analysis of it can say what any occurrence moved, and an answer appearing
-    on one came from somewhere else. A reader would take it for this round's.
+    A record left on an authored value travels into every view built from it
+    unless it is known to be derived. It is put here on a value no analysis
+    attaches one to, so nothing this round writes can cover it up: whatever
+    reaches the view came from the round before, and a reader would take it for
+    this one's.
     """
-    authored = _NoParallelLevel.entry_function()
-    call = next(expr for expr in postorder(authored.body) if isinstance(expr, Call))
-    attach(call, TrafficMetadata(whole=(("marker", TrafficBytes(1, 1)),)))
+    authored = MoEMegaKernel.entry_function()
+    carried = next(
+        expr
+        for expr in postorder(authored.body)
+        if not isinstance(expr, Call) and tensor_types(expr.type)
+    )
+    attach(carried, TrafficMetadata(whole=(("marker", TrafficBytes(1, 1)),)))
     try:
         result = analyze(
-            _NoParallelLevel,
-            _NoParallelLevel.entry_function(),
+            MoEMegaKernel,
+            MoEMegaKernel.entry_function(),
             analysis=("compute-cost", "memory"),
         )
-        stated = _occurrences(result.function)
-        assert stated
-        for expr in stated:
+        seen = 0
+        for expr in postorder(result.function.body):
             record = get_metadata(expr, TrafficMetadata)
-            assert record is None, f"a stale answer reached {describe(expr)}"
+            assert record is None or "marker" not in dict(record.whole), describe(expr)
+            seen += record is not None
+        assert seen, "this round attached nothing, so nothing covered anything up"
     finally:
-        detach(call, TrafficMetadata)
+        detach(carried, TrafficMetadata)
 
 
 def test_a_handler_that_breaks_its_own_contract_is_not_an_op_nothing_can_be_said_of() -> None:

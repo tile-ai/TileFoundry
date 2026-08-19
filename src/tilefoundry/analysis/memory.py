@@ -1271,8 +1271,8 @@ def analyze_memory(
                 allocation=None if allocation is None else allocation.metadata,
             ),
         )
+        scope = FunctionScope(module, fn)
         if allocation is not None:
-            scope = FunctionScope(module, fn)
             _address_buffers(
                 fn,
                 record,
@@ -1282,7 +1282,13 @@ def analyze_memory(
                 topology_levels=target.topology_levels,
                 topologies=topologies,
             )
-            _record_traffic(fn, scope, level, topologies, allocation.placements)
+        _record_traffic(
+            fn,
+            scope,
+            level,
+            topologies,
+            None if allocation is None else allocation.placements,
+        )
         for loop, footprint in loop_records:
             attach(loop, footprint)
 
