@@ -30,19 +30,22 @@ from tilefoundry.ir.types.shard.layout_algebra import (
 from tilefoundry.ir.types.shard.shard_layout import Split
 
 from .errors import AnalysisError
-from .memory import definition_order
 from .metadata import BufferAllocationMetadata, BufferRef
+from .walk import postorder
 
 
 @dataclass(frozen=True)
 class PlannedBuffer:
     """One value field's buffer, and the part of it a reader owns.
 
+    ``expr_id`` is the value this entry belongs to, which is how a reader that
+    holds the value finds it; ``binding`` is for saying which one it was.
     ``origin`` and ``extents`` are stated in the buffer's layout positions. A
     value with no layout has one position per logical axis. An unprojected plan
     owns everything, so the origin is zero and the extents are the whole space.
     """
 
+    expr_id: int
     binding: str
     field: int
     ref: BufferRef
@@ -69,9 +72,30 @@ class BufferPlan:
     level: str | None
     buffers: tuple[PlannedBuffer, ...] = ()
 
-    def of(self, binding: str) -> tuple[PlannedBuffer, ...]:
-        """The fields planned for *binding*, in the order its type states them."""
-        return tuple(item for item in self.buffers if item.binding == binding)
+    def of(self, expr) -> tuple[PlannedBuffer, ...]:
+        """The fields planned for one value, in the order its type states them.
+
+        A value with no entry has none rather than an empty one: nothing is not
+        the same answer as no bytes, and a reader that needs an address has to
+        be able to tell them apart.
+        """
+        return tuple(item for item in self.buffers if item.expr_id == id(expr))
+
+    def owned(self, expr, participant: int, field: int = 0) -> "PlannedBuffer | None":
+        """What *participant* owns of one field of one value.
+
+        The same answer ``project`` gives for that field, without narrowing the
+        whole function to ask about one buffer.
+        """
+        item = next(
+            (
+                held
+                for held in self.buffers
+                if held.expr_id == id(expr) and held.field == field
+            ),
+            None,
+        )
+        return None if item is None else _owned(item, participant, self.level)
 
     def project(self, participant: int) -> "BufferPlan":
         """The same buffers, narrowed to what *participant* owns of each.
@@ -90,7 +114,7 @@ class BufferPlan:
 def build_buffer_plan(fn: Function, level: str | None = None) -> BufferPlan:
     """Read back the addresses *fn*'s placement decided, as one plan."""
     planned: list[PlannedBuffer] = []
-    for expr in definition_order(fn):
+    for expr in _values_of(fn):
         record = get_metadata(expr, BufferAllocationMetadata)
         if record is None:
             continue
@@ -99,6 +123,7 @@ def build_buffer_plan(fn: Function, level: str | None = None) -> BufferPlan:
             whole = _position_shape(ref)
             planned.append(
                 PlannedBuffer(
+                    expr_id=id(expr),
                     binding=binding,
                     field=field,
                     ref=ref,
@@ -113,6 +138,17 @@ def _position_shape(ref: BufferRef) -> tuple:
     """The coordinates one buffer is addressed by: its layout's positions."""
     shape = getattr(ref.layout, "shape", None)
     return tuple(ref.shape if shape is None else shape)
+
+
+def _values_of(fn: Function) -> "list":
+    """Every value of *fn*, each once, parameters first.
+
+    A parameter is named again wherever it is read, and one value has one
+    buffer, so the walk states each the first time it reaches it.
+    """
+    seen: set[int] = set()
+    walk = [*fn.params, *(postorder(fn.body) if fn.body is not None else ())]
+    return [expr for expr in walk if id(expr) not in seen and not seen.add(id(expr))]
 
 
 def _binding_of(expr) -> str:
@@ -142,6 +178,7 @@ def _owned(item: PlannedBuffer, participant: int, level: str | None) -> PlannedB
         return None
     origin, extents = _block(item, layout, coordinate)
     return PlannedBuffer(
+        expr_id=item.expr_id,
         binding=item.binding,
         field=item.field,
         ref=item.ref,

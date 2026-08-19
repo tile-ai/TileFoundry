@@ -20,6 +20,7 @@ from tilefoundry.ir.core import (
     Call,
     Constant,
     Expr,
+    Tuple,
     Var,
     binding_name,
     get_metadata,
@@ -31,6 +32,8 @@ from tilefoundry.ir.types import Type, local_type_of, tensor_bytes
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target, UnsupportedCapabilityError
+from tilefoundry.visitor_registry.access_relation import declared_storage
+from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
 
 from .check import Placement, _call_placements, _result_placement
 from .errors import AnalysisError
@@ -110,9 +113,8 @@ def _carried_origins(fn: Function) -> dict[int, Expr]:
     iteration, and those names are the loop's own. No iteration allocates, so
     the buffer a carried value stands for is the one the loop was entered with.
 
-    A loop's own result is followed to what it yielded rather than assumed to be
-    what it started from: a body that updates in place reaches the same buffer
-    through the alias it proved, and one that does not reaches its own.
+    A loop's own result is not here: it is what its last iteration yielded, one
+    field per carried value, which is a structure and not a rename.
     """
     found: dict[int, Expr] = {}
     if fn.body is None:
@@ -122,8 +124,6 @@ def _carried_origins(fn: Function) -> dict[int, Expr]:
             continue
         for carried, init in zip(expr.carried_args, expr.init_args, strict=False):
             found[id(carried)] = init
-        if len(expr.yield_values) == 1:
-            found[id(expr)] = expr.yield_values[0]
     return found
 
 
@@ -748,79 +748,232 @@ def _address_buffers(
     record: MemoryMetadata,
     allocation: _Allocation,
     facts: MemoryHierarchyFacts,
+    ctx,
     *,
     topology_levels: tuple[str, ...],
     topologies: tuple[Topology, ...],
 ) -> None:
-    """Give each value the addresses its own bytes were placed at.
+    """Give each value the buffer its bytes are in, and where in it they start.
 
-    Buffers are numbered in definition order so the same program numbers them
-    the same way twice. A tuple's leaves tile one allocation in the order the
-    type states them, because that allocation was sized as their sum. A value
-    living in another's bytes names that whole allocation rather than a range of
-    its own, and where inside it the value starts is what the operation's own
-    storage links state. A value only some of whose leaves were placed gets no
-    record, and neither does one whose owner this order does not name.
+    A level whose capacity the target states was placed, and each value's leaves
+    tile the allocation its lifetime was sized by. A level held per unit of work
+    is not placed, and a value there gets a buffer of its own with nothing to
+    search for: two registers are two buffers however their offsets read. A
+    value living in another's bytes names that whole allocation rather than a
+    range of its own, and a tuple names the buffers it was built from. Values
+    are numbered as the program defines them, so it numbers them so twice.
     """
     order = definition_order(fn)
     labels = _unique_labels(order)
     carried = _carried_origins(fn)
     sizes = {(item.level, item.binding): item.bytes for item in record.lifetimes}
-    numbers: dict[tuple[str, str], int] = {}
-    for expr in order:
-        if _is_view(expr):
+    seen: set[int] = set()
+    walk = [
+        expr
+        for expr in (*fn.params, *(postorder(fn.body) if fn.body is not None else ()))
+        if id(expr) not in seen and not seen.add(id(expr))
+    ]
+
+    numbers: dict[int, dict[str, int]] = {}
+    minted = 0
+    for expr in walk:
+        if _is_view(expr) or id(expr) in carried or _parts_of(expr) is not None:
             continue
         for level in bytes_by_storage(expr.type):
-            key = (level, labels[id(expr)])
-            if key in allocation.addresses and key not in numbers:
-                numbers[key] = len(numbers)
+            named = labels.get(id(expr))
+            placed = (level, named) in allocation.addresses if named else False
+            if not placed and level in _ALLOCATED_LEVELS:
+                continue
+            numbers.setdefault(id(expr), {}).setdefault(level, minted)
+            minted += 1
 
-    for expr in order:
-        try:
-            owner = _base_of(expr, carried=carried) if _is_view(expr) else expr
-        except AnalysisError:
+    stated: dict[int, tuple[BufferRef, ...]] = {}
+    for expr in walk:
+        refs = _refs_of(
+            expr,
+            ctx=ctx,
+            stated=stated,
+            numbers=numbers,
+            labels=labels,
+            carried=carried,
+            addresses=allocation.addresses,
+            sizes=sizes,
+            facts=facts,
+            topology_levels=topology_levels,
+            topologies=topologies,
+        )
+        if refs is None:
             continue
-        if id(owner) not in labels:
-            continue
-        binding = labels[id(owner)]
-        cursors: dict[str, int] = {}
-        refs: list[BufferRef] = []
-        for leaf in tensor_types(expr.type):
-            if leaf.storage is StorageKind.UMAT:
-                refs = []
-                break
-            level = str(leaf.storage)
-            number = numbers.get((level, binding))
-            if number is None:
-                refs = []
-                break
-            declared = facts.explicit(level)
-            held = (
-                leaf
-                if declared is None
-                else _type_at_owner(
-                    leaf,
-                    owner=declared.owner,
-                    topology_levels=topology_levels,
-                    topologies=topologies,
-                )
-            )
-            base = allocation.addresses[(level, binding)]
-            own = owner is expr
-            refs.append(
-                BufferRef(
-                    buffer_id=number,
-                    level=level,
-                    offset=base + (cursors.get(level, 0) if own else 0),
-                    size=tensor_bytes(held) if own else sizes[(level, binding)],
-                    shape=tuple(held.shape),
-                    layout=held.layout,
-                )
-            )
-            if own:
-                cursors[level] = cursors.get(level, 0) + tensor_bytes(held)
+        stated[id(expr)] = refs
         if refs:
-            attach(expr, BufferAllocationMetadata(fields=tuple(refs)))
+            attach(expr, BufferAllocationMetadata(fields=refs))
+
+
+def _parts_of(expr: Expr) -> "tuple[Expr, ...] | None":
+    """The values a value is made of, when it holds nothing of its own.
+
+    A tuple names the values it was built from and a loop names what it yielded;
+    neither allocates, so each of their fields is the buffer of the value behind
+    it. Everything else answers for itself.
+    """
+    if isinstance(expr, Tuple):
+        return expr.elements
+    if isinstance(expr, GridRegionExpr):
+        return expr.yield_values
+    return None
+
+
+def _refs_of(
+    expr: Expr,
+    *,
+    ctx,
+    stated: dict[int, tuple[BufferRef, ...]],
+    numbers: dict[int, dict[str, int]],
+    labels: dict[int, str],
+    carried: dict[int, Expr],
+    addresses: dict[tuple[str, str], int],
+    sizes: dict[tuple[str, str], int],
+    facts: MemoryHierarchyFacts,
+    topology_levels: tuple[str, ...],
+    topologies: tuple[Topology, ...],
+) -> tuple[BufferRef, ...] | None:
+    """Where one value's leaves are, or None when that cannot be said."""
+    parts = _parts_of(expr)
+    if parts is not None:
+        held = [stated.get(id(item)) for item in parts]
+        return None if any(item is None for item in held) else tuple(
+            ref for item in held for ref in item
+        )
+    try:
+        owner = _base_of(expr, carried=carried)
+    except AnalysisError:
+        return None
+    own = owner is expr
+    if not own and id(owner) in stated:
+        return _renamed(
+            expr, stated[id(owner)], _span_of(expr, ctx), facts, topology_levels, topologies
+        )
+    minted = numbers.get(id(owner))
+    if minted is None:
+        return None
+    named = labels.get(id(owner))
+    cursors: dict[str, int] = {}
+    refs: list[BufferRef] = []
+    for leaf in tensor_types(expr.type):
+        if leaf.storage is StorageKind.UMAT:
+            return None
+        level = str(leaf.storage)
+        number = minted.get(level)
+        if number is None:
+            return None
+        held = _at_owner(leaf, level, facts, topology_levels, topologies)
+        base = addresses.get((level, named), 0) if named else 0
+        whole = sizes.get((level, named)) if named else None
+        refs.append(
+            BufferRef(
+                buffer_id=number,
+                level=level,
+                offset=base + (cursors.get(level, 0) if own else 0),
+                size=tensor_bytes(held) if own or whole is None else whole,
+                shape=tuple(held.shape),
+                layout=held.layout,
+            )
+        )
+        if own:
+            cursors[level] = cursors.get(level, 0) + tensor_bytes(held)
+    return tuple(refs)
+
+
+def _span_of(expr: Expr, ctx) -> "int | None":
+    """Where inside the value it renames this one starts, in bytes.
+
+    An operation that takes one field of several says so in its own storage
+    claim, and that is what decides which buffer the field is in. One that
+    renames the whole of what it reads says nothing, and starts at the front.
+    """
+    if ctx is None or not isinstance(expr, Call):
+        return None
+    try:
+        claim = declared_storage(expr, ctx)
+    except (AnalysisError, NotImplementedError, ValueError):
+        return None
+    spans = getattr(claim, "spans", ()) if claim is not None else ()
+    starts = {span.offset for span in spans}
+    return starts.pop() if len(starts) == 1 else None
+
+
+def _renamed(
+    expr: Expr,
+    owner: tuple[BufferRef, ...],
+    start: "int | None",
+    facts: MemoryHierarchyFacts,
+    topology_levels: tuple[str, ...],
+    topologies: tuple[Topology, ...],
+) -> tuple[BufferRef, ...] | None:
+    """One value's own coordinates over the buffers another value owns.
+
+    A value that renames all of another has its leaves, one for one. A value
+    that renames one field of several is placed by the byte its own operation
+    says it starts at, because which field it took is what decides which buffer
+    it is in and naming the first would be a guess that reads like an address.
+    """
+    leaves = tensor_types(expr.type)
+    if len(leaves) != len(owner):
+        owner = _from_byte(owner, start, len(leaves))
+        if owner is None:
+            return None
+    refs = []
+    for leaf, ref in zip(leaves, owner):
+        if leaf.storage is StorageKind.UMAT:
+            return None
+        level = str(leaf.storage)
+        if level != ref.level:
+            return None
+        held = _at_owner(leaf, level, facts, topology_levels, topologies)
+        refs.append(
+            BufferRef(
+                buffer_id=ref.buffer_id,
+                level=level,
+                offset=ref.offset,
+                size=ref.size,
+                shape=tuple(held.shape),
+                layout=held.layout,
+            )
+        )
+    return tuple(refs)
+
+
+def _from_byte(
+    owner: tuple[BufferRef, ...], start: "int | None", wanted: int
+) -> "tuple[BufferRef, ...] | None":
+    """The run of a value's buffers that begins *start* bytes into it."""
+    if start is None or wanted > len(owner):
+        return None
+    cursor = 0
+    for index, ref in enumerate(owner):
+        if cursor == start:
+            return owner[index : index + wanted] if index + wanted <= len(owner) else None
+        cursor += ref.size
+    return None
+
+
+def _at_owner(
+    leaf: Type,
+    level: str,
+    facts: MemoryHierarchyFacts,
+    topology_levels: tuple[str, ...],
+    topologies: tuple[Topology, ...],
+) -> Type:
+    """One leaf as the unit owning its level holds it."""
+    declared = facts.explicit(level)
+    if declared is None:
+        return leaf
+    return _type_at_owner(
+        leaf,
+        owner=declared.owner,
+        topology_levels=topology_levels,
+        topologies=topologies,
+    )
 
 
 def _buffer_placements(
@@ -937,6 +1090,7 @@ def analyze_memory(
                 record,
                 allocation,
                 facts,
+                CostContext(scope=FunctionScope(module, fn)),
                 topology_levels=target.topology_levels,
                 topologies=topologies,
             )

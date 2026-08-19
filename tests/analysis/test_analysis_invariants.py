@@ -20,7 +20,7 @@ import torch
 
 import tilefoundry.analysis.api as analysis_api
 import tilefoundry.cli.analyze as cli_analyze
-from tests.analysis.test_analysis_families import _oversized_working_set
+from tests.analysis.test_analysis_families import _NoParallelLevel, _oversized_working_set
 from tests.evaluator.eval_utils import EvalCase, run_eval_case
 from tests.fixtures.logical.authored_constraint import AuthoredConstraint
 from tests.fixtures.logical.gqa_static import static_online_attend
@@ -44,13 +44,13 @@ from tilefoundry.analysis import (
 from tilefoundry.analysis.buffer_plan import BufferPlan, PlannedBuffer, build_buffer_plan
 from tilefoundry.analysis.compute_cost import _prove_storage, _Storage
 from tilefoundry.analysis.footprint import _local_type as footprint_local_type
-from tilefoundry.analysis.memory import definition_order
 from tilefoundry.analysis.metadata import (
     BufferAllocationMetadata,
     BufferRef,
     MemoryMetadata,
 )
 from tilefoundry.analysis.preflight import validate_authored
+from tilefoundry.analysis.traffic import lower_traffic
 from tilefoundry.analysis.walk import loop_scopes, postorder, tensor_types, values_of
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamically
@@ -153,7 +153,7 @@ from tilefoundry.visitor_registry.access_relation import (
     transfers,
     writes,
 )
-from tilefoundry.visitor_registry.contexts import Cost, CostContext, TrafficBytes
+from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionScope, TrafficBytes
 from tilefoundry.visitor_registry.relation_build import identity_access
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
@@ -2345,17 +2345,21 @@ def test_a_participants_share_of_a_buffer_is_the_type_it_was_given() -> None:
     """
     plan, function = _planned()
     topologies = (Topology("cta", 8),)
-    stated: dict[str, list[tuple[int, ...]]] = {}
-    for expr in definition_order(function):
+    stated: dict[int, list[tuple[int, ...]]] = {}
+    for expr in (*function.params, *postorder(function.body)):
         if get_metadata(expr, BufferAllocationMetadata) is None:
             continue
         local = local_type_of(expr.type, level="cta", topologies=topologies)
-        name = expr.name if isinstance(expr, Var) else binding_name(expr)
-        stated[name] = [tuple(leaf.shape) for leaf in tensor_types(local)]
+        stated[id(expr)] = [tuple(leaf.shape) for leaf in tensor_types(local)]
     assert stated
+    checked = 0
     for participant in range(8):
         for item in plan.project(participant).buffers:
-            assert item.extents == stated[item.binding][item.field]
+            held = stated[item.expr_id]
+            if item.field < len(held):
+                assert item.extents == held[item.field]
+                checked += 1
+    assert checked
 
 
 def test_a_buffer_no_participant_holds_is_not_in_that_participants_plan() -> None:
@@ -2363,6 +2367,7 @@ def test_a_buffer_no_participant_holds_is_not_in_that_participants_plan() -> Non
     mesh = make_mesh((2,), ("c",), topology=Topology("cta", 4))
     held = make_shard_tensor_type((8,), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32)
     item = PlannedBuffer(
+        expr_id=1,
         binding="x",
         field=0,
         ref=BufferRef(0, "gmem", 0, 32, (8,), held.layout),
@@ -2377,23 +2382,133 @@ def test_a_buffer_no_participant_holds_is_not_in_that_participants_plan() -> Non
 def test_the_fields_of_one_value_tile_the_allocation_it_was_given() -> None:
     """An address means something only if the bytes behind it are the value's.
 
-    A value's leaves are laid out consecutively inside the allocation its
-    lifetime was sized by, so the last one ends exactly where that allocation
-    does. A gap would mean bytes charged to a value no field of it occupies, and
-    an overrun would mean two values sharing bytes neither one placed.
+    Leaves that share a buffer are laid out consecutively inside the allocation
+    the value's lifetime was sized by, so the last one ends exactly where that
+    allocation does. A gap would mean bytes charged to a value no field of it
+    occupies, and an overrun would mean two values sharing bytes neither one
+    placed. Leaves in different buffers are a value naming other values' bytes
+    rather than holding any, and tile nothing.
     """
     plan, function = _planned()
     record = get_metadata(function, MemoryMetadata)
     sizes = {(item.level, item.binding): item.bytes for item in record.lifetimes}
-    owned: dict[tuple[str, str], list[BufferRef]] = {}
+    owned: dict[tuple[int, str], list[PlannedBuffer]] = {}
     for item in plan.buffers:
-        key = (item.ref.level, item.binding)
-        if key in sizes:
-            owned.setdefault(key, []).append(item.ref)
+        owned.setdefault((item.expr_id, item.ref.level), []).append(item)
     assert owned
-    for (level, binding), refs in owned.items():
+    checked = 0
+    for (_value, level), held in owned.items():
+        refs = [item.ref for item in sorted(held, key=lambda item: item.field)]
+        if len({ref.buffer_id for ref in refs}) != 1:
+            continue
         cursor = refs[0].offset
         for ref in refs:
-            assert ref.offset == cursor, (binding, level)
+            assert ref.offset == cursor, (held[0].binding, level)
             cursor += ref.size
-        assert cursor - refs[0].offset == sizes[(level, binding)], (binding, level)
+        stated = sizes.get((level, held[0].binding))
+        if stated is None:
+            continue
+        assert cursor - refs[0].offset == stated, (held[0].binding, level)
+        checked += 1
+    assert checked
+
+
+def _traffic_of(module, level, dims):
+    """Every primitive occurrence's lowered traffic, by op name."""
+    result = analyze(
+        module, module.entry_function(), analysis=("compute-cost", "memory"),
+        level=level, dims=dims,
+    )
+    function = result.function
+    plan = build_buffer_plan(function, level)
+    scope = FunctionScope(module, function)
+    whole = CostContext(scope=scope)
+    unit = CostContext(scope=scope, level=level, topologies=module.effective_topologies())
+    found = {}
+    for expr in postorder(function.body):
+        if not isinstance(expr, Call) or isinstance(expr.target, Function):
+            continue
+        handler = access_relation_registry.lookup(type(expr.target))
+        if handler is None:
+            continue
+        found.setdefault(type(expr.target).__name__, []).append(
+            lower_traffic(
+                expr, handler(expr, whole), handler(expr, unit), plan, whole, unit,
+                participant=0, umat_level="gmem",
+            )
+        )
+    return found
+
+
+def test_a_rename_that_lands_on_the_same_bytes_moves_none_of_them() -> None:
+    """Two names for one address are one value, and copying it costs nothing.
+
+    The proof is the addresses: a link's two sides are composed with the layouts
+    of the buffers they name, over the iteration the occurrence runs, and only
+    an equality there earns the zero. A reader that took the op's name for it
+    would score a reshape between different buffers as free.
+    """
+    found = _traffic_of(
+        replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 8),)),
+        "cta",
+        {"ctx_len": 1024},
+    )
+    renames = found["Reshape"]
+    assert renames
+    assert any(record.whole == () for record in renames)
+
+    for record in found["Binary"]:
+        assert record.whole, "an operation that reads its operands moved bytes"
+        for level, moved in record.whole:
+            assert level == "gmem" and moved.read and moved.write
+
+
+def test_a_unit_moves_the_share_of_a_buffer_it_was_given() -> None:
+    """One participant's bytes are one participant's, not the program's.
+
+    Query heads are split eight ways, so a unit reads an eighth of what the
+    occurrence reads. The two numbers come out of one lowering rather than two
+    opinions, which is what keeps them a share of each other.
+    """
+    found = _traffic_of(
+        replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 8),)),
+        "cta",
+        {"ctx_len": 1024},
+    )
+    split = [
+        record
+        for record in found["Binary"]
+        if record.whole and record.whole[0][1].read == 8 * record.per_unit[0][1].read
+    ]
+    assert split, "no occurrence divided its reads across the eight participants"
+    for record in split:
+        assert record.boundaries
+        assert sum(item.read for item in record.boundaries) == record.whole[0][1].read
+
+
+def test_an_occurrence_with_no_address_is_refused_rather_than_charged_nothing() -> None:
+    """A buffer nobody placed is a question unanswered, not an answer of zero.
+
+    This program never names the level its machine runs work at, so nothing it
+    keeps has an address. Its occurrences move real bytes, and reporting none of
+    them would read as a program that is free to run.
+    """
+    result = analyze(
+        _NoParallelLevel, _NoParallelLevel.entry_function(), analysis=("compute-cost", "memory")
+    )
+    function = result.function
+    plan = build_buffer_plan(function, "cta")
+    assert plan.buffers == ()
+
+    scope = FunctionScope(_NoParallelLevel, function)
+    ctx = CostContext(scope=scope)
+    call = next(
+        expr
+        for expr in postorder(function.body)
+        if isinstance(expr, Call) and access_relation_registry.lookup(type(expr.target))
+    )
+    relations = access_relation_registry.lookup(type(call.target))(call, ctx)
+    with pytest.raises(AnalysisError, match="no address"):
+        lower_traffic(
+            call, relations, relations, plan, ctx, ctx, participant=0, umat_level="gmem"
+        )
