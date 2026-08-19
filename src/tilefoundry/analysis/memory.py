@@ -35,7 +35,6 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target, UnsupportedCapabilityError
 from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
-    declared_storage,
 )
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
 
@@ -830,6 +829,23 @@ def _parts_of(expr: Expr) -> "tuple[Expr, ...] | None":
     return None
 
 
+def _renames(expr: Expr, carried: dict[int, Expr]) -> Expr:
+    """The value whose bytes this one is in, one step along.
+
+    One step and not all of them: a value that renames a field names which one,
+    and that answer belongs to the step that made it. Following the chain to its
+    end first loses every field named on the way.
+    """
+    held = carried.get(id(expr))
+    if held is not None:
+        return held
+    alias = get_metadata(expr, BufferAliasMetadata)
+    if alias is None or alias.kind not in ("forward", "update") or not alias.aliased_operands:
+        return expr
+    reached = expr.args[alias.aliased_operands[0]]
+    return expr if reached is expr else reached
+
+
 def _refs_of(
     expr: Expr,
     *,
@@ -851,14 +867,14 @@ def _refs_of(
         return None if any(item is None for item in held) else tuple(
             ref for item in held for ref in item
         )
-    try:
-        owner = _base_of(expr, carried=carried)
-    except AnalysisError:
-        return None
+    owner = _renames(expr, carried)
     own = owner is expr
-    if not own and id(owner) in stated:
+    if not own:
+        held = stated.get(id(owner))
+        if held is None:
+            return None
         return _renamed(
-            expr, stated[id(owner)], _span_of(expr, ctx), facts, topology_levels, topologies
+            expr, held, _span_of(expr, ctx), facts, topology_levels, topologies
         )
     minted = numbers.get(id(owner))
     if minted is None:
@@ -892,21 +908,30 @@ def _refs_of(
 
 
 def _span_of(expr: Expr, ctx) -> "int | None":
-    """Where inside the value it renames this one starts, in bytes.
+    """Which field of the value it renames this one took.
 
-    An operation that takes one field of several says so in its own storage
-    claim, and that is what decides which buffer the field is in. One that
-    renames the whole of what it reads says nothing, and starts at the front.
+    An operation that takes one field of several names it in the link that
+    forwards it, and that is what decides which buffer the field is in. The
+    field is named as a field rather than as a byte, so a tuple whose earlier
+    fields have no static size is still placeable. One that renames the whole of
+    what it reads names nothing, and starts at the front.
     """
     if ctx is None or not isinstance(expr, Call):
         return None
+    handler = access_relation_registry.lookup(type(expr.target))
+    if handler is None:
+        return None
     try:
-        claim = declared_storage(expr, ctx)
+        relations = handler(expr, ctx)
     except (AnalysisError, NotImplementedError, ValueError):
         return None
-    spans = getattr(claim, "spans", ()) if claim is not None else ()
-    starts = {span.offset for span in spans}
-    return starts.pop() if len(starts) == 1 else None
+    named = {
+        link.input_field
+        for output in relations.outputs
+        for link in (output.storage.links if output.storage else ())
+        if link.input_field is not None
+    }
+    return named.pop() if len(named) == 1 else None
 
 
 def _renamed(
@@ -920,13 +945,13 @@ def _renamed(
     """One value's own coordinates over the buffers another value owns.
 
     A value that renames all of another has its leaves, one for one. A value
-    that renames one field of several is placed by the byte its own operation
-    says it starts at, because which field it took is what decides which buffer
-    it is in and naming the first would be a guess that reads like an address.
+    that renames one field of several is placed by the field its own operation
+    named, because which field it took is what decides which buffer it is in and
+    naming the first would be a guess that reads like an address.
     """
     leaves = tensor_types(expr.type)
     if len(leaves) != len(owner):
-        owner = _from_byte(owner, start, len(leaves))
+        owner = _from_field(owner, start, len(leaves))
         if owner is None:
             return None
     refs = []
@@ -950,18 +975,13 @@ def _renamed(
     return tuple(refs)
 
 
-def _from_byte(
-    owner: tuple[BufferRef, ...], start: "int | None", wanted: int
+def _from_field(
+    owner: tuple[BufferRef, ...], field: "int | None", wanted: int
 ) -> "tuple[BufferRef, ...] | None":
-    """The run of a value's buffers that begins *start* bytes into it."""
-    if start is None or wanted > len(owner):
+    """The run of a value's buffers that begins at the field it named."""
+    if field is None or not 0 <= field <= len(owner) - wanted:
         return None
-    cursor = 0
-    for index, ref in enumerate(owner):
-        if cursor == start:
-            return owner[index : index + wanted] if index + wanted <= len(owner) else None
-        cursor += ref.size
-    return None
+    return owner[field : field + wanted]
 
 
 def _at_owner(

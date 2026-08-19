@@ -255,9 +255,10 @@ def lower_traffic(
     Both readings come from the same boundaries, one asked of the program and
     one of a unit of it. How much crossed a boundary is the Op's own answer, and
     which level it crossed at is where the value lives. A boundary whose value
-    has no address is refused, because an occurrence that cannot be located has
-    not been shown to move nothing. One participant is asked: every participant
-    holds the same extents of a value and differs only in where they start.
+    has no address is refused, an occurrence that cannot be located not having
+    been shown to move nothing, and one that moved nothing gets no row at all.
+    One participant is asked: every participant holds the same extents of a
+    value and differs only in where they start.
     """
     unit_domain = tuple(getattr(unit_ctx.local_type_of(call), "shape", ()) or ())
     boundaries: list[BoundaryTraffic] = []
@@ -271,12 +272,14 @@ def lower_traffic(
     settled = _settled(unit_relations, plan, call, unit_domain, unit_ctx)
     for side, index, field, boundary, value in rows:
         where = f"{describe(call)}: {side} {index}"
-        leaf = _leaf(ctx.type_of(value), field, where)
         mine = unit_rows.get((side, index))
         if mine is None:
             raise AnalysisError(f"{where} is stated for the program and not for a unit")
         moving = 0 if (side, index) in settled else boundary.quantity.upper
         share = 0 if moving == 0 else mine.quantity.upper
+        if not moving and not share:
+            continue
+        leaf = _leaf(ctx.type_of(value), field, where)
         if leaf.storage is StorageKind.UMAT:
             if side == "output":
                 continue

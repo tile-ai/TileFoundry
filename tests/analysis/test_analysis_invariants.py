@@ -2677,7 +2677,8 @@ def test_an_occurrence_this_cannot_state_carries_no_record_rather_than_an_empty_
     reader that needs an occurrence's bytes finds either them or nothing at all.
     An empty record in that place would be a claim that the occurrence moved
     nothing, which is what the units reading each other's buffers here did not
-    do.
+    do. A record that is there states a row for every boundary that moved and
+    none for the boundaries that did not, so its rows and its totals agree.
     """
     result = analyze(
         MoEMegaKernel, MoEMegaKernel.entry_function(), analysis=("compute-cost", "memory")
@@ -2690,11 +2691,12 @@ def test_an_occurrence_this_cannot_state_carries_no_record_rather_than_an_empty_
             continue
         (stated if get_metadata(expr, TrafficMetadata) is not None else silent).append(expr)
     assert stated and silent
+    moving = 0
     for record in (get_metadata(expr, TrafficMetadata) for expr in stated):
-        assert record.boundaries
-        assert record.whole or all(
-            not item.read and not item.write for item in record.boundaries
-        )
+        assert all(item.read or item.write for item in record.boundaries)
+        assert bool(record.whole) == bool(record.boundaries)
+        moving += bool(record.boundaries)
+    assert moving, "every occurrence this program states moved nothing"
 
 
 def _occurrences(function):
