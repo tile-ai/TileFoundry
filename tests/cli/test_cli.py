@@ -12,10 +12,8 @@ import pytest
 import tilefoundry.cli.target as target_cli
 from tests.fixtures.shapes.composed_leaf_source import composed_leaf_source
 from tilefoundry import cli
-from tilefoundry.analysis.facts import ThroughputFacts
 from tilefoundry.cli.source import load_authored_ir, one_extent_per_dim
 from tilefoundry.target import CpuTarget, registered_targets
-from tilefoundry.target.cuda import CudaTarget
 
 
 class ListedCpuTarget(CpuTarget):
@@ -659,12 +657,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> N
         f"waves={summary['waves']}",
     ]
     assert payload["totals"]["flops"] == cost["flops"]
-    moved = payload["totals"]["traffic"]["gmem"]
-    facts = CudaTarget("nvidia.h200_sxm").get_facts(ThroughputFacts)
-    rate = facts.memory_bandwidth_bytes_per_second
-    assert bound["memory_ns"] == -(
-        -(moved["read"] + moved["write"]) * 1_000_000_000 // rate
-    ), "the totals and the bound were counted by different families"
+    assert payload["totals"]["traffic"] == cost["traffic"]
 
     hoisted = {
         line.split(" = ", 1)[0] for line in lines if " = Mesh((Topology(" in line

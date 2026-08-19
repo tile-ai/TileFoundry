@@ -1143,23 +1143,23 @@ def test_analysis_snapshot_drift_sentinel() -> None:
         "shared_largest_tile_bytes": 211_200,
         "gmem_lhs_bytes": 4_325_376,
         "modest_shared_bytes": 4_096,
-        "placed_ideal_ns": (5_249, 65_194),
+        "placed_ideal_ns": (3_501, 65_194),
         "placed_traffic": (
             {
-                "gmem": {"read": 12_601_544, "write": 12_592_272},
-                "rmem": {"read": 168, "write": 0},
+                "gmem": {"read": 8_407_240, "write": 8_396_936},
+                "rmem": {"read": 672, "write": 0},
                     "smem": {"read": 13_274_816, "write": 13_037_248},
             },
             {
-                "gmem": {"read": 4_472_832, "write": 8_538_112},
-                "rmem": {"read": 416, "write": 0},
-                    "smem": {"read": 784_007_168, "write": 473_628_672},
+                "gmem": {"read": 4_472_832, "write": 8_536_064},
+                "rmem": {"read": 960, "write": 0},
+                    "smem": {"read": 779_812_864, "write": 469_434_368},
             },
         ),
         "flash_split_traffic": {
-            "gmem": {"read": 4_196_416, "write": 2_099_264},
-            "rmem": {"read": 80, "write": 104},
-            "smem": {"read": 7_735_168, "write": 7_414_144},
+            "gmem": {"read": 2_099_264, "write": 2_048},
+            "rmem": {"read": 336, "write": 104},
+            "smem": {"read": 7_701_376, "write": 7_380_352},
         },
         "flash_split_offset_slice_traffic": (
             (
@@ -1251,7 +1251,7 @@ def test_roofline_reads_the_recorded_work_and_aggregates_before_dividing() -> No
     entry = _CudaAdd.entry_function()
     result = analyze(_CudaAdd, entry, analysis="roofline")
 
-    assert result.executed == ("compute-cost", "memory", "roofline")
+    assert result.executed == ("compute-cost", "roofline")
     call = _calls(result.function)[-1]
     cost = get_metadata(call, ComputeCostMetadata)
     bound = get_metadata(call, RooflineMetadata)
@@ -1333,7 +1333,7 @@ def test_mega_kernel_preserves_placement_costs_and_dependency_order() -> None:
         MoEMegaKernel.entry_function(),
         analysis=("roofline", "performance"),
     )
-    assert result.executed == ("compute-cost", "memory", "roofline", "performance")
+    assert result.executed == ("compute-cost", "roofline", "memory", "performance")
     calls = _calls(result.function)
     assert len(calls) == 7
     assert all(not isinstance(call.target, Function) for call in calls)
@@ -1390,8 +1390,8 @@ def test_mega_kernel_preserves_placement_costs_and_dependency_order() -> None:
     )
     assert memory.traffic == (("gmem", summed),)
     assert (roofline.memory_ns, roofline.ideal_ns, roofline.bound_by) == (
-        58,
-        58,
+        45,
+        45,
         "memory",
     )
 
@@ -1902,11 +1902,11 @@ def test_a_report_shows_the_requested_analyses_and_reads_the_same_either_way() -
     data = rendered.data
 
     assert data["requested"] == ["roofline"]
-    assert data["executed"] == ["compute-cost", "memory", "roofline"]
+    assert data["executed"] == ["compute-cost", "roofline"]
     assert set(data["function_records"]) == {"roofline"}
     assert data["totals"]["flops"] == {"f32": 256}
     assert all(set(call) == {"value", "roofline"} for call in data["calls"])
-    assert get_metadata(result.function, MemoryMetadata) is not None
+    assert get_metadata(result.function, MemoryMetadata) is None
     cost = get_metadata(_calls(result.function)[-1], ComputeCostMetadata)
     assert cost is not None
     asked = render_comment(cost, opt_in=frozenset({"operands"}))

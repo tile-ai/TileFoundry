@@ -1,10 +1,9 @@
 """How long the requested work must take, at best.
 
 This family adds no measurement of its own. It reads the work the compute-cost
-records state and the bytes the memory family's traffic records state, and
-divides each by the rates the target publishes, so a change here can only ever
-be a change in how the two are combined -- never a second, subtly different
-count of the same flops or the same bytes.
+records state and divides it by the rates the target publishes, so a change here
+can only ever be a change in how the two are combined -- never a second, subtly
+different count of the same flops.
 """
 
 from __future__ import annotations
@@ -18,7 +17,6 @@ from tilefoundry.target import Target
 from .errors import AnalysisError
 from .facts import ThroughputFacts
 from .metadata import ComputeCostMetadata, RooflineMetadata, TrafficBytes
-from .traffic import TrafficMetadata
 from .walk import attach, describe, postorder, reachable_functions
 
 SELECTOR = "roofline"
@@ -91,46 +89,18 @@ def _bound(compute_ns: int, memory_ns: int, *, has_work: bool) -> RooflineMetada
     )
 
 
-def _moved_at(moved: TrafficMetadata, level: str) -> TrafficBytes:
-    """The bytes a traffic record states at *level*, none being none moved."""
-    return next(
-        (value for name, value in moved.whole if name == level), TrafficBytes()
-    )
-
-
 def _cost_bound(
-    cost: ComputeCostMetadata, moved: TrafficMetadata, facts: ThroughputFacts
+    cost: ComputeCostMetadata, facts: ThroughputFacts, *, scale: int = 1
 ) -> RooflineMetadata:
-    """Bound one occurrence from the work it does and the bytes it moves."""
+    """Bound one compute-cost record after applying an execution count."""
+    flops = tuple((name, value * scale) for name, value in cost.flops)
+    traffic = cost.traffic_at(facts.bandwidth_level)
+    traffic = TrafficBytes(traffic.read * scale, traffic.write * scale)
     return _bound(
-        _compute_ns(cost.flops, facts),
-        _memory_ns(_moved_at(moved, facts.bandwidth_level), facts),
-        has_work=bool(cost.flops or moved.whole),
+        _compute_ns(flops, facts),
+        _memory_ns(traffic, facts),
+        has_work=bool(cost.flops or cost.traffic),
     )
-
-
-def _traffic_of(fn: Function) -> TrafficMetadata:
-    """One function's own total, refused when it was never settled."""
-    moved = get_metadata(fn, TrafficMetadata)
-    if moved is None:
-        raise AnalysisError(
-            f"function {fn.name!r}: roofline needs the traffic record the memory "
-            "family states only when every occurrence in it gave an answer"
-        )
-    return moved
-
-
-def _moved_by(expr: Call) -> TrafficMetadata:
-    """The bytes one occurrence moves, a call standing for what it calls."""
-    if isinstance(expr.target, Function):
-        return _traffic_of(expr.target)
-    moved = get_metadata(expr, TrafficMetadata)
-    if moved is None:
-        raise AnalysisError(
-            f"{describe(expr)}: roofline needs the traffic record this call was "
-            "never given, and its flops alone do not bound it"
-        )
-    return moved
 
 
 def analyze_roofline(
@@ -140,13 +110,7 @@ def analyze_roofline(
     level: str | None = None,
     options: object | None = None,
 ) -> None:
-    """Attach a bound to every Call, and one to every Function, reachable here.
-
-    A bound is a claim about how fast something can go, so it is made only where
-    both halves of it were stated. An occurrence whose bytes nobody could state
-    is refused rather than bounded by its flops alone: reporting the compute side
-    of a missing memory side reads as a call that turned out to be compute-bound.
-    """
+    """Attach a bound to every Call, and one to every Function, reachable here."""
     facts = target.get_facts(ThroughputFacts)
     for fn in reachable_functions(function):
         for expr in postorder(fn.body):
@@ -158,14 +122,14 @@ def analyze_roofline(
                     f"{describe(expr)}: roofline needs the compute-cost record "
                     "this call was never given"
                 )
-            attach(expr, _cost_bound(cost, _moved_by(expr), facts))
+            attach(expr, _cost_bound(cost, facts))
         total = get_metadata(fn, ComputeCostMetadata)
         if total is None:
             raise AnalysisError(
                 f"function {fn.name!r}: roofline needs the compute-cost root "
                 "record this function was never given"
             )
-        attach(fn, _cost_bound(total, _traffic_of(fn), facts))
+        attach(fn, _cost_bound(total, facts))
 
 
 __all__ = ["SELECTOR", "analyze_roofline"]

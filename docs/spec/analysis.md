@@ -329,7 +329,7 @@ Each owns its record types and declares its dependencies and output additions.
 |---|---|---|---|---|---|---|
 | `compute-cost` | - | `ComputeCostMetadata`, `BufferAliasMetadata` | `ComputeCostMetadata` on every measured Call and the Function; `BufferAliasMetadata` on every measured Call | the authored program | `compute-cost` | every measured Call |
 | `memory` | `compute-cost` | `MemoryMetadata`, `LoopFootprintMetadata` | `MemoryMetadata` on the Function; `LoopFootprintMetadata` on every `GridRegionExpr` | the authored program, `MemoryHierarchyFacts` | `peak-footprint`, `advisory` | none |
-| `roofline` | `compute-cost`, `memory` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | `roofline` | every measured Call |
+| `roofline` | `compute-cost` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | `roofline` | every measured Call |
 | `performance` | `compute-cost`, `memory` | `PerformanceMetadata`, `PerformanceSummaryMetadata` | `PerformanceMetadata` on every Call with a modeled duration; `PerformanceSummaryMetadata` on the Function | `ThroughputFacts`, `ParallelCapacityFacts`, `MemoryHierarchyFacts` | `performance` | every Call with a modeled duration |
 
 Every compact text summary begins with these two lines:
@@ -962,9 +962,7 @@ attached only to the Function. Its full JSON projection is under
 #### 2.2.3 `roofline`
 
 `roofline` converts recorded work into a lower time bound at the target's
-published compute and memory rates. The work is the compute-cost record's and
-the bytes are the memory family's traffic record's; roofline counts neither
-itself.
+published compute and memory rates.
 
 ```python
 class RooflineMetadata(IRMetadata):
@@ -1118,18 +1116,9 @@ as defined in that family's section.
     `AnalysisError`.
   - `ThroughputFacts.peak_for` MUST return `None` for an unpublished dtype rate,
     and analysis MUST NOT substitute an assumed rate.
-  - Roofline reads `ComputeCostMetadata` for the work and the memory family's
-    traffic record for the bytes, so a roofline-only rendering reports only what
-    roofline and those dependencies wrote. No other family's conclusion is
-    promoted into it.
-  - A bound MUST be made only where both of its sides were stated. An occurrence
-    or function carrying no traffic record MUST raise `AnalysisError` rather than
-    be bounded by its flops alone: a memory side left out reads as a program that
-    turned out to be compute-bound. A Call to a Function MUST be bounded by the
-    bytes that function's own record states.
-  - A report's traffic total and the bound in the same report MUST come from the
-    same record. Two families counting the same bytes differently makes one
-    rendering disagree with itself about the program it describes.
+  - Roofline reads only `ComputeCostMetadata`, so a roofline-only rendering
+    reports only what roofline and that dependency wrote. No other family's
+    conclusion is promoted into it.
 
 #### 2.2.4 `performance`
 

@@ -19,7 +19,6 @@ from tilefoundry.analysis.metadata import (
     PerformanceSummaryMetadata,
     RooflineMetadata,
 )
-from tilefoundry.analysis.traffic import TrafficMetadata
 from tilefoundry.analysis.walk import postorder, tensor_types
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.core.module import Module
@@ -299,22 +298,12 @@ def _loop_records(
 
 
 def _work_totals(function: Function) -> dict[str, object]:
-    """The multiplicity-aware work recorded on the Function root.
-
-    The bytes come from the traffic record wherever the memory family stated
-    one, which is the same record the bound was read from: a report whose total
-    and whose verdict were counted by different families can disagree with
-    itself about the program it is describing.
-    """
+    """The multiplicity-aware work recorded on the Function root."""
     record = get_metadata(function, ComputeCostMetadata)
     if record is None:
         return {"flops": {}, "traffic": {}}
     reported = render_record(record, function)
-    moved = get_metadata(function, TrafficMetadata)
-    traffic = (
-        reported["traffic"] if moved is None else render_record(moved, function)["whole"]
-    )
-    return {"flops": reported["flops"], "traffic": traffic}
+    return {"flops": reported["flops"], "traffic": reported["traffic"]}
 
 
 def render_json(data: dict[str, object]) -> str:
