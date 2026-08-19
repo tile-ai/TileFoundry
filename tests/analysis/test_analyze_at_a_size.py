@@ -164,8 +164,8 @@ def test_every_analysis_runs_at_a_stated_size(family: str) -> None:
 @pytest.mark.parametrize(
     ("dims", "expected_bound"),
     (
-        ({"ctx_len": 0, "seq": 512}, "compute"),
-        ({"ctx_len": 512, "seq": 512}, "compute"),
+        ({"ctx_len": 0, "seq": 512}, "memory"),
+        ({"ctx_len": 512, "seq": 512}, "memory"),
         ({"ctx_len": 4608, "seq": 1}, "memory"),
     ),
     ids=[

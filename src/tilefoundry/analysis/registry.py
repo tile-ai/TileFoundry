@@ -46,7 +46,7 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
         return Analyzer(
             "roofline",
             analyze_roofline,
-            requires=("compute-cost",),
+            requires=("compute-cost", "memory"),
             produces=(RooflineMetadata,),
         )
     if selector == "performance":
