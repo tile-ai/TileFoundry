@@ -17,8 +17,6 @@ import isl
 
 from tilefoundry.ir.core.metadata import IRMetadata
 from tilefoundry.ir.types import TensorType, TupleType, Type
-from tilefoundry.ir.types.shard import try_c_order_strides
-from tilefoundry.ir.types.shard.layout import ComposedLayout
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.access_relation import (
     AccessMode,
@@ -401,114 +399,20 @@ def _links_for(
 def _same_address(link, field: int | None, call, plan: BufferPlan, domain: tuple, ctx) -> bool:
     """Whether a link's two sides name the same bytes.
 
-    Same buffer is necessary and not sufficient: two regions of one allocation
-    are different bytes unless the coordinates map to the same addresses. A link
-    that reads a coordinate and answers with itself says they do without knowing
-    where either sits, which is what lets a run-time window be honoured.
+    The placement already answered this. A value whose operation was shown to
+    forward or update another was never given a buffer of its own: it was given
+    that other value's, and a value living in another's bytes did not move to
+    get there. One that could not be shown to do so was allocated separately,
+    and a link between two allocations is a copy however alike the two read.
     """
     source = _entry(plan, call.args[link.input], link.input_field)
     output = _entry(plan, call, field)
     if source is None or output is None:
         return False
-    if _frame(source.ref) != _frame(output.ref):
-        return False
-    where = describe(call)
-    reading = _widths(link, field, call, ctx, where)
-    if reading is None:
-        return False
-    source_bytes, output_bytes = reading
-    if isinstance(link.where, WindowAccess):
-        apart = _window_shift(
-            link.where, source.ref, source_bytes, output.ref, output_bytes
-        )
-        return apart == 0
-    left = _address_map(link.where, source.ref, source_bytes, domain)
-    right = _address_map(_reading(domain), output.ref, output_bytes, domain)
-    return left is not None and right is not None and left.is_equal(right)
-
-
-def _reading(domain: tuple) -> "isl.multi_aff":
-    """An output read at its own coordinates, which is where the link lands."""
-    names = ", ".join(f"d{axis}" for axis in range(len(domain)))
-    return isl.multi_aff(f"{{ [{names}] -> [{names}] }}" if names else "{ [] -> [] }")
-
-
-def _frame(ref) -> tuple:
-    """The place one value's addresses are measured from.
-
-    Two addresses say the same thing only when both are measured from the same
-    place: the same allocation, the same region of it, and both stated the same
-    way. A placed value measures from its allocation and an unplaced one from
-    the region it anchored, so the two are never held against each other -- an
-    unplaced value has no absolute address to compare. Sharing an allocation
-    stays necessary either way, a distance into one buffer saying nothing about
-    another.
-    """
-    placed = ref.offset is not None
-    return (placed, ref.buffer_id, ref.level, ref.anchor)
-
-
-def _base(ref) -> int:
-    """Where one value begins, measured in its own frame."""
-    return ref.displacement if ref.offset is None else ref.offset
-
-
-def _seat(ref, payload: int) -> "tuple | None":
-    """Where one value sits in its buffer and how its coordinates step there.
-
-    Two values name the same bytes only if they begin at the same distance into
-    the place they are both measured from and step the same way. A placed value
-    measures that from its allocation and an unplaced one from the region it
-    anchored, so two renamings of something nobody placed can still be shown to
-    be each other. Either being unreadable is not a match, and neither distance
-    means anything until ``_frame`` says the two are measured alike.
-    """
-    strides = _strides(ref)
-    seated = _seated(ref)
-    if strides is None or seated is None:
-        return None
-    return (
-        _base(ref) + seated * payload,
-        tuple(stride * payload for stride in strides),
+    return (source.ref.buffer_id, source.ref.level) == (
+        output.ref.buffer_id,
+        output.ref.level,
     )
-
-
-def _window_shift(where, source, source_bytes: int, output, output_bytes: int):
-    """How far into what it reads a window's own coordinates begin, in bytes.
-
-    A window states where it starts rather than mapping a coordinate, so the
-    distance is read off that start instead of out of a relation. Its complement
-    is the region the window left alone, which is answered at its own
-    coordinates and so begins where it began. Two sides that step differently
-    are not one value seen twice, and a start that arrives as a value at run
-    time fixes no distance at all.
-    """
-    seats = (_seat(source, source_bytes), _seat(output, output_bytes))
-    if None in seats:
-        return None
-    (base, stepping), (against, steps) = seats
-    if stepping != steps:
-        return None
-    apart = base - against
-    if where.complement or not where.offsets:
-        return apart
-    if len(where.offsets) != len(stepping):
-        return None
-    for offset, step in zip(where.offsets, stepping):
-        if not isinstance(offset, int) or isinstance(offset, bool):
-            return None
-        apart += offset * step
-    return apart
-
-
-def _widths(link, field: int | None, call, ctx, where: str) -> "tuple[int, int] | None":
-    """What one element costs on each side of a link, in bytes."""
-    try:
-        source = _element_bytes(_leaf(ctx.type_of(call.args[link.input]), link.input_field, where))
-        output = _element_bytes(_leaf(ctx.type_of(call), field, where))
-    except AnalysisError:
-        return None
-    return source, output
 
 
 def _entry(plan: BufferPlan, value, field: int | None) -> PlannedBuffer | None:
@@ -517,117 +421,4 @@ def _entry(plan: BufferPlan, value, field: int | None) -> PlannedBuffer | None:
     return next((item for item in plan.of(value) if item.field == wanted), None)
 
 
-def _strides(ref) -> tuple | None:
-    """One buffer's element strides, in the positions it is addressed by.
-
-    A layout wrapped in a distribution or shifted by a constant still steps the
-    way the layout underneath it steps, so the wrappers are unwrapped rather
-    than read for strides they do not carry.
-
-    A value that states no layout at all is dense in its own coordinates, which
-    is what the rest of the compiler reads it as, so it steps in C order over
-    the extents it has. Extents nobody has bound yet give no such order, and
-    those stay unknown rather than guessed.
-    """
-    return _stepping(ref.layout, ref.shape)
-
-
-def _stepping(layout, shape: tuple = ()) -> tuple | None:
-    """The element strides of whatever layout finally states them."""
-    if layout is None:
-        stated = try_c_order_strides(tuple(shape))
-        return None if stated is None else tuple(stated)
-    if isinstance(layout, ComposedLayout):
-        return None if layout.inner is not None else _stepping(layout.outer)
-    inner = getattr(layout, "layout", None)
-    if inner is not None:
-        return _stepping(inner)
-    strides = getattr(layout, "strides", None)
-    if strides is None:
-        return None
-    return (
-        tuple(strides)
-        if all(isinstance(item, int) and not isinstance(item, bool) for item in strides)
-        else None
-    )
-
-
-def _seated(ref) -> "int | None":
-    """How many elements into its buffer one value's own coordinates start.
-
-    A layout composed with a constant carries that shift, and a shift is part of
-    an address: two views of one buffer that differ only by it are different
-    bytes. A composition this cannot read is not a zero shift, so it answers
-    with nothing rather than with the front of the buffer.
-    """
-    return _shift(ref.layout)
-
-
-def _shift(layout) -> "int | None":
-    """Every constant shift between one value's coordinates and its buffer."""
-    if layout is None:
-        return 0
-    if isinstance(layout, ComposedLayout):
-        if layout.inner is not None or not isinstance(layout.offset, int):
-            return None
-        deeper = _shift(layout.outer)
-        return None if deeper is None else layout.offset + deeper
-    inner = getattr(layout, "layout", None)
-    return 0 if inner is None else _shift(inner)
-
-
-def _address_map(pattern, ref, payload: int, domain: tuple) -> "isl.map | None":
-    """Where a pattern's coordinates land, as byte addresses in one buffer.
-
-    In bytes and from the buffer's own front, because two values of one buffer
-    at different byte offsets are different bytes however alike their
-    coordinates read. Over the iteration the occurrence runs, and not over every
-    coordinate the formula could take: a position a participant holds one of
-    contributes nothing to an address, and two patterns that differ only there
-    name the same bytes.
-    """
-    seat = _seat(ref, payload)
-    if seat is None or isinstance(pattern, (IndexedAccess, WindowAccess)):
-        return None
-    base, strides = seat
-    coords = ", ".join(f"c{axis}" for axis in range(len(strides)))
-    terms = [f"{stride}*c{axis}" for axis, stride in enumerate(strides) if stride]
-    linear = " + ".join([*terms, str(base)]) if terms else str(base)
-    try:
-        relation = pattern.as_map() if hasattr(pattern, "as_map") else pattern
-        placed = relation.apply_range(isl.map(f"{{ [{coords}] -> [{linear}] }}"))
-        return placed.intersect_domain(_box(domain))
-    except (isl.Error, ValueError):
-        return None
-
-
-def view_displacement(link, source, source_bytes: int, output, output_bytes: int, domain: tuple):
-    """Where in its source a renamed value begins, in bytes, when that is fixed.
-
-    A link reads an output coordinate and answers with the input coordinate
-    holding it, so the distance between the bytes they name is a function of the
-    output's own coordinates. A renaming is the case where that distance does
-    not vary: the value sits at one place in the buffer, and the place is the
-    distance. One that varies is not a displacement of the value but a mapping
-    through it, and a window whose start is a run-time value fixes nothing.
-    """
-    if isinstance(link.where, WindowAccess):
-        return _window_shift(link.where, source, source_bytes, output, output_bytes)
-    reading = _address_map(link.where, source, source_bytes, domain)
-    written = _address_map(_reading(domain), output, output_bytes, domain)
-    if reading is None or written is None:
-        return None
-    try:
-        apart = (
-            reading.flat_range_product(written)
-            .apply_range(isl.map("{ [a, b] -> [a - b] }"))
-            .range()
-        )
-        if not apart.is_singleton():
-            return None
-        return int(str(apart.max_val(isl.aff("{ [x] -> [x] }"))))
-    except (isl.Error, ValueError):
-        return None
-
-
-__all__ = ["BoundaryTraffic", "TrafficMetadata", "lower_traffic", "view_displacement"]
+__all__ = ["BoundaryTraffic", "TrafficMetadata", "lower_traffic"]

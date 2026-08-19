@@ -141,15 +141,13 @@ class ValueLifetime:
 
 @dataclass(frozen=True)
 class BufferRef:
-    """Where one value's bytes are, and how a coordinate of it becomes a byte.
+    """Where one value's bytes are.
 
-    ``offset`` and ``size`` are the range it occupies, and an ``offset`` of
-    ``None`` means nothing places it absolutely: it is somewhere in ``size``
-    bytes rather than at their front. ``anchor`` names the place it is measured
-    from and ``displacement`` how far into that place it begins, so a value
-    nobody places still relates to its renamings: two are the same bytes when
-    they share an anchor, a displacement and a stepping, of which an address is
-    one showing. ``shape`` and ``layout`` are the value's at the level's owner.
+    ``offset`` and ``size`` are the range this value occupies, and an ``offset``
+    of ``None`` means nothing places it absolutely: it is somewhere in ``size``
+    bytes of that buffer rather than at the front of them. Values sharing a
+    ``buffer_id`` are in one allocation, which is what says one of them lives in
+    another's bytes rather than in a copy of them.
     """
 
     buffer_id: int
@@ -158,8 +156,6 @@ class BufferRef:
     size: int
     shape: tuple = ()
     layout: object = None
-    anchor: int = 0
-    displacement: int = 0
 
 
 @dataclass(frozen=True)
