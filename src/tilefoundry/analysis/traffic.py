@@ -150,10 +150,10 @@ def _touched(pattern, shape: tuple, domain: tuple) -> isl.set | None:
         return None
     if isinstance(pattern, WindowAccess):
         return _window_set(pattern, shape)
-    relation = pattern.as_map() if hasattr(pattern, "as_map") else pattern
     try:
+        relation = pattern.as_map() if hasattr(pattern, "as_map") else pattern
         return relation.intersect_domain(_box(domain)).range()
-    except Exception:  # pragma: no cover - isl refuses a space it cannot match
+    except (isl.Error, ValueError):
         return None
 
 
@@ -161,7 +161,7 @@ def _count(region: isl.set) -> int | None:
     """How many coordinates a region holds, when it holds a countable number."""
     try:
         value = region.count_val()
-    except Exception:  # pragma: no cover - isl refuses an unbounded region
+    except (isl.Error, ValueError):
         return None
     text = str(value)
     return int(text) if text.lstrip("-").isdigit() else None
@@ -506,14 +506,14 @@ def _address_map(pattern, ref, payload: int, domain: tuple) -> "isl.map | None":
     if seat is None or isinstance(pattern, (IndexedAccess, WindowAccess)):
         return None
     base, strides = seat
-    relation = pattern.as_map() if hasattr(pattern, "as_map") else pattern
     coords = ", ".join(f"c{axis}" for axis in range(len(strides)))
     terms = [f"{stride}*c{axis}" for axis, stride in enumerate(strides) if stride]
     linear = " + ".join([*terms, str(base)]) if terms else str(base)
     try:
+        relation = pattern.as_map() if hasattr(pattern, "as_map") else pattern
         placed = relation.apply_range(isl.map(f"{{ [{coords}] -> [{linear}] }}"))
         return placed.intersect_domain(_box(domain))
-    except Exception:  # pragma: no cover - isl refuses a rank it cannot match
+    except (isl.Error, ValueError):
         return None
 
 

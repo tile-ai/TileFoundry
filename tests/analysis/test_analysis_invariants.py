@@ -50,7 +50,12 @@ from tilefoundry.analysis.metadata import (
     MemoryMetadata,
 )
 from tilefoundry.analysis.preflight import validate_authored
-from tilefoundry.analysis.traffic import _address_map, _seat, lower_traffic
+from tilefoundry.analysis.traffic import (
+    TrafficMetadata,
+    _address_map,
+    _seat,
+    lower_traffic,
+)
 from tilefoundry.analysis.walk import loop_scopes, postorder, tensor_types, values_of
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamically
@@ -2415,29 +2420,18 @@ def test_the_fields_of_one_value_tile_the_allocation_it_was_given() -> None:
 
 
 def _traffic_of(module, level, dims):
-    """Every primitive occurrence's lowered traffic, by op name."""
+    """Every primitive occurrence's traffic as the analysis attached it, by op."""
     result = analyze(
         module, module.entry_function(), analysis=("compute-cost", "memory"),
         level=level, dims=dims,
     )
-    function = result.function
-    plan = build_buffer_plan(function, level)
-    scope = FunctionScope(module, function)
-    whole = CostContext(scope=scope)
-    unit = CostContext(scope=scope, level=level, topologies=module.effective_topologies())
     found = {}
-    for expr in postorder(function.body):
+    for expr in postorder(result.function.body):
         if not isinstance(expr, Call) or isinstance(expr.target, Function):
             continue
-        handler = access_relation_registry.lookup(type(expr.target))
-        if handler is None:
-            continue
-        found.setdefault(type(expr.target).__name__, []).append(
-            lower_traffic(
-                expr, handler(expr, whole), handler(expr, unit), plan, whole, unit,
-                participant=0, umat_level="gmem",
-            )
-        )
+        record = get_metadata(expr, TrafficMetadata)
+        if record is not None:
+            found.setdefault(type(expr.target).__name__, []).append(record)
     return found
 
 
@@ -2665,3 +2659,30 @@ def test_a_unit_that_holds_none_of_a_value_is_not_a_unit_that_moves_none() -> No
             assert "holds no part of" in str(error)
             refused += 1
     assert refused, "no occurrence read a buffer this participant has no share of"
+
+
+def test_an_occurrence_this_cannot_state_carries_no_record_rather_than_an_empty_one() -> None:
+    """Saying nothing and saying zero are different, and both get said.
+
+    The pipeline attaches what it could state and leaves the rest alone, so a
+    reader that needs an occurrence's bytes finds either them or nothing at all.
+    An empty record in that place would be a claim that the occurrence moved
+    nothing, which is what the units reading each other's buffers here did not
+    do.
+    """
+    result = analyze(
+        MoEMegaKernel, MoEMegaKernel.entry_function(), analysis=("compute-cost", "memory")
+    )
+    stated, silent = [], []
+    for expr in postorder(result.function.body):
+        if not isinstance(expr, Call) or isinstance(expr.target, Function):
+            continue
+        if access_relation_registry.lookup(type(expr.target)) is None:
+            continue
+        (stated if get_metadata(expr, TrafficMetadata) is not None else silent).append(expr)
+    assert stated and silent
+    for record in (get_metadata(expr, TrafficMetadata) for expr in stated):
+        assert record.boundaries
+        assert record.whole or all(
+            not item.read and not item.write for item in record.boundaries
+        )

@@ -26,12 +26,18 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
             LoopFootprintMetadata,
             MemoryMetadata,
         )
+        from tilefoundry.analysis.traffic import TrafficMetadata  # noqa: PLC0415
 
         return Analyzer(
             "memory",
             analyze_memory,
             requires=("compute-cost",),
-            produces=(MemoryMetadata, LoopFootprintMetadata, BufferAllocationMetadata),
+            produces=(
+                MemoryMetadata,
+                LoopFootprintMetadata,
+                BufferAllocationMetadata,
+                TrafficMetadata,
+            ),
         )
     if selector == "roofline":
         from tilefoundry.analysis.metadata import RooflineMetadata  # noqa: PLC0415

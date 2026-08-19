@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+import isl
 from ortools.sat.python import cp_model
 
 from tilefoundry.ir.core import (
@@ -32,9 +33,13 @@ from tilefoundry.ir.types import Type, local_type_of, tensor_bytes
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target, UnsupportedCapabilityError
-from tilefoundry.visitor_registry.access_relation import declared_storage
+from tilefoundry.visitor_registry.access_relation import (
+    access_relation_registry,
+    declared_storage,
+)
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
 
+from .buffer_plan import build_buffer_plan
 from .check import Placement, _call_placements, _result_placement
 from .errors import AnalysisError
 from .facts import (
@@ -58,6 +63,7 @@ from .metadata import (
     TrafficBytes,
     ValueLifetime,
 )
+from .traffic import lower_traffic
 from .walk import (
     attach,
     bytes_by_storage,
@@ -68,6 +74,7 @@ from .walk import (
 )
 
 SELECTOR = "memory"
+_UMAT_LEVEL = str(StorageKind.RMEM)
 
 _ALLOCATED_LEVELS = ("gmem", "smem")
 
@@ -1006,6 +1013,45 @@ def _buffer_placements(
     return resolved
 
 
+def _record_traffic(
+    module: Module,
+    fn: Function,
+    scope: FunctionScope,
+    level: str | None,
+    topologies: tuple[Topology, ...],
+) -> None:
+    """Give every occurrence the bytes its own relations say it moves.
+
+    An occurrence whose movement cannot be stated is left without a record
+    rather than given an empty one. Having no answer and having answered zero
+    are different things, and a reader that needs the bytes has to be able to
+    tell them apart.
+    """
+    plan = build_buffer_plan(fn, level)
+    whole = CostContext(scope=scope)
+    unit = CostContext(scope=scope, level=level, topologies=topologies)
+    for expr in postorder(fn.body) if fn.body is not None else ():
+        if not isinstance(expr, Call) or isinstance(expr.target, Function):
+            continue
+        handler = access_relation_registry.lookup(type(expr.target))
+        if handler is None:
+            continue
+        try:
+            moved = lower_traffic(
+                expr,
+                handler(expr, whole),
+                handler(expr, unit),
+                plan,
+                whole,
+                unit,
+                participant=0,
+                umat_level=_UMAT_LEVEL,
+            )
+        except (AnalysisError, NotImplementedError, ValueError, isl.Error):
+            continue
+        attach(expr, moved)
+
+
 def analyze_memory(
     module: Module,
     function: Function,
@@ -1085,15 +1131,17 @@ def analyze_memory(
             ),
         )
         if allocation is not None:
+            scope = FunctionScope(module, fn)
             _address_buffers(
                 fn,
                 record,
                 allocation,
                 facts,
-                CostContext(scope=FunctionScope(module, fn)),
+                CostContext(scope=scope),
                 topology_levels=target.topology_levels,
                 topologies=topologies,
             )
+            _record_traffic(module, fn, scope, level, topologies)
         for loop, footprint in loop_records:
             attach(loop, footprint)
 
