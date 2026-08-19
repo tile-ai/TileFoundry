@@ -1014,7 +1014,6 @@ def _buffer_placements(
 
 
 def _record_traffic(
-    module: Module,
     fn: Function,
     scope: FunctionScope,
     level: str | None,
@@ -1024,8 +1023,10 @@ def _record_traffic(
 
     An occurrence whose movement cannot be stated is left without a record
     rather than given an empty one. Having no answer and having answered zero
-    are different things, and a reader that needs the bytes has to be able to
-    tell them apart.
+    are different things, and a reader that needs the bytes has to tell them
+    apart. What is heard as no answer is what says so: a handler failing its own
+    contract is a broken handler, not an Op nothing can be said about, and it is
+    left to reach whoever asked.
     """
     plan = build_buffer_plan(fn, level)
     whole = CostContext(scope=scope)
@@ -1047,7 +1048,7 @@ def _record_traffic(
                 participant=0,
                 umat_level=_UMAT_LEVEL,
             )
-        except (AnalysisError, NotImplementedError, ValueError, isl.Error):
+        except (AnalysisError, NotImplementedError, isl.Error):
             continue
         attach(expr, moved)
 
@@ -1141,7 +1142,7 @@ def analyze_memory(
                 topology_levels=target.topology_levels,
                 topologies=topologies,
             )
-            _record_traffic(module, fn, scope, level, topologies)
+            _record_traffic(fn, scope, level, topologies)
         for loop, footprint in loop_records:
             attach(loop, footprint)
 

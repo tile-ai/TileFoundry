@@ -44,6 +44,7 @@ from tilefoundry.analysis import (
 from tilefoundry.analysis.buffer_plan import BufferPlan, PlannedBuffer, build_buffer_plan
 from tilefoundry.analysis.compute_cost import _prove_storage, _Storage
 from tilefoundry.analysis.footprint import _local_type as footprint_local_type
+from tilefoundry.analysis.memory import _record_traffic
 from tilefoundry.analysis.metadata import (
     BufferAllocationMetadata,
     BufferRef,
@@ -56,7 +57,15 @@ from tilefoundry.analysis.traffic import (
     _seat,
     lower_traffic,
 )
-from tilefoundry.analysis.walk import loop_scopes, postorder, tensor_types, values_of
+from tilefoundry.analysis.walk import (
+    attach,
+    detach,
+    loop_scopes,
+    postorder,
+    reachable_functions,
+    tensor_types,
+    values_of,
+)
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamically
 from tilefoundry.inspection.analysis_report import render_analysis
@@ -2686,3 +2695,96 @@ def test_an_occurrence_this_cannot_state_carries_no_record_rather_than_an_empty_
         assert record.whole or all(
             not item.read and not item.write for item in record.boundaries
         )
+
+
+def _occurrences(function):
+    """Every primitive occurrence of *function* that states its accesses."""
+    return [
+        expr
+        for expr in postorder(function.body)
+        if isinstance(expr, Call)
+        and not isinstance(expr.target, Function)
+        and access_relation_registry.lookup(type(expr.target)) is not None
+    ]
+
+
+def test_a_derived_answer_does_not_survive_into_a_program_that_cannot_give_it() -> None:
+    """An answer belongs to the analysis that reached it, not to the program.
+
+    A record left on an authored call travels into every view built from it
+    unless it is known to be derived. This occurrence is one no analysis of this
+    program can answer -- a unit reading a buffer it holds no part of -- so an
+    answer appearing on it came from somewhere else, and a reader would take a
+    stale number for this round's.
+    """
+    first = analyze(
+        MoEMegaKernel, MoEMegaKernel.entry_function(), analysis=("compute-cost", "memory")
+    )
+    silent = [
+        expr for expr in _occurrences(first.function)
+        if get_metadata(expr, TrafficMetadata) is None
+    ]
+    assert silent, "no occurrence of this program was left unanswered"
+    provenance = get_metadata(silent[0], OccurrenceProvenance)
+    assert provenance is not None
+
+    authored = {
+        id(expr): expr
+        for function in reachable_functions(MoEMegaKernel.entry_function())
+        for expr in postorder(function.body)
+    }[provenance.source_call]
+    attach(authored, TrafficMetadata(whole=(("marker", TrafficBytes(1, 1)),)))
+    try:
+        second = analyze(
+            MoEMegaKernel, MoEMegaKernel.entry_function(), analysis=("compute-cost", "memory")
+        )
+        for expr in _occurrences(second.function):
+            record = get_metadata(expr, TrafficMetadata)
+            assert record is None or "marker" not in dict(record.whole)
+    finally:
+        detach(authored, TrafficMetadata)
+
+
+def test_a_handler_that_breaks_its_own_contract_is_not_an_op_nothing_can_be_said_of() -> None:
+    """Two silences that mean opposite things are told apart at the boundary.
+
+    An Op whose relation says it cannot state a case is a case this does not
+    cover, and the occurrence goes without a record. A handler raising because
+    it built something invalid is a bug in the handler, and swallowing it would
+    file that bug under the same heading and leave it there.
+    """
+
+    class _Breaks(Op):
+        pass
+
+    register_typeinfer(_Breaks)(lambda call, ctx: make_tensor_type((4,), DType.f32))
+
+    @register_access_relation(_Breaks)
+    def _broken(call, ctx) -> AccessRelations:
+        raise ValueError("this handler built something it should not have")
+
+    class _Declines(Op):
+        pass
+
+    register_typeinfer(_Declines)(lambda call, ctx: make_tensor_type((4,), DType.f32))
+
+    @register_access_relation(_Declines)
+    def _declines(call, ctx) -> AccessRelations:
+        raise NotImplementedError("this Op does not state relations at this shape")
+
+    held = make_tensor_type((4,), DType.f32)
+    source = Var(type=held, name="held")
+    broken = Call(type=held, target=_Breaks(), args=(source,))
+    declines = Call(type=held, target=_Declines(), args=(source,))
+
+    for body, expected in ((broken, ValueError), (declines, None)):
+        function = Function(
+            type=held, name="main", params=(source,), body=body, return_type=held
+        )
+        scope = FunctionScope(_NoParallelLevel, function)
+        if expected is None:
+            _record_traffic(function, scope, None, ())
+            assert get_metadata(body, TrafficMetadata) is None
+            continue
+        with pytest.raises(expected, match="should not have"):
+            _record_traffic(function, scope, None, ())
