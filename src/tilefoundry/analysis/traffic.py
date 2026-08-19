@@ -70,13 +70,31 @@ class TrafficMetadata(IRMetadata):
 
 
 def _element_bytes(type_: Type) -> int:
-    """One element of *type_* in bytes, refused when it is not whole bytes."""
+    """One element of *type_* in bytes, refused when it is not whole bytes.
+
+    An address is a byte, so a value whose elements are not whole bytes has no
+    address arithmetic here. How much such a value moves is a different question
+    and is answered over the whole count rather than one element at a time.
+    """
     bits = getattr(getattr(type_, "dtype", None), "bit_width", None)
     if not isinstance(bits, int) or bits <= 0 or bits % 8:
         raise AnalysisError(
             f"an element of {bits!r} bits has no whole number of bytes to charge"
         )
     return bits // 8
+
+
+def _moved_bytes(count: int, type_: Type) -> int:
+    """What *count* elements of *type_* come to in bytes, rounded up as a leaf.
+
+    A leaf is addressed on its own, so a value of sub-byte elements takes whole
+    bytes however few of them move -- which is what the type system already
+    answers when asked the size of one.
+    """
+    bits = getattr(getattr(type_, "dtype", None), "bit_width", None)
+    if not isinstance(bits, int) or bits <= 0:
+        raise AnalysisError(f"an element of {bits!r} bits has no size to charge")
+    return -(-count * bits // 8)
 
 
 def _leaf(type_: Type, field: int | None, where: str) -> TensorType:
@@ -298,24 +316,24 @@ def lower_traffic(
                     "participant holds no part of, so the bytes come from "
                     "somewhere this does not model"
                 )
-        payload = _element_bytes(leaf)
         read, write = (moving, 0) if side == "input" else (0, moving)
+        crossed = (_moved_bytes(read, leaf), _moved_bytes(write, leaf))
         boundaries.append(
             BoundaryTraffic(
                 side=side,
                 index=index,
                 field=field,
                 level=level,
-                read=read * payload,
-                write=write * payload,
+                read=crossed[0],
+                write=crossed[1],
             )
         )
         into = whole.setdefault(level, [0, 0])
-        into[0] += read * payload
-        into[1] += write * payload
+        into[0] += crossed[0]
+        into[1] += crossed[1]
         held = unit.setdefault(level, [0, 0])
-        held[0] += (share if side == "input" else 0) * payload
-        held[1] += (0 if side == "input" else share) * payload
+        held[0] += _moved_bytes(share if side == "input" else 0, leaf)
+        held[1] += _moved_bytes(0 if side == "input" else share, leaf)
     return TrafficMetadata(
         whole=_levelled(whole),
         per_unit=_levelled(unit),

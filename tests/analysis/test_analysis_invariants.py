@@ -65,6 +65,7 @@ from tilefoundry.analysis.preflight import validate_authored
 from tilefoundry.analysis.traffic import (
     TrafficMetadata,
     _address_map,
+    _moved_bytes,
     _seat,
     _strides,
     lower_traffic,
@@ -3348,3 +3349,23 @@ def test_a_program_with_no_addresses_moves_bytes_and_takes_no_stated_time() -> N
         analyze(
             _NoParallelLevel, _NoParallelLevel.entry_function(), analysis="performance"
         )
+
+
+def test_a_value_of_bits_is_charged_the_bytes_it_takes_up() -> None:
+    """A boolean is a bit, and a bit is not a fraction of a byte to charge.
+
+    Charging one element at a time asks what a bit costs in bytes, which has no
+    answer, and refusing there loses the traffic of every mask a program
+    computes. A leaf is addressed on its own, so the count is converted whole
+    and rounded up the way the type system already sizes it.
+    """
+    mask = make_tensor_type((512,), DType.bool)
+    assert tensor_bytes(mask) == 64
+
+    assert _moved_bytes(512, mask) == 64
+    assert _moved_bytes(1, mask) == 1
+    assert _moved_bytes(0, mask) == 0
+    assert _moved_bytes(9, mask) == 2
+
+    held = make_tensor_type((512,), DType.f32)
+    assert _moved_bytes(512, held) == tensor_bytes(held)
