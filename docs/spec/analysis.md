@@ -903,6 +903,13 @@ attached only to the Function. Its full JSON projection is under
   - `Reshape` and `Slice` are addressing views and MUST NOT receive independent
     lifetimes. `Transpose` MUST allocate its result. Analysis uses operation
     semantics for this distinction rather than inferring aliasing from layouts.
+  - An addressing view's non-source operands are the addressing itself, and MUST
+    move nothing: the bounds of a `Slice` say which bytes the result names, and
+    naming them is not reading them. An operation that writes at an address it
+    is given reads that address, and MUST state one element per number it is
+    given -- one for a rank-0 start, and one per axis for a tuple of them. The
+    two are different questions about the same-looking operand, and comparing
+    one against the other reads as a change in traffic where there is none.
   - The memory levels MUST be two flat tuples with a separate relation edge list.
   - A GPU projection MUST cover the explicit levels a program can name and the
     caches traffic passes through, and MUST state that L1 caches L2, that L2

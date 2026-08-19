@@ -9,7 +9,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Scalar, Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -110,7 +110,10 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
                 WindowAccess(tuple(0 for _ in update.shape), tuple(update.shape)),
                 window,
             ),
-            *(moves(_scalar_access(ctx, arg), 1) for arg in call.args[2:]),
+            *(
+                moves(_scalar_access(ctx, arg), _controls(ctx, arg))
+                for arg in call.args[2:]
+            ),
         ),
         outputs=(
             BoundaryAccess(
@@ -222,6 +225,17 @@ def _eval_insert_slice(ctx):
 
 
 __all__ = ["InsertSlice"]
+
+
+def _controls(ctx, arg) -> int:
+    """How many numbers one operand carries for placing the window.
+
+    A window is placed by one number per axis it is placed on, and an operand
+    holding several of them carries several: a rank-N tuple of offsets is read N
+    times over, not once.
+    """
+    stated = ctx.type_of(arg)
+    return len(stated.fields) if isinstance(stated, TupleType) else 1
 
 
 def _scalar_access(ctx, arg) -> "isl.multi_aff":

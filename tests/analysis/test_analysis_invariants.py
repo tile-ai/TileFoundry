@@ -858,7 +858,7 @@ def test_every_boundary_states_the_movement_its_op_performs() -> None:
         ),
     )
     assert counted(access_relation_registry.lookup(InsertSlice)(written, ctx)) == (
-        [12, 12, 1],
+        [12, 12, 2],
         [12],
     )
 
@@ -1567,8 +1567,9 @@ def test_a_windows_amount_does_not_move_with_where_it_lands() -> None:
     A literal offset, an offset that arrives as a value, and an offset a loop
     counts out all place the same window, so the update and the container around
     it move the same bytes each time -- including at the ends, where a window
-    flush against a boundary is still its own size. What the offset does change
-    is the pattern, which is where a reader looks to find out.
+    flush against a boundary is still its own size. Two numbers place it either
+    way, one per axis. What the offset does change is the pattern, which is
+    where a reader looks to find out.
     """
 
     def written(offset) -> tuple[list[int], list[int], object]:
@@ -1601,7 +1602,7 @@ def test_a_windows_amount_does_not_move_with_where_it_lands() -> None:
         )
 
     top, middle, bottom = written(axes(0, 0)), written(axes(1, 0)), written(axes(2, 0))
-    assert top[:2] == middle[:2] == bottom[:2] == ([12, 12, 1], [12])
+    assert top[:2] == middle[:2] == bottom[:2] == ([12, 12, 2], [12])
     assert top[2].offsets == (0, 0)
     assert bottom[2].offsets == (2, 0)
 
@@ -2834,7 +2835,9 @@ def test_a_function_moves_its_occurrences_as_often_as_its_loops_repeat_them() ->
     One occurrence inside a loop of 24 moves what it moves 24 times, and the
     rule for saying so lives here rather than in each reader: two readers with
     two copies of it drift. The boundaries are not repeated with it -- which
-    operand moved what belongs to the occurrence, not to the total.
+    operand moved what belongs to the occurrence, not to the total. The insert
+    in that loop reads three eight-byte numbers to place its window, so the
+    register total is those three, counted twenty-four times.
     """
     case = next(item for item in CORPUS if item.id == "access_footprint.grouped_moe")
     selected = case.analyze[0]
@@ -2861,7 +2864,7 @@ def test_a_function_moves_its_occurrences_as_often_as_its_loops_repeat_them() ->
     assert dict(record.whole) == {
         level: TrafficBytes(*moved) for level, moved in counted.items()
     }
-    assert dict(record.whole)["rmem"] == TrafficBytes(8 * 24, 0)
+    assert dict(record.whole)["rmem"] == TrafficBytes(3 * 8 * 24, 0)
 
 
 def test_a_total_counts_work_a_unit_does_not_do_only_where_it_happened() -> None:
@@ -3068,3 +3071,65 @@ def test_a_field_is_placed_in_the_buffer_that_field_is_in() -> None:
         (fields[1].buffer_id, fields[1].offset, fields[1].size)
     ]
     assert get_metadata(taken, TrafficMetadata).whole == ()
+
+
+def _insert_slice_controls(dst_shape, update_shape, offsets):
+    """One insert's boundary quantities, at the shapes it was written with."""
+    call = Call(
+        type=make_tensor_type(dst_shape, DType.f32),
+        target=InsertSlice(),
+        args=(
+            Var(type=make_tensor_type(dst_shape, DType.f32), name="dst"),
+            Var(type=make_tensor_type(update_shape, DType.f32), name="upd"),
+            offsets,
+        ),
+    )
+    relations = access_relation_registry.lookup(InsertSlice)(call, CostContext())
+    return [boundary.quantity.upper for boundary in relations.inputs]
+
+
+def test_an_insert_reads_one_number_for_every_axis_it_places_its_window_on() -> None:
+    """A window is placed by one number per axis, and N of them is N reads.
+
+    The offsets arrive as one operand whether there is one of them or three, and
+    counting the operand rather than the numbers in it charged a rank-3 insert
+    for a third of what it read. A bare scalar start is the one case where the
+    operand and the number are the same thing.
+    """
+    scalar = Constant(type=make_tensor_type((), DType.i64), value=2)
+
+    def tuple_of(count):
+        held = make_tensor_type((), DType.i64)
+        return Tuple(
+            type=TupleType(fields=tuple(held for _ in range(count))),
+            elements=tuple(Constant(type=held, value=0) for _ in range(count)),
+        )
+
+    assert _insert_slice_controls((10,), (4,), scalar) == [10 - 4, 4, 1]
+    assert _insert_slice_controls((8, 8), (2, 2), tuple_of(2)) == [64 - 4, 4, 2]
+    assert _insert_slice_controls((8, 8, 8), (2, 2, 2), tuple_of(3)) == [512 - 8, 8, 3]
+
+
+def test_naming_bytes_is_not_reading_them() -> None:
+    """A window's bounds address it; a write's offsets are read to place it.
+
+    The two arrive the same way -- scalars beside a tensor -- and mean opposite
+    things. A slice's bounds say which bytes the result is, which is addressing
+    and moves nothing. An insert is handed an address and reads it to know where
+    to put its window. A reader comparing one against the other sees traffic
+    appear or vanish where nothing changed.
+    """
+    held = make_tensor_type((10,), DType.f32)
+    start = Constant(type=make_tensor_type((), DType.i64), value=2)
+    bounds = Tuple(
+        type=TupleType(fields=(make_tensor_type((), DType.i64),)), elements=(start,)
+    )
+    window = Call(
+        type=make_tensor_type((4,), DType.f32),
+        target=SliceOp(sizes=(4,), strides=(1,)),
+        args=(Var(type=held, name="x"), bounds),
+    )
+    naming = access_relation_registry.lookup(SliceOp)(window, CostContext())
+    assert [item.quantity.upper for item in naming.inputs] == [4, 0]
+
+    assert _insert_slice_controls((10,), (4,), start) == [10 - 4, 4, 1]
