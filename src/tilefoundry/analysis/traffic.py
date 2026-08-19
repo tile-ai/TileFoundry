@@ -390,9 +390,9 @@ def _same_address(link, field: int | None, call, plan: BufferPlan, domain: tuple
     """Whether a link's two sides name the same bytes.
 
     Same buffer is necessary and not sufficient: two regions of one allocation
-    are different bytes unless the coordinates map to the same addresses. A pair
-    of windows written the same way over the same layout answers that without
-    knowing where they sit, which is what lets a run-time offset be honoured.
+    are different bytes unless the coordinates map to the same addresses. A link
+    that reads a coordinate and answers with itself says they do without knowing
+    where either sits, which is what lets a run-time window be honoured.
     """
     source = _entry(plan, call.args[link.input], link.input_field)
     output = _entry(plan, call, field)
@@ -405,13 +405,19 @@ def _same_address(link, field: int | None, call, plan: BufferPlan, domain: tuple
     if reading is None:
         return False
     source_bytes, output_bytes = reading
-    if isinstance(link.source, WindowAccess) or isinstance(link.output, WindowAccess):
-        return link.source == link.output and _seat(source.ref, source_bytes) == _seat(
+    if isinstance(link.where, WindowAccess):
+        return not link.where.offsets or _seat(source.ref, source_bytes) == _seat(
             output.ref, output_bytes
         )
-    left = _address_map(link.source, source.ref, source_bytes, domain)
-    right = _address_map(link.output, output.ref, output_bytes, domain)
+    left = _address_map(link.where, source.ref, source_bytes, domain)
+    right = _address_map(_reading(domain), output.ref, output_bytes, domain)
     return left is not None and right is not None and left.is_equal(right)
+
+
+def _reading(domain: tuple) -> "isl.multi_aff":
+    """An output read at its own coordinates, which is where the link lands."""
+    names = ", ".join(f"d{axis}" for axis in range(len(domain)))
+    return isl.multi_aff(f"{{ [{names}] -> [{names}] }}" if names else "{ [] -> [] }")
 
 
 def _seat(ref, payload: int) -> "tuple | None":
@@ -532,15 +538,15 @@ def _address_map(pattern, ref, payload: int, domain: tuple) -> "isl.map | None":
 def view_displacement(link, source, source_bytes: int, output, output_bytes: int, domain: tuple):
     """Where in its source a renamed value begins, in bytes, when that is fixed.
 
-    A link's two sides read one iteration domain, so the distance between the
-    bytes they name is a function of that domain. A renaming is the case where
-    that distance does not vary: the value sits at one place in the buffer, and
-    the place is the distance. One that varies is not a displacement of the
-    value but a mapping through it, and one side that cannot be addressed at all
-    -- a window whose start is a run-time value -- fixes nothing.
+    A link reads an output coordinate and answers with the input coordinate
+    holding it, so the distance between the bytes they name is a function of the
+    output's own coordinates. A renaming is the case where that distance does
+    not vary: the value sits at one place in the buffer, and the place is the
+    distance. One that varies is not a displacement of the value but a mapping
+    through it, and a window whose start is a run-time value fixes nothing.
     """
-    reading = _address_map(link.source, source, source_bytes, domain)
-    written = _address_map(link.output, output, output_bytes, domain)
+    reading = _address_map(link.where, source, source_bytes, domain)
+    written = _address_map(_reading(domain), output, output_bytes, domain)
     if reading is None or written is None:
         return None
     try:

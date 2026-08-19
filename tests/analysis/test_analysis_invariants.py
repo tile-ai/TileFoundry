@@ -1282,16 +1282,15 @@ def test_an_indexed_update_keeps_its_container_and_writes_the_rows_it_names() ->
         assert relations.outputs[0].pattern == IndexedAccess(index_operand=1, axis=0)
         (link,) = relations.outputs[0].storage.links
         assert link.kind == "preserve" and link.quantity == AccessQuantity(32, 32)
-        assert isinstance(link.source, isl.multi_aff)
-        assert isinstance(link.output, isl.multi_aff)
+        assert isinstance(link.where, isl.multi_aff)
 
 
 def test_a_view_and_the_value_it_renames_state_the_same_coordinates() -> None:
     """The repros I claimed and did not check: a link that must compare equal.
 
-    A forward link is honoured when both sides name the same bytes, so a view
-    whose source and output images differ is a copy however plainly it is a
-    renaming. Each of these was said to be fixed a round before it was, because
+    A forward link is honoured when it reads a coordinate and answers with the
+    one holding it, so a view whose link says otherwise is a copy however
+    plainly it is a renaming. Each of these was said to be fixed a round before it was, because
     the tests covered a different shape than the claim did.
     """
     cta = Topology("cta", 2)
@@ -1315,18 +1314,17 @@ def test_a_view_and_the_value_it_renames_state_the_same_coordinates() -> None:
 
     held = split((8,))
     same = linked(Reshard(layout=held.layout, storage=held.storage), held)
-    assert _as_map(same.source).is_equal(isl.map("{ [d0, d1] -> [0, d1] }"))
-    assert _as_map(same.source).is_equal(_as_map(same.output))
+    assert _as_map(same.where).is_equal(isl.map("{ [d0, d1] -> [0, d1] }"))
 
     turned = linked(Transpose(perm=(0, 1)), split((8, 4)))
-    assert _as_map(turned.source).is_equal(_as_map(turned.output))
+    assert _as_map(turned.where).is_equal(isl.map("{ [d0, d1, d2] -> [0, d1, d2] }"))
 
     parted = access_relation_registry.lookup(SplitOp)(
         _split_call(split((8, 4))), CostContext(level="cta", topologies=(cta,))
     )
     for field, offset in enumerate((0, 2)):
         (link,) = parted.outputs[field].storage.links
-        assert _as_map(link.source).is_equal(
+        assert _as_map(link.where).is_equal(
             isl.map(f"{{ [d0, d1, d2] -> [0, d1, d2 + {offset}] }}")
         )
 
@@ -1543,7 +1541,7 @@ def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:
         )
         (link,) = relations.outputs[field].storage.links
         assert link.input == 0 and link.input_field is None
-        assert _as_map(link.source).is_equal(
+        assert _as_map(link.where).is_equal(
             isl.map(f"{{ [d0, d1] -> [d0 + {offset}, d1] }}")
         )
         assert link.quantity == AccessQuantity(15, 15)
@@ -1844,22 +1842,15 @@ def test_a_relation_that_cannot_be_true_is_refused_where_it_is_written() -> None
         outputs=(BoundaryAccess(reads, held, AccessMode.TRANSFER, OutputStorage()),),
     )
 
-    beyond = StorageLink("forward", 3, reads, reads, held)
+    beyond = StorageLink("forward", 3, reads, held)
     refused(
         "output 0 links to operand 3, and this call has 1",
         inputs=(moves(reads, 4),),
         outputs=(transfers(reads, held, beyond),),
     )
 
-    crossed = StorageLink("forward", 0, identity_access(2), reads, held)
-    refused(
-        "output 0 links two patterns over different domains",
-        inputs=(moves(reads, 4),),
-        outputs=(transfers(reads, held, crossed),),
-    )
-
     with pytest.raises(ValueError, match="a link either forwards a value"):
-        StorageLink("borrow", 0, reads, reads, held)
+        StorageLink("borrow", 0, reads, held)
 
 
 def test_a_link_is_held_to_the_operand_it_names() -> None:
@@ -1888,9 +1879,7 @@ def test_a_link_is_held_to_the_operand_it_names() -> None:
                 transfers(
                     identity_access(1),
                     held,
-                    StorageLink(
-                        "forward", 0, identity_access(1), identity_access(1), held
-                    ),
+                    StorageLink("forward", 0, identity_access(1), held),
                 ),
             ),
         )
@@ -1983,7 +1972,6 @@ def test_a_link_source_that_names_a_field_is_checked_against_that_field() -> Non
                             "forward",
                             0,
                             IndexedAccess(index_operand=1, axis=_axis),
-                            identity_access(1),
                             held,
                             input_field=0,
                         ),
@@ -2120,7 +2108,7 @@ def test_a_storage_claim_covers_every_operand_it_names() -> None:
                         reads,
                         held,
                         *(
-                            StorageLink("forward", operand, reads, reads, held)
+                            StorageLink("forward", operand, reads, held)
                             for operand in operands
                         ),
                     ),

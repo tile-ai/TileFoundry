@@ -192,8 +192,7 @@ def _split_access(call: "Call", ctx) -> AccessRelations:
                 StorageLink(
                     kind="forward",
                     input=0,
-                    source=reads,
-                    output=written,
+                    where=reads,
                     quantity=AccessQuantity(moved, moved),
                 ),
             )

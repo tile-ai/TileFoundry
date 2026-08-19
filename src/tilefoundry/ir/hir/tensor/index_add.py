@@ -157,8 +157,7 @@ def _index_add_access(call: "Call", ctx) -> AccessRelations:
     preserve = StorageLink(
         kind="preserve",
         input=0,
-        source=identity,
-        output=identity,
+        where=identity,
         quantity=AccessQuantity(held, held),
     )
     return AccessRelations(

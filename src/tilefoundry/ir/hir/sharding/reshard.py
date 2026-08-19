@@ -224,8 +224,7 @@ def _reshard_access(call: "Call", ctx) -> AccessRelations:
     link = StorageLink(
         kind="forward",
         input=0,
-        source=reads,
-        output=written,
+        where=reads,
         quantity=held,
     )
     return AccessRelations(

@@ -150,7 +150,7 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
     )
     complement = WindowAccess(offsets, extents, complement=True)
     preserve = StorageLink(
-        kind="preserve", input=0, source=complement, output=complement, quantity=kept
+        kind="preserve", input=0, where=complement, quantity=kept
     )
     return AccessRelations(
         inputs=(

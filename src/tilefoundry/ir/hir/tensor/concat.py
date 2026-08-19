@@ -136,13 +136,12 @@ def _concat_access(call: "Call", ctx) -> AccessRelations:
         held = elements_of(type_)
         piece = list(dims)
         if offset:
-            piece[axis] = f"d{axis} + {offset}"
+            piece[axis] = f"d{axis} - {offset}"
         links.append(
             StorageLink(
                 kind="forward",
                 input=index,
-                source=isl.multi_aff(f"{{ [{domain_text}] -> [{domain_text}] }}"),
-                output=isl.multi_aff(f"{{ [{domain_text}] -> [{', '.join(piece)}] }}"),
+                where=isl.multi_aff(f"{{ [{domain_text}] -> [{', '.join(piece)}] }}"),
                 quantity=AccessQuantity(held, held),
             )
         )

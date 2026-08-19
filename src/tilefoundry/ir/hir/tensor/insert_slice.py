@@ -99,8 +99,7 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     preserve = StorageLink(
         kind="preserve",
         input=0,
-        source=complement,
-        output=complement,
+        where=complement,
         quantity=AccessQuantity(kept, kept),
     )
     return AccessRelations(

@@ -146,18 +146,18 @@ class AccessMode(enum.Enum):
 class StorageLink:
     """One region an output may share with an input, and how much of it.
 
-    ``source`` and ``output`` map one shared iteration domain to a coordinate on
-    each side. Two patterns rather than two byte offsets, because an offset and
-    a size cannot state an unbound window start or the mapping a transpose
-    forwards through. ``quantity`` is how much the region holds, never measured
-    off a pattern. A link is a candidate: whether these bytes really are shared
-    is the allocation's answer, and an unhonoured link is the copy instead.
+    ``where`` reads an output coordinate and answers with the input coordinate
+    holding it: a pattern rather than a byte offset, which could state neither
+    an unbound window start nor the mapping a transpose forwards through, and
+    one rather than two, which would be the same answer twice. ``quantity`` is
+    how much the region holds, never measured off a pattern. A link is a
+    candidate: whether these bytes really are shared is the allocation's answer,
+    and an unhonoured link is the copy instead.
     """
 
     kind: str
     input: int
-    source: "AccessPattern"
-    output: "AccessPattern"
+    where: "AccessPattern"
     quantity: "AccessQuantity"
     input_field: int | None = None
 
@@ -178,14 +178,13 @@ class StorageLink:
                 f"a link names a field of its operand by position, not "
                 f"{self.input_field!r}"
             )
-        for side, pattern in (("source", self.source), ("output", self.output)):
-            if not isinstance(
-                pattern, (isl.multi_aff, isl.map, IndexedAccess, WindowAccess)
-            ):
-                raise ValueError(
-                    f"a link's {side} reads through a relation, a lookup or a "
-                    f"window, not through {pattern!r}"
-                )
+        if not isinstance(
+            self.where, (isl.multi_aff, isl.map, IndexedAccess, WindowAccess)
+        ):
+            raise ValueError(
+                f"a link reads through a relation, a lookup or a window, not "
+                f"through {self.where!r}"
+            )
         if not isinstance(self.quantity, AccessQuantity):
             raise ValueError(
                 f"a link states how much it covers, not {self.quantity!r}"
@@ -363,45 +362,6 @@ class AccessRelations:
                         f"output {index} links to operand {link.input}, and this "
                         f"call has {len(self.inputs)}"
                     )
-                if not _shares_domain(link.source, link.output):
-                    raise ValueError(
-                        f"output {index} links two patterns over different "
-                        "domains, so no coordinate of one names a coordinate "
-                        "of the other"
-                    )
-
-
-def _affine_domain(pattern: "AccessPattern") -> "isl.set | None":
-    """The set a carrier is indexed by, when it can state one."""
-    if isinstance(pattern, isl.multi_aff):
-        return isl.map.from_multi_aff(pattern).domain()
-    if isinstance(pattern, isl.map):
-        return pattern.domain()
-    return None
-
-
-def _shares_domain(source: "AccessPattern", output: "AccessPattern") -> bool:
-    """Whether two link patterns are indexed by one iteration domain.
-
-    Two affine carriers are compared as the sets they are, not as two rank
-    numbers: a pair of rank-2 maps over different extents index different
-    programs. Two windows are compared by the extents that are their domain. A
-    lookup states no domain of its own, and is admitted -- a link through one is
-    refused later, by a prover that has no bijection to offer, rather than here
-    where refusing it would make that ruling unwritable.
-    """
-    if isinstance(source, IndexedAccess) or isinstance(output, IndexedAccess):
-        return True
-    if isinstance(source, WindowAccess) and isinstance(output, WindowAccess):
-        return source.extents == output.extents
-    left, right = _affine_domain(source), _affine_domain(output)
-    if left is None or right is None:
-        return False
-    return left.is_equal(right)
-
-
-
-
 
 
 
@@ -576,15 +536,11 @@ def _check_lookups_against(call, ctx, relations: AccessRelations, op_cls: type) 
                 hold(boundary.pattern, f"{side} {index}", held)
             links = boundary.storage.links if boundary.storage is not None else ()
             for link in links:
-                for end, pattern in (("source", link.source), ("output", link.output)):
+                for end, pattern in (("where", link.where),):
                     if isinstance(pattern, IndexedAccess):
-                        reached = (
-                            _field_of(
-                                ctx.type_of(call.args[link.input]),
-                                link.input_field or 0,
-                            )
-                            if end == "source"
-                            else held
+                        reached = _field_of(
+                            ctx.type_of(call.args[link.input]),
+                            link.input_field or 0,
                         )
                         hold(pattern, f"{side} {index}'s link {end}", reached)
 
@@ -645,12 +601,11 @@ def _check_image_ranks(call, ctx, relations: AccessRelations, op_cls: type) -> N
                 if link.input_field is not None and isinstance(source, TupleType):
                     source = source.fields[link.input_field]
                 _hold_rank(
-                    link.source,
+                    link.where,
                     len(source.shape) if isinstance(source, TensorType) else 0,
-                    f"{side} {index}'s link source",
+                    f"{side} {index}'s link",
                     op_cls,
                 )
-                _hold_rank(link.output, wanted, f"{side} {index}'s link output", op_cls)
 
 
 def _hold_rank(pattern: "AccessPattern", wanted: int, where: str, op_cls: type) -> None:
@@ -1068,8 +1023,7 @@ def view_relations(
         link = StorageLink(
             kind="forward",
             input=source,
-            source=reads,
-            output=written,
+            where=reads,
             quantity=held,
             input_field=None if field is None else field(call, ctx),
         )
