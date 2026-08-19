@@ -1278,8 +1278,11 @@ model.
     MUST NOT overlap; disjoint sets MAY overlap, while a partial intersection
     serializes each whole occurrence rather than splitting it by participant.
   - A `GridRegionExpr` MUST be represented as one structured performance node. Its
-    body is solved once: `stride_ns` is that body's local makespan and the t-th
-    execution of a body occurrence with first interval `[start_ns, end_ns)` is
+    body is solved once, from the time the loop itself begins rather than from
+    zero, so a body occurrence's reported `[start_ns, end_ns)` is the interval it
+    actually runs in and not one a reader has to offset. `stride_ns` is that
+    body's local makespan and the t-th execution of a body occurrence with first
+    interval `[start_ns, end_ns)` is
     `[start_ns + t*stride_ns, end_ns + t*stride_ns)`, for `0 <= t < trips`.
     The loop spans `trips * stride_ns`; a consumer of its yield MUST wait for
     that full span. Loop-invariant values remain single occurrences outside it.

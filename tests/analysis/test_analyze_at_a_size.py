@@ -451,6 +451,54 @@ def test_without_a_size_the_result_names_the_record_bearing_view() -> None:
     assert get_metadata(function, ComputeCostMetadata) is None
 
 
+def test_a_loop_body_is_laid_out_where_the_loop_runs_not_where_it_starts() -> None:
+    """A body occurrence states the time it actually runs at, in one reading.
+
+    The loop begins after everything before it, and the work inside it begins
+    there rather than at zero: an interval measured from the body's own origin
+    and moved afterwards is the same number reached twice, and the second
+    reading is the one a reader would be given if the move were ever missed.
+    Every trip after the first is that interval plus a whole stride.
+    """
+    module = _aimed()
+    result = analyze(
+        module,
+        module.entry_function(),
+        analysis=("compute-cost", "performance"),
+        dims={"ctx_len": 8},
+    )
+    trips = enclosing_trips(result.function.body)
+    inside = [
+        record
+        for expr in postorder(result.function.body)
+        if isinstance(expr, Call)
+        and trips.get(id(expr), 1) > 1
+        and (record := get_metadata(expr, PerformanceMetadata)) is not None
+    ]
+    assert len(inside) == 17
+    ahead = [
+        record
+        for expr in postorder(result.function.body)
+        if isinstance(expr, Call)
+        and trips.get(id(expr), 1) == 1
+        and (record := get_metadata(expr, PerformanceMetadata)) is not None
+        and record.timeline.end_ns <= min(item.timeline.start_ns for item in inside)
+    ]
+    assert ahead, "nothing ran before this loop, so the origin proves nothing"
+
+    entered = max(record.timeline.end_ns for record in ahead)
+    first = min(record.timeline.start_ns for record in inside)
+    assert first >= entered, (
+        "a body occurrence was timed from its own origin rather than the loop's"
+    )
+    assert first == 539
+
+    stride = {record.timeline.stride_ns for record in inside}
+    assert stride == {920}
+    span = max(record.timeline.end_ns for record in inside) - first
+    assert span <= 920, "one trip of the body outlasted the stride it repeats at"
+
+
 def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> None:
     results = []
     for extent in (8, 16):

@@ -287,7 +287,23 @@ def _schedule(
             return host[len(scope)]
         return None
 
-    def build(scope: _Chain) -> _Scope:
+    def held_under(scope: _Chain) -> Placement:
+        """Which participants run anything in one scope, before it is laid out.
+
+        A loop occupies whatever its body occupies, and a body is laid out from
+        where the loop starts -- so the two cannot both wait for each other. The
+        occupation is a fact about the program's placement rather than about its
+        timing, and is read straight off the occurrences beneath.
+        """
+        found: set[int] = set()
+        for expr in direct.get(scope, ()):
+            if isinstance(expr, Call):
+                found |= placements[id(expr)]
+            else:
+                found |= held_under((*scope, id(expr)))
+        return frozenset(found)
+
+    def build(scope: _Chain, origin_ns: int) -> _Scope:
         occurrences: dict[int, _Occurrence] = {}
         children_scopes: list[_Scope] = []
         cursors: dict[int, int] = {}
@@ -295,22 +311,15 @@ def _schedule(
         for expr in sorted(direct.get(scope, ()), key=lambda item: source_index[id(item)]):
             index = source_index[id(expr)]
             runs = replays[id(expr)]
-            if isinstance(expr, Call):
-                occurrence = _Occurrence(
-                    expr, placements[id(expr)], index, durations[id(expr)] * runs, lifted=runs
-                )
-            else:
-                body = build((*scope, id(expr)))
-                children_scopes.append(body)
-                occurrence = _Occurrence(
-                    expr,
-                    body.placement,
-                    index,
-                    body.makespan_ns * loop_trip_count(expr) * runs,
-                    trips=loop_trip_count(expr) * runs,
-                    lifted=runs,
-                    body=body,
-                )
+            here = (*scope, id(expr))
+            occurrence = _Occurrence(
+                expr,
+                placements[id(expr)] if isinstance(expr, Call) else held_under(here),
+                index,
+                durations[id(expr)] * runs if isinstance(expr, Call) else 0,
+                trips=1 if isinstance(expr, Call) else loop_trip_count(expr) * runs,
+                lifted=runs,
+            )
             occurrences[id(expr)] = occurrence
 
             operands = expr.args if isinstance(expr, Call) else expr.init_args
@@ -328,31 +337,31 @@ def _schedule(
 
             ready = max(
                 (occurrences[key].end_ns for key in occurrence.predecessors),
-                default=0,
+                default=origin_ns,
             )
+            if not isinstance(expr, Call):
+                occurrence.body = build(here, ready)
+                occurrence.duration_ns = (
+                    occurrence.body.makespan_ns * occurrence.trips
+                )
             if occurrence.duration_ns:
-                ready = max(ready, *(cursors.get(position, 0) for position in occurrence.placement))
+                held = max(cursors.get(position, 0) for position in occurrence.placement)
+                if held > ready:
+                    ready = held
+                    if occurrence.body is not None:
+                        occurrence.body = build(here, ready)
+            if occurrence.body is not None:
+                children_scopes.append(occurrence.body)
             occurrence.start_ns = ready
             occurrence.end_ns = ready + occurrence.duration_ns
             if occurrence.duration_ns:
                 for position in occurrence.placement:
                     cursors[position] = occurrence.end_ns
-            if occurrence.body is not None:
-                _shift(occurrence.body, occurrence.start_ns)
-            makespan = max(makespan, occurrence.end_ns)
+            makespan = max(makespan, occurrence.end_ns - origin_ns)
 
         return _Scope(occurrences, children_scopes, makespan)
 
-    return build(())
-
-
-def _shift(scope: _Scope, delta: int) -> None:
-    """Move a body that was laid out against its own origin to where it runs."""
-    for occurrence in scope.occurrences.values():
-        occurrence.start_ns += delta
-        occurrence.end_ns += delta
-    for child in scope.children:
-        _shift(child, delta)
+    return build((), 0)
 
 
 def _records(
