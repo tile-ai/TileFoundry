@@ -1,13 +1,12 @@
 """Turn one occurrence's access relations into the bytes it moves.
 
-There is one lowering, and both readings come out of it: what the program moved
-and what one unit of it did. No second allocation is run and no second opinion
-is formed from a Type -- an occurrence moves what its relation says and no more,
-and the plan says which buffer that was and which part of it a unit owns.
-
-An access this cannot place is refused rather than reported as nothing. A buffer
-with no address is a question this cannot answer, and answering zero would read
-as an occurrence that moves nothing.
+One lowering answers twice: for the program, and for one unit of it. A unit's
+answer is the relation asked of a unit, already the projection onto one
+participant -- the program's window is never intersected to arrive at it. The
+plan is for the buffer: which one a boundary is in, where a unit's coordinates
+sit in it, and whether a link's two sides are the same bytes. An access this
+cannot place is refused rather than reported as nothing, a buffer with no
+address and a unit moving what it holds no part of alike.
 """
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ import isl
 
 from tilefoundry.ir.core.metadata import IRMetadata
 from tilefoundry.ir.types import TensorType, TupleType, Type
+from tilefoundry.ir.types.shard.layout import ComposedLayout
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.access_relation import (
     AccessMode,
@@ -268,7 +268,7 @@ def lower_traffic(
         (side, index): boundary
         for side, index, _field, boundary, _value in _rows_of(call, unit_relations, ctx)
     }
-    settled = _settled(unit_relations, plan, call, unit_domain)
+    settled = _settled(unit_relations, plan, call, unit_domain, unit_ctx)
     for side, index, field, boundary, value in rows:
         where = f"{describe(call)}: {side} {index}"
         leaf = _leaf(ctx.type_of(value), field, where)
@@ -291,7 +291,12 @@ def lower_traffic(
             wanted = 0 if field is None else field
             owned = plan.owned(value, participant, wanted)
             if owned is None:
-                share = 0
+                if share:
+                    raise AnalysisError(
+                        f"{where} moves {share} elements of a value this "
+                        "participant holds no part of, so the bytes come from "
+                        "somewhere this does not model"
+                    )
             else:
                 _within(mine, owned, unit_domain, where)
         payload = _element_bytes(leaf)
@@ -333,6 +338,7 @@ def _settled(
     plan: BufferPlan,
     call,
     domain: tuple,
+    ctx,
 ) -> "set[tuple[str, int]]":
     """The boundaries whose bytes were already where the operation put them.
 
@@ -351,7 +357,7 @@ def _settled(
             continue
         links = _links_for(side, boundary, relations)
         if links and all(
-            _same_address(link, output, call, plan, domain) for link, output in links
+            _same_address(link, output, call, plan, domain, ctx) for link, output in links
         ):
             proven.add((side, index))
     return proven
@@ -375,7 +381,7 @@ def _links_for(
     return found
 
 
-def _same_address(link, field: int | None, call, plan: BufferPlan, domain: tuple) -> bool:
+def _same_address(link, field: int | None, call, plan: BufferPlan, domain: tuple, ctx) -> bool:
     """Whether a link's two sides name the same bytes.
 
     Same buffer is necessary and not sufficient: two regions of one allocation
@@ -389,15 +395,42 @@ def _same_address(link, field: int | None, call, plan: BufferPlan, domain: tuple
         return False
     if (source.ref.buffer_id, source.ref.level) != (output.ref.buffer_id, output.ref.level):
         return False
+    where = describe(call)
+    reading = _widths(link, field, call, ctx, where)
+    if reading is None:
+        return False
+    source_bytes, output_bytes = reading
     if isinstance(link.source, WindowAccess) or isinstance(link.output, WindowAccess):
-        return (
-            link.source == link.output
-            and source.ref.offset == output.ref.offset
-            and _strides(source.ref) == _strides(output.ref)
+        return link.source == link.output and _seat(source.ref, source_bytes) == _seat(
+            output.ref, output_bytes
         )
-    left = _address_map(link.source, source.ref, domain)
-    right = _address_map(link.output, output.ref, domain)
+    left = _address_map(link.source, source.ref, source_bytes, domain)
+    right = _address_map(link.output, output.ref, output_bytes, domain)
     return left is not None and right is not None and left.is_equal(right)
+
+
+def _seat(ref, payload: int) -> "tuple | None":
+    """Where one value sits in its buffer and how its coordinates step there.
+
+    Two values of one buffer name the same bytes only if they start at the same
+    byte and step the same way. Either being unreadable is not a match, because
+    an address nobody can state has not been shown to equal another.
+    """
+    strides = _strides(ref)
+    seated = _seated(ref)
+    if strides is None or seated is None:
+        return None
+    return (ref.offset + seated * payload, tuple(stride * payload for stride in strides))
+
+
+def _widths(link, field: int | None, call, ctx, where: str) -> "tuple[int, int] | None":
+    """What one element costs on each side of a link, in bytes."""
+    try:
+        source = _element_bytes(_leaf(ctx.type_of(call.args[link.input]), link.input_field, where))
+        output = _element_bytes(_leaf(ctx.type_of(call), field, where))
+    except AnalysisError:
+        return None
+    return source, output
 
 
 def _entry(plan: BufferPlan, value, field: int | None) -> PlannedBuffer | None:
@@ -416,20 +449,40 @@ def _strides(ref) -> tuple | None:
     return tuple(strides) if all(isinstance(item, int) for item in strides) else None
 
 
-def _address_map(pattern, ref, domain: tuple) -> "isl.map | None":
-    """Where a pattern's coordinates land, as element addresses in one buffer.
+def _seated(ref) -> "int | None":
+    """How many elements into its buffer one value's own coordinates start.
 
-    Over the iteration it runs, and not over every coordinate the formula could
-    take: a position a participant holds one of contributes nothing to an
-    address, and two patterns that differ only there name the same bytes.
+    A layout composed with a constant carries that shift, and a shift is part of
+    an address: two views of one buffer that differ only by it are different
+    bytes. A composition this cannot read is not a zero shift, so it answers
+    with nothing rather than with the front of the buffer.
     """
-    strides = _strides(ref)
-    if strides is None or isinstance(pattern, (IndexedAccess, WindowAccess)):
+    layout = ref.layout
+    if isinstance(layout, ComposedLayout):
+        if layout.inner is not None or not isinstance(layout.offset, int):
+            return None
+        return layout.offset
+    return 0
+
+
+def _address_map(pattern, ref, payload: int, domain: tuple) -> "isl.map | None":
+    """Where a pattern's coordinates land, as byte addresses in one buffer.
+
+    In bytes and from the buffer's own front, because two values of one buffer
+    at different byte offsets are different bytes however alike their
+    coordinates read. Over the iteration the occurrence runs, and not over every
+    coordinate the formula could take: a position a participant holds one of
+    contributes nothing to an address, and two patterns that differ only there
+    name the same bytes.
+    """
+    seat = _seat(ref, payload)
+    if seat is None or isinstance(pattern, (IndexedAccess, WindowAccess)):
         return None
+    base, strides = seat
     relation = pattern.as_map() if hasattr(pattern, "as_map") else pattern
     coords = ", ".join(f"c{axis}" for axis in range(len(strides)))
     terms = [f"{stride}*c{axis}" for axis, stride in enumerate(strides) if stride]
-    linear = " + ".join(terms) if terms else "0"
+    linear = " + ".join([*terms, str(base)]) if terms else str(base)
     try:
         placed = relation.apply_range(isl.map(f"{{ [{coords}] -> [{linear}] }}"))
         return placed.intersect_domain(_box(domain))

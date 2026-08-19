@@ -50,7 +50,7 @@ from tilefoundry.analysis.metadata import (
     MemoryMetadata,
 )
 from tilefoundry.analysis.preflight import validate_authored
-from tilefoundry.analysis.traffic import lower_traffic
+from tilefoundry.analysis.traffic import _address_map, _seat, lower_traffic
 from tilefoundry.analysis.walk import loop_scopes, postorder, tensor_types, values_of
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamically
@@ -125,7 +125,7 @@ from tilefoundry.ir.types import (
     make_tensor_type,
     tensor_bytes,
 )
-from tilefoundry.ir.types.shard import Topology, make_mesh
+from tilefoundry.ir.types.shard import Layout, Topology, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial
 from tilefoundry.ir.types.shard.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.storage import StorageKind
@@ -2466,24 +2466,37 @@ def test_a_rename_that_lands_on_the_same_bytes_moves_none_of_them() -> None:
 def test_a_unit_moves_the_share_of_a_buffer_it_was_given() -> None:
     """One participant's bytes are one participant's, not the program's.
 
-    Query heads are split eight ways, so a unit reads an eighth of what the
-    occurrence reads. The two numbers come out of one lowering rather than two
-    opinions, which is what keeps them a share of each other.
+    The unit reading is the relation asked of a unit, already the projection
+    onto one participant; the whole window is never intersected with anything to
+    get it. Eight CTAs divide 32 query heads, so a reduction reading 8192 bf16
+    elements and writing 64 reads 1024 and writes 8 per unit. A value none of
+    them divides is read whole by each, which is why the share is the layout's
+    answer and not a division by the number of participants.
     """
     found = _traffic_of(
         replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 8),)),
         "cta",
         {"ctx_len": 1024},
     )
-    split = [
+    divided = [
         record
-        for record in found["Binary"]
-        if record.whole and record.whole[0][1].read == 8 * record.per_unit[0][1].read
+        for record in found["Reduce"]
+        if record.whole == (("gmem", TrafficBytes(16384, 128)),)
     ]
-    assert split, "no occurrence divided its reads across the eight participants"
-    for record in split:
-        assert record.boundaries
-        assert sum(item.read for item in record.boundaries) == record.whole[0][1].read
+    assert divided, "no reduction read 8192 elements and wrote 64"
+    for record in divided:
+        assert record.per_unit == (("gmem", TrafficBytes(2048, 16)),)
+        assert sum(item.read for item in record.boundaries) == 16384
+        assert sum(item.write for item in record.boundaries) == 128
+
+    replicated = [
+        record
+        for record in found["Cast"]
+        if record.whole == (("gmem", TrafficBytes(1024, 2048)),)
+    ]
+    assert replicated, "no cast read a value every participant holds whole"
+    for record in replicated:
+        assert record.per_unit == record.whole
 
 
 def test_an_occurrence_with_no_address_is_refused_rather_than_charged_nothing() -> None:
@@ -2512,3 +2525,109 @@ def test_an_occurrence_with_no_address_is_refused_rather_than_charged_nothing() 
         lower_traffic(
             call, relations, relations, plan, ctx, ctx, participant=0, umat_level="gmem"
         )
+
+
+def _matmul_relations(lhs_shape, rhs_shape, out_shape):
+    """One contraction's relations, at the shapes it was written with."""
+    call = Call(
+        type=make_tensor_type(out_shape, DType.f32),
+        target=MatMul(),
+        args=(
+            Var(type=make_tensor_type(lhs_shape, DType.f32), name="a"),
+            Var(type=make_tensor_type(rhs_shape, DType.f32), name="b"),
+        ),
+    )
+    return access_relation_registry.lookup(MatMul)(call, CostContext())
+
+
+def test_a_contraction_reads_each_operand_at_its_own_extents() -> None:
+    """A contraction reaches along the axis it sums, not along the one it keeps.
+
+    Reading each operand at the result's coordinates is right only while every
+    extent agrees. For `(128,64) x (64,32)` it claims the left operand has 32
+    columns and the right 128 rows, which is the wrong half of both: the shapes
+    the map names have to be the shapes the operands have.
+    """
+    relations = _matmul_relations((128, 64), (64, 32), (128, 32))
+    assert relations.inputs[0].pattern.is_equal(
+        isl.map("{ [d0, d1] -> [d0, k] : 0 <= k < 64 }")
+    )
+    assert relations.inputs[1].pattern.is_equal(
+        isl.map("{ [d0, d1] -> [k, d1] : 0 <= k < 64 }")
+    )
+    result = isl.set("{ [d0, d1] : 0 <= d0 < 128 and 0 <= d1 < 32 }")
+    assert relations.inputs[0].pattern.intersect_domain(result).range().is_equal(
+        isl.set("{ [i0, i1] : 0 <= i0 < 128 and 0 <= i1 < 64 }")
+    )
+    assert relations.inputs[1].pattern.intersect_domain(result).range().is_equal(
+        isl.set("{ [i0, i1] : 0 <= i0 < 64 and 0 <= i1 < 32 }")
+    )
+    assert [boundary.quantity.upper for boundary in relations.inputs] == [8192, 2048]
+    assert relations.outputs[0].quantity.upper == 4096
+
+
+def test_a_contraction_reads_a_batch_it_broadcasts_at_one_coordinate() -> None:
+    """A batch an operand has one of is read there however many the result has."""
+    relations = _matmul_relations((1, 128, 64), (4, 64, 32), (4, 128, 32))
+    assert relations.inputs[0].pattern.is_equal(
+        isl.map("{ [d0, d1, d2] -> [0, d1, k] : 0 <= k < 64 }")
+    )
+    assert relations.inputs[1].pattern.is_equal(
+        isl.map("{ [d0, d1, d2] -> [d0, k, d2] : 0 <= k < 64 }")
+    )
+
+
+def test_two_segments_of_one_buffer_are_not_one_address() -> None:
+    """Sharing an allocation is not sharing bytes.
+
+    Two values tiling one buffer have the same number, the same level and the
+    same strides, and differ only in where they start. A proof that stops before
+    the base address calls them the same bytes and scores copying one onto the
+    other as free.
+    """
+    held = Layout(shape=(4,), strides=(1,))
+    front = BufferRef(buffer_id=7, level="gmem", offset=0, size=32, shape=(4,), layout=held)
+    back = replace(front, offset=32)
+    reading = isl.multi_aff("{ [i] -> [i] }")
+
+    assert _address_map(reading, front, 8, (4,)).is_equal(_address_map(reading, front, 8, (4,)))
+    assert not _address_map(reading, front, 8, (4,)).is_equal(
+        _address_map(reading, back, 8, (4,))
+    )
+    assert _seat(front, 8) == (0, (8,)) and _seat(back, 8) == (32, (8,))
+
+
+def test_a_unit_that_holds_none_of_a_value_is_not_a_unit_that_moves_none() -> None:
+    """Reading what a neighbour holds is remote traffic, not free traffic.
+
+    This program gives each expert its own slice of the machine, so a unit
+    running one of them holds no part of the other's buffers while its relation
+    still says it moves them. That is a question about traffic between units,
+    which nothing here answers, so it is refused rather than recorded as zero.
+    """
+    result = analyze(
+        MoEMegaKernel, MoEMegaKernel.entry_function(), analysis=("compute-cost", "memory")
+    )
+    function = result.function
+    plan = build_buffer_plan(function, "cta")
+    scope = FunctionScope(MoEMegaKernel, function)
+    whole = CostContext(scope=scope)
+    unit = CostContext(
+        scope=scope, level="cta", topologies=MoEMegaKernel.effective_topologies()
+    )
+    refused = 0
+    for expr in postorder(function.body):
+        if not isinstance(expr, Call) or isinstance(expr.target, Function):
+            continue
+        handler = access_relation_registry.lookup(type(expr.target))
+        if handler is None:
+            continue
+        try:
+            lower_traffic(
+                expr, handler(expr, whole), handler(expr, unit), plan, whole, unit,
+                participant=0, umat_level="gmem",
+            )
+        except AnalysisError as error:
+            assert "holds no part of" in str(error)
+            refused += 1
+    assert refused, "no occurrence read a buffer this participant has no share of"

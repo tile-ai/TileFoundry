@@ -19,13 +19,16 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     build_relation,
     elements_of,
+    factored_image,
+    logical_axes_of,
+    logical_coordinates,
     moves,
     register_access_relation,
     register_type_relation,
     writes,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
-from tilefoundry.visitor_registry.relation_build import shape_from_relation
+from tilefoundry.visitor_registry.relation_build import identity_access, shape_from_relation
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
@@ -54,29 +57,79 @@ def _broadcast_batch(lhs_batch, rhs_batch):
     return broadcast_shapes(tuple(lhs_batch), tuple(rhs_batch), raising=False)
 
 
+def _held_axis(local, logical, axis: int) -> int:
+    """How much of one logical axis this participant holds."""
+    held = 1
+    for position, owner in enumerate(logical_axes_of(local, logical)):
+        if owner == axis:
+            held *= local.shape[position]
+    return held
+
+
+def _operand_reads(
+    local, logical, carried: dict, out_logical, inner: str, *, contracts_last: bool
+) -> list[str]:
+    """One expression per logical axis of an operand of the contraction.
+
+    The two matrix axes are the contraction and the one the result keeps; which
+    is which is the only difference between the two operands. Batch axes are
+    right-aligned against the result's, and one the operand broadcasts reads its
+    only coordinate rather than the result's.
+    """
+    rank = len(logical.shape)
+    shift = len(out_logical.shape) - rank
+    reads: list[str] = []
+    for axis in range(rank):
+        if axis == rank - 1:
+            reads.append(inner if contracts_last else carried.get(len(out_logical.shape) - 1, "0"))
+        elif axis == rank - 2:
+            reads.append(carried.get(len(out_logical.shape) - 2, "0") if contracts_last else inner)
+        elif is_one(logical.shape[axis]) and not is_one(out_logical.shape[axis + shift]):
+            reads.append("0")
+        else:
+            reads.append(carried.get(axis + shift, "0"))
+    return reads
+
+
 @register_access_relation(MatMul)
 def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
-    """GLOBAL black-box — declare identity multi_aff.
+    """Every coordinate of each operand a contraction reaches, read once.
 
-    GLOBAL black-box — declare identity multi_aff (the K-dim reduction is
-    internal to the op semantics at this level).
+    Reading each operand at the result's own coordinates claims a shape it does
+    not have the moment the contracted and kept axes differ in extent: for
+    `(M,K)` by `(K,N)` it gives the left operand N columns. The contracted
+    extent is this participant's own, that axis being one a layout can split.
     """
     lhs_ty = ctx.local_type_of(call.args[0])
     rhs_ty = ctx.local_type_of(call.args[1])
     out_ty = ctx.local_type_of(call)
+    logical_lhs = ctx.type_of(call.args[0])
+    logical_rhs = ctx.type_of(call.args[1])
+    logical_out = ctx.type_of(call)
+    rank = len(out_ty.shape)
+    carried = logical_coordinates(out_ty, logical_out)
 
-    def _ident(rank: int) -> "isl.multi_aff":
-        if rank == 0:
-            return isl.multi_aff("{ [] -> [] }")
-        dims = ", ".join(f"i{i}" for i in range(rank))
-        return isl.multi_aff(f"{{ [{dims}] -> [{dims}] }}")
-
+    inputs = []
+    for local, logical, contracts_last in (
+        (lhs_ty, logical_lhs, True),
+        (rhs_ty, logical_rhs, False),
+    ):
+        held = _held_axis(
+            local, logical, len(logical.shape) - (1 if contracts_last else 2)
+        )
+        inner = "0" if held == 1 else "k"
+        reads = _operand_reads(
+            local, logical, carried, logical_out, inner, contracts_last=contracts_last
+        )
+        image = ", ".join(factored_image(reads, local, logical))
+        dims = ", ".join(f"d{index}" for index in range(rank))
+        guard = "" if held == 1 else f" : 0 <= k < {held}"
+        inputs.append(
+            moves(isl.map(f"{{ [{dims}] -> [{image}]{guard} }}"), elements_of(local))
+        )
     return AccessRelations(
-        inputs=(
-            moves(_ident(len(lhs_ty.shape)), elements_of(lhs_ty)),
-            moves(_ident(len(rhs_ty.shape)), elements_of(rhs_ty)),
-        ),
-        outputs=(writes(_ident(len(out_ty.shape)), elements_of(out_ty)),),
+        inputs=tuple(inputs),
+        outputs=(writes(identity_access(rank), elements_of(out_ty)),),
     )
 
 
