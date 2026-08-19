@@ -662,15 +662,15 @@ class BufferRef:
     Attributes:
         buffer_id: attribute; Which allocation of the function holds them.
         level: attribute; The storage level that allocation is at.
-        offset: attribute; Where this range starts, in bytes from the buffer.
-        size: attribute; How many bytes this range covers.
+        offset: attribute; Where this range starts in bytes from the buffer, or None when nothing places it.
+        size: attribute; How many bytes this range covers, or the allocation it is somewhere in.
         shape: attribute; The extents the offset and size are stated against.
         layout: attribute; How a coordinate of those extents becomes an address.
     """
 
     buffer_id: int
     level: str
-    offset: int
+    offset: int | None
     size: int
     shape: tuple = ()
     layout: object = None

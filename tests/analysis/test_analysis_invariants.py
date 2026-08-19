@@ -8,10 +8,12 @@ implementation output, so a formula round-trip cannot validate itself.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from dataclasses import MISSING, dataclass, replace
 from dataclasses import fields as dataclass_fields
+from pathlib import Path
 from typing import get_args, get_origin
 
 import isl
@@ -19,6 +21,8 @@ import pytest
 import torch
 
 import tilefoundry.analysis.api as analysis_api
+import tilefoundry.analysis.metadata as analysis_records
+import tilefoundry.analysis.traffic as analysis_traffic
 import tilefoundry.cli.analyze as cli_analyze
 from tests.analysis.test_analysis_families import (
     CORPUS,
@@ -3178,3 +3182,56 @@ def test_a_value_nobody_can_place_does_not_place_the_one_that_renames_it() -> No
         assert get_metadata(expr, TrafficMetadata).whole, (
             "a window that could not be placed was scored as already in place"
         )
+
+
+def _spec_records():
+    """Every dataclass the analysis spec declares, as name to field list."""
+    text = (
+        Path(__file__).resolve().parents[2] / "docs" / "spec" / "analysis.md"
+    ).read_text()
+    found = {}
+    for block in re.findall(r"```python\n(.*?)```", text, re.S):
+        try:
+            tree = ast.parse(block)
+        except SyntaxError:
+            continue
+        for node in tree.body:
+            if not isinstance(node, ast.ClassDef):
+                continue
+            fields = [
+                (item.target.id, ast.unparse(item.annotation))
+                for item in node.body
+                if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+            ]
+            if fields:
+                found[node.name] = fields
+    return found
+
+
+def test_a_record_the_spec_declares_has_the_fields_it_declares() -> None:
+    """The spec states these shapes to be read by people who cannot run them.
+
+    A field the implementation widened and the spec did not says a value is
+    invalid that the implementation emits, and a reader writing against the spec
+    builds something that breaks on the first program that hits it. Comparing
+    the two is the only thing that keeps a written shape a shape.
+    """
+    checked = 0
+    for name, declared in sorted(_spec_records().items()):
+        real = getattr(analysis_records, name, None) or getattr(analysis_traffic, name, None)
+        if real is None or not dataclass_fields(real):
+            continue
+        checked += 1
+        actual = [
+            (
+                item.name,
+                (item.type if isinstance(item.type, str) else str(item.type)).strip("'\""),
+            )
+            for item in dataclass_fields(real)
+        ]
+        assert [name for name, _ in declared] == [name for name, _ in actual], name
+        for (stated, written), (_held, real_type) in zip(declared, actual):
+            assert written.replace(" ", "") == real_type.replace(" ", ""), (
+                f"{name}.{stated}"
+            )
+    assert checked > 10, "the spec declared almost nothing to compare against"
