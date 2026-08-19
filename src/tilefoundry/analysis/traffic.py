@@ -248,6 +248,7 @@ def lower_traffic(
     unit_ctx,
     *,
     participant: int,
+    runs: bool = True,
     umat_level: str,
 ) -> TrafficMetadata:
     """The bytes one occurrence moves, whole and for one participant.
@@ -276,7 +277,7 @@ def lower_traffic(
         if mine is None:
             raise AnalysisError(f"{where} is stated for the program and not for a unit")
         moving = 0 if (side, index) in settled else boundary.quantity.upper
-        share = 0 if moving == 0 else mine.quantity.upper
+        share = 0 if moving == 0 or not runs else mine.quantity.upper
         if not moving and not share:
             continue
         leaf = _leaf(ctx.type_of(value), field, where)
@@ -292,7 +293,7 @@ def lower_traffic(
                     "moves cannot be attributed to a buffer"
                 )
             wanted = 0 if field is None else field
-            owned = plan.owned(value, participant, wanted)
+            owned = plan.owned(value, participant, wanted) if runs else None
             if owned is None:
                 if share:
                     raise AnalysisError(

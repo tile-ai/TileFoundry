@@ -693,6 +693,7 @@ class _Allocation:
 
     metadata: AllocationMetadata
     addresses: dict[tuple[str, str], int]
+    placements: dict[int, Placement]
 
 
 def _allocate(
@@ -746,7 +747,7 @@ def _allocate(
                     f"in one {name!r} domain and at byte {offset} in another, so "
                     "it has no single address to state"
                 )
-    return _Allocation(AllocationMetadata(solver_status=status), addresses)
+    return _Allocation(AllocationMetadata(solver_status=status), addresses, placements)
 
 
 def _address_buffers(
@@ -1038,15 +1039,16 @@ def _record_traffic(
     scope: FunctionScope,
     level: str | None,
     topologies: tuple[Topology, ...],
+    placements: dict[int, Placement] | None = None,
+    participant: int = 0,
 ) -> None:
     """Give every occurrence the bytes its own relations say it moves.
 
-    An occurrence whose movement cannot be stated is left without a record
-    rather than given an empty one. Having no answer and having answered zero
-    are different things, and a reader that needs the bytes has to tell them
-    apart. What is heard as no answer is what says so: a handler failing its own
-    contract is a broken handler, not an Op nothing can be said about, and it is
-    left to reach whoever asked.
+    A participant that does not run one does none of its movement, which is a
+    share of zero rather than a refusal. One whose movement cannot be stated is
+    left without a record instead of an empty one, no answer and zero being
+    different things. What is heard as no answer is what says so: a handler
+    failing its own contract reaches whoever asked.
     """
     plan = build_buffer_plan(fn, level)
     whole = CostContext(scope=scope)
@@ -1057,6 +1059,7 @@ def _record_traffic(
         handler = access_relation_registry.lookup(type(expr.target))
         if handler is None:
             continue
+        held = (placements or {}).get(id(expr))
         try:
             moved = lower_traffic(
                 expr,
@@ -1065,7 +1068,8 @@ def _record_traffic(
                 plan,
                 whole,
                 unit,
-                participant=0,
+                participant=participant,
+                runs=held is None or participant in held,
                 umat_level=_UMAT_LEVEL,
             )
         except (AnalysisError, NotImplementedError, isl.Error):
@@ -1162,7 +1166,7 @@ def analyze_memory(
                 topology_levels=target.topology_levels,
                 topologies=topologies,
             )
-            _record_traffic(fn, scope, level, topologies)
+            _record_traffic(fn, scope, level, topologies, allocation.placements)
         for loop, footprint in loop_records:
             attach(loop, footprint)
 

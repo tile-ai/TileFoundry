@@ -42,6 +42,7 @@ from tilefoundry.analysis import (
     extract,
 )
 from tilefoundry.analysis.buffer_plan import BufferPlan, PlannedBuffer, build_buffer_plan
+from tilefoundry.analysis.check import _call_placements
 from tilefoundry.analysis.compute_cost import _prove_storage, _Storage
 from tilefoundry.analysis.footprint import _local_type as footprint_local_type
 from tilefoundry.analysis.memory import _record_traffic
@@ -59,10 +60,10 @@ from tilefoundry.analysis.traffic import (
 )
 from tilefoundry.analysis.walk import (
     attach,
+    describe,
     detach,
     loop_scopes,
     postorder,
-    reachable_functions,
     tensor_types,
     values_of,
 )
@@ -2634,71 +2635,6 @@ def test_a_view_shifted_into_its_buffer_is_proved_by_where_it_was_shifted() -> N
     )
 
 
-def test_a_unit_that_holds_none_of_a_value_is_not_a_unit_that_moves_none() -> None:
-    """Reading what a neighbour holds is remote traffic, not free traffic.
-
-    This program gives each expert its own slice of the machine, so a unit
-    running one of them holds no part of the other's buffers while its relation
-    still says it moves them. That is a question about traffic between units,
-    which nothing here answers, so it is refused rather than recorded as zero.
-    """
-    result = analyze(
-        MoEMegaKernel, MoEMegaKernel.entry_function(), analysis=("compute-cost", "memory")
-    )
-    function = result.function
-    plan = build_buffer_plan(function, "cta")
-    scope = FunctionScope(MoEMegaKernel, function)
-    whole = CostContext(scope=scope)
-    unit = CostContext(
-        scope=scope, level="cta", topologies=MoEMegaKernel.effective_topologies()
-    )
-    refused = 0
-    for expr in postorder(function.body):
-        if not isinstance(expr, Call) or isinstance(expr.target, Function):
-            continue
-        handler = access_relation_registry.lookup(type(expr.target))
-        if handler is None:
-            continue
-        try:
-            lower_traffic(
-                expr, handler(expr, whole), handler(expr, unit), plan, whole, unit,
-                participant=0, umat_level="gmem",
-            )
-        except AnalysisError as error:
-            assert "holds no part of" in str(error)
-            refused += 1
-    assert refused, "no occurrence read a buffer this participant has no share of"
-
-
-def test_an_occurrence_this_cannot_state_carries_no_record_rather_than_an_empty_one() -> None:
-    """Saying nothing and saying zero are different, and both get said.
-
-    The pipeline attaches what it could state and leaves the rest alone, so a
-    reader that needs an occurrence's bytes finds either them or nothing at all.
-    An empty record in that place would be a claim that the occurrence moved
-    nothing, which is what the units reading each other's buffers here did not
-    do. A record that is there states a row for every boundary that moved and
-    none for the boundaries that did not, so its rows and its totals agree.
-    """
-    result = analyze(
-        MoEMegaKernel, MoEMegaKernel.entry_function(), analysis=("compute-cost", "memory")
-    )
-    stated, silent = [], []
-    for expr in postorder(result.function.body):
-        if not isinstance(expr, Call) or isinstance(expr.target, Function):
-            continue
-        if access_relation_registry.lookup(type(expr.target)) is None:
-            continue
-        (stated if get_metadata(expr, TrafficMetadata) is not None else silent).append(expr)
-    assert stated and silent
-    moving = 0
-    for record in (get_metadata(expr, TrafficMetadata) for expr in stated):
-        assert all(item.read or item.write for item in record.boundaries)
-        assert bool(record.whole) == bool(record.boundaries)
-        moving += bool(record.boundaries)
-    assert moving, "every occurrence this program states moved nothing"
-
-
 def _occurrences(function):
     """Every primitive occurrence of *function* that states its accesses."""
     return [
@@ -2710,41 +2646,99 @@ def _occurrences(function):
     ]
 
 
+def test_a_unit_that_holds_none_of_a_value_is_not_a_unit_that_moves_none() -> None:
+    """Not running an occurrence and reading what a neighbour holds differ.
+
+    This program gives each expert its own slice of the machine, so a unit
+    running one of them does none of the other's work: that is a share of
+    nothing, and the occurrence still moves everything it moves. A unit that did
+    run it while holding no part of what it reads would be reading between
+    units, which nothing here answers, and is refused rather than counted as the
+    same nothing.
+    """
+    result = analyze(
+        MoEMegaKernel, MoEMegaKernel.entry_function(), analysis=("compute-cost", "memory")
+    )
+    function = result.function
+    places = _call_placements(MoEMegaKernel, function, "cta")
+    elsewhere = [
+        expr for expr in _occurrences(function) if 0 not in places.get(id(expr), {0})
+    ]
+    assert elsewhere, "every occurrence of this program runs on the first participant"
+    for expr in elsewhere:
+        record = get_metadata(expr, TrafficMetadata)
+        assert record is not None and record.whole and record.per_unit == ()
+
+    plan = build_buffer_plan(function, "cta")
+    scope = FunctionScope(MoEMegaKernel, function)
+    whole = CostContext(scope=scope)
+    unit = CostContext(
+        scope=scope, level="cta", topologies=MoEMegaKernel.effective_topologies()
+    )
+    handler = access_relation_registry.lookup(type(elsewhere[0].target))
+    with pytest.raises(AnalysisError, match="holds no part of"):
+        lower_traffic(
+            elsewhere[0], handler(elsewhere[0], whole), handler(elsewhere[0], unit),
+            plan, whole, unit, participant=0, runs=True, umat_level="gmem",
+        )
+
+
+def test_an_occurrence_this_cannot_state_carries_no_record_rather_than_an_empty_one() -> None:
+    """Saying nothing and saying zero are different, and both get said.
+
+    A program whose machine places nothing has no address for anything it keeps,
+    so no occurrence of it can be told what it moved. An empty record there
+    would claim they moved nothing, when what happened is that nobody could say.
+    A program that can be told states a row for every boundary that moved and
+    none for those that did not, so its rows and its totals agree.
+    """
+    unplaceable = analyze(
+        _NoParallelLevel, _NoParallelLevel.entry_function(), analysis=("compute-cost", "memory")
+    )
+    silent = _occurrences(unplaceable.function)
+    assert silent
+    for expr in silent:
+        assert get_metadata(expr, TrafficMetadata) is None
+
+    result = analyze(
+        MoEMegaKernel, MoEMegaKernel.entry_function(), analysis=("compute-cost", "memory")
+    )
+    stated = _occurrences(result.function)
+    assert stated
+    moving = 0
+    for expr in stated:
+        record = get_metadata(expr, TrafficMetadata)
+        assert record is not None
+        assert all(item.read or item.write for item in record.boundaries)
+        assert bool(record.whole) == bool(record.boundaries)
+        moving += bool(record.boundaries)
+    assert moving, "every occurrence this program states moved nothing"
+
+
 def test_a_derived_answer_does_not_survive_into_a_program_that_cannot_give_it() -> None:
     """An answer belongs to the analysis that reached it, not to the program.
 
     A record left on an authored call travels into every view built from it
-    unless it is known to be derived. This occurrence is one no analysis of this
-    program can answer -- a unit reading a buffer it holds no part of -- so an
-    answer appearing on it came from somewhere else, and a reader would take a
-    stale number for this round's.
+    unless it is known to be derived. This program's machine places nothing, so
+    no analysis of it can say what any occurrence moved, and an answer appearing
+    on one came from somewhere else. A reader would take it for this round's.
     """
-    first = analyze(
-        MoEMegaKernel, MoEMegaKernel.entry_function(), analysis=("compute-cost", "memory")
-    )
-    silent = [
-        expr for expr in _occurrences(first.function)
-        if get_metadata(expr, TrafficMetadata) is None
-    ]
-    assert silent, "no occurrence of this program was left unanswered"
-    provenance = get_metadata(silent[0], OccurrenceProvenance)
-    assert provenance is not None
-
-    authored = {
-        id(expr): expr
-        for function in reachable_functions(MoEMegaKernel.entry_function())
-        for expr in postorder(function.body)
-    }[provenance.source_call]
-    attach(authored, TrafficMetadata(whole=(("marker", TrafficBytes(1, 1)),)))
+    authored = _NoParallelLevel.entry_function()
+    call = next(expr for expr in postorder(authored.body) if isinstance(expr, Call))
+    attach(call, TrafficMetadata(whole=(("marker", TrafficBytes(1, 1)),)))
     try:
-        second = analyze(
-            MoEMegaKernel, MoEMegaKernel.entry_function(), analysis=("compute-cost", "memory")
+        result = analyze(
+            _NoParallelLevel,
+            _NoParallelLevel.entry_function(),
+            analysis=("compute-cost", "memory"),
         )
-        for expr in _occurrences(second.function):
+        stated = _occurrences(result.function)
+        assert stated
+        for expr in stated:
             record = get_metadata(expr, TrafficMetadata)
-            assert record is None or "marker" not in dict(record.whole)
+            assert record is None, f"a stale answer reached {describe(expr)}"
     finally:
-        detach(authored, TrafficMetadata)
+        detach(call, TrafficMetadata)
 
 
 def test_a_handler_that_breaks_its_own_contract_is_not_an_op_nothing_can_be_said_of() -> None:
