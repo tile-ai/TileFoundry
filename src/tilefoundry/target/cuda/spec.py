@@ -116,7 +116,7 @@ def build_cuda_architecture(document: HardwareDocument) -> CudaArchitecture:
     return architecture
 
 
-_SERVICE_KINDS = ("integer", "predicate", "select", "local-copy", "special")
+_SERVICE_KINDS = ("integer", "predicate", "select", "special")
 
 
 def build_cuda_device(document: HardwareDocument) -> CudaDevice:

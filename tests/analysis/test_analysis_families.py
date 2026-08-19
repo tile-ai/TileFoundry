@@ -1791,14 +1791,11 @@ def test_time_comes_from_the_rates_the_target_states_and_from_nothing_else() -> 
         r"dtype 'f32' at 'cta'$",
     ):
         _local_duration_ns(computed, throughput, replace(services, unit_flops=()), level="cta")
-    with pytest.raises(
-        AnalysisError,
-        match=r"^performance: target states no one-unit throughput for "
-        r"'local-copy' work at 'cta'$",
-    ):
-        _local_duration_ns(
-            work, throughput, replace(services, unit_ops=()), moved=moved, level="cta"
-        )
+    assert _local_duration_ns(
+        work, throughput, replace(services, unit_ops=()), moved=moved, level="cta"
+    ) == _local_duration_ns(work, throughput, services, moved=moved, level="cta"), (
+        "movement at a level with no published rate was priced as service"
+    )
 
     result = analyze(_PricingBoundary, functions["serviced_predicate"], analysis="performance")
     compared = next(
@@ -1850,16 +1847,16 @@ def test_a_zero_cost_structural_occurrence_carries_no_performance_record() -> No
     )
 
 
-def test_a_local_materialise_costs_the_scalar_moves_it_is_made_of() -> None:
-    """Movement no vendor publishes a bandwidth for is charged, not dropped.
+def test_a_local_materialise_states_bytes_this_model_puts_no_clock_on() -> None:
+    """Movement no vendor publishes a bandwidth for is stated and left untimed.
 
-    NVIDIA states no register or shared-memory bandwidth, and the model used to
-    read that silence as zero time: a program staged entirely through smem came
-    out free. It is charged instead as the scalar moves it is made of, one per
-    32-bit word, against a published instruction throughput. Because it now
-    takes time, it also needs a placement -- an occurrence nobody runs cannot be
-    given a duration -- and a materialise written outside any Mesh is refused
-    with the diagnostic that says where to put it.
+    NVIDIA states no register or shared-memory bandwidth. This model reports
+    those bytes rather than dropping them, and does not invent a rate to time
+    them by: standing an instruction throughput in for a bandwidth prices a
+    move as if it were arithmetic. What it still owes is a placement, because
+    an occurrence nobody runs is not one this can measure, so a materialise
+    written outside any Mesh is refused with the diagnostic that says where to
+    put it.
     """
     _result, entry = _run(_unplaced_structural, ("compute-cost", "memory"))
 
@@ -1874,14 +1871,13 @@ def test_a_local_materialise_costs_the_scalar_moves_it_is_made_of() -> None:
 
     target = _unplaced_structural.resolve_target()
     services = target.get_facts(PerformanceServiceFacts)
-    words = -(-16 // 4)
     assert _local_duration_ns(
         cost,
         target.get_facts(ThroughputFacts),
         services,
         moved=cost_moved,
         level="cta",
-    ) == -(-(words * 1_000_000_000) // services.ops("local-copy"))
+    ) == 0, "bytes at a level nobody rated were given a time anyway"
 
     with pytest.raises(AnalysisError, match=r"op=Stack: has no cta placement"):
         _run(_unplaced_structural, "performance")

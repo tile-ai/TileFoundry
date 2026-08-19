@@ -1038,12 +1038,11 @@ class PerformanceServiceFacts:
 ```
 
 The service kinds a target states are named by the operations that record them:
-`integer`, `predicate`, `select`, `special` and `local-copy`. The names
-are this project's, not any vendor's -- a hardware table names instructions, not
-services -- so each MUST say in its provenance which published row it was
-derived from. `local-copy` is counted in scalar moves rather than bytes, one
-move per 32-bit word, so moving `n` bytes counts `ceil(n / 4)`: it stands in for
-the register and shared-memory bandwidths no vendor publishes.
+`integer`, `predicate`, `select` and `special`. The names are this project's,
+not any vendor's -- a hardware table names instructions, not services -- so each
+MUST say in its provenance which published row it was derived from. A service is
+work the machine does, not movement it makes: bytes are stated as traffic and
+priced by a bandwidth, never by standing an instruction rate in for one.
 
 Requesting roofline adds this verdict and the Function's own work line to the
 summary. The two quantities the bound divides -- the summed `flops` and the
@@ -1094,11 +1093,11 @@ as defined in that family's section.
     entry of `traffic_per_unit` by `unit_bandwidth`. Compute and movement
     overlap within one occurrence, so its duration is the greater of the two
     sides rather than their sum.
-  - Traffic at a level with no stated one-unit bandwidth MUST be charged as the
-    scalar moves it is made of, under the `local-copy` service, whenever the
-    occurrence records no flops and no other service. An occurrence that does
-    record work already pays for reading its own operands, and MUST NOT be
-    charged a second time for the same registers.
+  - Traffic at a level with no stated one-unit bandwidth MUST remain visible in
+    `TrafficMetadata` and MUST NOT enter a duration. A rate nobody published is
+    not one this may invent, and an instruction throughput standing in for a
+    bandwidth prices a move as though it were arithmetic. A model that does time
+    those bytes states its own rate for them.
   - An occurrence that computes nothing and moves nothing is a view: it renames
     what is already there and MUST take zero time. Every other occurrence takes
     a machine time, and MUST therefore carry an execution placement.
@@ -1262,10 +1261,9 @@ model.
     renames what is already there rather than doing anything: it needs no result
     placement and MUST receive no record, because an empty interval reads as a
     measurement rather than as the absence of one. Movement at a level with no
-    published bandwidth does NOT make an occurrence structural; it is charged
-    under `local-copy`, so a program staged through smem is not free for want of
-    a published smem bandwidth. It still carries its producers' precedence to its
-    consumers. Inputs MUST NOT supply placement for an unplaced result.
+    published bandwidth does NOT make an occurrence structural: it moved bytes,
+    and the record says so even though this model puts no clock on them. It
+    still carries its producers' precedence to its consumers. Inputs MUST NOT supply placement for an unplaced result.
     `Reshard` executes on the placement of its result.
   - The participant set MUST be the exact image of the result Mesh layout under
     [shard §5](./shard.md#5-mesh), not an extent inferred from a topology or an

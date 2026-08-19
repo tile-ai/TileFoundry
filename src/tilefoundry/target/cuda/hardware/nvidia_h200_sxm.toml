@@ -105,13 +105,6 @@ origin = "derived"
 source = "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#throughput-of-native-arithmetic-instructions"
 conditions = "The same conservative scalar-service envelope as integer: 64 results/clock/SM times the derived 1,982,717,803 Hz effective clock, per CTA. A select is issued as a scalar proxy rather than rated on its own line. A peak-style analytical throughput, not a measured calibration."
 
-[facts.service.local-copy]
-value = 126893939394
-unit = "op/s"
-origin = "derived"
-source = "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#throughput-of-native-arithmetic-instructions"
-conditions = "The same conservative scalar-service envelope as integer: 64 results/clock/SM times the derived 1,982,717,803 Hz effective clock, per CTA. One scalar move per 32-bit word, so a move of n bytes counts ceil(n / 4). NVIDIA publishes no static register or shared bandwidth, and this proxy is what stands in for one. A peak-style analytical throughput, not a measured calibration."
-
 [facts.service.special]
 value = 31723484848
 unit = "op/s"

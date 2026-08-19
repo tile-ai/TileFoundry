@@ -84,7 +84,6 @@ class VendorNpuTarget(Target):
                     ("integer", 1_000_000_000),
                     ("predicate", 1_000_000_000),
                     ("select", 1_000_000_000),
-                    ("local-copy", 1_000_000_000),
                     ("special", 250_000_000),
                 ),
                 unit_bandwidth=(("gmem", 2_000_000_000_000 // 16),),

@@ -51,34 +51,6 @@ def _is_structural_occurrence(
     )
 
 
-_LOCAL_COPY_WORD_BYTES = 4
-_LOCAL_COPY = "local-copy"
-
-
-def _local_copy_bytes(
-    cost: ComputeCostMetadata,
-    moved: "TrafficMetadata | None",
-    services: PerformanceServiceFacts,
-) -> int:
-    """The movement no published bandwidth prices and no arithmetic absorbs.
-
-    An operation that computes something already pays for reading its own
-    operands: charging every register read again as a second bandwidth would
-    bill the same nanoseconds twice. What is left is the movement that is the
-    whole point of the occurrence -- an explicit local reshard, a materialise --
-    and that is a run of scalar moves, one per ``_LOCAL_COPY_WORD_BYTES``.
-    """
-    if any(value for _name, value in cost.flops_per_unit) or any(
-        value for _kind, value in cost.service_per_unit
-    ):
-        return 0
-    return sum(
-        bytes_.total_bytes
-        for level, bytes_ in (moved.per_unit if moved is not None else ())
-        if services.bandwidth(level) is None
-    )
-
-
 def _local_duration_ns(
     cost: ComputeCostMetadata,
     facts: ThroughputFacts,
@@ -93,7 +65,9 @@ def _local_duration_ns(
     Compute and movement overlap within one occurrence, so its duration is
     whichever side takes longer. Work with no stated throughput is refused
     rather than priced at nothing: a number with a hole in it reads as a program
-    that does less than it does.
+    that does less than it does. Movement at a level the target publishes no
+    bandwidth for is a different case -- it is stated and left untimed, because
+    a rate nobody published is not one this may invent.
     """
     if services.unit != level:
         raise AnalysisError(
@@ -129,17 +103,6 @@ def _local_duration_ns(
                 f"{kind!r} work at {level!r}"
             )
         compute_ns += -(-(value * scale * 1_000_000_000) // throughput)
-
-    copied = _local_copy_bytes(cost, moved, services)
-    if copied:
-        words = -(-copied // _LOCAL_COPY_WORD_BYTES)
-        throughput = services.ops(_LOCAL_COPY)
-        if throughput is None or throughput <= 0:
-            raise AnalysisError(
-                f"performance: target states no one-unit throughput for "
-                f"{_LOCAL_COPY!r} work at {level!r}"
-            )
-        compute_ns += -(-(words * scale * 1_000_000_000) // throughput)
 
     crossed = (
         moved.per_unit_at(facts.bandwidth_level).total_bytes * scale

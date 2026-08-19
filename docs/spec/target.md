@@ -433,16 +433,15 @@ The installed `nvidia.h200_sxm` device document.
     Hopper tensor cores have no FP4 mode, so the product has no such rate, which
     is a fact about it and not a number nobody published.
   - It MUST record a per-CTA service rate for each of `integer`, `predicate`,
-    `select`, `local-copy`, and `special`, because a program that
-    compares, selects, indexes or moves locally asks for work no FLOP/s figure
-    prices. Each MUST state its derivation in `conditions`: the instruction
+    `select`, and `special`, because a program that compares, selects or
+    indexes asks for work no FLOP/s figure prices. Each MUST state its derivation in `conditions`: the instruction
     throughput in results/clock/SM from the vendor's arithmetic-instruction
     table, times the clock the published `f32` peak implies
     (`67e12 / (132 SM * 128 results/clock * 2 FLOP/result)`), stated per CTA.
     These are peak-style analytical envelopes rather than measured
     calibrations, and `conditions` MUST say so, along with the proxy each one
-    stands for -- `local-copy` counts one scalar move per 32-bit word because
-    NVIDIA publishes no static register or shared-memory bandwidth.
+    stands for. A service rate MUST NOT stand in for a bandwidth: movement at a
+    level with no published one is stated as traffic and left untimed.
 
 #### 4.2.2 B200SXM
 

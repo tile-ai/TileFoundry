@@ -750,7 +750,7 @@ class CostEvaluator(ExprVisitor[Cost]): ...
     such puts work on a pipe it never went down.
   - `service` MUST group that work by the kind of service the machine provides,
     named for the operation rather than for a machine: `integer`, `predicate`,
-    `select`, `special`, `local-copy`. A comparison MUST record
+    `select`, `special`. A comparison MUST record
     `predicate`, a selection MUST record `select`, an operation over whole
     numbers MUST record `integer`, and an operation the machine answers on its
     special-function unit -- `rsqrt`, `exp`, `log`, `exp2`, `log2` -- MUST
