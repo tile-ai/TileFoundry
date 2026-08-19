@@ -17,6 +17,7 @@ import isl
 
 from tilefoundry.ir.core.metadata import IRMetadata
 from tilefoundry.ir.types import TensorType, TupleType, Type
+from tilefoundry.ir.types.shard import try_c_order_strides
 from tilefoundry.ir.types.shard.layout import ComposedLayout
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.access_relation import (
@@ -449,14 +450,20 @@ def _strides(ref) -> tuple | None:
     A layout wrapped in a distribution or shifted by a constant still steps the
     way the layout underneath it steps, so the wrappers are unwrapped rather
     than read for strides they do not carry.
+
+    A value that states no layout at all is dense in its own coordinates, which
+    is what the rest of the compiler reads it as, so it steps in C order over
+    the extents it has. Extents nobody has bound yet give no such order, and
+    those stay unknown rather than guessed.
     """
-    return _stepping(ref.layout)
+    return _stepping(ref.layout, ref.shape)
 
 
-def _stepping(layout) -> tuple | None:
+def _stepping(layout, shape: tuple = ()) -> tuple | None:
     """The element strides of whatever layout finally states them."""
     if layout is None:
-        return None
+        stated = try_c_order_strides(tuple(shape))
+        return None if stated is None else tuple(stated)
     if isinstance(layout, ComposedLayout):
         return None if layout.inner is not None else _stepping(layout.outer)
     inner = getattr(layout, "layout", None)

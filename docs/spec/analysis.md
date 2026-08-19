@@ -656,6 +656,34 @@ class ValueLifetime:
     last_used_at: int
     persistent: bool = False
 
+class BufferRef:
+    """Where one value's bytes are, and how a coordinate of it becomes a byte.
+
+    Attributes:
+        buffer_id: attribute; Which allocation of the function holds them.
+        level: attribute; The storage level that allocation is at.
+        offset: attribute; Where this range starts, in bytes from the buffer.
+        size: attribute; How many bytes this range covers.
+        shape: attribute; The extents the offset and size are stated against.
+        layout: attribute; How a coordinate of those extents becomes an address.
+    """
+
+    buffer_id: int
+    level: str
+    offset: int
+    size: int
+    shape: tuple = ()
+    layout: object = None
+
+class BufferAllocationMetadata(IRMetadata):
+    """Where each of one value's fields lives; one entry for a plain Tensor.
+
+    Attributes:
+        fields: attribute; One `BufferRef` per tensor leaf, in type order.
+    """
+
+    fields: tuple[BufferRef, ...] = ()
+
 class AllocationMetadata:
     """What deciding this function's byte addresses came to.
 
@@ -710,8 +738,23 @@ where each one sits.
     decided once. A domain whose contents fit at once MUST be settled without
     searching, and one whose simultaneously live bytes exceed the capacity MUST
     be reported infeasible without searching.
-  - The addresses themselves MUST NOT be reported. They are the proof that a
-    placement exists, and no consumer reads them.
+  - Every value whose bytes were placed MUST carry a `BufferAllocationMetadata`
+    naming the buffer each of its leaves is in. A value only some of whose
+    leaves could be placed MUST carry none: a partial address is not one. Values
+    sharing a `buffer_id` are in one allocation; the refs a value owns tile it
+    in `offset` order, and a value living in another's bytes names that
+    allocation rather than a range of its own.
+  - A level held per unit of work rather than shared is not searched for
+    addresses, and a value there MUST still receive a `buffer_id` of its own.
+    Two such values are two buffers however their offsets read.
+  - `BufferRef.shape` and `BufferRef.layout` are the value's at the level's
+    owner, and they are the coordinate space `offset` and `size` are stated
+    against. A `layout` of `None` over a fully static `shape` MUST be read as
+    `Layout(shape, try_c_order_strides(shape))`: a value that states no layout
+    is dense in its own coordinates. A `shape` that is not fully static leaves
+    `try_c_order_strides` undefined, and the addressing MUST stay unknown rather
+    than be assumed dense. Not stating a layout and not knowing one are
+    different, and only the first is dense.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|

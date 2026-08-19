@@ -61,6 +61,7 @@ from tilefoundry.analysis.traffic import (
     TrafficMetadata,
     _address_map,
     _seat,
+    _strides,
     lower_traffic,
 )
 from tilefoundry.analysis.walk import (
@@ -146,6 +147,7 @@ from tilefoundry.ir.types import (
     make_tensor_type,
     tensor_bytes,
 )
+from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Layout, Topology, make_mesh
 from tilefoundry.ir.types.shard.layout import ComposedLayout
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial
@@ -2671,9 +2673,12 @@ def test_a_unit_that_holds_none_of_a_value_is_not_a_unit_that_moves_none() -> No
         expr for expr in _occurrences(function) if 0 not in places.get(id(expr), {0})
     ]
     assert elsewhere, "every occurrence of this program runs on the first participant"
+    moved = 0
     for expr in elsewhere:
         record = get_metadata(expr, TrafficMetadata)
-        assert record is not None and record.whole and record.per_unit == ()
+        assert record is not None and record.per_unit == ()
+        moved += bool(record.whole)
+    assert moved, "none of the work this unit skips moved anything at all"
 
     plan = build_buffer_plan(function, "cta")
     scope = FunctionScope(MoEMegaKernel, function)
@@ -2681,10 +2686,13 @@ def test_a_unit_that_holds_none_of_a_value_is_not_a_unit_that_moves_none() -> No
     unit = CostContext(
         scope=scope, level="cta", topologies=MoEMegaKernel.effective_topologies()
     )
-    handler = access_relation_registry.lookup(type(elsewhere[0].target))
+    reading = next(
+        expr for expr in elsewhere if get_metadata(expr, TrafficMetadata).whole
+    )
+    handler = access_relation_registry.lookup(type(reading.target))
     with pytest.raises(AnalysisError, match="holds no part of"):
         lower_traffic(
-            elsewhere[0], handler(elsewhere[0], whole), handler(elsewhere[0], unit),
+            reading, handler(reading, whole), handler(reading, unit),
             plan, whole, unit, participant=0, runs=True, umat_level="gmem",
         )
 
@@ -2917,3 +2925,34 @@ def test_a_total_missing_one_of_its_parts_is_not_stated_at_all() -> None:
     still, function = _totalled(_MovesWithoutSaying(), ComputeCostMetadata())
     assert get_metadata(still, TrafficMetadata) is None
     assert get_metadata(function, TrafficMetadata) == TrafficMetadata()
+
+
+def test_a_value_that_states_no_layout_is_dense_in_its_own_coordinates() -> None:
+    """Not stating a layout and not knowing one are different answers.
+
+    A value with no layout is dense in its own extents, which is what the rest
+    of the compiler reads it as, so its coordinates step in C order and two
+    names for the same bytes can be shown to be the same. Extents nobody has
+    bound have no such order, and stay unknown rather than being assumed: a
+    guess there would prove two addresses equal that nothing has compared.
+    Where a value sits is never guessed either way.
+    """
+    stated = BufferRef(
+        buffer_id=1, level="gmem", offset=0, size=256, shape=(4, 8, 2), layout=None
+    )
+    assert _strides(stated) == (16, 2, 1)
+    assert _seat(stated, 4) == (0, (64, 8, 4))
+
+    unbound = replace(stated, shape=(DimVar("n", 0, 64), 8))
+    assert _strides(unbound) is None
+    assert _seat(unbound, 4) is None
+
+    reading = isl.multi_aff("{ [i, j, k] -> [i, j, k] }")
+    shifted = replace(stated, offset=32)
+    assert _address_map(reading, stated, 4, (4, 8, 2)).is_equal(
+        _address_map(reading, replace(stated), 4, (4, 8, 2))
+    )
+    assert not _address_map(reading, stated, 4, (4, 8, 2)).is_equal(
+        _address_map(reading, shifted, 4, (4, 8, 2))
+    )
+    assert _address_map(reading, unbound, 4, (4, 8, 2)) is None
