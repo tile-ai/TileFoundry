@@ -3326,3 +3326,25 @@ def test_a_link_that_states_both_ranks_is_taken() -> None:
             isl.map(f"{{ [d0, d1] -> [d0, d1 + {offset}] }}")
         )
         assert link.where.dim(isl.dim_type.IN) == 2
+
+
+def test_a_program_with_no_addresses_moves_bytes_and_takes_no_stated_time() -> None:
+    """What a program moves and how long it takes are different questions.
+
+    Bytes are what the operations say they move, and saying it needs no address;
+    a time is a claim about a machine running a placed program, and a program
+    whose buffers nobody placed has none to report. Reading the second answer as
+    the first is what would make a program that moves megabytes look free.
+    """
+    result = analyze(
+        _NoParallelLevel, _NoParallelLevel.entry_function(), analysis=("compute-cost", "memory")
+    )
+    function = result.function
+    assert get_metadata(function, MemoryMetadata).allocation is None
+    moved = get_metadata(function, TrafficMetadata)
+    assert moved is not None and moved.whole
+
+    with pytest.raises(AnalysisError):
+        analyze(
+            _NoParallelLevel, _NoParallelLevel.entry_function(), analysis="performance"
+        )
