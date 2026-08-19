@@ -1099,8 +1099,11 @@ as defined in that family's section.
     bandwidth prices a move as though it were arithmetic. A model that does time
     those bytes states its own rate for them.
   - An occurrence that computes nothing and moves nothing is a view: it renames
-    what is already there and MUST take zero time. Every other occurrence takes
-    a machine time, and MUST therefore carry an execution placement.
+    what is already there and MUST take zero time. Every other occurrence did
+    something and MUST therefore carry an execution placement, whether or not
+    this model can put a clock on it: one whose only work is traffic at a level
+    with no published bandwidth still ran somewhere, and its duration MAY be
+    zero without making it a view.
   - Work of a dtype or a kind the target states no one-unit throughput for MUST
     refuse rather than price at zero: it belongs on the same clock as the rest
     of the work, so pricing it at nothing would leave a hole inside a number the

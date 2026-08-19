@@ -42,7 +42,10 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import _call_placements, _mesh_image, _result_placement
-from tilefoundry.analysis.compute_cost import _local_duration_ns
+from tilefoundry.analysis.compute_cost import (
+    _is_structural_occurrence,
+    _local_duration_ns,
+)
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.memory import _base_of
 from tilefoundry.analysis.movement import (
@@ -50,6 +53,7 @@ from tilefoundry.analysis.movement import (
     _with_untouched_copy,
     _without_forwarded_movement,
 )
+from tilefoundry.analysis.roofline import _cost_bound
 from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
 from tilefoundry.inspection.analysis_report import (
@@ -1871,13 +1875,17 @@ def test_a_local_materialise_states_bytes_this_model_puts_no_clock_on() -> None:
 
     target = _unplaced_structural.resolve_target()
     services = target.get_facts(PerformanceServiceFacts)
+    throughput = target.get_facts(ThroughputFacts)
     assert _local_duration_ns(
-        cost,
-        target.get_facts(ThroughputFacts),
-        services,
-        moved=cost_moved,
-        level="cta",
+        cost, throughput, services, moved=cost_moved, level="cta"
     ) == 0, "bytes at a level nobody rated were given a time anyway"
+    assert not _is_structural_occurrence(cost, cost_moved), (
+        "an occurrence that moved bytes was called a view for lack of a rate"
+    )
+    bound = _cost_bound(cost, cost_moved, throughput)
+    assert (bound.ideal_ns, bound.bound_by) == (0, "none"), (
+        "a bound owed a nanosecond to bytes no rate was published for"
+    )
 
     with pytest.raises(AnalysisError, match=r"op=Stack: has no cta placement"):
         _run(_unplaced_structural, "performance")

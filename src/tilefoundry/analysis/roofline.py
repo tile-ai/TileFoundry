@@ -65,9 +65,10 @@ def _memory_ns(traffic: TrafficBytes, facts: ThroughputFacts) -> int:
 def _bound(compute_ns: int, memory_ns: int, *, has_work: bool) -> RooflineMetadata:
     """Combine the two sides into one bound and name the one that set it.
 
-    Work the machine has no published rate for still takes time, so a call that
-    does something reports at least one nanosecond. Reporting zero would read as
-    free.
+    A nanosecond is owed by what this could have priced: work of a rated kind
+    whose own rate is missing reports at least one, because reporting zero for
+    it would read as free. Bytes at a level with no published bandwidth owe
+    nothing -- no rate was ever stated for them, so no floor follows.
     """
     ideal = max(compute_ns, memory_ns)
     if not ideal:
