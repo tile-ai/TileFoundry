@@ -57,9 +57,9 @@ from .metadata import (
     PerformanceMetadata,
     PerformanceSummaryMetadata,
     RooflineMetadata,
+    TrafficMetadata,
 )
 from .preflight import infer_authored_types, validate_call_context
-from .traffic import TrafficMetadata
 from .walk import describe, postorder, reachable_functions, tensor_types
 
 _INLINE_NODES = 10_000

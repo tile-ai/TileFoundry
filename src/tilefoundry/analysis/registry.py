@@ -25,8 +25,8 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
             BufferAllocationMetadata,
             LoopFootprintMetadata,
             MemoryMetadata,
+            TrafficMetadata,  # noqa: PLC0415
         )
-        from tilefoundry.analysis.traffic import TrafficMetadata  # noqa: PLC0415
 
         return Analyzer(
             "memory",

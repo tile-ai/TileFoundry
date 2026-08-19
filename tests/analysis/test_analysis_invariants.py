@@ -22,7 +22,6 @@ import torch
 
 import tilefoundry.analysis.api as analysis_api
 import tilefoundry.analysis.metadata as analysis_records
-import tilefoundry.analysis.traffic as analysis_traffic
 import tilefoundry.cli.analyze as cli_analyze
 import tilefoundry.visitor_registry.access_relation as access_relation
 from tests.analysis.test_analysis_families import (
@@ -52,7 +51,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.buffer_plan import BufferPlan, PlannedBuffer, build_buffer_plan
 from tilefoundry.analysis.check import _call_placements
-from tilefoundry.analysis.compute_cost import _prove_storage, _Storage
+from tilefoundry.analysis.compute_cost import _bytes_for, _prove_storage, _Storage
 from tilefoundry.analysis.footprint import _local_type as footprint_local_type
 from tilefoundry.analysis.memory import _record_traffic
 from tilefoundry.analysis.metadata import (
@@ -60,13 +59,9 @@ from tilefoundry.analysis.metadata import (
     BufferRef,
     ComputeCostMetadata,
     MemoryMetadata,
+    TrafficMetadata,
 )
 from tilefoundry.analysis.preflight import validate_authored
-from tilefoundry.analysis.traffic import (
-    TrafficMetadata,
-    _moved_bytes,
-    lower_traffic,
-)
 from tilefoundry.analysis.walk import (
     attach,
     describe,
@@ -2546,8 +2541,6 @@ def test_a_unit_moves_the_share_of_a_buffer_it_was_given() -> None:
     assert divided, "no reduction read 8192 elements and wrote 64"
     for record in divided:
         assert record.per_unit == (("gmem", TrafficBytes(2048, 16)),)
-        assert sum(item.read for item in record.boundaries) == 16384
-        assert sum(item.write for item in record.boundaries) == 128
 
     replicated = [
         record
@@ -2646,86 +2639,39 @@ def _occurrences(function):
     ]
 
 
-def test_a_unit_that_holds_none_of_a_value_is_not_a_unit_that_moves_none() -> None:
-    """Not running an occurrence and reading what a neighbour holds differ.
+def test_the_bytes_this_family_states_are_the_bytes_already_settled() -> None:
+    """Moving a record is not recounting what it holds.
 
-    This program gives each expert its own slice of the machine, so a unit
-    running one of them does none of the other's work: that is a share of
-    nothing, and the occurrence still moves everything it moves. A unit that did
-    run it while holding no part of what it reads would be reading between
-    units, which nothing here answers, and is refused rather than counted as the
-    same nothing.
+    The cost of every occurrence settled what it moves, whole and per unit, and
+    the function's total already counts each as often as its loops repeat it.
+    Attaching that under the family that knows where values live says whose
+    record it is; a second count of the same bytes would be a second answer,
+    and two answers to one question drift.
     """
-    result = analyze(
-        MoEMegaKernel, MoEMegaKernel.entry_function(), analysis=("compute-cost", "memory")
+    placed = replace(
+        GqaOnline,
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 8),),
     )
-    function = result.function
-    places = _call_placements(MoEMegaKernel, function, "cta")
-    elsewhere = [
-        expr for expr in _occurrences(function) if 0 not in places.get(id(expr), {0})
-    ]
-    assert elsewhere, "every occurrence of this program runs on the first participant"
-    moved = 0
-    for expr in elsewhere:
-        record = get_metadata(expr, TrafficMetadata)
-        assert record is not None and record.per_unit == ()
-        moved += bool(record.whole)
-    assert moved, "none of the work this unit skips moved anything at all"
-
-    plan = build_buffer_plan(function, "cta")
-    scope = FunctionScope(MoEMegaKernel, function)
-    whole = CostContext(scope=scope)
-    unit = CostContext(
-        scope=scope, level="cta", topologies=MoEMegaKernel.effective_topologies()
-    )
-    reading = next(
-        expr for expr in elsewhere if get_metadata(expr, TrafficMetadata).whole
-    )
-    handler = access_relation_registry.lookup(type(reading.target))
-    with pytest.raises(AnalysisError, match="holds no part of"):
-        lower_traffic(
-            reading, handler(reading, whole), handler(reading, unit),
-            plan, whole, unit, participant=0, runs=True, umat_level="gmem",
+    for owner, dims in ((MoEMegaKernel, None), (placed, {"ctx_len": 1024})):
+        asked = {} if dims is None else {"dims": dims}
+        result = analyze(
+            owner, owner.entry_function(), analysis=("compute-cost", "memory"), **asked
         )
+        checked = 0
+        for expr in (result.function, *postorder(result.function.body)):
+            cost = get_metadata(expr, ComputeCostMetadata)
+            moved = get_metadata(expr, TrafficMetadata)
+            if cost is None:
+                assert moved is None, "bytes were stated for an occurrence nothing priced"
+                continue
+            assert moved is not None, "an occurrence was priced and left without a record"
+            assert moved.whole == cost.traffic
+            assert moved.per_unit == cost.traffic_per_unit
+            checked += 1
+        assert checked > 1, "this program stated no cost to carry"
 
 
-def test_an_occurrence_this_cannot_state_carries_no_record_rather_than_an_empty_one() -> None:
-    """Saying nothing and saying zero are different, and both get said.
-
-    An Op that states no relations at this shape leaves its occurrence with
-    nothing said about it, and an empty record there would claim it moved
-    nothing. A program that can be told states a row for every boundary that
-    moved and none for those that did not, so its rows and its totals agree.
-    """
-
-    class _DeclinesHere(Op):
-        pass
-
-    register_typeinfer(_DeclinesHere)(
-        lambda call, ctx: make_tensor_type((4,), DType.f32)
-    )
-
-    @register_access_relation(_DeclinesHere)
-    def _declines(call, ctx) -> AccessRelations:
-        raise NotImplementedError("this Op does not state relations at this shape")
-
-    silent, function = _totalled(_DeclinesHere())
-    assert get_metadata(silent, TrafficMetadata) is None
-    assert get_metadata(function, TrafficMetadata) is None
-
-    result = analyze(
-        MoEMegaKernel, MoEMegaKernel.entry_function(), analysis=("compute-cost", "memory")
-    )
-    stated = _occurrences(result.function)
-    assert stated
-    moving = 0
-    for expr in stated:
-        record = get_metadata(expr, TrafficMetadata)
-        assert record is not None
-        assert all(item.read or item.write for item in record.boundaries)
-        assert bool(record.whole) == bool(record.boundaries)
-        moving += bool(record.boundaries)
-    assert moving, "every occurrence this program states moved nothing"
 def test_a_derived_answer_does_not_survive_into_a_program_that_cannot_give_it() -> None:
     """An answer belongs to the analysis that reached it, not to the program.
 
@@ -2758,60 +2704,16 @@ def test_a_derived_answer_does_not_survive_into_a_program_that_cannot_give_it() 
         detach(carried, TrafficMetadata)
 
 
-def test_a_handler_that_breaks_its_own_contract_is_not_an_op_nothing_can_be_said_of() -> None:
-    """Two silences that mean opposite things are told apart at the boundary.
-
-    An Op whose relation says it cannot state a case is a case this does not
-    cover, and the occurrence goes without a record. A handler raising because
-    it built something invalid is a bug in the handler, and swallowing it would
-    file that bug under the same heading and leave it there.
-    """
-
-    class _Breaks(Op):
-        pass
-
-    register_typeinfer(_Breaks)(lambda call, ctx: make_tensor_type((4,), DType.f32))
-
-    @register_access_relation(_Breaks)
-    def _broken(call, ctx) -> AccessRelations:
-        raise ValueError("this handler built something it should not have")
-
-    class _Declines(Op):
-        pass
-
-    register_typeinfer(_Declines)(lambda call, ctx: make_tensor_type((4,), DType.f32))
-
-    @register_access_relation(_Declines)
-    def _declines(call, ctx) -> AccessRelations:
-        raise NotImplementedError("this Op does not state relations at this shape")
-
-    held = make_tensor_type((4,), DType.f32)
-    source = Var(type=held, name="held")
-    broken = Call(type=held, target=_Breaks(), args=(source,))
-    declines = Call(type=held, target=_Declines(), args=(source,))
-
-    for body, expected in ((broken, ValueError), (declines, None)):
-        function = Function(
-            type=held, name="main", params=(source,), body=body, return_type=held
-        )
-        scope = FunctionScope(_NoParallelLevel, function)
-        if expected is None:
-            _record_traffic(function, scope, None, ())
-            assert get_metadata(body, TrafficMetadata) is None
-            continue
-        with pytest.raises(expected, match="should not have"):
-            _record_traffic(function, scope, None, ())
-
-
 def test_a_function_moves_its_occurrences_as_often_as_its_loops_repeat_them() -> None:
     """A total is the bytes counted again for every trip that moves them.
 
     One occurrence inside a loop of 24 moves what it moves 24 times, and the
     rule for saying so lives here rather than in each reader: two readers with
     two copies of it drift. The boundaries are not repeated with it -- which
-    operand moved what belongs to the occurrence, not to the total. The insert
-    in that loop reads three eight-byte numbers to place its window, so the
-    register total is those three, counted twenty-four times.
+    operand moved what belongs to the occurrence, not to the total. Three
+    occurrences in it place a window by three eight-byte numbers each, two of
+    them twenty-four times over and one of them twice, which is what the
+    register total counts.
     """
     case = next(item for item in CORPUS if item.id == "access_footprint.grouped_moe")
     selected = case.analyze[0]
@@ -2820,7 +2722,7 @@ def test_a_function_moves_its_occurrences_as_often_as_its_loops_repeat_them() ->
     function = result.function
 
     record = get_metadata(function, TrafficMetadata)
-    assert record is not None and record.boundaries == ()
+    assert record is not None
 
     trips = enclosing_trips(function.body)
     counted: dict[str, list[int]] = {}
@@ -2838,7 +2740,7 @@ def test_a_function_moves_its_occurrences_as_often_as_its_loops_repeat_them() ->
     assert dict(record.whole) == {
         level: TrafficBytes(*moved) for level, moved in counted.items()
     }
-    assert dict(record.whole)["rmem"] == TrafficBytes(3 * 8 * 24, 0)
+    assert dict(record.whole)["rmem"] == TrafficBytes(3 * 8 * (24 + 2 + 24), 0)
 
 
 def test_a_total_counts_work_a_unit_does_not_do_only_where_it_happened() -> None:
@@ -2892,53 +2794,13 @@ def _totalled(target, cost=None):
     return body, function
 
 
-def test_a_total_missing_one_of_its_parts_is_not_stated_at_all() -> None:
-    """A sum that left something out reads as a smaller program.
-
-    An occurrence nobody can answer for makes the function's total an unknown
-    rather than a smaller number, so it is not stated and a reader asking for it
-    is told nothing instead of told wrong. An Op that states no accesses at all
-    counts the same way when it was going to move something: silence about an
-    occurrence that moves bytes is not the same as an occurrence that does not.
-    """
-
-    class _Declines(Op):
-        pass
-
-    register_typeinfer(_Declines)(lambda call, ctx: make_tensor_type((4,), DType.f32))
-
-    @register_access_relation(_Declines)
-    def _declines(call, ctx) -> AccessRelations:
-        raise NotImplementedError("this Op does not state relations at this shape")
-
-    class _MovesWithoutSaying(Op):
-        pass
-
-    register_typeinfer(_MovesWithoutSaying)(
-        lambda call, ctx: make_tensor_type((4,), DType.f32)
-    )
-
-    refused, function = _totalled(_Declines())
-    assert get_metadata(refused, TrafficMetadata) is None
-    assert get_metadata(function, TrafficMetadata) is None
-
-    moving = ComputeCostMetadata(traffic=(("gmem", TrafficBytes(16, 0)),))
-    silent, function = _totalled(_MovesWithoutSaying(), moving)
-    assert get_metadata(silent, TrafficMetadata) is None
-    assert get_metadata(function, TrafficMetadata) is None
-
-    still, function = _totalled(_MovesWithoutSaying(), ComputeCostMetadata())
-    assert get_metadata(still, TrafficMetadata) is None
-    assert get_metadata(function, TrafficMetadata) == TrafficMetadata()
-
-
 def test_a_window_is_placed_where_its_own_link_says_it_begins() -> None:
     """A view of a view is somewhere inside the value neither of them copied.
 
-    Both windows were placed in the buffer they name rather than given one of
-    their own, which is the whole of what says they moved nothing. Where inside
-    it they begin is a question the placement left open, and leaving it open is
-    not the same as answering it with the front of the buffer.
+    Both were placed in the buffer they name rather than given one of their
+    own, and neither moves any of the bytes it names. Where inside it they
+    begin is a question the placement left open, and leaving it open is not the
+    same as answering it with the front of the buffer.
     """
     result = analyze(
         _RenamesTwice, _RenamesTwice.entry_function(), analysis=("compute-cost", "memory")
@@ -2954,16 +2816,16 @@ def test_a_window_is_placed_where_its_own_link_says_it_begins() -> None:
     assert [ref.offset for ref in (*outer.fields, *inner.fields)] == [None, None]
 
     for expr in windows:
-        assert get_metadata(expr, TrafficMetadata).whole == ()
+        moved = dict(get_metadata(expr, TrafficMetadata).whole)
+        assert moved["gmem"] == TrafficBytes(0, 0), "a static window was charged one"
 
 
 def test_a_window_whose_start_is_only_known_at_run_time_is_still_a_window() -> None:
     """Not knowing where a window lands is not knowing that it moved.
 
-    Its start arrives as a value, so nothing here states an address for it. It
-    was still placed in the buffer it names rather than given one of its own,
-    and a value living in another's bytes did not copy them to get there --
-    whoever really reads it is who moves anything.
+    Its start arrives as a value, so nothing here states an address for it, and
+    what the occurrence reads is that value rather than the bytes it names.
+    Whoever really reads the window is who moves anything.
     """
     case = next(item for item in CORPUS if item.id == "deepseek_v4_flash")
     selected = next(item for item in case.analyze if item.selector == "mla_kv_update")
@@ -2983,8 +2845,12 @@ def test_a_window_whose_start_is_only_known_at_run_time_is_still_a_window() -> N
     ]
     assert open_, "no window of this program had a start only the run knows"
     for expr in windows:
-        assert get_metadata(expr, TrafficMetadata).whole == (), (
-            "a window was charged for naming bytes it was placed in"
+        moved = dict(get_metadata(expr, TrafficMetadata).whole)
+        assert moved.get("gmem", TrafficBytes()).write == 0, (
+            "a window was charged for writing bytes it only named"
+        )
+        assert moved.get("gmem", TrafficBytes()).read < tensor_bytes(expr.type), (
+            "a window was charged for reading the bytes it only named"
         )
 
 
@@ -3085,10 +2951,10 @@ def test_naming_bytes_is_not_reading_them() -> None:
 def test_re_indexing_something_unplaced_moves_none_of_it() -> None:
     """Renaming a window nobody placed is still renaming.
 
-    Reading it under other extents covers the same bytes, and it was placed in
-    the same buffer the window itself was placed in. Neither states an address,
-    and neither had to: what says they moved nothing is that neither was given
-    a buffer of its own.
+    Reading it under other extents covers the same bytes and asks the run for
+    nothing, so the re-indexing moves nothing at any level. Its start being
+    open is a fact about the window it renames, and does not turn either of
+    them into a copy.
     """
     result = analyze(
         _RenamesAnUnplacedWindowAtNoDistance,
@@ -3104,27 +2970,25 @@ def test_re_indexing_something_unplaced_moves_none_of_it() -> None:
     opened, flat = (
         get_metadata(expr, BufferAllocationMetadata).fields[0] for expr in windows
     )
-
-    assert (opened.offset, flat.offset) == (None, None), (
-        "re-indexing an unplaced window invented an address for it"
-    )
+    assert (opened.offset, flat.offset) == (None, None)
     assert flat.buffer_id == opened.buffer_id
-    for expr in windows:
-        assert get_metadata(expr, TrafficMetadata).whole == ()
-    reader = [e for e in postorder(result.function.body) if isinstance(e, Call)][-1]
-    assert dict(get_metadata(reader, TrafficMetadata).whole)["gmem"].read == 128, (
-        "the occurrence that really reads the window was let off with it"
+
+    assert dict(get_metadata(windows[0], TrafficMetadata).whole)["gmem"] == TrafficBytes(8, 0)
+    assert get_metadata(windows[1], TrafficMetadata).whole == (), (
+        "re-indexing a value onto its own bytes was charged for moving them"
     )
+    reader = [e for e in postorder(result.function.body) if isinstance(e, Call)][-1]
+    assert dict(get_metadata(reader, TrafficMetadata).whole)["gmem"] == TrafficBytes(128, 64)
 
 
 def test_a_value_nobody_can_place_does_not_place_the_one_that_renames_it() -> None:
-    """A distance from an unknown address is another unknown address.
+    """A window whose start is a value reads the start, not the window.
 
-    A window whose start arrives as a value is somewhere in the buffer it names
-    and nowhere in particular, so measuring the next window from the front of
-    that buffer answers with a number wrong by wherever the first really began.
-    Neither window states an address, both were placed in what they name, and
-    the occurrence that really reads them is the one charged for the bytes.
+    Where it lands is a number the run supplies, so the occurrence reads that
+    number -- one eight-byte scalar -- and names the sixty-four bytes it does
+    not move. Charging it the window would say a program that looks at part of
+    a tensor copied that part, and neither window here states an address for
+    what it named.
     """
     result = analyze(
         _RenamesWhatItCannotPlace,
@@ -3138,19 +3002,15 @@ def test_a_value_nobody_can_place_does_not_place_the_one_that_renames_it() -> No
     ]
     assert len(windows) == 2
     held = [get_metadata(expr, BufferAllocationMetadata) for expr in windows]
-    assert all(item is not None for item in held)
     assert [ref.offset for item in held for ref in item.fields] == [None, None]
+    assert held[0].fields[0].buffer_id == held[1].fields[0].buffer_id
 
-    opened, into = (item.fields[0] for item in held)
-    assert opened.buffer_id == into.buffer_id, (
-        "a window measured from another was given an allocation of its own"
-    )
-    for expr in windows:
-        assert get_metadata(expr, TrafficMetadata).whole == ()
+    opened, into = (dict(get_metadata(expr, TrafficMetadata).whole) for expr in windows)
+    assert opened["gmem"] == TrafficBytes(8, 0), "a run-time window was charged its window"
+    assert into["gmem"] == TrafficBytes(0, 0), "a window of a window was charged one"
+
     reader = [e for e in postorder(result.function.body) if isinstance(e, Call)][-1]
-    assert dict(get_metadata(reader, TrafficMetadata).whole)["gmem"].read == 64, (
-        "the occurrence that really reads the window was let off with it"
-    )
+    assert dict(get_metadata(reader, TrafficMetadata).whole)["gmem"] == TrafficBytes(64, 32)
 
 
 def _spec_records(page="analysis.md"):
@@ -3186,7 +3046,7 @@ def test_a_record_the_spec_declares_has_the_fields_it_declares() -> None:
     """
     checked = 0
     pages = {
-        "analysis.md": (analysis_records, analysis_traffic),
+        "analysis.md": (analysis_records,),
         "visitor-registry.md": (access_relation,),
     }
     for page, modules in pages.items():
@@ -3326,16 +3186,15 @@ def test_a_value_of_bits_is_charged_the_bytes_it_takes_up() -> None:
 
     Charging one element at a time asks what a bit costs in bytes, which has no
     answer, and refusing there loses the traffic of every mask a program
-    computes. A leaf is addressed on its own, so the count is converted whole
-    and rounded up the way the type system already sizes it.
+    computes. A leaf is addressed on its own, so the count is taken as a share
+    of the whole the type system already sizes it as.
     """
     mask = make_tensor_type((512,), DType.bool)
     assert tensor_bytes(mask) == 64
 
-    assert _moved_bytes(512, mask) == 64
-    assert _moved_bytes(1, mask) == 1
-    assert _moved_bytes(0, mask) == 0
-    assert _moved_bytes(9, mask) == 2
+    assert _bytes_for(mask, 512) == 64
+    assert _bytes_for(mask, 0) == 0
+    assert _bytes_for(mask, 8) == 1
 
     held = make_tensor_type((512,), DType.f32)
-    assert _moved_bytes(512, held) == tensor_bytes(held)
+    assert _bytes_for(held, 512) == tensor_bytes(held)

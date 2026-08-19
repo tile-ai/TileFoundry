@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-import isl
 from ortools.sat.python import cp_model
 
 from tilefoundry.ir.core import (
@@ -38,7 +37,6 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
 
-from .buffer_plan import build_buffer_plan
 from .check import Placement, _call_placements, _result_placement
 from .errors import AnalysisError
 from .facts import (
@@ -60,14 +58,13 @@ from .metadata import (
     LoopFootprintMetadata,
     MemoryMetadata,
     TrafficBytes,
+    TrafficMetadata,
     ValueLifetime,
 )
-from .traffic import TrafficMetadata, lower_traffic
 from .walk import (
     attach,
     bytes_by_storage,
     children,
-    enclosing_trips,
     postorder,
     reachable_functions,
     tensor_types,
@@ -992,20 +989,6 @@ def _renamed(
     return tuple(refs)
 
 
-def _leaf_at(link, call, ctx, facts, topology_levels, topologies):
-    """The tensor a link reads from, as the unit owning its level holds it."""
-    if link is None or not isinstance(call, Call) or link.input >= len(call.args):
-        return None
-    leaves = tensor_types(ctx.type_of(call.args[link.input]))
-    index = 0 if link.input_field is None else link.input_field
-    if not 0 <= index < len(leaves):
-        return None
-    leaf = leaves[index]
-    if leaf.storage is StorageKind.UMAT:
-        return None
-    return _at_owner(leaf, str(leaf.storage), facts, topology_levels, topologies)
-
-
 def _from_field(
     owner: tuple[BufferRef, ...], field: "int | None", wanted: int
 ) -> "tuple[BufferRef, ...] | None":
@@ -1064,92 +1047,24 @@ def _buffer_placements(
     return resolved
 
 
-def _record_traffic(
-    fn: Function,
-    scope: FunctionScope,
-    level: str | None,
-    topologies: tuple[Topology, ...],
-    placements: dict[int, Placement] | None = None,
-    participant: int = 0,
-) -> None:
-    """Give every occurrence the bytes its own relations say it moves.
+def _record_traffic(fn: Function) -> None:
+    """Carry the settled movement of every occurrence under this family.
 
-    A participant that does not run one does none of its movement, a share of
-    zero rather than a refusal, and one whose movement cannot be stated is left
-    without a record instead of an empty one. The function's own total is the
-    same bytes counted as often as the loops repeat them, stated only when every
-    occurrence that owed an answer gave one: a total missing a part of itself
-    reads as a smaller program rather than as an incomplete count.
+    The bytes were counted once, when the cost of each occurrence was settled,
+    and counting them again from where their buffers landed would be a second
+    answer to a question that already has one. What this adds is whose record it
+    is: a reader asking what a program moves asks the family that knows where
+    its values live, and gets the same numbers either way.
     """
-    plan = build_buffer_plan(fn, level)
-    whole = CostContext(scope=scope)
-    unit = CostContext(scope=scope, level=level, topologies=topologies)
-    trips = enclosing_trips(fn.body)
-    totals: dict[str, list[int]] = {}
-    shares: dict[str, list[int]] = {}
-    complete = True
     for expr in postorder(fn.body) if fn.body is not None else ():
-        if not isinstance(expr, Call) or isinstance(expr.target, Function):
+        if not isinstance(expr, Call):
             continue
-        handler = access_relation_registry.lookup(type(expr.target))
-        if handler is None:
-            if _owes_an_answer(expr):
-                complete = False
-            continue
-        held = (placements or {}).get(id(expr))
-        try:
-            moved = lower_traffic(
-                expr,
-                handler(expr, whole),
-                handler(expr, unit),
-                plan,
-                whole,
-                unit,
-                participant=participant,
-                runs=held is None or participant in held,
-                umat_level=_UMAT_LEVEL,
-            )
-        except (AnalysisError, NotImplementedError, isl.Error):
-            complete = False
-            continue
-        attach(expr, moved)
-        repeats = trips.get(id(expr), 1)
-        _add_traffic(totals, moved.whole, repeats)
-        _add_traffic(shares, moved.per_unit, repeats)
-    if complete:
-        attach(fn, TrafficMetadata(whole=_totalled(totals), per_unit=_totalled(shares)))
-
-
-def _owes_an_answer(expr: Expr) -> bool:
-    """Whether an occurrence with no relation was still going to move bytes.
-
-    An Op that states no accesses can still be one that moves something, and
-    counting a function's bytes without it gives a total that is short by
-    however much it moved. What says whether it moved anything is the cost
-    already recorded for it; an occurrence with no cost record has not been
-    shown to move nothing either.
-    """
-    cost = get_metadata(expr, ComputeCostMetadata)
-    return cost is None or bool(cost.traffic)
-
-
-def _add_traffic(
-    into: dict[str, list[int]],
-    stated: tuple[tuple[str, TrafficBytes], ...],
-    repeats: int,
-) -> None:
-    """Add one occurrence's bytes to a function's, as often as it happens."""
-    for level, moved in stated:
-        running = into.setdefault(level, [0, 0])
-        running[0] += moved.read * repeats
-        running[1] += moved.write * repeats
-
-
-def _totalled(found: dict[str, list[int]]) -> tuple[tuple[str, TrafficBytes], ...]:
-    """One function's totals per level, in a stable order."""
-    return tuple(
-        (level, TrafficBytes(read, write)) for level, (read, write) in sorted(found.items())
-    )
+        cost = get_metadata(expr, ComputeCostMetadata)
+        if cost is not None:
+            attach(expr, TrafficMetadata(cost.traffic, cost.traffic_per_unit))
+    total = get_metadata(fn, ComputeCostMetadata)
+    if total is not None:
+        attach(fn, TrafficMetadata(total.traffic, total.traffic_per_unit))
 
 
 def analyze_memory(
@@ -1241,13 +1156,7 @@ def analyze_memory(
                 topology_levels=target.topology_levels,
                 topologies=topologies,
             )
-        _record_traffic(
-            fn,
-            scope,
-            level,
-            topologies,
-            None if allocation is None else allocation.placements,
-        )
+        _record_traffic(fn)
         for loop, footprint in loop_records:
             attach(loop, footprint)
 

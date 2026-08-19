@@ -62,6 +62,19 @@ class ComputeCostMetadata(IRMetadata):
 
 
 @dataclass(frozen=True)
+class TrafficMetadata(IRMetadata):
+    """The bytes one occurrence moves, whole and for one participant.
+
+    The same numbers the compute-cost record settled, carried under the family
+    that owns where values live. Attaching them here says which family a reader
+    asks about movement; it does not count anything a second time.
+    """
+
+    whole: tuple[tuple[str, TrafficBytes], ...] = ()
+    per_unit: tuple[tuple[str, TrafficBytes], ...] = ()
+
+
+@dataclass(frozen=True)
 class BufferAliasMetadata(IRMetadata):
     """Where one Call's result bytes live.
 

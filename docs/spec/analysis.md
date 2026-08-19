@@ -743,23 +743,22 @@ where each one sits.
     leaves could be placed MUST carry none: a partial address is not one. Values
     sharing a `buffer_id` are in one allocation, and the refs a value owns tile
     it in `offset` order.
-  - What an occurrence moves MUST be stated whether or not an address was
-    settled for its buffers. What proves a transfer came to nothing is the
-    placement having put its output in the allocation the link names, so a
-    boundary the placement puts nowhere MUST be charged for the copy nothing
-    ruled out. A function with no `allocation` therefore still carries traffic,
-    which is a different question from whether a time may be reported for it
+  - What an occurrence moves is settled once, when its cost is settled, and
+    `TrafficMetadata` MUST carry those same bytes and the same multiplicity
+    rather than count them again from where the buffers landed. A function with
+    no `allocation` therefore still carries traffic, which is a different
+    question from whether a time may be reported for it
     ([§2.2.4](#224-performance)), and the two MUST NOT be read as one.
   - A value living in another's bytes MUST state an `offset` of `None` over the
     containing allocation's size: it is somewhere in those bytes, and where it
     sits and whether it moved are different questions. An address MUST NOT be
     recovered by measuring from the front of the buffer that contains it, which
     is wrong by wherever the containing value really began.
-  - Whether a boundary moved bytes MUST be read off the placement rather than
-    decided again. A value shown to forward or update another is given that
-    value's allocation and not one of its own, and a value living in another's
-    bytes did not move to get there; a value allocated separately did. An
-    address MUST NOT be re-derived to answer a question the placement settled.
+  - An allocation fact MUST NOT be used to invent a movement number. A window
+    whose start arrives at run time reads that start and names the bytes it
+    windows; a coordinate nobody has bound makes neither an address nor a copy,
+    and MUST NOT turn an addressing view into a full read of its source and a
+    write of its result.
   - A level held per unit of work rather than shared is not searched for
     addresses, and a value there MUST still receive a `buffer_id` of its own.
     Two such values are two buffers however their offsets read.
