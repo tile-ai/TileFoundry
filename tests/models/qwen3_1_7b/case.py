@@ -55,7 +55,6 @@ CASE = ModelCase(
         FunctionCase(
             id="qwen3_1_7b/analyze/placed_mlp",
             selector="placed_mlp",
-            performance=True,
         ),
         FunctionCase(
             id="qwen3_1_7b/analyze/decoder_layer",

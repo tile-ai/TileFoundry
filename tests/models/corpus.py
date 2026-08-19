@@ -218,8 +218,10 @@ class FunctionCase:
     context length. A model with no open dimension states none, and that is not
     the same as a model that has one and cannot be asked -- see `SizedCase`.
 
-    `performance` marks an analysis witness whose costed Call results explicitly
-    carry placement at the selected topology level.
+    Whether the function is placed is not stated here. It is a fact about the
+    program, asked of the concrete HIR by `states_execution_domain`, so a model
+    that gains a placement is asked the larger question without anyone
+    remembering to change a flag.
     """
 
     id: str
@@ -228,7 +230,6 @@ class FunctionCase:
     gate: CapabilityGate = field(default_factory=CapabilityGate)
     topology: str | None = None
     dims: Mapping[str, int] | None = None
-    performance: bool = False
 
 
 @dataclass(frozen=True)
@@ -374,14 +375,220 @@ class ModelCase:
         return selected, found
 
 
+
+@dataclass(frozen=True)
+class ConcreteCase:
+    """One program at one set of extents, ready to be asked a question.
+
+    A case of the model corpus and a root of the placed fixtures are the same
+    thing once both are concrete -- a Module to measure against, a Function of
+    it, and the extents to ask at -- so whatever asks about them is written once
+    and never has to know which of the two lists a program came from.
+
+    The program is built when it is asked for rather than when the inventory is
+    made: collecting a parametrized test would otherwise specialise every model
+    in the repository before running anything.
+    """
+
+    id: str
+    dims: Mapping[str, int] | None
+    build: Callable[[], tuple[Module, Function]]
+
+    def program(self) -> tuple[Module, Function]:
+        return self.build()
+
+    def places(self, level: str = "cta") -> bool:
+        """Whether any occurrence of this program was authored inside *level*.
+
+        Asked of the concrete HIR, so it is a fact about the program rather than
+        a flag somebody set beside it: a model whose kernels are written outside
+        any Mesh has nothing that says which participants run them, however many
+        of that level its Module declares it has.
+        """
+        owner, function = self.program()
+        return states_execution_domain(owner, function, self.dims, level)
+
+
+def states_execution_domain(
+    owner: Module,
+    function: Function,
+    dims: "Mapping[str, int] | None",
+    level: str = "cta",
+) -> bool:
+    """Whether *function*, once concrete, runs anything inside a Mesh of *level*."""
+    from tilefoundry.analysis.check import _resolve_program_geometry
+    from tilefoundry.analysis.walk import postorder
+    from tilefoundry.ir.core import Call, get_metadata
+    from tilefoundry.ir.core.metadata import ExecutionDomainMetadata
+    from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
+
+    _module, concrete = _resolve_program_geometry(
+        owner, function, dims, TypeInferContext(scope=FunctionScope(owner, function))
+    )
+    return any(
+        (get_metadata(item, ExecutionDomainMetadata) or ExecutionDomainMetadata())
+        .at(level)
+        is not None
+        for item in postorder(concrete.body)
+        if isinstance(item, Call)
+    )
+
+
+#: The machine a root that states none is asked on, the way `TargetFixture` binds
+#: one. A program with no Target is not yet a question about a machine.
+_UNBOUND_MACHINE = "nvidia.h200_sxm"
+
+#: The sizes a placed root is asked at when the sizes themselves are the subject.
+#: A selector absent from here is asked at one size its own declaration admits,
+#: so adding a fixture never means editing this. A selector present here is one
+#: whose separate prefill and decode surfaces each have to be asked about, which
+#: is a thing about the program rather than about its declared ranges.
+STATED_DIMS: "Mapping[tuple[str, str], tuple[Mapping[str, int], ...]]" = {
+    ("qwen3_1_7b_pd", "model"): (
+        {"ctx_len": 0, "seq": 512},
+        {"ctx_len": 512, "seq": 512},
+        {"ctx_len": 512, "seq": 1},
+        {"ctx_len": 4608, "seq": 1},
+    ),
+}
+
+#: One size for a dimension a program leaves open, when no size was stated.
+_PROBE = 128
+
+
+def _probe_dims(owner: Module, function: Function) -> "Mapping[str, int] | None":
+    """One concrete extent per open dimension, from its own declared range."""
+    from tilefoundry.analysis.check import _program_dim_vars
+
+    declared = _program_dim_vars(owner, function)
+    if not declared:
+        return None
+    return {
+        name: max(int(var.lo), min(_PROBE, int(var.hi) - 1))
+        for name, var in sorted(declared.items())
+    }
+
+
+def placed_fixture_roots() -> tuple[tuple[str, str, Module], ...]:
+    """Every reusable placed program, by the file and the name it is published under.
+
+    Walked rather than listed, so a fixture added to the package joins the
+    inventory instead of quietly escaping it. A Module reached as somebody's
+    child is not a root: it is asked about through the parent whose machine it
+    inherits. One of these files names its neighbour the way a script does,
+    because the CLI loads them by path, so the package directory is on the path
+    while they import.
+    """
+    import importlib
+    import pkgutil
+    import sys
+
+    from tilefoundry.ir.core.module import subtree
+
+    import tests.fixtures.placed as placed
+
+    found: list[tuple[str, str, Module]] = []
+    sys.path.insert(0, str(Path(placed.__path__[0])))
+    try:
+        for info in sorted(pkgutil.iter_modules(placed.__path__), key=lambda i: i.name):
+            source = importlib.import_module(f"{placed.__name__}.{info.name}")
+            named = [
+                (name, value)
+                for name in dir(source)
+                if not name.startswith("_")
+                and isinstance(value := getattr(source, name), Module)
+            ]
+            children = {
+                id(child)
+                for _name, owner in named
+                for child in subtree(owner)
+                if child is not owner
+            }
+            found.extend(
+                (info.name, name, value)
+                for name, value in named
+                if id(value) not in children
+            )
+    finally:
+        sys.path.pop(0)
+    return tuple(found)
+
+
+def placed_cases(level: str = "cta") -> tuple[ConcreteCase, ...]:
+    """Every placed root that answers for *level*, at every size it is asked at.
+
+    A root whose own machine does not run *level* at all is left out here and
+    named by the inventory guard instead: a CPU program is not a CTA program
+    that failed.
+    """
+    from tilefoundry.target import CudaTarget
+
+    cases: list[ConcreteCase] = []
+    for file, name, published in placed_fixture_roots():
+        root = published
+        try:
+            root.resolve_target()
+        except Exception:  # noqa: BLE001 -- a root that names no machine
+            root = replace(root, target=CudaTarget(_UNBOUND_MACHINE))
+        if level not in root.resolve_target().topology_levels:
+            continue
+        for selector, function in function_selectors(root):
+            owner = select(root, selector)
+            for dims in STATED_DIMS.get((file, selector)) or (
+                _probe_dims(owner, function),
+            ):
+                shown = ",".join(f"{k}={v}" for k, v in (dims or {}).items()) or "static"
+                cases.append(
+                    ConcreteCase(
+                        f"{file}.{name}.{selector}[{shown}]",
+                        dims,
+                        lambda owner=owner, function=function: (owner, function),
+                    )
+                )
+    return tuple(cases)
+
+
+def model_cases() -> tuple[ConcreteCase, ...]:
+    """Every model the corpus selects for analysis, at the extents it states."""
+    from tests.models.registry import CORPUS
+
+    return tuple(
+        ConcreteCase(
+            selected.id,
+            selected.dims,
+            lambda case=case, selected=selected: case.resolve(
+                case.build(), selected.selector
+            ),
+        )
+        for case in CORPUS
+        for selected in case.analyze
+    )
+
+
+def concrete_cases() -> tuple[ConcreteCase, ...]:
+    """Every concrete program in the repository, from both places one lives.
+
+    Whether each of them states where it runs is asked of the built HIR by
+    whoever is asking, not decided here: a list that filtered itself would be
+    the allowlist this exists to avoid.
+    """
+    return model_cases() + placed_cases()
+
 __all__ = [
     "CapabilityGate",
+    "ConcreteCase",
     "CorpusError",
     "FunctionCase",
     "MODELS_ROOT",
     "ModelCase",
     "Outcome",
     "ReferenceCase",
+    "STATED_DIMS",
     "SizedCase",
     "TargetFixture",
+    "concrete_cases",
+    "model_cases",
+    "placed_cases",
+    "placed_fixture_roots",
+    "states_execution_domain",
 ]

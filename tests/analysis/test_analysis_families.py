@@ -10,16 +10,11 @@ disagree with itself.
 
 from __future__ import annotations
 
-import importlib
 import json
-import pkgutil
-import sys
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
-import tests.fixtures.placed as placed
 import tilefoundry.analysis.compute_cost as compute_cost
 from tests.fixtures.placed.derived_prefill import DerivedPrefill
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
@@ -27,6 +22,7 @@ from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tests.fixtures.placed.square_cuda import Model as SquareCuda
 from tests.fixtures.shapes.window_programs import WindowCost
+from tests.models.corpus import placed_cases, placed_fixture_roots
 from tests.models.registry import CORPUS
 from tilefoundry import func, module
 from tilefoundry.analysis import (
@@ -51,7 +47,6 @@ from tilefoundry.analysis.check import (
     _call_placements,
     _execution_placement,
     _mesh_image,
-    _program_dim_vars,
     _result_placement,
 )
 from tilefoundry.analysis.compute_cost import (
@@ -66,7 +61,7 @@ from tilefoundry.analysis.movement import (
 )
 from tilefoundry.analysis.performance import _storage_of
 from tilefoundry.analysis.roofline import _cost_bound
-from tilefoundry.analysis.walk import describe, postorder
+from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
 from tilefoundry.inspection.analysis_report import (
     render_analysis,
@@ -84,7 +79,6 @@ from tilefoundry.ir.core import (
     binding_name,
     get_metadata,
 )
-from tilefoundry.ir.core.module import Module, function_selectors, select, subtree
 from tilefoundry.ir.hir import Function, GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.tensor.slice import Slice
@@ -1878,94 +1872,44 @@ def test_an_execution_domain_is_restated_at_the_extents_it_is_asked_at() -> None
     )
 
 
-def _placed_fixture_roots() -> list[tuple[str, str, Module]]:
-    """Every reusable placed program, by the file and name it is published under.
+def test_the_placed_inventory_takes_the_whole_directory() -> None:
+    """What is asked about is what is there, and what is left out is named.
 
-    Walked rather than listed, so a fixture added to the package joins the census
-    instead of quietly escaping it. A Module reached as somebody's child is not a
-    root: it is asked about through the parent whose machine it inherits. One of
-    these files names its neighbour the way a script does, because the CLI loads
-    them by path, so the package directory is on the path while they import.
+    The inventory is walked out of the fixture package rather than listed, so a
+    fixture added to it joins instead of quietly escaping. This pins the walk --
+    every root found, a Module reached as somebody's child not counted as one,
+    and the only roots left out being those whose machine runs no CTAs. Excluding
+    one for any other reason is the allowlist this prevents, and would show up
+    here as a number that moved. What those cases answer is asked where the
+    analyses run; a count is not an answer, so this runs nothing.
     """
-    found: list[tuple[str, str, Module]] = []
-    sys.path.insert(0, str(Path(placed.__path__[0])))
-    try:
-        for info in sorted(pkgutil.iter_modules(placed.__path__), key=lambda i: i.name):
-            source = importlib.import_module(f"{placed.__name__}.{info.name}")
-            named = [
-                (name, value)
-                for name in dir(source)
-                if not name.startswith("_")
-                and isinstance(value := getattr(source, name), Module)
-            ]
-            children = {
-                id(child)
-                for _n, owner in named
-                for child in subtree(owner)
-                if child is not owner
-            }
-            found.extend(
-                (info.name, name, value)
-                for name, value in named
-                if id(value) not in children
-            )
-    finally:
-        sys.path.pop(0)
-    return found
+    roots = placed_fixture_roots()
+    assert len(roots) == 27
 
-
-def test_every_placed_fixture_says_where_each_of_its_occurrences_ran() -> None:
-    """The whole placed corpus, at a size, with no occurrence left unplaced.
-
-    A program that names CTAs and is aimed at a machine that runs them is a
-    performance question, and every one of them has to answer it: an execution
-    domain that only the fixtures somebody remembered to check carry is one the
-    next authored program will be missing. A dimension left open is asked at a
-    size its own declaration admits, because counting elements needs a number.
-    A CPU root is not a smaller version of this question -- its machine runs no
-    CTAs -- so it is named and left out rather than counted as passing.
-    """
-    machine = CudaTarget("nvidia.h200_sxm")
-    asked: list[str] = []
-    outside: list[str] = []
-    for file, name, root in _placed_fixture_roots():
+    outside = []
+    for file, name, published in roots:
+        root = published
         try:
             root.resolve_target()
-        except (AnalysisError, TypeError, ValueError):
-            root = replace(root, target=machine)
+        except Exception:  # noqa: BLE001 -- a root that names no machine
+            root = replace(root, target=CudaTarget("nvidia.h200_sxm"))
         if "cta" not in root.resolve_target().topology_levels:
             outside.append(f"{file}.{name}")
-            continue
-        for selector, function in function_selectors(root):
-            owner = select(root, selector)
-            declared = _program_dim_vars(owner, function)
-            dims = {
-                dim: max(int(var.lo), min(128, int(var.hi) - 1))
-                for dim, var in sorted(declared.items())
-            }
-            result = analyze(
-                owner,
-                function,
-                analysis=("compute-cost", "memory", "roofline", "performance"),
-                level="cta",
-                dims=dims or None,
-            )
-            calls = _calls(result.function)
-            undomained = [
-                describe(call)
-                for call in calls
-                if get_metadata(call, ExecutionDomainMetadata) is None
-                or get_metadata(call, ExecutionDomainMetadata).at("cta") is None
-            ]
-            assert not undomained, f"{file}.{name}.{selector}: {undomained}"
-            assert calls
-            assert (
-                get_metadata(result.function, PerformanceSummaryMetadata) is not None
-            ), f"{file}.{name}.{selector} was placed but got no summary"
-            asked.append(f"{file}.{name}.{selector}")
+    assert outside == [
+        "fused_twin.Fused",
+        "nested_twin.Nested",
+        "square_cpu.Mine",
+        "square_cpu_runtime.Mine",
+        "square_twin.Model",
+        "weighted_twin.WeightedRoot",
+    ]
 
-    assert len(asked) == 19, asked
-    assert len(outside) == 6, outside
+    cases = placed_cases()
+    assert len(roots) - len(outside) == 21, "the roots that answer for CTAs"
+    assert len({case.id.rsplit("[", 1)[0] for case in cases}) == 27, (
+        "one row per selector those roots expose, not one per root"
+    )
+    assert len(cases) == 30, "and one case per stated set of sizes"
 
 
 def test_only_addressable_levels_are_placed_by_the_solver() -> None:

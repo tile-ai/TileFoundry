@@ -20,9 +20,12 @@ from tests.fixtures.placed.flash_split_k_decode import BLOCK, HEADS, WORKERS, Fl
 from tests.fixtures.placed.gqa_decode import MAX_CTX, GqaOnline
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tests.fixtures.placed.qwen3_1_7b_pd import PrefillLayer
-from tests.models.corpus import FunctionCase, ModelCase
+from tests.models.corpus import (
+    ConcreteCase,
+    concrete_cases,
+    states_execution_domain,
+)
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
-from tests.models.registry import CORPUS
 from tilefoundry.analysis import (
     AnalysisResult,
     ComputeCostMetadata,
@@ -36,10 +39,11 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.compute_cost import _local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.walk import enclosing_trips, postorder, tensor_types
+from tilefoundry.analysis.walk import describe, enclosing_trips, postorder, tensor_types
 from tilefoundry.inspection.analysis_report import render_analysis
 from tilefoundry.ir.core import Call, Constant, get_metadata
 from tilefoundry.ir.core.kinds import BinaryKind
+from tilefoundry.ir.core.metadata import ExecutionDomainMetadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
@@ -73,10 +77,8 @@ from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFa
 CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT}
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
-QWEN3_PD_FAMILIES = ("compute-cost", "memory", "roofline")
-CORPUS_ANALYSES = [
-    pytest.param(case, selected, id=selected.id) for case in CORPUS for selected in case.analyze
-]
+LOGICAL_FAMILIES = ("compute-cost", "memory", "roofline")
+INVENTORY = [pytest.param(case, id=case.id) for case in concrete_cases()]
 
 
 SOLVER = ScheduleOptions(timeout_seconds=60, workers=4, random_seed=0, stop_at_first_solution=True)
@@ -100,8 +102,10 @@ def assert_performance_contract(result: AnalysisResult) -> None:
 
     The prediction contains each occurrence it timed and is no faster than the
     ideal bound. An occurrence's duration is its own compute-cost record priced
-    at the target's stated rates, so nothing here is a second opinion about how
-    long a resource takes, and a solve that proved nothing says so.
+    at the target's rates, so nothing here is a second opinion about how long a
+    resource takes, and a solve that proved nothing says so. One a loop repeats
+    without changing is written once and stands for every run of it, so its
+    interval is that many of its own durations and no more than its loops allow.
     """
     fn = result.function
     summary = get_metadata(fn, PerformanceSummaryMetadata)
@@ -117,6 +121,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
     module_target = result.module.resolve_target()
     throughput = module_target.get_facts(ThroughputFacts)
     services = module_target.get_facts(PerformanceServiceFacts)
+    repeats = enclosing_trips(fn.body)
     timed = 0
     for expr in postorder(fn.body):
         if not isinstance(expr, Call) or isinstance(expr.target, Function):
@@ -138,24 +143,51 @@ def assert_performance_contract(result: AnalysisResult) -> None:
         assert record is not None
         assert summary.timeline.start_ns <= record.timeline.start_ns
         assert record.timeline.end_ns <= summary.timeline.end_ns
-        assert record.timeline.end_ns - record.timeline.start_ns == duration
+
+        span = record.timeline.end_ns - record.timeline.start_ns
+        assert span % duration == 0, describe(expr)
+        runs, available = span // duration, repeats.get(id(expr), 1)
+        assert 1 <= runs <= available and available % runs == 0, describe(expr)
     assert bool(timed) is bool(predicted_ns)
 
 
-@pytest.mark.parametrize(("case", "selected"), CORPUS_ANALYSES)
-def test_every_corpus_function_analyzes_from_source(
-    case: ModelCase, selected: FunctionCase
-) -> None:
-    module = case.build()
-    owner, function = case.resolve(module, selected.selector)
-    families = FAMILIES if selected.performance else QWEN3_PD_FAMILIES
+@pytest.mark.parametrize("case", INVENTORY)
+def test_every_concrete_program_answers_for_where_it_runs(case: ConcreteCase) -> None:
+    """Every program the repository holds, asked the question its own HIR admits.
 
-    result = analyze(owner, function, analysis=families, dims=selected.dims)
+    The model corpus and the placed fixtures are one inventory, and what each
+    program is asked is read off the concrete HIR rather than off a flag beside
+    it. One that runs something inside a CTA Mesh is asked for all four families
+    and has to answer with a coherent prediction. One that runs nothing inside
+    any Mesh is not a smaller version of that question: it still measures its
+    work, its bytes and its bound, and performance has to refuse it by name
+    rather than quietly return an empty timeline.
+    """
+    owner, function = case.program()
+    if not states_execution_domain(owner, function, case.dims):
+        logical = analyze(owner, function, analysis=LOGICAL_FAMILIES, dims=case.dims)
+        assert logical.module is owner
+        assert logical.metadata_types
+        owner, function = case.program()
+        with pytest.raises(AnalysisError, match="has no cta execution domain"):
+            analyze(owner, function, analysis=FAMILIES, dims=case.dims)
+        return
+
+    result = analyze(owner, function, analysis=FAMILIES, dims=case.dims)
 
     assert result.module is owner
-    assert result.metadata_types
-    if selected.performance:
-        assert_performance_contract(result)
+    assert set(result.executed) == set(FAMILIES)
+    undomained = [
+        describe(call)
+        for call in postorder(result.function.body)
+        if isinstance(call, Call)
+        and not isinstance(call.target, Function)
+        and (get_metadata(call, ExecutionDomainMetadata) or ExecutionDomainMetadata())
+        .at("cta")
+        is None
+    ]
+    assert not undomained, f"{case.id}: {undomained}"
+    assert_performance_contract(result)
 
 
 @pytest.mark.parametrize("family", FAMILIES)
@@ -181,13 +213,13 @@ def test_every_analysis_runs_at_a_stated_size(family: str) -> None:
         "qwen3-pd-decode-context",
     ],
 )
-def test_qwen3_pd_fixture_runs_all_analysis_families(
+def test_qwen3_pd_states_its_bound_and_its_loop_footprints_at_each_size(
     dims: dict[str, int], expected_bound: str
 ) -> None:
     result = analyze(
         PrefillLayer,
         PrefillLayer.entry_function(),
-        analysis=QWEN3_PD_FAMILIES,
+        analysis=LOGICAL_FAMILIES,
         dims=dims,
     )
 

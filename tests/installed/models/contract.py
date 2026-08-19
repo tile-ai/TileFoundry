@@ -20,7 +20,7 @@ from pathlib import Path
 import torch
 from safetensors.torch import save_file
 
-from tests.models.corpus import FunctionCase, ModelCase
+from tests.models.corpus import FunctionCase, ModelCase, states_execution_domain
 from tests.models.decode_oracle import one_ulp_at
 from tests.models.registry import cases_of
 
@@ -160,13 +160,18 @@ def analysed_every_family(
 ) -> dict:
     """Judge every family the selected function is ready to run.
 
-    ``FunctionCase.performance`` marks an explicitly placed analysis witness. Other
-    shipped functions keep their logical three-family conclusions and must make a
-    separate performance request fail for a missing execution domain.
+    Which families those are is read off the program: one that runs something
+    inside a CTA Mesh answers for all four, and one that runs nothing inside any
+    Mesh keeps its logical three and must make a separate performance request
+    fail for a missing execution domain. Asking a flag beside the case instead
+    would let a program that gained a placement keep being asked the smaller
+    question.
     """
     selected = [item for item in case.analyze if item.selector == selector]
     assert len(selected) == 1, f"{case.id}: analysis selector {selector!r} is not unique"
-    families = FAMILIES if selected[0].performance else LOGICAL_FAMILIES
+    owner, function = case.resolve(case.build(), selector)
+    placed = states_execution_domain(owner, function, dims or selected[0].dims)
+    families = FAMILIES if placed else LOGICAL_FAMILIES
     report = reported(tf, source, case, selector, families, dims)
     assert report["executed"] == list(families), (
         f"asked for {list(families)}, the command ran {report['executed']}"
