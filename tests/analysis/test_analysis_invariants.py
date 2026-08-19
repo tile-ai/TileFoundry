@@ -53,6 +53,7 @@ from tilefoundry.analysis.buffer_plan import BufferPlan, PlannedBuffer, build_bu
 from tilefoundry.analysis.check import _call_placements
 from tilefoundry.analysis.footprint import _local_type as footprint_local_type
 from tilefoundry.analysis.metadata import (
+    BufferAliasMetadata,
     BufferAllocationMetadata,
     BufferRef,
     ComputeCostMetadata,
@@ -60,7 +61,9 @@ from tilefoundry.analysis.metadata import (
     TrafficMetadata,
 )
 from tilefoundry.analysis.movement import _bytes_for, _prove_storage, _Storage
+from tilefoundry.analysis.performance import analyze_performance
 from tilefoundry.analysis.preflight import validate_authored
+from tilefoundry.analysis.roofline import analyze_roofline
 from tilefoundry.analysis.walk import (
     attach,
     describe,
@@ -2670,6 +2673,48 @@ def test_the_two_families_answer_about_different_halves_of_one_call() -> None:
             assert not hasattr(moved, "flops"), "the movement record still states work"
             checked += 1
         assert checked > 1, "this program stated no cost to carry"
+
+def test_a_bound_is_refused_where_half_of_what_it_divides_is_missing() -> None:
+    """A dependency that was declared is one whose answer may be relied on.
+
+    Both readers of the two records name memory among their dependencies, so an
+    occurrence reaching them without the bytes it moves is a broken run rather
+    than an occurrence that moved none. Treating the absence as zero reports a
+    program faster than the one that was measured, which is the one direction a
+    lower bound may not be wrong in.
+    """
+    for run in (analyze_roofline, analyze_performance):
+        result = analyze(
+            SquareCuda, SquareCuda.entry_function(), analysis=("compute-cost", "memory")
+        )
+        robbed = next(
+            expr for expr in postorder(result.function.body) if isinstance(expr, Call)
+        )
+        detach(robbed, TrafficMetadata)
+        with pytest.raises(AnalysisError, match="traffic record"):
+            run(SquareCuda, result.function, SquareCuda.resolve_target(), "cta", None)
+
+
+def test_a_conclusion_moved_between_families_is_still_a_derived_one() -> None:
+    """Which family reaches an answer does not make the answer the program's.
+
+    An alias conclusion is settled by the family that places values, not by the
+    one that prices work. Asking only for the pricing must still clear it: a
+    record the round did not write, left behind by the round before, reads as
+    this round's finding about a program nothing here proved anything about.
+    """
+    authored = SquareCuda.entry_function()
+    marked = next(expr for expr in postorder(authored.body) if isinstance(expr, Call))
+    attach(marked, BufferAliasMetadata("update", (7,)))
+    try:
+        result = analyze(SquareCuda, authored, analysis="compute-cost")
+        for expr in postorder(result.function.body):
+            assert get_metadata(expr, BufferAliasMetadata) is None, (
+                f"{describe(expr)} kept an alias conclusion this round never reached"
+            )
+    finally:
+        detach(marked, BufferAliasMetadata)
+
 
 def test_a_derived_answer_does_not_survive_into_a_program_that_cannot_give_it() -> None:
     """An answer belongs to the analysis that reached it, not to the program.

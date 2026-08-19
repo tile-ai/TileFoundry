@@ -235,8 +235,9 @@ def report_data(
         "loops": _loop_records(function, selected, target),
     }
     available = set(metadata_types)
-    if ComputeCostMetadata in selected or (
-        "roofline" in analyses and ComputeCostMetadata in available
+    asked = {ComputeCostMetadata, TrafficMetadata}
+    if asked & selected or (
+        "roofline" in analyses and asked & available
     ):
         data["totals"] = _work_totals(function)
     return data

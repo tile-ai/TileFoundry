@@ -102,11 +102,10 @@ def _summary(
             requested=tuple(data["requested"]), executed=tuple(data["executed"])
         ),
     ]
-    if "totals" in data:
+    if "totals" in data and "compute-cost" in data["executed"]:
         views.append(get_metadata(function, ComputeCostMetadata) or ComputeCostMetadata())
-        moved = get_metadata(function, TrafficMetadata)
-        if moved is not None:
-            views.append(moved)
+    if "traffic" in function_records:
+        views.append(get_metadata(function, TrafficMetadata) or TrafficMetadata())
     if "memory" in function_records:
         memory = get_metadata(function, MemoryMetadata)
         views.append(MemorySummary(peak_footprint(memory)))

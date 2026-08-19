@@ -447,9 +447,9 @@ layer settles is which type a field holds and what its keys name:
 
 #### 2.2.1 `compute-cost`
 
-`compute-cost` measures the logical work and movement of each authored `Call`
-without reading target hardware facts. `TrafficBytes` is the shared cost-context
-record defined by [visitor-registry §7](./visitor-registry.md#7-instance-4--cost).
+`compute-cost` measures the logical work of each authored `Call` without reading
+target hardware facts. What an occurrence moves is the memory family's answer
+([§2.2.2](#222-memory)), read off the same registered evaluator.
 
 ```python
 class ComputeCostMetadata(IRMetadata):
@@ -466,19 +466,6 @@ class ComputeCostMetadata(IRMetadata):
     flops_per_unit: tuple[tuple[str, int], ...] = ()
     service: tuple[tuple[str, int], ...] = ()
     service_per_unit: tuple[tuple[str, int], ...] = ()
-
-class TrafficMetadata(IRMetadata):
-    """What one Call moves, or what one Function moves over all its trips.
-
-    Attributes:
-        whole: attribute; TrafficBytes per storage level name.
-        per_unit: attribute; TrafficBytes per storage level name for one unit of the analysed topology level.
-        operands: attribute; TrafficBytes per operand, positional against (*call.args, call); present only for a direct primitive call.
-    """
-
-    whole: tuple[tuple[str, TrafficBytes], ...] = ()
-    per_unit: tuple[tuple[str, TrafficBytes], ...] = ()
-    operands: tuple[TrafficBytes, ...] = ()
 ```
 
 | Field | How it is computed | Reads the target |
@@ -487,40 +474,25 @@ class TrafficMetadata(IRMetadata):
 | `service` | For a primitive Call, take its cost evaluator's service counts -- the results it asks a machine for that are not floating point -- and multiply by the same factor. A Function Call takes the callee's summed `service`. | No |
 | `service_per_unit` | The same evaluator over the same projected Types, multiplied by the same factor. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `flops_per_unit` | Use the same evaluator over Types projected through authored `Split`s at or coarser than the analysed level, then multiply by the same factor. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
-| `traffic_per_unit` | Ask the Op's access relation, in the analysed level's window, how much each boundary moves, and charge that at the levels the operand's projected Type names. Which direction an operand moves stays the evaluator's answer. An Op with no registered relation falls back to the evaluator over projected Types. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
-| `traffic` | Multiply the evaluator's per-operand movement by the same factor, charge concrete tensor leaves to their storage levels, and group by level. A Type with leaves at several levels keeps those leaf bytes separate. A `UMAT` leaf has no residency of its own: when it appears in `Call.args`, charge its own bytes at the target's established `rmem` materialization level; when it appears only in an Op attribute, charge nothing. A Function Call takes the callee's grouped total. | No |
-| `operands` | Multiply each evaluator entry by the same factor and keep order `(*call.args, call)`. A Function Call has no operand split. | No |
 
 Requesting this family adds one summary line, prefixed by `# `: the Function's own
 record, stated exactly as a Call's is. The whole program's work is not a second
 record.
 
 ```text
-compute-cost flops=<dtype>:<int>@<int>[,...] service=<kind>:<int>@<int>[,...] traffic=<level>:r<int>/w<int>@r<int>/w<int>[,...]
+compute-cost flops=<dtype>:<int>@<int>[,...] service=<kind>:<int>@<int>[,...]
 ```
 
 Every measured Call receives this annotation. Each key pairs the whole quantity
 with one unit's share, so the two `*_per_unit` fields are not separate keys.
-`operands` is the same traffic split by operand, one layer finer, so it is
-emitted only when asked for ([cli Analyze](./cli.md#analyze)) and is absent from a
-Function Call, which has no split:
 
-```text
-compute-cost flops=<dtype>:<int>@<int>[,...] service=<kind>:<int>@<int>[,...] traffic=<level>:r<int>/w<int>@r<int>/w<int>[,...][ operands=<position>:r<int>/w<int>[,...]]
-```
-
-Each reported Call's JSON projection is under its `compute-cost` key. `operands`
-appears only for a primitive Call and contains objects in positional order:
+Each reported Call's JSON projection is under its `compute-cost` key:
 
 ```text
 {"flops": {<dtype>: <int>},
  "flops_per_unit": {<dtype>: <int>},
  "service": {<kind>: <int>},
- "service_per_unit": {<kind>: <int>},
- "traffic": {<level>: {"read": <int>, "write": <int>}},
- "traffic_per_unit": {<level>: {"read": <int>, "write": <int>}},
- "operands": [{"arg": <position>, "name": <name>, "type": <type>,
-               "read": <int>, "write": <int>}, ...]}
+ "service_per_unit": {<kind>: <int>}}
 ```
 
 - constraints:
@@ -597,10 +569,26 @@ class BufferAliasMetadata(IRMetadata):
 
 #### 2.2.2 `memory`
 
-`memory` measures whole-Function value lifetimes, footprints, and the levels at
-which the compute-cost traffic lands.
+`memory` measures whole-Function value lifetimes and footprints, decides where
+each value's bytes live, and states what every occurrence moves and at which
+level. The movement is read off the Op's own registered evaluator, corrected by
+the alias proof this family already settles for lifetimes.
 
 ```python
+class TrafficMetadata(IRMetadata):
+    """What one Call moves, or what one Function moves over all its trips.
+
+    Attributes:
+        whole: attribute; TrafficBytes per storage level name.
+        per_unit: attribute; TrafficBytes per storage level name for one unit of the analysed topology level.
+        operands: attribute; TrafficBytes per operand, positional against (*call.args, call); present only for a direct primitive call.
+    """
+
+    whole: tuple[tuple[str, TrafficBytes], ...] = ()
+    per_unit: tuple[tuple[str, TrafficBytes], ...] = ()
+    operands: tuple[TrafficBytes, ...] = ()
+
+
 class LevelFootprint:
     """How much of one memory level a function needs at its peak.
 
@@ -748,11 +736,10 @@ where each one sits.
     leaves could be placed MUST carry none: a partial address is not one. Values
     sharing a `buffer_id` are in one allocation, and the refs a value owns tile
     it in `offset` order.
-  - What an occurrence moves is settled once, when its cost is settled, and
-    `TrafficMetadata` MUST carry those same bytes and the same multiplicity
-    rather than count them again from where the buffers landed. A function with
-    no `allocation` therefore still carries traffic, which is a different
-    question from whether a time may be reported for it
+  - What an occurrence moves MUST be counted once, from the Op's own registered
+    evaluator, and MUST NOT be counted again from where the buffers landed. A
+    function with no `allocation` therefore still carries traffic, which is a
+    different question from whether a time may be reported for it
     ([§2.2.4](#224-performance)), and the two MUST NOT be read as one.
   - A value living in another's bytes MUST state an `offset` of `None` over the
     containing allocation's size: it is somewhere in those bytes, and where it
@@ -796,9 +783,11 @@ where each one sits.
 | `LevelFootprint.persistent_bytes` | Sum of persistent lifetimes at that level. | No |
 | `LevelFootprint.capacity_bytes` | Capacity of the matching explicit level, or `None` when it is unknown or undeclared. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
 | `MemoryMetadata.footprint` | One `LevelFootprint` per occupied storage level. | As above |
-| `MemoryMetadata.traffic` | Exact per-level sum of the Function's already-scaled `ComputeCostMetadata.traffic`. | No |
 | `MemoryMetadata.lifetimes` | Every value residency except a `Reshape`, which aliases its input. | As above |
 | `MemoryMetadata.advisories` | Explicit peak overflow, cache/shared-capacity division, and same-scope authored-loop access-footprint findings. | `MemoryHierarchyFacts` |
+| `TrafficMetadata.whole` | Multiply the Op evaluator's per-operand movement by the occurrence's trip factor, correct it by the alias proof, charge concrete tensor leaves to their storage levels, and group by level. A Type with leaves at several levels keeps those leaf bytes separate. A `UMAT` leaf has no residency of its own: when it appears in `Call.args`, charge its own bytes at the target's established `rmem` materialization level; when it appears only in an Op attribute, charge nothing. A Function Call takes the callee's grouped total. | No |
+| `TrafficMetadata.per_unit` | Ask the Op's access relation, in the analysed level's window, how much each boundary moves, and charge that at the levels the operand's projected Type names. Which direction an operand moves stays the evaluator's answer. An Op with no registered relation falls back to the evaluator over projected Types. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `TrafficMetadata.operands` | Multiply each evaluator entry by the same factor and keep order `(*call.args, call)`. A Function Call has no operand split. | No |
 
 The target-aware loop projection is report data rather than another metadata
 record. `LoopFootprintMetadata` remains target-independent:
@@ -884,9 +873,11 @@ class MemoryHierarchyFacts:
     relations: tuple[MemoryLevelRelation, ...]
 ```
 
-Requesting memory adds one summary line and one line per advisory:
+Requesting memory adds the Function's own movement, one footprint line, and one
+line per advisory:
 
 ```text
+traffic traffic=<level>:r<int>/w<int>@r<int>/w<int>[,...]
 peak-footprint=<level>:<int>[,<level>:<int>...]
 advisory="<text>"
 ```
@@ -896,14 +887,32 @@ a program with none adds none. An advisory is a sentence, so it is quoted and
 escaped ([inspection §2.8](./inspection.md#28-record-comment-forms)); JSON carries
 the same text raw.
 
-The record's single-line comment form projects the footprint it holds; `traffic`
-and `lifetimes` are read from JSON, not from a line:
+The record's single-line comment form projects the footprint it holds;
+`lifetimes` is read from JSON, not from a line:
 
 ```text
 memory peak=<level>:<int>[,...] persistent=<int> advisories=<int>
 ```
 
-The `analyze` equation printer emits no memory annotation because the record is
+Every measured Call also receives a `traffic` annotation, whose `operands` split
+is one layer finer and so is emitted only when asked for
+([cli Analyze](./cli.md#analyze)) and is absent from a Function, which has no
+split:
+
+```text
+traffic traffic=<level>:r<int>/w<int>@r<int>/w<int>[,...][ operands=<position>:r<int>/w<int>[,...]]
+```
+
+Its JSON projection is under the reported value's `traffic` key:
+
+```text
+{"whole": {<level>: {"read": <int>, "write": <int>}},
+ "per_unit": {<level>: {"read": <int>, "write": <int>}},
+ "operands": [{"arg": <position>, "name": <name>, "type": <type>,
+               "read": <int>, "write": <int>}, ...]}
+```
+
+The `analyze` equation printer emits no memory annotation because that record is
 attached only to the Function. Its full JSON projection is under
 `function_records.memory`:
 
@@ -1032,8 +1041,9 @@ derived from. `local-copy` is counted in scalar moves rather than bytes, one
 move per 32-bit word, so moving `n` bytes counts `ceil(n / 4)`: it stands in for
 the register and shared-memory bandwidths no vendor publishes.
 
-Requesting roofline adds the exact summed compute-cost `flops` and `traffic`,
-the memory record's per-level peak, and this verdict to the summary:
+Requesting roofline adds the Function's exact summed `flops` and the bytes the
+memory family counted, the memory record's per-level peak, and this verdict to
+the summary:
 
 ```text
 roofline ideal-ns=<int> bound-by=<resource>

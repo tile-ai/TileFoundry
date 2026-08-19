@@ -1914,6 +1914,31 @@ def test_the_gpu_memory_graph_is_not_a_tree() -> None:
     assert all(relation.kind is MemoryRelationKind.CACHES for relation in flat.relations)
 
 
+def test_a_memory_report_states_the_bytes_that_family_counted() -> None:
+    """The family that counts the bytes is the one whose report shows them.
+
+    Asking for memory alone asks what a program moves and where it sits, and a
+    rendering of that answer that names only the footprint has dropped half of
+    it. The other family is not running, so nothing here may borrow its line
+    either: a report of one family states that family.
+    """
+    result = analyze(MoEMegaKernel, MoEMegaKernel.entry_function(), analysis="memory")
+    rendering = render_analysis(result)
+    text = render_text(rendering)
+
+    assert "traffic" in rendering.data["function_records"], (
+        "the memory family reported no traffic record at all"
+    )
+    moved = rendering.data["function_records"]["traffic"]["whole"]["gmem"]
+    assert (
+        f"# traffic traffic=gmem:r{moved['read']}/w{moved['write']}" in text
+    ), "a memory report showed the footprint and not the bytes that made it"
+    assert "# compute-cost" not in text, (
+        "a family that did not run was given a line of its own"
+    )
+    assert "# peak-footprint" in text
+
+
 def test_a_report_shows_the_requested_analyses_and_reads_the_same_either_way() -> None:
     """Promote only bounded dependency evidence into a roofline report.
 
@@ -1951,7 +1976,8 @@ def test_a_report_shows_the_requested_analyses_and_reads_the_same_either_way() -
     bound = payload["function_records"]["roofline"]
     assert f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}" in text
     assert "# compute-cost flops=f32:256@256" in text
-    assert "# traffic traffic=gmem:r2048/w1024@r2048/w1024" in text
+    assert "# traffic" not in text, "a dependency's own line was promoted into a bound"
+    assert data["totals"]["traffic"] == {"gmem": {"read": 2048, "write": 1024}}
     assert "# peak-footprint" not in text
     assert "operands" not in text
 

@@ -104,12 +104,14 @@ def _durations(
                 f"{describe(expr)}: performance needs the compute-cost record this "
                 "call was never given"
             )
+        moved = get_metadata(expr, TrafficMetadata)
+        if moved is None:
+            raise AnalysisError(
+                f"{describe(expr)}: performance needs the traffic record the "
+                "memory family states for every call it measures"
+            )
         result[id(expr)] = _local_duration_ns(
-            cost,
-            facts,
-            services,
-            moved=get_metadata(expr, TrafficMetadata),
-            level=level,
+            cost, facts, services, moved=moved, level=level
         )
     return result
 

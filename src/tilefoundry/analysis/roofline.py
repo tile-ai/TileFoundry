@@ -95,7 +95,7 @@ def _bound(compute_ns: int, memory_ns: int, *, has_work: bool) -> RooflineMetada
 
 
 def _cost_bound(
-    cost: ComputeCostMetadata, moved: TrafficMetadata | None, facts: ThroughputFacts
+    cost: ComputeCostMetadata, moved: TrafficMetadata, facts: ThroughputFacts
 ) -> RooflineMetadata:
     """Bound one occurrence from the work it does and the bytes it moves.
 
@@ -103,11 +103,10 @@ def _cost_bound(
     a peak for, and the bytes at the level it publishes a bandwidth for. Typed
     service has no whole-device rate to divide by and so does not enter a bound.
     """
-    traffic = TrafficBytes() if moved is None else moved.at(facts.bandwidth_level)
     return _bound(
         _compute_ns(cost.flops, facts),
-        _memory_ns(traffic, facts),
-        has_work=bool(cost.flops or (moved is not None and moved.whole)),
+        _memory_ns(moved.at(facts.bandwidth_level), facts),
+        has_work=bool(cost.flops or moved.whole),
     )
 
 
@@ -130,14 +129,26 @@ def analyze_roofline(
                     f"{describe(expr)}: roofline needs the compute-cost record "
                     "this call was never given"
                 )
-            attach(expr, _cost_bound(cost, get_metadata(expr, TrafficMetadata), facts))
+            moved = get_metadata(expr, TrafficMetadata)
+            if moved is None:
+                raise AnalysisError(
+                    f"{describe(expr)}: roofline needs the traffic record the "
+                    "memory family states for every call it measures"
+                )
+            attach(expr, _cost_bound(cost, moved, facts))
         total = get_metadata(fn, ComputeCostMetadata)
         if total is None:
             raise AnalysisError(
                 f"function {fn.name!r}: roofline needs the compute-cost root "
                 "record this function was never given"
             )
-        attach(fn, _cost_bound(total, get_metadata(fn, TrafficMetadata), facts))
+        moved = get_metadata(fn, TrafficMetadata)
+        if moved is None:
+            raise AnalysisError(
+                f"function {fn.name!r}: roofline needs the traffic root record "
+                "the memory family states for every function it measures"
+            )
+        attach(fn, _cost_bound(total, moved, facts))
 
 
 __all__ = ["SELECTOR", "analyze_roofline"]
