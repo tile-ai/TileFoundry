@@ -56,6 +56,7 @@ from tilefoundry.analysis.compute_cost import (
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.movement import (
     _call_movement,
+    _charged,
 )
 from tilefoundry.analysis.roofline import _cost_bound
 from tilefoundry.analysis.walk import postorder
@@ -882,13 +883,23 @@ def test_slice_costs_coordinates_but_not_the_view() -> None:
 
 
 def test_unmaterialized_shape_values_are_not_charged_as_attributes() -> None:
+    """An unmaterialized result moved bytes and no level holds them.
+
+    A leaf with no committed residency names no level, so what it moved stays in
+    its own operand entry and no level's traffic grows by it. The value the shape
+    came from is not an operand of the call at all.
+    """
     function = _UnmaterializedValueCosts.entry_function()
     zeros = _calls(function)[-1]
     shape_value = zeros.target.type.shape[0]
     assert shape_value.type.storage is StorageKind.UMAT
     assert shape_value not in zeros.args
     assert zeros.type.storage is StorageKind.UMAT
-    traffic, operands = _call_movement(zeros, Cost({}, (TrafficBytes(write=16),)))
+    charged = _charged(((zeros.type, 16),), None)
+    assert charged == (16, {}), "an unmaterialized leaf names no level"
+    traffic, operands = _call_movement(
+        zeros, Cost({}, (TrafficBytes(write=16),)), (charged[1],)
+    )
     assert operands == (TrafficBytes(write=16),)
     assert traffic == ()
 
@@ -1137,14 +1148,8 @@ def test_analysis_snapshot_drift_sentinel() -> None:
             "smem": {"read": 11_899_776, "write": 11_578_752},
         },
         "flash_split_offset_slice_traffic": (
-            (
-                ("gmem", TrafficBytes(read=0, write=0)),
-                    ("rmem", TrafficBytes(read=32, write=0)),
-            ),
-            (
-                ("gmem", TrafficBytes(read=0, write=0)),
-                    ("rmem", TrafficBytes(read=32, write=0)),
-            ),
+            (("rmem", TrafficBytes(read=32, write=0)),),
+            (("rmem", TrafficBytes(read=32, write=0)),),
         ),
     }
 

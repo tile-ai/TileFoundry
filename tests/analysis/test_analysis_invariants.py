@@ -63,6 +63,7 @@ from tilefoundry.analysis.metadata import (
 from tilefoundry.analysis.movement import (
     _bytes_for,
     _moved_bytes,
+    _output_bytes,
     _stated_movement,
     call_traffic,
 )
@@ -3147,8 +3148,13 @@ def test_a_window_is_given_bytes_of_its_own_and_still_moves_none() -> None:
     )
 
     for expr in windows:
-        moved = dict(get_metadata(expr, TrafficMetadata).whole)
-        assert moved["gmem"] == TrafficBytes(0, 0), "a static window was charged one"
+        record = get_metadata(expr, TrafficMetadata)
+        assert record.operands[0] == TrafficBytes(), "a static window read its source"
+        assert record.operands[-1] == TrafficBytes(), "or wrote the window it named"
+        moved = dict(record.whole)
+        assert moved.get("gmem", TrafficBytes()) == TrafficBytes(0, 0), (
+            "a static window was charged one"
+        )
 
 
 def test_a_window_whose_start_is_only_known_at_run_time_is_still_a_window() -> None:
@@ -3596,7 +3602,9 @@ def test_a_value_nobody_can_place_does_not_place_the_one_that_renames_it() -> No
 
     opened, into = (dict(get_metadata(expr, TrafficMetadata).whole) for expr in windows)
     assert opened["gmem"] == TrafficBytes(8, 0), "a run-time window was charged its window"
-    assert into["gmem"] == TrafficBytes(0, 0), "a window of a window was charged one"
+    assert into.get("gmem", TrafficBytes()) == TrafficBytes(0, 0), (
+        "a window of a window was charged one"
+    )
 
     reader = [e for e in postorder(result.function.body) if isinstance(e, Call)][-1]
     assert dict(get_metadata(reader, TrafficMetadata).whole)["gmem"] == TrafficBytes(64, 32)
@@ -3699,12 +3707,13 @@ def test_a_control_operand_is_charged_the_leaves_it_reaches() -> None:
     """Which leaf a boundary reaches decides the bytes, because widths differ.
 
     A tuple of numbers is indexed by one coordinate, so a boundary that lands on
-    the second of them owes the second one's width. Charging the first, or the
-    whole tuple, is a wrong number at a plausible size -- and a nested tuple is
-    the same question with the leaves counted flat.
+    the second of them owes the second one's width, at the level that leaf lives
+    at. Charging the first, or the whole tuple, or every level the operand's Type
+    names, is a wrong number at a plausible size -- and a nested tuple is the
+    same question with the leaves counted flat.
     """
-    narrow = make_tensor_type((), DType.i32)
-    wide = make_tensor_type((), DType.i64)
+    narrow = make_tensor_type((), DType.i32, storage=StorageKind.GMEM)
+    wide = make_tensor_type((), DType.i64, storage=StorageKind.RMEM)
     mixed = TupleType(fields=(narrow, wide))
     nested = TupleType(fields=(narrow, TupleType(fields=(wide, narrow))))
 
@@ -3723,12 +3732,104 @@ def test_a_control_operand_is_charged_the_leaves_it_reaches() -> None:
     assert reached_leaves(reaching("0 <= l < 2", 2), 2) == frozenset({0, 1})
     assert reached_leaves(reaching("l = 2", 3), 3) == frozenset({2})
 
-    assert _moved_bytes(mixed, reaching("l = 0", 2)) == 4, "the narrow leaf it took"
-    assert _moved_bytes(mixed, reaching("l = 1", 2)) == 8, "and the wide one"
-    assert _moved_bytes(mixed, reaching("0 <= l < 2", 2)) == 12, "or both of them"
-    assert _moved_bytes(nested, reaching("l = 1", 3)) == 8, (
+    def moved(held, where: str, count: int):
+        return _moved_bytes(held, reaching(where, count), umat_level=None)
+
+    assert moved(mixed, "l = 0", 2) == (4, {"gmem": 4}), "the narrow leaf it took"
+    assert moved(mixed, "l = 1", 2) == (8, {"rmem": 8}), "and the wide one"
+    assert moved(mixed, "0 <= l < 2", 2) == (12, {"gmem": 4, "rmem": 8}), (
+        "or both of them, each at its own level"
+    )
+    assert moved(nested, "l = 1", 3) == (8, {"rmem": 8}), (
         "a nested field is one flat leaf, not one field of the top level"
     )
+    assert moved(nested, "l = 2", 3) == (4, {"gmem": 4}), (
+        "and the leaf after it is the one behind the nested field"
+    )
+
+
+def test_a_reached_leaf_is_charged_at_its_own_level_and_the_others_are_not() -> None:
+    """One tuple, two levels, and one boundary that only reached one of them.
+
+    An operand's Type names every level its leaves live at, so grouping the
+    amount by the Type charges the leaf nobody reached as well as the one that
+    was -- twice the traffic, at a level this occurrence never touched. The
+    reached leaf's bytes and the reached leaf's level have to stay together.
+    """
+    source = Var(type=make_tensor_type((1024, 2048)), name="source")
+    narrow = make_tensor_type((), DType.i32, storage=StorageKind.GMEM)
+    wide = make_tensor_type((), DType.i64, storage=StorageKind.RMEM)
+    starts = Tuple(
+        type=TupleType(fields=(narrow, wide)),
+        elements=(Constant(type=narrow, value=0), Constant(type=wide, value=0)),
+    )
+    call = Call(
+        type=make_tensor_type((256, 2048)),
+        target=SliceOp(sizes=(256, 2048), strides=(1, 1)),
+        args=(source, starts),
+    )
+    honest = access_relation_registry.lookup(SliceOp)
+
+    def reads_the_second_number(one, ctx) -> AccessRelations:
+        """A window that reads the second of its numbers and not the first."""
+        relations = honest(one, ctx)
+        held = relation_of(relations.inputs[1].pattern)
+        return AccessRelations(
+            inputs=(
+                relations.inputs[0],
+                BoundaryRelation(
+                    AffineAccess(held.intersect_range(isl.set("{ [l] : l = 1 }")))
+                ),
+            ),
+            outputs=relations.outputs,
+        )
+
+    def measured():
+        return call_traffic(call, CostEvaluator(CostContext()), CostEvaluator(CostContext()))
+
+    both = measured()
+    assert both.operands == (TrafficBytes(), TrafficBytes(read=12), TrafficBytes())
+    assert both.whole == (
+        ("gmem", TrafficBytes(read=4)),
+        ("rmem", TrafficBytes(read=8)),
+    ), "reading both numbers is one charge at each of their levels"
+
+    access_relation_registry._map[SliceOp] = reads_the_second_number
+    try:
+        one = measured()
+    finally:
+        access_relation_registry._map[SliceOp] = honest
+    assert measured() == both, "the honest relation was not put back"
+
+    assert one.operands == (TrafficBytes(), TrafficBytes(read=8), TrafficBytes()), (
+        "the second number is eight bytes wide"
+    )
+    assert one.whole == (("rmem", TrafficBytes(read=8)),), (
+        "and it lives at rmem, so gmem was not touched at all"
+    )
+    assert one.per_unit == one.whole
+
+    written = AccessRelations(
+        inputs=(),
+        outputs=(
+            BoundaryRelation(
+                AffineAccess(isl.map("{ [d0] -> [c0] : c0 = d0 and 0 <= d0 < 2 }"))
+            ),
+            BoundaryRelation(
+                AffineAccess(isl.map("{ [d0] -> [c0] : c0 = 0 and 0 <= d0 < 2 }"))
+            ),
+        ),
+    )
+    result = TupleType(
+        fields=(
+            make_tensor_type((2,), DType.i32, storage=StorageKind.GMEM),
+            make_tensor_type((2,), DType.i64, storage=StorageKind.RMEM),
+        )
+    )
+    assert _output_bytes(written, result, umat_level=None) == (
+        16,
+        {"gmem": 8, "rmem": 8},
+    ), "a field written in part owes that part, at that field's own level"
 
 
 def test_an_evaluator_that_reports_the_wrong_operand_count_is_refused() -> None:
