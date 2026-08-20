@@ -16,7 +16,6 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._helpers import is_one
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
@@ -26,8 +25,9 @@ from tilefoundry.visitor_registry.access_relation import (
     elements_of,
     factored_image,
     iterating,
-    logical_axes_of,
+    logical_term,
     moves,
+    normalised_rows,
     register_access_relation,
     register_type_relation,
     writes,
@@ -75,34 +75,19 @@ def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
     the whole row's sum before any of it can be written. So the axis it
     normalises is not a coordinate this Op is asked by: it is free in the images,
     and the row is what each boundary reaches. The weight matches that axis and
-    nothing else, so every row reaches all of it -- one weight element each,
-    not one per row.
+    nothing else, so every row reaches all of it -- one weight element each.
     """
     x_ty = ctx.local_type_of(call.args[0])
     w_ty = ctx.local_type_of(call.args[1])
     logical_x = ctx.type_of(call.args[0])
     normalised = len(logical_x.shape) - 1
-    belongs = logical_axes_of(x_ty, logical_x)
-
-    rows: list = []
-    names: list[str] = []
-    guards: list[str] = []
-    for position, owner in enumerate(belongs):
-        extent = x_ty.shape[position]
-        if owner != normalised:
-            names.append(f"d{len(rows)}")
-            rows.append(extent)
-        elif is_one(extent):
-            names.append("0")
-        else:
-            names.append(f"j{position}")
-            guards.append(f"0 <= j{position} < {extent}")
+    rows, names, guards = normalised_rows(x_ty, logical_x, normalised)
     domain = ", ".join(f"d{index}" for index in range(len(rows)))
     where = f" : {' and '.join(guards)}" if guards else ""
     element = f"{{ [{domain}] -> [{', '.join(names)}]{where} }}"
     across = ", ".join(
         factored_image(
-            [_spread(names, belongs, x_ty, normalised)],
+            [logical_term(names, x_ty, logical_x, normalised)],
             w_ty,
             ctx.type_of(call.args[1]),
         )
@@ -119,19 +104,6 @@ def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
             outputs=(writes(isl.map(element), elements_of(x_ty)),),
         ),
     )
-
-
-def _spread(names: list, belongs: list, local, axis: int) -> str:
-    """One logical axis's coordinate, rebuilt from the positions holding it."""
-    linear, stride = "", 1
-    for position in reversed(range(len(belongs))):
-        extent = local.shape[position]
-        if belongs[position] != axis or is_one(extent):
-            continue
-        term = names[position] if stride == 1 else f"{stride} * {names[position]}"
-        linear = term if not linear else f"{linear} + {term}"
-        stride *= extent
-    return linear or "0"
 
 
 @register_type_relation(RMSNorm)

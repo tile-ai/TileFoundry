@@ -522,20 +522,21 @@ def test_an_expanded_axis_reads_through_a_floor_division() -> None:
 def test_one_call_producing_two_tensors_becomes_two_statements() -> None:
     """A rotation returns q and k, and under GQA they are different widths.
 
-    One iteration domain cannot cover both, so the call lifts into two
-    statements, each over its own head count, each writing its own output buffer
-    (the `_{index}` suffix any multi-output op's outputs take). The two are
+    The two outputs answer on different parts of the one space the call is asked
+    by, so it lifts into two statements, each over its own head count, each
+    writing its own output buffer (the `_{index}` suffix any multi-output op's
+    outputs take, which is the name the statement takes too). The two are
     independent, so no dependence may appear between them -- an edge here would
     serialise two rotations that have nothing to say to each other.
     """
     tg = extract(rope_gqa)
 
     assert {u.name: type(u.op.target).__name__ for u in tg.units} == {
-        "RoPE_q": "RoPE",
-        "RoPE_k": "RoPE",
+        "RoPE_0": "RoPE",
+        "RoPE_1": "RoPE",
     }
     expected = isl.union_set("{}")
-    for name, heads in (("RoPE_q", HQ), ("RoPE_k", HKV)):
+    for name, heads in (("RoPE_0", HQ), ("RoPE_1", HKV)):
         expected = expected.union(
             isl.set(
                 f"{{ {name}[d0,d1,d2,d3] : 0<=d0<1 and 0<=d1<4 "
@@ -545,7 +546,7 @@ def test_one_call_producing_two_tensors_becomes_two_statements() -> None:
     assert tg.domain.is_equal(expected)
 
     writes = isl.union_map("{}")
-    for name, heads, buffer in (("RoPE_q", HQ, "rope_0"), ("RoPE_k", HKV, "rope_1")):
+    for name, heads, buffer in (("RoPE_0", HQ, "rope_0"), ("RoPE_1", HKV, "rope_1")):
         writes = writes.union(
             isl.map(
                 f"{{ {name}[d0,d1,d2,d3] -> {buffer}[d0,d1,d2,d3] : "
@@ -567,7 +568,7 @@ def test_a_rotation_reads_its_tables_at_the_position_and_not_at_random() -> None
     """
     tg = extract(rope_gqa)
 
-    for name, heads in (("RoPE_q", HQ), ("RoPE_k", HKV)):
+    for name, heads in (("RoPE_0", HQ), ("RoPE_1", HKV)):
         bounds = f"0<=d0<1 and 0<=d1<4 and 0<=d2<{heads} and 0<=d3<{HEAD_DIM}"
         for table in ("cos_cache", "sin_cache"):
             read = isl.map(f"{{ {name}[d0,d1,d2,d3] -> {table}[d1,d3] : {bounds} }}")

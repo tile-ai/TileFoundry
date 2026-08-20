@@ -27,12 +27,14 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
     elements_of,
+    index_set,
     iterating,
     logical_coordinates,
     moves,
     reached_at,
     register_access_relation,
     register_type_relation,
+    relation_of,
     writes,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
@@ -90,8 +92,8 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     """GLOBAL level: a rotation per element, read out of a table by position.
 
     Every boundary answers about the rotated value's own coordinates. Q and K
-    are read and written where those say; grouped-query K holds fewer heads, and
-    the identity over this domain reaches exactly the heads it has. A table
+    are read and written where those say; grouped-query K holds fewer heads, so
+    its own boundaries answer on the part of that space it has. A table
     carries head_dim on its last axis and rows on the ones before, so it is read
     at the value's own head_dim coordinate and at any row those axes could
     legally name -- the row is an element of `pos_ids`, which no relation here
@@ -103,6 +105,12 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     head_dim = len(logical_q.shape) - 1
     carried = logical_coordinates(q_ty, logical_q)
     value = identity_access(rank)
+    narrower = index_set(tuple(k_ty.shape))
+    grouped = (
+        relation_of(value)
+        if narrower is None
+        else relation_of(value).intersect_domain(narrower)
+    )
     positions = ctx.local_type_of(call.args[4])
     taken = elements_of(positions)
     tables = []
@@ -124,10 +132,10 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
         )
     return iterating(
         q_ty.shape,
-    AccessRelations(
+        AccessRelations(
             inputs=(
                 moves(value, elements_of(q_ty)),
-                moves(value, elements_of(k_ty)),
+                moves(grouped, elements_of(k_ty)),
                 *tables,
                 moves(
                     reached_at(
@@ -140,7 +148,10 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
                     taken,
                 ),
             ),
-            outputs=(writes(value, elements_of(q_ty)), writes(value, elements_of(k_ty))),
+            outputs=(
+                writes(value, elements_of(q_ty)),
+                writes(grouped, elements_of(k_ty)),
+            ),
         ),
     )
 

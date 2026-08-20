@@ -20,12 +20,12 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     logical_axes_of,
     moves,
+    normalised_rows,
     register_access_relation,
     register_type_relation,
     writes,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
-from tilefoundry.visitor_registry.relation_build import identity_access
 
 
 @register_op(name="layer_norm")
@@ -147,35 +147,36 @@ def _eval_layer_norm(ctx):
 
 @register_access_relation(LayerNorm)
 def _layer_norm_access(call: "Call", ctx) -> AccessRelations:
-    """Every element normalized once; the parameters read across the suffix.
+    """One row normalised per iteration; the parameters read across the suffix.
 
-    The parameters match the whole normalized suffix, not one axis of it, which
-    is what the type relation already requires of them. The verifier refuses a
-    split at or beyond that axis, so their footprint is the suffix's product in
-    every view -- a participant's row spans all of it.
+    Normalising needs the whole suffix before any of it can be written, so those
+    axes are not coordinates this Op is asked by. The parameters match the whole
+    suffix rather than one axis of it, which is what the type relation already
+    requires of them; the verifier refuses a split at or beyond that axis, so
+    their footprint is the suffix's product in every view.
     """
     x = ctx.local_type_of(call.args[0])
     result = ctx.local_type_of(call)
     logical = ctx.type_of(call)
-    rank = len(result.shape)
     authored = call.target.axis
     axis = authored + len(logical.shape) if authored < 0 else authored
+    rows, names, guards = normalised_rows(result, logical, axis)
+    domain = ", ".join(f"d{index}" for index in range(len(rows)))
+    where = f" : {' and '.join(guards)}" if guards else ""
+    row = isl.map(f"{{ [{domain}] -> [{', '.join(names)}]{where} }}")
     belongs = logical_axes_of(result, logical)
-    dims = [f"d{index}" for index in range(rank)]
     suffix = ", ".join(
-        dims[position] for position, owner in enumerate(belongs) if owner >= axis
+        names[position] for position, owner in enumerate(belongs) if owner >= axis
     ) or "0"
-    domain = ", ".join(dims)
-    across = isl.multi_aff(f"{{ [{domain}] -> [{suffix}] }}")
-    held = elements_of(ctx.local_type_of(call.args[1]))
+    across = isl.map(f"{{ [{domain}] -> [{suffix}]{where} }}")
     return iterating(
-        result.shape,
-    AccessRelations(
+        rows,
+        AccessRelations(
             inputs=(
-                moves(identity_access(rank), elements_of(x)),
-                moves(across, held),
+                moves(row, elements_of(x)),
+                moves(across, elements_of(ctx.local_type_of(call.args[1]))),
                 moves(across, elements_of(ctx.local_type_of(call.args[2]))),
             ),
-            outputs=(writes(identity_access(rank), elements_of(result)),),
+            outputs=(writes(row, elements_of(result)),),
         ),
     )

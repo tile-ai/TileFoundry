@@ -18,7 +18,9 @@ from typing import Callable, Union
 
 import isl
 
+from tilefoundry.ir.hir._helpers import is_one
 from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
+from tilefoundry.ir.types.dim_isl import dim_range, to_domain
 from tilefoundry.ir.types.shape_dim import ShapeDim
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import Layout, try_c_order_strides
@@ -322,15 +324,31 @@ def moves_between(
 
 
 def elements_of(type_: "Type") -> int:
-    """How many elements one boundary value holds."""
+    """How many elements one boundary value holds, at most.
+
+    A shape is usually numbers by the time anything is counted, because a
+    program is specialised before it is measured. An axis still symbolic here
+    holds at most what its own declared range allows, which is an answer a
+    reader can check; one that declares no range is refused.
+    """
     if not isinstance(type_, TensorType):
         raise ValueError(f"{type_!r} is not one tensor boundary")
     counted = 1
     for extent in type_.shape:
-        if not isinstance(extent, int) or isinstance(extent, bool) or extent < 0:
-            raise ValueError(f"{type_!r} has no concrete element count")
-        counted *= extent
+        if isinstance(extent, int) and not isinstance(extent, bool) and extent >= 0:
+            counted *= extent
+            continue
+        counted *= _most_of(extent, type_)
     return counted
+
+
+def _most_of(extent, type_: "Type") -> int:
+    """The largest one symbolic axis declares it may be."""
+    try:
+        _low, high = dim_range(extent)
+    except (ArithmeticError, TypeError, ValueError):
+        raise ValueError(f"{type_!r} has no concrete element count") from None
+    return high - 1
 
 
 def access_elements(
@@ -932,6 +950,45 @@ def placed_window(
     )
 
 
+def normalised_rows(local: "Type", logical: "Type", first: int) -> tuple:
+    """The rows an Op is asked once per, and the names its reads range over.
+
+    Normalising needs the whole of what it normalises before any of it can be
+    written, so the axes from `first` on are not coordinates the Op is asked by:
+    they are free in the images. Returns the extents walked, one name per
+    position of `local`, and the guards bounding the free ones.
+    """
+    belongs = logical_axes_of(local, logical)
+    extents: list = []
+    names: list[str] = []
+    guards: list[str] = []
+    for position, owner in enumerate(belongs):
+        extent = local.shape[position]
+        if owner < first:
+            names.append(f"d{len(extents)}")
+            extents.append(extent)
+        elif is_one(extent):
+            names.append("0")
+        else:
+            names.append(f"j{position}")
+            guards.append(f"0 <= j{position} < {extent}")
+    return tuple(extents), tuple(names), tuple(guards)
+
+
+def logical_term(names: "Sequence[str]", local: "Type", logical: "Type", axis: int) -> str:
+    """One logical axis's coordinate, rebuilt from the positions holding it."""
+    linear, stride = "", 1
+    belongs = logical_axes_of(local, logical)
+    for position in reversed(range(len(belongs))):
+        extent = local.shape[position]
+        if belongs[position] != axis or is_one(extent):
+            continue
+        term = names[position] if stride == 1 else f"{stride} * {names[position]}"
+        linear = term if not linear else f"{linear} + {term}"
+        stride *= extent
+    return linear or "0"
+
+
 def iterating(extents: "Sequence", relations: "AccessRelations") -> "AccessRelations":
     """Every boundary of one Op, on the iteration space that Op walks.
 
@@ -941,17 +998,20 @@ def iterating(extents: "Sequence", relations: "AccessRelations") -> "AccessRelat
     contracts; most Ops walk what they produce. A boundary may be partial in
     that space, which is one relation empty somewhere, not a second space.
     """
-    domain = index_set(tuple(extents))
-    if domain is None:
+    try:
+        domain, named = to_domain(tuple(extents))
+    except (TypeError, ValueError, isl.Error):
         return relations
     return AccessRelations(
-        inputs=tuple(_held_to(boundary, domain) for boundary in relations.inputs),
-        outputs=tuple(_held_to(boundary, domain) for boundary in relations.outputs),
+        inputs=tuple(_held_to(boundary, domain, named) for boundary in relations.inputs),
+        outputs=tuple(_held_to(boundary, domain, named) for boundary in relations.outputs),
         storage_effect=relations.storage_effect,
     )
 
 
-def _held_to(boundary: "BoundaryAccess", domain: "isl.set") -> "BoundaryAccess":
+def _held_to(
+    boundary: "BoundaryAccess", domain: "isl.set", named: dict
+) -> "BoundaryAccess":
     """One boundary, restricted to the coordinates its Op iterates."""
     pattern = boundary.pattern
     if not isinstance(pattern, (AffineAccess, isl.map, isl.multi_aff)):
@@ -964,15 +1024,18 @@ def _held_to(boundary: "BoundaryAccess", domain: "isl.set") -> "BoundaryAccess":
             "one coordinate system and every boundary of it answers about that one"
         )
     held = relation.intersect_domain(domain)
-    named = {
-        held.get_dim_name(isl.dim_type.PARAM, index)
-        for index in range(held.dim(isl.dim_type.PARAM))
-    }
-    stated = pattern.parameters if isinstance(pattern, AffineAccess) else ()
+    stated = dict(pattern.parameters) if isinstance(pattern, AffineAccess) else {}
     return dataclasses.replace(
         boundary,
         pattern=AffineAccess(
-            held, tuple((name, value) for name, value in stated if name in named)
+            held,
+            tuple(
+                (name, stated.get(name, named.get(name)))
+                for name in (
+                    held.get_dim_name(isl.dim_type.PARAM, index)
+                    for index in range(held.dim(isl.dim_type.PARAM))
+                )
+            ),
         ),
     )
 
@@ -1672,6 +1735,8 @@ __all__ = [
     "reached_elements",
     "relation_of",
     "iterating",
+    "normalised_rows",
+    "logical_term",
     "settled",
     "view_relations",
     "window_source",

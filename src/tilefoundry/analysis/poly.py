@@ -18,7 +18,6 @@ import isl
 from tilefoundry.ir.core import Call, Tuple, TypeInferContext, Var, binding_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.hir.tensor.full_like import FullLike
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reshape import Reshape, flat_reshape_map
@@ -27,9 +26,14 @@ from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.ir.types.dim import DimVar, is_dim_op_call
+from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.ir.visitor import ExprVisitor
-from tilefoundry.visitor_registry.access_relation import AccessRelationResult, build_relation
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelations,
+    access_relation_registry,
+    relation_of,
+)
 
 from .walk import children, postorder
 
@@ -506,126 +510,214 @@ def _out_dtype(call: Call, out_idx: int):
     return getattr(ty, "dtype", None)
 
 
-def _registered_access(
-    call: Call, stmt_name: str, result: AccessRelationResult, namer, prefix: str,
-    loops: tuple[GridRegionExpr, ...] = (),
-) -> _StatementAccess:
-    """Registered access.
+@dataclasses.dataclass
+class _RankPreserving(TypeInferContext):
+    """A context whose local view narrows a Split axis and keeps the rank.
 
-    Statement extraction for an op with a registered forward relation
-    (``access_relation.build_relation`` returned non-``None``, e.g. MatMul,
-    RMSNorm).
+    An isl flow model is indexed by a tensor's logical axes, so a local view that
+    factored them into layout positions would silently lose dependences. Handlers
+    ask their context this question, which is what lets one registered relation
+    answer both the whole program and one participant.
     """
-    prefixed, loop_params = _loop_domain(result.domain, loops)
-    prefixed = _full_slice_domain(prefixed, call.args, loops)
-    domain = prefixed.set_tuple_name(stmt_name)
+
+    def local_type_of(self, expr) -> object:
+        return _local_type(self.type_of(expr))
+
+
+def _placed_value(value, loops: tuple[GridRegionExpr, ...]):
+    """Where in this loop nest a parameter's value sits, when it sits anywhere.
+
+    A shape parameter is a `DimVar` and stays one: isl carries it symbolically
+    and the schedule reads it back. An offset is an operand, and this nest may be
+    the thing that moves it.
+    """
+    if isinstance(value, DimVar):
+        return None
+    try:
+        return _slice_start(value, loops)
+    except (AttributeError, TypeError, ExtractError):
+        return None
+
+
+def _place_parameters(
+    access: "isl.map", boundary, loops: tuple[GridRegionExpr, ...]
+) -> "isl.map":
+    """Say what a relation's parameters are, in this loop nest's terms.
+
+    A window's offset is bound to the operand that states it, and that operand
+    may be an induction variable: then the parameter is the loop coordinate, and
+    the dependence moves with the trip. A shape parameter stays symbolic, isl
+    carrying it through to the schedule. One nobody here can place is projected
+    out, which unions over every value the Op allows -- more accesses than there
+    are, which is the safe direction for a dependence.
+    """
+    bound = dict(getattr(boundary.pattern, "parameters", ()) or ())
+    for name in _named(access):
+        value = bound.get(name)
+        if isinstance(value, DimVar):
+            continue
+        position = _named(access).index(name) if name in _named(access) else None
+        if position is None:
+            continue
+        number = static_dim_value(value)
+        loop_position = None
+        if number is None:
+            placed = _placed_value(value, loops)
+            if placed is None:
+                access = access.project_out(isl.dim_type.PARAM, position, 1)
+                continue
+            loop_position, number = placed
+        local = isl.local_space.from_space(access.get_space())
+        equality = isl.constraint.alloc_equality(local).set_coefficient_si(
+            isl.dim_type.PARAM, position, 1
+        )
+        if loop_position is not None:
+            equality = equality.set_coefficient_si(isl.dim_type.IN, loop_position, -1)
+        access = access.add_constraint(equality.set_constant_si(-number))
+        access = access.project_out(isl.dim_type.PARAM, position, 1)
+    return access
+
+
+def _named(access: "isl.map") -> list:
+    """The parameters one relation names, in the order isl holds them."""
+    return [
+        access.get_dim_name(isl.dim_type.PARAM, index)
+        for index in range(access.dim(isl.dim_type.PARAM))
+    ]
+
+
+def _walked(
+    call: Call, relations: AccessRelations, walked: "isl.set"
+) -> tuple["isl.set", dict]:
+    """One statement's own space, and the values its isl parameters name.
+
+    An access map's domain is the Op's iteration space, so the space a statement
+    walks is the one its output relation was written over -- a product keeps the
+    axis it sums, a normalisation is asked once per row -- rather than the shape
+    of what it produced.
+    """
+    named = {
+        walked.get_dim_name(isl.dim_type.PARAM, index)
+        for index in range(walked.dim(isl.dim_type.PARAM))
+    }
+    bound = {
+        name: value
+        for boundary in (*relations.outputs, *relations.inputs)
+        for name, value in (getattr(boundary.pattern, "parameters", ()) or ())
+    }
+    missing = named - set(bound)
+    if missing:
+        raise ExtractError(
+            f"extract: {type(call.target).__name__} walks a space naming "
+            f"{sorted(missing)}, and nothing here says what those are"
+        )
+    return walked.coalesce(), {name: bound[name] for name in named}
+
+
+def _registered_access(
+    call: Call, stmt_name: str, relations: AccessRelations, ctx, namer, prefix: str,
+    loops: tuple[GridRegionExpr, ...] = (),
+) -> list[_StatementAccess]:
+    """Statement extraction from the Op's own registered boundary relations.
+
+    Every boundary is asked by the same coordinates, so one space serves them
+    all -- and a boundary may answer on only part of it. Outputs that answer on
+    different parts are different statements, which is how one rotation over two
+    head counts lifts into two. A relation's parameters are placed in this loop
+    nest's terms first, because a window that moves with the trip carries the
+    dependence that makes the loop a loop.
+    """
     depth = len(loops)
 
-    n_inputs = len(call.args)
-    output_maps = tuple(_lift(m, depth) for m in result.maps[n_inputs:])
-    if not output_maps:
-        raise ExtractError(
-            f"extract: {type(call.target).__name__} build_relation "
-            "produced no output map(s); a compute-op statement must write "
-            "at least one value"
+    def placed(boundary) -> "isl.map":
+        return _place_parameters(
+            _lift(relation_of(boundary.pattern), depth), boundary, loops
         )
+
+    written = tuple(placed(boundary) for boundary in relations.outputs)
+    if not written:
+        raise ExtractError(
+            f"extract: {type(call.target).__name__} states no output boundary; "
+            "a compute-op statement must write at least one value"
+        )
+    walks = tuple(
+        raw_map.domain().project_out(isl.dim_type.SET, 0, depth) for raw_map in written
+    )
+    pieces: list[list[int]] = []
+    for index, own in enumerate(walks):
+        for piece in pieces:
+            if walks[piece[0]].is_equal(own):
+                piece.append(index)
+                break
+        else:
+            pieces.append([index])
+
+    read_maps = tuple(
+        placed(relations.inputs[index]) if index < len(relations.inputs) else None
+        for index in range(len(call.args))
+    )
+    return [
+        _one_statement(
+            call,
+            stmt_name if len(pieces) == 1 else f"{stmt_name}_{piece[0]}",
+            piece,
+            written,
+            walks[piece[0]],
+            read_maps,
+            relations,
+            namer,
+            prefix,
+            loops,
+        )
+        for piece in pieces
+    ]
+
+
+def _one_statement(
+    call: Call,
+    stmt_name: str,
+    piece: list[int],
+    written: tuple,
+    walks: "isl.set",
+    read_maps: tuple,
+    relations: AccessRelations,
+    namer,
+    prefix: str,
+    loops: tuple[GridRegionExpr, ...],
+) -> _StatementAccess:
+    """One statement: the part of a Call's space one group of outputs answers on."""
+    own, shape_params = _walked(call, relations, walks)
+    prefixed, loop_params = _loop_domain(own, loops)
+    prefixed = _full_slice_domain(prefixed, call.args, loops)
+    domain = prefixed.set_tuple_name(stmt_name)
 
     reads: list["isl.map"] = []
     writes: list["isl.map"] = []
     dtypes: dict = {}
-    for i, arg in enumerate(call.args):
-        m = _read_map(_lift(result.maps[i], depth), stmt_name, domain, arg, namer, loops)
-        reads.append(m)
-        dtypes[m.get_tuple_name(isl.dim_type.OUT)] = getattr(arg.type, "dtype", None)
+    for index, arg in enumerate(call.args):
+        if read_maps[index] is None:
+            continue
+        read = _read_map(read_maps[index], stmt_name, domain, arg, namer, loops)
+        reads.append(read)
+        dtypes[read.get_tuple_name(isl.dim_type.OUT)] = getattr(arg.type, "dtype", None)
 
-    n_outputs = len(output_maps)
-    for out_idx, raw_map in enumerate(output_maps):
-        out_buf = namer(call, prefix) if n_outputs == 1 else f"{namer(call, prefix)}_{out_idx}"
-        bound = _bind_map(raw_map, stmt_name, domain, out_buf)
+    for out_idx in piece:
+        out_buf = (
+            namer(call, prefix)
+            if len(written) == 1
+            else f"{namer(call, prefix)}_{out_idx}"
+        )
+        bound = _bind_map(written[out_idx], stmt_name, domain, out_buf)
         writes.append(bound)
         dtypes[out_buf] = _out_dtype(call, out_idx)
-
-
-
-
-
-
-
-
         if not bound.is_injective():
             reads.append(bound)
 
     return _StatementAccess(
         name=stmt_name, domain=domain, op=call,
         reads=tuple(reads), writes=tuple(writes),
-        params={**result.param_map, **loop_params}, dtypes=dtypes, loops=loops,
+        params={**shape_params, **loop_params}, dtypes=dtypes, loops=loops,
     )
-
-
-def _rope_branch(
-    call: Call, x, cos_cache, sin_cache, pos_ids, out_idx: int,
-    stmt_name: str, namer, prefix: str, loops: tuple[GridRegionExpr, ...] = (),
-) -> _StatementAccess:
-    """One RoPE branch (q or k).
-
-    One RoPE branch (q or k): calls the registered relation with *x*
-    standing in for both value-input slots, keeping only *x*'s own reads
-    and its ``out_idx`` output.
-    """
-    x_ty, cos_ty, sin_ty, pos_ty = (
-        _local_type(t.type) for t in (x, cos_cache, sin_cache, pos_ids)
-    )
-    result = build_relation(call, (x_ty, x_ty, cos_ty, sin_ty, pos_ty), TypeInferContext())
-    prefixed, loop_params = _loop_domain(result.domain, loops)
-    prefixed = _full_slice_domain(
-        prefixed, (x, cos_cache, sin_cache, pos_ids), loops
-    )
-    domain = prefixed.set_tuple_name(stmt_name)
-    depth = len(loops)
-
-    reads = [
-        _read_map(_lift(result.maps[i], depth), stmt_name, domain, arg, namer, loops)
-        for i, arg in ((0, x), (2, cos_cache), (3, sin_cache), (4, pos_ids))
-    ]
-    out_buf = f"{namer(call, prefix)}_{out_idx}"
-    write = _bind_map(_lift(result.maps[5 + out_idx], depth), stmt_name, domain, out_buf)
-    if not write.is_injective():
-        reads.append(write)
-    dtypes = {m.get_tuple_name(isl.dim_type.OUT): getattr(t.type, "dtype", None)
-              for m, t in zip(reads, (x, cos_cache, sin_cache, pos_ids))}
-    dtypes[out_buf] = _out_dtype(call, out_idx)
-    return _StatementAccess(
-        name=stmt_name, domain=domain, op=call,
-        reads=tuple(reads), writes=(write,),
-        params={**result.param_map, **loop_params}, dtypes=dtypes, loops=loops,
-    )
-
-
-def _rope_access(
-    call: Call,
-    stmt_name: str,
-    namer,
-    prefix: str,
-    loops: tuple[GridRegionExpr, ...] = (),
-) -> list[_StatementAccess]:
-    """RoPE -> two statements, one per value input.
-
-    RoPE -> two statements, one per value input: GQA's Hq != Hkv means
-    q_rope/k_rope cannot share one domain (see the task report's path A).
-    Output buffers use the same ``_{out_idx}`` suffix ``_registered_access``
-    uses for a same-domain multi-output op, so ``_buffer_namer``'s
-    ``TupleGetItem`` passthrough resolves a downstream read to the matching
-    branch's write.
-    """
-    q, k, cos_cache, sin_cache, pos_ids = call.args
-    return [
-        _rope_branch(
-            call, q, cos_cache, sin_cache, pos_ids, 0, f"{stmt_name}_q", namer, prefix, loops,
-        ),
-        _rope_branch(
-            call, k, cos_cache, sin_cache, pos_ids, 1, f"{stmt_name}_k", namer, prefix, loops,
-        ),
-    ]
 
 
 def _extract_statement(
@@ -635,19 +727,23 @@ def _extract_statement(
     prefix: str,
     loops: tuple[GridRegionExpr, ...] = (),
 ) -> list[_StatementAccess]:
-    if isinstance(call.target, RoPE):
-        return _rope_access(call, stmt_name, namer, prefix, loops)
-    input_types = tuple(_local_type(arg.type) for arg in call.args)
-    result = build_relation(call, input_types, TypeInferContext())
-    if result is not None:
-        return [_registered_access(call, stmt_name, result, namer, prefix, loops)]
-    raise ExtractError(
-        f"extract: op {type(call.target).__name__!r} has no "
-        "registered forward type_relation (access_relation.build_relation "
-        "returned None) -- register one via tilefoundry.visitor_registry."
-        "access_relation.register_type_relation(...); extract has no "
-        "per-op fallback."
-    )
+    handler = access_relation_registry.lookup(type(call.target))
+    if handler is None:
+        raise ExtractError(
+            f"extract: op {type(call.target).__name__!r} has no registered "
+            "access relation -- register one via tilefoundry.visitor_registry."
+            "access_relation.register_access_relation(...); extract has no "
+            "per-op fallback."
+        )
+    ctx = _RankPreserving()
+    try:
+        relations = handler(call, ctx)
+    except (NotImplementedError, TypeError, ValueError, isl.Error) as error:
+        raise ExtractError(
+            f"extract: {type(call.target).__name__} cannot state its boundary "
+            f"relations here: {error}"
+        ) from error
+    return _registered_access(call, stmt_name, relations, ctx, namer, prefix, loops)
 
 
 def _initial_schedule(accesses: list[_StatementAccess]) -> "isl.union_map":
