@@ -15,6 +15,7 @@ from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     elements_of,
+    iterating,
     register_access_relation,
     writes,
 )
@@ -50,7 +51,10 @@ def _zeros_access(call: "Call", ctx) -> AccessRelations:
     leaving to a default that would invent one.
     """
     result = ctx.local_type_of(call)
-    return AccessRelations(
-        inputs=(),
-        outputs=(writes(identity_access(len(result.shape)), elements_of(result)),),
+    return iterating(
+        result.shape,
+    AccessRelations(
+            inputs=(),
+            outputs=(writes(identity_access(len(result.shape)), elements_of(result)),),
+        ),
     )

@@ -27,6 +27,7 @@ from tilefoundry.visitor_registry.access_relation import (
     control_read,
     elements_of,
     factored_window,
+    iterating,
     logical_axes_of,
     logical_coordinates,
     moves,
@@ -162,38 +163,45 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
         held - written.upper, held - written.lower, written.provenance
     )
     complement, reached = placed_window(
-        offsets, extents, len(local_cache.shape), _row_limit(offsets, extents, limit)
+        offsets,
+        extents,
+        len(local_cache.shape),
+        _row_limit(offsets, extents, limit),
+        tuple(local_cache.shape),
     )
     preserve = StorageLink(
         kind="preserve", input=0, where=complement, quantity=kept
     )
-    return AccessRelations(
-        inputs=(
-            BoundaryAccess(complement, kept, AccessMode.TRANSFER),
-            moves(control_read(len(local_cache.shape), ctx, call.args[1]), 1),
-            moves(control_read(len(local_cache.shape), ctx, call.args[2]), 1),
-            BoundaryAccess(
-                window_source(
-                    (0, start, *(0 for _ in cache[2:])),
-                    len(local_cache.shape),
-                    local_new,
-                    logical_new,
-                    logical_coordinates(local_cache, logical_cache),
-                    (None, rows),
-                    (None, limit),
+    return iterating(
+        local_cache.shape,
+    AccessRelations(
+            inputs=(
+                BoundaryAccess(complement, kept, AccessMode.TRANSFER),
+                moves(control_read(len(local_cache.shape), ctx, call.args[1]), 1),
+                moves(control_read(len(local_cache.shape), ctx, call.args[2]), 1),
+                BoundaryAccess(
+                    window_source(
+                        (0, start, *(0 for _ in cache[2:])),
+                        len(local_cache.shape),
+                        local_new,
+                        logical_new,
+                        logical_coordinates(local_cache, logical_cache),
+                        (None, rows),
+                        (None, limit),
+                    ),
+                    written,
                 ),
-                written,
             ),
-        ),
-        outputs=(
-            BoundaryAccess(
-                reached,
-                written,
-                AccessMode.WRITE,
-                OutputStorage((preserve,)),
+            outputs=(
+                BoundaryAccess(
+                    reached,
+                    written,
+                    AccessMode.WRITE,
+                    OutputStorage((preserve,)),
+                ),
             ),
+            storage_effect=_cache_update_storage(call, ctx),
         ),
-        storage_effect=_cache_update_storage(call, ctx),
     )
 
 

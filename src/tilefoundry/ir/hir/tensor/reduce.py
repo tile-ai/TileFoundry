@@ -27,7 +27,8 @@ from tilefoundry.visitor_registry.access_relation import (
     build_relation,
     elements_of,
     factored_image,
-    logical_axes_of,
+    iterating,
+    logical_coordinates,
     moves,
     register_access_relation,
     register_type_relation,
@@ -175,77 +176,45 @@ def _eval_reduce(ctx):
 def _reduce_access(call: "Call", ctx) -> AccessRelations:
     """Every source coordinate feeding a result coordinate, read once.
 
-    The input's domain is not the result's: a reduction reads more coordinates
-    than it writes, which is the whole of what it does. The extents it reads
-    over are this participant's own: a reduced axis can itself be split, and then
-    each unit contributes over the piece it holds. The source-to-result
-    correspondence comes from both layouts, since a result coordinate names a
-    logical axis and not a position. A reduced axis a participant holds one of
-    contributes a constant, there being nothing for a variable to range over.
+    A reduction walks what it reads, so the source's own positions are the
+    coordinates: it reads more of them than it writes, which is the whole of what
+    it does, and the collapse happens on the way out. The extents walked are this
+    participant's own, a reduced axis being one a layout can split, and the
+    correspondence to the result comes from both layouts, since a result
+    coordinate names a logical axis and not a position.
     """
     source = ctx.local_type_of(call.args[0])
     result = ctx.local_type_of(call)
     logical_source = ctx.type_of(call.args[0])
-    rank = len(result.shape)
+    logical_result = ctx.type_of(call)
+    rank = len(source.shape)
     axes = tuple(
         axis + len(logical_source.shape) if axis < 0 else axis
         for axis in call.target.axes
     )
-    logical_result = ctx.type_of(call)
-    produces = logical_axes_of(result, logical_result)
-
-    linear: dict[int, str] = {}
-    strides: dict[int, int] = {}
-    for position in reversed(range(len(produces))):
-        owner = produces[position]
-        extent = result.shape[position]
-        stride = strides.get(owner, 1)
-        if extent != 1:
-            term = f"d{position}" if stride == 1 else f"{stride} * d{position}"
-            linear[owner] = term if owner not in linear else f"{linear[owner]} + {term}"
-            strides[owner] = stride * extent
-
-    surviving = [
-        axis for axis in range(len(logical_source.shape)) if axis not in axes
-    ]
-    order = (
+    carried = logical_coordinates(source, logical_source)
+    surviving = [axis for axis in range(len(logical_source.shape)) if axis not in axes]
+    came_from = (
         {axis: axis for axis in range(len(logical_source.shape))}
         if call.target.keepdim
-        else {axis: place for place, axis in enumerate(surviving)}
+        else dict(enumerate(surviving))
     )
-
-    held = [1] * len(logical_source.shape)
-    for position, owner in enumerate(logical_axes_of(source, logical_source)):
-        held[owner] *= source.shape[position]
-
-    reads, guards = [], []
-    for axis in range(len(logical_source.shape)):
-        reads.append("0" if axis in axes else linear.get(order[axis], "0"))
-    if call.target.keepdim:
-        for position, owner in enumerate(produces):
-            if owner in axes and result.shape[position] != 1:
-                guards.append(f"d{position} = 0")
-
-    spread = factored_image(reads, source, logical_source)
-    for position, owner in enumerate(logical_axes_of(source, logical_source)):
-        if owner not in axes:
-            continue
-        extent = source.shape[position]
-        if extent == 1:
-            continue
-        spread[position] = f"r{position}"
-        guards.append(f"0 <= r{position} < {extent}")
-    dims = ", ".join(f"d{index}" for index in range(rank))
-    where = " and ".join(guards)
-    image = ", ".join(spread)
-    return AccessRelations(
-        inputs=(
-            moves(
-                isl.map(
-                    f"{{ [{dims}] -> [{image}]" + (f" : {where} }}" if where else " }")
+    writes_at = [
+        "0"
+        if axis not in came_from or came_from[axis] in axes
+        else carried.get(came_from[axis], "0")
+        for axis in range(len(logical_result.shape))
+    ]
+    collapses = ", ".join(factored_image(writes_at, result, logical_result))
+    domain = ", ".join(f"d{index}" for index in range(rank))
+    return iterating(
+        source.shape,
+        AccessRelations(
+            inputs=(moves(identity_access(rank), elements_of(source)),),
+            outputs=(
+                writes(
+                    isl.map(f"{{ [{domain}] -> [{collapses}] }}"), elements_of(result)
                 ),
-                elements_of(source),
             ),
         ),
-        outputs=(writes(identity_access(rank), elements_of(result)),),
     )

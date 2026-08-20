@@ -16,6 +16,7 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.hir._helpers import is_one
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
@@ -23,9 +24,10 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
     elements_of,
-    logical_coordinates,
+    factored_image,
+    iterating,
+    logical_axes_of,
     moves,
-    reached_at,
     register_access_relation,
     register_type_relation,
     writes,
@@ -67,33 +69,69 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_access_relation(RMSNorm)
 def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
-    """GLOBAL level: x read where it is written, the weight where it broadcasts.
+    """GLOBAL level: one row normalised per iteration, read whole.
 
-    Both boundaries answer about the result's own coordinates, so the rank-1
-    weight is read at the last logical axis rather than over a domain of its
-    own -- every row reaches the same weights, which is one weight element each
-    and not one per row. The reduction is internal to the op.
+    A normalisation is asked once per row, because every element of a row needs
+    the whole row's sum before any of it can be written. So the axis it
+    normalises is not a coordinate this Op is asked by: it is free in the images,
+    and the row is what each boundary reaches. The weight matches that axis and
+    nothing else, so every row reaches all of it -- one weight element each,
+    not one per row.
     """
     x_ty = ctx.local_type_of(call.args[0])
     w_ty = ctx.local_type_of(call.args[1])
     logical_x = ctx.type_of(call.args[0])
-    rank = len(x_ty.shape)
-    carried = logical_coordinates(x_ty, logical_x)
-    return AccessRelations(
-        inputs=(
-            moves(_identity(rank), elements_of(x_ty)),
-            moves(
-                reached_at(
-                    rank,
-                    w_ty,
-                    ctx.type_of(call.args[1]),
-                    {0: carried.get(len(logical_x.shape) - 1, "0")},
-                ),
-                elements_of(w_ty),
-            ),
-        ),
-        outputs=(writes(_identity(rank), elements_of(x_ty)),),
+    normalised = len(logical_x.shape) - 1
+    belongs = logical_axes_of(x_ty, logical_x)
+
+    rows: list = []
+    names: list[str] = []
+    guards: list[str] = []
+    for position, owner in enumerate(belongs):
+        extent = x_ty.shape[position]
+        if owner != normalised:
+            names.append(f"d{len(rows)}")
+            rows.append(extent)
+        elif is_one(extent):
+            names.append("0")
+        else:
+            names.append(f"j{position}")
+            guards.append(f"0 <= j{position} < {extent}")
+    domain = ", ".join(f"d{index}" for index in range(len(rows)))
+    where = f" : {' and '.join(guards)}" if guards else ""
+    element = f"{{ [{domain}] -> [{', '.join(names)}]{where} }}"
+    across = ", ".join(
+        factored_image(
+            [_spread(names, belongs, x_ty, normalised)],
+            w_ty,
+            ctx.type_of(call.args[1]),
+        )
     )
+    return iterating(
+        rows,
+        AccessRelations(
+            inputs=(
+                moves(isl.map(element), elements_of(x_ty)),
+                moves(
+                    isl.map(f"{{ [{domain}] -> [{across}]{where} }}"), elements_of(w_ty)
+                ),
+            ),
+            outputs=(writes(isl.map(element), elements_of(x_ty)),),
+        ),
+    )
+
+
+def _spread(names: list, belongs: list, local, axis: int) -> str:
+    """One logical axis's coordinate, rebuilt from the positions holding it."""
+    linear, stride = "", 1
+    for position in reversed(range(len(belongs))):
+        extent = local.shape[position]
+        if belongs[position] != axis or is_one(extent):
+            continue
+        term = names[position] if stride == 1 else f"{stride} * {names[position]}"
+        linear = term if not linear else f"{linear} + {term}"
+        stride *= extent
+    return linear or "0"
 
 
 @register_type_relation(RMSNorm)

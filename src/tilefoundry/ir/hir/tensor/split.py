@@ -33,6 +33,7 @@ from tilefoundry.visitor_registry.access_relation import (
     StorageLink,
     elements_of,
     factored_image,
+    iterating,
     logical_coordinates,
     register_access_relation,
     self_image,
@@ -177,25 +178,28 @@ def _split_access(call: "Call", ctx) -> AccessRelations:
         outputs.append(self_image(local_field, field))
         held.append(elements_of(local_field))
 
-    return AccessRelations(
-        inputs=(
-            BoundaryAccess(
-                self_image(source, logical_source),
-                AccessQuantity(elements_of(source), elements_of(source)),
-                AccessMode.TRANSFER,
-            ),
-        ),
-        outputs=tuple(
-            transfers(
-                written,
-                AccessQuantity(moved, moved),
-                StorageLink(
-                    kind="forward",
-                    input=0,
-                    where=reads,
-                    quantity=AccessQuantity(moved, moved),
+    return iterating(
+        source.shape,
+    AccessRelations(
+            inputs=(
+                BoundaryAccess(
+                    self_image(source, logical_source),
+                    AccessQuantity(elements_of(source), elements_of(source)),
+                    AccessMode.TRANSFER,
                 ),
-            )
-            for reads, written, moved in zip(sources, outputs, held)
+            ),
+            outputs=tuple(
+                transfers(
+                    written,
+                    AccessQuantity(moved, moved),
+                    StorageLink(
+                        kind="forward",
+                        input=0,
+                        where=reads,
+                        quantity=AccessQuantity(moved, moved),
+                    ),
+                )
+                for reads, written, moved in zip(sources, outputs, held)
+            ),
         ),
     )

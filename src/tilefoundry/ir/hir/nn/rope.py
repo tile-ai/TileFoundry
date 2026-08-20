@@ -27,6 +27,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
     elements_of,
+    iterating,
     logical_coordinates,
     moves,
     reached_at,
@@ -121,23 +122,26 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
                 taken * (elements_of(table) // table.shape[0]),
             )
         )
-    return AccessRelations(
-        inputs=(
-            moves(value, elements_of(q_ty)),
-            moves(value, elements_of(k_ty)),
-            *tables,
-            moves(
-                reached_at(
-                    rank,
-                    positions,
-                    ctx.type_of(call.args[4]),
-                    {},
-                    free=tuple(range(len(ctx.type_of(call.args[4]).shape))),
+    return iterating(
+        q_ty.shape,
+    AccessRelations(
+            inputs=(
+                moves(value, elements_of(q_ty)),
+                moves(value, elements_of(k_ty)),
+                *tables,
+                moves(
+                    reached_at(
+                        rank,
+                        positions,
+                        ctx.type_of(call.args[4]),
+                        {},
+                        free=tuple(range(len(ctx.type_of(call.args[4]).shape))),
+                    ),
+                    taken,
                 ),
-                taken,
             ),
+            outputs=(writes(value, elements_of(q_ty)), writes(value, elements_of(k_ty))),
         ),
-        outputs=(writes(value, elements_of(q_ty)), writes(value, elements_of(k_ty))),
     )
 
 

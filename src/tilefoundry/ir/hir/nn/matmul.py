@@ -20,6 +20,7 @@ from tilefoundry.visitor_registry.access_relation import (
     build_relation,
     elements_of,
     factored_image,
+    iterating,
     logical_axes_of,
     logical_coordinates,
     moves,
@@ -28,7 +29,7 @@ from tilefoundry.visitor_registry.access_relation import (
     writes,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
-from tilefoundry.visitor_registry.relation_build import identity_access, shape_from_relation
+from tilefoundry.visitor_registry.relation_build import shape_from_relation
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
@@ -95,10 +96,12 @@ def _operand_reads(
 def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
     """Every coordinate of each operand a contraction reaches, read once.
 
-    Reading each operand at the result's own coordinates claims a shape it does
-    not have the moment the contracted and kept axes differ in extent: for
-    `(M,K)` by `(K,N)` it gives the left operand N columns. The contracted
-    extent is this participant's own, that axis being one a layout can split.
+    A product walks the axis it sums, so that axis is a coordinate this Op is
+    asked by rather than something existential inside an image, and the result is
+    accumulated over it. Reading an operand at the result's own coordinates would
+    claim a shape it does not have the moment the summed and kept axes differ in
+    extent. The summed extent is this participant's own, that axis being one a
+    layout can split, and an operand holding less of it answers on that much.
     """
     lhs_ty = ctx.local_type_of(call.args[0])
     rhs_ty = ctx.local_type_of(call.args[1])
@@ -108,28 +111,39 @@ def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
     logical_out = ctx.type_of(call)
     rank = len(out_ty.shape)
     carried = logical_coordinates(out_ty, logical_out)
-
-    inputs = []
-    for local, logical, contracts_last in (
+    operands = (
         (lhs_ty, logical_lhs, True),
         (rhs_ty, logical_rhs, False),
-    ):
-        held = _held_axis(
-            local, logical, len(logical.shape) - (1 if contracts_last else 2)
-        )
+    )
+    helds = tuple(
+        _held_axis(local, logical, len(logical.shape) - (1 if last else 2))
+        for local, logical, last in operands
+    )
+    contracted = max(helds)
+    dims = ", ".join((*(f"d{index}" for index in range(rank)), "k"))
+
+    inputs = []
+    for (local, logical, contracts_last), held in zip(operands, helds):
         inner = "0" if held == 1 else "k"
         reads = _operand_reads(
             local, logical, carried, logical_out, inner, contracts_last=contracts_last
         )
         image = ", ".join(factored_image(reads, local, logical))
-        dims = ", ".join(f"d{index}" for index in range(rank))
-        guard = "" if held == 1 else f" : 0 <= k < {held}"
+        guard = "" if held == contracted else f" : 0 <= k < {held}"
         inputs.append(
             moves(isl.map(f"{{ [{dims}] -> [{image}]{guard} }}"), elements_of(local))
         )
-    return AccessRelations(
-        inputs=tuple(inputs),
-        outputs=(writes(identity_access(rank), elements_of(out_ty)),),
+    accumulates = ", ".join(f"d{index}" for index in range(rank))
+    return iterating(
+        (*out_ty.shape, contracted),
+        AccessRelations(
+            inputs=tuple(inputs),
+            outputs=(
+                writes(
+                    isl.map(f"{{ [{dims}] -> [{accumulates}] }}"), elements_of(out_ty)
+                ),
+            ),
+        ),
     )
 
 

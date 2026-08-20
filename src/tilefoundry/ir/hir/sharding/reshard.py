@@ -31,6 +31,7 @@ from tilefoundry.visitor_registry.access_relation import (
     elements_of,
     factored_image,
     forward_whole,
+    iterating,
     logical_coordinates,
     register_access_relation,
     register_type_relation,
@@ -227,10 +228,13 @@ def _reshard_access(call: "Call", ctx) -> AccessRelations:
         where=reads,
         quantity=held,
     )
-    return AccessRelations(
-        inputs=(BoundaryAccess(reads, held, AccessMode.TRANSFER),),
-        outputs=(transfers(written, held, link),),
-        storage_effect=_reshard_storage(call, ctx),
+    return iterating(
+        result.shape,
+    AccessRelations(
+            inputs=(BoundaryAccess(reads, held, AccessMode.TRANSFER),),
+            outputs=(transfers(written, held, link),),
+            storage_effect=_reshard_storage(call, ctx),
+        ),
     )
 
 

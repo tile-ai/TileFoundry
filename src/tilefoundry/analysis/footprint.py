@@ -19,7 +19,7 @@ from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.reshape import Reshape, flat_reshape_map
 from tilefoundry.ir.hir.tensor.slice import Slice, window_base
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.types import TensorType, TupleType
+from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import shard_layout_of
@@ -33,7 +33,6 @@ from tilefoundry.visitor_registry.access_relation import (
     storage_effect_of,
 )
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
-from tilefoundry.visitor_registry.isl_utility import to_domain
 
 from .walk import loop_repeated_values, loop_trip_count, postorder
 
@@ -431,24 +430,57 @@ def _touched(call: Call, relations: AccessRelations):
 def _relation_cases(
     call: Call, ctx: TypeInferContext, *, narrow: bool
 ) -> tuple[_RelationCase, ...]:
-    """The registered relations of a Call, on the domain its result runs over."""
+    """The registered relations of a Call, on the space that Call iterates.
+
+    An access map's domain is the Op's iteration space, so the space to walk is
+    read off the relations rather than rebuilt from a result's extents: a
+    contraction walks its contracted axis and a reduction walks what it reads,
+    and neither has the shape of what it produces.
+    """
     handler = access_relation_registry.lookup(type(call.target))
     if handler is None:
         raise _Unavailable
     try:
         relations = handler(call, ctx)
-        held = ctx.local_type_of(call)
-        fields = held.fields if isinstance(held, TupleType) else (held,)
-        result = fields[0] if fields else None
-        if not isinstance(result, TensorType):
+        domain = _iterated(relations)
+        if domain is None or not domain.is_bounded():
             raise _Unavailable
-        domain, _params = to_domain(tuple(result.shape))
         local_types = tuple(ctx.local_type_of(arg) for arg in call.args)
     except (NotImplementedError, TypeError, ValueError, isl.Error) as error:
         raise _Unavailable from error
     return (
         _RelationCase(domain=domain, relations=relations, local_types=local_types),
     )
+
+
+def _iterated(relations: AccessRelations) -> "isl.set | None":
+    """The space a Call's own relations say it walks.
+
+    Every boundary of one Op is asked by the same coordinates, so any of them
+    names the space; a boundary that is partial in it names less, and the union
+    is what the Call actually ran.
+    """
+    walked = None
+    for boundary in (*relations.outputs, *relations.inputs):
+        try:
+            own = relation_of(boundary.pattern).domain()
+        except (TypeError, ValueError, isl.Error):
+            return None
+        walked = own if walked is None else walked.union(own)
+    if walked is None:
+        return None
+    return _without_parameters(walked).coalesce()
+
+
+def _without_parameters(walked: "isl.set") -> "isl.set":
+    """One space with its parameters taken out, so it stands for coordinates only.
+
+    An offset a boundary is waiting for narrows that boundary, not the space the
+    Call walks; leaving it in makes a set nobody can count, and isl answers zero
+    for one of those rather than refusing.
+    """
+    count = walked.dim(isl.dim_type.PARAM)
+    return walked if not count else walked.project_out(isl.dim_type.PARAM, 0, count)
 
 
 def _labels(fn: Function) -> dict[int, str]:
@@ -572,7 +604,10 @@ def _one_pass(access: isl.map, domain: isl.set, depth: int) -> int:
     standing = domain
     for axis in range(depth):
         standing = standing.fix_si(isl.dim_type.SET, axis, standing.dim_min_val(axis).get_num_si())
-    amount = access.intersect_domain(standing).range().coalesce().count_val()
+    reached = access.intersect_domain(standing).range()
+    if reached.dim(isl.dim_type.PARAM):
+        raise _Unavailable
+    amount = reached.coalesce().count_val()
     if not amount.is_int():
         raise _Unavailable
     return amount.get_num_si()
@@ -597,6 +632,8 @@ def _reached_elements(sets: list[isl.set]) -> int:
     for set_ in merged.values():
         if set_.is_empty():
             continue
+        if set_.dim(isl.dim_type.PARAM):
+            raise _Unavailable
         amount = set_.coalesce().count_val()
         if not amount.is_int():
             raise _Unavailable

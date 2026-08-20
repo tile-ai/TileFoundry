@@ -68,26 +68,36 @@ def _transpose_storage(call: "Call", ctx) -> StorageEffectClaim | None:
 def _transpose_view(call: "Call", ctx) -> tuple:
     """Result axis k is source axis perm[k], stated in both sides' positions.
 
-    The permutation is over logical axes, and a layout may factor either side
-    into more positions than that. So the result's own coordinates are rebuilt
-    per logical axis, permuted, and spread over the source's positions.
+    A permutation walks what it reads, so the source's own positions are the
+    coordinates and the permutation happens on the way out. It is stated over
+    logical axes and a layout may factor either side into more positions than
+    that, so the source's coordinates are rebuilt per logical axis, permuted,
+    and spread over the result's positions.
     """
     perm = tuple(call.target.perm)
     result = ctx.local_type_of(call)
     source = ctx.local_type_of(call.args[0])
-    carried = logical_coordinates(result, ctx.type_of(call))
-    reads = ["0"] * len(perm)
+    logical_source = ctx.type_of(call.args[0])
+    carried = logical_coordinates(source, logical_source)
+    writes_at = ["0"] * len(perm)
     for result_axis, source_axis in enumerate(perm):
-        reads[source_axis] = carried.get(result_axis, "0")
-    domain = ", ".join(f"d{index}" for index in range(len(result.shape)))
-    image = ", ".join(factored_image(reads, source, ctx.type_of(call.args[0])))
+        writes_at[result_axis] = carried.get(source_axis, "0")
+    domain = ", ".join(f"d{index}" for index in range(len(source.shape)))
+    image = ", ".join(factored_image(writes_at, result, ctx.type_of(call)))
     return (
+        self_image(source, logical_source),
         isl.multi_aff(f"{{ [{domain}] -> [{image}] }}"),
-        self_image(result, ctx.type_of(call)),
     )
 
 
-register_access_relation(Transpose)(view_relations(0, _transpose_storage, _transpose_view))
+register_access_relation(Transpose)(
+    view_relations(
+        0,
+        _transpose_storage,
+        _transpose_view,
+        over=lambda call, ctx: ctx.local_type_of(call.args[0]).shape,
+    )
+)
 
 
 @register_type_relation(Transpose)

@@ -20,6 +20,7 @@ from tilefoundry.visitor_registry.access_relation import (
     OutputStorage,
     StorageLink,
     elements_of,
+    iterating,
     logical_coordinates,
     moves,
     reached_at,
@@ -92,22 +93,25 @@ def _index_copy_access(call: "Call", ctx) -> AccessRelations:
         where=identity,
         quantity=AccessQuantity(held, held),
     )
-    return AccessRelations(
-        inputs=(
-            BoundaryAccess(
-                identity,
-                AccessQuantity(held, held),
-                AccessMode.TRANSFER,
+    return iterating(
+        dst.shape,
+    AccessRelations(
+            inputs=(
+                BoundaryAccess(
+                    identity,
+                    AccessQuantity(held, held),
+                    AccessMode.TRANSFER,
+                ),
+                moves(named, elements_of(index)),
+                moves(payload, touched),
             ),
-            moves(named, elements_of(index)),
-            moves(payload, touched),
-        ),
-        outputs=(
-            BoundaryAccess(
-                rows,
-                AccessQuantity(touched, touched),
-                AccessMode.WRITE,
-                OutputStorage((preserve,)),
+            outputs=(
+                BoundaryAccess(
+                    rows,
+                    AccessQuantity(touched, touched),
+                    AccessMode.WRITE,
+                    OutputStorage((preserve,)),
+                ),
             ),
         ),
     )

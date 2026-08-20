@@ -16,6 +16,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
     elements_of,
+    iterating,
     moves,
     register_access_relation,
     register_type_relation,
@@ -122,12 +123,15 @@ def _repeat_interleave_access(call: "Call", ctx) -> AccessRelations:
     reads = list(dims)
     reads[axis] = f"floor(d{axis} / {repeats})" if repeats != 1 else dims[axis]
     domain = ", ".join(dims)
-    return AccessRelations(
-        inputs=(
-            moves(
-                isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}"),
-                elements_of(source),
+    return iterating(
+        result.shape,
+    AccessRelations(
+            inputs=(
+                moves(
+                    isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}"),
+                    elements_of(source),
+                ),
             ),
+            outputs=(writes(identity_access(rank), elements_of(result)),),
         ),
-        outputs=(writes(identity_access(rank), elements_of(result)),),
     )

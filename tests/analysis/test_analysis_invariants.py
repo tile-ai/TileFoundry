@@ -180,6 +180,7 @@ from tilefoundry.visitor_registry.access_relation import (
     moves,
     reached_elements,
     register_access_relation,
+    relation_of,
     transfers,
     writes,
 )
@@ -756,19 +757,21 @@ def test_a_data_dependent_read_is_a_relation_and_not_a_function() -> None:
     """A scan over an axis cannot be an `isl.multi_aff`, and must not claim to be.
 
     `topk` and `argmax` each read every element of the axis they scan to produce
-    one output, so the read is one-to-many: an `isl.map`. The distinction is the
-    whole safety property -- a `multi_aff` is a function, and a consumer that
-    took one would conclude each output element depends on a single input
-    element, then happily tile the axis a scan cannot be tiled along.
+    one output, so the read is one-to-many and cannot be single-valued. The
+    distinction is the whole safety property -- a function would have a consumer
+    conclude each output element depends on a single input element, then happily
+    tile the axis a scan cannot be tiled along.
     """
     logits = _relations(TopK(k=8), (1, 128))
     assert len(logits.inputs) == 1
-    assert isinstance(logits.inputs[0].pattern, isl.map)
+    assert not relation_of(logits.inputs[0].pattern).is_single_valued()
     assert len(logits.outputs) == 2
-    assert all(isinstance(item.pattern, isl.multi_aff) for item in logits.outputs)
+    assert all(
+        relation_of(item.pattern).is_single_valued() for item in logits.outputs
+    )
 
     picked = _relations(ArgMax(), (1, 151936))
-    assert isinstance(picked.inputs[0].pattern, isl.map)
+    assert not relation_of(picked.inputs[0].pattern).is_single_valued()
     assert len(picked.outputs) == 1
 
 
@@ -796,8 +799,8 @@ def test_a_relation_says_how_a_data_dependent_operand_is_read() -> None:
     rotated = isl.set(f"{{ [d0, d1, d2] : 0 <= d0 < 1 and 0 <= d1 < 32 and 0 <= d2 < {HEAD_DIM} }}")
 
     assert len(relation.inputs) == 5
-    assert isinstance(relation.inputs[0].pattern, isl.multi_aff)
-    assert isinstance(relation.inputs[1].pattern, isl.multi_aff)
+    assert relation_of(relation.inputs[0].pattern).is_single_valued()
+    assert relation_of(relation.inputs[1].pattern).is_single_valued()
     for lookup in (relation.inputs[2], relation.inputs[3]):
         read = lookup.pattern.relation
         assert not read.is_single_valued(), (
@@ -809,7 +812,9 @@ def test_a_relation_says_how_a_data_dependent_operand_is_read() -> None:
     asked = rotated.apply(relation.inputs[4].pattern.relation)
     assert int(str(asked.count_val())) == 1, "the one position that decided all of it"
     assert len(relation.outputs) == 2
-    assert all(isinstance(item.pattern, isl.multi_aff) for item in relation.outputs)
+    assert all(
+        relation_of(item.pattern).is_single_valued() for item in relation.outputs
+    )
 
 
 def test_every_boundary_states_the_movement_its_op_performs() -> None:
@@ -915,8 +920,8 @@ def test_every_boundary_states_the_movement_its_op_performs() -> None:
 
 
 def _as_map(pattern) -> "isl.map":
-    """One comparable carrier, whichever of the two affine forms was stated."""
-    return pattern if isinstance(pattern, isl.map) else isl.map.from_multi_aff(pattern)
+    """One comparable carrier, whichever affine form a boundary stated."""
+    return relation_of(pattern)
 
 
 @dataclass(frozen=True)
@@ -986,9 +991,10 @@ def test_a_reduction_maps_the_axes_its_layout_factored() -> None:
 
     Splitting an axis of 12 over a mesh of 6 makes the projected shape
     `(1, 2, 1)`: two positions for logical axis 0 and one for axis 1. Reducing
-    "axis 1" by position would reduce the mesh factor of axis 0 and carry its
+    "axis 1" by position would collapse the mesh factor of axis 0 and carry its
     residual through untouched -- and the amount can come out right while that
-    happens, which is why the map is what this asserts.
+    happens, which is why the maps are what this asserts. A reduction walks what
+    it reads, so the collapse is on the way out.
     """
     mesh = make_mesh((6, 32), ("w", "t"), topology=Topology("thread", 6 * 32))
     source = make_shard_tensor_type(
@@ -1005,9 +1011,15 @@ def test_a_reduction_maps_the_axes_its_layout_factored() -> None:
     relations = access_relation_registry.lookup(Reduce)(
         call, CostContext(level="thread", topologies=(Topology("thread", 6 * 32),))
     )
-    reads = relations.inputs[0].pattern
+    reads = relation_of(relations.inputs[0].pattern)
     assert reads.dim(isl.dim_type.OUT) == 3
-    assert reads.is_equal(isl.map("{ [d0, d1, d2] -> [0, d1, 0] }"))
+    assert reads.is_equal(
+        isl.map("{ [d0, d1, d2] -> [d0, d1, d2] : d0 = 0 and 0 <= d1 <= 1 and d2 = 0 }")
+    ), "every source coordinate this participant holds, read once"
+    written = relation_of(relations.outputs[0].pattern)
+    assert written.is_equal(
+        isl.map("{ [d0, d1, d2] -> [0, d1, 0] : d0 = 0 and 0 <= d1 <= 1 and d2 = 0 }")
+    ), "and the surviving axis written at the positions holding it, not by number"
 
 
 def _reduced(type_, axes, keepdim, level=None, topologies=()):
@@ -1018,9 +1030,11 @@ def _reduced(type_, axes, keepdim, level=None, topologies=()):
         Call(type=type_, target=target, args=(held,))
     )
     call = Call(type=inferred, target=target, args=(held,))
-    return access_relation_registry.lookup(Reduce)(
-        call, CostContext(level=level, topologies=topologies)
-    ).inputs[0].pattern
+    return relation_of(
+        access_relation_registry.lookup(Reduce)(
+            call, CostContext(level=level, topologies=topologies)
+        ).outputs[0].pattern
+    )
 
 
 def test_a_reduction_without_keepdim_names_the_axis_that_survived() -> None:
@@ -1030,16 +1044,17 @@ def test_a_reduction_without_keepdim_names_the_axis_that_survived() -> None:
     and a source axis at the same number are different axes. Once a layout
     factors things the two are not even the same count: reducing axis 1 of a
     `(4,8,5)` whose axis 1 is split leaves the last logical axis at position 3,
-    and reading it from position 1 takes the mesh factor of a different axis.
+    and writing it at position 1 takes the mesh factor of a different axis.
     """
+    walked = "0 <= d0 <= 1 and 0 <= d1 <= 2 and 0 <= d2 <= 3"
     assert _reduced(make_tensor_type((2, 3, 4), DType.f32), (1,), False).is_equal(
-        isl.map("{ [d0, d1] -> [d0, r1, d1] : 0 <= r1 < 3 }")
+        isl.map(f"{{ [d0, d1, d2] -> [d0, d2] : {walked} }}")
     )
     assert _reduced(make_tensor_type((2, 3, 4), DType.f32), (0, 2), False).is_equal(
-        isl.map("{ [d0] -> [r0, d0, r2] : 0 <= r0 < 2 and 0 <= r2 < 4 }")
+        isl.map(f"{{ [d0, d1, d2] -> [d1] : {walked} }}")
     )
     assert _reduced(make_tensor_type((2, 3, 4), DType.f32), (1, 2), False).is_equal(
-        isl.map("{ [d0] -> [d0, r1, r2] : 0 <= r1 < 3 and 0 <= r2 < 4 }")
+        isl.map(f"{{ [d0, d1, d2] -> [d0] : {walked} }}")
     )
 
     cta = Topology("cta", 2)
@@ -1049,10 +1064,11 @@ def test_a_reduction_without_keepdim_names_the_axis_that_survived() -> None:
         attrs=(ShardSplit(1),),
         dtype=DType.f32,
     )
+    held = "0 <= d0 <= 3 and d1 = 0 and 0 <= d2 <= 3 and 0 <= d3 <= 4"
     for keepdim in (False, True):
         assert _reduced(split, (1,), keepdim, "cta", (cta,)).is_equal(
-            isl.map("{ [d0, d1, d2, d3] -> [d0, 0, r1, d3] : 0 <= r1 < 4 }")
-        )
+            isl.map(f"{{ [d0, d1, d2, d3] -> [d0, 0, 0, d3] : {held} }}")
+        ), "the last logical axis is written at the position holding it"
 
 
 def test_layer_norm_reads_its_parameters_across_the_whole_suffix() -> None:
@@ -1556,14 +1572,15 @@ def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:
         ),
     )
     relations = access_relation_registry.lookup(Stack)(stacked, ctx)
+    stacks = "0 <= d0 <= 1 and 0 <= d1 <= 3 and 0 <= d2 <= 7"
     assert _as_map(relations.inputs[0].pattern).is_equal(
-        isl.map("{ [d0, d1, d2] -> [d1, d2] : d0 = 0 }")
+        isl.map(f"{{ [d0, d1, d2] -> [d1, d2] : d0 = 0 and {stacks} }}")
     )
     assert _as_map(relations.inputs[1].pattern).is_equal(
-        isl.map("{ [d0, d1, d2] -> [d1, d2] : d0 = 1 }")
+        isl.map(f"{{ [d0, d1, d2] -> [d1, d2] : d0 = 1 and {stacks} }}")
     )
     assert _as_map(relations.outputs[0].pattern).is_equal(
-        isl.map("{ [d0, d1, d2] -> [d0, d1, d2] }")
+        isl.map(f"{{ [d0, d1, d2] -> [d0, d1, d2] : {stacks} }}")
     )
 
     parted = Call(
@@ -1577,12 +1594,13 @@ def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:
         args=(Var(type=make_tensor_type((6, 5), DType.f32), name="whole"),),
     )
     relations = access_relation_registry.lookup(Split)(parted, ctx)
+    parts = "0 <= d0 <= 5 and 0 <= d1 <= 4"
     assert _as_map(relations.inputs[0].pattern).is_equal(
-        isl.map("{ [d0, d1] -> [d0, d1] }")
+        isl.map(f"{{ [d0, d1] -> [d0, d1] : {parts} }}")
     )
     for field, offset in enumerate((0, 3)):
         assert _as_map(relations.outputs[field].pattern).is_equal(
-            isl.map("{ [d0, d1] -> [d0, d1] }")
+            isl.map(f"{{ [d0, d1] -> [d0, d1] : {parts} }}")
         )
         (link,) = relations.outputs[field].storage.links
         assert link.input == 0 and link.input_field is None
@@ -1600,11 +1618,12 @@ def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:
         ),
     )
     relations = access_relation_registry.lookup(Binary)(added, ctx)
+    rows = "0 <= d0 <= 3 and 0 <= d1 <= 7"
     assert _as_map(relations.inputs[0].pattern).is_equal(
-        isl.map("{ [d0, d1] -> [d0, d1] }")
+        isl.map(f"{{ [d0, d1] -> [d0, d1] : {rows} }}")
     )
     assert _as_map(relations.inputs[1].pattern).is_equal(
-        isl.map("{ [d0, d1] -> [d1] }")
+        isl.map(f"{{ [d0, d1] -> [d1] : {rows} }}")
     )
 
     held = Call(
@@ -1617,7 +1636,7 @@ def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:
     )
     relations = access_relation_registry.lookup(Binary)(held, ctx)
     assert _as_map(relations.inputs[1].pattern).is_equal(
-        isl.map("{ [d0, d1] -> [d0, 0] }")
+        isl.map("{ [d0, d1] -> [d0, 0] : 0 <= d0 <= 3 and 0 <= d1 <= 7 }")
     )
 
 
@@ -2205,12 +2224,15 @@ def test_a_quantised_scale_is_written_once_per_group() -> None:
     relation = _relations(Quant(group=128), (1, 2048))
 
     assert len(relation.inputs) == 1
-    assert isinstance(relation.inputs[0].pattern, isl.multi_aff)
+    assert relation_of(relation.inputs[0].pattern).is_single_valued()
 
     assert len(relation.outputs) == 2
-    scale = relation.outputs[1].pattern
-    assert isinstance(scale, isl.map)
+    scale = relation_of(relation.outputs[1].pattern)
+    assert not scale.is_injective(), "a group of elements shares one entry"
     assert "128" in str(scale)
+    assert reached_elements(relation.outputs[1].pattern) == 2048 // 128, (
+        "one entry per group, which is the whole saving"
+    )
 
 
 _KEYED = re.compile(rf'(?P<key>[\w-]+){FIELD}(?P<value>"(?:[^"\\]|\\.)*"|\S+)')
@@ -2654,34 +2676,46 @@ def test_a_contraction_reads_each_operand_at_its_own_extents() -> None:
     Reading each operand at the result's coordinates is right only while every
     extent agrees. For `(128,64) x (64,32)` it claims the left operand has 32
     columns and the right 128 rows, which is the wrong half of both: the shapes
-    the map names have to be the shapes the operands have.
+    the map names have to be the shapes the operands have. The axis being summed
+    is one of the coordinates the Op is asked by, so it appears in the domain
+    rather than as something existential inside an image.
     """
     relations = _matmul_relations((128, 64), (64, 32), (128, 32))
-    assert relations.inputs[0].pattern.is_equal(
-        isl.map("{ [d0, d1] -> [d0, k] : 0 <= k < 64 }")
+    walked = "0 <= d0 < 128 and 0 <= d1 < 32 and 0 <= k < 64"
+    assert relation_of(relations.inputs[0].pattern).is_equal(
+        isl.map(f"{{ [d0, d1, k] -> [d0, k] : {walked} }}")
     )
-    assert relations.inputs[1].pattern.is_equal(
-        isl.map("{ [d0, d1] -> [k, d1] : 0 <= k < 64 }")
+    assert relation_of(relations.inputs[1].pattern).is_equal(
+        isl.map(f"{{ [d0, d1, k] -> [k, d1] : {walked} }}")
     )
-    result = isl.set("{ [d0, d1] : 0 <= d0 < 128 and 0 <= d1 < 32 }")
-    assert relations.inputs[0].pattern.intersect_domain(result).range().is_equal(
+    assert relation_of(relations.outputs[0].pattern).is_equal(
+        isl.map(f"{{ [d0, d1, k] -> [d0, d1] : {walked} }}")
+    ), "and the result is accumulated over it, which is why the write repeats"
+    assert relation_of(relations.inputs[0].pattern).range().is_equal(
         isl.set("{ [i0, i1] : 0 <= i0 < 128 and 0 <= i1 < 64 }")
     )
-    assert relations.inputs[1].pattern.intersect_domain(result).range().is_equal(
+    assert relation_of(relations.inputs[1].pattern).range().is_equal(
         isl.set("{ [i0, i1] : 0 <= i0 < 64 and 0 <= i1 < 32 }")
     )
     assert [boundary.quantity.upper for boundary in relations.inputs] == [8192, 2048]
     assert relations.outputs[0].quantity.upper == 4096
+    assert [
+        reached_elements(boundary.pattern) for boundary in relations.inputs
+    ] == [8192, 2048], "walking the summed axis moves no operand element twice"
 
 
 def test_a_contraction_reads_a_batch_it_broadcasts_at_one_coordinate() -> None:
     """A batch an operand has one of is read there however many the result has."""
     relations = _matmul_relations((1, 128, 64), (4, 64, 32), (4, 128, 32))
-    assert relations.inputs[0].pattern.is_equal(
-        isl.map("{ [d0, d1, d2] -> [0, d1, k] : 0 <= k < 64 }")
+    walked = "0 <= d0 < 4 and 0 <= d1 < 128 and 0 <= d2 < 32 and 0 <= k < 64"
+    assert relation_of(relations.inputs[0].pattern).is_equal(
+        isl.map(f"{{ [d0, d1, d2, k] -> [0, d1, k] : {walked} }}")
     )
-    assert relations.inputs[1].pattern.is_equal(
-        isl.map("{ [d0, d1, d2] -> [d0, k, d2] : 0 <= k < 64 }")
+    assert relation_of(relations.inputs[1].pattern).is_equal(
+        isl.map(f"{{ [d0, d1, d2, k] -> [d0, k, d2] : {walked} }}")
+    )
+    assert reached_elements(relations.inputs[0].pattern) == 128 * 64, (
+        "read once, not once per batch the result has"
     )
 
 
@@ -3083,13 +3117,13 @@ def test_what_a_boundary_moves_is_what_its_relation_reaches() -> None:
     operand has is not reaching, so a relation stated over a bigger container
     still answers for the smaller one it was given.
     """
-    positions = isl.set("{ [d0, d1] : 0 <= d0 < 8 and 0 <= d1 < 4 }")
-    replicated = AffineAccess(isl.map("{ [d0, d1] -> [0, d1] }"))
-    assert reached_elements(replicated, positions, index_set((1, 4))) == 4, (
+    walked = "0 <= d0 < 8 and 0 <= d1 < 4"
+    replicated = AffineAccess(isl.map(f"{{ [d0, d1] -> [0, d1] : {walked} }}"))
+    assert reached_elements(replicated, index_set((1, 4))) == 4, (
         "one row read by eight is one row moved"
     )
-    beyond = AffineAccess(isl.map("{ [d0, d1] -> [d0, d1] }"))
-    assert reached_elements(beyond, positions, index_set((2, 4))) == 8, (
+    beyond = AffineAccess(isl.map(f"{{ [d0, d1] -> [d0, d1] : {walked} }}"))
+    assert reached_elements(beyond, index_set((2, 4))) == 8, (
         "and coordinates the operand does not have are not reached at all"
     )
 
@@ -3117,11 +3151,11 @@ def test_an_unbound_parameter_settles_at_the_smallest_window_it_allows() -> None
     cache = index_set((2, 16, 4, 8))
     per_row, held = 2 * 4 * 8, 2 * 16 * 4 * 8
 
-    written = reached_elements(relations.outputs[0].pattern, cache, cache)
+    written = reached_elements(relations.outputs[0].pattern, cache)
     assert written == per_row, "one row is the smallest window this Op describes"
-    kept = reached_elements(relations.inputs[0].pattern, cache, cache)
+    kept = reached_elements(relations.inputs[0].pattern, cache)
     assert kept == held - per_row, "and the rest of the cache is what it left"
-    assert reached_elements(relations.inputs[2].pattern, cache, index_set(())) == 1, (
+    assert reached_elements(relations.inputs[2].pattern, index_set(())) == 1, (
         "the row count itself is one number, read once"
     )
 

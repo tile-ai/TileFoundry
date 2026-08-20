@@ -36,6 +36,7 @@ from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     elements_of,
+    iterating,
     moves,
     register_access_relation,
     writes,
@@ -242,11 +243,14 @@ def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelat
         scale_rel = isl.map(f"{{ [{dims}] -> [{out_dims}floor({last}/{group})] }}")
 
     fields = ctx.local_type_of(call).fields
-    return AccessRelations(
-        inputs=(moves(ident, elements_of(ctx.local_type_of(call.args[0]))),),
-        outputs=(
-            writes(ident, elements_of(fields[0])),
-            writes(scale_rel, elements_of(fields[1])),
+    return iterating(
+        x_ty.shape,
+    AccessRelations(
+            inputs=(moves(ident, elements_of(ctx.local_type_of(call.args[0]))),),
+            outputs=(
+                writes(ident, elements_of(fields[0])),
+                writes(scale_rel, elements_of(fields[1])),
+            ),
         ),
     )
 

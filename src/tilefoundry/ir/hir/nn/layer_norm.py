@@ -17,6 +17,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
     elements_of,
+    iterating,
     logical_axes_of,
     moves,
     register_access_relation,
@@ -167,11 +168,14 @@ def _layer_norm_access(call: "Call", ctx) -> AccessRelations:
     domain = ", ".join(dims)
     across = isl.multi_aff(f"{{ [{domain}] -> [{suffix}] }}")
     held = elements_of(ctx.local_type_of(call.args[1]))
-    return AccessRelations(
-        inputs=(
-            moves(identity_access(rank), elements_of(x)),
-            moves(across, held),
-            moves(across, elements_of(ctx.local_type_of(call.args[2]))),
+    return iterating(
+        result.shape,
+    AccessRelations(
+            inputs=(
+                moves(identity_access(rank), elements_of(x)),
+                moves(across, held),
+                moves(across, elements_of(ctx.local_type_of(call.args[2]))),
+            ),
+            outputs=(writes(identity_access(rank), elements_of(result)),),
         ),
-        outputs=(writes(identity_access(rank), elements_of(result)),),
     )

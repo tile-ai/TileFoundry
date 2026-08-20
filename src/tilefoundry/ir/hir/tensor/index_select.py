@@ -23,6 +23,7 @@ from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     elements_of,
+    iterating,
     logical_coordinates,
     moves,
     reached_at,
@@ -127,18 +128,21 @@ def _index_select_access_relation(call: "Call", ctx) -> AccessRelations:
     slice_size = math.prod(
         extent for position, extent in enumerate(source_ty.shape) if position != axis
     )
-    return AccessRelations(
-        inputs=(
-            moves(
-                reached_at(rank, source_ty, logical_source, carried, free=(axis,)),
-                elements_of(index_ty) * slice_size,
+    return iterating(
+        out_ty.shape,
+    AccessRelations(
+            inputs=(
+                moves(
+                    reached_at(rank, source_ty, logical_source, carried, free=(axis,)),
+                    elements_of(index_ty) * slice_size,
+                ),
+                moves(
+                    reached_at(rank, index_ty, logical_index, {0: carried.get(axis, "0")}),
+                    elements_of(index_ty),
+                ),
             ),
-            moves(
-                reached_at(rank, index_ty, logical_index, {0: carried.get(axis, "0")}),
-                elements_of(index_ty),
-            ),
+            outputs=(writes(identity_access(rank), elements_of(out_ty)),),
         ),
-        outputs=(writes(identity_access(rank), elements_of(out_ty)),),
     )
 
 

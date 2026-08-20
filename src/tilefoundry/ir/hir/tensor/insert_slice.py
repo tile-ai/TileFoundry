@@ -24,6 +24,7 @@ from tilefoundry.visitor_registry.access_relation import (
     control_read,
     elements_of,
     factored_window,
+    iterating,
     logical_axes_of,
     logical_coordinates,
     moves,
@@ -97,7 +98,9 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     )
     window = elements_of(update)
     kept = elements_of(ctx.local_type_of(call.args[0])) - window
-    complement, written = placed_window(offsets, extents, len(result.shape))
+    complement, written = placed_window(
+        offsets, extents, len(result.shape), within=tuple(result.shape)
+    )
     read_update = window_source(
         _offset_axes(call, rank),
         len(result.shape),
@@ -111,27 +114,30 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
         where=complement,
         quantity=AccessQuantity(kept, kept),
     )
-    return AccessRelations(
-        inputs=(
-            BoundaryAccess(complement, AccessQuantity(kept, kept), AccessMode.TRANSFER),
-            moves(read_update, window),
-            *(
-                moves(
-                    control_read(len(result.shape), ctx, arg),
-                    control_leaves(ctx, arg),
-                )
-                for arg in call.args[2:]
+    return iterating(
+        result.shape,
+    AccessRelations(
+            inputs=(
+                BoundaryAccess(complement, AccessQuantity(kept, kept), AccessMode.TRANSFER),
+                moves(read_update, window),
+                *(
+                    moves(
+                        control_read(len(result.shape), ctx, arg),
+                        control_leaves(ctx, arg),
+                    )
+                    for arg in call.args[2:]
+                ),
             ),
-        ),
-        outputs=(
-            BoundaryAccess(
-                written,
-                AccessQuantity(window, window),
-                AccessMode.WRITE,
-                OutputStorage((preserve,)),
+            outputs=(
+                BoundaryAccess(
+                    written,
+                    AccessQuantity(window, window),
+                    AccessMode.WRITE,
+                    OutputStorage((preserve,)),
+                ),
             ),
+            storage_effect=_insert_slice_storage(call, ctx),
         ),
-        storage_effect=_insert_slice_storage(call, ctx),
     )
 
 

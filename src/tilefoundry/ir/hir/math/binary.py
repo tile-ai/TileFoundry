@@ -32,6 +32,7 @@ from tilefoundry.visitor_registry.access_relation import (
     build_relation,
     elements_of,
     elementwise_elements,
+    iterating,
     moves,
     register_access_relation,
     register_type_relation,
@@ -141,15 +142,18 @@ def _merge_layout(a: object, b: object, out_shape: tuple) -> object:
 @register_access_relation(Binary)
 def _elementwise_binary(call: "Call", ctx) -> AccessRelations:
     out_ty = ctx.local_type_of(call)
-    return AccessRelations(
-        inputs=tuple(
-            moves(
-                broadcast_access(out_ty.shape, ctx.local_type_of(arg).shape),
-                elementwise_elements(arg, call, ctx),
-            )
-            for arg in call.args
+    return iterating(
+        out_ty.shape,
+    AccessRelations(
+            inputs=tuple(
+                moves(
+                    broadcast_access(out_ty.shape, ctx.local_type_of(arg).shape),
+                    elementwise_elements(arg, call, ctx),
+                )
+                for arg in call.args
+            ),
+            outputs=(writes(identity_access(len(out_ty.shape)), elements_of(out_ty)),),
         ),
-        outputs=(writes(identity_access(len(out_ty.shape)), elements_of(out_ty)),),
     )
 
 

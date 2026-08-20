@@ -27,6 +27,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     build_relation,
     elements_of,
+    iterating,
     moves,
     register_access_relation,
     register_type_relation,
@@ -145,10 +146,13 @@ def _stack_access(call: "Call", ctx) -> AccessRelations:
         else isl.map(f"{{ [{domain}] -> [] : d{axis} = {position} }}")
         for position in range(len(call.args))
     )
-    return AccessRelations(
-        inputs=tuple(
-            moves(item, elements_of(ctx.local_type_of(arg)))
-            for item, arg in zip(inputs, call.args)
+    return iterating(
+        result.shape,
+    AccessRelations(
+            inputs=tuple(
+                moves(item, elements_of(ctx.local_type_of(arg)))
+                for item, arg in zip(inputs, call.args)
+            ),
+            outputs=(writes(identity_access(rank), elements_of(result)),),
         ),
-        outputs=(writes(identity_access(rank), elements_of(result)),),
     )
