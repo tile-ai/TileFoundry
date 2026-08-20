@@ -896,7 +896,8 @@ def test_one_relation_answers_before_its_result_type_exists() -> None:
     the coordinates cannot be stated in terms of what the Op returns -- that is
     the thing being derived. Every rank here is built from the inputs and the
     attributes: a product with and without batch axes, an elementwise op at
-    three ranks, a broadcast, a permutation and a reduction.
+    three ranks, a broadcast, a permutation, a reduction, and the two fixed
+    tiles whose space is the instruction's own count.
     """
     f32 = DType.f32
     cases = (
@@ -918,6 +919,24 @@ def test_one_relation_answers_before_its_result_type_exists() -> None:
             "reduction",
             Reduce(axes=(1,), keepdim=False, kind=ReduceKind.SUM),
             (make_tensor_type((2, 3, 4), f32),),
+        ),
+        (
+            "m16n8k16 tile",
+            Mma_SM80_16x8x16(dtype_a=DType.f16, dtype_b=DType.f16, dtype_acc=DType.f32),
+            (
+                make_tensor_type((16, 16), DType.f16),
+                make_tensor_type((16, 8), DType.f16),
+            ),
+        ),
+        (
+            "m64n128k16 tile",
+            Wgmma_SM90_64x128x16(
+                dtype_a=DType.f16, dtype_b=DType.f16, dtype_acc=DType.f32
+            ),
+            (
+                make_tensor_type((64, 16), DType.f16),
+                make_tensor_type((16, 128), DType.f16),
+            ),
         ),
     )
     for label, target, shapes in cases:
@@ -1570,7 +1589,7 @@ def test_a_grouped_convolution_reads_only_the_groups_it_computes() -> None:
     The contraction extent is a group's worth, so a participant computing one
     group of two reads eight channels rather than sixteen: 512, where the
     program's channel count would bill 1024. The map says which eight, through
-    the group offset the type relation already uses.
+    the group offset the Op's own access relation already states.
     """
     (whole, spanning), (unit, _) = _projected(
         Conv2D(stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=2),

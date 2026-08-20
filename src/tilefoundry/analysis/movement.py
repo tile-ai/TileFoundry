@@ -131,7 +131,7 @@ def _output_bytes(relations: AccessRelations, held: Type) -> int | None:
     A tuple result is as many boundaries as it has fields, each somewhere of its
     own that the Op stated separately. Reading only the first would drop the
     rest, and reading the tuple as one value has no element count to read at
-    all -- either way the Op's own answer is thrown away for a Type's.
+    all -- either way the relation's answer is replaced by the Type's size.
     """
     fields = held.fields if isinstance(held, TupleType) else (held,)
     total = 0

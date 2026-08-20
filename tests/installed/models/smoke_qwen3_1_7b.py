@@ -56,7 +56,7 @@ def test_the_plan_reaches_the_level_below_the_one_it_partitions(
     levels, and a root that stopped declaring ``thread`` leaves this command with
     no level to be given and no test to inject one. Only this model and
     ``qwen2_5_1_5b`` can witness that -- the other roots declare ``thread`` too, but
-    their IR reaches ops with no registered type relation, so the command fails for
+    their IR reaches ops with no registered access relation, so the command fails for
     a reason that has nothing to do with the level.
     """
     contract.scheduled(tf, shipped_source(MODEL), case, planned, topology="thread")

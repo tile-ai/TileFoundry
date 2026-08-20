@@ -272,14 +272,16 @@ def _tile_access(call: "Call", ctx) -> AccessRelations:
 
     ``_TILES`` holds each instruction's own count, which is what separates these
     from a MatMul: one instruction moves one instruction's elements however many
-    participants issue it. Where those elements sit is the reader's answer, so
-    the patterns are stated in the axes the operands were written in.
+    participants issue it. That count is the accumulator's own extents, so the
+    space is stated from the instruction rather than from the Type being
+    derived. Where those elements sit is the reader's answer, so the patterns
+    are stated in the axes the operands were written in.
     """
-    m, n, k = _TILES[type(call.target).__name__]
-    accumulator = ctx.type_of(call)
-    rank = len(accumulator.shape)
+    m, n, _ = _TILES[type(call.target).__name__]
+    tile = (m, n)
+    rank = len(tile)
     return iterating(
-        accumulator.shape,
+        tile,
         AccessRelations(
             inputs=(
                 BoundaryRelation(_whole_read(ctx.type_of(call.args[0]), rank)),

@@ -994,9 +994,10 @@ def _record_movement(
 ) -> None:
     """Say what every occurrence moves, and whose bytes it moved them into.
 
-    The Op's own registered evaluator answers how much crossed each boundary,
-    The function's own total is the same bytes counted as often as its loops
-    repeat them.
+    The Op's own registered evaluator answers which way each boundary moves and
+    whether anything is materialised; the boundary's relation answers how much
+    of it crossed. The function's own total is the same bytes counted as often
+    as its loops repeat them.
     """
     scope = FunctionScope(module, fn)
     whole = CostEvaluator(CostContext(scope=scope))

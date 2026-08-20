@@ -913,12 +913,16 @@ attached only to the Function. Its full JSON projection is under
     distinction rather than inferring aliasing from layouts.
   - A caller-owned parameter MUST NOT be reused. Donation is a contract with
     the caller, not a conclusion this family may draw.
-  - A view's tensor source and its result MUST move nothing: re-indexing the
-    same elements asks the run for none of them. Its other operands are the
-    numbers that place it and MUST be read: one element per number, reached
-    through the boundary's own relation onto the flat leaves the operand holds,
-    and charged at each reached leaf's own width. An operation that writes at an
-    address it is given reads that address the same way.
+  - Which boundaries move is the Op's evaluator's answer and MUST NOT be read
+    off the lifetimes above: a boundary it reports no direction on moves
+    nothing, which is what a `Reshape` and a `Slice` say of their tensor source
+    and their result, while a `Transpose` shares its operand's bytes and still
+    reads and writes them because its evaluator materialises the permutation.
+    The numbers that place a window MUST be read like any other operand: one
+    element per number, reached through the boundary's own relation onto the
+    flat leaves the operand holds, and charged at each reached leaf's own width.
+    An operation that writes at an address it is given reads that address the
+    same way.
   - The memory levels MUST be two flat tuples with a separate relation edge list.
   - A GPU projection MUST cover the explicit levels a program can name and the
     caches traffic passes through, and MUST state that L1 caches L2, that L2

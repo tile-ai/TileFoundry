@@ -110,8 +110,9 @@ def _layer_norm_access(call: "Call", ctx) -> AccessRelations:
 
     Normalising needs the whole suffix before any of it can be written, so those
     axes are not coordinates this Op is asked by. The parameters match the whole
-    suffix rather than one axis of it, which is what the type relation already
-    requires of them; the verifier refuses a split at or beyond that axis, so
+    suffix rather than one axis of it, which is what this Op's own type contract
+    already requires of them; the verifier refuses a split at or beyond that
+    axis, so
     their footprint is the suffix's product in every view.
     """
     x = ctx.type_of(call.args[0])
