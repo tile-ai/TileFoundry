@@ -18,20 +18,19 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessMode,
     AccessQuantity,
     AccessRelations,
-    AffineAccess,
     BoundaryAccess,
     OutputStorage,
     StorageEffectClaim,
     StorageLink,
-    affine_term,
     elements_of,
-    factored_image,
     factored_window,
     logical_axes_of,
     logical_coordinates,
     moves,
+    placed_window,
     register_access_relation,
     update_destination,
+    window_source,
 )
 from tilefoundry.visitor_registry.relation_build import identity_access
 
@@ -75,73 +74,6 @@ def _offset_axes(call: "Call", rank: int) -> tuple:
     return (start, *(0 for _ in range(rank - 1)))
 
 
-def _placed(offsets: tuple, extents: tuple, rank: int) -> tuple:
-    """Where the window sits among the result's own positions, and what is left.
-
-    The domain is the result's positions, so both answers are about the same
-    coordinates: the write reaches the window, and what the destination keeps is
-    every position the window does not cover. An offset only known later is a
-    parameter bound to the value it is, and a window begins inside what it is
-    placed in.
-    """
-    domain = ", ".join(f"d{index}" for index in range(rank))
-    guards: list[str] = []
-    parameters: list[tuple[str, object]] = []
-    for position in range(rank):
-        begin, bound = affine_term(offsets[position], f"o{position}")
-        parameters.extend(bound)
-        if bound:
-            guards.append(f"0 <= {begin}")
-        extent = extents[position]
-        if begin == "0":
-            guards.append(f"0 <= d{position} < {extent}")
-            continue
-        guards.append(f"{begin} <= d{position} < {begin} + {extent}")
-    prefix = _prefix(parameters)
-    where = f" : {' and '.join(guards)}" if guards else ""
-    written = isl.map(f"{prefix}{{ [{domain}] -> [{domain}]{where} }}")
-    whole = isl.map(f"{{ [{domain}] -> [{domain}] }}")
-    return (
-        AffineAccess(whole.subtract(written), tuple(parameters)),
-        AffineAccess(written, tuple(parameters)),
-    )
-
-
-def _read_update(call: "Call", ctx, offsets: tuple, rank: int) -> AffineAccess:
-    """The update read at its own coordinates, from where the window put them.
-
-    The window covers the update's shape wherever it lands, so the coordinate
-    read is the one written shifted back to where the window starts. The shift is
-    per logical axis, because that is what the offsets are stated against, and
-    only then spread over the positions the update's own layout made -- which are
-    not the result's.
-    """
-    result = ctx.local_type_of(call)
-    logical_result = ctx.type_of(call)
-    update = ctx.local_type_of(call.args[1])
-    logical_update = ctx.type_of(call.args[1])
-    carried = logical_coordinates(result, logical_result)
-    parameters: list[tuple[str, object]] = []
-    reads: list[str] = []
-    for axis in range(len(logical_update.shape)):
-        walked = carried.get(axis, "0")
-        begin, bound = affine_term(offsets[axis] if axis < len(offsets) else 0, f"o{axis}")
-        parameters.extend(bound)
-        reads.append(walked if begin == "0" else f"{walked} - {begin}")
-    domain = ", ".join(f"d{index}" for index in range(rank))
-    image = ", ".join(factored_image(reads, update, logical_update))
-    return AffineAccess(
-        isl.map(f"{_prefix(parameters)}{{ [{domain}] -> [{image}] }}"),
-        tuple(parameters),
-    )
-
-
-def _prefix(parameters: list) -> str:
-    """The isl parameter list a relation needs, or nothing when it needs none."""
-    names = list(dict.fromkeys(name for name, _value in parameters))
-    return f"[{', '.join(names)}] -> " if names else ""
-
-
 @register_access_relation(InsertSlice)
 def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     """The result is dst with a window replaced, so every index reads itself.
@@ -166,9 +98,13 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     )
     window = elements_of(update)
     kept = elements_of(ctx.local_type_of(call.args[0])) - window
-    complement, written = _placed(offsets, extents, len(result.shape))
-    read_update = _read_update(
-        call, ctx, _offset_axes(call, rank), len(result.shape)
+    complement, written = placed_window(offsets, extents, len(result.shape))
+    read_update = window_source(
+        _offset_axes(call, rank),
+        len(result.shape),
+        update,
+        logical_update,
+        logical_coordinates(result, logical_result),
     )
     preserve = StorageLink(
         kind="preserve",

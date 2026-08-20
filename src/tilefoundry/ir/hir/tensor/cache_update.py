@@ -21,17 +21,18 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessQuantity,
     AccessRelations,
     BoundaryAccess,
-    OperandValue,
     OutputStorage,
     StorageEffectClaim,
     StorageLink,
-    WindowAccess,
     elements_of,
     factored_window,
     logical_axes_of,
+    logical_coordinates,
     moves,
+    placed_window,
     register_access_relation,
     update_destination,
+    window_source,
 )
 from tilefoundry.visitor_registry.relation_build import identity_access
 
@@ -69,18 +70,17 @@ def _static(extent) -> int | None:
     return extent if isinstance(extent, int) and not isinstance(extent, bool) else None
 
 
-def _rows(expr, capacity, supplied) -> object:
+def _rows(expr) -> object:
     """How many rows this update writes: the number, or the value that says it.
 
-    ``s`` is a runtime scalar, and what it may be is the Op's own contract: at
-    least one row, and no more than either the cache holds or ``new`` brought.
-    That range is what keeps a quantity a quantity instead of charging the whole
+    ``s`` is a runtime scalar, so when it is not written down the answer is the
+    operand itself -- a relation can carry it as a parameter and a reader can
+    bind it, which is what keeps this a quantity instead of charging the whole
     cache for a handful of rows.
     """
     if isinstance(expr, Constant) and isinstance(expr.value, int):
         return int(expr.value)
-    limits = [value for value in (_static(capacity), _static(supplied)) if value is not None]
-    return OperandValue(operand=2, bound=(1, min(limits)) if limits else None)
+    return expr
 
 
 def _written(rows, per_row: int, limit: int | None) -> AccessQuantity:
@@ -126,15 +126,11 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
 
     cache = _by_logical_axis(local_cache, logical_cache)
     supplied = _by_logical_axis(local_new, logical_new)
-    rows = _rows(
-        call.args[2],
-        cache[1] if len(cache) > 1 else None,
-        supplied[1] if len(supplied) > 1 else None,
-    )
+    rows = _rows(call.args[2])
     start = (
         int(call.args[1].value)
         if isinstance(call.args[1], Constant) and isinstance(call.args[1].value, int)
-        else OperandValue(operand=1)
+        else call.args[1]
     )
     offsets, extents = factored_window(
         (0, start, *(0 for _ in cache[2:])),
@@ -148,7 +144,7 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
     kept = AccessQuantity(
         held - written.upper, held - written.lower, written.provenance
     )
-    complement = WindowAccess(offsets, extents, complement=True)
+    complement, reached = placed_window(offsets, extents, len(local_cache.shape))
     preserve = StorageLink(
         kind="preserve", input=0, where=complement, quantity=kept
     )
@@ -158,12 +154,20 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
             moves(_scalar_access(ctx, call.args[1]), 1),
             moves(_scalar_access(ctx, call.args[2]), 1),
             BoundaryAccess(
-                WindowAccess(tuple(0 for _ in extents), extents), written
+                window_source(
+                    (0, start, *(0 for _ in cache[2:])),
+                    len(local_cache.shape),
+                    local_new,
+                    logical_new,
+                    logical_coordinates(local_cache, logical_cache),
+                    (None, rows),
+                ),
+                written,
             ),
         ),
         outputs=(
             BoundaryAccess(
-                identity_access(len(local_cache.shape)),
+                reached,
                 written,
                 AccessMode.WRITE,
                 OutputStorage((preserve,)),

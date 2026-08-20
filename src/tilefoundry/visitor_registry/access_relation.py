@@ -874,6 +874,93 @@ def affine_term(value, name: str) -> "tuple[str, tuple[tuple[str, object], ...]]
     return name, ((name, value),)
 
 
+def placed_window(offsets: tuple, extents: tuple, rank: int) -> tuple:
+    """What a window reaches among a value's own positions, and what it leaves.
+
+    One domain for both, the value's own positions, so the two answer about the
+    same coordinates: the window is where the offsets put it, and what is left
+    alone is every position it does not cover -- a difference, not a flag. An
+    offset or an extent only known later is a parameter bound to the value it is,
+    and a window begins inside what it is placed in.
+    """
+    domain = ", ".join(f"d{index}" for index in range(rank))
+    guards: list[str] = []
+    parameters: list[tuple[str, object]] = []
+    for position in range(rank):
+        begin, bound_begin = affine_term(offsets[position], f"o{position}")
+        extent, bound_extent = affine_term(extents[position], f"e{position}")
+        parameters.extend((*bound_begin, *bound_extent))
+        if bound_begin:
+            guards.append(f"0 <= {begin}")
+        if bound_extent:
+            guards.append(f"1 <= {extent}")
+        if begin == "0":
+            guards.append(f"0 <= d{position} < {extent}")
+            continue
+        guards.append(f"{begin} <= d{position} < {begin} + {extent}")
+    prefix = isl_parameters(parameters)
+    where = f" : {' and '.join(guards)}" if guards else ""
+    reached = isl.map(f"{prefix}{{ [{domain}] -> [{domain}]{where} }}")
+    whole = isl.map(f"{{ [{domain}] -> [{domain}] }}")
+    return (
+        AffineAccess(whole.subtract(reached), tuple(parameters)),
+        AffineAccess(reached, tuple(parameters)),
+    )
+
+
+def window_source(
+    offsets: tuple,
+    rank: int,
+    local: "Type",
+    logical: "Type",
+    carried: dict,
+    extents: tuple = (),
+) -> "AffineAccess":
+    """One operand read at its own coordinates, from where a window put them.
+
+    A window covers the operand's shape wherever it lands, so the coordinate read
+    is the one reached shifted back to where the window starts. The shift is per
+    logical axis, because that is what an offset is stated against, and only then
+    spread over the positions this operand's own layout made -- which are not the
+    result's. An axis whose extent is given holds the read to it, because an
+    operand supplying more than the window takes is not read past it; an axis
+    given ``None`` is covered whole and asks for no such guard.
+    """
+    parameters: list[tuple[str, object]] = []
+    reads: list[str] = []
+    guards: list[str] = []
+    for axis in range(len(logical.shape)):
+        walked = carried.get(axis, "0")
+        begin, bound = affine_term(offsets[axis] if axis < len(offsets) else 0, f"o{axis}")
+        parameters.extend(bound)
+        if bound:
+            guards.append(f"0 <= {begin}")
+        reads.append(walked if begin == "0" else f"{walked} - {begin}")
+        if axis >= len(extents) or extents[axis] is None:
+            continue
+        extent, bound_extent = affine_term(extents[axis], f"e{axis}")
+        parameters.extend(bound_extent)
+        if bound_extent:
+            guards.append(f"1 <= {extent}")
+        guards.append(
+            f"0 <= {walked} - {begin} < {extent}" if begin != "0"
+            else f"0 <= {walked} < {extent}"
+        )
+    domain = ", ".join(f"d{index}" for index in range(rank))
+    image = ", ".join(factored_image(reads, local, logical))
+    where = f" : {' and '.join(guards)}" if guards else ""
+    return AffineAccess(
+        isl.map(f"{isl_parameters(parameters)}{{ [{domain}] -> [{image}]{where} }}"),
+        tuple(parameters),
+    )
+
+
+def isl_parameters(parameters: list) -> str:
+    """The parameter list a relation needs, or nothing when it needs none."""
+    names = list(dict.fromkeys(name for name, _value in parameters))
+    return f"[{', '.join(names)}] -> " if names else ""
+
+
 def factored_window(
     offsets: "Sequence[object]", extents: "Sequence[object]", local: "Type", logical: "Type"
 ) -> tuple[tuple, tuple]:
@@ -1291,10 +1378,12 @@ __all__ = [
     "IndexedAccess",
     "elements_of",
     "moves",
+    "placed_window",
     "moves_between",
     "OperandValue",
     "access_elements",
     "affine_term",
+    "isl_parameters",
     "WindowAccess",
     "AccessRelations",
     "AccessRelationResult",
@@ -1312,6 +1401,7 @@ __all__ = [
     "storage_effect_of",
     "linearized_view",
     "view_relations",
+    "window_source",
     "transfers",
     "writes",
     "measures_without_reading",

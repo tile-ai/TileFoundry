@@ -167,7 +167,6 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     BoundaryAccess,
     IndexedAccess,
-    OperandValue,
     OutputStorage,
     StorageEffectClaim,
     StorageEffectKind,
@@ -1501,9 +1500,17 @@ def test_a_window_is_stated_in_the_positions_its_layout_made() -> None:
         )
         for level in (None, "cta")
     )
-    assert whole.inputs[0].pattern.extents == (4, 4, 2, 8)
+    assert whole.inputs[0].pattern.relation.dim(isl.dim_type.IN) == 4, (
+        "the whole program states the window on the four axes it has"
+    )
+    assert unit.inputs[0].pattern.relation.dim(isl.dim_type.IN) == 5, (
+        "one participant states it on the five positions its layout made"
+    )
+    assert isl.set("{ [a, b, c, d] : 0 <= a < 4 and 0 <= b < 4 and 0 <= c < 2"
+                   " and 0 <= d < 8 }").apply(
+        whole.inputs[0].pattern.relation
+    ).is_empty(), "the rows the update replaces are not the rows it keeps"
     assert whole.inputs[3].quantity.upper == 256
-    assert unit.inputs[0].pattern.extents == (1, 2, 4, 2, 8)
     assert unit.inputs[3].quantity.upper == 128
 
 
@@ -1705,15 +1712,21 @@ def test_an_unbound_row_count_states_its_range_and_where_it_came_from() -> None:
     assert update.quantity.lower == per_row
     assert update.quantity.upper == 5 * per_row
     assert "new supplies" in update.quantity.provenance
-    assert update.pattern.extents[1] == OperandValue(operand=2, bound=(1, 5))
+    waited = dict(update.pattern.parameters)
+    assert waited["o1"] is call.args[1], "where the rows land is that operand"
+    assert waited["e1"] is call.args[2], "and how many there are is that one"
 
     kept = relations.inputs[0]
     assert (kept.quantity.lower, kept.quantity.upper) == (
         held - 5 * per_row,
         held - per_row,
     )
-    assert kept.pattern.complement
-    assert kept.pattern.offsets[1] == OperandValue(operand=1)
+    assert not kept.pattern.relation.is_empty(), (
+        "replacing some rows leaves the others"
+    )
+    left_alone = dict(kept.pattern.parameters)
+    assert left_alone["o1"] is call.args[1], "what is left alone is cut by the same start"
+    assert left_alone["e1"] is call.args[2], "and by the same row count"
     assert relations.outputs[0].quantity == update.quantity
 
 
