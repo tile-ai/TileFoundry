@@ -14,6 +14,7 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
     BoundaryRelation,
     iterating,
     normalised_rows,
@@ -44,7 +45,7 @@ def _softmax_access(call: "Call", ctx) -> AccessRelations:
     rows, names, guards = normalised_rows(x_ty, logical_x, axis)
     domain = ", ".join(f"d{index}" for index in range(len(rows)))
     where = f" : {' and '.join(guards)}" if guards else ""
-    row = isl.map(f"{{ [{domain}] -> [{', '.join(names)}]{where} }}")
+    row = AffineAccess(isl.map(f"{{ [{domain}] -> [{', '.join(names)}]{where} }}"))
     return iterating(
         rows,
         AccessRelations(

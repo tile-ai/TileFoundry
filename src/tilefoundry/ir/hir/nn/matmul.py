@@ -16,6 +16,7 @@ from tilefoundry.ir.types.shard.shard_layout import shard_layout_of, split_targe
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
     BoundaryRelation,
     coordinates_of,
     iterating,
@@ -116,7 +117,7 @@ def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
     ):
         reads = _operand_reads(shape, out_shape, inner, contracts_last=contracts_last)
         inputs.append(
-            BoundaryRelation(isl.map(f"{{ [{dims}] -> [{', '.join(reads)}] }}"))
+            BoundaryRelation(AffineAccess(isl.map(f"{{ [{dims}] -> [{', '.join(reads)}] }}")))
         )
         del held
     accumulates = ", ".join(f"d{index}" for index in range(rank))
@@ -125,7 +126,7 @@ def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
         AccessRelations(
             inputs=tuple(inputs),
             outputs=(
-                BoundaryRelation(isl.map(f"{{ [{dims}] -> [{accumulates}] }}")),
+                BoundaryRelation(AffineAccess(isl.map(f"{{ [{dims}] -> [{accumulates}] }}"))),
             ),
         ),
     )

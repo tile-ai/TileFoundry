@@ -281,8 +281,6 @@ each boundary. There is no second registry and no fallback: a boundary nobody
 can price is a boundary nobody can schedule.
 
 ```python
-AccessPattern = Union["isl.multi_aff", "isl.map", AffineAccess]
-
 class AffineAccess:
     """One boundary's relation, together with what its parameters are.
 
@@ -301,7 +299,7 @@ class BoundaryRelation:
         pattern: attribute; The relation from the Op's iteration space to that value's coordinates.
     """
 
-    pattern: AccessPattern
+    pattern: AffineAccess
 
 class AccessRelations:
     """One `BoundaryRelation` per boundary value, in boundary order."""
@@ -320,7 +318,7 @@ Registry + decorator:
 
 ```python
 access_relation_registry: AnalysisRegistry     # keyed by type[Op]
-def register_access_relation(op_cls: type, *, renames: int | None = None): ...
+def register_access_relation(op_cls: type): ...
 ```
 
 - constraints:
@@ -328,6 +326,12 @@ def register_access_relation(op_cls: type, *, renames: int | None = None): ...
     the Call's own Type: typeinfer asks it in order to derive that Type, so a
     handler that asked back would be asking for its own answer. It MAY read its
     operands' Types, its Op's attributes, and the values its parameters bind.
+  - `AffineAccess` is the only carrier. A boundary MUST NOT take a bare
+    `isl.map` or `isl.multi_aff`: those say where a boundary reaches and nothing
+    about what its parameters stand for, so whoever restricts one guesses.
+    Construction MUST refuse them, and every helper that builds a boundary hands
+    one over already stated. A function handed to `AffineAccess` is kept as the
+    relation it is.
   - Every `BoundaryRelation.pattern` is a relation from the Op's **whole
     iteration space** to the coordinates that boundary reaches, stated in the
     axes the value was written in. Every boundary of one Op shares that space; a
@@ -357,11 +361,6 @@ def register_access_relation(op_cls: type, *, renames: int | None = None): ...
     and holds every boundary to the iterations this participant performs. A
     value nobody divided is addressed whole by every participant, so leaving one
     boundary unheld would charge one participant what all of them read.
-  - `renames` says the Op's result is another name for that operand. It is a
-    statement about what the Op reads, not a proof: whether the two ends can be
-    given one address is the allocation's question
-    ([analysis §2.2.2](./analysis.md#222-memory)),
-    and bytes are shared within one storage level and nowhere else.
 
 ## 5. Instance 2 — `verify`
 

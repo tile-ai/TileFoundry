@@ -166,7 +166,9 @@ from tilefoundry.visitor_registry.access_relation import (
     AffineAccess,
     BoundaryRelation,
     access_relation_registry,
+    broadcast_access,
     coordinates_of,
+    identity_access,
     index_set,
     linearized_view,
     reached_elements,
@@ -691,7 +693,7 @@ def test_loop_scopes_choose_the_containing_loop_instead_of_the_smaller_work_set(
     assert scope_of[id(middle_values[-1])] == id(middle)
 
 
-def _bounded(rank: int, extent: int = 4) -> "isl.map":
+def _bounded(rank: int, extent: int = 4) -> "AffineAccess":
     """A bounded identity, which is the shape a real handler states.
 
     An Op walks a space it can be counted over, so a test standing in for one
@@ -700,7 +702,7 @@ def _bounded(rank: int, extent: int = 4) -> "isl.map":
     dims = ", ".join(f"d{index}" for index in range(rank)) or ""
     guards = " and ".join(f"0 <= d{index} < {extent}" for index in range(rank))
     where = f" : {guards}" if guards else ""
-    return isl.map(f"{{ [{dims}] -> [{dims}]{where} }}")
+    return AffineAccess(isl.map(f"{{ [{dims}] -> [{dims}]{where} }}"))
 
 
 def _relations(target, shape, *args) -> AccessRelations:
@@ -799,7 +801,7 @@ def test_what_one_op_states_about_its_own_space_is_checked_before_its_type() -> 
 
     two_ranks = asked(
         "_AsksTwoRanks",
-        (isl.map("{ [d0, d1] -> [d0] : 0 <= d0 < 4 and 0 <= d1 < 4 }"),),
+        (AffineAccess(isl.map("{ [d0, d1] -> [d0] : 0 <= d0 < 4 and 0 <= d1 < 4 }")),),
         (_bounded(1),),
     )
     with pytest.raises(ValueError, match="one Op walks one space"):
@@ -807,7 +809,7 @@ def test_what_one_op_states_about_its_own_space_is_checked_before_its_type() -> 
 
     open_ended = asked(
         "_LeavesItOpen",
-        (isl.map("{ [d0] -> [d0] : 0 <= d0 }"),),
+        (AffineAccess(isl.map("{ [d0] -> [d0] : 0 <= d0 }")),),
         (_bounded(1),),
     )
     with pytest.raises(ValueError, match="no parameter binding makes bounded"):
@@ -815,7 +817,7 @@ def test_what_one_op_states_about_its_own_space_is_checked_before_its_type() -> 
 
     empty_beside_full = asked(
         "_AddressesWithoutReading",
-        (isl.map("{ [d0] -> [d0] : false }"),),
+        (AffineAccess(isl.map("{ [d0] -> [d0] : false }")),),
         (_bounded(1),),
     )
     coordinates_of(empty_beside_full, TypeInferContext())
@@ -1813,6 +1815,45 @@ def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:
     )
 
 
+def test_a_boundary_states_one_carrier_and_refuses_the_others() -> None:
+    """One carrier, so a reader never asks which kind it was handed.
+
+    A bare isl map or function says where it reaches and nothing about the
+    values its parameters stand for, and whoever restricts it then guesses. The
+    carrier that says both is the only one a boundary takes, and every helper
+    that builds one hands it over already wrapped.
+    """
+    for raw in (isl.map("{ [d0] -> [d0] }"), isl.multi_aff("{ [d0] -> [d0] }")):
+        with pytest.raises(ValueError, match="through an AffineAccess"):
+            BoundaryRelation(raw)
+    with pytest.raises(ValueError, match="through an AffineAccess"):
+        BoundaryRelation("{ [d0] -> [d0] }")
+
+    held = BoundaryRelation(AffineAccess(isl.map("{ [d0] -> [d0] }")))
+    assert isinstance(held.pattern, AffineAccess)
+    assert isinstance(identity_access(2), AffineAccess), (
+        "a helper hands over the carrier, not the map inside it"
+    )
+    assert isinstance(broadcast_access((4, 8), (8,)), AffineAccess)
+    assert isinstance(linearized_view((2, 3), (6,)), AffineAccess)
+    assert AffineAccess(isl.multi_aff("{ [d0] -> [d0] }")).relation.is_equal(
+        isl.map("{ [d0] -> [d0] }")
+    ), "a function is the relation it is, and is kept as one"
+
+    for op, operands in (
+        (MatMul(), ((4, 8), (8, 2))),
+        (Reduce(axes=(1,), keepdim=False, kind=ReduceKind.SUM), ((4, 8),)),
+        (Concat(axis=0), ((3, 5), (3, 5))),
+    ):
+        relations = _asked(
+            op,
+            make_tensor_type((4, 2), DType.f32),
+            *(make_tensor_type(shape, DType.f32) for shape in operands),
+        )
+        for boundary in (*relations.inputs, *relations.outputs):
+            assert isinstance(boundary.pattern, AffineAccess)
+
+
 def test_a_partial_boundary_is_narrowed_and_not_cut_away() -> None:
     """A participant's share cuts every boundary, and a partial one survives it.
 
@@ -1850,6 +1891,58 @@ def test_a_partial_boundary_is_narrowed_and_not_cut_away() -> None:
     assert not relation_of(unit.inputs[0].pattern).is_empty(), (
         "the rest of the container is still there to keep"
     )
+
+
+def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed()  -> None:
+    """A relation may be written past its value; a projected one never reaches there.
+
+    An insert reads its update at the coordinate the window shifted back to, and
+    for the coordinates before the window that is a negative one. Every
+    projected boundary is held to the positions this participant was given, so
+    what it reaches is inside them and which iterations are its own follows from
+    that rather than from a read nobody could perform.
+    """
+    cta = Topology("cta", 2)
+    mesh = make_mesh((2,), ("c",), topology=cta)
+    destination = make_shard_tensor_type(
+        (8,), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32
+    )
+    update = make_shard_tensor_type(
+        (4,), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32
+    )
+    call = Call(
+        type=destination,
+        target=InsertSlice(),
+        args=(
+            Var(type=destination, name="dst"),
+            Var(type=update, name="update"),
+            Constant(type=make_tensor_type((), DType.i64), value=2),
+        ),
+    )
+    ctx = CostContext(level="cta", topologies=(cta,))
+
+    stated = coordinates_of(call, ctx)
+    reads = relation_of(stated.inputs[1].pattern)
+    assert not reads.intersect_range(
+        isl.set("{ [c0] : c0 < 0 }")
+    ).is_empty(), "the window's own read runs before its operand begins"
+
+    relations = relations_of(call, ctx)
+    held = (
+        *(ctx.local_type_of(arg) for arg in call.args),
+        ctx.local_type_of(call),
+    )
+    for boundary, view in zip((*relations.inputs, *relations.outputs), held, strict=True):
+        reached = relation_of(boundary.pattern).range()
+        if not isinstance(view, TensorType) or reached.is_empty():
+            continue
+        box = index_set(tuple(view.shape))
+        assert box is not None and reached.is_subset(box), (
+            f"a boundary reached {reached} outside the {tuple(view.shape)} it was given"
+        )
+    assert relation_of(relations.inputs[1].pattern).domain().is_equal(
+        isl.set("{ [d0] : 2 <= d0 <= 3 }")
+    ), "so the iterations left are the ones whose read this participant holds"
 
 
 def test_a_windows_amount_does_not_move_with_where_it_lands() -> None:
@@ -2888,13 +2981,12 @@ def _totalled(target, cost=None):
     return body, function
 
 
-def test_a_window_is_placed_in_the_buffer_it_names() -> None:
-    """A view of a view is somewhere inside the value neither of them copied.
+def test_a_window_is_given_bytes_of_its_own_and_still_moves_none() -> None:
+    """A window nobody planned is allocated, and allocating it is not moving it.
 
-    Both were placed in the buffer they name rather than given one of their
-    own, and neither moves any of the bytes it names. Where inside it they
-    begin is a question the placement left open, and leaving it open is not the
-    same as answering it with the front of the buffer.
+    No plan has put a window at its source's addresses, so each is given bytes
+    of its own. What it moves is a separate question and the answer is nothing:
+    naming the bytes it is a window of asks the run for none of them.
     """
     result = analyze(
         _RenamesTwice, _RenamesTwice.entry_function(), analysis=("compute-cost", "memory")
@@ -2906,8 +2998,9 @@ def test_a_window_is_placed_in_the_buffer_it_names() -> None:
     ]
     assert len(windows) == 2
     outer, inner = (get_metadata(expr, BufferAllocationMetadata) for expr in windows)
-    assert outer.fields[0].buffer_id == inner.fields[0].buffer_id
-    assert [ref.offset for ref in (*outer.fields, *inner.fields)] == [None, None]
+    assert outer.fields[0].buffer_id != inner.fields[0].buffer_id, (
+        "no plan shares these addresses, so each window owns its own"
+    )
 
     for expr in windows:
         moved = dict(get_metadata(expr, TrafficMetadata).whole)
@@ -2917,9 +3010,9 @@ def test_a_window_is_placed_in_the_buffer_it_names() -> None:
 def test_a_window_whose_start_is_only_known_at_run_time_is_still_a_window() -> None:
     """Not knowing where a window lands is not knowing that it moved.
 
-    Its start arrives as a value, so nothing here states an address for it, and
-    what the occurrence reads is that value rather than the bytes it names.
-    Whoever really reads the window is who moves anything.
+    Its start arrives as a value, so what the occurrence reads is that value
+    rather than the bytes it names. Whoever really reads the window is who moves
+    anything; being given bytes of its own is not reading them.
     """
     case = next(item for item in CORPUS if item.id == "deepseek_v4_flash")
     selected = next(item for item in case.analyze if item.selector == "mla_kv_update")
@@ -2932,12 +3025,9 @@ def test_a_window_whose_start_is_only_known_at_run_time_is_still_a_window() -> N
         if isinstance(expr, Call) and isinstance(expr.target, SliceOp)
     ]
     assert windows, "this program was expected to window something"
-    open_ = [
-        expr
-        for expr in windows
-        if get_metadata(expr, BufferAllocationMetadata).fields[0].offset is None
-    ]
-    assert open_, "no window of this program had a start only the run knows"
+    assert all(
+        get_metadata(expr, BufferAllocationMetadata) is not None for expr in windows
+    ), "every window of this program was given somewhere to be"
     for expr in windows:
         moved = dict(get_metadata(expr, TrafficMetadata).whole)
         assert moved.get("gmem", TrafficBytes()).write == 0, (
@@ -3208,10 +3298,10 @@ def test_a_window_that_fits_nowhere_reaches_nothing() -> None:
 def test_a_field_is_placed_in_the_buffer_that_field_is_in() -> None:
     """Taking the second of two is not taking the first of them.
 
-    Which field a value took decides which bytes it is, and the link that
-    forwards it names that field. Sixteen floats into a thirty-two float value,
-    the second half begins where the first one ends, and a reader given the
-    first would be reading somebody else's numbers at the right size.
+    Sixteen floats into a thirty-two float value, the second half begins where
+    the first one ends. Taking one of them is given bytes of its own, because no
+    plan has put it in the tuple's, and it is still the size of the field it
+    took rather than of the field beside it.
     """
     result = analyze(
         _TakesAField, _TakesAField.entry_function(), analysis=("compute-cost", "memory")
@@ -3231,9 +3321,12 @@ def test_a_field_is_placed_in_the_buffer_that_field_is_in() -> None:
 
     assert [ref.size for ref in fields] == [16 * 4, 16 * 4]
     assert fields[1].offset == fields[0].offset + 16 * 4
-    assert [(ref.buffer_id, ref.size) for ref in mine] == [
-        (fields[1].buffer_id, fields[1].size)
-    ]
+    assert [ref.size for ref in mine] == [fields[1].size], (
+        "the field it took, not the one beside it"
+    )
+    assert mine[0].buffer_id not in {ref.buffer_id for ref in fields}, (
+        "and bytes of its own, because no plan has put it in the tuple's"
+    )
     assert get_metadata(taken, TrafficMetadata).whole == ()
 
 
@@ -3303,9 +3396,9 @@ def test_re_indexing_something_unplaced_moves_none_of_it() -> None:
     """Renaming a window nobody placed is still renaming.
 
     Reading it under other extents covers the same bytes and asks the run for
-    nothing, so the re-indexing moves nothing at any level. Its start being
-    open is a fact about the window it renames, and does not turn either of
-    them into a copy.
+    nothing, so the re-indexing moves nothing at any level. A reshape is the one
+    renaming that is not given bytes of its own, because renaming the axes over
+    the same elements in the same order is all it does.
     """
     result = analyze(
         _RenamesAnUnplacedWindowAtNoDistance,
@@ -3321,8 +3414,7 @@ def test_re_indexing_something_unplaced_moves_none_of_it() -> None:
     opened, flat = (
         get_metadata(expr, BufferAllocationMetadata).fields[0] for expr in windows
     )
-    assert (opened.offset, flat.offset) == (None, None)
-    assert flat.buffer_id == opened.buffer_id
+    assert flat.buffer_id == opened.buffer_id, "a reshape is where what it renames is"
 
     assert dict(get_metadata(windows[0], TrafficMetadata).whole)["gmem"] == TrafficBytes(8, 0)
     assert get_metadata(windows[1], TrafficMetadata).whole == (), (
@@ -3338,8 +3430,7 @@ def test_a_value_nobody_can_place_does_not_place_the_one_that_renames_it() -> No
     Where it lands is a number the run supplies, so the occurrence reads that
     number -- one eight-byte scalar -- and names the sixty-four bytes it does
     not move. Charging it the window would say a program that looks at part of
-    a tensor copied that part, and neither window here states an address for
-    what it named.
+    a tensor copied that part.
     """
     result = analyze(
         _RenamesWhatItCannotPlace,
@@ -3353,8 +3444,9 @@ def test_a_value_nobody_can_place_does_not_place_the_one_that_renames_it() -> No
     ]
     assert len(windows) == 2
     held = [get_metadata(expr, BufferAllocationMetadata) for expr in windows]
-    assert [ref.offset for item in held for ref in item.fields] == [None, None]
-    assert held[0].fields[0].buffer_id == held[1].fields[0].buffer_id
+    assert held[0].fields[0].buffer_id != held[1].fields[0].buffer_id, (
+        "no plan shares these addresses, so each window owns its own"
+    )
 
     opened, into = (dict(get_metadata(expr, TrafficMetadata).whole) for expr in windows)
     assert opened["gmem"] == TrafficBytes(8, 0), "a run-time window was charged its window"

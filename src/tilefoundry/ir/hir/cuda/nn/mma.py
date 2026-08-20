@@ -28,6 +28,7 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
     BoundaryRelation,
     identity_access,
     iterating,
@@ -243,7 +244,7 @@ __all__ = ["Mma", "Mma_SM80_16x8x16", "Wgmma_SM90_64x128x16"]
 _TILES = {"Mma_SM80_16x8x16": (16, 8, 16), "Wgmma_SM90_64x128x16": (64, 128, 16)}
 
 
-def _whole_read(held: "Type", rank: int) -> "isl.map":
+def _whole_read(held: "Type", rank: int) -> "AffineAccess":
     """Every coordinate of one operand, whatever the result coordinate is.
 
     A tile instruction reads its operands entire, so no result coordinate picks
@@ -261,7 +262,9 @@ def _whole_read(held: "Type", rank: int) -> "isl.map":
     dims = ", ".join(f"d{index}" for index in range(rank))
     image = ", ".join(terms) if terms else "0"
     where = " and ".join(guards)
-    return isl.map(f"{{ [{dims}] -> [{image}]" + (f" : {where} }}" if where else " }"))
+    return AffineAccess(
+        isl.map(f"{{ [{dims}] -> [{image}]" + (f" : {where} }}" if where else " }"))
+    )
 
 
 def _tile_access(call: "Call", ctx) -> AccessRelations:

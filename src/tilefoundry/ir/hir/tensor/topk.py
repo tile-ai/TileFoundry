@@ -42,6 +42,7 @@ from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
     BoundaryRelation,
     coordinates_of,
     iterating,
@@ -241,12 +242,12 @@ def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     scanned = dims[rank]
     reads = ", ".join(scanned if index == axis else dims[index] for index in range(rank))
     kept = ", ".join(dims[:rank])
-    written = BoundaryRelation(isl.map(f"{{ [{walked}] -> [{kept}] }}"))
+    written = BoundaryRelation(AffineAccess(isl.map(f"{{ [{walked}] -> [{kept}] }}")))
     out_shape = (*x_ty.shape[:axis], picked, *x_ty.shape[axis + 1 :])
     return iterating(
         (*out_shape, x_ty.shape[axis]),
         AccessRelations(
-            inputs=(BoundaryRelation(isl.map(f"{{ [{walked}] -> [{reads}] }}")),),
+            inputs=(BoundaryRelation(AffineAccess(isl.map(f"{{ [{walked}] -> [{reads}] }}"))),),
             outputs=(written, written),
         ),
     )

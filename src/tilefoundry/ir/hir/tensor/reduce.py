@@ -23,6 +23,7 @@ from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
     BoundaryRelation,
     coordinates_of,
     identity_access,
@@ -195,7 +196,7 @@ def _reduce_access(call: "Call", ctx) -> AccessRelations:
         AccessRelations(
             inputs=(BoundaryRelation(identity_access(rank)),),
             outputs=(
-                BoundaryRelation(isl.map(f"{{ [{domain}] -> [{collapses}] }}")),
+                BoundaryRelation(AffineAccess(isl.map(f"{{ [{domain}] -> [{collapses}] }}"))),
             ),
         ),
     )

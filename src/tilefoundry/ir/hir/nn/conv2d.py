@@ -20,6 +20,7 @@ from tilefoundry.ir.types.shard.shard_layout import Split, shard_layout_of, spli
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
     BoundaryRelation,
     coordinates_of,
     iterating,
@@ -377,17 +378,19 @@ def _conv2d_access(call: "Call", ctx) -> AccessRelations:
     guard = " and ".join((f"0 <= {height} < {x.shape[2]}", f"0 <= {width} < {x.shape[3]}"))
     per_group_out = max(weight.shape[0] // op.groups, 1) if op.groups != 1 else 1
     channel = "ci" if op.groups == 1 else f"floor(co/{per_group_out})*{contraction}+ci"
-    reached = isl.map(f"{{ [{domain}] -> [n, {channel}, {height}, {width}] : {guard} }}")
+    reached = AffineAccess(
+        isl.map(f"{{ [{domain}] -> [n, {channel}, {height}, {width}] : {guard} }}")
+    )
     return iterating(
         (*result, contraction, k_h, k_w),
         AccessRelations(
             inputs=(
                 BoundaryRelation(reached),
-                BoundaryRelation(isl.multi_aff(f"{{ [{domain}] -> [co, ci, kh, kw] }}")),
-                BoundaryRelation(isl.multi_aff(f"{{ [{domain}] -> [co] }}")),
+                BoundaryRelation(AffineAccess(isl.multi_aff(f"{{ [{domain}] -> [co, ci, kh, kw] }}"))),
+                BoundaryRelation(AffineAccess(isl.multi_aff(f"{{ [{domain}] -> [co] }}"))),
             ),
             outputs=(
-                BoundaryRelation(isl.multi_aff(f"{{ [{domain}] -> [n, co, oh, ow] }}")),
+                BoundaryRelation(AffineAccess(isl.multi_aff(f"{{ [{domain}] -> [n, co, oh, ow] }}"))),
             ),
         ),
     )

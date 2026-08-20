@@ -21,6 +21,7 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
     BoundaryRelation,
     factored_image,
     iterating,
@@ -32,9 +33,9 @@ from tilefoundry.visitor_registry.access_relation import (
 
 def _identity(rank: int) -> "isl.multi_aff":
     if rank == 0:
-        return isl.multi_aff("{ [] -> [] }")
+        return AffineAccess(isl.map("{ [] -> [] }"))
     dims = ", ".join(f"i{i}" for i in range(rank))
-    return isl.multi_aff(f"{{ [{dims}] -> [{dims}] }}")
+    return AffineAccess(isl.map(f"{{ [{dims}] -> [{dims}] }}"))
 
 
 @register_op(name="rms_norm")
@@ -91,10 +92,10 @@ def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
         rows,
         AccessRelations(
             inputs=(
-                BoundaryRelation(isl.map(element)),
-                BoundaryRelation(isl.map(f"{{ [{domain}] -> [{across}]{where} }}")),
+                BoundaryRelation(AffineAccess(isl.map(element))),
+                BoundaryRelation(AffineAccess(isl.map(f"{{ [{domain}] -> [{across}]{where} }}"))),
             ),
-            outputs=(BoundaryRelation(isl.map(element)),),
+            outputs=(BoundaryRelation(AffineAccess(isl.map(element))),),
         ),
     )
 

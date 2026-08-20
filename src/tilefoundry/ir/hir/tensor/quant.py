@@ -35,6 +35,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
     BoundaryRelation,
     iterating,
     register_access_relation,
@@ -230,7 +231,7 @@ def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelat
     group = call.target.group
 
     dims = ", ".join(f"i{k}" for k in range(rank))
-    ident = isl.multi_aff(f"{{ [{dims}] -> [{dims}] }}")
+    ident = AffineAccess(isl.map(f"{{ [{dims}] -> [{dims}] }}"))
 
     if rank == 0:
         scale_rel = ident  # pragma: no cover
@@ -238,7 +239,9 @@ def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelat
         outer = ", ".join(f"i{k}" for k in range(rank - 1))
         last = f"i{rank - 1}"
         out_dims = (outer + ", ") if outer else ""
-        scale_rel = isl.map(f"{{ [{dims}] -> [{out_dims}floor({last}/{group})] }}")
+        scale_rel = AffineAccess(
+            isl.map(f"{{ [{dims}] -> [{out_dims}floor({last}/{group})] }}")
+        )
 
     return iterating(
         x_ty.shape,

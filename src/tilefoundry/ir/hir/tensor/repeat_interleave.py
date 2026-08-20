@@ -14,6 +14,7 @@ from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
     BoundaryRelation,
     identity_access,
     iterating,
@@ -101,7 +102,7 @@ def _repeat_interleave_access(call: "Call", ctx) -> AccessRelations:
         out_shape,
     AccessRelations(
             inputs=(
-                BoundaryRelation(isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}")),
+                BoundaryRelation(AffineAccess(isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}"))),
             ),
             outputs=(BoundaryRelation(identity_access(rank)),),
         ),

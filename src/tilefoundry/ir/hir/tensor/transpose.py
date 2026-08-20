@@ -14,6 +14,7 @@ from tilefoundry.ir.types.shard import ComposedLayout, Layout, try_c_order_strid
 from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
+    AffineAccess,
     coordinates_of,
     identity_access,
     register_access_relation,
@@ -57,7 +58,7 @@ def _transpose_view(call: "Call", ctx) -> tuple:
     domain = ", ".join(f"d{index}" for index in range(rank))
     return (
         identity_access(rank),
-        isl.multi_aff(f"{{ [{domain}] -> [{', '.join(writes_at)}] }}"),
+        AffineAccess(isl.map(f"{{ [{domain}] -> [{', '.join(writes_at)}] }}")),
     )
 
 

@@ -24,6 +24,7 @@ from tilefoundry.ir.types.shard import (
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
     BoundaryRelation,
     coordinates_of,
     identity_access,
@@ -119,9 +120,11 @@ def _stack_access(call: "Call", ctx) -> AccessRelations:
     domain = ", ".join(dims)
     reads = ", ".join(dim for index, dim in enumerate(dims) if index != axis)
     inputs = tuple(
-        isl.map(f"{{ [{domain}] -> [{reads}] : d{axis} = {position} }}")
-        if rank > 1
-        else isl.map(f"{{ [{domain}] -> [] : d{axis} = {position} }}")
+        AffineAccess(
+            isl.map(f"{{ [{domain}] -> [{reads}] : d{axis} = {position} }}")
+            if rank > 1
+            else isl.map(f"{{ [{domain}] -> [] : d{axis} = {position} }}")
+        )
         for position in range(len(call.args))
     )
     return iterating(

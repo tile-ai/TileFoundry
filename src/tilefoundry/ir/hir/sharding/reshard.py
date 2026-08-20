@@ -168,7 +168,7 @@ class Reshard(Op):
 
 
 
-@register_access_relation(Reshard, renames=0)
+@register_access_relation(Reshard)
 def _reshard_access(call: "Call", ctx) -> AccessRelations:
     """Every logical index reads itself. Where those bytes go is a separate fact.
 

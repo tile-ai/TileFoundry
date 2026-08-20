@@ -9,7 +9,7 @@ relations, so there is one place to be right and nothing to keep in step.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Union
+from typing import Callable
 
 import isl
 
@@ -28,19 +28,19 @@ from .registries import AnalysisRegistry
 class AffineAccess:
     """One boundary's relation, together with what its parameters are.
 
-    A coordinate an Op only learns at run time is a parameter of the relation
-    rather than a hole in it: which coordinates are reached depends on the value,
-    and the relation says so by naming the value it depends on. Each entry pairs
-    the parameter's name in *relation* with the operand element or dimension it
-    is, so whoever restricts the relation can bind it rather than guess it.
-
-    A relation with no parameters is the ordinary case and states none.
+    A coordinate an Op only learns at run time is a parameter rather than a hole:
+    each entry pairs the parameter's name in *relation* with the operand element
+    or dimension it is, so whoever restricts the relation binds it rather than
+    guessing. A relation with no parameters states none, and a function handed in
+    is kept as the relation it is.
     """
 
     relation: "isl.map"
     parameters: tuple[tuple[str, object], ...] = ()
 
     def __post_init__(self) -> None:
+        if isinstance(self.relation, isl.multi_aff):
+            object.__setattr__(self, "relation", isl.map.from_multi_aff(self.relation))
         if not isinstance(self.relation, isl.map):
             raise ValueError(
                 f"an affine access is a relation, not {self.relation!r}"
@@ -64,7 +64,7 @@ class AffineAccess:
             )
 
 
-AccessPattern = Union["isl.multi_aff", "isl.map", AffineAccess]
+
 
 
 @dataclass(frozen=True)
@@ -77,13 +77,13 @@ class BoundaryRelation:
     drift, and the drift is invisible until a number is wrong.
     """
 
-    pattern: AccessPattern
+    pattern: AffineAccess
 
     def __post_init__(self) -> None:
-        if not isinstance(self.pattern, (isl.multi_aff, isl.map, AffineAccess)):
+        if not isinstance(self.pattern, AffineAccess):
             raise ValueError(
-                f"a boundary reaches its coordinates through a relation, not "
-                f"through {self.pattern!r}"
+                f"a boundary reaches its coordinates through an AffineAccess, "
+                f"which says what its parameters are; {self.pattern!r} does not"
             )
 
 
@@ -184,12 +184,12 @@ def _field_of(type_: "Type", index: int) -> "Type | None":
     return type_ if index == 0 else None
 
 
-def _image_rank(pattern: "AccessPattern") -> int:
+def _image_rank(pattern: "AffineAccess") -> int:
     """How many coordinates one boundary's relation names."""
     return relation_of(pattern).dim(isl.dim_type.OUT)
 
 
-def _reaches_nothing(pattern: "AccessPattern") -> bool:
+def _reaches_nothing(pattern: "AffineAccess") -> bool:
     """Whether a boundary reaches no coordinate at all, at any iteration.
 
     An Op answering from a Type without reading it says so with an empty
@@ -227,7 +227,7 @@ def _check_image_ranks(call, ctx, relations: AccessRelations, op_cls: type) -> N
                 _hold_rank(boundary.pattern, wanted, f"{side} {index}", op_cls)
 
 
-def _hold_rank(pattern: "AccessPattern", wanted: int, where: str, op_cls: type) -> None:
+def _hold_rank(pattern: "AffineAccess", wanted: int, where: str, op_cls: type) -> None:
     """Refuse an affine image that names a different number of coordinates."""
     stated = _image_rank(pattern)
     if stated != wanted:
@@ -237,21 +237,16 @@ def _hold_rank(pattern: "AccessPattern", wanted: int, where: str, op_cls: type) 
         )
 
 
-def register_access_relation(
-    op_cls: type, *, renames: int | None = None
-) -> Callable[[Callable], Callable]:
+def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
     """Decorator to register the one handler that states an Op's coordinates.
 
     The handler signature is ``(call, ctx) -> AccessRelations``. What it answers
     comes before the Call has a Type, so it may read its operands, its Op's
     attributes and the values its parameters bind, and not the Call's own Type.
-    ``renames`` says the result is another name for that operand, stated in the
-    same registration because it is a fact about what the Op reads.
+    Holding that answer against the Call is a separate step, `relations_of`.
     """
 
     def decorate(handler: Callable) -> Callable:
-        if renames is not None:
-            handler.re_addresses = renames
         access_relation_registry.register(op_cls, handler)
         return handler
 
@@ -330,8 +325,7 @@ def _affine_boundaries(relations: AccessRelations):
     """Every boundary of one Op that states coordinates, with where it is."""
     for side, boundaries in (("input", relations.inputs), ("output", relations.outputs)):
         for index, boundary in enumerate(boundaries):
-            if isinstance(boundary.pattern, (AffineAccess, isl.map, isl.multi_aff)):
-                yield side, index, boundary.pattern
+            yield side, index, boundary.pattern
 
 
 def iteration_universe(relations: AccessRelations) -> "isl.set | None":
@@ -564,9 +558,9 @@ def _placed(
 ) -> "isl.map":
     """One boundary's image carried from logical axes onto the positions it has.
 
-    Only the placement: which iterations belong to this participant follows from
-    it, and holding the image to the coordinates the value has would answer that
-    with the box rather than with the ownership.
+    Held to the positions this participant was given, so which iterations are
+    its own follows from the placement rather than from a relation that may
+    reach past what it was handed.
     """
     relation = relation_of(boundary.pattern)
     if (
@@ -582,7 +576,15 @@ def _placed(
             f"{len(logical.shape)} axes of its own; a canonical relation is "
             "stated in the axes an Op was written in"
         )
-    return relation.apply_range(positions_of(local, logical))
+    return _within_positions(relation.apply_range(positions_of(local, logical)), local)
+
+
+def _within_positions(relation: "isl.map", local) -> "isl.map":
+    """One relation held to the coordinates the value it reaches actually has."""
+    box = index_set(tuple(local.shape)) if isinstance(local, TensorType) else None
+    if box is None or box.tuple_dim() != relation.range().tuple_dim():
+        return relation
+    return relation.intersect_range(box)
 
 
 def _addressed(
@@ -593,10 +595,9 @@ def _addressed(
     The projected relation is then the whole answer: what it reaches is what
     crossed, with nothing left for a reader to intersect again or to forget to.
     """
-    box = index_set(tuple(local.shape)) if isinstance(local, TensorType) else None
-    if box is not None and box.tuple_dim() == relation.range().tuple_dim():
-        relation = relation.intersect_range(box)
-    return _held_countable(_rebuilt(relation, bindings), side, index, call)
+    return _held_countable(
+        _rebuilt(_within_positions(relation, local), bindings), side, index, call
+    )
 
 
 def _rebuilt(relation: "isl.map", bindings: dict) -> "BoundaryRelation":
@@ -869,16 +870,11 @@ def _held_to(
     )
 
 
-def relation_of(pattern: "AccessPattern") -> "isl.map":
-    """One boundary's coordinates as a relation, whatever carrier states them.
-
-    A function and a relation answer the same question about the same two spaces,
-    so a reader that only asks "where does this coordinate go" should not have to
-    know which one it was handed.
-    """
-    if isinstance(pattern, AffineAccess):
-        pattern = pattern.relation
-    return isl.map.from_multi_aff(pattern) if isinstance(pattern, isl.multi_aff) else pattern
+def relation_of(pattern: "AffineAccess") -> "isl.map":
+    """One boundary's coordinates as the relation it states."""
+    if not isinstance(pattern, AffineAccess):
+        raise ValueError(f"a boundary states an AffineAccess, not {pattern!r}")
+    return pattern.relation
 
 
 def index_set(shape) -> "isl.set | None":
@@ -904,7 +900,7 @@ def _as_number(value) -> int | None:
     return inner if isinstance(inner, int) and not isinstance(inner, bool) else None
 
 
-def settled(pattern: "AccessPattern") -> "isl.map":
+def settled(pattern: "AffineAccess") -> "isl.map":
     """One relation with every parameter fixed to a number.
 
     A parameter bound to something that has a value is fixed to that value. One
@@ -946,7 +942,7 @@ def settled(pattern: "AccessPattern") -> "isl.map":
 
 
 def reached_elements(
-    pattern: "AccessPattern", box: "isl.set | None" = None, within: "isl.set | None" = None
+    pattern: "AffineAccess", box: "isl.set | None" = None, within: "isl.set | None" = None
 ) -> int | None:
     """How many distinct boundary elements one boundary reaches.
 
@@ -1114,7 +1110,7 @@ def isl_parameters(parameters: list) -> str:
     return f"[{', '.join(names)}] -> " if names else ""
 
 
-def self_image(local: "Type", logical: "Type") -> "isl.multi_aff":
+def self_image(local: "Type", logical: "Type") -> "AffineAccess":
     """A value read at its own coordinates, with its fixed positions written down.
 
     An identity over every position claims coordinates a participant does not
@@ -1128,8 +1124,8 @@ def self_image(local: "Type", logical: "Type") -> "isl.multi_aff":
     reads = [carried.get(axis, "0") for axis in range(len(logical.shape))]
     image = ", ".join(factored_image(reads, local, logical))
     if not rank:
-        return isl.multi_aff("{ [] -> [] }")
-    return isl.multi_aff(f"{{ [{domain}] -> [{image}] }}")
+        return AffineAccess(isl.map("{ [] -> [] }"))
+    return AffineAccess(isl.map(f"{{ [{domain}] -> [{image}] }}"))
 
 
 def positions_of(local: "Type", logical: "Type") -> "isl.map":
@@ -1205,25 +1201,20 @@ def elementwise_elements(arg, call, ctx) -> int:
     return elements_of(type_) if isinstance(type_, TensorType) else 0
 
 
-def identity_access(rank: int) -> "isl.multi_aff":
-    """Identity boundary for a tensor of *rank*.
-
-    One element per element is a function, so it takes the canonical carrier: a
-    reader that received a map would have to ask whether this access might be
-    many-to-one, which it never is.
-    """
+def identity_access(rank: int) -> "AffineAccess":
+    """Identity boundary for a tensor of *rank*: each element read where it is."""
     dims = ", ".join(f"d{index}" for index in range(rank))
-    return isl.multi_aff(f"{{ [{dims}] -> [{dims}] }}") if rank else isl.multi_aff("{ [] -> [] }")
+    return AffineAccess(isl.map(f"{{ [{dims}] -> [{dims}] }}" if rank else "{ [] -> [] }"))
 
 
-def broadcast_access(result_shape: tuple, operand_shape: tuple) -> "isl.multi_aff":
+def broadcast_access(result_shape: tuple, operand_shape: tuple) -> "AffineAccess":
     """Which coordinate of an operand a result coordinate reads.
 
     An operand of the result's own shape reads the coordinate it is at. A
     shorter one right-aligns, dropping the leading axes it does not have; an
     axis it holds one of is read at zero however far the result runs along it.
-    Both are still functions of the result coordinate, so both keep the
-    canonical carrier rather than becoming a map nobody has to widen.
+    Both are still functions of the result coordinate, and both are stated as
+    the relation they are.
     """
     rank = len(result_shape)
     dims = [f"d{index}" for index in range(rank)]
@@ -1234,8 +1225,8 @@ def broadcast_access(result_shape: tuple, operand_shape: tuple) -> "isl.multi_af
     ]
     domain = ", ".join(dims)
     if not reads:
-        return isl.multi_aff(f"{{ [{domain}] -> [] }}") if rank else isl.multi_aff("{ [] -> [] }")
-    return isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}")
+        return AffineAccess(isl.map(f"{{ [{domain}] -> [] }}" if rank else "{ [] -> [] }"))
+    return AffineAccess(isl.map(f"{{ [{domain}] -> [{', '.join(reads)}] }}"))
 
 
 def measures_without_reading(call, ctx) -> AccessRelations:
@@ -1249,12 +1240,12 @@ def measures_without_reading(call, ctx) -> AccessRelations:
     result = ctx.type_of(call.args[0]) if call.args else None
     out_rank = len(result.shape) if hasattr(result, "shape") else 0
 
-    def _empty(arg) -> "isl.map":
+    def _empty(arg) -> "AffineAccess":
         type_ = ctx.type_of(arg)
         in_rank = len(type_.shape) if hasattr(type_, "shape") else 0
         reads = ", ".join(f"i{index}" for index in range(in_rank))
         domain = ", ".join(f"d{index}" for index in range(out_rank))
-        return isl.map(f"{{ [{domain}] -> [{reads}] : 1 = 0 }}")
+        return AffineAccess(isl.map(f"{{ [{domain}] -> [{reads}] : 1 = 0 }}"))
 
     return iterating(
         getattr(result, "shape", ()) or (),
@@ -1269,7 +1260,7 @@ def measures_without_reading(call, ctx) -> AccessRelations:
     )
 
 
-def linearized_view(out_shape: tuple, in_shape: tuple) -> "isl.multi_aff | isl.map":
+def linearized_view(out_shape: tuple, in_shape: tuple) -> "AffineAccess":
     """Where an output coordinate sits in a source of another shape.
 
     A reshape keeps the elements in the order they were in and renames the axes
@@ -1289,7 +1280,7 @@ def linearized_view(out_shape: tuple, in_shape: tuple) -> "isl.multi_aff | isl.m
     if 0 in out_shape or 0 in in_shape:
         dims = ", ".join(f"d{index}" for index in range(out_rank))
         reads = ", ".join("0" for _ in range(in_rank))
-        return isl.map(f"{{ [{dims}] -> [{reads}] : 1 = 0 }}")
+        return AffineAccess(isl.map(f"{{ [{dims}] -> [{reads}] : 1 = 0 }}"))
     dims = [f"d{index}" for index in range(out_rank)]
     flat, stride = [], 1
     for index in reversed(range(out_rank)):
@@ -1305,12 +1296,12 @@ def linearized_view(out_shape: tuple, in_shape: tuple) -> "isl.multi_aff | isl.m
         term = f"({linear})" if step == 1 else f"floor(({linear}) / {step})"
         reads.append(term if in_shape[axis] == stride // step else f"({term}) mod {in_shape[axis]}")
     domain = ", ".join(dims)
-    return isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}")
+    return AffineAccess(isl.map(f"{{ [{domain}] -> [{', '.join(reads)}] }}"))
 
 
 def view_relations(
     source: int = 0,
-    mapping: "Callable[..., tuple[AccessPattern, AccessPattern]] | None" = None,
+    mapping: "Callable[..., tuple[AffineAccess, AffineAccess]] | None" = None,
     field: "Callable[..., int | None] | None" = None,
     over: "Callable[..., Sequence] | None" = None,
 ) -> Callable[..., AccessRelations]:
@@ -1351,32 +1342,7 @@ def view_relations(
             ),
         )
 
-    _handler.re_addresses = source
-    _handler.re_addressed_field = field
     return _handler
-
-
-def re_addresses(call) -> int | None:
-    """Which operand a Call's result is another name for, or ``None``.
-
-    An Op registered through `view_relations` is a renaming of one operand, and
-    it says so in that same registration rather than in a second place. Nothing
-    is proven here: whether the two ends can really be given the same addresses
-    is the allocation's question, and this is what it asks about.
-    """
-    handler = access_relation_registry.lookup(type(call.target))
-    return getattr(handler, "re_addresses", None)
-
-
-def re_addressed_field(call, ctx) -> int | None:
-    """Which field of its operand a Call renames, when the operand is a tuple.
-
-    A tuple has one buffer per field, so which field was taken is which buffer
-    the result is in. An Op that renames a whole value names no field.
-    """
-    handler = access_relation_registry.lookup(type(call.target))
-    field = getattr(handler, "re_addressed_field", None)
-    return None if field is None else field(call, ctx)
 
 
 def identity_relations(n_inputs: int) -> Callable[..., AccessRelations]:
@@ -1466,7 +1432,7 @@ def same_placement(left: "Type", right: "Type") -> bool:
 
 
 __all__ = [
-    "AccessPattern",
+    "AffineAccess",
     "AccessRelations",
     "AffineAccess",
     "BoundaryRelation",
@@ -1497,8 +1463,6 @@ __all__ = [
     "boundary_maps",
     "positions_of",
     "projected",
-    "re_addressed_field",
-    "re_addresses",
     "reached_elements",
     "register_access_relation",
     "relation_of",

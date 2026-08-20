@@ -29,6 +29,7 @@ from tilefoundry.ir.types.shard.shard_layout import split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
     BoundaryRelation,
     coordinates_of,
     iterating,
@@ -90,9 +91,11 @@ def _concat_access(call: "Call", ctx) -> AccessRelations:
         if offset:
             reads[axis] = f"d{axis} - {offset}"
         inputs.append(
-            isl.map(
-                f"{{ [{domain_text}] -> [{', '.join(reads)}] : "
-                f"{offset} <= d{axis} < {offset + extent} }}"
+            AffineAccess(
+                isl.map(
+                    f"{{ [{domain_text}] -> [{', '.join(reads)}] : "
+                    f"{offset} <= d{axis} < {offset + extent} }}"
+                )
             )
         )
         offset += extent
@@ -109,7 +112,7 @@ def _concat_access(call: "Call", ctx) -> AccessRelations:
                 for item, type_ in zip(inputs, types)
             ),
             outputs=(
-                BoundaryRelation(isl.multi_aff(f"{{ [{domain_text}] -> [{domain_text}] }}")),
+                BoundaryRelation(AffineAccess(isl.multi_aff(f"{{ [{domain_text}] -> [{domain_text}] }}"))),
             ),
         ),
     )

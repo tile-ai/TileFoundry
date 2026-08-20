@@ -15,6 +15,7 @@ from tilefoundry.ir.types.shard.shard_layout import ShardLayout, split_target_ax
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
     BoundaryRelation,
     iterating,
     logical_axes_of,
@@ -119,12 +120,12 @@ def _layer_norm_access(call: "Call", ctx) -> AccessRelations:
     rows, names, guards = normalised_rows(x, x, axis)
     domain = ", ".join(f"d{index}" for index in range(len(rows)))
     where = f" : {' and '.join(guards)}" if guards else ""
-    row = isl.map(f"{{ [{domain}] -> [{', '.join(names)}]{where} }}")
+    row = AffineAccess(isl.map(f"{{ [{domain}] -> [{', '.join(names)}]{where} }}"))
     belongs = logical_axes_of(x, x)
     suffix = ", ".join(
         names[position] for position, owner in enumerate(belongs) if owner >= axis
     ) or "0"
-    across = isl.map(f"{{ [{domain}] -> [{suffix}]{where} }}")
+    across = AffineAccess(isl.map(f"{{ [{domain}] -> [{suffix}]{where} }}"))
     return iterating(
         rows,
         AccessRelations(

@@ -263,8 +263,8 @@ def flat_reshape_map(old_shape: tuple, new_shape: tuple) -> "isl.map":
     """``new_shape``'s multi-index -> ``old_shape``'s multi-index via row-major flat-index equality.
 
     ``new_shape``'s multi-index -> ``old_shape``'s multi-index via
-    row-major flat-index equality (no bounds attached, like every other
-    ``build_relation`` map -- the caller's domain supplies them).
+    row-major flat-index equality, with no bounds attached: the Op's own extents
+    supply them.
     """
     m, n = len(old_shape), len(new_shape)
     pre = 0

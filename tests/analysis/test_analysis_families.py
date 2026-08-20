@@ -801,18 +801,28 @@ def test_memory_holds_parameters_resident_past_their_last_reader() -> None:
 
 
 
-def test_a_view_keeps_the_buffer_it_reads_alive() -> None:
-    """A base is live while anything reading through it still has a reader."""
+def test_a_value_is_live_until_the_last_thing_reading_it_is_defined() -> None:
+    """Every value that owns bytes has a lifetime, and it ends at its last reader.
+
+    A window is one of the values that owns bytes: no plan has put it at its
+    source's addresses. What the source has to outlive is not the window itself
+    but whatever finally reads through it.
+    """
     held = next(function for function in _MovementCosts.functions if function.name == "held")
     result = analyze(_MovementCosts, held, analysis="memory")
 
-    made, _window, consumer = _calls(result.function)
+    made, window, consumer = _calls(result.function)
     record = get_metadata(result.function, MemoryMetadata)
     assert record is not None
     bindings = {item.binding: item for item in record.lifetimes}
-    assert set(bindings) == {"source", binding_name(made), binding_name(consumer)}
+    assert set(bindings) == {
+        "source",
+        binding_name(made),
+        binding_name(window),
+        binding_name(consumer),
+    }
     assert bindings[binding_name(made)].last_used_at == bindings[
-        binding_name(consumer)
+        binding_name(window)
     ].defined_at
 
 
@@ -964,7 +974,9 @@ def test_memory_footprints_follow_the_owner_recorded_by_the_target() -> None:
     gmem = get_metadata(result.function, MemoryMetadata)
     assert gmem is not None
     gmem_lifetimes = {item.binding: item.bytes for item in gmem.lifetimes if item.level == "gmem"}
-    assert "v0" not in gmem_lifetimes
+    assert gmem_lifetimes["v0"] == tensor_bytes(matmul.params[0].type), (
+        "a reshard is given bytes of its own, at the size it redistributes"
+    )
     assert gmem_lifetimes["lhs"] == tensor_bytes(matmul.params[0].type)
 
     roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))

@@ -25,6 +25,7 @@ from tilefoundry.ir.types import TupleType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
     BoundaryRelation,
     index_set,
     iterating,
@@ -104,6 +105,7 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     narrower = index_set(tuple(k_ty.shape))
     if narrower is not None:
         grouped = grouped.intersect_range(narrower)
+    value, grouped = AffineAccess(value), AffineAccess(grouped)
     positions = ctx.type_of(call.args[4])
     tables = []
     for operand in (2, 3):

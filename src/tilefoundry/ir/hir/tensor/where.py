@@ -20,6 +20,7 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
     BoundaryRelation,
     coordinates_of,
     iterating,
@@ -46,7 +47,7 @@ def _broadcast_all(shapes: tuple[tuple, ...]) -> tuple:
     return out_shape
 
 
-def _maps(shapes: tuple[tuple, ...]) -> tuple[object, tuple[isl.map, ...], dict]:
+def _maps(shapes: tuple[tuple, ...]) -> tuple[object, tuple[AffineAccess, ...], dict]:
     out_shape = _broadcast_all(shapes)
     rank = len(out_shape)
     domain, param_map = to_domain(out_shape)
@@ -59,8 +60,8 @@ def _maps(shapes: tuple[tuple, ...]) -> tuple[object, tuple[isl.map, ...], dict]
             "0" if is_one(shape[i]) and not is_one(out_shape[pad + i]) else dims[pad + i]
             for i in range(len(shape))
         ]
-        maps.append(isl.map(f"{{ {source} -> [{', '.join(accessed)}] }}"))
-    maps.append(isl.map(f"{{ {source} -> [{', '.join(dims)}] }}"))
+        maps.append(AffineAccess(isl.map(f"{{ {source} -> [{', '.join(accessed)}] }}")))
+    maps.append(AffineAccess(isl.map(f"{{ {source} -> [{', '.join(dims)}] }}")))
     return (domain, tuple(maps), param_map)
 
 

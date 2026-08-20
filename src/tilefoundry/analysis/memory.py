@@ -27,14 +27,12 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.tensor.reshape import Reshape
+from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.types import Type, local_type_of, tensor_bytes
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target, UnsupportedCapabilityError
-from tilefoundry.visitor_registry.access_relation import (
-    re_addressed_field,
-    re_addresses,
-)
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
@@ -101,32 +99,14 @@ class _CachePressure:
 
 
 def _is_view(expr: Expr) -> bool:
-    """Whether *expr* is another name for a buffer some value already owns.
+    """Whether *expr* aliases its operand rather than allocating.
 
-    An Op registered as a re-addressing of one operand is one; everything else
-    is given bytes of its own. That is conservative on purpose: an operation
-    that lands in an operand's buffer is a fact about a plan, and no plan has
-    been made here.
+    A reshape or a transpose describes the same bytes differently. Charging it
+    for its result would count one buffer twice. Everything else owns its own
+    bytes: landing in an operand's is a fact about a plan, and no plan has been
+    made here.
     """
-    return _re_addressed(expr) is not None
-
-
-def _re_addressed(expr: Expr) -> "Expr | None":
-    """The value whose bytes *expr* is another name for, when it is one.
-
-    Bytes are shared within one storage level and nowhere else: a value that
-    came out at another level was copied there, whatever the Op that named it
-    calls itself.
-    """
-    if not isinstance(expr, Call):
-        return None
-    source = re_addresses(expr)
-    if source is None or source >= len(expr.args):
-        return None
-    operand = expr.args[source]
-    held = {leaf.storage for leaf in tensor_types(expr.type)}
-    theirs = {leaf.storage for leaf in tensor_types(operand.type)}
-    return operand if held <= theirs else None
+    return isinstance(expr, Call) and isinstance(expr.target, (Reshape, Transpose))
 
 
 def _carried_origins(fn: Function) -> dict[int, Expr]:
@@ -160,10 +140,9 @@ def _base_of(
         raise AnalysisError(f"{binding_name(expr) or 'a value'} aliases itself")
     if carried is not None and id(expr) in carried:
         return _base_of(carried[id(expr)], seen | {id(expr)}, carried)
-    reached = _re_addressed(expr)
-    if reached is None:
+    if not _is_view(expr):
         return expr
-    return _base_of(reached, seen | {id(expr)}, carried)
+    return _base_of(expr.args[0], seen | {id(expr)}, carried)
 
 
 def _label(expr: Expr, position: int) -> str:
@@ -846,9 +825,9 @@ def _renames(expr: Expr, carried: dict[int, Expr]) -> Expr:
     held = carried.get(id(expr))
     if held is not None:
         return held
-    reached = _re_addressed(expr)
-    if reached is None:
+    if not _is_view(expr):
         return expr
+    reached = expr.args[0]
     return expr if reached is expr else reached
 
 
@@ -879,8 +858,7 @@ def _refs_of(
         held = stated.get(id(owner))
         if held is None:
             return None
-        field = _renaming(expr, ctx, owner)
-        return _renamed(expr, held, field, facts, topology_levels, topologies)
+        return _renamed(expr, held, facts, topology_levels, topologies)
     minted = numbers.get(id(owner))
     if minted is None:
         return None
@@ -912,17 +890,6 @@ def _refs_of(
     return tuple(refs)
 
 
-def _renaming(expr: Expr, ctx, operand: Expr) -> "int | None":
-    """Which field of *operand* this value renames, when it renames one of several.
-
-    A renaming names the operand it is of and, when that operand is a tuple,
-    which field of it. Anything else renames the whole value and names no field.
-    """
-    if ctx is None or _re_addressed(expr) is not operand:
-        return None
-    return re_addressed_field(expr, ctx)
-
-
 def _element_bytes(leaf) -> "int | None":
     """One element of *leaf* in bytes, or None when it is not whole bytes."""
     bits = getattr(getattr(leaf, "dtype", None), "bit_width", None)
@@ -934,24 +901,19 @@ def _element_bytes(leaf) -> "int | None":
 def _renamed(
     expr: Expr,
     owner: tuple[BufferRef, ...],
-    start: "int | None",
     facts: MemoryHierarchyFacts,
     topology_levels: tuple[str, ...],
     topologies: tuple[Topology, ...],
 ) -> tuple[BufferRef, ...] | None:
     """One value's own coordinates over the buffers another value owns.
 
-    A value that renames all of another has its leaves, one for one. A value
-    that renames one field of several is placed by the field its own operation
-    named, because which field it took decides which buffer it is in. Where in
+    A re-indexing has the leaves of what it re-indexes, one for one. Where in
     those bytes it begins is not said here: no plan has put the two ends at one
     address, so the value is somewhere in them and that is all.
     """
     leaves = tensor_types(expr.type)
     if len(leaves) != len(owner):
-        owner = _from_field(owner, start, len(leaves))
-        if owner is None:
-            return None
+        return None
     refs = []
     for leaf, ref in zip(leaves, owner):
         if leaf.storage is StorageKind.UMAT:
@@ -973,13 +935,6 @@ def _renamed(
     return tuple(refs)
 
 
-def _from_field(
-    owner: tuple[BufferRef, ...], field: "int | None", wanted: int
-) -> "tuple[BufferRef, ...] | None":
-    """The run of a value's buffers that begins at the field it named."""
-    if field is None or not 0 <= field <= len(owner) - wanted:
-        return None
-    return owner[field : field + wanted]
 
 
 def _at_owner(

@@ -103,10 +103,9 @@ def assert_performance_contract(result: AnalysisResult) -> None:
 
     The prediction contains each occurrence it timed and is no faster than the
     ideal bound. An occurrence's duration is its own compute-cost record priced
-    at the target's rates, so nothing here is a second opinion about how long a
-    resource takes, and a solve that proved nothing says so. One a loop repeats
-    without changing is written once and stands for every run of it, so its
-    interval is that many of its own durations and no more than its loops allow.
+    at the target's rates, and a solve that proved nothing says so. One a loop
+    repeats is written once, so its interval is that many of its own durations.
+    A loop is not an occurrence and carries no timeline of its own.
     """
     fn = result.function
     summary = get_metadata(fn, PerformanceSummaryMetadata)
@@ -150,6 +149,11 @@ def assert_performance_contract(result: AnalysisResult) -> None:
         runs, available = span // duration, repeats.get(id(expr), 1)
         assert 1 <= runs <= available and available % runs == 0, describe(expr)
     assert bool(timed) is bool(predicted_ns)
+    for expr in postorder(fn.body):
+        if not isinstance(expr, GridRegionExpr):
+            continue
+        assert get_metadata(expr, PerformanceMetadata) is None, describe(expr)
+        assert get_metadata(expr, PerformanceSummaryMetadata) is None, describe(expr)
 
 
 @pytest.mark.parametrize("case", INVENTORY)

@@ -538,11 +538,10 @@ Where a value's bytes live is not settled here and is not inferred from what an
 Op moves.
 
 - constraints:
-  - A Call whose Op registers `renames`
-    ([visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation))
-    is another name for that operand and MUST be given no bytes of its own, and
-    only when both ends sit at one storage level. Every other result, including
-    one that overwrites a destination, MUST be given bytes of its own.
+  - A `Reshape` or a `Slice` re-indexes elements its operand already holds and
+    MUST be given no bytes of its own. Every other result, including one that
+    overwrites a destination, MUST be given bytes of its own: landing in an
+    operand's buffer is a fact about a plan, and no plan has been made here.
   - What an occurrence moves is its Op's own registered answer. This family MUST
     NOT correct it by where the result turned out to be: an operation that
     computed something computed it, and a plan that lands it in an operand's

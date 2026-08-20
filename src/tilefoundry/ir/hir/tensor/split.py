@@ -26,6 +26,7 @@ from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis, 
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
     BoundaryRelation,
     identity_access,
     iterating,
@@ -157,9 +158,11 @@ def _split_access(call: "Call", ctx) -> AccessRelations:
         if begin:
             writes[axis] = f"d{axis} - {begin}"
         written.append(
-            isl.map(
-                f"{{ [{domain}] -> [{', '.join(writes)}] : "
-                f"{begin} <= d{axis} < {begin + chunk} }}"
+            AffineAccess(
+                isl.map(
+                    f"{{ [{domain}] -> [{', '.join(writes)}] : "
+                    f"{begin} <= d{axis} < {begin + chunk} }}"
+                )
             )
         )
 

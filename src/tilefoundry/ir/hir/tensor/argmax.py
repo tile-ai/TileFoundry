@@ -27,6 +27,7 @@ from tilefoundry.ir.types.shard.shard_layout import Split, shard_layout_of, spli
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
     BoundaryRelation,
     coordinates_of,
     identity_access,
@@ -121,7 +122,7 @@ def _argmax_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRela
         x_ty.shape,
         AccessRelations(
             inputs=(BoundaryRelation(identity_access(rank)),),
-            outputs=(BoundaryRelation(isl.map(f"{{ [{walked}] -> [{kept}] }}")),),
+            outputs=(BoundaryRelation(AffineAccess(isl.map(f"{{ [{walked}] -> [{kept}] }}"))),),
         ),
     )
 
