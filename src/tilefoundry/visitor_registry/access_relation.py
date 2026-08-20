@@ -744,44 +744,55 @@ def _check_claim_against_links(relations: AccessRelations, op_cls: type) -> None
 
 
 def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
-    """Decorator to register a GLOBAL-level access-relation handler.
+    """Decorator to register the one handler that states an Op's coordinates.
 
-    The handler signature is ``(call, ctx) -> AccessRelations``. Every boundary
-    gets a pattern: isl where the addresses are affine, ``IndexedAccess`` or
-    ``WindowAccess`` where a runtime value decides them.
-
-    What comes back is held to the Call it was asked about: one entry per
-    operand and one per output, and every link's element width against the
-    operand it names. Anything needing the Call is checked here, because the
-    record itself has no Call to ask.
+    The handler signature is ``(call, ctx) -> AccessRelations``. What it answers
+    comes before the Call has a Type: type inference asks it in order to derive
+    that Type, so a handler that asked back would be asking for its own answer.
+    It may read its operands, its Op's attributes and the values its parameters
+    bind. Holding that answer against the Call is a separate step, `relations_of`,
+    because every check worth making needs the Type this answer derives.
     """
 
     def decorate(handler: Callable) -> Callable:
-        def checked(call, ctx) -> AccessRelations:
-            relations = handler(call, ctx)
-            wanted_inputs, wanted_outputs = _boundaries_of(call, ctx)
-            for side, stated, wanted in (
-                ("input", len(relations.inputs), wanted_inputs),
-                ("output", len(relations.outputs), wanted_outputs),
-            ):
-                if stated != wanted:
-                    raise ValueError(
-                        f"{op_cls.__name__} describes {stated} {side} "
-                        f"boundar{'y' if stated == 1 else 'ies'} of a call with "
-                        f"{wanted}"
-                    )
-            _check_links_against(call, ctx, relations, op_cls)
-            _check_lookups_against(call, ctx, relations, op_cls)
-            _check_image_ranks(call, ctx, relations, op_cls)
-            _check_claim_against_links(relations, op_cls)
-            return relations
-
-        checked.__name__ = getattr(handler, "__name__", "checked")
-        checked.__doc__ = handler.__doc__
-        access_relation_registry.register(op_cls, checked)
+        access_relation_registry.register(op_cls, handler)
         return handler
 
     return decorate
+
+
+def relations_of(call, ctx) -> AccessRelations:
+    """One Op's coordinates, held against the Call now that it has a Type.
+
+    One entry per operand and one per output, every image at the rank of what it
+    reaches, and every link's element width against the operand it names. A
+    reader that already has the Call's Type asks through here; type inference,
+    which is deriving that Type, asks the registry directly.
+    """
+    handler = access_relation_registry.lookup(type(call.target))
+    if handler is None:
+        raise ValueError(
+            f"{type(call.target).__name__} states no access relations, and there "
+            "is no fallback: register one with register_access_relation"
+        )
+    op_cls = type(call.target)
+    relations = handler(call, ctx)
+    wanted_inputs, wanted_outputs = _boundaries_of(call, ctx)
+    for side, stated, wanted in (
+        ("input", len(relations.inputs), wanted_inputs),
+        ("output", len(relations.outputs), wanted_outputs),
+    ):
+        if stated != wanted:
+            raise ValueError(
+                f"{op_cls.__name__} describes {stated} {side} "
+                f"boundar{'y' if stated == 1 else 'ies'} of a call with "
+                f"{wanted}"
+            )
+    _check_links_against(call, ctx, relations, op_cls)
+    _check_lookups_against(call, ctx, relations, op_cls)
+    _check_image_ranks(call, ctx, relations, op_cls)
+    _check_claim_against_links(relations, op_cls)
+    return relations
 
 
 def storage_effect_of(relations: AccessRelations) -> "StorageEffectClaim | None":
@@ -1745,6 +1756,7 @@ __all__ = [
     "measures_without_reading",
     "type_relation_registry",
     "register_access_relation",
+    "relations_of",
     "register_type_relation",
     "identity_relations",
     "build_relation",

@@ -34,6 +34,7 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target, UnsupportedCapabilityError
 from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
+    relations_of,
 )
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
@@ -907,11 +908,10 @@ def _renaming(expr: Expr, ctx, operand: Expr) -> "tuple[int | None, object]":
     """
     if ctx is None or not isinstance(expr, Call):
         return None, None
-    handler = access_relation_registry.lookup(type(expr.target))
-    if handler is None:
+    if access_relation_registry.lookup(type(expr.target)) is None:
         return None, None
     try:
-        relations = handler(expr, ctx)
+        relations = relations_of(expr, ctx)
     except (AnalysisError, NotImplementedError, ValueError):
         return None, None
     where = [index for index, arg in enumerate(expr.args) if arg is operand]

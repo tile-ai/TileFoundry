@@ -22,6 +22,7 @@ from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
     declared_storage,
     elements_of,
+    relations_of,
     static_bytes,
 )
 from tilefoundry.visitor_registry.contexts import Cost, CostContext
@@ -103,10 +104,9 @@ def _stated_movement(call: Call, cost: Cost, ctx: CostContext) -> tuple[TrafficB
     unit. Only the amount comes from it: which direction an operand moves stays
     the cost's answer. ``None`` for an Op with no relation yet.
     """
-    handler = access_relation_registry.lookup(type(call.target))
-    if handler is None:
+    if access_relation_registry.lookup(type(call.target)) is None:
         return None
-    relations = handler(call, ctx)
+    relations = relations_of(call, ctx)
     operands = (*call.args, call)
     stated: list[TrafficBytes] = []
     for index, (operand, moved) in enumerate(zip(operands, cost.traffic)):

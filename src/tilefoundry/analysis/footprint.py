@@ -30,6 +30,7 @@ from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
     index_set,
     relation_of,
+    relations_of,
     storage_effect_of,
 )
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
@@ -437,11 +438,10 @@ def _relation_cases(
     contraction walks its contracted axis and a reduction walks what it reads,
     and neither has the shape of what it produces.
     """
-    handler = access_relation_registry.lookup(type(call.target))
-    if handler is None:
+    if access_relation_registry.lookup(type(call.target)) is None:
         raise _Unavailable
     try:
-        relations = handler(call, ctx)
+        relations = relations_of(call, ctx)
         domain = _iterated(relations)
         if domain is None or not domain.is_bounded():
             raise _Unavailable

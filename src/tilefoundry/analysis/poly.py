@@ -33,6 +33,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     access_relation_registry,
     relation_of,
+    relations_of,
 )
 
 from .walk import children, postorder
@@ -778,8 +779,7 @@ def _extract_statement(
     prefix: str,
     loops: tuple[GridRegionExpr, ...] = (),
 ) -> list[_StatementAccess]:
-    handler = access_relation_registry.lookup(type(call.target))
-    if handler is None:
+    if access_relation_registry.lookup(type(call.target)) is None:
         raise ExtractError(
             f"extract: op {type(call.target).__name__!r} has no registered "
             "access relation -- register one via tilefoundry.visitor_registry."
@@ -788,7 +788,7 @@ def _extract_statement(
         )
     ctx = _RankPreserving()
     try:
-        relations = handler(call, ctx)
+        relations = relations_of(call, ctx)
     except (NotImplementedError, TypeError, ValueError, isl.Error) as error:
         raise ExtractError(
             f"extract: {type(call.target).__name__} cannot state its boundary "

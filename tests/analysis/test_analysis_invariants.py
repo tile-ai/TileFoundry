@@ -9,6 +9,7 @@ implementation output, so a formula round-trip cannot validate itself.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import json
 import re
 from dataclasses import MISSING, dataclass, replace
@@ -110,12 +111,13 @@ from tilefoundry.ir.core import (
     get_metadata,
 )
 from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.core.kinds import BinaryKind, ReduceKind
+from tilefoundry.ir.core.kinds import BinaryKind, ReduceKind, UnaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16, Wgmma_SM90_64x128x16
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.nn.conv2d import Conv2D
 from tilefoundry.ir.hir.nn.layer_norm import LayerNorm
 from tilefoundry.ir.hir.nn.matmul import MatMul
@@ -181,6 +183,7 @@ from tilefoundry.visitor_registry.access_relation import (
     reached_elements,
     register_access_relation,
     relation_of,
+    relations_of,
     transfers,
     writes,
 )
@@ -770,9 +773,199 @@ def _relations(target, shape, *args) -> AccessRelations:
     """The registered relation of one op, at the black-box (whole-call) level."""
     operands = (Var(type=make_tensor_type(shape, DType.bf16), name="x"), *args)
     call = Call(type=make_tensor_type(shape, DType.bf16), target=target, args=operands)
+    return relations_of(call, TypeInferContext())
+
+
+_UNTYPED = "the result Type this Call is about to be given"
+
+
+@dataclass
+class _NothingKnowsTheResult(TypeInferContext):
+    """A context that refuses to say what one Call returns.
+
+    Type inference asks for the coordinates in order to derive that Type, so a
+    relation stated in terms of it cannot be the one type inference asks: the
+    question would be its own answer. Refusing here is the only way to tell a
+    handler that derived the space from its inputs from one that asked for the
+    result and got it because the context was willing to infer it again.
+    """
+
+    about: object = None
+
+    def type_of(self, expr):
+        if expr is self.about:
+            raise AssertionError(
+                "the canonical relation asked for the result Type it is being "
+                "asked in order to derive"
+            )
+        return super().type_of(expr)
+
+    def local_type_of(self, expr):
+        if expr is self.about:
+            raise AssertionError(
+                "the canonical relation asked for the result's local Type, which "
+                "is a projection of an answer that does not exist yet"
+            )
+        return super().local_type_of(expr)
+
+
+def _pre_type(target, *args) -> AccessRelations:
+    """One Op's relations, asked before anything knows what it returns."""
     handler = access_relation_registry.lookup(type(target))
     assert handler is not None
-    return handler(call, TypeInferContext())
+    call = Call(type=_UNTYPED, target=target, args=args)
+    return handler(call, _NothingKnowsTheResult(about=call))
+
+
+def _walked_by(relations: AccessRelations) -> "isl.set":
+    """The space every boundary of one Op is asked by, compared as a set.
+
+    Two spellings of one space are one space, so this asks isl whether they are
+    equal rather than whether they read the same.
+    """
+    walked = None
+    for boundary in (*relations.inputs, *relations.outputs):
+        own = relation_of(boundary.pattern).domain()
+        if walked is None:
+            walked = own
+            continue
+        assert walked.is_equal(own), (
+            f"one Op states one space: {walked} against {own}"
+        )
+    assert walked is not None
+    return walked
+
+
+def test_one_relation_answers_before_its_result_type_exists() -> None:
+    """The registry that answers analysis is the one type inference has to ask.
+
+    A shape and a shard layout are derived from where an Op reads and writes, so
+    the coordinates cannot be stated in terms of what the Op returns -- that is
+    the thing being derived. Every rank here is built from the inputs and the
+    attributes: a product with and without batch axes, an elementwise op at
+    three ranks, a broadcast, a permutation and a reduction.
+    """
+    f32 = DType.f32
+    cases = (
+        ("matmul", MatMul(), (make_tensor_type((8, 4), f32), make_tensor_type((4, 2), f32))),
+        (
+            "batched matmul",
+            MatMul(),
+            (make_tensor_type((3, 8, 4), f32), make_tensor_type((3, 4, 2), f32)),
+        ),
+        ("unary rank 1", Unary(kind=UnaryKind.NEG), (make_tensor_type((5,), f32),)),
+        ("unary rank 3", Unary(kind=UnaryKind.NEG), (make_tensor_type((2, 3, 4), f32),)),
+        (
+            "broadcast",
+            Binary(kind=BinaryKind.ADD),
+            (make_tensor_type((4, 8), f32), make_tensor_type((8,), f32)),
+        ),
+        ("permutation", Transpose(perm=(1, 0)), (make_tensor_type((3, 5), f32),)),
+        (
+            "reduction",
+            Reduce(axes=(1,), keepdim=False, kind=ReduceKind.SUM),
+            (make_tensor_type((2, 3, 4), f32),),
+        ),
+    )
+    for label, target, shapes in cases:
+        args = tuple(
+            Var(type=shape, name=f"operand{index}") for index, shape in enumerate(shapes)
+        )
+        relations = _pre_type(target, *args)
+        assert len(relations.inputs) == len(args), label
+        assert relations.outputs, label
+        _walked_by(relations)
+
+
+def test_the_shape_type_inference_answers_is_the_one_the_relation_reaches() -> None:
+    """Two answers that must be one: what a Call's Type says, and where it writes.
+
+    Type inference derives the result's extents from the output boundary, so a
+    relation that reached other coordinates would infer another shape. Asserted
+    where the two could disagree: a contraction drops the axis it sums, a
+    reduction drops the axes it reduces, and a permutation reorders them.
+    """
+    f32 = DType.f32
+    for target, shapes, expected in (
+        (MatMul(), ((8, 4), (4, 2)), (8, 2)),
+        (MatMul(), ((3, 8, 4), (3, 4, 2)), (3, 8, 2)),
+        (Transpose(perm=(1, 0)), ((3, 5),), (5, 3)),
+        (Reduce(axes=(1,), keepdim=False, kind=ReduceKind.SUM), ((2, 3, 4),), (2, 4)),
+    ):
+        args = tuple(
+            Var(type=make_tensor_type(shape, f32), name=f"operand{index}")
+            for index, shape in enumerate(shapes)
+        )
+        relations = _pre_type(target, *args)
+        reached = relation_of(relations.outputs[0].pattern).range()
+        extents = tuple(
+            int(str(reached.dim_max_val(axis))) + 1
+            for axis in range(reached.dim(isl.dim_type.SET))
+        )
+        assert extents == expected, f"{type(target).__name__} reaches {extents}"
+        inferred = TypeInferVisitor(TypeInferContext()).visit(
+            Call(type=_UNTYPED, target=target, args=args)
+        )
+        assert tuple(inferred.shape) == expected == extents, (
+            f"{type(target).__name__}: inference and the relation disagree"
+        )
+
+
+def test_one_wrong_relation_is_wrong_for_both_of_its_readers() -> None:
+    """There is one relation, so breaking it has to break everything reading it.
+
+    A registry consulted by only one of two readers can be wrong for a whole
+    release without anything failing. This replaces the product's relation with
+    one that contracts the wrong axis and asks both readers: the shape type
+    inference derives, and the amount the movement consumer counts. If either
+    still answers as before, they are not reading the same thing.
+    """
+    lhs = Var(type=make_tensor_type((8, 4), DType.f32), name="lhs")
+    rhs = Var(type=make_tensor_type((4, 2), DType.f32), name="rhs")
+    call = Call(type=_UNTYPED, target=MatMul(), args=(lhs, rhs))
+
+    honest = access_relation_registry.lookup(MatMul)
+
+    def contracts_the_kept_axis(one, ctx) -> AccessRelations:
+        """A product that sums the axis it should have kept."""
+        relations = honest(one, ctx)
+        swapped = relation_of(relations.outputs[0].pattern)
+        return AccessRelations(
+            inputs=relations.inputs,
+            outputs=(
+                dataclasses.replace(
+                    relations.outputs[0],
+                    pattern=AffineAccess(
+                        swapped.project_out(isl.dim_type.OUT, 0, 1), ()
+                    ),
+                ),
+            ),
+            storage_effect=relations.storage_effect,
+        )
+
+    shape, moved = inferred_and_moved(call)
+    access_relation_registry._map[MatMul] = contracts_the_kept_axis
+    try:
+        broken_shape, broken_moved = inferred_and_moved(call)
+    finally:
+        access_relation_registry._map[MatMul] = honest
+    assert broken_moved != moved, "the movement consumer did not read the relation"
+    assert broken_shape != shape, "type inference did not read the same relation"
+    assert inferred_and_moved(call) == (shape, moved)
+
+
+def inferred_and_moved(call: Call) -> tuple:
+    """What both readers say about one Call: its inferred shape, and its movement."""
+    inferred = TypeInferVisitor(TypeInferContext()).visit(call)
+    relations = access_relation_registry.lookup(type(call.target))(
+        call, TypeInferContext()
+    )
+    return (
+        tuple(getattr(inferred, "shape", ())),
+        tuple(
+            reached_elements(boundary.pattern) for boundary in relations.outputs
+        ),
+    )
 
 
 def test_a_data_dependent_read_is_a_relation_and_not_a_function() -> None:
@@ -890,7 +1083,7 @@ def test_every_boundary_states_the_movement_its_op_performs() -> None:
             Var(type=make_tensor_type((4, 4), DType.bf16), name="tail"),
         ),
     )
-    assert counted(access_relation_registry.lookup(Concat)(joined, ctx)) == (
+    assert counted(relations_of(joined, ctx)) == (
         [12, 16],
         [28],
     )
@@ -903,7 +1096,7 @@ def test_every_boundary_states_the_movement_its_op_performs() -> None:
             Var(type=make_tensor_type((3,), DType.i32), name="index"),
         ),
     )
-    assert counted(access_relation_registry.lookup(IndexSelect)(gathered, ctx)) == (
+    assert counted(relations_of(gathered, ctx)) == (
         [24, 3],
         [24],
     )
@@ -923,7 +1116,7 @@ def test_every_boundary_states_the_movement_its_op_performs() -> None:
             ),
         ),
     )
-    assert counted(access_relation_registry.lookup(InsertSlice)(written, ctx)) == (
+    assert counted(relations_of(written, ctx)) == (
         [12, 12, 2],
         [12],
     )
@@ -938,7 +1131,7 @@ def test_every_boundary_states_the_movement_its_op_performs() -> None:
             Var(type=make_tensor_type((2, 5, 4, 8), DType.bf16), name="new"),
         ),
     )
-    assert counted(access_relation_registry.lookup(CacheUpdate)(cached, ctx)) == (
+    assert counted(relations_of(cached, ctx)) == (
         [832, 1, 1, 192],
         [192],
     )
@@ -978,7 +1171,7 @@ def _asked(op, result, *operands, ctx=None):
             Var(type=type_, name=f"a{index}") for index, type_ in enumerate(operands)
         ),
     )
-    return access_relation_registry.lookup(type(op))(call, ctx or TypeInferContext())
+    return relations_of(call, ctx or TypeInferContext())
 
 
 def test_a_reduction_reads_the_extent_its_own_participant_holds() -> None:
@@ -1033,7 +1226,7 @@ def test_a_reduction_maps_the_axes_its_layout_factored() -> None:
         target=Reduce(axes=(1,), keepdim=True, kind=ReduceKind.SUM),
         args=(Var(type=source, name="x"),),
     )
-    relations = access_relation_registry.lookup(Reduce)(
+    relations = relations_of(
         call, CostContext(level="thread", topologies=(Topology("thread", 6 * 32),))
     )
     reads = relation_of(relations.inputs[0].pattern)
@@ -1056,7 +1249,7 @@ def _reduced(type_, axes, keepdim, level=None, topologies=()):
     )
     call = Call(type=inferred, target=target, args=(held,))
     return relation_of(
-        access_relation_registry.lookup(Reduce)(
+        relations_of(
             call, CostContext(level=level, topologies=topologies)
         ).outputs[0].pattern
     )
@@ -1168,7 +1361,7 @@ def _projected(op, result, *operands):
     )
     views = []
     for level in (None, "cta"):
-        relations = access_relation_registry.lookup(type(op))(
+        relations = relations_of(
             call, CostContext(level=level, topologies=(_CONV_CTA,))
         )
         views.append((_counted(relations), relations))
@@ -1381,9 +1574,7 @@ def test_a_view_and_the_value_it_renames_state_the_same_coordinates() -> None:
             Call(type=source, target=op, args=(held,))
         )
         call = Call(type=inferred, target=op, args=(held,))
-        relations = access_relation_registry.lookup(type(op))(
-            call, CostContext(level="cta", topologies=(cta,))
-        )
+        relations = relations_of(call, CostContext(level="cta", topologies=(cta,)))
         return relations.outputs[0].storage.links[0]
 
     held = split((8,))
@@ -1393,7 +1584,7 @@ def test_a_view_and_the_value_it_renames_state_the_same_coordinates() -> None:
     turned = linked(Transpose(perm=(0, 1)), split((8, 4)))
     assert _as_map(turned.where).is_equal(isl.map("{ [d0, d1, d2] -> [0, d1, d2] }"))
 
-    parted = access_relation_registry.lookup(SplitOp)(
+    parted = relations_of(
         _split_call(split((8, 4))), CostContext(level="cta", topologies=(cta,))
     )
     for field, offset in enumerate((0, 2)):
@@ -1527,7 +1718,7 @@ def test_a_window_is_stated_in_the_positions_its_layout_made() -> None:
     )
     call = Call(type=inferred, target=written, args=(*held, offsets))
     whole, unit = (
-        access_relation_registry.lookup(InsertSlice)(
+        relations_of(
             call, CostContext(level=level, topologies=(cta,))
         )
         for level in (None, "cta")
@@ -1558,7 +1749,7 @@ def test_a_window_is_stated_in_the_positions_its_layout_made() -> None:
     )
     call = Call(type=inferred, target=cache, args=rows)
     whole, unit = (
-        access_relation_registry.lookup(CacheUpdate)(
+        relations_of(
             call, CostContext(level=level, topologies=(cta,))
         )
         for level in (None, "cta")
@@ -1596,7 +1787,7 @@ def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:
             Var(type=make_tensor_type((4, 8), DType.f32), name="upper"),
         ),
     )
-    relations = access_relation_registry.lookup(Stack)(stacked, ctx)
+    relations = relations_of(stacked, ctx)
     stacks = "0 <= d0 <= 1 and 0 <= d1 <= 3 and 0 <= d2 <= 7"
     assert _as_map(relations.inputs[0].pattern).is_equal(
         isl.map(f"{{ [d0, d1, d2] -> [d1, d2] : d0 = 0 and {stacks} }}")
@@ -1618,7 +1809,7 @@ def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:
         target=Split(axis=0, num_splits=2),
         args=(Var(type=make_tensor_type((6, 5), DType.f32), name="whole"),),
     )
-    relations = access_relation_registry.lookup(Split)(parted, ctx)
+    relations = relations_of(parted, ctx)
     parts = "0 <= d0 <= 5 and 0 <= d1 <= 4"
     assert _as_map(relations.inputs[0].pattern).is_equal(
         isl.map(f"{{ [d0, d1] -> [d0, d1] : {parts} }}")
@@ -1642,7 +1833,7 @@ def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:
             Var(type=make_tensor_type((8,), DType.f32), name="row"),
         ),
     )
-    relations = access_relation_registry.lookup(Binary)(added, ctx)
+    relations = relations_of(added, ctx)
     rows = "0 <= d0 <= 3 and 0 <= d1 <= 7"
     assert _as_map(relations.inputs[0].pattern).is_equal(
         isl.map(f"{{ [d0, d1] -> [d0, d1] : {rows} }}")
@@ -1659,7 +1850,7 @@ def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:
             Var(type=make_tensor_type((4, 1), DType.f32), name="column"),
         ),
     )
-    relations = access_relation_registry.lookup(Binary)(held, ctx)
+    relations = relations_of(held, ctx)
     assert _as_map(relations.inputs[1].pattern).is_equal(
         isl.map("{ [d0, d1] -> [d0, 0] : 0 <= d0 <= 3 and 0 <= d1 <= 7 }")
     )
@@ -1687,7 +1878,7 @@ def test_a_windows_amount_does_not_move_with_where_it_lands() -> None:
                 offset,
             ),
         )
-        relations = access_relation_registry.lookup(InsertSlice)(call, ctx)
+        relations = relations_of(call, ctx)
         return (
             [item.quantity.upper for item in relations.inputs],
             [item.quantity.upper for item in relations.outputs],
@@ -1771,7 +1962,7 @@ def test_an_unbound_row_count_states_its_range_and_where_it_came_from() -> None:
             Var(type=make_tensor_type((2, 5, 4, 8), DType.bf16), name="new"),
         ),
     )
-    relations = access_relation_registry.lookup(CacheUpdate)(call, ctx)
+    relations = relations_of(call, ctx)
     per_row, held = 2 * 4 * 8, 2 * 16 * 4 * 8
 
     update = relations.inputs[3]
@@ -1829,7 +2020,7 @@ def test_a_lookups_amount_does_not_move_with_the_values_it_looks_up() -> None:
                 Var(type=make_tensor_type((length,), DType.i32), name="index"),
             ),
         )
-        relations = access_relation_registry.lookup(IndexSelect)(call, ctx)
+        relations = relations_of(call, ctx)
         return tuple(item.quantity.upper for item in relations.inputs)
 
     assert declared(3) == (12, 3)
@@ -1853,7 +2044,7 @@ def test_a_field_of_a_tuple_is_named_by_the_link_that_forwards_it() -> None:
 
     for field, held in ((0, values), (1, indices)):
         taken = Call(type=held, target=TupleGetItem(index=field), args=(pair,))
-        relations = access_relation_registry.lookup(TupleGetItem)(taken, ctx)
+        relations = relations_of(taken, ctx)
         (link,) = relations.outputs[0].storage.links
         assert (link.input, link.input_field) == (0, field)
         assert link.quantity == AccessQuantity(4, 4)
@@ -1893,7 +2084,7 @@ def test_a_claim_no_link_supports_is_refused_when_the_handler_answers() -> None:
         args=(Var(type=make_tensor_type((4,), DType.f32), name="held"),),
     )
     with pytest.raises(ValueError, match="no link of its output says so"):
-        access_relation_registry.lookup(_Overclaims)(call, TypeInferContext())
+        relations_of(call, TypeInferContext())
 
 
 def test_an_empty_shape_relabels_to_an_empty_relation() -> None:
@@ -1996,7 +2187,7 @@ def test_a_link_is_held_to_the_operand_it_names() -> None:
         args=(Var(type=make_tensor_type((4,), DType.i64), name="wider"),),
     )
     with pytest.raises(ValueError, match="whose elements are 64 bits against 32"):
-        access_relation_registry.lookup(_Narrows)(call, TypeInferContext())
+        relations_of(call, TypeInferContext())
 
 
 def test_a_lookup_is_held_to_the_operand_and_the_axis_it_names() -> None:
@@ -2032,7 +2223,7 @@ def test_a_lookup_is_held_to_the_operand_and_the_axis_it_names() -> None:
             target=target(),
             args=(Var(type=make_tensor_type((4,), DType.f32), name="held"),),
         )
-        return access_relation_registry.lookup(target)(call, TypeInferContext())
+        return relations_of(call, TypeInferContext())
 
     absent = registered("_LooksUpNobody", lambda: IndexedAccess(index_operand=3, axis=0))
     with pytest.raises(ValueError, match="through operand 3, and this call has 1"):
@@ -2097,7 +2288,7 @@ def test_a_link_source_that_names_a_field_is_checked_against_that_field() -> Non
                 Var(type=make_tensor_type((4,), DType.i64), name="index"),
             ),
         )
-        return access_relation_registry.lookup(target)(call, TypeInferContext())
+        return relations_of(call, TypeInferContext())
 
     relations = asked(registered("_LooksIntoAField", 0))
     (link,) = relations.outputs[0].storage.links
@@ -2138,7 +2329,7 @@ def test_a_relation_is_held_to_the_call_it_was_asked_about() -> None:
             target=target(),
             args=tuple(Var(type=holds, name=f"a{index}") for index in range(operands)),
         )
-        return access_relation_registry.lookup(target)(call, TypeInferContext())
+        return relations_of(call, TypeInferContext())
 
     for name, inputs, outputs, result, operands, complaint in (
         ("_SkipsAnOperand", 1, 1, holds, 2, "1 input boundary of a call with 2"),
@@ -2692,7 +2883,7 @@ def _matmul_relations(lhs_shape, rhs_shape, out_shape):
             Var(type=make_tensor_type(rhs_shape, DType.f32), name="b"),
         ),
     )
-    return access_relation_registry.lookup(MatMul)(call, CostContext())
+    return relations_of(call, CostContext())
 
 
 def test_a_contraction_reads_each_operand_at_its_own_extents() -> None:
@@ -3172,7 +3363,7 @@ def test_an_unbound_parameter_settles_at_the_smallest_window_it_allows() -> None
             Var(type=make_tensor_type((2, 5, 4, 8), DType.bf16), name="new"),
         ),
     )
-    relations = access_relation_registry.lookup(CacheUpdate)(call, ctx)
+    relations = relations_of(call, ctx)
     cache = index_set((2, 16, 4, 8))
     per_row, held = 2 * 4 * 8, 2 * 16 * 4 * 8
 
@@ -3356,7 +3547,7 @@ def _insert_slice_controls(dst_shape, update_shape, offsets):
             offsets,
         ),
     )
-    relations = access_relation_registry.lookup(InsertSlice)(call, CostContext())
+    relations = relations_of(call, CostContext())
     return [boundary.quantity.upper for boundary in relations.inputs]
 
 
@@ -3401,7 +3592,7 @@ def test_naming_bytes_is_not_reading_them() -> None:
         target=SliceOp(sizes=(4,), strides=(1,)),
         args=(Var(type=held, name="x"), bounds),
     )
-    naming = access_relation_registry.lookup(SliceOp)(window, CostContext())
+    naming = relations_of(window, CostContext())
     assert [item.quantity.upper for item in naming.inputs] == [4, 0]
 
     assert _insert_slice_controls((10,), (4,), start) == [10 - 4, 4, 1]
@@ -3575,7 +3766,7 @@ def test_a_link_is_asked_by_as_many_coordinates_as_its_output_has() -> None:
         args=(Var(type=make_tensor_type((4,), DType.f32), name="x"),),
     )
     with pytest.raises(ValueError, match="from 1 coordinates, and it has 2"):
-        access_relation_registry.lookup(_AsksTooFew)(call, CostContext())
+        relations_of(call, CostContext())
 
 
 def test_a_link_that_states_both_ranks_is_taken() -> None:
@@ -3594,7 +3785,7 @@ def test_a_link_that_states_both_ranks_is_taken() -> None:
         target=Concat(axis=0),
         args=(Var(type=piece, name="a"), Var(type=piece, name="b")),
     )
-    relations = access_relation_registry.lookup(Concat)(joined, TypeInferContext())
+    relations = relations_of(joined, TypeInferContext())
     for index, offset in enumerate((0, 3)):
         (link,) = [
             item
@@ -3607,7 +3798,7 @@ def test_a_link_that_states_both_ranks_is_taken() -> None:
         assert link.where.dim(isl.dim_type.IN) == 2
         assert link.where.dim(isl.dim_type.OUT) == 2
 
-    parted = access_relation_registry.lookup(SplitOp)(
+    parted = relations_of(
         _split_call(make_tensor_type((6, 4), DType.f32)), TypeInferContext()
     )
     for field, offset in enumerate((0, 2)):
