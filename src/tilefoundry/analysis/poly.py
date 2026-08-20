@@ -644,6 +644,9 @@ def _registered_access(
     walks = tuple(
         raw_map.domain().project_out(isl.dim_type.SET, 0, depth) for raw_map in written
     )
+    whole = walks[0]
+    for own in walks[1:]:
+        whole = whole.union(own)
     read_maps = tuple(
         placed(relations.inputs[index]) if index < len(relations.inputs) else None
         for index in range(len(call.args))
@@ -655,6 +658,7 @@ def _registered_access(
             index,
             len(written),
             walks[index],
+            _settled_within(whole, walks[index]),
             read_maps,
             relations,
             namer,
@@ -665,20 +669,64 @@ def _registered_access(
     ]
 
 
+def _settled_within(whole: "isl.set", piece: "isl.set") -> tuple[int, ...]:
+    """The coordinates one output piece holds still while its Call varies them.
+
+    A Call that rotates two values walks a coordinate saying which it is
+    rotating, and one output answers at one value of it. That coordinate is not
+    part of the statement -- the statement is the piece -- so it comes off, and
+    the rank a reader sees is the rank the work has. An extent of one that the
+    whole Call also holds still is a real axis and stays.
+    """
+    return tuple(
+        position
+        for position in range(piece.dim(isl.dim_type.SET))
+        if _held_still(piece, position) and not _held_still(whole, position)
+    )
+
+
+def _held_still(walked: "isl.set", position: int) -> bool:
+    """Whether one coordinate takes a single value everywhere in a space."""
+    low, high = walked.dim_min_val(position), walked.dim_max_val(position)
+    return low.is_int() and high.is_int() and low.get_num_si() == high.get_num_si()
+
+
+def _without(walked: "isl.set", settled: tuple[int, ...]) -> "isl.set":
+    """One space with the coordinates an output piece holds still taken out."""
+    for position in reversed(settled):
+        walked = walked.project_out(isl.dim_type.SET, position, 1)
+    return walked
+
+
 def _one_statement(
     call: Call,
     stmt_name: str,
     out_idx: int,
     outputs: int,
     walks: "isl.set",
+    settled: tuple[int, ...],
     read_maps: tuple,
     relations: AccessRelations,
     namer,
     prefix: str,
     loops: tuple[GridRegionExpr, ...],
 ) -> _StatementAccess:
-    """One statement: the part of a Call's space one output answers on."""
-    own, shape_params = _walked(call, relations, walks)
+    """One statement: the part of a Call's space one output answers on.
+
+    A boundary that answers nowhere in this piece is not this statement's: the
+    other value a fused rotation writes is read by the other statement, and
+    copying it here would invent a dependence on bytes this work never touches.
+    """
+    depth = len(loops)
+    here = walks.insert_dims(isl.dim_type.SET, 0, depth)
+
+    def within(access: "isl.map") -> "isl.map":
+        held = access.intersect_domain(here)
+        for position in reversed(settled):
+            held = held.project_out(isl.dim_type.IN, depth + position, 1)
+        return held
+
+    own, shape_params = _walked(call, relations, _without(walks, settled))
     prefixed, loop_params = _loop_domain(own, loops)
     prefixed = _full_slice_domain(prefixed, call.args, loops)
     domain = prefixed.set_tuple_name(stmt_name)
@@ -689,7 +737,10 @@ def _one_statement(
     for index, arg in enumerate(call.args):
         if read_maps[index] is None:
             continue
-        read = _read_map(read_maps[index], stmt_name, domain, arg, namer, loops)
+        reached = within(read_maps[index])
+        if reached.is_empty():
+            continue
+        read = _read_map(reached, stmt_name, domain, arg, namer, loops)
         reads.append(read)
         dtypes[read.get_tuple_name(isl.dim_type.OUT)] = getattr(arg.type, "dtype", None)
 
@@ -697,10 +748,12 @@ def _one_statement(
         namer(call, prefix) if outputs == 1 else f"{namer(call, prefix)}_{out_idx}"
     )
     bound = _bind_map(
-        _place_parameters(
-            _lift(relation_of(relations.outputs[out_idx].pattern), len(loops)),
-            relations.outputs[out_idx],
-            loops,
+        within(
+            _place_parameters(
+                _lift(relation_of(relations.outputs[out_idx].pattern), depth),
+                relations.outputs[out_idx],
+                loops,
+            )
         ),
         stmt_name,
         domain,

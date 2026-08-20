@@ -34,11 +34,9 @@ from tilefoundry.visitor_registry.access_relation import (
     reached_at,
     register_access_relation,
     register_type_relation,
-    relation_of,
     writes,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
-from tilefoundry.visitor_registry.relation_build import identity_access
 
 
 @register_op
@@ -91,26 +89,26 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
 def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelations:
     """GLOBAL level: a rotation per element, read out of a table by position.
 
-    Every boundary answers about the rotated value's own coordinates. Q and K
-    are read and written where those say; grouped-query K holds fewer heads, so
-    its own boundaries answer on the part of that space it has. A table
-    carries head_dim on its last axis and rows on the ones before, so it is read
-    at the value's own head_dim coordinate and at any row those axes could
-    legally name -- the row is an element of `pos_ids`, which no relation here
-    holds. `pos_ids` is read whole, each element naming a row some token wanted.
+    Rotating Q and rotating K are instances of the same work, so the space this
+    Op walks says which: one coordinate names the value rotated, Q's boundaries
+    answer where it is Q and K's where it is K, which keeps them apart even at
+    equal width. Grouped-query K holds fewer heads and answers on that much. A
+    table carries head_dim last and rows before it, so it is read at the rotated
+    value's head_dim coordinate and at any row those axes could name -- the row
+    is an element of `pos_ids`, which nothing here holds, read whole by both.
     """
     q_ty, k_ty = ctx.local_type_of(call.args[0]), ctx.local_type_of(call.args[1])
     logical_q = ctx.type_of(call.args[0])
     rank = len(q_ty.shape)
     head_dim = len(logical_q.shape) - 1
     carried = logical_coordinates(q_ty, logical_q)
-    value = identity_access(rank)
+    walked = ", ".join((*(f"d{index}" for index in range(rank)), f"d{rank}"))
+    own = ", ".join(f"d{index}" for index in range(rank))
+    value = isl.map(f"{{ [{walked}] -> [{own}] : d{rank} = 0 }}")
+    grouped = isl.map(f"{{ [{walked}] -> [{own}] : d{rank} = 1 }}")
     narrower = index_set(tuple(k_ty.shape))
-    grouped = (
-        relation_of(value)
-        if narrower is None
-        else relation_of(value).intersect_domain(narrower)
-    )
+    if narrower is not None:
+        grouped = grouped.intersect_range(narrower)
     positions = ctx.local_type_of(call.args[4])
     taken = elements_of(positions)
     tables = []
@@ -121,7 +119,7 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
         tables.append(
             moves(
                 reached_at(
-                    rank,
+                    rank + 1,
                     table,
                     logical_table,
                     {rows: carried.get(head_dim, "0")},
@@ -131,7 +129,7 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
             )
         )
     return iterating(
-        q_ty.shape,
+        (*q_ty.shape, 2),
         AccessRelations(
             inputs=(
                 moves(value, elements_of(q_ty)),
@@ -139,7 +137,7 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
                 *tables,
                 moves(
                     reached_at(
-                        rank,
+                        rank + 1,
                         positions,
                         ctx.type_of(call.args[4]),
                         {},

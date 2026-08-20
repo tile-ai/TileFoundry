@@ -557,6 +557,27 @@ def test_one_call_producing_two_tensors_becomes_two_statements() -> None:
     assert tg.deps.is_equal(isl.union_map("{}"))
 
 
+def test_each_rotation_reads_its_own_value_and_not_the_other() -> None:
+    """Exactly which buffers each statement reads, not merely which it includes.
+
+    Rotating Q and rotating K are separate work sharing only the tables and the
+    positions. A statement that also read the value it does not rotate would
+    claim a dependence on bytes it never touches, and every subset assertion
+    would still pass while it did. So this asks for the whole set: each side has
+    its own value, neither has the other's, and both have what they share.
+    """
+    tg = extract(rope_gqa)
+
+    read: dict[str, set[str]] = {}
+    tg.reads.foreach_map(
+        lambda access: read.setdefault(
+            access.get_tuple_name(isl.dim_type.IN), set()
+        ).add(access.get_tuple_name(isl.dim_type.OUT))
+    )
+    shared = {"cos_cache", "sin_cache", "pos_ids"}
+    assert read == {"RoPE_0": shared | {"q"}, "RoPE_1": shared | {"k"}}
+
+
 def test_a_rotation_reads_its_tables_at_the_position_and_not_at_random() -> None:
     """V1 decodes at `pos_ids == arange(seq)`, so the table selection is affine.
 
@@ -797,20 +818,23 @@ def test_a_relation_says_how_a_data_dependent_operand_is_read() -> None:
         Var(type=tables, name="sin"),
         Var(type=positions, name="pos"),
     )
-    rotated = isl.set(f"{{ [d0, d1, d2] : 0 <= d0 < 1 and 0 <= d1 < 32 and 0 <= d2 < {HEAD_DIM} }}")
+    rotated = isl.set(
+        f"{{ [d0, d1, d2, b] : 0 <= d0 < 1 and 0 <= d1 < 32 "
+        f"and 0 <= d2 < {HEAD_DIM} and 0 <= b < 2 }}"
+    )
 
     assert len(relation.inputs) == 5
     assert relation_of(relation.inputs[0].pattern).is_single_valued()
     assert relation_of(relation.inputs[1].pattern).is_single_valued()
     for lookup in (relation.inputs[2], relation.inputs[3]):
-        read = lookup.pattern.relation
+        read = relation_of(lookup.pattern)
         assert not read.is_single_valued(), (
             "a lookup cannot promise the entry it lands on"
         )
         assert int(str(rotated.apply(read).count_val())) == 4096 * HEAD_DIM, (
             "so it states every entry the table has, which is an answer"
         )
-    asked = rotated.apply(relation.inputs[4].pattern.relation)
+    asked = rotated.apply(relation_of(relation.inputs[4].pattern))
     assert int(str(asked.count_val())) == 1, "the one position that decided all of it"
     assert len(relation.outputs) == 2
     assert all(
