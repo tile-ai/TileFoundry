@@ -13,23 +13,27 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.arange import Arange
-from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
-from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.reshape import Reshape, flat_reshape_map
 from tilefoundry.ir.hir.tensor.slice import Slice, window_base
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.types import TensorType, numel
+from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import shard_layout_of
 from tilefoundry.ir.types.shard.shard_layout import split_target_axes
-from tilefoundry.visitor_registry.access_relation import AccessRelationResult, build_relation
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelations,
+    StorageEffectKind,
+    access_relation_registry,
+    index_set,
+    relation_of,
+    storage_effect_of,
+)
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.isl_utility import to_domain
-from tilefoundry.visitor_registry.relation_build import identity_map
 
 from .walk import loop_repeated_values, loop_trip_count, postorder
 
@@ -72,8 +76,8 @@ class _LoopReading:
 class _RelationCase:
     """One domain of a Call and the original operands modeled on that domain."""
 
-    result: AccessRelationResult
-    operand_maps: tuple[tuple[int, int], ...]
+    domain: isl.set
+    relations: AccessRelations
     local_types: tuple[object, ...]
 
 
@@ -269,115 +273,181 @@ def _source_buffer(
     return expr, access
 
 
-def _narrow_reshard_window(call: Call) -> TensorType | None:
-    if not (
-        isinstance(call.target, Reshard)
-        and isinstance(call.args[0], Call)
-        and isinstance(call.args[0].target, Slice)
-    ):
-        return None
-    source = _local_type(call.args[0].type)
-    target = _local_type(call.type)
-    if not isinstance(source, TensorType) or not isinstance(target, TensorType):
-        return None
-    if source.shape == target.shape or len(source.shape) != len(target.shape):
-        return None
-    if not all(
-        isinstance(source_size, int) and isinstance(target_size, int) and target_size <= source_size
-        for source_size, target_size in zip(source.shape, target.shape)
-    ):
-        return None
-    return TensorType(
-        shape=target.shape,
-        dtype=source.dtype,
-        layout=None,
-        storage=source.storage,
-    )
+@dataclass
+class _RankPreserving(TypeInferContext):
+    """A context whose local view narrows a Split axis and keeps the rank.
+
+    A footprint is a relation over a tensor's logical axes, so a local view that
+    factored them into layout positions would lose the very flow this model is
+    for. Handlers ask their context this question, which is what lets one
+    registered relation answer both the whole program and one participant.
+    """
+
+    def local_type_of(self, expr: Expr) -> object:
+        return _local_type(self.type_of(expr))
 
 
-def _relation(call: Call, ctx: TypeInferContext, *, narrow: bool):
-    input_types = tuple(_local_type(arg.type) if narrow else arg.type for arg in call.args)
-    if isinstance(call.target, InsertSlice):
-        update = input_types[1]
-        if not isinstance(update, TensorType):
-            raise _Unavailable
-        domain, param_map = to_domain(update.shape)
-        ident = identity_map(len(update.shape))
-        none = isl.map(f"{{ [{', '.join(f'd{i}' for i in range(len(update.shape)))}] -> [] }}")
-        return AccessRelationResult(
-            domain=domain,
-            maps=(ident, ident, none, ident),
-            param_map=param_map,
-        )
-    if isinstance(call.target, CacheUpdate):
-        new = input_types[3]
-        if not isinstance(new, TensorType):
-            raise _Unavailable
-        domain, param_map = to_domain(new.shape)
-        ident = identity_map(len(new.shape))
-        none = isl.map(f"{{ [{', '.join(f'd{i}' for i in range(len(new.shape)))}] -> [] }}")
-        return AccessRelationResult(
-            domain=domain,
-            maps=(ident, none, none, ident, ident),
-            param_map=param_map,
-        )
-    if isinstance(call.target, Reshard) and not narrow:
-        source = input_types[0]
-        if not isinstance(source, TensorType):
-            raise _Unavailable
-        domain, param_map = to_domain(source.shape)
-        ident = identity_map(len(source.shape))
-        return AccessRelationResult(domain=domain, maps=(ident, ident), param_map=param_map)
-    if narrow and (window := _narrow_reshard_window(call)) is not None:
-        domain, param_map = to_domain(window.shape)
-        ident = identity_map(len(window.shape))
-        return AccessRelationResult(domain=domain, maps=(ident, ident), param_map=param_map)
+def _placed_parameter(
+    value: object, loops: tuple[GridRegionExpr, ...], *, narrow: bool
+) -> tuple[int | None, int, int] | None:
+    """Where in this loop nest a parameter's value sits, when it sits anywhere."""
+    if not isinstance(value, Expr):
+        return None
     try:
-        return build_relation(call, input_types, ctx)
-    except (NotImplementedError, TypeError, ValueError, isl.Error) as error:
-        raise _Unavailable from error
+        return _slice_start(value, loops, narrow=narrow)
+    except _Unavailable:
+        bounds = _static_range(value, narrow=narrow)
+        return None if bounds is None else (None, bounds[0], bounds[1])
+
+
+def _widest_allowed(
+    access: isl.map, name: str, held: object
+) -> tuple[None, int, int] | None:
+    """The value a parameter may take that reaches the most of its operand.
+
+    A footprint is an upper bound, so a parameter nobody here can place takes
+    whichever end of its legal range touches more: where a window sits does not
+    change how much of it there is, but how long it is does. Both ends are the
+    Op's own contract, read off the relation rather than guessed.
+    """
+    names = [
+        access.get_dim_name(isl.dim_type.PARAM, index)
+        for index in range(access.dim(isl.dim_type.PARAM))
+    ]
+    space = f"[{', '.join(names)}] -> "
+    probe = isl.set(f"{space}{{ [x] : x = {name} }}").intersect_params(access.params())
+    ends = (probe.dim_min_val(0), probe.dim_max_val(0))
+    if not all(end.is_int() for end in ends):
+        return None
+    box = index_set(tuple(held.shape)) if isinstance(held, TensorType) else None
+    if box is None or box.dim(isl.dim_type.SET) != access.dim(isl.dim_type.OUT):
+        least = ends[0].get_num_si()
+        return (None, least, least)
+    best: tuple[int, int] | None = None
+    for value in sorted({end.get_num_si() for end in ends}):
+        reach = access.intersect_params(
+            isl.set(f"{space}{{ : {name} = {value} }}")
+        ).range().intersect(box)
+        amount = reach.coalesce().count_val()
+        if not amount.is_int():
+            return None
+        if best is None or amount.get_num_si() > best[0]:
+            best = (amount.get_num_si(), value)
+    return None if best is None else (None, best[1], best[1])
+
+
+def _bind_parameters(
+    access: isl.map,
+    pattern: object,
+    loops: tuple[GridRegionExpr, ...],
+    held: object,
+    domain: isl.set,
+    *,
+    narrow: bool,
+) -> isl.map:
+    """Say what each of a relation's parameters is, in this loop nest's terms.
+
+    A window's offset is bound to the operand that states it, and that operand
+    may be an induction variable: then the parameter is the loop coordinate, and
+    projecting it out unions the window over the trip. The relation is held to
+    the domain it runs over first, because what a parameter may be follows from
+    where the Call walks. One nobody here can place takes whichever end of its
+    legal range reaches the most, so a window of unknown position still counts
+    as the window it is rather than as everywhere it could have gone.
+    """
+    bound = dict(getattr(pattern, "parameters", ()) or ())
+    access = access.intersect_domain(domain)
+    while access.dim(isl.dim_type.PARAM):
+        name = access.get_dim_name(isl.dim_type.PARAM, 0)
+        value = bound.get(name)
+        number = static_dim_value(value)
+        if number is not None:
+            loop_axis, low, high = None, number, number
+        else:
+            placed = _placed_parameter(value, loops, narrow=narrow)
+            if placed is None:
+                placed = _widest_allowed(access, name, held)
+            if placed is None:
+                access = access.project_out(isl.dim_type.PARAM, 0, 1)
+                continue
+            loop_axis, low, high = placed
+        local = isl.local_space.from_space(access.get_space())
+
+        def placed(constraint: isl.constraint, sign: int) -> isl.constraint:
+            constraint = constraint.set_coefficient_si(isl.dim_type.PARAM, 0, sign)
+            if loop_axis is not None:
+                constraint = constraint.set_coefficient_si(isl.dim_type.IN, loop_axis, -sign)
+            return constraint
+
+        if low == high:
+            equality = placed(isl.constraint.alloc_equality(local), 1)
+            access = access.add_constraint(equality.set_constant_si(-low))
+        else:
+            floor = placed(isl.constraint.alloc_inequality(local), 1)
+            ceiling = placed(isl.constraint.alloc_inequality(local), -1)
+            access = access.add_constraint(floor.set_constant_si(-low))
+            access = access.add_constraint(ceiling.set_constant_si(high))
+        access = access.project_out(isl.dim_type.PARAM, 0, 1)
+    return access
+
+
+def _within(access: isl.map, held: TensorType) -> isl.map:
+    """The part of a relation that lands on coordinates the operand has.
+
+    A relation stated over a container reaches past a participant that holds part
+    of it, and a boundary answers for what it was given: reaching a coordinate
+    nobody holds is not reaching.
+    """
+    box = index_set(tuple(held.shape))
+    if box is None or box.dim(isl.dim_type.SET) != access.dim(isl.dim_type.OUT):
+        return access
+    return access.intersect_range(box)
+
+
+def _touched(call: Call, relations: AccessRelations):
+    """Each operand this Call reaches into, paired with the boundary saying where.
+
+    An Op that overwrites part of its destination states two things about that
+    operand: the window it writes, and the rest it keeps. Only the first is
+    reached -- the bytes it kept are the ones it did not touch -- so the written
+    output answers for that operand and the preserved input is passed over.
+    """
+    claim = relations.storage_effect or storage_effect_of(relations)
+    updated = (
+        set(claim.operands)
+        if claim is not None and claim.kind is StorageEffectKind.UPDATE
+        else set()
+    )
+    for index, boundary in enumerate(relations.inputs):
+        if index < len(call.args) and index not in updated:
+            yield index, boundary
+    if len(relations.outputs) != 1:
+        return
+    for index in sorted(updated):
+        if index < len(call.args):
+            yield index, relations.outputs[0]
 
 
 def _relation_cases(
     call: Call, ctx: TypeInferContext, *, narrow: bool
 ) -> tuple[_RelationCase, ...]:
-    """Build one normal domain, or RoPE's separate Q and K domains."""
-    local_types = tuple(_local_type(arg.type) if narrow else arg.type for arg in call.args)
-    if isinstance(call.target, RoPE):
-        cases: list[_RelationCase] = []
-        for value_index in (0, 1):
-            branch_types = (
-                local_types[value_index],
-                local_types[value_index],
-                local_types[2],
-                local_types[3],
-                local_types[4],
-            )
-            try:
-                result = build_relation(call, branch_types, ctx)
-            except (NotImplementedError, TypeError, ValueError, isl.Error) as error:
-                raise _Unavailable from error
-            if result is None:
-                raise _Unavailable
-            cases.append(
-                _RelationCase(
-                    result=result,
-                    operand_maps=((value_index, 0), (2, 2), (3, 3), (4, 4)),
-                    local_types=local_types,
-                )
-            )
-        return tuple(cases)
-    result = _relation(call, ctx, narrow=narrow)
-    if result is None or len(result.maps) < len(call.args):
+    """The registered relations of a Call, on the domain its result runs over."""
+    handler = access_relation_registry.lookup(type(call.target))
+    if handler is None:
         raise _Unavailable
-    if narrow and (window := _narrow_reshard_window(call)) is not None:
-        local_types = (window,)
+    try:
+        relations = handler(call, ctx)
+        held = ctx.local_type_of(call)
+        fields = held.fields if isinstance(held, TupleType) else (held,)
+        result = fields[0] if fields else None
+        if not isinstance(result, TensorType):
+            raise _Unavailable
+        domain, _params = to_domain(tuple(result.shape))
+        local_types = tuple(ctx.local_type_of(arg) for arg in call.args)
+    except (NotImplementedError, TypeError, ValueError, isl.Error) as error:
+        raise _Unavailable from error
     return (
-        _RelationCase(
-            result=result,
-            operand_maps=tuple((index, index) for index in range(len(call.args))),
-            local_types=local_types,
-        ),
+        _RelationCase(domain=domain, relations=relations, local_types=local_types),
     )
 
 
@@ -428,7 +498,8 @@ def _collect(
     order = {id(expr): index for index, expr in enumerate(values)}
     repeated = {loop_id: loop_repeated_values(loop) for loop_id, loop in loops.items()}
     labels = _labels(fn)
-    ctx = TypeInferContext(scope=FunctionScope(module, fn))
+    scope = FunctionScope(module, fn)
+    ctx = _RankPreserving(scope=scope) if narrow else TypeInferContext(scope=scope)
     accesses: dict[int, list[_Access]] = {key: [] for key in loops}
     unavailable: dict[int, list[Call]] = {key: [] for key in loops}
     for call in (expr for expr in values if isinstance(expr, Call)):
@@ -445,42 +516,27 @@ def _collect(
         call_unavailable = False
         for case in cases:
             try:
-                domain = _loop_domain(case.result.domain, path)
+                domain = _loop_domain(case.domain, path)
             except _Unavailable:
                 call_unavailable = True
                 break
             depth = len(path)
-            for index, map_index in case.operand_maps:
+            for index, boundary in _touched(call, case.relations):
                 operand = call.args[index]
-                raw = case.result.maps[map_index]
+                raw = relation_of(boundary.pattern)
                 local_type = case.local_types[index]
                 if raw.dim(isl.dim_type.OUT) == 0 or not isinstance(local_type, TensorType):
                     continue
                 access = raw.insert_dims(isl.dim_type.IN, 0, depth)
                 try:
-                    if isinstance(call.target, InsertSlice) and index == 0:
-                        update = case.local_types[1]
-                        if not isinstance(update, TensorType):
-                            raise _Unavailable
-                        access = _fold_window(
-                            access,
-                            call.args[2],
-                            (1,) * len(update.shape),
-                            path,
-                            narrow=narrow,
-                        )
+                    access = _bind_parameters(
+                        access, boundary.pattern, path, local_type, domain, narrow=narrow
+                    )
+                    access = _within(access, local_type)
+                    elements = _one_pass(access, domain, depth)
                     buffer, access = _source_buffer(operand, access, path, narrow=narrow)
                     if not isinstance(buffer.type, TensorType):
                         continue
-                    if isinstance(call.target, (InsertSlice, CacheUpdate)) and index == 0:
-                        window_type = case.local_types[
-                            1 if isinstance(call.target, InsertSlice) else 3
-                        ]
-                        if not isinstance(window_type, TensorType):
-                            raise _Unavailable
-                        elements = numel(window_type)
-                    else:
-                        elements = numel(local_type)
                 except (NotImplementedError, TypeError, ValueError, isl.Error, _Unavailable):
                     call_unavailable = True
                     break
@@ -503,6 +559,23 @@ def _collect(
             for loop in path:
                 unavailable[id(loop)].append(call)
     return loops, accesses, unavailable
+
+
+def _one_pass(access: isl.map, domain: isl.set, depth: int) -> int:
+    """How many elements one iteration reaches, with every loop standing still.
+
+    This is what would move if nothing were reused, so it is asked of the same
+    relation as the union rather than of the operand's size: charging a whole
+    cache for the rows one pass replaced is how a reuse figure stops meaning
+    anything.
+    """
+    standing = domain
+    for axis in range(depth):
+        standing = standing.fix_si(isl.dim_type.SET, axis, standing.dim_min_val(axis).get_num_si())
+    amount = access.intersect_domain(standing).range().coalesce().count_val()
+    if not amount.is_int():
+        raise _Unavailable
+    return amount.get_num_si()
 
 
 def _reached(access: _Access, loop: GridRegionExpr) -> isl.set:

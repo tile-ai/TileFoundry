@@ -875,14 +875,27 @@ def affine_term(value, name: str) -> "tuple[str, tuple[tuple[str, object], ...]]
     return name, ((name, value),)
 
 
-def placed_window(offsets: tuple, extents: tuple, rank: int) -> tuple:
+def _at_most(extent: str, limits: tuple, position: int) -> list[str]:
+    """The most a window may extend on one axis, when the Op guarantees one.
+
+    A runtime extent with no stated ceiling is a window a reader can only union
+    over the whole axis. The Op's own contract usually says more than that, and
+    saying it here is what keeps one relation answering both how much this
+    occurrence moves and how much the axis it walks ever holds.
+    """
+    limit = limits[position] if position < len(limits) else None
+    return [] if limit is None else [f"{extent} <= {limit}"]
+
+
+def placed_window(offsets: tuple, extents: tuple, rank: int, limits: tuple = ()) -> tuple:
     """What a window reaches among a value's own positions, and what it leaves.
 
     One domain for both, the value's own positions, so the two answer about the
     same coordinates: the window is where the offsets put it, and what is left
     alone is every position it does not cover -- a difference, not a flag. An
     offset or an extent only known later is a parameter bound to the value it is,
-    and a window begins inside what it is placed in.
+    kept inside whatever the Op guarantees about it, and a window begins inside
+    what it is placed in.
     """
     domain = ", ".join(f"d{index}" for index in range(rank))
     guards: list[str] = []
@@ -895,6 +908,7 @@ def placed_window(offsets: tuple, extents: tuple, rank: int) -> tuple:
             guards.append(f"0 <= {begin}")
         if bound_extent:
             guards.append(f"1 <= {extent}")
+            guards.extend(_at_most(extent, limits, position))
         if begin == "0":
             guards.append(f"0 <= d{position} < {extent}")
             continue
@@ -908,6 +922,18 @@ def placed_window(offsets: tuple, extents: tuple, rank: int) -> tuple:
         AffineAccess(left, tuple(parameters)),
         AffineAccess(reached, tuple(parameters)),
     )
+
+
+def relation_of(pattern: "AccessPattern") -> "isl.map":
+    """One boundary's coordinates as a relation, whatever carrier states them.
+
+    A function and a relation answer the same question about the same two spaces,
+    so a reader that only asks "where does this coordinate go" should not have to
+    know which one it was handed.
+    """
+    if isinstance(pattern, AffineAccess):
+        pattern = pattern.relation
+    return isl.map.from_multi_aff(pattern) if isinstance(pattern, isl.multi_aff) else pattern
 
 
 def index_set(shape) -> "isl.set | None":
@@ -942,9 +968,7 @@ def settled(pattern: "AccessPattern") -> "isl.map":
     runtime extent. Either way a reader gets a number it can check rather than a
     range it has to interpret.
     """
-    relation = pattern.relation if isinstance(pattern, AffineAccess) else pattern
-    if isinstance(relation, isl.multi_aff):
-        relation = isl.map.from_multi_aff(relation)
+    relation = relation_of(pattern)
     bound = dict(pattern.parameters) if isinstance(pattern, AffineAccess) else {}
     names = [
         relation.get_dim_name(isl.dim_type.PARAM, index)
@@ -1088,6 +1112,7 @@ def window_source(
     logical: "Type",
     carried: dict,
     extents: tuple = (),
+    limits: tuple = (),
 ) -> "AffineAccess":
     """One operand read at its own coordinates, from where a window put them.
 
@@ -1115,6 +1140,7 @@ def window_source(
         parameters.extend(bound_extent)
         if bound_extent:
             guards.append(f"1 <= {extent}")
+            guards.extend(_at_most(extent, limits, axis))
         guards.append(
             f"0 <= {walked} - {begin} < {extent}" if begin != "0"
             else f"0 <= {walked} < {extent}"
@@ -1569,6 +1595,10 @@ __all__ = [
     "self_image",
     "storage_effect_of",
     "linearized_view",
+    "index_set",
+    "reached_elements",
+    "relation_of",
+    "settled",
     "view_relations",
     "window_source",
     "transfers",

@@ -238,7 +238,9 @@ def test_qwen3_pd_states_its_bound_and_its_loop_footprints_at_each_size(
         and (record := get_metadata(expr, LoopFootprintMetadata)) is not None
     ]
     assert loop_footprints and all(record.footprints for record in loop_footprints)
-    assert any(not record.known for record in loop_footprints) is (dims["seq"] != 1)
+    assert all(record.known for record in loop_footprints), (
+        "every authored loop states a reading at every size, prefill included"
+    )
 
 
 def _predicted_ns(module, dims=None) -> int:

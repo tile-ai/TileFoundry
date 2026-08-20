@@ -107,6 +107,22 @@ def _written(rows, per_row: int, limit: int | None) -> AccessQuantity:
     )
 
 
+def _row_limit(offsets: tuple, extents: tuple, limit: int | None) -> tuple:
+    """The most the row window may extend, at the position holding the rows.
+
+    A window is stated per logical axis and projected onto positions, so the
+    ceiling has to land on the one position that varies over the rows -- the same
+    one the extent did.
+    """
+    if limit is None:
+        return ()
+    placed = [None] * len(extents)
+    for position, extent in enumerate(extents):
+        if extent is not offsets[position] and not isinstance(extent, int):
+            placed[position] = limit
+    return tuple(placed)
+
+
 @register_access_relation(CacheUpdate)
 def _cache_update_access(call: "Call", ctx) -> AccessRelations:
     """The result is the cache with ``s`` rows replaced at ``cur_pos``.
@@ -140,11 +156,14 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
     )
     held = elements_of(local_cache)
     per_row = held // cache[1] if isinstance(cache[1], int) and cache[1] else 0
-    written = _written(rows, per_row, _limit(tuple(cache), tuple(supplied)))
+    limit = _limit(tuple(cache), tuple(supplied))
+    written = _written(rows, per_row, limit)
     kept = AccessQuantity(
         held - written.upper, held - written.lower, written.provenance
     )
-    complement, reached = placed_window(offsets, extents, len(local_cache.shape))
+    complement, reached = placed_window(
+        offsets, extents, len(local_cache.shape), _row_limit(offsets, extents, limit)
+    )
     preserve = StorageLink(
         kind="preserve", input=0, where=complement, quantity=kept
     )
@@ -161,6 +180,7 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
                     logical_new,
                     logical_coordinates(local_cache, logical_cache),
                     (None, rows),
+                    (None, limit),
                 ),
                 written,
             ),
