@@ -501,54 +501,12 @@ Each reported Call's JSON projection is under its `compute-cost` key:
     not the direct sum of the one-occurrence Call records.
   - An op with no registered cost evaluator MUST raise `AnalysisError`.
   - Missing program geometry MUST NOT be replaced with a target capacity.
-  - `traffic_per_unit` MUST be the amount the Op's own access relation states
-    for each boundary, asked in the analysed level's window. Projecting an
-    operand's Type is not enough: a value nobody sharded projects to the whole
-    of itself, so charging that to every participant multiplies one read by the
-    number of them. An elementwise boundary MUST therefore charge a participant
-    no more than it produces and no more than the operand holds, which is what
-    makes a broadcast operand cost its own size.
-  - A relation MUST answer the same way for the whole program and for one unit,
-    from one registration. A second handler for the per-unit question would be
-    two statements of one fact, kept equal by hand.
   - The enclosing recomputation factor MUST be the product of the authored loop
     trip counts for loops whose induction variable or carried argument the Call
     transitively reads. A loop-invariant Call MUST keep a factor of one. The
     same rule MUST apply to primitive and Function Calls.
   - Downstream families MUST read the already-scaled record and MUST NOT apply
     authored loop trip counts a second time.
-  - Two primitive operands MAY name the same value; their positions MUST keep
-    them distinct. A rendering MUST omit an unavailable operand split rather
-    than emit it empty.
-  - A `Reshard` within one storage level MUST report zero movement for both
-  operands; a `Reshard` that changes storage MUST report one full source read
-  and one full destination write. The operand Types then attribute those two
-  amounts to their respective storage levels.
-  - A `UMAT` operand appearing in `Call.args` MUST contribute its own logical
-    bytes at `rmem`; a `UMAT` value appearing only in an Op attribute MUST
-    contribute no traffic.
-  - A Type with concrete and `UMAT` leaves MUST charge each leaf's bytes at
-    its own level. It MUST NOT assign the aggregate movement of the operand to
-    the one concrete level merely because that is the only committed level.
-  - Per-level `traffic` and `operands` MUST NOT be assumed equal for a Type that
-    occupies several levels: the aggregate is the conservative placement charge
-    while the operand entry is the evaluator's movement amount.
-
-Where a value's bytes live is not settled here and is not inferred from what an
-Op moves.
-
-- constraints:
-  - A `Reshape` or a `Transpose` describes bytes its operand already holds and
-    MUST be given none of its own. Every other result, including a window and a
-    field of a tuple and one that overwrites a destination, MUST be given bytes
-    of its own: landing in an operand's buffer is a fact about a plan, and no
-    plan has been made here.
-  - What an occurrence moves is its Op's own registered answer. This family MUST
-    NOT correct it by where the result turned out to be: an operation that
-    computed something computed it, and a plan that lands it in an operand's
-    buffer is that plan's saving, not this occurrence's.
-  - A caller-owned parameter MUST NOT be reused. Donation is a contract with the
-    caller, not a conclusion this family may draw.
 
 #### 2.2.2 `memory`
 
@@ -687,6 +645,34 @@ class MemoryMetadata(IRMetadata):
     allocation: AllocationMetadata | None = None
 ```
 
+Every traffic amount here is what a boundary's own relation reaches. The Op's
+evaluator says which way each boundary moves and whether the operation
+materialises anything; it does not say how much, and an Op with no relation
+fails closed rather than having its evaluator's number read as the amount.
+
+- constraints:
+  - One relation MUST answer the same way for the whole program and for one
+    unit, from one registration. A second handler for the per-unit question
+    would be two statements of one fact, kept equal by hand.
+  - Projecting an operand's Type is not enough: a value nobody sharded projects
+    to the whole of itself, so charging that to every participant multiplies one
+    read by the number of them. Every boundary MUST be held to the iterations
+    its participant performs, which is what makes a broadcast operand cost its
+    own size and a `Reshard` cost the distinct coordinates it reaches rather
+    than a full source per participant.
+  - A `UMAT` operand appearing in `Call.args` MUST contribute its own logical
+    bytes at `rmem`; a `UMAT` value appearing only in an Op attribute MUST
+    contribute no traffic.
+  - A Type with concrete and `UMAT` leaves MUST charge each leaf's bytes at its
+    own level. It MUST NOT assign the aggregate movement of the operand to the
+    one concrete level merely because that is the only committed level.
+  - Per-level `whole` and `operands` MUST NOT be assumed equal for a Type that
+    occupies several levels: the aggregate is the conservative placement charge
+    while the operand entry is that boundary's own amount.
+  - Two operands MAY name the same value; the `operands` split MUST keep their
+    positions distinct, and MUST omit an entry it cannot state rather than emit
+    it empty.
+
 Addresses are assigned against the authored definition order, which fixes every
 buffer's lifetime before any of them is placed, so the only open question is
 where each one sits.
@@ -724,8 +710,10 @@ where each one sits.
     repeat it, and its `operands` MUST be empty: which operand moved what
     belongs to the occurrence, not to the total.
   - What an occurrence moves MUST be counted once, from the Op's own registered
-    evaluator, and MUST NOT be counted again from where the buffers landed. A
-    function with no `allocation` therefore still carries traffic, which is a
+    evaluator, and MUST NOT be counted again from where the buffers landed: a
+    plan that lands a result in an operand's buffer is that plan's saving, not
+    this occurrence's. A function with no `allocation` therefore still carries
+    traffic, which is a
     different question from whether a time may be reported for it
     ([§2.2.4](#224-performance)), and the two MUST NOT be read as one.
   - A value living in another's bytes MUST state an `offset` of `None` over the
@@ -770,11 +758,11 @@ where each one sits.
 | `LevelFootprint.persistent_bytes` | Sum of persistent lifetimes at that level. | No |
 | `LevelFootprint.capacity_bytes` | Capacity of the matching explicit level, or `None` when it is unknown or undeclared. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
 | `MemoryMetadata.footprint` | One `LevelFootprint` per occupied storage level. | As above |
-| `MemoryMetadata.lifetimes` | Every value residency except a `Reshape`, which aliases its input. | As above |
+| `MemoryMetadata.lifetimes` | Every value residency except a `Reshape` or a `Transpose`, each of which describes bytes its operand already holds. | As above |
 | `MemoryMetadata.advisories` | Explicit peak overflow, cache/shared-capacity division, and same-scope authored-loop access-footprint findings. | `MemoryHierarchyFacts` |
-| `TrafficMetadata.whole` | On a Call, take the Op evaluator's per-operand movement for one occurrence, charge concrete tensor leaves to their storage levels, and group by level. On a Function, sum those over every reachable occurrence, each counted as often as its authored loops repeat it. A Type with leaves at several levels keeps those leaf bytes separate. A `UMAT` leaf has no residency of its own: when it appears in `Call.args`, charge its own bytes at the target's established `rmem` materialization level; when it appears only in an Op attribute, charge nothing. A Function Call takes the callee's grouped total. | No |
-| `TrafficMetadata.per_unit` | The same one occurrence, asked of the Op's access relation in the analysed level's window, charged at the levels the operand's projected Type names. On a Function, summed over occurrences with the same repetition. Which direction an operand moves stays the evaluator's answer. An Op with no registered relation falls back to the evaluator over projected Types. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
-| `TrafficMetadata.operands` | One occurrence's evaluator entries in order `(*call.args, call)`. Empty on a Function and on a Function Call, neither of which has a split. | No |
+| `TrafficMetadata.whole` | One occurrence's per-boundary movement asked of the Op's access relations in the whole program's window, charged to the storage levels its operand Types name and grouped by level. On a Function, summed over every reachable occurrence, each counted as often as its authored loops repeat it. A Type with leaves at several levels keeps those leaf bytes separate. A `UMAT` leaf has no residency of its own: when it appears in `Call.args`, charge its own bytes at the target's established `rmem` materialization level; when it appears only in an Op attribute, charge nothing. A Function Call takes the callee's grouped total. | No |
+| `TrafficMetadata.per_unit` | The same one occurrence, asked of the same relations in the analysed level's window, charged at the levels the operand's projected Type names. On a Function, summed over occurrences with the same repetition. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `TrafficMetadata.operands` | One occurrence's per-boundary movement in order `(*call.args, call)`, the same relation-derived amounts `whole` groups. Empty on a Function and on a Function Call, neither of which has a split. | No |
 
 The target-aware loop projection is report data rather than another metadata
 record. `LoopFootprintMetadata` remains target-independent:
@@ -916,16 +904,20 @@ attached only to the Function. Its full JSON projection is under
 - constraints:
   - `MemoryMetadata` MUST be attached per reachable `Function`; a peak spans its
     live ranges and belongs to no single expression.
-  - `Reshape` and `Slice` are addressing views and MUST NOT receive independent
-    lifetimes. `Transpose` MUST allocate its result. Analysis uses operation
-    semantics for this distinction rather than inferring aliasing from layouts.
-  - An addressing view's non-source operands are the addressing itself, and MUST
-    move nothing: the bounds of a `Slice` say which bytes the result names, and
-    naming them is not reading them. An operation that writes at an address it
-    is given reads that address, and MUST state one element per number it is
-    given -- one for a rank-0 start, and one per axis for a tuple of them. The
-    two are different questions about the same-looking operand, and comparing
-    one against the other reads as a change in traffic where there is none.
+  - `Reshape` and `Transpose` describe bytes their operand already holds and
+    MUST NOT receive independent lifetimes. Every other result, a window and a
+    field of a tuple and one that overwrites a destination included, MUST
+    allocate its own: landing in an operand's buffer is a fact about a plan,
+    and no plan has been made here. Analysis uses operation semantics for this
+    distinction rather than inferring aliasing from layouts.
+  - A caller-owned parameter MUST NOT be reused. Donation is a contract with
+    the caller, not a conclusion this family may draw.
+  - A view's tensor source and its result MUST move nothing: re-indexing the
+    same elements asks the run for none of them. Its other operands are the
+    numbers that place it and MUST be read: one element per number, reached
+    through the boundary's own relation onto the flat leaves the operand holds,
+    and charged at each reached leaf's own width. An operation that writes at an
+    address it is given reads that address the same way.
   - The memory levels MUST be two flat tuples with a separate relation edge list.
   - A GPU projection MUST cover the explicit levels a program can name and the
     caches traffic passes through, and MUST state that L1 caches L2, that L2
@@ -1073,9 +1065,9 @@ as defined in that family's section.
     bandwidth rather than summing traffic across levels.
   - Performance local duration MUST divide `ComputeCostMetadata.flops_per_unit`
     by `unit_flops`, `service_per_unit` by `unit_ops`, and the `bandwidth_level`
-    entry of `traffic_per_unit` by `unit_bandwidth`. Compute and movement
-    overlap within one occurrence, so its duration is the greater of the two
-    sides rather than their sum.
+    entry of `TrafficMetadata.per_unit` by `unit_bandwidth`. Compute and
+    movement overlap within one occurrence, so its duration is the greater of
+    the two sides rather than their sum.
   - Traffic at a level with no stated one-unit bandwidth MUST remain visible in
     `TrafficMetadata` and MUST NOT enter a duration. A rate nobody published is
     not one this may invent, and an instruction throughput standing in for a
@@ -1083,9 +1075,10 @@ as defined in that family's section.
     those bytes states its own rate for them.
   - Having moved bytes and having work this can time are different questions.
     What decides the second is the quantities a rate exists for: nonzero
-    `flops_per_unit`, nonzero `service_per_unit`, or nonzero `traffic_per_unit`
-    at `bandwidth_level`. An occurrence with none of them MUST take zero time
-    and MUST NOT be required to carry an execution placement -- there is no
+    `flops_per_unit`, nonzero `service_per_unit`, or nonzero
+    `TrafficMetadata.per_unit` at `bandwidth_level`. An occurrence with none of
+    them MUST take zero time and MUST NOT be required to carry an execution
+    placement -- there is no
     interval to lay on a participant. Its movement at any other level MUST still
     be recorded: it is untimed, not absent.
   - Work of a dtype or a kind the target states no one-unit throughput for MUST
@@ -1252,8 +1245,9 @@ model.
     work that made it never ran is a program this MUST refuse. An occurrence
     with no nonzero
     `flops_per_unit`, no nonzero `service_per_unit` and no nonzero
-    `traffic_per_unit` at `bandwidth_level` is structural to this model: it
-    needs no execution placement and MUST receive no record, because an empty
+    `TrafficMetadata.per_unit` at `bandwidth_level` is structural to this
+    model: it needs no execution placement and MUST receive no record, because
+    an empty
     interval reads as a measurement rather than as the absence of one. Movement
     at another level does not change that and MUST NOT be dropped from
     `TrafficMetadata` because of it -- structural here means nothing to time,
@@ -1277,13 +1271,11 @@ model.
     `[start_ns + t*stride_ns, end_ns + t*stride_ns)`, for `0 <= t < trips`.
     The loop spans `trips * stride_ns`; a consumer of its yield MUST wait for
     that full span. Loop-invariant values remain single occurrences outside it.
-  - An occurrence that writes into a value already holding bytes MUST start no
-    earlier than every reader of those bytes ends. Which values are those bytes
-    MUST be read off the allocation the memory family decided -- values sharing
-    a `buffer_id` are one buffer under several names, including the name a loop
-    carries it forward under. Following the write's own operand edges instead
-    reaches only the names it was handed, and a reader of the rest would still
-    be reading when the write replaced them.
+  - What an occurrence waits for MUST be read off the program's own structure:
+    the values it names, the loop it sits in, and the participants it runs on.
+    An ordering MUST NOT be inferred from an allocation -- two values sharing a
+    `buffer_id` are a plan's decision and no plan has been made -- and no
+    occurrence is held back for a write nobody proved happens in place.
   - Occurrences MUST be laid out in inline occurrence order. Reordering
     independent work is a schedule's decision, not an analysis's: what overlaps
     is what the program's own placement made independent, and the reported time

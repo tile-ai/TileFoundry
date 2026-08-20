@@ -8,14 +8,17 @@ those bytes are charged, which is a fact about the operand's Type.
 from __future__ import annotations
 
 from tilefoundry.ir.core import Call, VerifyError
-from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
+from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
-    access_elements,
     access_relation_registry,
-    elements_of,
+    leaves_of,
+    reached_elements,
+    reached_leaves,
     relations_of,
+    static_bytes,
 )
 from tilefoundry.visitor_registry.contexts import Cost, CostContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator
@@ -34,9 +37,9 @@ def _call_movement(
 ) -> tuple[tuple[tuple[str, TrafficBytes], ...], tuple[TrafficBytes, ...]]:
     """What each operand of *call* moves, and where those bytes are charged.
 
-    How much moves is the op's answer; which level it moves at is a function of
-    that operand's Type. *operand_types* supplies the projected types for the
-    per-unit reading.
+    How much moves is what that boundary's own relation reaches; which level it
+    moves at is a function of that operand's Type. *operand_types* supplies the
+    projected types for the per-unit reading.
     Concrete leaves use their declared levels; a UMAT leaf gets the level at
     which this call consumes it. The result is deliberately not a consuming
     argument, even when it is UMAT.
@@ -86,32 +89,36 @@ def _call_movement(
     return levels, tuple(charged)
 
 
-def _stated_movement(call: Call, cost: Cost, ctx: CostContext) -> tuple[TrafficBytes, ...] | None:
+def _stated_movement(call: Call, cost: Cost, ctx: CostContext) -> tuple[TrafficBytes, ...]:
     """Per-operand movement as the Op's own access relation states it.
 
     A Type says how big a value is, not how much of it this occurrence touches.
-    The two agree while every operand is sharded the way the result is, and part
-    company the moment one is not. The relation is asked instead, in this
-    context's window, so one handler answers for the whole program and for one
-    unit. Only the amount comes from it: which direction an operand moves stays
-    the cost's answer. ``None`` for an Op with no relation yet.
+    The relation is asked instead, in this context's window, so one handler
+    answers for the whole program and for one unit. Only the amount comes from
+    it: which direction an operand moves stays the cost's answer. A boundary
+    nothing can charge in bytes is refused rather than answered from the Type it
+    was written against.
     """
-    if access_relation_registry.lookup(type(call.target)) is None:
-        return None
     relations = relations_of(call, ctx)
     operands = (*call.args, call)
+    if len(cost.traffic) != len(operands):
+        raise AnalysisError(
+            f"{describe(call)}: cost reports {len(cost.traffic)} operands, "
+            f"the call has {len(operands)}"
+        )
     stated: list[TrafficBytes] = []
     for index, (operand, moved) in enumerate(zip(operands, cost.traffic)):
         if index == len(call.args):
             moving = _output_bytes(relations, ctx.local_type_of(call))
         else:
-            moving = _bytes_for(
-                ctx.local_type_of(operand),
-                access_elements(relations, boundary=index),
+            moving = _moved_bytes(
+                ctx.local_type_of(operand), relations.inputs[index].pattern
             )
         if moving is None:
-            stated.append(moved)
-            continue
+            raise AnalysisError(
+                f"{describe(call)}: boundary {index} reaches coordinates nothing "
+                "here can charge in bytes"
+            )
         stated.append(
             TrafficBytes(moving if moved.read else 0, moving if moved.write else 0)
         )
@@ -129,31 +136,54 @@ def _output_bytes(relations: AccessRelations, held: Type) -> int | None:
     fields = held.fields if isinstance(held, TupleType) else (held,)
     total = 0
     for position, field_ in enumerate(fields):
-        moving = _bytes_for(
-            field_, access_elements(relations, boundary=position, output=True)
-        )
+        if not 0 <= position < len(relations.outputs):
+            return None
+        moving = _moved_bytes(field_, relations.outputs[position].pattern)
         if moving is None:
             return None
         total += moving
     return total
 
 
+def _moved_bytes(held: Type, pattern) -> int | None:
+    """The bytes one boundary moves of *held*, by the leaves it reaches.
+
+    A structured operand is indexed by leaf and its leaves need not be the same
+    width, so which ones a boundary reaches is what decides the bytes: charging
+    the first for the one that was taken is a wrong number at the right size. A
+    single leaf is counted in its own elements instead.
+    """
+    leaves = leaves_of(held)
+    if not leaves:
+        return None
+    if len(leaves) == 1:
+        return _bytes_for(leaves[0], reached_elements(pattern))
+    reached = reached_leaves(pattern, len(leaves))
+    if reached is None:
+        return None
+    charged = 0
+    for leaf in sorted(reached):
+        size = static_bytes(leaves[leaf])
+        if size is None:
+            return None
+        charged += size
+    return charged
+
+
 def _bytes_for(held: Type, elements: int | None) -> int | None:
     """The bytes *elements* of *held* occupy, or ``None`` when unanswerable.
 
-    Taken as a share of the whole rather than as an element size, because a
-    packed dtype has no whole number of bytes per element and a bool boundary
-    would round to nothing.
+    Counted from how wide one element is, rounded up: a packed dtype has no
+    whole number of bytes per element, so a share of the whole would round one
+    bool to nothing and nine of them to one byte instead of two. A value whose
+    element width nobody states is not one this can answer for.
     """
     if elements is None or not isinstance(held, TensorType):
         return None
-    try:
-        whole = elements_of(held)
-    except ValueError:
+    bits = getattr(held.dtype, "bit_width", None)
+    if not isinstance(bits, int) or isinstance(bits, bool) or bits <= 0:
         return None
-    if whole <= 0:
-        return 0
-    return tensor_bytes(held) * elements // whole
+    return -(-elements * bits // 8)
 
 
 
@@ -178,6 +208,24 @@ def _bytes_for(held: Type, elements: int | None) -> int | None:
 
 
 
+
+
+def _as_related(expr: Call, cost: Cost, ctx: CostContext) -> Cost:
+    """One cost with every amount taken from the Op's own relations.
+
+    Asked in the window the caller is asking about, because one handler answers
+    for the whole program and for one participant. A Function is not an Op with
+    boundaries of its own -- what it moves is what its body does -- and every
+    other target states its coordinates or is refused here.
+    """
+    if isinstance(expr.target, Function):
+        return cost
+    if access_relation_registry.lookup(type(expr.target)) is None:
+        raise AnalysisError(
+            f"{describe(expr)}: states no access relations, so nothing here says "
+            "what it moves"
+        )
+    return Cost(cost.flops, _stated_movement(expr, cost, ctx), cost.service)
 
 
 def call_traffic(
@@ -186,9 +234,11 @@ def call_traffic(
     """What one Call moves, whole and for one participant.
 
     The same registered evaluator the work half reads, projected onto its
-    movement instead of its flops. What the Op states is what is charged: an
-    operation that computed something computed it, and where the bytes land is
-    the allocation's answer rather than a correction to this one.
+    movement instead of its flops. The evaluator says which way each boundary
+    moves and whether it materialises; how much crosses it is what that
+    boundary's own relation reaches, in whichever window is being asked about.
+    Where the bytes land is the allocation's answer rather than a correction to
+    this one.
     """
     try:
         whole_cost = whole.visit(expr)
@@ -199,9 +249,8 @@ def call_traffic(
         *(local.ctx.local_type_of(arg) for arg in expr.args),
         local.ctx.local_output_type(expr),
     )
-    stated = _stated_movement(expr, local_cost, local.ctx)
-    if stated is not None:
-        local_cost = Cost(local_cost.flops, stated, local_cost.service)
+    whole_cost = _as_related(expr, whole_cost, whole.ctx)
+    local_cost = _as_related(expr, local_cost, local.ctx)
     traffic_by_level, operands = _call_movement(expr, whole_cost)
     local_traffic, _local_operands = _call_movement(expr, local_cost, local_types)
     return TrafficMetadata(

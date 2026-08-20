@@ -252,11 +252,23 @@ def test_unspecialized_window_step_fails_closed():
         extract(unspecialized_tile_window_add)
 
 
-def test_data_dependent_index_select_fails_closed():
-    """Test data-dependent index selection fails closed.
+def test_data_dependent_index_select_reads_every_row_it_could_name():
+    """A gather whose index is a value reads every row that value could name.
 
-    An IndexSelect whose index is a value, not the loop's own induction variable,
-    has no affine access map -- so extraction refuses rather than inventing one.
+    No relation holds the deciding element, so the coordinate it lands on is not
+    one extraction can state. What it states instead is every row the axis
+    could legally name: more dependences than the program has, which is the safe
+    direction, and the same answer every other reader of that relation gets.
     """
-    with pytest.raises(ExtractError, match="not an enclosing loop's induction variable"):
-        extract(data_index_select)
+    tg = extract(data_index_select)
+
+    gathered = tg.reads.intersect(
+        isl.union_map("{ Binary1[i, d] -> x[r, d] }")
+    )
+    assert not gathered.is_empty(), "the gather's read was dropped rather than widened"
+    assert gathered.is_equal(
+        isl.union_map(
+            "{ Binary1[i, d] -> x[r, d] : 0 <= i <= 7 and 0 <= d <= 3 "
+            "and 0 <= r <= 7 }"
+        )
+    ), "every row of the table, for every coordinate of the result"

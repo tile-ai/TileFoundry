@@ -467,16 +467,20 @@ def _own_iterations(
     limits = None
     for side, boundaries in (("input", stated.inputs), ("output", stated.outputs)):
         for index, boundary in enumerate(boundaries):
+            asked = relation_of(boundary.pattern)
+            if asked.is_empty():
+                continue
             try:
-                asked = relation_of(boundary.pattern)
-                if asked.is_empty():
-                    continue
                 allowed = placed[side][index].domain().union(
                     walked.subtract(answered[side][index])
                 )
                 bounds = asked.params()
-            except isl.Error:  # pragma: no cover - unalignable parameter lists
-                continue
+            except isl.Error as error:
+                raise ValueError(
+                    f"{side} {index} cannot be lined up with the space its Op "
+                    f"walks, so which iterations are this participant's is not "
+                    f"answerable: {error}"
+                ) from error
             share = allowed if share is None else share.intersect(allowed)
             limits = bounds if limits is None else limits.intersect(bounds)
     if share is None:
@@ -499,9 +503,44 @@ def _iterating_over(
     relation = relation_of(boundary.pattern)
     try:
         held = relation.intersect_domain(share)
-    except isl.Error:  # pragma: no cover - unalignable parameter lists
-        return boundary
+    except isl.Error as error:
+        raise ValueError(
+            f"a boundary at {relation} cannot be held to the iterations "
+            f"{share} this participant performs: {error}"
+        ) from error
     return _rebuilt(held, bindings)
+
+
+def renaming_relation(call, ctx) -> "AffineAccess":
+    """One view's own coordinates, as coordinates of the value it renames.
+
+    A view states where it reads and where it writes over one space, so going
+    from its result's coordinates to its source's is reading the second
+    backwards and the first forwards. Every consumer that folds a view into its
+    buffer asks for this rather than rebuilding the Op's arithmetic, which is
+    how one relation answers dependence, footprint and movement alike.
+    """
+    relations = relations_of(call, ctx)
+    if isinstance(ctx.type_of(call.args[0]), TupleType):
+        raise ValueError(
+            f"{type(call.target).__name__} renames a field of a tuple, which is "
+            "one leaf of it rather than a coordinate change to fold"
+        )
+    written = relation_of(relations.outputs[0].pattern)
+    reads = relation_of(relations.inputs[0].pattern)
+    folded = written.reverse().apply_range(reads)
+    bindings = parameters_of(relations)
+    return AffineAccess(
+        folded,
+        tuple(
+            (name, bindings[name])
+            for name in (
+                folded.get_dim_name(isl.dim_type.PARAM, index)
+                for index in range(folded.dim(isl.dim_type.PARAM))
+            )
+            if name in bindings
+        ),
+    )
 
 
 def parameters_of(relations: AccessRelations) -> dict:
@@ -834,8 +873,11 @@ def iterating(extents: "Sequence", relations: "AccessRelations") -> "AccessRelat
     """
     try:
         domain, named = to_domain(tuple(extents))
-    except (TypeError, ValueError, isl.Error):
-        return relations
+    except (TypeError, ValueError, isl.Error) as error:
+        raise ValueError(
+            f"an Op states it iterates {tuple(extents)}, which is no space to "
+            f"walk: {error}"
+        ) from error
     return AccessRelations(
         inputs=tuple(_held_to(boundary, domain, named) for boundary in relations.inputs),
         outputs=tuple(_held_to(boundary, domain, named) for boundary in relations.outputs),
@@ -908,8 +950,7 @@ def settled(pattern: "AffineAccess") -> "isl.map":
     allows: the first legal iteration of a loop, the smallest legal window of a
     runtime extent. Either way a reader gets a number it can check rather than a
     range it has to interpret, so the parameters leave with their values put in.
-    A relation nothing satisfies has no value to settle on, and reaches nothing
-    whatever a reader would have picked.
+    A relation nothing satisfies has no value to settle on.
     """
     relation = relation_of(pattern)
     bound = dict(pattern.parameters) if isinstance(pattern, AffineAccess) else {}
@@ -927,12 +968,12 @@ def settled(pattern: "AffineAccess") -> "isl.map":
         number = _as_number(bound.get(name))
         if number is None:
             probe = isl.set(f"{space}{{ [x] : x = {name} }}").intersect_params(legal)
-            smallest = str(probe.dim_min_val(0))
+            edge = str(probe.dim_min_val(0))
             try:
-                number = int(smallest)
+                number = int(edge)
             except ValueError:
                 raise ValueError(
-                    f"a relation leaves {name!r} at {smallest} because it does not "
+                    f"a relation leaves {name!r} at {edge} because it does not "
                     "state what that parameter may be; a boundary nobody can bind "
                     "is not one a reader can count"
                 ) from None
@@ -946,11 +987,11 @@ def reached_elements(
 ) -> int | None:
     """How many distinct boundary elements one boundary reaches.
 
-    How much a boundary moves is not a second field to keep in step: it is what
-    the relation says over the coordinates its Op iterates, which the relation
-    itself carries. Reaching the same element from many coordinates is one element
-    moved, not many dependences, so an inner iteration axis costs nothing; and
-    reaching past the coordinates the operand has is not reaching at all.
+    Reaching the same element from many coordinates is one element moved, not
+    many dependences, so an inner iteration axis costs nothing; and reaching
+    past the coordinates the operand has is not reaching at all. This is one
+    occurrence, so a parameter nobody bound settles at its first legal binding:
+    how many crossings a loop performs is the footprint family's question.
     """
     relation = settled(pattern)
     if within is not None:
@@ -966,27 +1007,65 @@ def reached_elements(
         return None
 
 
-def control_leaves(ctx, arg) -> int:
+def control_leaves(type_: "Type") -> int:
     """How many numbers one operand carries for placing or sizing a window.
 
     A window is placed by one number per axis it is placed on, and an operand
     holding several of them carries several: a tuple of offsets is read once per
-    field, not once.
+    leaf it holds, however its fields are nested.
     """
-    stated = ctx.type_of(arg)
-    return len(stated.fields) if isinstance(stated, TupleType) else 1
+    return len(leaves_of(type_))
+
+
+def leaves_of(type_: "Type") -> tuple:
+    """Every tensor leaf of one value, flat, in the order a reader indexes them."""
+    if isinstance(type_, TupleType):
+        return tuple(leaf for field in type_.fields for leaf in leaves_of(field))
+    return (type_,) if isinstance(type_, TensorType) else ()
+
+
+def leaf_span(type_: "Type", field: int) -> "tuple[int, int]":
+    """Where one field of a value begins among its flat leaves, and how many.
+
+    A structured value is indexed by leaf, not by top-level field, so a field
+    holding a tuple of its own covers a run of them. Whoever takes that field
+    takes that run.
+    """
+    if not isinstance(type_, TupleType):
+        return (0, len(leaves_of(type_)))
+    begin = sum(len(leaves_of(held)) for held in type_.fields[:field])
+    return (begin, len(leaves_of(type_.fields[field])))
+
+
+def reached_leaves(pattern: "AffineAccess", count: int) -> "frozenset[int] | None":
+    """Which of a structured value's flat leaves one boundary reaches.
+
+    A tuple of numbers is indexed by one coordinate, so what crosses there is a
+    set of leaves rather than a count: they need not be the same width, and
+    charging the first for the one that was taken is a wrong number at the right
+    size. Read at the same first legal binding one crossing is counted at.
+    """
+    image = settled(pattern).range()
+    if image.dim(isl.dim_type.PARAM) or image.tuple_dim() != 1:
+        return None
+    return frozenset(
+        leaf
+        for leaf in range(count)
+        if not image.intersect(isl.set(f"{{ [{leaf}] }}")).is_empty()
+    )
 
 
 def _control_space(rank: int, ctx, arg) -> "tuple[str, str, str]":
     """The domain, image and reach of one control operand's own coordinates.
 
-    A tuple of numbers is indexed flat, one leaf per field. A lone scalar's legal
-    index set is the single point, at whatever positions its own view gives it.
+    A tuple of numbers is indexed flat, one leaf however its fields are nested.
+    A lone scalar's legal index set is the single point, at whatever positions
+    its own view gives it.
     """
     domain = ", ".join(f"d{index}" for index in range(rank))
     stated = ctx.type_of(arg)
     if isinstance(stated, TupleType):
-        return domain, "l", f"0 <= l < {len(stated.fields)}"
+        return domain, "l", f"0 <= l < {control_leaves(stated)}"
     held = ctx.local_type_of(arg)
     return domain, ", ".join("0" for _ in range(len(getattr(held, "shape", ()) or ()))), ""
 
@@ -1002,18 +1081,6 @@ def control_read(rank: int, ctx, arg) -> "AffineAccess":
     domain, image, reach = _control_space(rank, ctx, arg)
     where = f" : {reach}" if reach else ""
     return AffineAccess(isl.map(f"{{ [{domain}] -> [{image}]{where} }}"))
-
-
-def addresses_only(rank: int, ctx, arg) -> "AffineAccess":
-    """An operand a view is addressed with and does not read.
-
-    A slice's bounds say which bytes the result already is; being handed them is
-    not reading them. The empty relation over the same coordinates is that
-    answer -- not an identity over the result, which would charge a whole window
-    to a scalar nobody moved.
-    """
-    domain, image, _reach = _control_space(rank, ctx, arg)
-    return AffineAccess(isl.map(f"{{ [{domain}] -> [{image}] : false }}"))
 
 
 def reached_at(
@@ -1315,10 +1382,9 @@ def view_relations(
     """
 
     def _handler(call, ctx) -> AccessRelations:
-        result = _field_of(
-            ctx.type_of(call.args[source]),
-            0 if field is None else (field(call, ctx) or 0),
-        )
+        held = ctx.type_of(call.args[source])
+        taken = 0 if field is None else (field(call, ctx) or 0)
+        result = _field_of(held, taken)
         out_rank = len(result.shape) if hasattr(result, "shape") else 0
         walked = out_rank if over is None else len(tuple(over(call, ctx)))
         out_rank = walked
@@ -1328,13 +1394,21 @@ def view_relations(
         else:
             reads = identity_access(walked)
             written = identity_access(out_rank)
+        if isinstance(held, TupleType):
+            begin, count = leaf_span(held, taken)
+            coordinates = ", ".join(f"d{index}" for index in range(walked))
+            reads = AffineAccess(
+                isl.map(
+                    f"{{ [{coordinates}] -> [l] : {begin} <= l < {begin + count} }}"
+                )
+            )
         walks = (getattr(result, "shape", ()) or ()) if over is None else over(call, ctx)
         return iterating(
             walks,
             AccessRelations(
                 inputs=tuple(
                     BoundaryRelation(
-                        reads if index == source else addresses_only(walked, ctx, arg)
+                        reads if index == source else control_read(walked, ctx, arg)
                     )
                     for index, arg in enumerate(call.args)
                 ),
@@ -1462,10 +1536,15 @@ __all__ = [
     "boundary_maps",
     "positions_of",
     "projected",
+    "control_leaves",
+    "leaf_span",
+    "leaves_of",
     "reached_elements",
+    "reached_leaves",
     "register_access_relation",
     "relation_of",
     "relations_of",
+    "renaming_relation",
     "same_placement",
     "self_image",
     "settled",

@@ -609,19 +609,18 @@ class CostEvaluator(ExprVisitor[Cost]): ...
     each level instead. What the evaluator reported stands as the operand's own
     amount; a per-level total is therefore not always the sum of the amounts
     reported here.
-  - an evaluator MUST report the bytes its operation's own semantics move,
-    bounded by what its operand Types state statically:
-    - an operation that writes a window of a container charges the window and
-      MUST NOT charge the container;
-    - an operation that only re-describes or re-indexes existing elements, or
-      that names an existing value at another topology level, charges zero;
-    - when the touched extent is runtime data, the evaluator charges the
-      smallest bound its operand Types state statically.
-  - `Reshape` MUST report zero traffic because it re-indexes the same elements.
-    `Slice` MUST also report zero traffic because it is an addressing view; the
-    consumer that reads or materializes the window owns those bytes. `Transpose`
-    MUST report one result-sized read and write because its evaluator materializes
-    the permutation. Each evaluator answers from its operation's semantics.
+  - an evaluator says which way each boundary moves and whether the operation
+    materialises anything; **how much** crosses is not its answer. A consumer
+    takes every amount from the Op's access relations
+    ([§4.1](#41-access-relation-service--access_relation)) in the window it is
+    asking about, and an Op with no registered relation MUST fail closed rather
+    than have its evaluator's number read as the amount.
+  - so an operation that only re-describes or re-indexes existing elements
+    reports no direction on those boundaries and moves nothing, while the
+    numbers that place a window are read like any other operand: a `Reshape`
+    moves nothing, a `Slice` moves nothing of its tensor source or result and
+    reads the numbers placing it, and a `Transpose` reads and writes because its
+    evaluator materialises the permutation.
   - With no level, `CostContext.local_type_of` MUST return the selected Type as
     written. With a level, it MUST apply `local_type_of` using the context's
     topology hierarchy and MUST reject unresolved or non-concrete local extents

@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import math
 from dataclasses import replace
-
-import isl
 
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue
-from tilefoundry.ir.core import Call, Constant, Op
+from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
@@ -237,76 +234,3 @@ def _eval_reshape(ctx):
             f"reshape: at most one dynamic axis can be inferred, got new_shape={ctx.op.new_shape!r}"
         )
     return TensorValue(data=ctx.args[0].data.reshape(shape), type=ctx.result_type)
-
-
-def _static_extent(dim) -> "int | None":
-    """``dim``'s plain int value if a static axis (int or ``Constant``), else None."""
-    if isinstance(dim, bool):
-        return None
-    if isinstance(dim, int):
-        return dim
-    if isinstance(dim, Constant):
-        return int(dim.value)
-    return None
-
-
-def _row_major_strides(shape: list) -> list:
-    strides = [1] * len(shape)
-    acc = 1
-    for i in range(len(shape) - 1, -1, -1):
-        strides[i] = acc
-        acc *= shape[i]
-    return strides
-
-
-def flat_reshape_map(old_shape: tuple, new_shape: tuple) -> "isl.map":
-    """``new_shape``'s multi-index -> ``old_shape``'s multi-index via row-major flat-index equality.
-
-    ``new_shape``'s multi-index -> ``old_shape``'s multi-index via
-    row-major flat-index equality, with no bounds attached: the Op's own extents
-    supply them.
-    """
-    m, n = len(old_shape), len(new_shape)
-    pre = 0
-    while pre < m and pre < n and old_shape[pre] == new_shape[pre]:
-        pre += 1
-    suf = 0
-    while suf < m - pre and suf < n - pre and old_shape[m - 1 - suf] == new_shape[n - 1 - suf]:
-        suf += 1
-
-    old_mid_shape, new_mid_shape = old_shape[pre : m - suf], new_shape[pre : n - suf]
-    old_mid = [_static_extent(d) for d in old_mid_shape]
-    new_mid = [_static_extent(d) for d in new_mid_shape]
-    if any(d is None for d in old_mid) or any(d is None for d in new_mid):
-        raise NotImplementedError(
-            f"flat_reshape_map: reshape middle span {old_mid_shape!r} -> "
-            f"{new_mid_shape!r} has a non-static axis -- isl div/mod needs a "
-            "constant divisor; only a shared leading/trailing axis may be dynamic"
-        )
-    if math.prod(old_mid) != math.prod(new_mid):
-        raise ValueError(
-            f"flat_reshape_map: old_shape={old_shape!r} new_shape={new_shape!r} "
-            "do not have matching element counts"
-        )
-
-    in_dims = [f"n{i}" for i in range(n)]
-    mid_in = in_dims[pre : n - suf]
-    new_strides = _row_major_strides(new_mid)
-    old_strides = _row_major_strides(old_mid)
-    f_expr = " + ".join(f"{s}*{d}" for s, d in zip(new_strides, mid_in)) or "0"
-
-    out_exprs = [""] * m
-    out_exprs[:pre] = in_dims[:pre]
-    if suf:
-        out_exprs[m - suf :] = in_dims[n - suf :]
-    for i, extent in enumerate(old_mid):
-        if extent == 1:
-            out_exprs[pre + i] = "0"
-            continue
-        e = f_expr if old_strides[i] == 1 else f"floor(({f_expr})/{old_strides[i]})"
-
-        out_exprs[pre + i] = e if i == 0 else f"({e}) mod {extent}"
-
-    src = "[" + ", ".join(in_dims) + "]"
-    dst = "[" + ", ".join(out_exprs) + "]"
-    return isl.map(f"{{ {src} -> {dst} }}")

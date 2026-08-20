@@ -748,15 +748,22 @@ def test_the_two_operations_a_decoder_stops_on_cost_what_they_do() -> None:
     assert traffic.read == 0
 
 
-def test_index_select_reads_the_rows_it_names_and_not_the_table() -> None:
+def test_index_select_reaches_every_row_it_could_have_named() -> None:
+    """No boundary holds the deciding element, so the whole table is reached.
+
+    Which rows a gather lands on is a runtime fact and nothing in the relation
+    says it, so what it reaches is every row the axis could legally name. That
+    is fail-closed and it is the same number in both windows: an over-charge a
+    reader can check beats a number derived from an operand's shape.
+    """
     result, function = _run(_IndexSelected, ("compute-cost", "memory"))
 
     record = get_metadata(_calls(function)[-1], ComputeCostMetadata)
     record_moved = get_metadata(_calls(function)[-1], TrafficMetadata)
     assert record is not None
     traffic = record_moved.at("gmem")
-    rows = 4 * 64 * 4
-    assert traffic.read == rows + 4 * 4
+    rows, table_bytes = 4 * 64 * 4, 1024 * 64 * 4
+    assert traffic.read == table_bytes + 4 * 4
     assert traffic.write == rows
 
     payload = json.loads(render_json(report(result)))
@@ -765,7 +772,7 @@ def test_index_select_reads_the_rows_it_names_and_not_the_table() -> None:
         "arg": 0,
         "name": "table",
         "type": "f32[1024,64] gmem",
-        "read": rows,
+        "read": table_bytes,
         "write": 0,
     }
     assert (indices["arg"], indices["read"]) == (1, 16)

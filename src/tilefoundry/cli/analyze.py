@@ -64,7 +64,7 @@ def guidance() -> str:
         ------------   --------------------------------------  ---------------------
         compute-cost   flops_per_unit and service_per_unit.    the program shards
                        flops and service stay global
-        memory         traffic_per_unit. Footprint follows     the program shards
+        memory         per-unit traffic. Footprint follows     the program shards
                        its owner for each storage level
         roofline       nothing. The bound is the machine's     never
                        and is unchanged by program splits

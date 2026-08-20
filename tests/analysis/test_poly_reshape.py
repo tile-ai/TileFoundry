@@ -1,9 +1,10 @@
 """Pin ``extract``'s zero-op view fold for ``Reshape``.
 
 Reshape contributes no statement or buffer: consumers resolve through to the
-source and recompose access maps with ``reshape.flat_reshape_map``. Splits use
-multiply-add; merges use isl div/mod. Distinct toy dimensions mirror decoder
-head split/merge shapes while keeping exact per-element maps readable.
+source and fold the coordinates through the Op's own registered access
+relation, which is the only place the renaming is stated. Distinct toy
+dimensions mirror decoder head split/merge shapes while keeping exact
+per-element maps readable.
 """
 
 from __future__ import annotations

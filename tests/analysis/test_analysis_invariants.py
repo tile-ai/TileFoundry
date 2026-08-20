@@ -60,7 +60,12 @@ from tilefoundry.analysis.metadata import (
     MemoryMetadata,
     TrafficMetadata,
 )
-from tilefoundry.analysis.movement import _bytes_for
+from tilefoundry.analysis.movement import (
+    _bytes_for,
+    _moved_bytes,
+    _stated_movement,
+    call_traffic,
+)
 from tilefoundry.analysis.performance import analyze_performance
 from tilefoundry.analysis.preflight import validate_authored
 from tilefoundry.analysis.roofline import _cost_bound, analyze_roofline
@@ -167,17 +172,20 @@ from tilefoundry.visitor_registry.access_relation import (
     BoundaryRelation,
     access_relation_registry,
     broadcast_access,
+    control_leaves,
     coordinates_of,
     identity_access,
     index_set,
+    leaves_of,
     linearized_view,
     reached_elements,
+    reached_leaves,
     register_access_relation,
     relation_of,
     relations_of,
 )
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionScope, TrafficBytes
-from tilefoundry.visitor_registry.visitors import TypeInferVisitor
+from tilefoundry.visitor_registry.visitors import CostEvaluator, TypeInferVisitor
 
 
 @module(
@@ -836,11 +844,12 @@ def test_what_one_op_states_about_its_own_space_is_checked_before_its_type() -> 
 def test_the_partial_spaces_real_ops_state_are_accepted() -> None:
     """Three shapes that answer on part of a space, each for its own reason.
 
-    A slice is handed its bounds and never reads them, so that boundary answers
-    nowhere. An insert writes a window and keeps everything else, so those two
-    do not meet. A grouped rotation walks one coordinate saying which value it
-    is rotating, and each side answers at one value of it. All three are what
-    the checks have to admit while still refusing an unwalkable space.
+    A slice reads the numbers that place its window and none of the window, so
+    that boundary answers at one point. An insert writes a window and keeps
+    everything else, so those two do not meet. A grouped rotation walks one
+    coordinate saying which value it is rotating, and each side answers at one
+    value of it. All three are what the checks have to admit while still
+    refusing an unwalkable space.
     """
     bounds = Tuple(
         type=TupleType(fields=(make_tensor_type((), DType.i64),)),
@@ -852,8 +861,8 @@ def test_the_partial_spaces_real_ops_state_are_accepted() -> None:
         args=(Var(type=make_tensor_type((10,), DType.f32), name="x"), bounds),
     )
     addressed = coordinates_of(window, TypeInferContext())
-    assert relation_of(addressed.inputs[1].pattern).is_empty(), (
-        "a slice is handed its bounds and reads none of them"
+    assert reached_elements(addressed.inputs[1].pattern) == 1, (
+        "a slice reads the one number that places its window, not the window"
     )
     assert not relation_of(addressed.inputs[0].pattern).is_empty()
 
@@ -1009,6 +1018,122 @@ def inferred_and_moved(call: Call) -> tuple:
             reached_elements(boundary.pattern) for boundary in relations.outputs
         ),
     )
+
+
+def test_one_view_relation_answers_dependence_and_footprint() -> None:
+    """Folding a view is one relation's job, so breaking it breaks both readers.
+
+    A window's stride and start used to be rebuilt from the Op in each consumer.
+    This replaces the registered Slice relation with one reading a stride of two
+    and asks the polyhedral model what depends on what and the footprint family
+    what a loop touches: a reader still rebuilding the arithmetic would not move.
+    """
+    case = next(item for item in CORPUS if item.id == "access_footprint.qkv")
+    selected = case.analyze[0]
+    honest = access_relation_registry.lookup(SliceOp)
+
+    def reads_every_other_row(call, ctx) -> AccessRelations:
+        """A window that takes every other coordinate of what it names."""
+        relations = honest(call, ctx)
+        reads = relation_of(relations.inputs[0].pattern)
+        stretched = reads.apply_range(
+            isl.map(
+                "{ [c0, c1] -> [o0, o1] : o0 = 2c0 and o1 = c1 }"
+                if reads.dim(isl.dim_type.OUT) == 2
+                else "{ [c0] -> [o0] : o0 = 2c0 }"
+            )
+        )
+        return AccessRelations(
+            inputs=(
+                BoundaryRelation(
+                    AffineAccess(
+                        stretched,
+                        tuple(relations.inputs[0].pattern.parameters),
+                    )
+                ),
+                *relations.inputs[1:],
+            ),
+            outputs=relations.outputs,
+        )
+
+    def measured():
+        owner, entry = case.resolve(case.build(), selected.selector)
+        result = analyze(
+            owner, entry, analysis=("compute-cost", "memory"), dims=selected.dims
+        )
+        footprints = tuple(
+            tuple(sorted((item.buffer, item.bytes) for item in record.footprints))
+            for expr in postorder(result.function.body)
+            if (record := get_metadata(expr, LoopFootprintMetadata)) is not None
+        )
+        owner, entry = case.resolve(case.build(), selected.selector)
+        return (str(extract(entry).reads), footprints)
+
+    before = measured()
+    access_relation_registry._map[SliceOp] = reads_every_other_row
+    try:
+        after = measured()
+    finally:
+        access_relation_registry._map[SliceOp] = honest
+    assert measured() == before, "the honest relation was not put back"
+
+    assert after[0] != before[0], "the dependence did not read the view's relation"
+    assert after[1] != before[1], "and neither did the loop footprint"
+
+
+def test_one_relation_answers_the_whole_program_and_one_participant() -> None:
+    """Both windows read the same relation, so breaking it has to break both.
+
+    A quantity taken from the relation in one window and from a legacy evaluator
+    in the other is two answers again, and the whole-program one is what a
+    headline reports. This replaces a product's read with one reaching a
+    quarter as far, and asks for the whole reading, the per-unit reading and the
+    per-operand record.
+    """
+    cta = Topology("cta", 2)
+    mesh = make_mesh((2,), ("c",), topology=cta)
+    lhs = make_shard_tensor_type(
+        (8, 4), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32
+    )
+    rhs = make_tensor_type((4, 2), DType.f32)
+    call = Call(
+        type=make_tensor_type((8, 2), DType.f32),
+        target=MatMul(),
+        args=(Var(type=lhs, name="lhs"), Var(type=rhs, name="rhs")),
+    )
+    honest = access_relation_registry.lookup(MatMul)
+
+    def reads_a_quarter(one, ctx) -> AccessRelations:
+        """A product that reads a quarter of the operand it was handed."""
+        relations = honest(one, ctx)
+        held = relation_of(relations.inputs[0].pattern)
+        return AccessRelations(
+            inputs=(
+                BoundaryRelation(
+                    AffineAccess(held.intersect_range(isl.set("{ [c0, c1] : c1 < 1 }")))
+                ),
+                *relations.inputs[1:],
+            ),
+            outputs=relations.outputs,
+        )
+
+    def measured():
+        whole = CostEvaluator(CostContext())
+        unit = CostEvaluator(CostContext(level="cta", topologies=(cta,)))
+        moved = call_traffic(call, whole, unit)
+        return (moved.whole, moved.per_unit, moved.operands)
+
+    before = measured()
+    access_relation_registry._map[MatMul] = reads_a_quarter
+    try:
+        after = measured()
+    finally:
+        access_relation_registry._map[MatMul] = honest
+    assert measured() == before, "the honest relation was not put back"
+
+    assert after[0] != before[0], "the whole-program reading did not read the relation"
+    assert after[1] != before[1], "the per-participant reading did not read it either"
+    assert after[2] != before[2], "and neither did the per-operand record"
 
 
 def test_a_scan_depends_on_every_element_of_the_axis_it_scans() -> None:
@@ -2035,9 +2160,9 @@ def test_an_unbound_row_count_names_the_operands_that_decide_it() -> None:
 
     Where the rows land and how many there are are two runtime numbers, so the
     relation names them and says which operand each is: a reader restricts it
-    rather than guessing. What the boundary reaches with them at their smallest
-    is a number, and the complement is what that leaves -- charging the whole
-    cache would be neither.
+    rather than guessing. One crossing is the first legal binding of them, and
+    the complement is what that leaves -- charging the whole cache would be
+    neither, and how many crossings a loop performs is a footprint's question.
     """
     ctx = TypeInferContext()
     call = Call(
@@ -2055,7 +2180,7 @@ def test_an_unbound_row_count_names_the_operands_that_decide_it() -> None:
 
     update = relations.inputs[3]
     assert reached_elements(update.pattern) == per_row, (
-        "the smallest legal window is one row of what new supplies"
+        "one crossing is the first legal window, which is one row"
     )
     waited = dict(update.pattern.parameters)
     assert waited["o1"] is call.args[1], "where the rows land is that operand"
@@ -2063,7 +2188,7 @@ def test_an_unbound_row_count_names_the_operands_that_decide_it() -> None:
 
     kept = relations.inputs[0]
     assert reached_elements(kept.pattern) == held - per_row, (
-        "replacing one row leaves every other"
+        "and the complement of that window is what it leaves"
     )
     assert not kept.pattern.relation.is_empty(), (
         "replacing some rows leaves the others"
@@ -2604,13 +2729,13 @@ def _traffic_of(module, level, dims):
     return found
 
 
-def test_a_rename_that_lands_on_the_same_bytes_moves_none_of_them() -> None:
-    """Two names for one address are one value, and copying it costs nothing.
+def test_re_indexing_moves_nothing_and_computing_moves_something() -> None:
+    """Renaming the axes over elements asks the run for none of them.
 
-    The proof is the addresses: a link's two sides are composed with the layouts
-    of the buffers they name, over the iteration the occurrence runs, and only
-    an equality there earns the zero. A reader that took the op's name for it
-    would score a reshape between different buffers as free.
+    Which boundaries move at all is the Op's own evaluator: a reshape reports no
+    direction on any of them, so whatever its relations reach comes to nothing,
+    while an add reports reading its operands and writing its result and is
+    charged what those relations reach.
     """
     found = _traffic_of(
         replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 8),)),
@@ -3387,7 +3512,9 @@ def test_naming_bytes_is_not_reading_them() -> None:
         args=(Var(type=held, name="x"), bounds),
     )
     naming = relations_of(window, CostContext())
-    assert [reached_elements(item.pattern) for item in naming.inputs] == [4, 0]
+    assert [reached_elements(item.pattern) for item in naming.inputs] == [4, 1], (
+        "the window it names, and the one number placing it"
+    )
 
     assert _insert_slice_controls((10,), (4,), start) == [10 - 4, 4, 1]
 
@@ -3549,20 +3676,81 @@ def test_a_program_with_no_addresses_moves_bytes_and_takes_no_stated_time() -> N
         )
 
 
-def test_a_value_of_bits_is_charged_the_bytes_it_takes_up() -> None:
-    """A boolean is a bit, and a bit is not a fraction of a byte to charge.
+def test_a_control_operand_is_charged_the_leaves_it_reaches() -> None:
+    """Which leaf a boundary reaches decides the bytes, because widths differ.
 
-    Charging one element at a time asks what a bit costs in bytes, which has no
-    answer, and refusing there loses the traffic of every mask a program
-    computes. A leaf is addressed on its own, so the count is taken as a share
-    of the whole the type system already sizes it as.
+    A tuple of numbers is indexed by one coordinate, so a boundary that lands on
+    the second of them owes the second one's width. Charging the first, or the
+    whole tuple, is a wrong number at a plausible size -- and a nested tuple is
+    the same question with the leaves counted flat.
+    """
+    narrow = make_tensor_type((), DType.i32)
+    wide = make_tensor_type((), DType.i64)
+    mixed = TupleType(fields=(narrow, wide))
+    nested = TupleType(fields=(narrow, TupleType(fields=(wide, narrow))))
+
+    assert control_leaves(mixed) == 2
+    assert control_leaves(nested) == 3
+    assert [leaf.dtype for leaf in leaves_of(nested)] == [
+        DType.i32,
+        DType.i64,
+        DType.i32,
+    ]
+
+    def reaching(where: str, count: int) -> AffineAccess:
+        return AffineAccess(isl.map(f"{{ [d0] -> [l] : 0 <= d0 < 4 and {where} }}"))
+
+    assert reached_leaves(reaching("l = 1", 2), 2) == frozenset({1})
+    assert reached_leaves(reaching("0 <= l < 2", 2), 2) == frozenset({0, 1})
+    assert reached_leaves(reaching("l = 2", 3), 3) == frozenset({2})
+
+    assert _moved_bytes(mixed, reaching("l = 0", 2)) == 4, "the narrow leaf it took"
+    assert _moved_bytes(mixed, reaching("l = 1", 2)) == 8, "and the wide one"
+    assert _moved_bytes(mixed, reaching("0 <= l < 2", 2)) == 12, "or both of them"
+    assert _moved_bytes(nested, reaching("l = 1", 3)) == 8, (
+        "a nested field is one flat leaf, not one field of the top level"
+    )
+
+
+def test_an_evaluator_that_reports_the_wrong_operand_count_is_refused() -> None:
+    """Too few and too many are the same mistake, and both have to be caught.
+
+    Rebuilding a cost from its relations pairs each boundary with the direction
+    the evaluator reported, and pairing stops at the shorter of the two -- so an
+    evaluator reporting one too many would have its extra silently dropped and
+    come out the right length.
+    """
+    call = Call(
+        type=make_tensor_type((4,), DType.f32),
+        target=Binary(kind=BinaryKind.ADD),
+        args=(
+            Var(type=make_tensor_type((4,), DType.f32), name="a"),
+            Var(type=make_tensor_type((4,), DType.f32), name="b"),
+        ),
+    )
+    for count in (2, 4):
+        cost = Cost({}, tuple(TrafficBytes(read=1) for _ in range(count)))
+        with pytest.raises(AnalysisError, match=f"cost reports {count} operands"):
+            _stated_movement(call, cost, CostContext())
+
+
+def test_a_value_of_bits_is_charged_the_bytes_it_takes_up() -> None:
+    """A boolean is a bit, and part of a byte is still a byte to fetch.
+
+    Counting a packed value as a share of the whole rounds down, so one bool
+    would cost nothing and nine of them one byte instead of the two they are
+    read in. The width of an element is what says this, rounded up, and a value
+    whose width nobody states is refused rather than guessed at.
     """
     mask = make_tensor_type((512,), DType.bool)
     assert tensor_bytes(mask) == 64
 
-    assert _bytes_for(mask, 512) == 64
-    assert _bytes_for(mask, 0) == 0
-    assert _bytes_for(mask, 8) == 1
+    assert [_bytes_for(mask, count) for count in (0, 1, 8, 9, 512)] == [0, 1, 1, 2, 64]
+
+    packed = make_tensor_type((512,), DType.f4e2m1)
+    assert [_bytes_for(packed, count) for count in (0, 1, 2, 3, 512)] == [0, 1, 1, 2, 256]
 
     held = make_tensor_type((512,), DType.f32)
     assert _bytes_for(held, 512) == tensor_bytes(held)
+    assert _bytes_for(held, 1) == 4
+    assert _bytes_for(held, None) is None

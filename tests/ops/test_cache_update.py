@@ -187,12 +187,12 @@ class _KVCacheAppend:
 
 
 def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
-    """The op charges its window, and the analysed record charges the same window.
+    """One crossing is the first legal window, in both windows of the question.
 
-    What an occurrence moves is the Op's own answer. The rest of the cache is
-    the part it left alone -- it says so on that operand's boundary, which is
-    what a footprint reads -- and carrying it anywhere would be a plan's cost,
-    not this occurrence's.
+    How many rows this writes is a runtime value, so one occurrence is the first
+    legal binding of it: one row. How many such crossings the program performs
+    is the footprint family's question, and raising a single crossing to cover
+    them would be answering it here.
     """
     entry = _KVCacheAppend.entry_function()
     update = next(
@@ -231,10 +231,11 @@ def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
     assert result.level == "cta"
     assert record is not None
     assert record.flops == record.flops_per_unit == ()
+    row_bytes = _WINDOW_BYTES // 4
     assert moved.operands == (
         TrafficBytes(),
         TrafficBytes(read=4),
         TrafficBytes(read=4),
-        TrafficBytes(read=_WINDOW_BYTES),
-        TrafficBytes(write=_WINDOW_BYTES),
+        TrafficBytes(read=row_bytes),
+        TrafficBytes(write=row_bytes),
     )

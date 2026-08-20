@@ -20,7 +20,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.tensor.full_like import FullLike
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
-from tilefoundry.ir.hir.tensor.reshape import Reshape, flat_reshape_map
+from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice, window_base
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
@@ -31,9 +31,11 @@ from tilefoundry.ir.types.shard.shard_layout import shard_layout_of, split_targe
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    BoundaryRelation,
     access_relation_registry,
     relation_of,
     relations_of,
+    renaming_relation,
 )
 
 from .walk import children, postorder
@@ -183,25 +185,24 @@ def _buffer_namer():
         """Pierce.
 
         ``m`` (a read of ``expr``) rewritten to address ``expr``'s ultimate
-        buffer, folding each view hop between the two into the map's range: a
-        reshape recomputes the coordinates, and a one-element index_select
-        replaces its selected coordinate with an enclosing loop's induction
-        variable.
+        buffer, folding each view hop between the two into the map's range. The
+        coordinates come from the view's own registered relation, so a reshape's
+        arithmetic and a window's stride are stated once for every reader rather
+        than rebuilt here per Op.
         """
-        while isinstance(expr, Call):
-            target = expr.target
-            if isinstance(target, Reshape):
-                m = m.apply_range(flat_reshape_map(expr.args[0].type.shape, expr.type.shape))
-            elif isinstance(target, IndexSelect):
-                dim, pos = _index_select_loop_dim(expr, loops)
-                m = m.project_out(isl.dim_type.OUT, dim, 1)
-                m = m.insert_dims(isl.dim_type.OUT, dim, 1).equate(
-                    isl.dim_type.IN, pos, isl.dim_type.OUT, dim
-                )
-            elif isinstance(target, Slice):
-                m = _slice_read_map(m, expr, loops)
-            else:
-                break
+        ctx = _RankPreserving()
+        while isinstance(expr, Call) and isinstance(
+            expr.target, (Reshape, IndexSelect, Slice)
+        ):
+            try:
+                folded = renaming_relation(expr, ctx)
+                m = m.apply_range(relation_of(folded))
+                m = _place_parameters(m, BoundaryRelation(folded), loops)
+            except (NotImplementedError, TypeError, ValueError, isl.Error) as error:
+                raise ExtractError(
+                    f"extract: {type(expr.target).__name__} cannot state where it "
+                    f"reads what it renames: {error}"
+                ) from error
             expr = expr.args[0]
         return m
 
@@ -210,39 +211,6 @@ def _buffer_namer():
     return name_for
 
 
-def _index_select_loop_dim(
-    call: Call, loops: tuple[GridRegionExpr, ...]
-) -> tuple[int, int]:
-    """Return the selected dim and loop position for a foldable IndexSelect.
-
-    The only affine form is the strict torch index built by reshaping one
-    enclosing induction variable to shape ``(1,)``. Anything else is
-    data-dependent and has no affine access map.
-    """
-    x_rank = len(call.args[0].type.shape)
-    dim = call.target.dim
-    dim = dim + x_rank if dim < 0 else dim
-    index = call.args[1]
-    if not (
-        isinstance(index, Call)
-        and isinstance(index.target, Reshape)
-        and tuple(index.type.shape) == (1,)
-        and len(index.args) == 1
-    ):
-        raise ExtractError(
-            "extract: IndexSelect is only modelled for an enclosing loop's "
-            "induction variable reshaped to a one-element index "
-            f"(got index shape {getattr(index.type, 'shape', None)!r})"
-        )
-    scalar_index = index.args[0]
-    for pos, loop in enumerate(loops):
-        if loop.induction_var is scalar_index:
-            return dim, pos
-    raise ExtractError(
-        "extract: IndexSelect index is not an enclosing loop's induction variable "
-        "-- a data-dependent selection has no affine access map; only "
-        "loop-index addressing (a tile-loop slice) is modelled"
-    )
 
 
 def _slice_start(start, loops: tuple[GridRegionExpr, ...]) -> tuple[int | None, int]:
@@ -265,37 +233,6 @@ def _slice_start(start, loops: tuple[GridRegionExpr, ...]) -> tuple[int | None, 
     )
 
 
-def _slice_read_map(
-    m: "isl.map", call: Call, loops: tuple[GridRegionExpr, ...]
-) -> "isl.map":
-    """Rewrite Slice-result coordinates into coordinates of its source tensor."""
-    starts = call.args[1]
-    if not isinstance(starts, Tuple):
-        raise ExtractError("extract: Slice starts input must be a Tuple")
-    rank = m.dim(isl.dim_type.OUT)
-    if not (
-        len(starts.elements) == rank
-        and len(call.target.strides) == rank
-    ):
-        raise ExtractError("extract: Slice rank does not match its read relation")
-    transformed = m.insert_dims(isl.dim_type.OUT, rank, rank)
-    local = isl.local_space.from_space(transformed.get_space())
-    for axis, (start, stride) in enumerate(zip(starts.elements, call.target.strides)):
-        if not isinstance(stride, int) or isinstance(stride, bool) or stride <= 0:
-            raise ExtractError(
-                f"extract: Slice stride {stride!r} is not a positive static int"
-            )
-        loop_pos, offset = _slice_start(start, loops)
-        constraint = (
-            isl.constraint.alloc_equality(local)
-            .set_coefficient_si(isl.dim_type.OUT, rank + axis, 1)
-            .set_coefficient_si(isl.dim_type.OUT, axis, -stride)
-            .set_constant_si(-offset)
-        )
-        if loop_pos is not None:
-            constraint = constraint.set_coefficient_si(isl.dim_type.IN, loop_pos, -1)
-        transformed = transformed.add_constraint(constraint)
-    return transformed.project_out(isl.dim_type.OUT, 0, rank)
 
 
 def _assign_statement_names(ops: list[object]) -> list[str]:
@@ -402,64 +339,33 @@ def _loop_domain(
     return inner.insert_dims(isl.dim_type.SET, 0, len(loops)).intersect(box), params
 
 
-def _full_slice_domain(
-    domain: "isl.set", args: tuple, loops: tuple[GridRegionExpr, ...]
+def _renaming(expr) -> bool:
+    """Whether a value is another name for a buffer, with coordinates to fold."""
+    return isinstance(expr, Call) and isinstance(
+        expr.target, (Reshape, IndexSelect, Slice)
+    )
+
+
+def _whole_views(
+    prefixed: "isl.set", read_maps, args: tuple, namer, loops, within
 ) -> "isl.set":
-    """Restrict statements using loop-indexed Slice views to full windows."""
-    result = domain
-    for arg in args:
-        expr = arg
-        while isinstance(expr, Call) and isinstance(
-            expr.target, (TupleGetItem, Reshape, IndexSelect, Slice)
-        ):
-            if isinstance(expr.target, Slice):
-                starts = expr.args[1]
-                if not isinstance(starts, Tuple):
-                    raise ExtractError("extract: Slice starts input must be a Tuple")
-                for axis, (start, size, stride) in enumerate(
-                    zip(starts.elements, expr.target.sizes, expr.target.strides)
-                ):
-                    loop_pos, offset = _slice_start(start, loops)
-                    if loop_pos is None:
-                        continue
-                    if not all(
-                        isinstance(value, int) and not isinstance(value, bool)
-                        for value in (size, stride)
-                    ):
-                        raise ExtractError(
-                            "extract: loop-indexed Slice sizes and strides must be "
-                            "static integers"
-                        )
-                    extent = expr.args[0].type.shape[axis]
-                    local = isl.local_space.from_space(result.get_space())
+    """The trips whose views are whole, read off the folded relations themselves.
+
+    A window placed by the trip runs past its source on the last few, and the
+    view's own relation already says so: composing it leaves those coordinates
+    out. Asking the relation is what keeps one window formula in one place.
+    """
+    held = prefixed
+    for index, arg in enumerate(args):
+        if index >= len(read_maps) or read_maps[index] is None or not _renaming(arg):
+            continue
+        reached = within(read_maps[index])
+        if reached.is_empty():
+            continue
+        held = held.intersect(namer.pierce(reached, arg, loops).domain())
+    return held
 
 
-
-                    span = size * stride + offset
-                    constraint = (
-                        isl.constraint.alloc_inequality(local)
-                        .set_coefficient_si(isl.dim_type.SET, loop_pos, -1)
-                        .set_constant_si(-span)
-                    )
-                    if isinstance(extent, int) and not isinstance(extent, bool):
-                        constraint = constraint.set_constant_si(extent - span)
-                    elif isinstance(extent, DimVar):
-                        param = result.find_dim_by_name(isl.dim_type.PARAM, extent.name)
-                        if param < 0:
-                            raise ExtractError(
-                                f"extract: Slice extent parameter {extent.name!r} "
-                                "is absent from the statement domain"
-                            )
-                        constraint = constraint.set_coefficient_si(
-                            isl.dim_type.PARAM, param, 1
-                        )
-                    else:
-                        raise ExtractError(
-                            f"extract: Slice source extent {extent!r} is not affine"
-                        )
-                    result = result.add_constraint(constraint)
-            expr = expr.args[0]
-    return result
 
 
 def _lift(m: "isl.map", depth: int) -> "isl.map":
@@ -555,10 +461,11 @@ def _place_parameters(
     bound = dict(getattr(boundary.pattern, "parameters", ()) or ())
     for name in _named(access):
         value = bound.get(name)
-        if isinstance(value, DimVar):
-            continue
         position = _named(access).index(name) if name in _named(access) else None
         if position is None:
+            continue
+        if isinstance(value, DimVar):
+            access = _under_its_own_name(access, position, value.name)
             continue
         number = static_dim_value(value)
         loop_position = None
@@ -577,6 +484,30 @@ def _place_parameters(
         access = access.add_constraint(equality.set_constant_si(-number))
         access = access.project_out(isl.dim_type.PARAM, position, 1)
     return access
+
+
+def _under_its_own_name(access: "isl.map", position: int, name: str) -> "isl.map":
+    """One symbolic parameter renamed to the dimension it stands for.
+
+    A relation names its own parameters, and two relations naming the same
+    dimension differently do not meet: the schedule would carry two symbols for
+    one extent. Where the name is already taken it is the same dimension, so the
+    two are equated and one of them leaves.
+    """
+    held = _named(access)
+    if held[position] == name:
+        return access
+    if name not in held:
+        return access.set_dim_name(isl.dim_type.PARAM, position, name)
+    local = isl.local_space.from_space(access.get_space())
+    equality = (
+        isl.constraint.alloc_equality(local)
+        .set_coefficient_si(isl.dim_type.PARAM, position, 1)
+        .set_coefficient_si(isl.dim_type.PARAM, held.index(name), -1)
+    )
+    return access.add_constraint(equality).project_out(
+        isl.dim_type.PARAM, position, 1
+    )
 
 
 def _named(access: "isl.map") -> list:
@@ -729,7 +660,7 @@ def _one_statement(
 
     own, shape_params = _walked(call, relations, _without(walks, settled))
     prefixed, loop_params = _loop_domain(own, loops)
-    prefixed = _full_slice_domain(prefixed, call.args, loops)
+    prefixed = _whole_views(prefixed, read_maps, call.args, namer, loops, within)
     domain = prefixed.set_tuple_name(stmt_name)
 
     reads: list["isl.map"] = []

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 import isl
 
-from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var, binding_name
+from tilefoundry.ir.core import Call, Constant, Expr, Var, binding_name
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
@@ -16,7 +16,7 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.arange import Arange
-from tilefoundry.ir.hir.tensor.reshape import Reshape, flat_reshape_map
+from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice, window_base
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import TensorType
@@ -30,6 +30,7 @@ from tilefoundry.visitor_registry.access_relation import (
     index_set,
     relation_of,
     relations_of,
+    renaming_relation,
 )
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
@@ -178,96 +179,37 @@ def _static_range(expr: Expr, *, narrow: bool) -> tuple[int, int] | None:
     return None
 
 
-def _slice_start(
-    start: Expr, loops: tuple[GridRegionExpr, ...], *, narrow: bool
-) -> tuple[int | None, int, int]:
-    base, offset = window_base(start)
-    if base is None:
-        return None, offset, offset
-    for index, loop in enumerate(loops):
-        if loop.induction_var is base:
-            return index, offset, offset
-    if isinstance(start, Call) and isinstance(start.target, Binary):
-        if start.target.kind is BinaryKind.ADD:
-            for loop_expr, invariant in (
-                (start.args[0], start.args[1]),
-                (start.args[1], start.args[0]),
-            ):
-                for index, loop in enumerate(loops):
-                    if loop.induction_var is loop_expr:
-                        bounds = _static_range(invariant, narrow=narrow)
-                        if bounds is not None:
-                            return index, bounds[0], bounds[1]
-    raise _Unavailable
 
 
-def _fold_slice(
-    access: isl.map,
-    call: Call,
-    loops: tuple[GridRegionExpr, ...],
-    *,
-    narrow: bool,
-) -> isl.map:
-    return _fold_window(access, call.args[1], call.target.strides, loops, narrow=narrow)
 
 
-def _fold_window(
-    access: isl.map,
-    starts: Expr,
-    strides: tuple[int, ...],
-    loops: tuple[GridRegionExpr, ...],
-    *,
-    narrow: bool,
-) -> isl.map:
-    """Move local window coordinates to their source-buffer coordinates."""
-    rank = access.dim(isl.dim_type.OUT)
-    elements = starts.elements if isinstance(starts, Tuple) else (starts,)
-    if len(elements) != rank or len(strides) != rank:
-        raise _Unavailable
-    transformed = access.insert_dims(isl.dim_type.OUT, rank, rank)
-    local = isl.local_space.from_space(transformed.get_space())
-    for axis, (start, stride) in enumerate(zip(elements, strides)):
-        if not isinstance(stride, int) or isinstance(stride, bool) or stride <= 0:
-            raise _Unavailable
-        loop_axis, lower, upper = _slice_start(start, loops, narrow=narrow)
-
-        def positioned(constraint: isl.constraint, sign: int) -> isl.constraint:
-            constraint = constraint.set_coefficient_si(
-                isl.dim_type.OUT, rank + axis, sign
-            ).set_coefficient_si(isl.dim_type.OUT, axis, -sign * stride)
-            if loop_axis is not None:
-                constraint = constraint.set_coefficient_si(isl.dim_type.IN, loop_axis, -sign)
-            return constraint
-
-        if lower == upper:
-            constraint = positioned(isl.constraint.alloc_equality(local), 1)
-            transformed = transformed.add_constraint(constraint.set_constant_si(-lower))
-        else:
-            low = positioned(isl.constraint.alloc_inequality(local), 1)
-            high = positioned(isl.constraint.alloc_inequality(local), -1)
-            transformed = transformed.add_constraint(low.set_constant_si(-lower))
-            transformed = transformed.add_constraint(high.set_constant_si(upper))
-    return transformed.project_out(isl.dim_type.OUT, 0, rank)
 
 
 def _source_buffer(
     expr: Expr,
     access: isl.map,
     loops: tuple[GridRegionExpr, ...],
+    ctx: TypeInferContext,
     *,
     narrow: bool,
 ) -> tuple[Expr, isl.map]:
-    """Fold Slice and Reshape coordinates until *access* reaches an allocation."""
+    """Fold each view's coordinates until *access* reaches an allocation.
+
+    The coordinates come from the view's own registered relation, read backwards
+    through what it writes and forwards through what it reads, so a window's
+    stride and a reshape's arithmetic are stated once for every reader of them.
+    """
     while isinstance(expr, Call) and isinstance(expr.target, (Slice, Reshape)):
-        if isinstance(expr.target, Slice):
-            access = _fold_slice(access, expr, loops, narrow=narrow)
-        else:
-            old_type = _local_type(expr.args[0].type) if narrow else expr.args[0].type
-            new_type = _local_type(expr.type) if narrow else expr.type
-            if not isinstance(old_type, TensorType) or not isinstance(new_type, TensorType):
-                raise _Unavailable
-            access = access.apply_range(flat_reshape_map(old_type.shape, new_type.shape))
-        expr = expr.args[0]
+        folded = renaming_relation(expr, ctx)
+        source = expr.args[0]
+        held = _local_type(source.type) if narrow else source.type
+        if not isinstance(held, TensorType):
+            raise _Unavailable
+        access = access.apply_range(relation_of(folded))
+        access = _bind_parameters(
+            access, folded, loops, held, access.domain(), narrow=narrow
+        )
+        expr = source
     return expr, access
 
 
@@ -285,6 +227,36 @@ class _RankPreserving(TypeInferContext):
         return _local_type(self.type_of(expr))
 
 
+def _placed_in_loops(
+    value: Expr, loops: tuple[GridRegionExpr, ...], *, narrow: bool
+) -> tuple[int | None, int, int]:
+    """Which loop coordinate one runtime value is, and at what offset.
+
+    A relation's parameter is bound to the operand that states it, and that
+    operand may be an induction variable, or one plus something invariant. Then
+    the parameter is that loop's coordinate and projecting it out unions over
+    the trip; anything else this cannot place is refused to its caller.
+    """
+    base, offset = window_base(value)
+    if base is None:
+        return None, offset, offset
+    for index, loop in enumerate(loops):
+        if loop.induction_var is base:
+            return index, offset, offset
+    if isinstance(value, Call) and isinstance(value.target, Binary):
+        if value.target.kind is BinaryKind.ADD:
+            for loop_expr, invariant in (
+                (value.args[0], value.args[1]),
+                (value.args[1], value.args[0]),
+            ):
+                for index, loop in enumerate(loops):
+                    if loop.induction_var is loop_expr:
+                        bounds = _static_range(invariant, narrow=narrow)
+                        if bounds is not None:
+                            return index, bounds[0], bounds[1]
+    raise _Unavailable
+
+
 def _placed_parameter(
     value: object, loops: tuple[GridRegionExpr, ...], *, narrow: bool
 ) -> tuple[int | None, int, int] | None:
@@ -292,7 +264,7 @@ def _placed_parameter(
     if not isinstance(value, Expr):
         return None
     try:
-        return _slice_start(value, loops, narrow=narrow)
+        return _placed_in_loops(value, loops, narrow=narrow)
     except _Unavailable:
         bounds = _static_range(value, narrow=narrow)
         return None if bounds is None else (None, bounds[0], bounds[1])
@@ -553,7 +525,9 @@ def _collect(
                     )
                     access = _within(access, local_type)
                     elements = _one_pass(access, domain, depth)
-                    buffer, access = _source_buffer(operand, access, path, narrow=narrow)
+                    buffer, access = _source_buffer(
+                        operand, access, path, ctx, narrow=narrow
+                    )
                     if not isinstance(buffer.type, TensorType):
                         continue
                 except (NotImplementedError, TypeError, ValueError, isl.Error, _Unavailable):
