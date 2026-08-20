@@ -145,7 +145,7 @@ def test_analyze_help_explains_topology_effects_and_assumptions(capsys) -> None:
     for family in ("compute-cost", "memory", "roofline", "performance"):
         assert family in help_text
     assert "flops_per_unit" in help_text
-    assert "traffic_per_unit" in help_text
+    assert "per-unit traffic" in help_text
     assert "global traffic is the device's and counted once" in help_text
     assert "is an observation, not a bound" in help_text
 
