@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 import subprocess
@@ -24,12 +25,14 @@ from tests.fixtures.shapes.neighbour_sources import (
     configured_after_it_is_built,
     documented_and_postponed,
     future_import_out_of_place,
+    unsound_annotating_the_selection,
     unsound_by_control_exception,
     unsound_with_a_same_named_attribute,
     unsound_with_a_same_named_comprehension,
 )
 from tilefoundry import cli
 from tilefoundry.cli.source import (
+    _at_module_level,
     load_authored_ir,
     load_namespace,
     one_extent_per_dim,
@@ -298,6 +301,50 @@ def test_a_selected_load_keeps_the_docstring_the_file_states(tmp_path) -> None:
 
     assert namespace["__doc__"] == "The file's own docstring."
     assert namespace["SEEN"] == "The file's own docstring."
+
+
+@pytest.mark.parametrize(
+    ("postponed", "reaches"),
+    ((True, False), (False, True)),
+    ids=("postponed-annotations", "eager-annotations"),
+)
+def test_whether_an_annotation_reads_the_selection_is_the_file_s_decision(
+    tmp_path, postponed: bool, reaches: bool
+) -> None:
+    """An annotation reaches for what it names only where the file evaluates it.
+
+    Both files hold a helper that fails for its own reason and annotates the
+    selection. Postponed, those annotations are strings and reach for nothing, so
+    the helper's failure is not the selection's and the selection still loads.
+    Evaluated, they really do read it, so the helper is building on the selection
+    and its failure is not something to set aside.
+    """
+    source = tmp_path / f"annotated_{postponed}.py"
+    source.write_text(unsound_annotating_the_selection(postponed), encoding="utf-8")
+
+    if reaches:
+        with pytest.raises(AttributeError, match="no_such_attribute"):
+            load_namespace(f"{source}:Sound")
+        return
+    namespace, _selector = load_namespace(f"{source}:Sound")
+    assert "Sound" in namespace
+
+
+def test_a_comprehension_variable_is_local_to_the_comprehension(tmp_path) -> None:
+    """Every target of a comprehension is that comprehension's own name.
+
+    Only the first iterable is evaluated where the comprehension is written, so a
+    name read there is a name from outside. Every later iterable is evaluated
+    inside, where all of the targets already belong to the comprehension -- so one
+    spelled like the selection is not a reading of it, whatever position it is in.
+    """
+    read_from_outside = ast.parse("value = [0 for y in Sound]").body[0]
+    later_iterable = ast.parse("value = [0 for x in (0,) for Sound in Sound]").body[0]
+    first_iterable = ast.parse("value = [0 for y in Sound for Sound in (1,)]").body[0]
+
+    assert "Sound" in _at_module_level(read_from_outside)
+    assert "Sound" not in _at_module_level(later_iterable)
+    assert "Sound" in _at_module_level(first_iterable)
 
 
 def test_a_control_exception_is_not_set_aside(tmp_path) -> None:

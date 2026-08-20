@@ -79,11 +79,17 @@ boundaries are different:
 
   A statement that is the selection's own MUST NOT be set aside. That is one that
   binds the selected root, or that reads it while the file runs. Reads means free
-  reads and not spellings: a name being written is not a reading of it, a
-  comprehension's own variable shadows the name it spells, and a function body is
-  not read then -- so a class attribute, a comprehension variable, or a parameter
-  sharing the root's name is not a reading of it. What decorates, defaults or
-  annotates a function IS read then.
+  reads and not spellings: a name being written is not a reading of it, and a
+  function body is not read then -- so a class attribute or a parameter sharing the
+  root's name is not a reading of it. A comprehension's variables are its own,
+  every one of them: only its first iterable is evaluated where the comprehension
+  is written, so a name read there is a name from outside, while every later
+  iterable is evaluated inside where all the targets already belong to it.
+
+  What decorates a function and what defaults its arguments IS read then. Whether
+  its annotations are is the file's own decision: where `SOURCE` postpones its
+  annotations they stay strings and reach for nothing, and where it does not they
+  are read like anything else.
   Such a statement is building or reconfiguring what was named, so its failure
   MUST be reported even when an earlier statement also failed and even when the
   root is already bound. Only an `Exception` MAY be set aside at all: anything

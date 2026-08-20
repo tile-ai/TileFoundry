@@ -84,7 +84,7 @@ def select_ir(namespace: dict[str, object], selector: str | None) -> Module:
     raise ValueError("source defines no TileFoundry Module")
 
 
-def _statement_codes(path: Path) -> list[tuple[ast.stmt, object]]:
+def _statement_codes(path: Path) -> tuple[list[tuple[ast.stmt, object]], bool]:
     """Each top-level statement of *path*, compiled to run on its own.
 
     The whole file is compiled first and thrown away, so every rule Python
@@ -121,20 +121,21 @@ def _statement_codes(path: Path) -> list[tuple[ast.stmt, object]]:
         prefix = () if statement is documented else future
         unit = ast.Module(body=[*prefix, statement], type_ignores=[])
         codes.append((statement, compile(unit, str(path), "exec", dont_inherit=True)))
-    return codes
+    postponed = any(
+        alias.name == "annotations" for item in future for alias in item.names
+    )
+    return codes, postponed
 
 
-def _at_module_level(statement: ast.stmt) -> set[str]:
+def _at_module_level(statement: ast.stmt, *, postponed: bool = False) -> set[str]:
     """The names *statement* reads while the file runs.
 
-    Reads, not spellings. A name being written is not a reading of it, so a class
-    whose body assigns one has said nothing about what that name means elsewhere.
-    A comprehension's own variable means nothing outside it, so it shadows.
-
-    A function body runs when something calls it, not when the file loads, so its
-    names are not read here -- which is why a parameter sharing a module-level
-    name is not a mention of it. What decorates, defaults or annotates that
-    function is read now, and so is everything a class body does directly.
+    Reads, not spellings: a name being written is not a reading of it. A
+    comprehension's variables are its own -- only its first iterable is evaluated
+    where it is written, every later one inside, where all the targets belong to
+    it. A function body runs when something calls it, so its names are not read
+    here, while what decorates it and defaults its arguments is. Whether its
+    annotations are is the file's own decision, which *postponed* carries.
     """
     found: set[str] = set()
     scopes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
@@ -145,6 +146,8 @@ def _at_module_level(statement: ast.stmt) -> set[str]:
         parts: list[ast.AST] = list(getattr(node, "decorator_list", ()))
         parts.extend(node.args.defaults or ())
         parts.extend(item for item in (node.args.kw_defaults or ()) if item is not None)
+        if postponed:
+            return parts
         if getattr(node, "returns", None) is not None:
             parts.append(node.returns)
         parts.extend(
@@ -181,6 +184,11 @@ def _at_module_level(statement: ast.stmt) -> set[str]:
             ):
                 if part is not None:
                     walk(part, inner)
+            return
+        if postponed and isinstance(node, ast.AnnAssign):
+            for part in (node.target, node.value):
+                if part is not None:
+                    walk(part, bound)
             return
         for child in ast.iter_child_nodes(node):
             walk(child, bound)
@@ -236,11 +244,14 @@ def _run_for_selection(path: Path, module: object, root: str) -> None:
     """
     first: BaseException | None = None
     aside: list[ast.stmt] = []
-    for statement, code in _statement_codes(path):
+    codes, postponed = _statement_codes(path)
+    for statement, code in codes:
         try:
             exec(code, module.__dict__)  # noqa: S102 — the authored file
         except Exception as error:  # noqa: BLE001 — one unfinished statement
-            mine = _binds(statement, root) or root in _at_module_level(statement)
+            mine = _binds(statement, root) or root in _at_module_level(
+                statement, postponed=postponed
+            )
             if mine and not _follows_from(error, aside):
                 raise
             aside.append(statement)

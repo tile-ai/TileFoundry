@@ -253,3 +253,24 @@ def unsound_by_control_exception() -> str:
         )
         + _SOUND
     )
+
+
+def unsound_annotating_the_selection(postponed: bool) -> str:
+    """An unsound helper whose annotations name the selection.
+
+    Whether those annotations are read while the file loads is the file's own
+    decision: postponed, they are strings and name nothing yet, so the helper's
+    own failure is not the selection's; evaluated, they really do reach for the
+    selection and its failure is. The two files differ in one line.
+    """
+    head = "from __future__ import annotations\n" if postponed else ""
+    return (
+        head
+        + _HEAD
+        + "def absent(value):\n"
+        "    return value\n"
+        "@absent.no_such_attribute\n"
+        "def helper(value: Sound) -> Sound:\n"
+        "    return value\n"
+        + _SOUND
+    )
