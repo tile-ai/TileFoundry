@@ -48,11 +48,11 @@ class ComputeCostMetadata(IRMetadata):
 class TrafficMetadata(IRMetadata):
     """The bytes one occurrence moves, whole and for one participant.
 
-    Read off the Op's own registered evaluator by the family that decides where
-    values live, because whether a crossing was a copy is a question about
-    allocation. ``operands`` is positional against ``(*call.args, call)`` on a
-    Call and empty on a Function, whose totals count each occurrence as often as
-    its loops repeat it.
+    Which way a boundary moves is its Op's evaluator's answer and how much is
+    its relation's; the family that decides where values live attaches the
+    record, and where they landed never corrects a crossing. ``operands`` is
+    positional against ``(*call.args, call)`` on a Call and empty on a Function,
+    whose totals count each occurrence as often as its loops repeat it.
     """
 
     whole: tuple[tuple[str, TrafficBytes], ...] = ()

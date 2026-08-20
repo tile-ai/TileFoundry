@@ -105,7 +105,8 @@ def assert_performance_contract(result: AnalysisResult) -> None:
     ideal bound. An occurrence's duration is its own compute-cost record priced
     at the target's rates, and a solve that proved nothing says so. One a loop
     repeats is written once, so its interval is that many of its own durations.
-    A loop is not an occurrence and carries no timeline of its own.
+    A loop is not an occurrence and carries no timeline of its own, and still
+    states the buffers it touches.
     """
     fn = result.function
     summary = get_metadata(fn, PerformanceSummaryMetadata)
@@ -154,6 +155,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
             continue
         assert get_metadata(expr, PerformanceMetadata) is None, describe(expr)
         assert get_metadata(expr, PerformanceSummaryMetadata) is None, describe(expr)
+        assert get_metadata(expr, LoopFootprintMetadata) is not None, describe(expr)
 
 
 @pytest.mark.parametrize("case", INVENTORY)

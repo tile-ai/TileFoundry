@@ -666,9 +666,10 @@ fails closed rather than having its evaluator's number read as the amount.
   - A Type with concrete and `UMAT` leaves MUST charge each leaf's bytes at its
     own level. It MUST NOT assign the aggregate movement of the operand to the
     one concrete level merely because that is the only committed level.
-  - Per-level `whole` and `operands` MUST NOT be assumed equal for a Type that
-    occupies several levels: the aggregate is the conservative placement charge
-    while the operand entry is that boundary's own amount.
+  - Per-level `whole` and `operands` MUST NOT be assumed equal for a Type whose
+    leaves occupy several levels: `whole` groups each leaf's bytes under the
+    level that leaf sits at, while an `operands` entry is one boundary's own
+    amount over all of them. Where those bytes were placed enters neither.
   - Two operands MAY name the same value; the `operands` split MUST keep their
     positions distinct, and MUST omit an entry it cannot state rather than emit
     it empty.
