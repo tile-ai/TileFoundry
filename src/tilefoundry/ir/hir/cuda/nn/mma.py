@@ -28,6 +28,7 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    iterating,
     moves,
     register_access_relation,
     writes,
@@ -285,13 +286,17 @@ def _tile_access(call: "Call", ctx) -> AccessRelations:
     """
     m, n, k = _TILES[type(call.target).__name__]
     held = _viewed(ctx)
-    rank = len(held(call).shape)
-    return AccessRelations(
-        inputs=(
-            moves(_whole_read(held(call.args[0]), rank), m * k),
-            moves(_whole_read(held(call.args[1]), rank), k * n),
+    accumulator = held(call)
+    rank = len(accumulator.shape)
+    return iterating(
+        accumulator.shape,
+        AccessRelations(
+            inputs=(
+                moves(_whole_read(held(call.args[0]), rank), m * k),
+                moves(_whole_read(held(call.args[1]), rank), k * n),
+            ),
+            outputs=(writes(identity_access(rank), m * n),),
         ),
-        outputs=(writes(identity_access(rank), m * n),),
     )
 
 

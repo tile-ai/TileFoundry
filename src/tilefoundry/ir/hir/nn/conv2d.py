@@ -23,6 +23,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     build_relation,
     factored_image,
+    iterating,
     logical_axes_of,
     moves,
     register_access_relation,
@@ -448,28 +449,33 @@ def _conv2d_access(call: "Call", ctx) -> AccessRelations:
     )
     touched = _reachable_rows(x[2], op.stride[0], op.padding[0], op.dilation[0], k_h, result[2])
     across = _reachable_rows(x[3], op.stride[1], op.padding[1], op.dilation[1], k_w, result[3])
-    return AccessRelations(
-        inputs=(
-            moves(reached, result[0] * contraction * groups * touched * across),
-            moves(
-                isl.multi_aff(
-                    f"{{ [{domain}] -> "
-                    f"[{spread(['co', 'ci', 'kh', 'kw'], call.args[1])}] }}"
+    return iterating(
+        (result[0], result[1], result[2], result[3], contraction, k_h, k_w),
+        AccessRelations(
+            inputs=(
+                moves(reached, result[0] * contraction * groups * touched * across),
+                moves(
+                    isl.multi_aff(
+                        f"{{ [{domain}] -> "
+                        f"[{spread(['co', 'ci', 'kh', 'kw'], call.args[1])}] }}"
+                    ),
+                    result[1] * contraction * k_h * k_w,
                 ),
-                result[1] * contraction * k_h * k_w,
-            ),
-            moves(
-                isl.multi_aff(f"{{ [{domain}] -> [{spread(['co'], call.args[2])}] }}"),
-                result[1],
-            ),
-        ),
-        outputs=(
-            writes(
-                isl.multi_aff(
-                    f"{{ [{domain}] -> "
-                    f"[{spread(['n', 'co', 'oh', 'ow'], call)}] }}"
+                moves(
+                    isl.multi_aff(
+                        f"{{ [{domain}] -> [{spread(['co'], call.args[2])}] }}"
+                    ),
+                    result[1],
                 ),
-                result[0] * result[1] * result[2] * result[3],
+            ),
+            outputs=(
+                writes(
+                    isl.multi_aff(
+                        f"{{ [{domain}] -> "
+                        f"[{spread(['n', 'co', 'oh', 'ow'], call)}] }}"
+                    ),
+                    result[0] * result[1] * result[2] * result[3],
+                ),
             ),
         ),
     )

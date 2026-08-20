@@ -803,67 +803,83 @@ def _hold_one_space(relations: AccessRelations, op_cls: type) -> None:
     """Refuse boundaries of one Op that are asked by different coordinates.
 
     An Op walks one iteration space and every boundary answers about it, so two
-    asked by different coordinates describe two Ops. A boundary may answer on
-    part of that space -- the piece a grouped rotation writes, the positions a
-    window leaves alone -- so what must agree is the coordinates it is asked by,
-    and every part must lie inside the whole they make.
+    asked by a different number of coordinates describe two Ops. What each
+    answers on may differ and may be empty -- a grouped rotation's two pieces do
+    not meet, a window's complement is what the window is not, a control operand
+    is addressed and never read -- but each must be bounded once its parameters
+    stand for something, or nobody can count it or walk it.
     """
-    walked: tuple | None = None
-    whole = None
+    arity: tuple | None = None
+    for side, index, pattern in _affine_boundaries(relations):
+        own = relation_of(pattern).domain()
+        rank = own.dim(isl.dim_type.SET)
+        if arity is None:
+            arity = (rank, f"{side} {index}")
+        elif rank != arity[0]:
+            raise ValueError(
+                f"{op_cls.__name__} is asked by {arity[0]} coordinates at "
+                f"{arity[1]} and by {rank} at {side} {index}; one Op walks one "
+                "space"
+            )
+        if not own.is_bounded():
+            raise ValueError(
+                f"{op_cls.__name__} is asked at {own} on {side} {index}, which "
+                "no parameter binding makes bounded; an unbounded space is one "
+                "nobody can walk or count"
+            )
+
+
+def _affine_boundaries(relations: AccessRelations):
+    """Every boundary of one Op that states coordinates, with where it is."""
     for side, boundaries in (("input", relations.inputs), ("output", relations.outputs)):
         for index, boundary in enumerate(boundaries):
-            if not isinstance(boundary.pattern, (AffineAccess, isl.map, isl.multi_aff)):
-                continue
-            own = relation_of(boundary.pattern).domain()
-            rank = own.dim(isl.dim_type.SET)
-            if walked is None:
-                walked, whole = (rank, f"{side} {index}"), own
-                continue
-            if rank != walked[0]:
-                raise ValueError(
-                    f"{op_cls.__name__} is asked by {walked[0]} coordinates at "
-                    f"{walked[1]} and by {rank} at {side} {index}; one Op walks "
-                    "one space"
-                )
-            whole = whole.union(own)
-    if whole is None:
-        return
-    for side, boundaries in (("input", relations.inputs), ("output", relations.outputs)):
-        for index, boundary in enumerate(boundaries):
-            if not isinstance(boundary.pattern, (AffineAccess, isl.map, isl.multi_aff)):
-                continue
-            own = relation_of(boundary.pattern).domain()
-            if not own.is_subset(whole):
-                raise ValueError(
-                    f"{op_cls.__name__} is asked at {own} on {side} {index}, "
-                    f"which is outside the {whole} it walks"
-                )
+            if isinstance(boundary.pattern, (AffineAccess, isl.map, isl.multi_aff)):
+                yield side, index, boundary.pattern
+
+
+def iteration_universe(relations: AccessRelations) -> "isl.set | None":
+    """The whole space one Op walks, from the boundaries that answer about it.
+
+    There is no separate place an Op declares this: its boundaries do, each on
+    the part it answers on, so the whole is their union once their parameters are
+    lined up. Every reader derives it here so that one Op is one space to all of
+    them. It says what the Op walks, not that the Op was right about it.
+    """
+    walked = None
+    for _side, _index, pattern in _affine_boundaries(relations):
+        own = relation_of(pattern).domain()
+        walked = own if walked is None else walked.union(own)
+    return None if walked is None else walked.coalesce()
 
 
 def _hold_parameters_bound(relations: AccessRelations, op_cls: type) -> None:
-    """Refuse a relation naming a parameter nothing says the value of.
+    """Refuse a parameter nothing says the value of, or two things saying it.
 
     A parameter is how a relation carries what it cannot know yet, so one nobody
     binds is a hole: whoever counts it will either refuse or answer for a value
-    the program never had.
+    the program never had. And one name is one value across the whole Op --
+    boundaries that bind the same name to different things are not describing one
+    iteration space, whatever their coordinates say.
     """
-    for side, boundaries in (("input", relations.inputs), ("output", relations.outputs)):
-        for index, boundary in enumerate(boundaries):
-            pattern = boundary.pattern
-            if not isinstance(pattern, (AffineAccess, isl.map, isl.multi_aff)):
-                continue
-            relation = relation_of(pattern)
-            bound = {
-                name for name, _value in (getattr(pattern, "parameters", ()) or ())
-            }
-            named = {
-                relation.get_dim_name(isl.dim_type.PARAM, position)
-                for position in range(relation.dim(isl.dim_type.PARAM))
-            }
-            if named - bound:
+    seen: dict[str, object] = {}
+    for side, index, pattern in _affine_boundaries(relations):
+        relation = relation_of(pattern)
+        stated = dict(getattr(pattern, "parameters", ()) or ())
+        named = {
+            relation.get_dim_name(isl.dim_type.PARAM, position)
+            for position in range(relation.dim(isl.dim_type.PARAM))
+        }
+        if named - set(stated):
+            raise ValueError(
+                f"{op_cls.__name__} names {sorted(named - set(stated))} at {side} "
+                f"{index} and binds nothing to them"
+            )
+        for name in sorted(named):
+            was = seen.setdefault(name, stated[name])
+            if was is not stated[name] and was != stated[name]:
                 raise ValueError(
-                    f"{op_cls.__name__} names {sorted(named - bound)} at {side} "
-                    f"{index} and binds nothing to them"
+                    f"{op_cls.__name__} binds {name!r} to {was!r} and to "
+                    f"{stated[name]!r} at {side} {index}; one name is one value"
                 )
 
 
@@ -1854,6 +1870,7 @@ __all__ = [
     "register_access_relation",
     "relations_of",
     "coordinates_of",
+    "iteration_universe",
     "register_type_relation",
     "identity_relations",
     "build_relation",

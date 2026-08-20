@@ -769,6 +769,18 @@ def test_loop_scopes_choose_the_containing_loop_instead_of_the_smaller_work_set(
     assert scope_of[id(middle_values[-1])] == id(middle)
 
 
+def _bounded(rank: int, extent: int = 4) -> "isl.map":
+    """A bounded identity, which is the shape a real handler states.
+
+    An Op walks a space it can be counted over, so a test standing in for one
+    says how far its coordinates go rather than leaving them open.
+    """
+    dims = ", ".join(f"d{index}" for index in range(rank)) or ""
+    guards = " and ".join(f"0 <= d{index} < {extent}" for index in range(rank))
+    where = f" : {guards}" if guards else ""
+    return isl.map(f"{{ [{dims}] -> [{dims}]{where} }}")
+
+
 def _relations(target, shape, *args) -> AccessRelations:
     """The registered relation of one op, at the black-box (whole-call) level."""
     operands = (Var(type=make_tensor_type(shape, DType.bf16), name="x"), *args)
@@ -1405,11 +1417,15 @@ def test_a_grouped_convolution_reads_only_the_groups_it_computes() -> None:
     )
     assert whole == ([1024, 2304, 32], [2048])
     assert unit == ([512, 1152, 16], [1024])
-    assert spanning.inputs[0].pattern.is_equal(
+    walked = (
+        "0 <= n < 1 and 0 <= co < 32 and 0 <= oh < 8 and 0 <= ow < 8 "
+        "and 0 <= ci < 8 and 0 <= kh < 3 and 0 <= kw < 3"
+    )
+    assert relation_of(spanning.inputs[0].pattern).is_equal(
         isl.map(
             "{ [n, co, oh, ow, ci, kh, kw] -> "
             "[0, floor(co/16) * 8 + ci, oh + kh - 1, ow + kw - 1] : "
-            "0 <= oh + kh - 1 < 8 and 0 <= ow + kw - 1 < 8 }"
+            f"0 <= oh + kh - 1 < 8 and 0 <= ow + kw - 1 < 8 and {walked} }}"
         )
     )
 
@@ -2073,8 +2089,8 @@ def test_a_claim_no_link_supports_is_refused_when_the_handler_answers() -> None:
     @register_access_relation(_Overclaims)
     def _handler(call, ctx) -> AccessRelations:
         return AccessRelations(
-            inputs=(moves(identity_access(1), 4),),
-            outputs=(writes(identity_access(1), 4),),
+            inputs=(moves(_bounded(1), 4),),
+            outputs=(writes(_bounded(1), 4),),
             storage_effect=StorageEffectClaim(StorageEffectKind.FORWARD, (0,)),
         )
 
@@ -2171,12 +2187,12 @@ def test_a_link_is_held_to_the_operand_it_names() -> None:
     def _handler(call, ctx) -> AccessRelations:
         held = AccessQuantity(4, 4)
         return AccessRelations(
-            inputs=(BoundaryAccess(identity_access(1), held, AccessMode.TRANSFER),),
+            inputs=(BoundaryAccess(_bounded(1), held, AccessMode.TRANSFER),),
             outputs=(
                 transfers(
-                    identity_access(1),
+                    _bounded(1),
                     held,
-                    StorageLink("forward", 0, identity_access(1), held),
+                    StorageLink("forward", 0, _bounded(1), held),
                 ),
             ),
         )
@@ -2212,7 +2228,7 @@ def test_a_lookup_is_held_to_the_operand_and_the_axis_it_names() -> None:
                 inputs=(
                     BoundaryAccess(_pattern(), AccessQuantity(4, 4), AccessMode.READ),
                 ),
-                outputs=(writes(identity_access(1), 4),),
+                outputs=(writes(_bounded(1), 4),),
             )
 
         return target
@@ -2258,12 +2274,12 @@ def test_a_link_source_that_names_a_field_is_checked_against_that_field() -> Non
             held = AccessQuantity(4, 4)
             return AccessRelations(
                 inputs=(
-                    BoundaryAccess(identity_access(1), held, AccessMode.TRANSFER),
-                    moves(identity_access(1), 4),
+                    BoundaryAccess(_bounded(1), held, AccessMode.TRANSFER),
+                    moves(_bounded(1), 4),
                 ),
                 outputs=(
                     transfers(
-                        identity_access(1),
+                        _bounded(1),
                         held,
                         StorageLink(
                             "forward",
@@ -2317,8 +2333,8 @@ def test_a_relation_is_held_to_the_call_it_was_asked_about() -> None:
         @register_access_relation(target)
         def _handler(call, ctx, _in=inputs, _out=outputs) -> AccessRelations:
             return AccessRelations(
-                inputs=tuple(moves(identity_access(1), 4) for _ in range(_in)),
-                outputs=tuple(writes(identity_access(1), 4) for _ in range(_out)),
+                inputs=tuple(moves(_bounded(1), 4) for _ in range(_in)),
+                outputs=tuple(writes(_bounded(1), 4) for _ in range(_out)),
             )
 
         return target
@@ -3750,11 +3766,11 @@ def test_a_link_is_asked_by_as_many_coordinates_as_its_output_has() -> None:
         held = AccessQuantity(4, 4)
         return AccessRelations(
             inputs=(
-                BoundaryAccess(identity_access(2), held, AccessMode.TRANSFER),
+                BoundaryAccess(_bounded(2), held, AccessMode.TRANSFER),
             ),
             outputs=(
                 transfers(
-                    identity_access(2),
+                    _bounded(2),
                     held,
                     StorageLink(
                         "forward", 0, isl.map("{ [d0] -> [d0, 0] }"), held
