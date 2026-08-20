@@ -621,11 +621,12 @@ def _registered_access(
     """Statement extraction from the Op's own registered boundary relations.
 
     Every boundary is asked by the same coordinates, so one space serves them
-    all -- and a boundary may answer on only part of it. Outputs that answer on
-    different parts are different statements, which is how one rotation over two
-    head counts lifts into two. A relation's parameters are placed in this loop
-    nest's terms first, because a window that moves with the trip carries the
-    dependence that makes the loop a loop.
+    all -- and a boundary may answer on only part of it. Each output is its own
+    statement over the part its own relation answers on, which is how one
+    rotation over two head counts lifts into two, and what a hole writing one
+    buffer needs. A relation's parameters are placed in this loop nest's terms
+    first, because a window that moves with the trip carries the dependence that
+    makes the loop a loop.
     """
     depth = len(loops)
 
@@ -643,15 +644,6 @@ def _registered_access(
     walks = tuple(
         raw_map.domain().project_out(isl.dim_type.SET, 0, depth) for raw_map in written
     )
-    pieces: list[list[int]] = []
-    for index, own in enumerate(walks):
-        for piece in pieces:
-            if walks[piece[0]].is_equal(own):
-                piece.append(index)
-                break
-        else:
-            pieces.append([index])
-
     read_maps = tuple(
         placed(relations.inputs[index]) if index < len(relations.inputs) else None
         for index in range(len(call.args))
@@ -659,25 +651,25 @@ def _registered_access(
     return [
         _one_statement(
             call,
-            stmt_name if len(pieces) == 1 else f"{stmt_name}_{piece[0]}",
-            piece,
-            written,
-            walks[piece[0]],
+            stmt_name if len(written) == 1 else f"{stmt_name}_{index}",
+            index,
+            len(written),
+            walks[index],
             read_maps,
             relations,
             namer,
             prefix,
             loops,
         )
-        for piece in pieces
+        for index in range(len(written))
     ]
 
 
 def _one_statement(
     call: Call,
     stmt_name: str,
-    piece: list[int],
-    written: tuple,
+    out_idx: int,
+    outputs: int,
     walks: "isl.set",
     read_maps: tuple,
     relations: AccessRelations,
@@ -685,7 +677,7 @@ def _one_statement(
     prefix: str,
     loops: tuple[GridRegionExpr, ...],
 ) -> _StatementAccess:
-    """One statement: the part of a Call's space one group of outputs answers on."""
+    """One statement: the part of a Call's space one output answers on."""
     own, shape_params = _walked(call, relations, walks)
     prefixed, loop_params = _loop_domain(own, loops)
     prefixed = _full_slice_domain(prefixed, call.args, loops)
@@ -701,17 +693,23 @@ def _one_statement(
         reads.append(read)
         dtypes[read.get_tuple_name(isl.dim_type.OUT)] = getattr(arg.type, "dtype", None)
 
-    for out_idx in piece:
-        out_buf = (
-            namer(call, prefix)
-            if len(written) == 1
-            else f"{namer(call, prefix)}_{out_idx}"
-        )
-        bound = _bind_map(written[out_idx], stmt_name, domain, out_buf)
-        writes.append(bound)
-        dtypes[out_buf] = _out_dtype(call, out_idx)
-        if not bound.is_injective():
-            reads.append(bound)
+    out_buf = (
+        namer(call, prefix) if outputs == 1 else f"{namer(call, prefix)}_{out_idx}"
+    )
+    bound = _bind_map(
+        _place_parameters(
+            _lift(relation_of(relations.outputs[out_idx].pattern), len(loops)),
+            relations.outputs[out_idx],
+            loops,
+        ),
+        stmt_name,
+        domain,
+        out_buf,
+    )
+    writes.append(bound)
+    dtypes[out_buf] = _out_dtype(call, out_idx)
+    if not bound.is_injective():
+        reads.append(bound)
 
     return _StatementAccess(
         name=stmt_name, domain=domain, op=call,
