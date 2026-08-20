@@ -908,6 +908,45 @@ def placed_window(offsets: tuple, extents: tuple, rank: int) -> tuple:
     )
 
 
+def reached_at(
+    rank: int,
+    local: "Type",
+    logical: "Type",
+    reads: dict,
+    free: tuple = (),
+) -> "AffineAccess":
+    """The coordinates one operand is reached at, stated per logical axis.
+
+    An Op reasons in logical axes and a participant is indexed by the positions
+    its layout made, so the expressions are given per axis and spread over the
+    positions holding it. An axis named `free` is one whose coordinate is a value
+    nobody has here -- the element a lookup read decides it -- so the relation
+    covers every coordinate that axis could legally name instead of guessing one.
+    That keeps the answer bounded, and countable, without a carrier a reader has
+    to special-case.
+    """
+    belongs = logical_axes_of(local, logical)
+    stated = [reads.get(axis, "0") for axis in range(len(logical.shape))]
+    for axis in free:
+        stated[axis] = "0"
+    image = factored_image(stated, local, logical)
+    parameters: list[tuple[str, object]] = []
+    guards: list[str] = []
+    for position, owner in enumerate(belongs):
+        if owner not in free or local.shape[position] == 1:
+            continue
+        extent, bound = affine_term(local.shape[position], f"n{position}")
+        parameters.extend(bound)
+        image[position] = f"g{position}"
+        guards.append(f"0 <= g{position} < {extent}")
+    domain = ", ".join(f"d{index}" for index in range(rank))
+    where = f" : {' and '.join(guards)}" if guards else ""
+    return AffineAccess(
+        isl.map(f"{isl_parameters(parameters)}{{ [{domain}] -> [{', '.join(image)}]{where} }}"),
+        tuple(parameters),
+    )
+
+
 def window_source(
     offsets: tuple,
     rank: int,
