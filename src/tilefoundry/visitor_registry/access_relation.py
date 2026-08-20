@@ -1432,7 +1432,6 @@ def same_placement(left: "Type", right: "Type") -> bool:
 
 
 __all__ = [
-    "AffineAccess",
     "AccessRelations",
     "AffineAccess",
     "BoundaryRelation",
