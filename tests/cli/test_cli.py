@@ -11,6 +11,11 @@ import pytest
 
 import tilefoundry.cli.target as target_cli
 from tests.fixtures.shapes.composed_leaf_source import composed_leaf_source
+from tests.fixtures.shapes.neighbour_sources import (
+    broken_after,
+    broken_before,
+    broken_beside_a_parent,
+)
 from tilefoundry import cli
 from tilefoundry.cli.source import load_authored_ir, one_extent_per_dim
 from tilefoundry.target import CpuTarget, registered_targets
@@ -208,6 +213,53 @@ def test_analysis_reports_distinguish_cuda_products(tmp_path, capsys) -> None:
         "nvidia.h200_sxm": "nvidia.h200_sxm",
         "nvidia.b200_sxm": "nvidia.b200_sxm",
     }
+
+
+@pytest.mark.parametrize(
+    "written",
+    (broken_after, broken_before, broken_beside_a_parent),
+    ids=("unsound-last", "unsound-first", "unsound-between-child-and-parent"),
+)
+def test_naming_one_root_does_not_ask_about_the_rest_of_its_file(
+    tmp_path, capsys, written
+) -> None:
+    """A selector names one root, and the rest of the file is a different question.
+
+    Every one of these files holds a sound root and one that states an entry
+    naming no function it collected. Asking about the sound one has to answer
+    about the sound one, in whichever order they were written: a file is a place
+    programs are kept, not a claim that all of them are finished. The child the
+    parent case reaches is still needed and is still loaded, because dropping
+    what the selection uses would answer about a different program.
+    """
+    source = tmp_path / "neighbours.py"
+    source.write_text(written(), encoding="utf-8")
+    selected = "Parent" if written is broken_beside_a_parent else "Sound"
+
+    assert cli.main(["analyze", f"{source}:{selected}", "--compute-cost", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+
+    assert report["module"] == selected
+    assert report["totals"]["flops"]
+
+
+@pytest.mark.parametrize(
+    "written",
+    (broken_after, broken_before),
+    ids=("unsound-last", "unsound-first"),
+)
+def test_naming_no_root_still_asks_about_the_whole_file(tmp_path, capsys, written) -> None:
+    """With nothing selected, every root in the file is the question again.
+
+    The isolation is what a selector buys. Without one the command has been asked
+    about the file, so the unsound root is part of what it was asked about and its
+    own complaint is the answer -- named, not swallowed into a generic failure.
+    """
+    source = tmp_path / "neighbours.py"
+    source.write_text(written(), encoding="utf-8")
+
+    assert cli.main(["analyze", str(source), "--compute-cost"]) == 1
+    assert "entry 'nope' names no collected function" in capsys.readouterr().err
 
 
 def test_repeated_source_loads_keep_one_logical_target_registration(tmp_path) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import importlib.util
 import io
@@ -83,6 +84,85 @@ def select_ir(namespace: dict[str, object], selector: str | None) -> Module:
     raise ValueError("source defines no TileFoundry Module")
 
 
+def _mentioned(node: ast.AST) -> set[str]:
+    """Every bare name the subtree reads."""
+    found = set()
+    for item in ast.walk(node):
+        if isinstance(item, ast.Name):
+            found.add(item.id)
+        elif isinstance(item, ast.Attribute):
+            base = item
+            while isinstance(base, ast.Attribute):
+                base = base.value
+            if isinstance(base, ast.Name):
+                found.add(base.id)
+    return found
+
+
+def _bound(statement: ast.stmt) -> set[str]:
+    """Every module-level name one statement binds."""
+    if isinstance(statement, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        return {statement.name}
+    if isinstance(statement, ast.Assign):
+        return {
+            item.id
+            for target in statement.targets
+            for item in ast.walk(target)
+            if isinstance(item, ast.Name)
+        }
+    if isinstance(statement, (ast.AnnAssign, ast.AugAssign)):
+        return _mentioned(statement.target) if isinstance(statement.target, ast.Name) else set()
+    return set()
+
+
+def _selected_body(tree: ast.Module, root: str) -> list[ast.stmt] | None:
+    """*tree*'s statements with the ones the selection never needs removed.
+
+    A class that refuses to be built refuses while the file runs, so a file with
+    one unfinished program could not be asked about a finished one beside it.
+    Naming a root makes the rest a different question, so the rest is not run.
+    What the selection needs is kept, closed over the names each kept statement
+    mentions: a parent needs the child it names, and whatever holds that child.
+    A statement binding nothing is kept because it may be doing something, and
+    imports likewise. `None` when nothing to drop is a class.
+    """
+    selected = next(
+        (
+            item
+            for item in tree.body
+            if isinstance(item, ast.ClassDef) and item.name == root
+        ),
+        None,
+    )
+    if selected is None:
+        return None
+    keep = {id(selected)}
+    wanted = _mentioned(selected)
+    while True:
+        grown = False
+        for item in tree.body:
+            if id(item) in keep or not (_bound(item) & wanted):
+                continue
+            keep.add(id(item))
+            wanted |= _mentioned(item)
+            grown = True
+        if not grown:
+            break
+    body = [
+        item
+        for item in tree.body
+        if id(item) in keep
+        or isinstance(item, (ast.Import, ast.ImportFrom))
+        or not _bound(item)
+    ]
+    if not any(
+        isinstance(item, ast.ClassDef) and id(item) not in {id(kept) for kept in body}
+        for item in tree.body
+    ):
+        return None
+    return body
+
+
 def load_namespace(source: str) -> tuple[dict[str, object], str | None]:
     """Load one authored file, returning what it defined and its selector.
 
@@ -111,17 +191,26 @@ def load_namespace(source: str) -> tuple[dict[str, object], str | None]:
         if spec is None or spec.loader is None:
             raise ImportError(f"could not load source module {path}")
         module = importlib.util.module_from_spec(spec)
-
-
-
-
+        pruned = None
+        if selector is not None:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            body = _selected_body(tree, selector.split(".")[0])
+            if body is not None:
+                pruned = compile(
+                    ast.fix_missing_locations(ast.Module(body=body, type_ignores=[])),
+                    str(path),
+                    "exec",
+                )
 
 
         sys.modules[spec.name] = module
         captured_stdout = io.StringIO()
         with contextlib.redirect_stdout(captured_stdout):
             try:
-                spec.loader.exec_module(module)
+                if pruned is None:
+                    spec.loader.exec_module(module)
+                else:
+                    exec(pruned, module.__dict__)  # noqa: S102 — the authored file
             except ModuleNotFoundError as error:
                 raise ValueError(
                     f"{path.name} imports {error.name!r}, which is not importable.\n"
