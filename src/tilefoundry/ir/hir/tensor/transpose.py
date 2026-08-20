@@ -14,19 +14,10 @@ from tilefoundry.ir.types.shard import ComposedLayout, Layout, try_c_order_strid
 from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelationResult,
-    StorageEffectClaim,
-    build_relation,
-    forward_whole,
-    register_access_relation,
-    register_type_relation,
-    same_placement,
-    view_relations,
-)
-from tilefoundry.visitor_registry.relation_build import (
-    build_domain,
+    coordinates_of,
     identity_access,
-    identity_map,
+    register_access_relation,
+    view_relations,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
@@ -50,20 +41,6 @@ def _strides(type_: TensorType) -> tuple | None:
     return try_c_order_strides(tuple(layout.shape))
 
 
-def _transpose_storage(call: "Call", ctx) -> StorageEffectClaim | None:
-    """A permutation that carried its strides along moved no byte."""
-    source, result = ctx.type_of(call.args[0]), ctx.type_of(call)
-    if not same_placement(source, result):
-        return None
-    source_strides, result_strides = _strides(source), _strides(result)
-    if source_strides is None or result_strides is None:
-        return None
-    perm = call.target.perm
-    if len(perm) != len(source_strides):
-        return None
-    if result_strides != tuple(source_strides[axis] for axis in perm):
-        return None
-    return forward_whole(call, 0, ctx)
 
 
 def _transpose_view(call: "Call", ctx) -> tuple:
@@ -87,30 +64,10 @@ def _transpose_view(call: "Call", ctx) -> tuple:
 register_access_relation(Transpose)(
     view_relations(
         0,
-        _transpose_storage,
         _transpose_view,
-        over=lambda call, ctx: ctx.local_type_of(call.args[0]).shape,
+        over=lambda call, ctx: ctx.type_of(call.args[0]).shape,
     )
 )
-
-
-@register_type_relation(Transpose)
-def _transpose_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Forward relation for Transpose.
-
-    Forward relation for Transpose: an identity input map and an output map
-    that permutes the iteration dims (output axis ``o`` reads domain dim
-    ``perm[o]``). The shard engine reorders the input's layout positions by their
-    owning tensor axis, preserving any factorization.
-    """
-    (x,) = input_types
-    perm = call.target.perm
-    rank = len(x.shape)
-    dims = [f"d{i}" for i in range(rank)]
-    src = "[" + ", ".join(dims) + "]"
-    in_map = identity_map(rank)
-    out_map = isl.map(f"{{ {src} -> [{', '.join(dims[perm[o]] for o in range(rank))}] }}")
-    return AccessRelationResult(domain=build_domain(x.shape), maps=(in_map, out_map))
 
 
 @register_typeinfer(Transpose)
@@ -124,7 +81,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_layout = x_ty.layout
     source_shard = shard_layout_of(x_ty.layout)
     if source_shard is not None:
-        relation = build_relation(call, (x_ty,), ctx)
+        relation = coordinates_of(call, ctx)
         derived = derive_output_shard_layout((x_ty,), relation, new_shape, fresh_strides=False)
         if derived is not None:
             new_layout = derived

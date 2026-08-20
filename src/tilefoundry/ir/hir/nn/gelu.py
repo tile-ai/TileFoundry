@@ -14,9 +14,7 @@ from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
-    register_type_relation,
 )
-from tilefoundry.visitor_registry.relation_build import elementwise_relation
 
 _COMMUTES_WITH = frozenset()
 
@@ -33,7 +31,6 @@ class Gelu(Op):
     approximate = ParamDef(kind="attribute", annotation=str, default="tanh")
 
 
-register_type_relation(Gelu)(elementwise_relation())
 
 
 @register_typeinfer(Gelu)

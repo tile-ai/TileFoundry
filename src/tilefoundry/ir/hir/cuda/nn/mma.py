@@ -28,12 +28,11 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    BoundaryRelation,
+    identity_access,
     iterating,
-    moves,
     register_access_relation,
-    writes,
 )
-from tilefoundry.visitor_registry.relation_build import identity_access
 
 _FLOAT_ACCUMULATOR_COMBINATIONS = frozenset(
     {
@@ -248,10 +247,9 @@ def _whole_read(held: "Type", rank: int) -> "isl.map":
     """Every coordinate of one operand, whatever the result coordinate is.
 
     A tile instruction reads its operands entire, so no result coordinate picks
-    out part of one. The positions are the ones this view states rather than the
-    two an instruction is written in: a fragment held across a mesh keeps the
-    positions that mesh factored it into, and an image that named fewer could
-    not be composed with the layout that turns them into bytes.
+    out part of one. The coordinates are the operand's own axes; which positions
+    a layout made of them is the reader's question, answered by composing this
+    with that layout rather than by naming them here.
     """
     terms, guards = [], []
     for position, extent in enumerate(held.shape):
@@ -266,36 +264,25 @@ def _whole_read(held: "Type", rank: int) -> "isl.map":
     return isl.map(f"{{ [{dims}] -> [{image}]" + (f" : {where} }}" if where else " }"))
 
 
-def _viewed(ctx):
-    """How this context names a value's shape, whichever context it is.
-
-    The alias walk asks the same handler without a projection of its own, so it
-    answers with the type the program states rather than one a level narrowed.
-    """
-    local = getattr(ctx, "local_type_of", None)
-    return local if callable(local) else ctx.type_of
-
-
 def _tile_access(call: "Call", ctx) -> AccessRelations:
     """A fixed tile: both operands read whole, the accumulator written whole.
 
     ``_TILES`` holds each instruction's own count, which is what separates these
     from a MatMul: one instruction moves one instruction's elements however many
-    participants issue it. Where those elements sit is the view's answer, so the
-    patterns are stated over the positions this view gives the operands.
+    participants issue it. Where those elements sit is the reader's answer, so
+    the patterns are stated in the axes the operands were written in.
     """
     m, n, k = _TILES[type(call.target).__name__]
-    held = _viewed(ctx)
-    accumulator = held(call)
+    accumulator = ctx.type_of(call)
     rank = len(accumulator.shape)
     return iterating(
         accumulator.shape,
         AccessRelations(
             inputs=(
-                moves(_whole_read(held(call.args[0]), rank), m * k),
-                moves(_whole_read(held(call.args[1]), rank), k * n),
+                BoundaryRelation(_whole_read(ctx.type_of(call.args[0]), rank)),
+                BoundaryRelation(_whole_read(ctx.type_of(call.args[1]), rank)),
             ),
-            outputs=(writes(identity_access(rank), m * n),),
+            outputs=(BoundaryRelation(identity_access(rank)),),
         ),
     )
 

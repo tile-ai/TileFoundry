@@ -14,12 +14,11 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
-    elements_of,
+    BoundaryRelation,
+    identity_access,
     iterating,
     register_access_relation,
-    writes,
 )
-from tilefoundry.visitor_registry.relation_build import identity_access
 
 
 @register_op
@@ -56,7 +55,7 @@ def _zeros_access(call: "Call", ctx) -> AccessRelations:
         AccessRelations(
             inputs=(),
             outputs=(
-                writes(identity_access(len(allocated.shape)), elements_of(allocated)),
+                BoundaryRelation(identity_access(len(allocated.shape))),
             ),
         ),
     )

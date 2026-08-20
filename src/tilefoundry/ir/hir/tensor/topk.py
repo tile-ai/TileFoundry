@@ -41,17 +41,12 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelationResult,
     AccessRelations,
-    build_relation,
-    elements_of,
+    BoundaryRelation,
+    coordinates_of,
     iterating,
-    moves,
     register_access_relation,
-    register_type_relation,
-    writes,
 )
-from tilefoundry.visitor_registry.relation_build import build_domain
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
@@ -209,7 +204,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
         else Layout(shape=out_shape, strides=try_c_order_strides(out_shape))
     )
     if source_shard is not None:
-        relation = build_relation(call, (x_ty,), ctx)
+        relation = coordinates_of(call, ctx)
         derived = derive_output_shard_layout((x_ty,), relation, out_shape, fresh_strides=True)
 
         new_layout = derived if derived is not None else _canonical_shard(source_shard, out_shape)
@@ -222,65 +217,37 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     return TupleType(fields=(values_ty, indices_ty))
 
 
-@register_type_relation(TopK)
-def _topk_type_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Forward relation for shard propagation.
-
-    Forward relation for shard propagation. Every non-selected axis projects
-    to itself, so its sharding carries through unchanged. The selected axis is a
-    fresh, data-dependent selection (not a view of the input axis), so it does
-    not project — the output extent is synthesized from the shrunk output shape.
-    """
-    (x,) = input_types
-    rank = len(x.shape)
-    axis = call.target.axis
-    if axis < 0:
-        axis += rank
-    in_dims = ", ".join(f"d{i}" for i in range(rank))
-    out_dims = ", ".join("0" if i == axis else f"d{i}" for i in range(rank))
-    in_map = isl.map(f"{{ [{in_dims}] -> [{in_dims}] }}")
-    out_map = isl.map(f"{{ [{in_dims}] -> [{out_dims}] }}")
-    return AccessRelationResult(domain=build_domain(x.shape), maps=(in_map, out_map))
-
-
 @register_access_relation(TopK)
 def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelations:
-    """GLOBAL level.
+    """One selection per kept position, scanning the whole axis it selects from.
 
-    The reduction axis is data-dependent (top-k indices come from sort), so the
-    input access relation is an isl.map "scans the whole axis" rather than a
-    multi_aff. Output values/indices are leading-dims identity with a new
-    independent topk axis.
+    The axis a selection lands on is not a view of the axis it came from -- which
+    element is picked is a value's answer -- so the space walked names both: the
+    ``k`` positions produced and the coordinate scanned to produce them. The
+    result projects the first; the source reads the second.
     """
     x_ty = ctx.type_of(call.args[0])
     rank = len(x_ty.shape)
     axis = call.target.axis
     if axis < 0:
         axis += rank
-    in_dims = ", ".join(f"i{i}" for i in range(rank))
-    out_dims = ", ".join(f"i{i}" if i != axis else "j" for i in range(rank))
-
-    leading = ", ".join(f"i{i}" for i in range(rank) if i != axis)
-    if leading:
-        in_rel = isl.map(f"{{ [{out_dims}] -> [{in_dims}] }}")
-    else:
-        in_rel = isl.map(f"{{ [j] -> [i{axis}] }}")
-
-    out_id = isl.multi_aff(f"{{ [{out_dims}] -> [{out_dims}] }}")
     picked = _static_dim_value(call.target.k)
     if picked is None:
         raise NotImplementedError(
             f"TopK access relation: k must be a static extent here, got {call.target.k!r}"
         )
+    dims = [f"d{index}" for index in range(rank + 1)]
+    walked = ", ".join(dims)
+    scanned = dims[rank]
+    reads = ", ".join(scanned if index == axis else dims[index] for index in range(rank))
+    kept = ", ".join(dims[:rank])
+    written = BoundaryRelation(isl.map(f"{{ [{walked}] -> [{kept}] }}"))
     out_shape = (*x_ty.shape[:axis], picked, *x_ty.shape[axis + 1 :])
-    produced = 1
-    for extent in out_shape:
-        produced *= extent if isinstance(extent, int) else 1
     return iterating(
-        out_shape,
+        (*out_shape, x_ty.shape[axis]),
         AccessRelations(
-            inputs=(moves(in_rel, elements_of(x_ty)),),
-            outputs=(writes(out_id, produced), writes(out_id, produced)),
+            inputs=(BoundaryRelation(isl.map(f"{{ [{walked}] -> [{reads}] }}")),),
+            outputs=(written, written),
         ),
     )
 

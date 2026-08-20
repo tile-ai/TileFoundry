@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-
 import torch
 
 from tilefoundry.evaluator.registry import register_eval
@@ -22,14 +20,12 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
-    elements_of,
+    BoundaryRelation,
+    identity_access,
     iterating,
-    moves,
     reached_at,
     register_access_relation,
-    writes,
 )
-from tilefoundry.visitor_registry.relation_build import identity_access
 
 
 @register_op(name="index_select")
@@ -128,24 +124,15 @@ def _index_select_access_relation(call: "Call", ctx) -> AccessRelations:
     )
     rank = len(out_shape)
     carried = {position: f"d{position}" for position in range(rank)}
-    slice_size = math.prod(
-        extent for position, extent in enumerate(source_ty.shape) if position != axis
-    )
     return iterating(
         out_shape,
         AccessRelations(
             inputs=(
-                moves(
-                    reached_at(rank, source_ty, logical_source, carried, free=(axis,)),
-                    elements_of(index_ty) * slice_size,
-                ),
-                moves(
-                    reached_at(rank, index_ty, logical_index, {0: carried.get(axis, "0")}),
-                    elements_of(index_ty),
-                ),
+                BoundaryRelation(reached_at(rank, source_ty, logical_source, carried, free=(axis,))),
+                BoundaryRelation(reached_at(rank, index_ty, logical_index, {0: carried.get(axis, "0")})),
             ),
             outputs=(
-                writes(identity_access(rank), elements_of(index_ty) * slice_size),
+                BoundaryRelation(identity_access(rank)),
             ),
         ),
     )

@@ -1,88 +1,27 @@
-"""Register what one operation reads, writes, and where its result's bytes live.
+"""Register the coordinates one operation reaches at each of its boundaries.
 
-Boundary handlers return one ``BoundaryAccess`` per boundary: a pattern saying
-where it reads -- isl where that is affine, ``IndexedAccess`` or
-``WindowAccess`` where a runtime value decides it -- and, separately, how much
-it moves. Neither is inferred from the other.
-
-The same registration says whether the result owns its bytes or reuses an
-operand's, as a claim about that Op's own types. Whoever walks the function
-settles it; an identity relation alone claims nothing.
+Boundary handlers return one ``BoundaryRelation`` per boundary: the relation
+from the Op's own iteration space to the coordinates that value is read or
+written at. Nothing else is stated. How much crosses a boundary, what an Op
+walks, and whether two boundaries meet are all answers derived from those
+relations, so there is one place to be right and nothing to keep in step.
 """
 from __future__ import annotations
 
-import dataclasses
-import enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Union
 
 import isl
 
 from tilefoundry.ir.hir._helpers import is_one
 from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
-from tilefoundry.ir.types.dim_isl import dim_range, to_domain
-from tilefoundry.ir.types.shape_dim import ShapeDim
+from tilefoundry.ir.types.dim_isl import dim_range, to_dim, to_domain
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import Layout, try_c_order_strides
 from tilefoundry.ir.types.shard.int_tuple import flatten
 from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis, shard_layout_of
 
 from .registries import AnalysisRegistry
-
-
-@dataclass(frozen=True)
-class IndexedAccess:
-    """One boundary reached through the values of another operand.
-
-    A gather names the coordinate it wants by an element of ``index_operand``,
-    so no address is known here. What is being indexed is the boundary this
-    pattern sits on -- boundaries are already in order and already say which
-    value they describe -- so a target field would be a second name for
-    something already said, and a sentinel for "this output" would be a third.
-    """
-
-    index_operand: int
-    axis: int
-
-    def __post_init__(self) -> None:
-        for name in ("index_operand", "axis"):
-            value = getattr(self, name)
-            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-                raise ValueError(
-                    f"a lookup names its {name.replace('_', ' ')} by position, "
-                    f"not {value!r}"
-                )
-
-
-@dataclass(frozen=True)
-class OperandValue:
-    """One runtime number an access depends on, and what it may be.
-
-    ``element`` picks a field when the operand is a tuple of scalars. ``bound``
-    is the Op's own contract for the value, which is what lets a quantity stay a
-    checkable range instead of widening to the whole operand.
-    """
-
-    operand: int
-    element: int | None = None
-    bound: tuple[int, int] | None = None
-
-
-@dataclass(frozen=True)
-class WindowAccess:
-    """One boundary read or written as a window, one entry per axis.
-
-    An ``offset`` says where the window starts on its axis and an ``extent`` how
-    far it runs; either may be a number written down or an ``OperandValue`` only
-    known at run time. Where the window sits never changes how much it covers,
-    which is why an unbound offset costs a quantity nothing. ``complement``
-    marks the part of the container the window leaves alone -- the same question
-    answered from the other side.
-    """
-
-    offsets: tuple["OperandValue | int", ...]
-    extents: tuple["OperandValue | ShapeDim", ...]
-    complement: bool = False
 
 
 @dataclass(frozen=True)
@@ -125,202 +64,27 @@ class AffineAccess:
             )
 
 
-AccessPattern = Union[
-    "isl.multi_aff", "isl.map", AffineAccess, IndexedAccess, WindowAccess
-]
-
-
-
-
-
+AccessPattern = Union["isl.multi_aff", "isl.map", AffineAccess]
 
 
 @dataclass(frozen=True)
-class AccessQuantity:
-    """How many elements one boundary moves in one execution of an Op.
+class BoundaryRelation:
+    """One boundary, as the coordinates it reaches and nothing else.
 
-    ``lower`` and ``upper`` are equal whenever the Op can say the number. When
-    they differ, ``provenance`` names the invariant the range came from, so a
-    reader can check it rather than trust it; a prediction takes ``upper`` and
-    says that it did.
-    """
-
-    lower: int
-    upper: int
-    provenance: str | None = None
-
-    def __post_init__(self) -> None:
-        for name in ("lower", "upper"):
-            edge = getattr(self, name)
-            if not isinstance(edge, int) or isinstance(edge, bool) or edge < 0:
-                raise ValueError(
-                    f"an access moves a non-negative whole number of elements, "
-                    f"and its {name} is {edge!r}"
-                )
-        if self.lower > self.upper:
-            raise ValueError(
-                f"an access of {self.lower}..{self.upper} elements runs backwards"
-            )
-        if self.lower != self.upper and not self.provenance:
-            raise ValueError(
-                f"an access of {self.lower}..{self.upper} elements is a range, so it "
-                "must name the invariant it came from"
-            )
-
-    @property
-    def exact(self) -> bool:
-        """Whether one number answers this, rather than a range."""
-        return self.lower == self.upper
-
-
-class AccessMode(enum.Enum):
-    """What a boundary is for, which is not the same as what it costs.
-
-    ``READ`` and ``WRITE`` are the operation consuming or producing elements.
-    They are charged whether or not the bytes turn out to be somewhere they
-    already were: an add whose result lands in its operand's buffer still read
-    that operand and still wrote its result. ``TRANSFER`` is an operation whose
-    whole purpose is to move or re-address bytes, and is the only mode that can
-    come to nothing -- when its links are shown to name the same addresses.
-    """
-
-    READ = "read"
-    WRITE = "write"
-    TRANSFER = "transfer"
-
-
-@dataclass(frozen=True)
-class StorageLink:
-    """One region an output may share with an input, and how much of it.
-
-    ``where`` reads an output coordinate and answers with the input coordinate
-    holding it: a pattern rather than a byte offset, which could state neither
-    an unbound window start nor the mapping a transpose forwards through, and
-    one rather than two, which would be the same answer twice. ``quantity`` is
-    how much the region holds, never measured off a pattern. A link is a
-    candidate: whether these bytes really are shared is the allocation's answer,
-    and an unhonoured link is the copy instead.
-    """
-
-    kind: str
-    input: int
-    where: "AccessPattern"
-    quantity: "AccessQuantity"
-    input_field: int | None = None
-
-    def __post_init__(self) -> None:
-        if self.kind not in ("forward", "preserve"):
-            raise ValueError(
-                f"a link either forwards a value or preserves a container, "
-                f"not {self.kind!r}"
-            )
-        if not isinstance(self.input, int) or isinstance(self.input, bool) or self.input < 0:
-            raise ValueError(f"a link names an operand by position, not {self.input!r}")
-        if self.input_field is not None and (
-            not isinstance(self.input_field, int)
-            or isinstance(self.input_field, bool)
-            or self.input_field < 0
-        ):
-            raise ValueError(
-                f"a link names a field of its operand by position, not "
-                f"{self.input_field!r}"
-            )
-        if not isinstance(
-            self.where,
-            (isl.multi_aff, isl.map, AffineAccess, IndexedAccess, WindowAccess),
-        ):
-            raise ValueError(
-                f"a link reads through a relation, a lookup or a window, not "
-                f"through {self.where!r}"
-            )
-        if not isinstance(self.quantity, AccessQuantity):
-            raise ValueError(
-                f"a link states how much it covers, not {self.quantity!r}"
-            )
-
-
-@dataclass(frozen=True)
-class OutputStorage:
-    """Where one output's bytes may already be. No links means fresh bytes."""
-
-    links: tuple[StorageLink, ...] = ()
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.links, tuple) or not all(
-            isinstance(item, StorageLink) for item in self.links
-        ):
-            raise ValueError(f"storage is a tuple of links, not {self.links!r}")
-
-
-@dataclass(frozen=True)
-class BoundaryAccess:
-    """One boundary: where it reads, and how much it moves.
-
-    The two are separate answers. A pattern says which coordinates a value came
-    from and is what a dependence needs; a quantity says how much crossed the
-    boundary and is what a cost needs. Neither follows from the other -- every
-    output of a scan depends on the whole input the scan reads once -- so the Op
-    states both rather than having one inferred from the other.
+    A relation from the Op's iteration space to that value's own coordinates is
+    the whole statement. How much crossed here is what the relation reaches, so
+    it is derived rather than declared alongside: two statements of one fact
+    drift, and the drift is invisible until a number is wrong.
     """
 
     pattern: AccessPattern
-    quantity: AccessQuantity
-    mode: AccessMode = AccessMode.READ
-    storage: OutputStorage | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.mode, AccessMode):
-            raise ValueError(f"a boundary reads, writes or transfers, not {self.mode!r}")
-        if self.storage is not None and not isinstance(self.storage, OutputStorage):
-            raise ValueError(f"a boundary's storage is an OutputStorage, not {self.storage!r}")
-        if not isinstance(
-            self.pattern,
-            (isl.multi_aff, isl.map, AffineAccess, IndexedAccess, WindowAccess),
-        ):
+        if not isinstance(self.pattern, (isl.multi_aff, isl.map, AffineAccess)):
             raise ValueError(
-                f"a boundary reads through a relation, a lookup or a window, "
-                f"not through {self.pattern!r}"
+                f"a boundary reaches its coordinates through a relation, not "
+                f"through {self.pattern!r}"
             )
-        if not isinstance(self.quantity, AccessQuantity):
-            raise ValueError(
-                f"a boundary states how much it moves, not {self.quantity!r}"
-            )
-
-
-def moves(pattern: "AccessPattern", count: int) -> BoundaryAccess:
-    """One operand read, of a size the Op can state."""
-    return BoundaryAccess(pattern, AccessQuantity(count, count), AccessMode.READ)
-
-
-def writes(pattern: "AccessPattern", count: int) -> BoundaryAccess:
-    """One result produced, of a size the Op can state.
-
-    A write is charged wherever the bytes turn out to be. An operation that
-    computed something computed it, and landing in an operand's buffer is a
-    fact about the allocation rather than about the work.
-    """
-    return BoundaryAccess(pattern, AccessQuantity(count, count), AccessMode.WRITE)
-
-
-def transfers(
-    pattern: "AccessPattern", quantity: "AccessQuantity", *links: StorageLink
-) -> BoundaryAccess:
-    """One boundary whose whole purpose is moving or re-addressing bytes.
-
-    The only mode that can come to nothing, and only when its links are shown
-    to name the same addresses. It must name at least one, or there is nothing
-    to compare and nothing said about where the bytes came from.
-    """
-    return BoundaryAccess(
-        pattern, quantity, AccessMode.TRANSFER, OutputStorage(tuple(links))
-    )
-
-
-def moves_between(
-    pattern: "AccessPattern", lower: int, upper: int, provenance: str
-) -> BoundaryAccess:
-    """One boundary whose amount an unbound value leaves within a range."""
-    return BoundaryAccess(pattern, AccessQuantity(lower, upper, provenance))
 
 
 def elements_of(type_: "Type") -> int:
@@ -353,15 +117,17 @@ def _most_of(extent, type_: "Type") -> int:
 
 def access_elements(
     relations: AccessRelations, *, boundary: int, output: bool = False
-) -> AccessQuantity | None:
-    """What the Op said this boundary moves.
+) -> int | None:
+    """How many elements this boundary moves, as its own relation says.
 
-    Read back, never re-derived: the handler is the only thing that knows what
-    its Op does, and a second opinion computed from the pattern would be a
-    guess wearing the same type.
+    Derived, never declared: the relation already says which coordinates are
+    reached, and counting them is the same question a quantity field answered
+    from a second place. ``None`` when there is no boundary there.
     """
     chosen = relations.outputs if output else relations.inputs
-    return chosen[boundary].quantity if 0 <= boundary < len(chosen) else None
+    if not 0 <= boundary < len(chosen):
+        return None
+    return reached_elements(chosen[boundary].pattern)
 
 
 @dataclass(frozen=True)
@@ -370,128 +136,34 @@ class AccessRelations:
 
     One relation per boundary value, in boundary order.
 
-    - ``inputs``: one `BoundaryAccess` per input arg, in argument order.
+    - ``inputs``: one `BoundaryRelation` per input arg, in argument order.
     - ``outputs``: one per output. Single-output ops have len 1; tuple-output
       ops have one entry per tuple field.
-    - ``storage_effect``: where the result's bytes live. An Op that says nothing
-      produces its own, because reading an operand at the same indices is not
-      the same as being that operand.
     """
 
-    inputs: tuple[BoundaryAccess, ...]
-    outputs: tuple[BoundaryAccess, ...]
-    storage_effect: "StorageEffectClaim | None" = None
+    inputs: tuple[BoundaryRelation, ...]
+    outputs: tuple[BoundaryRelation, ...]
 
     def __post_init__(self) -> None:
         """Refuse an impossible description here, rather than interpret it later.
 
-        A boundary that says it writes on the input side is a broken handler,
-        and a consumer reading it as a read hides the break behind a plausible
-        number. What needs the Call -- element width, boundary count -- belongs
-        to the registration wrapper, which has one.
+        What needs the Call -- boundary count, the rank each value has -- belongs
+        to the registration wrapper, which has one. What is refusable without it
+        is that every boundary states a relation and that something is produced.
         """
         for side in ("inputs", "outputs"):
             stated = getattr(self, side)
             if not isinstance(stated, tuple) or not all(
-                isinstance(item, BoundaryAccess) for item in stated
+                isinstance(item, BoundaryRelation) for item in stated
             ):
-                raise ValueError(f"{side} is one BoundaryAccess per boundary, got {stated!r}")
+                raise ValueError(
+                    f"{side} is one BoundaryRelation per boundary, got {stated!r}"
+                )
         if not self.outputs:
             raise ValueError("an operation produces at least one value to describe")
-        for index, boundary in enumerate(self.inputs):
-            if boundary.mode not in (AccessMode.READ, AccessMode.TRANSFER):
-                raise ValueError(
-                    f"input {index} says it does {boundary.mode.value}; an operand "
-                    "is read or transferred, never written"
-                )
-            if boundary.storage is not None:
-                raise ValueError(
-                    f"input {index} states where bytes live; that is an output's "
-                    "answer about its own"
-                )
-        for index, boundary in enumerate(self.outputs):
-            if boundary.mode not in (AccessMode.WRITE, AccessMode.TRANSFER):
-                raise ValueError(
-                    f"output {index} says it does {boundary.mode.value}; a result "
-                    "is written or transferred, never read"
-                )
-            links = boundary.storage.links if boundary.storage is not None else ()
-            if boundary.mode is AccessMode.TRANSFER and not links:
-                raise ValueError(
-                    f"output {index} transfers but names no source; a transfer "
-                    "states which bytes it moves or it states nothing"
-                )
-            for link in links:
-                if link.input >= len(self.inputs):
-                    raise ValueError(
-                        f"output {index} links to operand {link.input}, and this "
-                        f"call has {len(self.inputs)}"
-                    )
-
-
-
-@dataclass(frozen=True)
-class AccessRelationResult:
-    """Forward access relation for one Call, built from input types alone.
-
-    ``domain`` is the bounded iteration domain as an ``isl.set``: static dims
-    are constant constraints, dynamic dims are isl parameters. ``maps`` holds
-    one access ``isl.map`` per boundary value, in boundary order (inputs
-    first, then outputs). ``param_map`` resolves each of ``domain``'s isl
-    parameter names back to the ``ShapeDim`` it stands for; it is this
-    Call's own data, never shared with any other Call's relation. The
-    carrier holds no tensor shape — output shape is typeinfer-side data.
-    """
-
-    domain: "isl.set"
-    maps: tuple["isl.map", ...]
-    param_map: dict = field(default_factory=dict)
-
-
-
-
-
-
-
-class StorageEffectKind(enum.Enum):
-    """What one Op claims about where its result's bytes live."""
-
-    PRODUCE = "produce"
-    FORWARD = "forward"
-    UPDATE = "update"
-
-
-@dataclass(frozen=True)
-class StorageSpan:
-    """One run of bytes inside one operand's own buffer."""
-
-    operand: int
-    offset: int
-    size: int
-
-
-@dataclass(frozen=True)
-class StorageEffectClaim:
-    """Which operands a result lives in, and where inside them if that is known.
-
-    ``spans_required`` marks a claim that is only true because of where the
-    pieces sit -- putting several of them side by side, say. Without it, a claim
-    whose spans do not resolve still stands on its operands alone, which is what
-    a re-indexing of one operand is whether or not its address is known.
-    """
-
-    kind: StorageEffectKind = StorageEffectKind.PRODUCE
-    operands: tuple[int, ...] = ()
-    spans: tuple[StorageSpan, ...] = ()
-    spans_required: bool = False
 
 
 access_relation_registry: AnalysisRegistry = AnalysisRegistry("access_relation")
-
-
-
-
-type_relation_registry: AnalysisRegistry = AnalysisRegistry("type_relation")
 
 
 def _boundaries_of(call, ctx) -> tuple[int, int]:
@@ -505,20 +177,6 @@ def _boundaries_of(call, ctx) -> tuple[int, int]:
     return len(call.args), outputs
 
 
-def _element_bits(type_: "Type") -> int | None:
-    """How wide one element of this boundary is, or ``None`` when unknown.
-
-    Bits rather than bytes, because a bool is one bit and a packed float four:
-    reading those as "no whole number of bytes, so never mind" let a bool share
-    a coordinate with an f32, where one side's index lands 31 bits inside the
-    other's element.
-    """
-    if not isinstance(type_, TensorType):
-        return None
-    bits = getattr(type_.dtype, "bit_width", None)
-    return bits if isinstance(bits, int) and bits > 0 else None
-
-
 def _field_of(type_: "Type", index: int) -> "Type | None":
     """One field of a tuple, or the value itself when it has no fields."""
     if isinstance(type_, TupleType):
@@ -526,110 +184,19 @@ def _field_of(type_: "Type", index: int) -> "Type | None":
     return type_ if index == 0 else None
 
 
-def _check_links_against(call, ctx, relations: AccessRelations, op_cls: type) -> None:
-    """Hold every storage link to the Call whose operands it names."""
-    result = ctx.type_of(call)
-    for index, boundary in enumerate(relations.outputs):
-        links = boundary.storage.links if boundary.storage is not None else ()
-        for link in links:
-            operand = ctx.type_of(call.args[link.input])
-            if isinstance(operand, TupleType):
-                if link.input_field is None or not (
-                    0 <= link.input_field < len(operand.fields)
-                ):
-                    raise ValueError(
-                        f"{op_cls.__name__} links output {index} to operand "
-                        f"{link.input}, which holds {len(operand.fields)} fields, "
-                        f"and names field {link.input_field!r}"
-                    )
-            elif link.input_field is not None:
-                raise ValueError(
-                    f"{op_cls.__name__} links output {index} to field "
-                    f"{link.input_field} of operand {link.input}, which has no "
-                    "fields of its own"
-                )
-            source = _element_bits(_field_of(operand, link.input_field or 0))
-            destination = _element_bits(_field_of(result, index))
-            if source is None or destination is None:
-                raise ValueError(
-                    f"{op_cls.__name__} shares output {index} with operand "
-                    f"{link.input}, and one of them states no element width; "
-                    "bytes cannot be shared between values of unknown shape"
-                )
-            if source != destination:
-                raise ValueError(
-                    f"{op_cls.__name__} shares output {index} with operand "
-                    f"{link.input}, whose elements are {source} bits against "
-                    f"{destination}; one side's coordinate would land inside "
-                    "the other's element"
-                )
+def _image_rank(pattern: "AccessPattern") -> int:
+    """How many coordinates one boundary's relation names."""
+    return relation_of(pattern).dim(isl.dim_type.OUT)
 
 
-def _check_lookups_against(call, ctx, relations: AccessRelations, op_cls: type) -> None:
-    """Hold every lookup to the operand it indexes through and the axis it names.
+def _reaches_nothing(pattern: "AccessPattern") -> bool:
+    """Whether a boundary reaches no coordinate at all, at any iteration.
 
-    A lookup says nothing checkable on its own -- two non-negative numbers -- so
-    the record cannot refuse an index operand that is not there or an axis the
-    boundary's own Type does not have. Here both are known.
+    An Op answering from a Type without reading it says so with an empty
+    relation, of whatever rank reads clearest, so it is exempt from being held
+    to the rank of a value it never touches.
     """
-    result = ctx.type_of(call)
-    sides = (
-        ("input", relations.inputs, [ctx.type_of(arg) for arg in call.args]),
-        (
-            "output",
-            relations.outputs,
-            list(result.fields) if isinstance(result, TupleType) else [result],
-        ),
-    )
-    def hold(lookup: IndexedAccess, where: str, held) -> None:
-        if lookup.index_operand >= len(call.args):
-            raise ValueError(
-                f"{op_cls.__name__} indexes {where} through operand "
-                f"{lookup.index_operand}, and this call has {len(call.args)}"
-            )
-        rank = len(held.shape) if isinstance(held, TensorType) else 0
-        if lookup.axis >= rank:
-            raise ValueError(
-                f"{op_cls.__name__} indexes {where} along axis {lookup.axis}, "
-                f"and it has {rank}"
-            )
-
-    for side, boundaries, types in sides:
-        for index, boundary in enumerate(boundaries):
-            held = types[index] if index < len(types) else None
-            if isinstance(boundary.pattern, IndexedAccess):
-                hold(boundary.pattern, f"{side} {index}", held)
-            links = boundary.storage.links if boundary.storage is not None else ()
-            for link in links:
-                for end, pattern in (("where", link.where),):
-                    if isinstance(pattern, IndexedAccess):
-                        reached = _field_of(
-                            ctx.type_of(call.args[link.input]),
-                            link.input_field or 0,
-                        )
-                        hold(pattern, f"{side} {index}'s link {end}", reached)
-
-
-def _image_rank(pattern: "AccessPattern") -> int | None:
-    """How many coordinates a carrier names, or ``None`` when it names none.
-
-    A window names one offset and one extent per coordinate, so it answers the
-    same question an affine image does and is held to the same rank. Both being
-    checked is what keeps a boundary from carrying a logical window against a
-    factored image of the same value.
-    """
-    if isinstance(pattern, AffineAccess):
-        return pattern.relation.dim(isl.dim_type.OUT)
-    if isinstance(pattern, (isl.multi_aff, isl.map)):
-        return pattern.dim(isl.dim_type.OUT)
-    if isinstance(pattern, WindowAccess):
-        if len(pattern.offsets) != len(pattern.extents):
-            raise ValueError(
-                f"a window states {len(pattern.offsets)} offsets and "
-                f"{len(pattern.extents)} extents"
-            )
-        return len(pattern.extents)
-    return None
+    return relation_of(pattern).is_empty()
 
 
 def _check_image_ranks(call, ctx, relations: AccessRelations, op_cls: type) -> None:
@@ -637,7 +204,7 @@ def _check_image_ranks(call, ctx, relations: AccessRelations, op_cls: type) -> N
 
     An image is composed with a `Layout`, whose shape and strides are the value's
     factored positions, so another rank cannot become an address at all. The rank
-    to match is this view's. A boundary that moves nothing is exempt: an Op
+    to match is this view's. A boundary that reaches nothing is exempt: an Op
     answering from a Type without reading it states an empty map of whatever
     shape reads clearest.
     """
@@ -656,109 +223,35 @@ def _check_image_ranks(call, ctx, relations: AccessRelations, op_cls: type) -> N
             if isinstance(held, TupleType):
                 continue
             wanted = len(held.shape) if isinstance(held, TensorType) else 0
-            if boundary.quantity.upper:
-                _hold_rank(
-                    boundary.pattern, wanted, f"{side} {index}", op_cls
-                )
-            links = boundary.storage.links if boundary.storage is not None else ()
-            for link in links:
-                if not link.quantity.upper:
-                    continue
-                source = ctx.type_of(call.args[link.input])
-                if link.input_field is not None and isinstance(source, TupleType):
-                    source = source.fields[link.input_field]
-                _hold_rank(
-                    link.where,
-                    len(source.shape) if isinstance(source, TensorType) else 0,
-                    f"{side} {index}'s link",
-                    op_cls,
-                )
-                asked = _domain_rank(boundary.pattern)
-                if asked is not None:
-                    _hold_domain(
-                        link.where, asked, f"{side} {index}'s link", op_cls
-                    )
-
+            if not _reaches_nothing(boundary.pattern):
+                _hold_rank(boundary.pattern, wanted, f"{side} {index}", op_cls)
 
 
 def _hold_rank(pattern: "AccessPattern", wanted: int, where: str, op_cls: type) -> None:
     """Refuse an affine image that names a different number of coordinates."""
     stated = _image_rank(pattern)
-    if stated is not None and stated != wanted:
+    if stated != wanted:
         raise ValueError(
             f"{op_cls.__name__} reads {where} at {stated} coordinates, and it "
             f"has {wanted} in this view"
         )
 
 
-def _domain_rank(pattern: "AccessPattern") -> int | None:
-    """How many coordinates a carrier is asked by, or None when it says none.
-
-    A window is asked by one offset and one extent per coordinate of the value
-    it is a window of, which is the same question an affine domain answers.
-    """
-    if isinstance(pattern, AffineAccess):
-        return pattern.relation.dim(isl.dim_type.IN)
-    if isinstance(pattern, (isl.multi_aff, isl.map)):
-        return pattern.dim(isl.dim_type.IN)
-    if isinstance(pattern, WindowAccess):
-        return _image_rank(pattern)
-    return None
-
-
-def _hold_domain(pattern: "AccessPattern", wanted: int, where: str, op_cls: type) -> None:
-    """Refuse a link asked by different coordinates than its own boundary.
-
-    A link answers for the output it belongs to, so it is asked by the same
-    coordinates that output is. One asked by fewer is a link to some other value, and
-    the reader that composes it with this occurrence finds that out too late to
-    say whose bytes it was talking about.
-    """
-    stated = _domain_rank(pattern)
-    if stated is not None and stated != wanted:
-        raise ValueError(
-            f"{op_cls.__name__} links {where} from {stated} coordinates, and it "
-            f"has {wanted} in this view"
-        )
-
-
-def _check_claim_against_links(relations: AccessRelations, op_cls: type) -> None:
-    """Hold the legacy whole-Call claim to the links of the same output.
-
-    One fact in two shapes, and the older one still has consumers. A claim that
-    no link supports is drift, and drift is invisible until a number is wrong.
-    The converse is allowed and is not drift: a link is a candidate and a claim
-    is a conclusion, so a reshard across levels states its link and no claim.
-    """
-    stated = relations.storage_effect
-    if stated is None:
-        return
-    derived = storage_effect_of(relations)
-    if derived is None:
-        raise ValueError(
-            f"{op_cls.__name__} claims {stated.kind.value} storage in operands "
-            f"{stated.operands}, and no link of its output says so"
-        )
-    if (stated.kind, stated.operands) != (derived.kind, derived.operands):
-        raise ValueError(
-            f"{op_cls.__name__} claims {stated.kind.value} storage in operands "
-            f"{stated.operands}, while its links say {derived.kind.value} in "
-            f"{derived.operands}"
-        )
-
-
-def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
+def register_access_relation(
+    op_cls: type, *, renames: int | None = None
+) -> Callable[[Callable], Callable]:
     """Decorator to register the one handler that states an Op's coordinates.
 
     The handler signature is ``(call, ctx) -> AccessRelations``. What it answers
-    comes before the Call has a Type: type inference asks it in order to derive
-    that Type, so a handler that asked back would be asking for its own answer.
-    It may read its operands, its Op's attributes and the values its parameters
-    bind. Holding that answer against the Call is a separate step, `relations_of`,
-    because every check worth making needs the Type this answer derives.
+    comes before the Call has a Type, so it may read its operands, its Op's
+    attributes and the values its parameters bind, and not the Call's own Type.
+    ``renames`` says the result is another name for that operand, stated in the
+    same registration because it is a fact about what the Op reads.
     """
 
     def decorate(handler: Callable) -> Callable:
+        if renames is not None:
+            handler.re_addresses = renames
         access_relation_registry.register(op_cls, handler)
         return handler
 
@@ -790,7 +283,7 @@ def coordinates_of(call, ctx) -> AccessRelations:
         )
     for index, (boundary, arg) in enumerate(zip(relations.inputs, call.args)):
         supplied = ctx.type_of(arg)
-        if isinstance(supplied, TupleType) or not boundary.quantity.upper:
+        if isinstance(supplied, TupleType) or _reaches_nothing(boundary.pattern):
             continue
         _hold_rank(
             boundary.pattern,
@@ -894,15 +387,15 @@ def projected(relations: AccessRelations, call, ctx) -> AccessRelations:
     all it can know before anything is placed. A reader addresses positions, and
     which ones a logical coordinate is depends on the layout the value ended up
     with, so the two are composed here for every Op. That composition also holds
-    a participant to its own iterations; nothing is narrowed against the other
-    boundaries after it, their shared space containing each already and
-    intersecting only dragging in parameters a boundary never spoke of.
+    a participant to its own iterations, and every boundary is then held to the
+    same ones: a value nobody sharded is addressed whole by everyone, so left
+    alone it would charge one participant the whole of what all of them read.
     """
     held = ctx.local_type_of(call)
     fields = held.fields if isinstance(held, TupleType) else (held,)
     logical = ctx.type_of(call)
     logical_fields = logical.fields if isinstance(logical, TupleType) else (logical,)
-    bindings = _bindings_of(relations)
+    bindings = parameters_of(relations)
 
     def views(index: int, side: str) -> tuple:
         if side == "output":
@@ -913,53 +406,108 @@ def projected(relations: AccessRelations, call, ctx) -> AccessRelations:
         arg = call.args[index]
         return ctx.local_type_of(arg), ctx.type_of(arg)
 
-    carried = {
+    placed = {
         side: tuple(
-            _addressed(boundary, *views(index, side), bindings, side, index, call)
+            _placed(boundary, *views(index, side), side, index, call)
             for index, boundary in enumerate(boundaries)
         )
         for side, boundaries in (("input", relations.inputs), ("output", relations.outputs))
     }
-    boxes = {
-        "input": tuple(
-            index_set(tuple(view.shape)) if isinstance(view, TensorType) else None
-            for view in (ctx.local_type_of(arg) for arg in call.args)
-        ),
-        "output": tuple(
-            index_set(tuple(field.shape)) if isinstance(field, TensorType) else None
-            for field in fields
-        ),
+    narrowed = {
+        side: tuple(
+            _is_narrowed(*views(index, side)) for index in range(len(boundaries))
+        )
+        for side, boundaries in (("input", relations.inputs), ("output", relations.outputs))
     }
+    share = _own_iterations(relations, placed, narrowed)
+    carried = {
+        side: tuple(
+            _addressed(relation, views(index, side)[0], bindings, side, index, call)
+            for index, relation in enumerate(relations_placed)
+        )
+        for side, relations_placed in placed.items()
+    }
+    if share is None:
+        return AccessRelations(inputs=carried["input"], outputs=carried["output"])
     return AccessRelations(
-        inputs=tuple(
-            _moving(
-                boundary,
-                boxes["input"][index] if index < len(boxes["input"]) else None,
-                "input",
-                index,
-                call,
-            )
-            for index, boundary in enumerate(carried["input"])
-        ),
-        outputs=tuple(
-            _moving(
-                boundary,
-                boxes["output"][index] if index < len(boxes["output"]) else None,
-                "output",
-                index,
-                call,
-            )
-            for index, boundary in enumerate(carried["output"])
-        ),
-        storage_effect=relations.storage_effect,
+        inputs=tuple(_iterating_over(boundary, share) for boundary in carried["input"]),
+        outputs=tuple(_iterating_over(boundary, share) for boundary in carried["output"]),
     )
 
 
-def _bindings_of(relations: AccessRelations) -> dict:
+def _is_narrowed(local, logical) -> bool:
+    """Whether this reader was handed less of a value than the program states."""
+    return (
+        isinstance(local, TensorType)
+        and isinstance(logical, TensorType)
+        and tuple(local.shape) != tuple(logical.shape)
+    )
+
+
+def _own_iterations(
+    stated: AccessRelations, placed: dict, narrowed: dict
+) -> "isl.set | None":
+    """Which of an Op's iterations this participant performs, or None if all.
+
+    A value handed out in pieces says which iterations belong to whoever holds
+    this piece: the ones whose coordinate of it they were given. Every boundary
+    is then held to those, because a value nobody divided is addressed whole by
+    each of them and would otherwise charge one participant what all of them
+    read. Only a divided value is asked -- an undivided one narrows nothing --
+    and only a boundary that answers about the whole space, since what a partial
+    one leaves out is left out for everybody.
+    """
+    walked = iteration_universe(stated)
+    if walked is None:
+        return None
+    share = None
+    for side, boundaries in (("input", stated.inputs), ("output", stated.outputs)):
+        for index, boundary in enumerate(boundaries):
+            if not narrowed[side][index]:
+                continue
+            try:
+                if not relation_of(boundary.pattern).domain().is_equal(walked):
+                    continue
+            except isl.Error:  # pragma: no cover - unalignable parameter lists
+                continue
+            own = placed[side][index].domain()
+            share = own if share is None else share.intersect(own)
+    if share is None or share.is_equal(walked):
+        return None
+    return share.coalesce()
+
+
+def _iterating_over(boundary: "BoundaryRelation", share: "isl.set") -> "BoundaryRelation":
+    """One boundary held to the iterations its participant performs."""
+    pattern = boundary.pattern
+    relation = relation_of(pattern)
+    try:
+        held = relation.intersect_domain(share)
+    except isl.Error:  # pragma: no cover - unalignable parameter lists
+        return boundary
+    stated = dict(pattern.parameters) if isinstance(pattern, AffineAccess) else {}
+    return BoundaryRelation(
+        AffineAccess(
+            held,
+            tuple(
+                (name, stated[name])
+                for name in (
+                    held.get_dim_name(isl.dim_type.PARAM, index)
+                    for index in range(held.dim(isl.dim_type.PARAM))
+                )
+                if name in stated
+            ),
+        )
+    )
+
+
+def parameters_of(relations: AccessRelations) -> dict:
     """Every parameter this Op binds, by name, across all of its boundaries.
 
     One name is one value for the whole Op, so a relation that gains a parameter
-    by being composed or restricted still knows what it stands for.
+    by being composed or restricted still knows what it stands for. This is also
+    what decodes an extent back out of the space an Op walks: a symbolic axis is
+    a parameter there, and this says which dimension it was.
     """
     bindings: dict = {}
     for _side, _index, pattern in _affine_boundaries(relations):
@@ -967,19 +515,57 @@ def _bindings_of(relations: AccessRelations) -> dict:
     return bindings
 
 
-def _addressed(
-    boundary: "BoundaryAccess", local, logical, bindings: dict, side: str, index: int, call
-) -> "BoundaryAccess":
-    """One boundary's image carried from logical axes onto the positions it has."""
-    pattern = boundary.pattern
-    if not isinstance(pattern, (AffineAccess, isl.map, isl.multi_aff)):
-        raise ValueError(
-            f"{type(call.target).__name__} states {side} {index} as a "
-            f"{type(pattern).__name__}, which no reader can carry onto positions"
-        )
-    relation = relation_of(pattern)
-    if not isinstance(local, TensorType) or not isinstance(logical, TensorType):
-        return _rebuilt(boundary, relation, bindings)
+def shape_from_relation(
+    relations: AccessRelations, extents: "Sequence", *, output: int = 0
+) -> tuple:
+    """The extents one output reaches, which is the shape that output has.
+
+    Type inference and every other reader take the shape from the same relation,
+    so a relation that contracts the wrong axis is wrong for all of them rather
+    than for whichever one recomputed it. *extents* is what the Op walks: an
+    empty space reaches nothing and has no extent left to read, so a projected
+    axis takes its own from there in order.
+    """
+    reached = relation_of(relations.outputs[output].pattern)
+    rank = reached.dim(isl.dim_type.OUT)
+    if reached.is_empty():
+        return tuple(extents[axis] for axis in range(rank))
+    image = reached.range()
+    bindings = parameters_of(relations)
+    return tuple(
+        to_dim(image.dim_max(axis).add_constant(1), bindings) for axis in range(rank)
+    )
+
+
+def boundary_maps(relations: AccessRelations) -> tuple["isl.map", ...]:
+    """Every boundary's relation, inputs first and then outputs.
+
+    Boundary order is already the argument order, so a reader that wants the
+    Op's maps as one sequence -- shard propagation walks operands against the
+    result -- takes them here rather than knowing how the record is shaped.
+    """
+    return tuple(
+        relation_of(boundary.pattern)
+        for boundary in (*relations.inputs, *relations.outputs)
+    )
+
+
+def _placed(
+    boundary: "BoundaryRelation", local, logical, side: str, index: int, call
+) -> "isl.map":
+    """One boundary's image carried from logical axes onto the positions it has.
+
+    Only the placement: which iterations belong to this participant follows from
+    it, and holding the image to the coordinates the value has would answer that
+    with the box rather than with the ownership.
+    """
+    relation = relation_of(boundary.pattern)
+    if (
+        not isinstance(local, TensorType)
+        or not isinstance(logical, TensorType)
+        or relation.is_empty()
+    ):
+        return relation
     if relation.dim(isl.dim_type.OUT) != len(logical.shape):
         raise ValueError(
             f"{type(call.target).__name__} reads {side} {index} at "
@@ -987,14 +573,27 @@ def _addressed(
             f"{len(logical.shape)} axes of its own; a canonical relation is "
             "stated in the axes an Op was written in"
         )
-    return _rebuilt(boundary, relation.apply_range(positions_of(local, logical)), bindings)
+    return relation.apply_range(positions_of(local, logical))
 
 
-def _rebuilt(boundary: "BoundaryAccess", relation: "isl.map", bindings: dict):
+def _addressed(
+    relation: "isl.map", local, bindings: dict, side: str, index: int, call
+) -> "BoundaryRelation":
+    """One placed boundary, held to the coordinates the value actually has.
+
+    The projected relation is then the whole answer: what it reaches is what
+    crossed, with nothing left for a reader to intersect again or to forget to.
+    """
+    box = index_set(tuple(local.shape)) if isinstance(local, TensorType) else None
+    if box is not None and box.tuple_dim() == relation.range().tuple_dim():
+        relation = relation.intersect_range(box)
+    return _held_countable(_rebuilt(relation, bindings), side, index, call)
+
+
+def _rebuilt(relation: "isl.map", bindings: dict) -> "BoundaryRelation":
     """One boundary carrying a relation, with what its parameters stand for."""
-    return dataclasses.replace(
-        boundary,
-        pattern=AffineAccess(
+    return BoundaryRelation(
+        AffineAccess(
             relation,
             tuple(
                 (name, bindings[name])
@@ -1004,29 +603,27 @@ def _rebuilt(boundary: "BoundaryAccess", relation: "isl.map", bindings: dict):
                 )
                 if name in bindings
             ),
-        ),
+        )
     )
 
 
-def _moving(boundary: "BoundaryAccess", box, side: str, index: int, call):
-    """One boundary charged what its own relation reaches, not what it was told.
+def _held_countable(
+    boundary: "BoundaryRelation", side: str, index: int, call
+) -> "BoundaryRelation":
+    """Refuse a projected boundary nobody can count.
 
-    An Op states its movement in logical terms because that is all it can know;
-    how much of that crosses here is what the projected relation says. There is
-    no falling back on what it said, because two answers is the thing this
-    milestone exists to remove.
+    A relation is the only statement of how much crosses here, so one whose
+    image is not a number leaves a reader with nothing -- and there is no
+    falling back on what the Op said, because two answers is the thing this
+    carrier exists to remove.
     """
-    reached = reached_elements(boundary.pattern, box)
-    if reached is None:
+    if reached_elements(boundary.pattern) is None:
         raise ValueError(
             f"{type(call.target).__name__} states {side} {index} as "
             f"{relation_of(boundary.pattern)}, which reaches no countable number "
             "of elements here"
         )
-    return dataclasses.replace(
-        boundary,
-        quantity=AccessQuantity(reached, reached, boundary.quantity.provenance),
-    )
+    return boundary
 
 
 def relations_of(call, ctx) -> AccessRelations:
@@ -1035,7 +632,7 @@ def relations_of(call, ctx) -> AccessRelations:
     The Op stated its coordinates in its own axes; here they are carried onto the
     positions this reader addresses, and then held to the Call. What is checked
     is what needs the Type: one boundary per output field, each written at the
-    rank that field has, and the legacy links and claim held to their operands.
+    rank that field has in this view.
     """
     op_cls = type(call.target)
     relations = projected(coordinates_of(call, ctx), call, ctx)
@@ -1046,50 +643,8 @@ def relations_of(call, ctx) -> AccessRelations:
             f"boundar{'y' if len(relations.outputs) == 1 else 'ies'} of a call "
             f"with {wanted_outputs}"
         )
-    _check_links_against(call, ctx, relations, op_cls)
-    _check_lookups_against(call, ctx, relations, op_cls)
     _check_image_ranks(call, ctx, relations, op_cls)
-    _check_claim_against_links(relations, op_cls)
     return relations
-
-
-def storage_effect_of(relations: AccessRelations) -> "StorageEffectClaim | None":
-    """The legacy whole-Call claim, read off the per-boundary links.
-
-    One truth, two shapes. The claim predates links and still has consumers, so
-    it is derived here rather than written a second time by each handler: two
-    hand-maintained statements of one fact drift, and the drift is invisible
-    until a number is wrong. Spans stay with the handler that computes byte
-    offsets until the allocation does, which is the step that retires this.
-
-    A claim covers the whole result, so an output that shares only part of
-    itself, or a tuple whose fields disagree, has no single claim to make.
-    """
-    if len(relations.outputs) != 1:
-        return None
-    boundary = relations.outputs[0]
-    links = boundary.storage.links if boundary.storage is not None else ()
-    if not links:
-        return None
-    kinds = {link.kind for link in links}
-    if len(kinds) != 1:
-        return None
-    kind = (
-        StorageEffectKind.UPDATE if kinds == {"preserve"} else StorageEffectKind.FORWARD
-    )
-    return StorageEffectClaim(kind, tuple(link.input for link in links))
-
-
-def declared_storage(call, ctx) -> "StorageEffectClaim | None":
-    """What one Call's Op claims about where its result's bytes live.
-
-    Asking the Op means building its relations, because one registration answers
-    both questions. A handler that cannot build them says so and is heard: the
-    fail-closed direction belongs to the proof, not to the claim, or a broken
-    handler would read as an Op that merely produces.
-    """
-    handler = access_relation_registry.lookup(type(call.target))
-    return None if handler is None else handler(call, ctx).storage_effect
 
 
 def logical_axes_of(local: "Type", logical: "Type") -> list[int]:
@@ -1274,17 +829,14 @@ def iterating(extents: "Sequence", relations: "AccessRelations") -> "AccessRelat
     return AccessRelations(
         inputs=tuple(_held_to(boundary, domain, named) for boundary in relations.inputs),
         outputs=tuple(_held_to(boundary, domain, named) for boundary in relations.outputs),
-        storage_effect=relations.storage_effect,
     )
 
 
 def _held_to(
-    boundary: "BoundaryAccess", domain: "isl.set", named: dict
-) -> "BoundaryAccess":
+    boundary: "BoundaryRelation", domain: "isl.set", named: dict
+) -> "BoundaryRelation":
     """One boundary, restricted to the coordinates its Op iterates."""
     pattern = boundary.pattern
-    if not isinstance(pattern, (AffineAccess, isl.map, isl.multi_aff)):
-        return boundary
     relation = relation_of(pattern)
     if relation.dim(isl.dim_type.IN) != domain.dim(isl.dim_type.SET):
         raise ValueError(
@@ -1294,9 +846,8 @@ def _held_to(
         )
     held = relation.intersect_domain(domain)
     stated = dict(pattern.parameters) if isinstance(pattern, AffineAccess) else {}
-    return dataclasses.replace(
-        boundary,
-        pattern=AffineAccess(
+    return BoundaryRelation(
+        AffineAccess(
             held,
             tuple(
                 (name, stated.get(name, named.get(name)))
@@ -1305,7 +856,7 @@ def _held_to(
                     for index in range(held.dim(isl.dim_type.PARAM))
                 )
             ),
-        ),
+        )
     )
 
 
@@ -1390,9 +941,9 @@ def reached_elements(
 ) -> int | None:
     """How many distinct boundary elements one boundary reaches.
 
-    A boundary's quantity is not a second field to keep in step: it is what the
-    relation says over the coordinates its Op iterates, which the relation itself
-    carries. Reaching the same element from many coordinates is one element
+    How much a boundary moves is not a second field to keep in step: it is what
+    the relation says over the coordinates its Op iterates, which the relation
+    itself carries. Reaching the same element from many coordinates is one element
     moved, not many dependences, so an inner iteration axis costs nothing; and
     reaching past the coordinates the operand has is not reaching at all.
     """
@@ -1554,49 +1105,6 @@ def isl_parameters(parameters: list) -> str:
     return f"[{', '.join(names)}] -> " if names else ""
 
 
-def factored_window(
-    offsets: "Sequence[object]", extents: "Sequence[object]", local: "Type", logical: "Type"
-) -> tuple[tuple, tuple]:
-    """Project one logical window onto the positions a layout factored.
-
-    A window is stated per logical axis and a projected Type has one entry per
-    position, so the lengths disagree the moment anything is split. A window
-    covering a whole axis leaves every position of it whole. One that narrows an
-    axis lands on the single position varying over it. An axis whose layout
-    leaves several varying is refused: the window would have to be shown to
-    align with the split first, and guessing is how a participant ends up
-    charged for rows its neighbour holds.
-    """
-    belongs = logical_axes_of(local, logical)
-    positions: dict[int, list[int]] = {}
-    for position, owner in enumerate(belongs):
-        positions.setdefault(owner, []).append(position)
-    spread_offsets: list[object] = [0] * len(belongs)
-    spread_extents: list[object] = list(local.shape)
-    for axis, held in positions.items():
-        offset = offsets[axis] if axis < len(offsets) else 0
-        extent = extents[axis] if axis < len(extents) else None
-        whole = 1
-        for position in held:
-            whole *= local.shape[position]
-        if offset == 0 and (extent is None or extent == whole):
-            continue
-        carrying = [position for position in held if local.shape[position] != 1]
-        if len(carrying) == 1:
-            spread_offsets[carrying[0]] = offset
-            spread_extents[carrying[0]] = extent if extent is not None else whole
-            continue
-        if True:
-            raise NotImplementedError(
-                f"a window of {extent!r} at {offset!r} on logical axis {axis} of "
-                f"{tuple(logical.shape)} cannot be projected: its layout gives "
-                f"that axis {len(carrying)} varying positions in "
-                f"{tuple(local.shape)}, and "
-                "the window has not been shown to align with the split"
-            )
-    return tuple(spread_offsets), tuple(spread_extents)
-
-
 def self_image(local: "Type", logical: "Type") -> "isl.multi_aff":
     """A value read at its own coordinates, with its fixed positions written down.
 
@@ -1685,11 +1193,37 @@ def elementwise_elements(arg, call, ctx) -> int:
     return elements_of(type_) if isinstance(type_, TensorType) else 0
 
 
-def _identity(rank: int) -> "isl.multi_aff":
-    if rank == 0:
-        return isl.multi_aff("{ [] -> [] }")
-    dims = ", ".join(f"i{i}" for i in range(rank))
-    return isl.multi_aff(f"{{ [{dims}] -> [{dims}] }}")
+def identity_access(rank: int) -> "isl.multi_aff":
+    """Identity boundary for a tensor of *rank*.
+
+    One element per element is a function, so it takes the canonical carrier: a
+    reader that received a map would have to ask whether this access might be
+    many-to-one, which it never is.
+    """
+    dims = ", ".join(f"d{index}" for index in range(rank))
+    return isl.multi_aff(f"{{ [{dims}] -> [{dims}] }}") if rank else isl.multi_aff("{ [] -> [] }")
+
+
+def broadcast_access(result_shape: tuple, operand_shape: tuple) -> "isl.multi_aff":
+    """Which coordinate of an operand a result coordinate reads.
+
+    An operand of the result's own shape reads the coordinate it is at. A
+    shorter one right-aligns, dropping the leading axes it does not have; an
+    axis it holds one of is read at zero however far the result runs along it.
+    Both are still functions of the result coordinate, so both keep the
+    canonical carrier rather than becoming a map nobody has to widen.
+    """
+    rank = len(result_shape)
+    dims = [f"d{index}" for index in range(rank)]
+    offset = rank - len(operand_shape)
+    reads = [
+        "0" if operand_shape[index - offset] == 1 else dims[index]
+        for index in range(offset, rank)
+    ]
+    domain = ", ".join(dims)
+    if not reads:
+        return isl.multi_aff(f"{{ [{domain}] -> [] }}") if rank else isl.multi_aff("{ [] -> [] }")
+    return isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}")
 
 
 def measures_without_reading(call, ctx) -> AccessRelations:
@@ -1713,8 +1247,12 @@ def measures_without_reading(call, ctx) -> AccessRelations:
     return iterating(
         getattr(result, "shape", ()) or (),
         AccessRelations(
-            inputs=tuple(moves(_empty(arg), 0) for arg in call.args),
-            outputs=(writes(_empty(call.args[0]) if call.args else _identity(out_rank), 0),),
+            inputs=tuple(BoundaryRelation(_empty(arg)) for arg in call.args),
+            outputs=(
+                BoundaryRelation(
+                    _empty(call.args[0]) if call.args else identity_access(out_rank)
+                ),
+            ),
         ),
     )
 
@@ -1760,7 +1298,6 @@ def linearized_view(out_shape: tuple, in_shape: tuple) -> "isl.multi_aff | isl.m
 
 def view_relations(
     source: int = 0,
-    storage: "Callable[..., StorageEffectClaim | None] | None" = None,
     mapping: "Callable[..., tuple[AccessPattern, AccessPattern]] | None" = None,
     field: "Callable[..., int | None] | None" = None,
     over: "Callable[..., Sequence] | None" = None,
@@ -1769,53 +1306,68 @@ def view_relations(
 
     A reshape, a slice, a reshard, an item of a tuple: the result is those same
     elements under another name, though a name whose layout may factor its axes
-    differently, so the source states its own positions. Both boundaries are
-    transfers, and the output names the operand it came from through one forward
-    link, so a plan that can put them at the same addresses makes this cost
-    nothing and one that cannot makes it a copy. Neither is this handler's call.
+    differently, so the source states its own positions. Where those elements
+    came from is all this states; whether the two ends can be given the same
+    addresses is the allocation's answer, not this handler's.
     """
 
     def _handler(call, ctx) -> AccessRelations:
-        result = ctx.type_of(call.args[source])
+        result = _field_of(
+            ctx.type_of(call.args[source]),
+            0 if field is None else (field(call, ctx) or 0),
+        )
         out_rank = len(result.shape) if hasattr(result, "shape") else 0
         walked = out_rank if over is None else len(tuple(over(call, ctx)))
-        moved = elements_of(result)
-        held = AccessQuantity(moved, moved)
+        out_rank = walked
 
         if mapping is not None:
             reads, written = mapping(call, ctx)
         else:
-            reads = _identity(walked)
-            written = _identity(out_rank)
-        link = StorageLink(
-            kind="forward",
-            input=source,
-            where=reads,
-            quantity=held,
-            input_field=None if field is None else field(call, ctx),
-        )
+            reads = identity_access(walked)
+            written = identity_access(out_rank)
+        walks = (getattr(result, "shape", ()) or ()) if over is None else over(call, ctx)
         return iterating(
-            (getattr(result, "shape", ()) or ()) if over is None else over(call, ctx),
+            walks,
             AccessRelations(
                 inputs=tuple(
-                    BoundaryAccess(
-                        reads if index == source else addresses_only(walked, ctx, arg),
-                        held if index == source else AccessQuantity(0, 0),
-                        AccessMode.TRANSFER if index == source else AccessMode.READ,
+                    BoundaryRelation(
+                        reads if index == source else addresses_only(walked, ctx, arg)
                     )
                     for index, arg in enumerate(call.args)
                 ),
-                outputs=(transfers(written, held, link),),
-                storage_effect=None if storage is None else storage(call, ctx),
+                outputs=(BoundaryRelation(written),),
             ),
         )
 
+    _handler.re_addresses = source
+    _handler.re_addressed_field = field
     return _handler
 
 
-def identity_relations(
-    n_inputs: int, storage: "Callable[..., StorageEffectClaim | None] | None" = None
-) -> Callable[..., AccessRelations]:
+def re_addresses(call) -> int | None:
+    """Which operand a Call's result is another name for, or ``None``.
+
+    An Op registered through `view_relations` is a renaming of one operand, and
+    it says so in that same registration rather than in a second place. Nothing
+    is proven here: whether the two ends can really be given the same addresses
+    is the allocation's question, and this is what it asks about.
+    """
+    handler = access_relation_registry.lookup(type(call.target))
+    return getattr(handler, "re_addresses", None)
+
+
+def re_addressed_field(call, ctx) -> int | None:
+    """Which field of its operand a Call renames, when the operand is a tuple.
+
+    A tuple has one buffer per field, so which field was taken is which buffer
+    the result is in. An Op that renames a whole value names no field.
+    """
+    handler = access_relation_registry.lookup(type(call.target))
+    field = getattr(handler, "re_addressed_field", None)
+    return None if field is None else field(call, ctx)
+
+
+def identity_relations(n_inputs: int) -> Callable[..., AccessRelations]:
     """Identity relations.
 
     Factory for a GLOBAL-level access-relation handler whose ``n_inputs``
@@ -1838,14 +1390,10 @@ def identity_relations(
             walked.shape,
             AccessRelations(
                 inputs=tuple(
-                    moves(
-                        _identity(_rank_of(call.args[index])),
-                        elementwise_elements(call.args[index], call, ctx),
-                    )
+                    BoundaryRelation(identity_access(_rank_of(call.args[index])))
                     for index in range(n_inputs)
                 ),
-                outputs=(writes(_identity(out_rank), elements_of(walked)),),
-                storage_effect=None if storage is None else storage(call, ctx),
+                outputs=(BoundaryRelation(identity_access(out_rank)),),
             ),
         )
 
@@ -1905,114 +1453,49 @@ def same_placement(left: "Type", right: "Type") -> bool:
     return left_shard.mesh == right_shard.mesh
 
 
-def forward_whole(call, operand: int, ctx) -> StorageEffectClaim:
-    """Forward all of *operand*, with its address when the sizes are static."""
-    size = static_bytes(ctx.type_of(call))
-    if size is None or size != static_bytes(ctx.type_of(call.args[operand])):
-        return StorageEffectClaim(StorageEffectKind.FORWARD, (operand,))
-    return StorageEffectClaim(
-        StorageEffectKind.FORWARD, (operand,), (StorageSpan(operand, 0, size),)
-    )
-
-
-def update_destination(call, ctx, *, destination: int) -> "StorageEffectClaim | None":
-    """Claim that the result is the destination's buffer after an overwrite.
-
-    Whether overwriting is free is not a question about this Call: it depends on
-    who else still reads those bytes and on whose buffer it is. All this states
-    is that the result is that operand, laid out the same way and the same size.
-    """
-    if not same_placement(ctx.type_of(call.args[destination]), ctx.type_of(call)):
-        return None
-    size = static_bytes(ctx.type_of(call))
-    if size is None or size != static_bytes(ctx.type_of(call.args[destination])):
-        return None
-    return StorageEffectClaim(
-        StorageEffectKind.UPDATE, (destination,), (StorageSpan(destination, 0, size),)
-    )
-
-
-def register_type_relation(op_cls: type) -> Callable[[Callable], Callable]:
-    """Decorator to register a forward type-relation builder.
-
-    The handler signature is ``(call, input_types, ctx) -> AccessRelationResult``.
-    It reads only ``input_types`` and the op's attributes — never the Call's own
-    output type — so it can run before the output type exists.
-    """
-    return type_relation_registry.decorator()(op_cls)
-
-
-def build_relation(call, input_types, ctx) -> "AccessRelationResult | None":
-    """Build relation.
-
-    Build the forward access relation for *call*, or ``None`` if its op has
-    no registered builder.
-    """
-    fn = type_relation_registry.lookup(type(call.target))
-    if fn is None:
-        return None
-    return fn(call, input_types, ctx)
-
-
 __all__ = [
-    "StorageEffectClaim",
-    "StorageEffectKind",
-    "StorageSpan",
-    "declared_storage",
-    "dense",
-    "forward_whole",
-    "same_placement",
-    "static_bytes",
-    "update_destination",
     "AccessPattern",
-    "AccessQuantity",
-    "BoundaryAccess",
-    "AffineAccess",
-    "IndexedAccess",
-    "elements_of",
-    "moves",
-    "placed_window",
-    "moves_between",
-    "OperandValue",
-    "access_elements",
-    "affine_term",
-    "isl_parameters",
-    "WindowAccess",
     "AccessRelations",
-    "AccessRelationResult",
+    "AffineAccess",
+    "BoundaryRelation",
+    "access_elements",
     "access_relation_registry",
-    "AccessMode",
-    "OutputStorage",
-    "StorageLink",
+    "affine_term",
+    "coordinates_of",
+    "dense",
+    "elements_of",
     "elementwise_elements",
     "factored_image",
-    "positions_of",
-    "projected",
+    "holds_whole_axis",
+    "broadcast_access",
+    "index_set",
+    "isl_parameters",
+    "iterating",
+    "iteration_universe",
+    "identity_access",
+    "identity_relations",
+    "linearized_view",
     "logical_axes_of",
     "logical_coordinates",
-    "factored_window",
-    "holds_whole_axis",
-    "self_image",
-    "storage_effect_of",
-    "linearized_view",
-    "index_set",
-    "reached_elements",
-    "relation_of",
-    "iterating",
-    "normalised_rows",
     "logical_term",
+    "measures_without_reading",
+    "normalised_rows",
+    "placed_window",
+    "parameters_of",
+    "boundary_maps",
+    "positions_of",
+    "projected",
+    "re_addressed_field",
+    "re_addresses",
+    "reached_elements",
+    "register_access_relation",
+    "relation_of",
+    "relations_of",
+    "same_placement",
+    "self_image",
     "settled",
+    "shape_from_relation",
+    "static_bytes",
     "view_relations",
     "window_source",
-    "transfers",
-    "writes",
-    "measures_without_reading",
-    "type_relation_registry",
-    "register_access_relation",
-    "relations_of",
-    "coordinates_of",
-    "iteration_universe",
-    "register_type_relation",
-    "identity_relations",
-    "build_relation",
 ]

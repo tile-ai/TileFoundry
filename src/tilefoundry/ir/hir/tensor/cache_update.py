@@ -17,21 +17,13 @@ from tilefoundry.ir.types.shard import shard_layout_of
 from tilefoundry.ir.types.shard.shard_layout import Split, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessMode,
-    AccessQuantity,
     AccessRelations,
-    BoundaryAccess,
-    OutputStorage,
-    StorageEffectClaim,
-    StorageLink,
+    BoundaryRelation,
     control_read,
-    elements_of,
     iterating,
     logical_axes_of,
-    moves,
     placed_window,
     register_access_relation,
-    update_destination,
     window_source,
 )
 
@@ -46,9 +38,6 @@ class CacheUpdate(Op):
     new = ParamDef(kind="input", pattern=Tensor)
 
 
-def _cache_update_storage(call: "Call", ctx) -> StorageEffectClaim | None:
-    """The new rows are written into the cache; the result is that cache."""
-    return update_destination(call, ctx, destination=0)
 
 
 def _limit(cache: tuple, supplied: tuple) -> int | None:
@@ -82,28 +71,6 @@ def _rows(expr) -> object:
     return expr
 
 
-def _written(rows, per_row: int, limit: int | None) -> AccessQuantity:
-    """How many elements the update writes, or the range ``s`` leaves it in.
-
-    ``1 <= s <= new.len`` and ``cur_pos + s <= cache.len`` are this Op's own
-    contract, so a written-down ``s`` outside it describes no program and is
-    refused here rather than turned into a negative complement downstream.
-    """
-    if not isinstance(limit, int):
-        raise ValueError("CacheUpdate: the rows it may write have no stated bound")
-    if isinstance(rows, int):
-        if not 1 <= rows <= limit:
-            raise ValueError(
-                f"CacheUpdate writes {rows} rows, and this call may write "
-                f"between 1 and {limit}"
-            )
-        return AccessQuantity(rows * per_row, rows * per_row)
-    return AccessQuantity(
-        per_row,
-        limit * per_row,
-        "CacheUpdate writes between one row and the fewer of what new supplies "
-        "and what the cache holds",
-    )
 
 
 def _row_limit(offsets: tuple, extents: tuple, limit: int | None) -> tuple:
@@ -144,23 +111,17 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
     )
     offsets = (0, start, *(0 for _ in cache[2:]))
     extents = (cache[0], rows, *cache[2:])
-    held = elements_of(ctx.type_of(call.args[0]))
-    per_row = held // cache[1] if isinstance(cache[1], int) and cache[1] else 0
     limit = _limit(cache, supplied)
-    written = _written(rows, per_row, limit)
-    kept = AccessQuantity(held - written.upper, held - written.lower, written.provenance)
     ceilings = (None, limit, *(None for _ in cache[2:]))
     complement, reached = placed_window(offsets, extents, rank, ceilings, cache)
-    preserve = StorageLink(kind="preserve", input=0, where=complement, quantity=kept)
     return iterating(
         cache,
         AccessRelations(
             inputs=(
-                BoundaryAccess(complement, kept, AccessMode.TRANSFER),
-                moves(control_read(rank, ctx, call.args[1]), 1),
-                moves(control_read(rank, ctx, call.args[2]), 1),
-                BoundaryAccess(
-                    window_source(
+                BoundaryRelation(complement),
+                BoundaryRelation(control_read(rank, ctx, call.args[1])),
+                BoundaryRelation(control_read(rank, ctx, call.args[2])),
+                BoundaryRelation(window_source(
                         offsets,
                         rank,
                         logical_new,
@@ -168,19 +129,9 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
                         {axis: f"d{axis}" for axis in range(rank)},
                         (None, rows),
                         ceilings,
-                    ),
-                    written,
-                ),
+                    )),
             ),
-            outputs=(
-                BoundaryAccess(
-                    reached,
-                    written,
-                    AccessMode.WRITE,
-                    OutputStorage((preserve,)),
-                ),
-            ),
-            storage_effect=_cache_update_storage(call, ctx),
+            outputs=(BoundaryRelation(reached),),
         ),
     )
 

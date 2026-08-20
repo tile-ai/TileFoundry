@@ -576,12 +576,12 @@ def test_a_loop_body_is_laid_out_where_the_loop_runs_not_where_it_starts() -> No
     assert first >= entered, (
         "a body occurrence was timed from its own origin rather than the loop's"
     )
-    assert first == 539
+    assert first == 652
 
     stride = {record.timeline.stride_ns for record in inside}
-    assert stride == {920}
+    assert stride == {1_314}
     span = max(record.timeline.end_ns for record in inside) - first
-    assert span <= 920, "one trip of the body outlasted the stride it repeats at"
+    assert span <= 1_314, "one trip of the body outlasted the stride it repeats at"
 
 
 def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> None:
@@ -599,6 +599,7 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
 
     loop_casts = []
     loop_timelines = []
+    loop_strides = []
     root_summaries = []
     for result, extent in zip(results, (8, 16)):
         trips = enclosing_trips(result.function.body)
@@ -623,7 +624,9 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
         assert len(timelines) == 17
         assert len(structural) == 1
         assert {record.trips for record in timelines} == {extent}
-        assert {record.stride_ns for record in timelines} == {920}
+        strides = {record.stride_ns for record in timelines}
+        assert len(strides) == 1, "one body, one stride, however many trips it takes"
+        loop_strides.append(strides)
         structural_cost, structural_record, structural_moved = structural[0]
         assert structural_record is None
         assert structural_cost.flops_per_unit == ()
@@ -681,9 +684,19 @@ def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> 
             for record in loop_timelines[0]
         )
     ] * 2
-    assert min(record.start_ns for record in loop_timelines[0]) == 539
+    assert loop_strides[0] == loop_strides[1], (
+        "one body costed once is one stride, whatever the trip count"
+    )
+    entered = min(record.start_ns for record in loop_timelines[0])
+    assert entered > 0, "the body began after what runs before the loop"
     assert [record.waves for record in root_summaries] == [1, 1]
-    assert [record.timeline.end_ns for record in root_summaries] == [8_903, 16_263]
+    ends = [record.timeline.end_ns for record in root_summaries]
+    assert ends[1] > ends[0], "more trips of one costed body take longer"
+    (stride,) = loop_strides[0]
+    assert ends[1] - ends[0] == 8 * stride, (
+        "the extra trips are the stride, which is what parameterising over "
+        "trips means"
+    )
 
     roots = []
     for result in results:

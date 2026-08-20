@@ -22,17 +22,13 @@ from tilefoundry.ir.types.shard import (
 from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelationResult,
     AccessRelations,
-    build_relation,
-    elements_of,
+    BoundaryRelation,
+    coordinates_of,
+    identity_access,
     iterating,
-    moves,
     register_access_relation,
-    register_type_relation,
-    writes,
 )
-from tilefoundry.visitor_registry.relation_build import build_domain, identity_access, identity_map
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 __all__ = ["ReduceKind", "Reduce"]
@@ -50,26 +46,6 @@ class Reduce(Op):
 
 def _reduced_axes(call: "Call", rank: int) -> tuple:
     return tuple(a % rank if a < 0 else a for a in call.target.axes)
-
-
-@register_type_relation(Reduce)
-def _reduce_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Forward relation for Reduce: an identity input map.
-
-    Forward relation for Reduce: an identity input map; the output map keeps
-    every axis (keepdim) or drops the reduced axes (no keepdim). The reduced
-    axes are reported as completely-reduced dims, so a Split on them collapses
-    to Broadcast and their layout positions collapse to size 1.
-    """
-    (x,) = input_types
-    rank = len(x.shape)
-    reduced = _reduced_axes(call, rank)
-    dims = [f"d{i}" for i in range(rank)]
-    src = "[" + ", ".join(dims) + "]"
-    in_map = identity_map(rank)
-    out_dims = dims if call.target.keepdim else [dims[i] for i in range(rank) if i not in reduced]
-    out_map = isl.map(f"{{ {src} -> [{', '.join(out_dims)}] }}")
-    return AccessRelationResult(domain=build_domain(x.shape), maps=(in_map, out_map))
 
 
 @register_typeinfer(Reduce)
@@ -104,7 +80,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     )
     source_shard = shard_layout_of(x_ty.layout)
     if source_shard is not None:
-        relation = build_relation(call, (x_ty,), ctx)
+        relation = coordinates_of(call, ctx)
         derived = derive_output_shard_layout(
             (x_ty,),
             relation,
@@ -217,9 +193,9 @@ def _reduce_access(call: "Call", ctx) -> AccessRelations:
     return iterating(
         source.shape,
         AccessRelations(
-            inputs=(moves(identity_access(rank), elements_of(source)),),
+            inputs=(BoundaryRelation(identity_access(rank)),),
             outputs=(
-                writes(isl.map(f"{{ [{domain}] -> [{collapses}] }}"), _kept(out_shape)),
+                BoundaryRelation(isl.map(f"{{ [{domain}] -> [{collapses}] }}")),
             ),
         ),
     )

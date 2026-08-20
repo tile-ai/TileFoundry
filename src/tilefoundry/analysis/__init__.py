@@ -16,7 +16,6 @@ from .facts import (
     ThroughputFacts,
 )
 from .metadata import (
-    BufferAliasMetadata,
     BufferFootprint,
     ComputeCostMetadata,
     LevelFootprint,
@@ -55,7 +54,6 @@ __all__ = [
     "AnalysisError",
     "AnalysisResult",
     "AxisExtent",
-    "BufferAliasMetadata",
     "BufferFootprint",
     "ComputeCostMetadata",
     "ExplicitMemoryLevelFacts",

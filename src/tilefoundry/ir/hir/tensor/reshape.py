@@ -22,16 +22,11 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    StorageEffectClaim,
-    StorageEffectKind,
-    dense,
-    forward_whole,
+    identity_access,
     linearized_view,
     register_access_relation,
-    same_placement,
     view_relations,
 )
-from tilefoundry.visitor_registry.relation_build import identity_access
 
 
 @register_op
@@ -40,16 +35,6 @@ class Reshape(Op):
     new_shape = ParamDef(kind="attribute", annotation=tuple)
 
 
-def _reshape_storage(call: Call, ctx) -> StorageEffectClaim | None:
-    """A reshape re-indexes its input; it never moves the elements.
-
-    The address only follows through when both sides describe one dense run, so
-    a re-indexing across some other layout forwards without one.
-    """
-    source, result = ctx.type_of(call.args[0]), ctx.type_of(call)
-    if same_placement(source, result) and dense(source) and dense(result):
-        return forward_whole(call, 0, ctx)
-    return StorageEffectClaim(StorageEffectKind.FORWARD, (0,))
 
 
 def _reshape_view(call: "Call", ctx) -> tuple:
@@ -61,7 +46,13 @@ def _reshape_view(call: "Call", ctx) -> tuple:
     )
 
 
-register_access_relation(Reshape)(view_relations(0, _reshape_storage, _reshape_view))
+register_access_relation(Reshape)(
+    view_relations(
+        0,
+        _reshape_view,
+        over=lambda call, ctx: call.target.new_shape,
+    )
+)
 
 
 def is_induction_var_singleton_reshape(expr) -> bool:

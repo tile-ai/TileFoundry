@@ -9,7 +9,6 @@ the TIR effect-form ``Binary`` Stmt that writes into ``dst``.
 
 from __future__ import annotations
 
-import isl
 import torch
 
 from tilefoundry.evaluator.registry import register_eval
@@ -19,7 +18,7 @@ from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._helpers import broadcast_shapes, is_one, resolve_anchor_storage
+from tilefoundry.ir.hir._helpers import broadcast_shapes, resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Layout, canonical_shard_layout, try_c_order_strides
@@ -27,20 +26,13 @@ from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout, shar
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelationResult,
     AccessRelations,
-    build_relation,
-    elementwise_elements,
-    iterating,
-    moves,
-    register_access_relation,
-    register_type_relation,
-    writes,
-)
-from tilefoundry.visitor_registry.isl_utility import to_domain
-from tilefoundry.visitor_registry.relation_build import (
+    BoundaryRelation,
     broadcast_access,
+    coordinates_of,
     identity_access,
+    iterating,
+    register_access_relation,
     shape_from_relation,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
@@ -64,35 +56,6 @@ class Binary(Op):
     lhs = ParamDef(kind="input", pattern=Tensor)
     rhs = ParamDef(kind="input", pattern=Tensor)
     kind = ParamDef(kind="attribute", annotation=BinaryKind)
-
-
-@register_type_relation(Binary)
-def _binary_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Forward access relation for a right-aligned elementwise binary op.
-
-    The iteration domain is the broadcast output shape; the output map is the
-    identity. Each operand's map ranges over its own tensor axes (right-aligned
-    to the output): axis ``i`` reads iteration dim ``pad + i``, or a constant 0
-    when that owned dim is size-1 broadcasting to a larger output dim — so the
-    shard engine treats those positions as broadcasts.
-    """
-    lhs, rhs = input_types
-    out_shape = broadcast_shapes(lhs.shape, rhs.shape)
-    r = len(out_shape)
-    domain, param_map = to_domain(out_shape)
-    in_dims = [f"d{i}" for i in range(r)]
-
-    def access(in_shape):
-        pad = r - len(in_shape)
-        return [
-            "0" if (is_one(in_shape[i]) and not is_one(out_shape[pad + i])) else f"d{pad + i}"
-            for i in range(len(in_shape))
-        ]
-
-    src = "[" + ", ".join(in_dims) + "]"
-    dsts = (access(lhs.shape), access(rhs.shape), in_dims)
-    maps = tuple(isl.map(f"{{ {src} -> [{', '.join(dst)}] }}") for dst in dsts)
-    return AccessRelationResult(domain=domain, maps=maps, param_map=param_map)
 
 
 def _merge_layout(a: object, b: object, out_shape: tuple) -> object:
@@ -149,13 +112,10 @@ def _elementwise_binary(call: "Call", ctx) -> AccessRelations:
         out_shape,
         AccessRelations(
             inputs=tuple(
-                moves(
-                    broadcast_access(out_shape, shape),
-                    elementwise_elements(arg, call, ctx),
-                )
+                BoundaryRelation(broadcast_access(out_shape, shape))
                 for arg, shape in zip(call.args, shapes)
             ),
-            outputs=(writes(identity_access(len(out_shape)), produced),),
+            outputs=(BoundaryRelation(identity_access(len(out_shape))),),
         ),
     )
 
@@ -200,8 +160,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         commutes_jointly=commutes_jointly,
     )
     try:
-        relation = build_relation(call, (lhs_ty, rhs_ty), ctx)
-        out_shape = shape_from_relation(relation, broadcast_shapes(lhs_ty.shape, rhs_ty.shape))
+        relation = coordinates_of(call, ctx)
+        out_shape = shape_from_relation(
+            relation, broadcast_shapes(lhs_ty.shape, rhs_ty.shape)
+        )
         shard = None
         if shard_layout_of(la) is not None or shard_layout_of(lb) is not None:
             shard = derive_output_shard_layout((lhs_ty, rhs_ty), relation, out_shape)

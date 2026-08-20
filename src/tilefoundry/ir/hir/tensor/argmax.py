@@ -26,17 +26,13 @@ from tilefoundry.ir.types.shard import (
 from tilefoundry.ir.types.shard.shard_layout import Split, shard_layout_of, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelationResult,
     AccessRelations,
-    build_relation,
-    elements_of,
+    BoundaryRelation,
+    coordinates_of,
+    identity_access,
     iterating,
-    moves,
     register_access_relation,
-    register_type_relation,
-    writes,
 )
-from tilefoundry.visitor_registry.relation_build import build_domain, identity_map
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
@@ -78,7 +74,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         else Layout(shape=out_shape, strides=try_c_order_strides(out_shape))
     )
     if source_shard is not None:
-        relation = build_relation(call, (x_ty,), ctx)
+        relation = coordinates_of(call, ctx)
         derived = derive_output_shard_layout(
             (x_ty,),
             relation,
@@ -105,53 +101,27 @@ def _eval_argmax(ctx):
     return TensorValue(data=out, type=ctx.result_type)
 
 
-@register_type_relation(ArgMax)
-def _argmax_type_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    (x,) = input_types
-    rank = len(x.shape)
-    axis = call.target.axis % rank
-    dims = [f"d{i}" for i in range(rank)]
-    source = f"[{', '.join(dims)}]"
-    output = [dim for i, dim in enumerate(dims) if i != axis]
-    return AccessRelationResult(
-        domain=build_domain(x.shape),
-        maps=(
-            identity_map(rank),
-            isl.map(f"{{ {source} -> [{', '.join(output)}] }}"),
-        ),
-    )
-
-
 @register_access_relation(ArgMax)
 def _argmax_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelations:
-    """GLOBAL: input scanned over the reduction axis (isl.map).
+    """A scan walks what it reads, and collapses the axis it scanned on the way out.
 
-    GLOBAL: input scanned over the reduction axis (isl.map). Output is
-    identity over the leading dims (axis collapsed away).
+    The coordinates are the source's own, because reading every element of the
+    reduced axis is the whole of what this does. The result names one fewer of
+    them, which is the collapse.
     """
     x_ty = ctx.type_of(call.args[0])
     rank = len(x_ty.shape)
     axis = call.target.axis
     if axis < 0:
         axis += rank
-    in_dims = ", ".join(f"i{i}" for i in range(rank))
-    leading = [f"i{i}" for i in range(rank) if i != axis]
-    out_dims = ", ".join(leading) if leading else ""
-    if out_dims:
-        in_rel = isl.map(f"{{ [{out_dims}] -> [{in_dims}] }}")
-        out_id = isl.multi_aff(f"{{ [{out_dims}] -> [{out_dims}] }}")
-    else:
-        in_rel = isl.map(f"{{ [] -> [{in_dims}] }}")
-        out_id = isl.multi_aff("{ [] -> [] }")
-    out_shape = (*x_ty.shape[:axis], *x_ty.shape[axis + 1 :])
-    produced = 1
-    for extent in out_shape:
-        produced *= extent if isinstance(extent, int) else 1
+    dims = [f"d{index}" for index in range(rank)]
+    walked = ", ".join(dims)
+    kept = ", ".join(dim for index, dim in enumerate(dims) if index != axis)
     return iterating(
-        out_shape,
+        x_ty.shape,
         AccessRelations(
-            inputs=(moves(in_rel, elements_of(x_ty)),),
-            outputs=(writes(out_id, produced),),
+            inputs=(BoundaryRelation(identity_access(rank)),),
+            outputs=(BoundaryRelation(isl.map(f"{{ [{walked}] -> [{kept}] }}")),),
         ),
     )
 

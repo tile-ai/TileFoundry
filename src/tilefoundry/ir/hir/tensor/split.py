@@ -25,15 +25,11 @@ from tilefoundry.ir.types.shard.shard_layout import Split as SplitAttr
 from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessMode,
-    AccessQuantity,
     AccessRelations,
-    BoundaryAccess,
-    StorageLink,
-    elements_of,
+    BoundaryRelation,
+    identity_access,
     iterating,
     register_access_relation,
-    transfers,
 )
 
 
@@ -134,62 +130,45 @@ def _eval_split(ctx):
 
 @register_access_relation(Split)
 def _split_access(call: "Call", ctx) -> AccessRelations:
-    """Each part reads its own run of the split axis, offset by those before it.
+    """One space, the source's, with each part written on its own run of it.
 
-    The offset is on a logical axis, so each part's own coordinates are rebuilt
-    per logical axis, shifted there, and only then spread over the source's
-    positions. The source is read once across all the parts, and read whole,
-    which is why its own boundary is the full domain rather than the first
-    part's map -- under that, every later part would vanish.
+    Every element of the source becomes an element of exactly one part, so the
+    space to walk is the source's and each output is partial in it: the run of
+    the split axis that part covers, shifted to that part's own coordinates.
+    Walking a part's own coordinates instead would say every part reads the
+    first one.
     """
     source = ctx.type_of(call.args[0])
-    logical_source = source
     rank = len(source.shape)
     axis = call.target.axis + rank if call.target.axis < 0 else call.target.axis
     parts = call.target.num_splits
-    extent = logical_source.shape[axis]
+    extent = source.shape[axis]
     if not isinstance(extent, int) or isinstance(extent, bool) or extent % parts:
         raise NotImplementedError(
             f"Split access_relation: axis {axis} extent {extent!r} does not "
             f"divide into {parts} static parts"
         )
     chunk = extent // parts
-
-    piece = (*source.shape[:axis], chunk, *source.shape[axis + 1 :])
-    moved = 1
-    for size in piece:
-        moved *= size if isinstance(size, int) else 1
     domain = ", ".join(f"d{index}" for index in range(rank))
-    sources, outputs, held = [], [], []
+    written = []
     for part in range(parts):
-        reads = [f"d{index}" for index in range(rank)]
-        reads[axis] = reads[axis] if not part else f"d{axis} + {part * chunk}"
-        sources.append(isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}"))
-        outputs.append(identity_access(rank))
-        held.append(moved)
+        writes = [f"d{index}" for index in range(rank)]
+        begin = part * chunk
+        if begin:
+            writes[axis] = f"d{axis} - {begin}"
+        written.append(
+            isl.map(
+                f"{{ [{domain}] -> [{', '.join(writes)}] : "
+                f"{begin} <= d{axis} < {begin + chunk} }}"
+            )
+        )
 
     return iterating(
-        piece,
+        source.shape,
         AccessRelations(
-            inputs=(
-                BoundaryAccess(
-                    identity_access(rank),
-                    AccessQuantity(elements_of(source), elements_of(source)),
-                    AccessMode.TRANSFER,
-                ),
-            ),
-            outputs=tuple(
-                transfers(
-                    written,
-                    AccessQuantity(moved, moved),
-                    StorageLink(
-                        kind="forward",
-                        input=0,
-                        where=reads,
-                        quantity=AccessQuantity(moved, moved),
-                    ),
-                )
-                for reads, written, moved in zip(sources, outputs, held)
-            ),
+            inputs=(BoundaryRelation(identity_access(rank)),),
+            outputs=tuple(BoundaryRelation(item) for item in written),
         ),
     )
+
+

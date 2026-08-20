@@ -15,19 +15,14 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelationResult,
     AccessRelations,
-    build_relation,
-    elements_of,
+    BoundaryRelation,
+    coordinates_of,
     iterating,
     logical_axes_of,
-    moves,
     register_access_relation,
-    register_type_relation,
-    writes,
+    shape_from_relation,
 )
-from tilefoundry.visitor_registry.isl_utility import to_domain
-from tilefoundry.visitor_registry.relation_build import shape_from_relation
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
@@ -121,10 +116,7 @@ def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
     ):
         reads = _operand_reads(shape, out_shape, inner, contracts_last=contracts_last)
         inputs.append(
-            moves(
-                isl.map(f"{{ [{dims}] -> [{', '.join(reads)}] }}"),
-                elements_of(ctx.type_of(call.args[0 if contracts_last else 1])),
-            )
+            BoundaryRelation(isl.map(f"{{ [{dims}] -> [{', '.join(reads)}] }}"))
         )
         del held
     accumulates = ", ".join(f"d{index}" for index in range(rank))
@@ -133,10 +125,7 @@ def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
         AccessRelations(
             inputs=tuple(inputs),
             outputs=(
-                writes(
-                    isl.map(f"{{ [{dims}] -> [{accumulates}] }}"),
-                    _elements(out_shape),
-                ),
+                BoundaryRelation(isl.map(f"{{ [{dims}] -> [{accumulates}] }}")),
             ),
         ),
     )
@@ -148,44 +137,6 @@ def _elements(shape: tuple) -> int:
     for extent in shape:
         counted *= extent if isinstance(extent, int) else 1
     return counted
-
-
-@register_type_relation(MatMul)
-def _matmul_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Forward access relation for ``(batch.., M, K) × (batch.., K, N)``.
-
-    Iteration domain is ``[batch.., M, N, K]``; the output map drops K (the
-    reduced contraction dim). A batch dim that this operand broadcasts (its
-    extent is 1 while the output extent is larger) accesses a constant 0 rather
-    than the iteration dim, so shard propagation treats it as a broadcast.
-    """
-    lhs, rhs = input_types
-    lhs_batch = lhs.shape[:-2]
-    rhs_batch = rhs.shape[:-2]
-    out_batch = _broadcast_batch(lhs_batch, rhs_batch)
-    b = len(out_batch)
-    m, k, n = lhs.shape[-2], lhs.shape[-1], rhs.shape[-1]
-    domain, param_map = to_domain((*out_batch, m, n, k))
-
-    m_d, n_d, k_d = b, b + 1, b + 2
-    in_dims = [f"d{i}" for i in range(b + 3)]
-
-    def batch_access(in_batch):
-
-        pad = b - len(in_batch)
-        return [
-            "0" if (is_one(in_batch[j]) and not is_one(out_batch[pad + j])) else f"d{pad + j}"
-            for j in range(len(in_batch))
-        ]
-
-    lhs_out = batch_access(lhs_batch) + [f"d{m_d}", f"d{k_d}"]
-    rhs_out = batch_access(rhs_batch) + [f"d{k_d}", f"d{n_d}"]
-    out_out = [f"d{j}" for j in range(b)] + [f"d{m_d}", f"d{n_d}"]
-    src = "[" + ", ".join(in_dims) + "]"
-    maps = tuple(
-        isl.map(f"{{ {src} -> [{', '.join(dst)}] }}") for dst in (lhs_out, rhs_out, out_out)
-    )
-    return AccessRelationResult(domain=domain, maps=maps, param_map=param_map)
 
 
 @register_typeinfer(MatMul)
@@ -212,7 +163,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
     check_multilinear_partials(ctx, call, (("lhs", lhs), ("rhs", rhs)))
 
-    relation = build_relation(call, (lhs, rhs), ctx)
+    relation = coordinates_of(call, ctx)
 
     out_batch = _broadcast_batch(lhs.shape[:-2], rhs.shape[:-2])
     out_shape = shape_from_relation(

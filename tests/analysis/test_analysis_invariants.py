@@ -53,16 +53,14 @@ from tilefoundry.analysis import (
 from tilefoundry.analysis.buffer_plan import BufferPlan, PlannedBuffer, build_buffer_plan
 from tilefoundry.analysis.check import _call_placements
 from tilefoundry.analysis.facts import ThroughputFacts
-from tilefoundry.analysis.footprint import _local_type as footprint_local_type
 from tilefoundry.analysis.metadata import (
-    BufferAliasMetadata,
     BufferAllocationMetadata,
     BufferRef,
     ComputeCostMetadata,
     MemoryMetadata,
     TrafficMetadata,
 )
-from tilefoundry.analysis.movement import _bytes_for, _prove_storage, _Storage
+from tilefoundry.analysis.movement import _bytes_for
 from tilefoundry.analysis.performance import analyze_performance
 from tilefoundry.analysis.preflight import validate_authored
 from tilefoundry.analysis.roofline import _cost_bound, analyze_roofline
@@ -164,32 +162,19 @@ from tilefoundry.schedule.partition import PartitionProgramError, build_partitio
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessMode,
-    AccessQuantity,
     AccessRelations,
     AffineAccess,
-    BoundaryAccess,
-    IndexedAccess,
-    OutputStorage,
-    StorageEffectClaim,
-    StorageEffectKind,
-    StorageLink,
-    StorageSpan,
+    BoundaryRelation,
     access_relation_registry,
-    build_relation,
     coordinates_of,
     index_set,
     linearized_view,
-    moves,
     reached_elements,
     register_access_relation,
     relation_of,
     relations_of,
-    transfers,
-    writes,
 )
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionScope, TrafficBytes
-from tilefoundry.visitor_registry.relation_build import identity_access
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 
@@ -642,72 +627,8 @@ def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
     assert "-> y[" not in str(rows.reads)
 
 
-def test_reshard_relation_rejects_redistribution_but_accepts_storage_moves() -> None:
-    function = check_program(SquareCuda, SquareCuda.entry_function())
-    reshards = [
-        expr
-        for expr in postorder(function.body)
-        if isinstance(expr, Call) and isinstance(expr.target, Reshard)
-    ]
-    assert len(reshards) == 2
-
-    redistribution, storage_move = reshards
-    redistribution_inputs = tuple(
-        footprint_local_type(arg.type) for arg in redistribution.args
-    )
-    with pytest.raises(
-        NotImplementedError,
-        match=r"cross-position redistribution changes the local shape from \(168,\) to \(1,\)",
-    ):
-        build_relation(redistribution, redistribution_inputs, TypeInferContext())
-
-    storage_inputs = tuple(footprint_local_type(arg.type) for arg in storage_move.args)
-    assert storage_inputs[0].shape == (1,)
-    relation = build_relation(storage_move, storage_inputs, TypeInferContext())
-    assert relation is not None
-    assert relation.domain.is_equal(isl.set("{ [d0 = 0] }"))
-    assert len(relation.maps) == 2
-    assert all(item.is_equal(isl.map("{ [d0] -> [d0] }")) for item in relation.maps)
 
 
-def test_forward_relations_distinguish_layer_norm_from_elementwise() -> None:
-    x_type = make_tensor_type((2, 3, 4), DType.f32)
-    affine_type = make_tensor_type((3, 4), DType.f32)
-    x = Var(type=x_type, name="x")
-    weight = Var(type=affine_type, name="weight")
-    bias = Var(type=affine_type, name="bias")
-    layer_norm = Call(
-        type=x_type,
-        target=LayerNorm(axis=1, eps=1e-5),
-        args=(x, weight, bias),
-    )
-
-    relation = build_relation(
-        layer_norm, (x_type, affine_type, affine_type), TypeInferContext()
-    )
-    assert relation is not None
-    assert relation.domain.is_equal(isl.set("{ [d0] : 0 <= d0 < 2 }"))
-    row = isl.map("{ [d0] -> [d0, j0, j1] : 0 <= j0 < 3 and 0 <= j1 < 4 }")
-    affine = isl.map(
-        "{ [d0] -> [j0, j1] : 0 <= j0 < 3 and 0 <= j1 < 4 }"
-    )
-    assert len(relation.maps) == 4
-    assert relation.maps[0].is_equal(row)
-    assert relation.maps[1].is_equal(affine)
-    assert relation.maps[2].is_equal(affine)
-    assert relation.maps[3].is_equal(row)
-
-    relu = Call(type=x_type, target=ReLU(), args=(x,))
-    elementwise = build_relation(relu, (x_type,), TypeInferContext())
-    assert elementwise is not None
-    identity = isl.map("{ [d0, d1, d2] -> [d0, d1, d2] }")
-    assert elementwise.domain.is_equal(
-        isl.set(
-            "{ [d0, d1, d2] : 0 <= d0 < 2 and 0 <= d1 < 3 and 0 <= d2 < 4 }"
-        )
-    )
-    assert len(elementwise.maps) == 2
-    assert all(item.is_equal(identity) for item in elementwise.maps)
 
 
 def test_loop_scopes_choose_the_containing_loop_instead_of_the_smaller_work_set() -> None:
@@ -865,9 +786,9 @@ def test_what_one_op_states_about_its_own_space_is_checked_before_its_type() -> 
         register_access_relation(target)(
             lambda call, ctx: AccessRelations(
                 inputs=tuple(
-                    moves(pattern, 4) for pattern in inputs
+                    BoundaryRelation(pattern) for pattern in inputs
                 ),
-                outputs=tuple(writes(pattern, 4) for pattern in outputs),
+                outputs=tuple(BoundaryRelation(pattern) for pattern in outputs),
             )
         )
         return Call(
@@ -1061,7 +982,6 @@ def test_one_wrong_relation_is_wrong_for_both_of_its_readers() -> None:
                     ),
                 ),
             ),
-            storage_effect=relations.storage_effect,
         )
 
     shape, moved = inferred_and_moved(call)
@@ -1089,26 +1009,31 @@ def inferred_and_moved(call: Call) -> tuple:
     )
 
 
-def test_a_data_dependent_read_is_a_relation_and_not_a_function() -> None:
-    """A scan over an axis cannot be an `isl.multi_aff`, and must not claim to be.
+def test_a_scan_depends_on_every_element_of_the_axis_it_scans() -> None:
+    """One result of a scan depends on the whole axis, and the relations say so.
 
     `topk` and `argmax` each read every element of the axis they scan to produce
-    one output, so the read is one-to-many and cannot be single-valued. The
-    distinction is the whole safety property -- a function would have a consumer
-    conclude each output element depends on a single input element, then happily
-    tile the axis a scan cannot be tiled along.
+    one output. Both boundaries are functions of the coordinate the Op walks --
+    the scan coordinate is one of them -- so the property is in the dependence
+    between them: composing the write backwards with the read is one-to-many.
+    A consumer that concluded otherwise would tile an axis a scan cannot be
+    tiled along.
     """
+
+    def depends(relations, output: int = 0):
+        write = relation_of(relations.outputs[output].pattern)
+        read = relation_of(relations.inputs[0].pattern)
+        return write.reverse().apply_range(read)
+
     logits = _relations(TopK(k=8), (1, 128))
     assert len(logits.inputs) == 1
-    assert not relation_of(logits.inputs[0].pattern).is_single_valued()
     assert len(logits.outputs) == 2
-    assert all(
-        relation_of(item.pattern).is_single_valued() for item in logits.outputs
-    )
+    assert not depends(logits).is_single_valued()
+    assert not depends(logits, 1).is_single_valued()
 
     picked = _relations(ArgMax(), (1, 151936))
-    assert not relation_of(picked.inputs[0].pattern).is_single_valued()
     assert len(picked.outputs) == 1
+    assert not depends(picked).is_single_valued()
 
 
 def test_a_relation_says_how_a_data_dependent_operand_is_read() -> None:
@@ -1157,19 +1082,19 @@ def test_a_relation_says_how_a_data_dependent_operand_is_read() -> None:
 
 
 def test_every_boundary_states_the_movement_its_op_performs() -> None:
-    """Hand-counted, boundary by boundary, because nothing derives this.
+    """Hand-counted, boundary by boundary, against what each relation reaches.
 
-    A pattern says where a value came from and a quantity says how much crossed;
-    the second does not follow from the first. Every output of a scan depends on
-    the whole input the scan reads once, and a matrix product's result domain
-    says nothing about how big its operands were. So each Op states its own, and
-    each is checked here against a number worked out by hand.
+    A relation says where a value came from, and how much crossed is how many
+    distinct coordinates it reaches. Every output of a scan depends on the whole
+    input the scan reads once, and a matrix product's result domain says nothing
+    about how big its operands were -- so each Op walks its own space, and every
+    count below is worked out by hand from that.
     """
 
     def counted(relations) -> tuple[list[int], list[int]]:
         return (
-            [item.quantity.upper for item in relations.inputs],
-            [item.quantity.upper for item in relations.outputs],
+            [reached_elements(item.pattern) for item in relations.inputs],
+            [reached_elements(item.pattern) for item in relations.outputs],
         )
 
     scanned = _relations(TopK(k=8), (1, 128))
@@ -1193,7 +1118,10 @@ def test_every_boundary_states_the_movement_its_op_performs() -> None:
         Var(type=make_tensor_type((4096, 4), DType.bf16), name="sin"),
         Var(type=make_tensor_type((5,), DType.i32), name="pos"),
     )
-    assert counted(rotated) == ([40, 40, 20, 20, 5], [40, 40])
+    assert counted(rotated) == ([40, 40, 16384, 16384, 5], [40, 40]), (
+        "a table row is an element of pos_ids, which no boundary holds, so both "
+        "tables are reached at every row they could name"
+    )
 
     ctx = TypeInferContext()
     joined = Call(
@@ -1218,9 +1146,9 @@ def test_every_boundary_states_the_movement_its_op_performs() -> None:
         ),
     )
     assert counted(relations_of(gathered, ctx)) == (
-        [24, 3],
+        [512, 3],
         [24],
-    )
+    ), "a gather reaches every row it could have named, no boundary holding which"
 
     written = Call(
         type=make_tensor_type((4, 6), DType.bf16),
@@ -1276,10 +1204,10 @@ class _WholeWeight:
 
 
 def _counted(relations) -> tuple[list[int], list[int]]:
-    """Every boundary's stated amount, inputs then outputs."""
+    """Every boundary's amount, as its own relation reaches it: inputs, outputs."""
     return (
-        [item.quantity.upper for item in relations.inputs],
-        [item.quantity.upper for item in relations.outputs],
+        [reached_elements(item.pattern) for item in relations.inputs],
+        [reached_elements(item.pattern) for item in relations.outputs],
     )
 
 
@@ -1351,13 +1279,13 @@ def test_a_reduction_maps_the_axes_its_layout_factored() -> None:
         call, CostContext(level="thread", topologies=(Topology("thread", 6 * 32),))
     )
     reads = relation_of(relations.inputs[0].pattern)
-    assert reads.dim(isl.dim_type.OUT) == 3
+    assert reads.dim(isl.dim_type.OUT) == 3, "one image entry per position it made"
     assert reads.is_equal(
-        isl.map("{ [d0, d1, d2] -> [d0, d1, d2] : d0 = 0 and 0 <= d1 <= 1 and d2 = 0 }")
+        isl.map("{ [d0, d1] -> [0, d0, 0] : 0 <= d0 <= 1 and d1 = 0 }")
     ), "every source coordinate this participant holds, read once"
     written = relation_of(relations.outputs[0].pattern)
     assert written.is_equal(
-        isl.map("{ [d0, d1, d2] -> [0, d1, 0] : d0 = 0 and 0 <= d1 <= 1 and d2 = 0 }")
+        isl.map("{ [d0, d1] -> [0, d0, 0] : 0 <= d0 <= 1 and d1 = 0 }")
     ), "and the surviving axis written at the positions holding it, not by number"
 
 
@@ -1403,10 +1331,10 @@ def test_a_reduction_without_keepdim_names_the_axis_that_survived() -> None:
         attrs=(ShardSplit(1),),
         dtype=DType.f32,
     )
-    held = "0 <= d0 <= 3 and d1 = 0 and 0 <= d2 <= 3 and 0 <= d3 <= 4"
-    for keepdim in (False, True):
+    held = "0 <= d0 <= 3 and 0 <= d1 <= 3 and 0 <= d2 <= 4"
+    for keepdim, kept in ((False, "d0, 0, 0, d2"), (True, "d0, 0, 0, 0, d2")):
         assert _reduced(split, (1,), keepdim, "cta", (cta,)).is_equal(
-            isl.map(f"{{ [d0, d1, d2, d3] -> [d0, 0, 0, d3] : {held} }}")
+            isl.map(f"{{ [d0, d1, d2] -> [{kept}] : {held} }}")
         ), "the last logical axis is written at the position holding it"
 
 
@@ -1636,11 +1564,9 @@ def test_an_indexed_update_keeps_its_container_and_writes_the_rows_it_names() ->
 
     The index answers the first, so those boundaries reach every row the axis
     could legally name rather than claiming one. It answers nothing about the
-    second: the whole destination is preserved through one affine identity link,
-    because these are the same bytes whichever rows get overwritten. A repeated
-    index writes one row twice and an out-of-order one writes no window at all,
-    and neither changes a quantity -- there is no subtraction left to go
-    negative.
+    second: which rows get overwritten does not change which buffer they are in.
+    A repeated index writes one row twice and an out-of-order one writes no
+    window at all, and neither changes what any boundary reaches.
     """
     shapes = (
         make_tensor_type((4, 8), DType.f32),
@@ -1653,15 +1579,13 @@ def test_an_indexed_update_keeps_its_container_and_writes_the_rows_it_names() ->
         return int(str(container.apply(pattern.relation).count_val()))
 
     copied = _asked(IndexCopy(dim=0), shapes[0], *shapes)
-    assert _counted(copied) == ([32, 2, 16], [16])
-    assert copied.inputs[0].mode is AccessMode.TRANSFER
+    assert _counted(copied) == ([32, 2, 16], [32])
     assert reaches(copied.inputs[2].pattern) == 16, (
         "the payload rows land wherever the index says, so all of them are read"
     )
 
     added = _asked(IndexAdd(dim=0), shapes[0], *shapes)
-    assert _counted(added) == ([16, 2, 16], [16])
-    assert added.inputs[0].mode is AccessMode.READ
+    assert _counted(added) == ([32, 2, 16], [32])
     assert reaches(added.inputs[0].pattern) == 32, (
         "and the rows added to are any of the container's, for the same reason"
     )
@@ -1672,18 +1596,15 @@ def test_an_indexed_update_keeps_its_container_and_writes_the_rows_it_names() ->
             "a scatter cannot promise the row it lands on"
         )
         assert reaches(written) == 32
-        (link,) = relations.outputs[0].storage.links
-        assert link.kind == "preserve" and link.quantity == AccessQuantity(32, 32)
-        assert isinstance(link.where, isl.multi_aff)
 
 
-def test_a_view_and_the_value_it_renames_state_the_same_coordinates() -> None:
-    """The repros I claimed and did not check: a link that must compare equal.
+def test_a_view_reads_its_source_at_the_positions_that_source_has() -> None:
+    """A renaming reads the coordinate holding the value it renames, and no other.
 
-    A forward link is honoured when it reads a coordinate and answers with the
-    one holding it, so a view whose link says otherwise is a copy however
-    plainly it is a renaming. Each of these was said to be fixed a round before it was, because
-    the tests covered a different shape than the claim did.
+    A view stated in logical axes is composed with the layout its source ended
+    up with, so a participant holding one row of a split source reads position
+    zero of it and not the row number the program wrote. The two cases below are
+    the shapes that were claimed fixed a round before they were.
     """
     cta = Topology("cta", 2)
     mesh = make_mesh((2,), ("c",), topology=cta)
@@ -1693,30 +1614,23 @@ def test_a_view_and_the_value_it_renames_state_the_same_coordinates() -> None:
             shape, mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32
         )
 
-    def linked(op, source):
+    def reads(op, source):
         held = Var(type=source, name="x")
         inferred = TypeInferVisitor(TypeInferContext()).visit(
             Call(type=source, target=op, args=(held,))
         )
         call = Call(type=inferred, target=op, args=(held,))
         relations = relations_of(call, CostContext(level="cta", topologies=(cta,)))
-        return relations.outputs[0].storage.links[0]
+        return relations.inputs[0].pattern
 
     held = split((8,))
-    same = linked(Reshard(layout=held.layout, storage=held.storage), held)
-    assert _as_map(same.where).is_equal(isl.map("{ [d0, d1] -> [0, d1] }"))
+    same = reads(Reshard(layout=held.layout, storage=held.storage), held)
+    assert _as_map(same).is_equal(isl.map("{ [d0] -> [0, d0] : 0 <= d0 <= 3 }"))
 
-    turned = linked(Transpose(perm=(0, 1)), split((8, 4)))
-    assert _as_map(turned.where).is_equal(isl.map("{ [d0, d1, d2] -> [0, d1, d2] }"))
-
-    parted = relations_of(
-        _split_call(split((8, 4))), CostContext(level="cta", topologies=(cta,))
+    turned = reads(Transpose(perm=(0, 1)), split((8, 4)))
+    assert _as_map(turned).is_equal(
+        isl.map("{ [d0, d1] -> [0, d0, d1] : 0 <= d0 <= 3 and 0 <= d1 <= 3 }")
     )
-    for field, offset in enumerate((0, 2)):
-        (link,) = parted.outputs[field].storage.links
-        assert _as_map(link.where).is_equal(
-            isl.map(f"{{ [d0, d1, d2] -> [0, d1, d2 + {offset}] }}")
-        )
 
 
 def _split_call(source):
@@ -1811,92 +1725,12 @@ def test_a_cache_whose_rows_are_split_is_refused() -> None:
         )
 
 
-def test_a_window_is_stated_in_the_positions_its_layout_made() -> None:
-    """A window is per logical axis and a projected Type is per position.
-
-    The two lengths disagree the moment anything is split, and nothing was
-    checking it: a window of two offsets rode along beside an image of three
-    coordinates, and a cache reported the row count its layout happened to put
-    at position one. The row axis keeps its own extent while a batch split
-    shrinks the rest, which is what tells the two apart.
-    """
-    cta = Topology("cta", 2)
-    mesh = make_mesh((2,), ("c",), topology=cta)
-
-    def split(shape, dtype=DType.f32):
-        return make_shard_tensor_type(
-            shape, mesh=mesh, attrs=(ShardSplit(0),), dtype=dtype
-        )
-
-    i64 = make_tensor_type((), DType.i64)
-    offsets = Tuple(
-        type=i64,
-        elements=(Constant(type=i64, value=0), Constant(type=i64, value=3)),
-    )
-    written = InsertSlice()
-    held = tuple(
-        Var(type=type_, name=name)
-        for type_, name in ((split((4, 8)), "dst"), (split((4, 2)), "upd"))
-    )
-    inferred = TypeInferVisitor(TypeInferContext()).visit(
-        Call(type=held[0].type, target=written, args=(*held, offsets))
-    )
-    call = Call(type=inferred, target=written, args=(*held, offsets))
-    whole, unit = (
-        relations_of(
-            call, CostContext(level=level, topologies=(cta,))
-        )
-        for level in (None, "cta")
-    )
-    assert whole.inputs[0].pattern.relation.dim(isl.dim_type.IN) == 2, (
-        "the whole program states the window on the two axes it has"
-    )
-    assert unit.inputs[0].pattern.relation.dim(isl.dim_type.IN) == 3, (
-        "one participant states it on the three positions its layout made"
-    )
-    kept = whole.inputs[0].pattern.relation
-    assert not kept.is_empty(), "a window inside a container leaves the rest"
-    inside = isl.set("{ [d0, d1] : 0 <= d0 < 4 and 3 <= d1 < 5 }")
-    assert inside.apply(kept).is_empty(), (
-        "what the destination keeps is exactly what the window does not cover"
-    )
-
-    cache = CacheUpdate()
-    i32 = make_tensor_type((), DType.i32)
-    rows = (
-        Var(type=split((4, 16, 2, 8), DType.bf16), name="cache"),
-        Constant(type=i32, value=0),
-        Constant(type=i32, value=4),
-        Var(type=split((4, 4, 2, 8), DType.bf16), name="new"),
-    )
-    inferred = TypeInferVisitor(TypeInferContext()).visit(
-        Call(type=rows[0].type, target=cache, args=rows)
-    )
-    call = Call(type=inferred, target=cache, args=rows)
-    whole, unit = (
-        relations_of(
-            call, CostContext(level=level, topologies=(cta,))
-        )
-        for level in (None, "cta")
-    )
-    assert whole.inputs[0].pattern.relation.dim(isl.dim_type.IN) == 4, (
-        "the whole program states the window on the four axes it has"
-    )
-    assert unit.inputs[0].pattern.relation.dim(isl.dim_type.IN) == 5, (
-        "one participant states it on the five positions its layout made"
-    )
-    assert isl.set("{ [a, b, c, d] : 0 <= a < 4 and 0 <= b < 4 and 0 <= c < 2"
-                   " and 0 <= d < 8 }").apply(
-        whole.inputs[0].pattern.relation
-    ).is_empty(), "the rows the update replaces are not the rows it keeps"
-    assert whole.inputs[3].quantity.upper == 256
-    assert unit.inputs[3].quantity.upper == 128
 
 
 def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:
-    """A quantity says how much crossed; the pattern says from where.
+    """How much crossed is derived; from where is what the relation states.
 
-    The amount can be right while the coordinates are wrong, and a dependence
+    A count can be right while the coordinates are wrong, and a dependence
     reads the coordinates. Three shapes here have no identity to fall back on:
     a result with an axis its inputs do not have, a source read in pieces by
     several outputs, and an operand broadcast against a larger result. Reusing
@@ -1940,15 +1774,13 @@ def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:
         isl.map(f"{{ [d0, d1] -> [d0, d1] : {parts} }}")
     )
     for field, offset in enumerate((0, 3)):
+        writes = "d0" if not offset else f"d0 - {offset}"
         assert _as_map(relations.outputs[field].pattern).is_equal(
-            isl.map(f"{{ [d0, d1] -> [d0, d1] : {parts} }}")
-        )
-        (link,) = relations.outputs[field].storage.links
-        assert link.input == 0 and link.input_field is None
-        assert _as_map(link.where).is_equal(
-            isl.map(f"{{ [d0, d1] -> [d0 + {offset}, d1] }}")
-        )
-        assert link.quantity == AccessQuantity(15, 15)
+            isl.map(
+                f"{{ [d0, d1] -> [{writes}, d1] : "
+                f"{offset} <= d0 <= {offset + 2} and 0 <= d1 <= 4 }}"
+            )
+        ), "each part is written on its own run of the axis it was cut on"
 
     added = Call(
         type=make_tensor_type((4, 8), DType.f32),
@@ -2005,8 +1837,8 @@ def test_a_windows_amount_does_not_move_with_where_it_lands() -> None:
         )
         relations = relations_of(call, ctx)
         return (
-            [item.quantity.upper for item in relations.inputs],
-            [item.quantity.upper for item in relations.outputs],
+            [reached_elements(item.pattern) for item in relations.inputs],
+            [reached_elements(item.pattern) for item in relations.outputs],
             relations.inputs[0].pattern,
         )
 
@@ -2066,15 +1898,14 @@ def test_a_windows_amount_does_not_move_with_where_it_lands() -> None:
     assert [name for name, _value in counted[2].parameters] == ["o0"]
 
 
-def test_an_unbound_row_count_states_its_range_and_where_it_came_from() -> None:
-    """An `s` nobody bound is still bounded, and says by what.
+def test_an_unbound_row_count_names_the_operands_that_decide_it() -> None:
+    """An `s` nobody bound is a parameter of the relation, bound to that operand.
 
-    The Op's own contract is that it writes at least one row and no more than
-    the fewer of what `new` brought and what the cache holds. That is a range a
-    reader can check, and the complement is the same range read from the other
-    side; charging the whole cache would be neither. The result says the same
-    range: how big the cache is and how much of it this occurrence wrote are
-    different numbers, and a boundary is asked for the second.
+    Where the rows land and how many there are are two runtime numbers, so the
+    relation names them and says which operand each is: a reader restricts it
+    rather than guessing. What the boundary reaches with them at their smallest
+    is a number, and the complement is what that leaves -- charging the whole
+    cache would be neither.
     """
     ctx = TypeInferContext()
     call = Call(
@@ -2091,17 +1922,16 @@ def test_an_unbound_row_count_states_its_range_and_where_it_came_from() -> None:
     per_row, held = 2 * 4 * 8, 2 * 16 * 4 * 8
 
     update = relations.inputs[3]
-    assert update.quantity.lower == per_row
-    assert update.quantity.upper == 5 * per_row
-    assert "new supplies" in update.quantity.provenance
+    assert reached_elements(update.pattern) == per_row, (
+        "the smallest legal window is one row of what new supplies"
+    )
     waited = dict(update.pattern.parameters)
     assert waited["o1"] is call.args[1], "where the rows land is that operand"
     assert waited["e1"] is call.args[2], "and how many there are is that one"
 
     kept = relations.inputs[0]
-    assert (kept.quantity.lower, kept.quantity.upper) == (
-        held - 5 * per_row,
-        held - per_row,
+    assert reached_elements(kept.pattern) == held - per_row, (
+        "replacing one row leaves every other"
     )
     assert not kept.pattern.relation.is_empty(), (
         "replacing some rows leaves the others"
@@ -2109,16 +1939,17 @@ def test_an_unbound_row_count_states_its_range_and_where_it_came_from() -> None:
     left_alone = dict(kept.pattern.parameters)
     assert left_alone["o1"] is call.args[1], "what is left alone is cut by the same start"
     assert left_alone["e1"] is call.args[2], "and by the same row count"
-    assert relations.outputs[0].quantity == update.quantity
+    assert reached_elements(relations.outputs[0].pattern) == per_row
 
 
-def test_a_lookups_amount_does_not_move_with_the_values_it_looks_up() -> None:
-    """The same index shape reads the same amount, whatever it points at.
+def test_a_lookup_reaches_every_row_it_could_have_named() -> None:
+    """The same index shape reaches the same coordinates, whatever it points at.
 
     The three index vectors here really are different -- run them and the
-    results differ -- and a longer one really does read more. That is the claim
-    a lookup makes: which rows it lands on is a runtime fact, how many rows it
-    reads is not.
+    results differ -- and nothing in the relation tells them apart: no boundary
+    holds the deciding element. So the table read is every row the axis could
+    legally name, which is fail-closed and the same for all three, while the
+    index itself is read at its own length.
     """
     table = torch.arange(24, dtype=torch.float32).reshape(6, 4)
     ordered, repeated, backwards = (
@@ -2146,70 +1977,16 @@ def test_a_lookups_amount_does_not_move_with_the_values_it_looks_up() -> None:
             ),
         )
         relations = relations_of(call, ctx)
-        return tuple(item.quantity.upper for item in relations.inputs)
+        return tuple(reached_elements(item.pattern) for item in relations.inputs)
 
-    assert declared(3) == (12, 3)
+    assert declared(3) == (24, 3), "three rows nobody named is any of the six"
     assert declared(6) == (24, 6)
 
 
-def test_a_field_of_a_tuple_is_named_by_the_link_that_forwards_it() -> None:
-    """Which field, not just which operand: the two fields are different sizes.
-
-    A `TopK` produces values and their indices, four bytes an element against
-    eight. A link naming only the operand pointed at whichever field came
-    first, and the width check that would have caught it was skipped, because a
-    tuple has no width of its own. The naming is what is watched here: a
-    handler that really states two widths is refused elsewhere, since a
-    `TupleGetItem`'s result is inferred from its field and always agrees.
-    """
-    ctx = TypeInferContext()
-    values = make_tensor_type((4,), DType.f32)
-    indices = make_tensor_type((4,), DType.i64)
-    pair = Var(type=TupleType(fields=(values, indices)), name="picked")
-
-    for field, held in ((0, values), (1, indices)):
-        taken = Call(type=held, target=TupleGetItem(index=field), args=(pair,))
-        relations = relations_of(taken, ctx)
-        (link,) = relations.outputs[0].storage.links
-        assert (link.input, link.input_field) == (0, field)
-        assert link.quantity == AccessQuantity(4, 4)
 
 
 
 
-def test_a_claim_no_link_supports_is_refused_when_the_handler_answers() -> None:
-    """The older shape of one fact is held to the newer one, on every call.
-
-    A whole-Call claim and per-boundary links say the same thing twice, and two
-    hand-written statements drift. Sampling a few models would only catch the
-    drift those models happen to reach, so the check is where every handler
-    passes: the registration wrapper, once per call.
-
-    The converse is allowed. A link is a candidate -- these bytes may be shared
-    -- and a claim is a conclusion the handler reaches only when placement and
-    size already agree, so a reshard across levels states its link and no claim.
-    """
-
-    class _Overclaims(Op):
-        pass
-
-    register_typeinfer(_Overclaims)(lambda call, ctx: make_tensor_type((4,), DType.f32))
-
-    @register_access_relation(_Overclaims)
-    def _handler(call, ctx) -> AccessRelations:
-        return AccessRelations(
-            inputs=(moves(_bounded(1), 4),),
-            outputs=(writes(_bounded(1), 4),),
-            storage_effect=StorageEffectClaim(StorageEffectKind.FORWARD, (0,)),
-        )
-
-    call = Call(
-        type=make_tensor_type((4,), DType.f32),
-        target=_Overclaims(),
-        args=(Var(type=make_tensor_type((4,), DType.f32), name="held"),),
-    )
-    with pytest.raises(ValueError, match="no link of its output says so"):
-        relations_of(call, TypeInferContext())
 
 
 def test_an_empty_shape_relabels_to_an_empty_relation() -> None:
@@ -2228,199 +2005,12 @@ def test_an_empty_shape_relabels_to_an_empty_relation() -> None:
         linearized_view((2, "ctx"), (6,))
 
 
-def test_a_relation_that_cannot_be_true_is_refused_where_it_is_written() -> None:
-    """An impossible description fails at its author, not at its reader.
-
-    A boundary that says it writes on the input side is a broken handler. A
-    consumer that quietly reads it as a read hides the break behind a number
-    that looks like every other number. Everything answerable without the Call
-    is answered here, naming the side and the index so the handler is findable.
-    """
-    reads = identity_access(1)
-    held = AccessQuantity(4, 4)
-
-    def refused(complaint: str, **kwargs):
-        with pytest.raises(ValueError, match=re.escape(complaint)):
-            AccessRelations(**kwargs)
-
-    refused(
-        "input 0 says it does write",
-        inputs=(BoundaryAccess(reads, held, AccessMode.WRITE),),
-        outputs=(writes(reads, 4),),
-    )
-    refused(
-        "output 0 says it does read",
-        inputs=(moves(reads, 4),),
-        outputs=(BoundaryAccess(reads, held, AccessMode.READ),),
-    )
-    refused(
-        "input 0 states where bytes live",
-        inputs=(BoundaryAccess(reads, held, AccessMode.READ, OutputStorage()),),
-        outputs=(writes(reads, 4),),
-    )
-    refused(
-        "output 0 transfers but names no source",
-        inputs=(moves(reads, 4),),
-        outputs=(BoundaryAccess(reads, held, AccessMode.TRANSFER, OutputStorage()),),
-    )
-
-    beyond = StorageLink("forward", 3, reads, held)
-    refused(
-        "output 0 links to operand 3, and this call has 1",
-        inputs=(moves(reads, 4),),
-        outputs=(transfers(reads, held, beyond),),
-    )
-
-    with pytest.raises(ValueError, match="a link either forwards a value"):
-        StorageLink("borrow", 0, reads, held)
 
 
-def test_a_link_is_held_to_the_operand_it_names() -> None:
-    """Sharing bytes with an operand of another element width cannot be meant.
-
-    One side's coordinate would land inside the other's element. Compared in
-    bits, because a bool is one and a packed float four: reading those as "no
-    whole number of bytes, so never mind" let a bool share a coordinate with an
-    f32. The record cannot see this -- it has no Call and no types -- so the
-    registration wrapper, which has both, is where it is caught.
-    """
-
-    class _Narrows(Op):
-        pass
-
-    register_typeinfer(_Narrows)(
-        lambda call, ctx: make_tensor_type((4,), DType.f32)
-    )
-
-    @register_access_relation(_Narrows)
-    def _handler(call, ctx) -> AccessRelations:
-        held = AccessQuantity(4, 4)
-        return AccessRelations(
-            inputs=(BoundaryAccess(_bounded(1), held, AccessMode.TRANSFER),),
-            outputs=(
-                transfers(
-                    _bounded(1),
-                    held,
-                    StorageLink("forward", 0, _bounded(1), held),
-                ),
-            ),
-        )
-
-    call = Call(
-        type=make_tensor_type((4,), DType.f32),
-        target=_Narrows(),
-        args=(Var(type=make_tensor_type((4,), DType.i64), name="wider"),),
-    )
-    with pytest.raises(ValueError, match="whose elements are 64 bits against 32"):
-        relations_of(call, TypeInferContext())
 
 
-def test_a_lookup_is_held_to_the_operand_and_the_axis_it_names() -> None:
-    """Two non-negative numbers say nothing checkable until there is a Call.
-
-    A lookup states which operand's values choose its coordinates and along
-    which axis, and neither can be verified against a record that has no
-    operands and no Types. Both are verified where they can be, and a handler
-    naming an operand nobody passed or an axis the boundary does not have is
-    refused rather than left for whichever consumer indexes past the end.
-    """
-
-    def registered(name, pattern_for):
-        target = type(name, (Op,), {})
-        register_typeinfer(target)(
-            lambda call, ctx: make_tensor_type((4,), DType.f32)
-        )
-
-        @register_access_relation(target)
-        def _handler(call, ctx, _pattern=pattern_for) -> AccessRelations:
-            return AccessRelations(
-                inputs=(
-                    BoundaryAccess(_pattern(), AccessQuantity(4, 4), AccessMode.READ),
-                ),
-                outputs=(writes(_bounded(1), 4),),
-            )
-
-        return target
-
-    def asked(target):
-        call = Call(
-            type=make_tensor_type((4,), DType.f32),
-            target=target(),
-            args=(Var(type=make_tensor_type((4,), DType.f32), name="held"),),
-        )
-        return relations_of(call, TypeInferContext())
-
-    absent = registered("_LooksUpNobody", lambda: IndexedAccess(index_operand=3, axis=0))
-    with pytest.raises(ValueError, match="through operand 3, and this call has 1"):
-        asked(absent)
-
-    beyond = registered("_LooksUpTooFar", lambda: IndexedAccess(index_operand=0, axis=2))
-    with pytest.raises(ValueError, match="along axis 2, and it has 1"):
-        asked(beyond)
-
-    with pytest.raises(ValueError, match="names its index operand by position"):
-        IndexedAccess(index_operand=-1, axis=0)
-    with pytest.raises(ValueError, match="names its axis by position"):
-        IndexedAccess(index_operand=0, axis=-1)
 
 
-def test_a_link_source_that_names_a_field_is_checked_against_that_field() -> None:
-    """A tuple has no rank; the field a link names does, and that is what holds.
-
-    Passing the whole tuple to the axis check made every rank zero, so a lookup
-    into a perfectly good tensor field was refused for having an axis. The field
-    is resolved the same way the element-width check resolves it.
-    """
-
-    def registered(name, axis):
-        target = type(name, (Op,), {})
-        register_typeinfer(target)(
-            lambda call, ctx: make_tensor_type((4,), DType.f32)
-        )
-
-        @register_access_relation(target)
-        def _handler(call, ctx, _axis=axis) -> AccessRelations:
-            held = AccessQuantity(4, 4)
-            return AccessRelations(
-                inputs=(
-                    BoundaryAccess(_bounded(1), held, AccessMode.TRANSFER),
-                    moves(_bounded(1), 4),
-                ),
-                outputs=(
-                    transfers(
-                        _bounded(1),
-                        held,
-                        StorageLink(
-                            "forward",
-                            0,
-                            IndexedAccess(index_operand=1, axis=_axis),
-                            held,
-                            input_field=0,
-                        ),
-                    ),
-                ),
-            )
-
-        return target
-
-    def asked(target):
-        rows = make_tensor_type((4,), DType.f32)
-        call = Call(
-            type=rows,
-            target=target(),
-            args=(
-                Var(type=TupleType(fields=(rows, rows)), name="pair"),
-                Var(type=make_tensor_type((4,), DType.i64), name="index"),
-            ),
-        )
-        return relations_of(call, TypeInferContext())
-
-    relations = asked(registered("_LooksIntoAField", 0))
-    (link,) = relations.outputs[0].storage.links
-    assert link.input_field == 0
-
-    with pytest.raises(ValueError, match="along axis 2, and it has 1"):
-        asked(registered("_LooksPastAField", 2))
 
 
 def test_a_relation_is_held_to_the_call_it_was_asked_about() -> None:
@@ -2442,8 +2032,8 @@ def test_a_relation_is_held_to_the_call_it_was_asked_about() -> None:
         @register_access_relation(target)
         def _handler(call, ctx, _in=inputs, _out=outputs) -> AccessRelations:
             return AccessRelations(
-                inputs=tuple(moves(_bounded(1), 4) for _ in range(_in)),
-                outputs=tuple(writes(_bounded(1), 4) for _ in range(_out)),
+                inputs=tuple(BoundaryRelation(_bounded(1)) for _ in range(_in)),
+                outputs=tuple(BoundaryRelation(_bounded(1)) for _ in range(_out)),
             )
 
         return target
@@ -2487,71 +2077,6 @@ def test_a_service_count_is_a_number_of_results_and_not_a_truth() -> None:
             Cost({}, moved, refused)
 
 
-def test_a_storage_claim_covers_every_operand_it_names() -> None:
-    """Addressing one operand does not conclude anything about a second.
-
-    A conclusion is read as "the result lives in these operands", and its reader
-    retires the movement of each. A handler that names two while proving one
-    would have the reader retire bytes nothing was shown about, so the claim is
-    refused rather than trimmed to the part that held. An Op with no boundary
-    relation still states this: the two are one registration, not one fact.
-    """
-
-    class _ReachesBoth(Op):
-        pass
-
-    class _ReachesOne(Op):
-        pass
-
-    holds = make_tensor_type((4,), DType.f32)
-    size = tensor_bytes(holds)
-    left = Var(type=holds, name="left")
-    right = Var(type=holds, name="right")
-
-    def _both(call: Call, ctx) -> StorageEffectClaim:
-        return StorageEffectClaim(StorageEffectKind.FORWARD, (0,), (StorageSpan(0, 0, size),))
-
-    def _one(call: Call, ctx) -> StorageEffectClaim:
-        return StorageEffectClaim(StorageEffectKind.FORWARD, (0, 1), (StorageSpan(0, 0, size),))
-
-    def _forwarding(claim, *operands):
-        """A handler whose links say what its legacy claim says."""
-
-        def _handler(call, ctx) -> AccessRelations:
-            held = AccessQuantity(4, 4)
-            reads = identity_access(1)
-            return AccessRelations(
-                inputs=tuple(
-                    BoundaryAccess(reads, held, AccessMode.TRANSFER)
-                    for _ in call.args
-                ),
-                outputs=(
-                    transfers(
-                        reads,
-                        held,
-                        *(
-                            StorageLink("forward", operand, reads, held)
-                            for operand in operands
-                        ),
-                    ),
-                ),
-                storage_effect=claim(call, ctx),
-            )
-
-        return _handler
-
-    register_access_relation(_ReachesBoth)(_forwarding(_both, 0))
-    register_access_relation(_ReachesOne)(_forwarding(_one, 0, 1))
-
-    walk = _Storage(
-        type_of=lambda expr: expr.type, users={}, positions={}, caller_owned=frozenset()
-    )
-    covered = Call(type=holds, target=_ReachesBoth(), args=(left, right))
-    assert _prove_storage(covered, walk) == (StorageEffectKind.FORWARD, (0,))
-
-    partial = Call(type=holds, target=_ReachesOne(), args=(left, right))
-    assert _prove_storage(partial, walk) is None
-    assert id(partial) not in walk.bases
 
 
 def test_a_quantised_scale_is_written_once_per_group() -> None:
@@ -3038,8 +2563,7 @@ def test_a_contraction_reads_each_operand_at_its_own_extents() -> None:
     assert relation_of(relations.inputs[1].pattern).range().is_equal(
         isl.set("{ [i0, i1] : 0 <= i0 < 64 and 0 <= i1 < 32 }")
     )
-    assert [boundary.quantity.upper for boundary in relations.inputs] == [8192, 2048]
-    assert relations.outputs[0].quantity.upper == 4096
+    assert reached_elements(relations.outputs[0].pattern) == 4096
     assert [
         reached_elements(boundary.pattern) for boundary in relations.inputs
     ] == [8192, 2048], "walking the summed axis moves no operand element twice"
@@ -3169,25 +2693,6 @@ def test_a_bound_is_refused_where_half_of_what_it_divides_is_missing() -> None:
         )
 
 
-def test_a_conclusion_moved_between_families_is_still_a_derived_one() -> None:
-    """Which family reaches an answer does not make the answer the program's.
-
-    An alias conclusion is settled by the family that places values, not by the
-    one that prices work. Asking only for the pricing must still clear it: a
-    record the round did not write, left behind by the round before, reads as
-    this round's finding about a program nothing here proved anything about.
-    """
-    authored = SquareCuda.entry_function()
-    marked = next(expr for expr in postorder(authored.body) if isinstance(expr, Call))
-    attach(marked, BufferAliasMetadata("update", (7,)))
-    try:
-        result = analyze(SquareCuda, authored, analysis="compute-cost")
-        for expr in postorder(result.function.body):
-            assert get_metadata(expr, BufferAliasMetadata) is None, (
-                f"{describe(expr)} kept an alias conclusion this round never reached"
-            )
-    finally:
-        detach(marked, BufferAliasMetadata)
 
 
 def test_a_derived_answer_does_not_survive_into_a_program_that_cannot_give_it() -> None:
@@ -3312,7 +2817,7 @@ def _totalled(target, cost=None):
     return body, function
 
 
-def test_a_window_is_placed_where_its_own_link_says_it_begins() -> None:
+def test_a_window_is_placed_in_the_buffer_it_names() -> None:
     """A view of a view is somewhere inside the value neither of them copied.
 
     Both were placed in the buffer they name rather than given one of their
@@ -3673,7 +3178,7 @@ def _insert_slice_controls(dst_shape, update_shape, offsets):
         ),
     )
     relations = relations_of(call, CostContext())
-    return [boundary.quantity.upper for boundary in relations.inputs]
+    return [reached_elements(boundary.pattern) for boundary in relations.inputs]
 
 
 def test_an_insert_reads_one_number_for_every_axis_it_places_its_window_on() -> None:
@@ -3718,7 +3223,7 @@ def test_naming_bytes_is_not_reading_them() -> None:
         args=(Var(type=held, name="x"), bounds),
     )
     naming = relations_of(window, CostContext())
-    assert [item.quantity.upper for item in naming.inputs] == [4, 0]
+    assert [reached_elements(item.pattern) for item in naming.inputs] == [4, 0]
 
     assert _insert_slice_controls((10,), (4,), start) == [10 - 4, 4, 1]
 
@@ -3855,86 +3360,8 @@ def _held_to_the_code(declared_records, modules) -> int:
     return checked
 
 
-def test_a_link_is_asked_by_as_many_coordinates_as_its_output_has() -> None:
-    """A link answers for one coordinate of its output, so it is asked by all of them.
-
-    A map indexed by fewer is a link to some other value, and it composes with
-    this occurrence without complaining: the reader finds out only when the
-    spaces refuse to meet, by which point the answer has been a conservative
-    charge rather than a refused handler for however long. The boundaries
-    themselves agree here, so this is the link and nothing else.
-    """
-
-    class _AsksTooFew(Op):
-        pass
-
-    register_typeinfer(_AsksTooFew)(lambda call, ctx: make_tensor_type((2, 2), DType.f32))
-
-    @register_access_relation(_AsksTooFew)
-    def _handler(call, ctx) -> AccessRelations:
-        held = AccessQuantity(4, 4)
-        return AccessRelations(
-            inputs=(
-                BoundaryAccess(_bounded(2), held, AccessMode.TRANSFER),
-            ),
-            outputs=(
-                transfers(
-                    _bounded(2),
-                    held,
-                    StorageLink(
-                        "forward", 0, isl.map("{ [d0] -> [d0, 0] }"), held
-                    ),
-                ),
-            ),
-        )
-
-    call = Call(
-        type=make_tensor_type((2, 2), DType.f32),
-        target=_AsksTooFew(),
-        args=(Var(type=make_tensor_type((2, 2), DType.f32), name="x"),),
-    )
-    with pytest.raises(ValueError, match="from 1 coordinates, and it has 2"):
-        relations_of(call, CostContext())
 
 
-def test_a_link_that_states_both_ranks_is_taken() -> None:
-    """The shapes a real op states are the ones the check is meant to admit.
-
-    A concat's link answers for a coordinate of the whole and names one of the
-    piece it came from; a split's answers for a coordinate of a piece and names
-    one of the whole. Both are indexed by their own output and land in their own
-    input, at the same rank, which is what the check asks and no more.
-    """
-    held = make_tensor_type((6, 5), DType.f32)
-    piece = make_tensor_type((3, 5), DType.f32)
-
-    joined = Call(
-        type=held,
-        target=Concat(axis=0),
-        args=(Var(type=piece, name="a"), Var(type=piece, name="b")),
-    )
-    relations = relations_of(joined, TypeInferContext())
-    for index, offset in enumerate((0, 3)):
-        (link,) = [
-            item
-            for item in relations.outputs[0].storage.links
-            if item.input == index
-        ]
-        assert _as_map(link.where).is_equal(
-            isl.map(f"{{ [d0, d1] -> [d0 - {offset}, d1] }}")
-        )
-        assert link.where.dim(isl.dim_type.IN) == 2
-        assert link.where.dim(isl.dim_type.OUT) == 2
-
-    parted = relations_of(
-        _split_call(make_tensor_type((6, 4), DType.f32)), TypeInferContext()
-    )
-    for field, offset in enumerate((0, 2)):
-        (link,) = parted.outputs[field].storage.links
-        assert _as_map(link.where).is_equal(
-            isl.map(f"{{ [d0, d1] -> [d0, d1 + {offset}] }}")
-        )
-        assert link.where.dim(isl.dim_type.IN) == 2
 
 
 def test_a_program_with_no_addresses_moves_bytes_and_takes_no_stated_time() -> None:

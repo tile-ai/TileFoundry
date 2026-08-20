@@ -30,8 +30,6 @@ from .facts import (
     ThroughputFacts,
 )
 from .metadata import (
-    BufferAliasMetadata,
-    BufferAllocationMetadata,
     ComputeCostMetadata,
     MemoryMetadata,
     PerformanceMetadata,
@@ -123,63 +121,10 @@ def _producer_ids(expr: Expr, schedulable: set[int]) -> set[int]:
     return {producer for child in children(expr) for producer in _producer_ids(child, schedulable)}
 
 
-def _storage_of(expr: Expr) -> frozenset[int]:
-    """Which allocations hold one value's bytes, as the memory family numbered them.
-
-    Values sharing an allocation are one buffer under several names, which is
-    the question a write about to reuse those bytes has to ask. Asking the
-    record rather than walking the operand edges again keeps one answer to it.
-    """
-    held = get_metadata(expr, BufferAllocationMetadata)
-    return frozenset(field.buffer_id for field in held.fields) if held is not None else frozenset()
 
 
-def _overwritten_readers(
-    call: Call,
-    values: list[Expr],
-    users: dict[int, list[Expr]],
-    positions: dict[int, int],
-    schedulable: set[int],
-) -> set[int]:
-    """Everything that read the buffer an in-place write is about to overwrite.
-
-    The write reuses those bytes, so it cannot start while anything still needs
-    what they held, and def-use ordering does not say this: a reader of the old
-    value is not a producer of the new one. Every name for those bytes counts, so
-    a view of the buffer is walked too. The write is the group's last authored
-    use, which is what made it a write, so every such reader precedes it.
-    """
-    alias = get_metadata(call, BufferAliasMetadata)
-    if alias is None or alias.kind != "update":
-        return set()
-    written = _storage_of(call.args[alias.aliased_operands[0]])
-    if not written:
-        return set()
-    here = positions[id(call)]
-    group = [
-        expr
-        for expr in values
-        if expr is not call and _storage_of(expr) & written
-    ]
-    readers: set[int] = set()
-    for member in group:
-        for reader in _schedulable_users(member, users, schedulable):
-            if reader is not call and positions.get(id(reader), -1) < here:
-                readers.add(id(reader))
-    return readers
 
 
-def _schedulable_users(
-    expr: Expr, users: dict[int, list[Expr]], schedulable: set[int]
-) -> list[Expr]:
-    """The occurrences that read *expr*, through anything that is not one itself."""
-    found: list[Expr] = []
-    for user in users.get(id(expr), ()):
-        if id(user) in schedulable:
-            found.append(user)
-        else:
-            found.extend(_schedulable_users(user, users, schedulable))
-    return found
 
 
 def _variance_chains(fn: Function) -> tuple[dict[int, _Chain], dict[int, GridRegionExpr]]:
@@ -326,10 +271,6 @@ def _schedule(
             producers = {
                 producer for operand in operands for producer in _producer_ids(operand, schedulable)
             }
-            if isinstance(expr, Call):
-                producers.update(
-                    _overwritten_readers(expr, values, users, source_index, schedulable)
-                )
             for producer in producers:
                 resolved = representative(producer, scope)
                 if resolved is not None and resolved != id(expr):

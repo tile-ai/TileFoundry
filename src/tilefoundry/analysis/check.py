@@ -62,7 +62,6 @@ from .compute_cost import _call_cost_record, _is_structural_occurrence
 from .errors import AnalysisError
 from .facts import ParallelCapacityFacts, PerformanceServiceFacts, ThroughputFacts
 from .metadata import (
-    BufferAliasMetadata,
     BufferAllocationMetadata,
     ComputeCostMetadata,
     MemoryMetadata,
@@ -72,13 +71,12 @@ from .metadata import (
     RooflineMetadata,
     TrafficMetadata,
 )
-from .movement import alias_conclusions, call_traffic
+from .movement import call_traffic
 from .preflight import infer_authored_types, validate_call_context
 from .walk import describe, postorder, reachable_functions, tensor_types
 
 _INLINE_NODES = 10_000
 _DERIVED_METADATA = {
-    BufferAliasMetadata,
     BufferAllocationMetadata,
     ComputeCostMetadata,
     MemoryMetadata,
@@ -314,7 +312,6 @@ def _call_placements(
             topologies=module.effective_topologies(),
         )
     )
-    aliases = alias_conclusions(function, whole)
     result: dict[int, Placement] = {}
     for expr in postorder(function.body):
         if not isinstance(expr, Call) or isinstance(expr.target, Function):
@@ -323,7 +320,7 @@ def _call_placements(
             result[id(expr)] = _execution_placement(expr, selected)
         except AnalysisError as error:
             cost = _call_cost_record(expr, whole, local)
-            moved = call_traffic(expr, whole, local, aliases[id(expr)])
+            moved = call_traffic(expr, whole, local)
             if _is_structural_occurrence(cost, moved, bandwidth_level=timed):
                 result[id(expr)] = frozenset()
                 continue
@@ -346,7 +343,6 @@ class AnalysisCheckContext:
     level: str | None
     whole: CostEvaluator
     local: CostEvaluator
-    aliases: dict[int, object]
 
     @property
     def selected_topology(self) -> Topology:
@@ -375,7 +371,6 @@ def analysis_check_context(
         level=level,
         whole=whole,
         local=local,
-        aliases=alias_conclusions(function, whole),
     )
 
 
@@ -419,7 +414,7 @@ class PerformanceInputChecker:
     def check_call(self, call: Call, ctx: AnalysisCheckContext) -> None:
         """Require a placement for every occurrence that will take time."""
         cost = _call_cost_record(call, ctx.whole, ctx.local)
-        moved = call_traffic(call, ctx.whole, ctx.local, ctx.aliases.get(id(call)))
+        moved = call_traffic(call, ctx.whole, ctx.local)
         if _is_structural_occurrence(
             cost, moved, bandwidth_level=_timed_level(ctx.target)
         ):

@@ -18,24 +18,12 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessMode,
-    AccessQuantity,
-    AccessRelationResult,
     AccessRelations,
-    BoundaryAccess,
-    StorageEffectClaim,
-    StorageEffectKind,
-    StorageLink,
-    elements_of,
-    forward_whole,
+    BoundaryRelation,
+    identity_access,
     iterating,
     register_access_relation,
-    register_type_relation,
-    same_placement,
-    transfers,
 )
-from tilefoundry.visitor_registry.isl_utility import to_domain
-from tilefoundry.visitor_registry.relation_build import identity_access, identity_map
 
 
 def _dim_mul(a, b):
@@ -178,24 +166,9 @@ class Reshard(Op):
     storage = ParamDef(kind="attribute", default=None)
 
 
-def _reshard_storage(call: "Call", ctx) -> StorageEffectClaim | None:
-    """A reshard within one storage is a view of it; across storage it is a copy.
-
-    That boundary is the op's own, stated with its cost classification: a layout
-    change alone re-describes the bytes where they already are. The address
-    follows through only when the positions are the same as well.
-    """
-    source, result = ctx.type_of(call.args[0]), ctx.type_of(call)
-    if not isinstance(source, TensorType) or not isinstance(result, TensorType):
-        return None
-    if source.storage != result.storage:
-        return None
-    if not same_placement(source, result):
-        return StorageEffectClaim(StorageEffectKind.FORWARD, (0,))
-    return forward_whole(call, 0, ctx)
 
 
-@register_access_relation(Reshard)
+@register_access_relation(Reshard, renames=0)
 def _reshard_access(call: "Call", ctx) -> AccessRelations:
     """Every logical index reads itself. Where those bytes go is a separate fact.
 
@@ -206,49 +179,14 @@ def _reshard_access(call: "Call", ctx) -> AccessRelations:
     """
     logical = ctx.type_of(call.args[0])
     rank = len(logical.shape)
-    whole = elements_of(logical)
-    held = AccessQuantity(whole, whole)
     reads = identity_access(rank)
-    link = StorageLink(kind="forward", input=0, where=reads, quantity=held)
     return iterating(
         logical.shape,
         AccessRelations(
-            inputs=(BoundaryAccess(reads, held, AccessMode.TRANSFER),),
-            outputs=(transfers(identity_access(rank), held, link),),
-            storage_effect=_reshard_storage(call, ctx),
+            inputs=(BoundaryRelation(reads),),
+            outputs=(BoundaryRelation(identity_access(rank)),),
         ),
     )
-
-
-@register_type_relation(Reshard)
-def _reshard_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Use identity only when Reshard preserves each position's local shape.
-
-    Canonical layouts factor mesh extents into extra positions. Their local
-    projection is one, so discard only those extras when restoring tensor rank.
-    """
-    (x,) = input_types
-    layout = call.target.layout
-    output_shape = tuple(x.shape)
-    if layout is not None:
-        factored = list(shard_layout_local_shape(layout, require_static=False))
-        excess = len(factored) - len(x.shape)
-        split_positions = {attr.axis for attr in layout.attrs if isinstance(attr, Split)}
-        for position in sorted(split_positions, reverse=True):
-            if excess == 0:
-                break
-            if factored[position] == 1:
-                del factored[position]
-                excess -= 1
-        output_shape = tuple(factored)
-    if output_shape != x.shape:
-        raise NotImplementedError(
-            "Reshard type_relation: cross-position redistribution changes "
-            f"the local shape from {x.shape} to {output_shape}"
-        )
-    domain, param_map = to_domain(x.shape)
-    ident = identity_map(len(x.shape))
-    return AccessRelationResult(domain=domain, maps=(ident, ident), param_map=param_map)
 
 
 @register_typeinfer(Reshard)

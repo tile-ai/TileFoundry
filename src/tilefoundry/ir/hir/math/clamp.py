@@ -19,9 +19,7 @@ from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
-    register_type_relation,
 )
-from tilefoundry.visitor_registry.relation_build import elementwise_relation
 
 _COMMUTES_WITH = frozenset({"max", "min"})
 
@@ -35,7 +33,6 @@ class Clamp(Op):
     max_val = ParamDef(kind="attribute", annotation=float)
 
 
-register_type_relation(Clamp)(elementwise_relation())
 
 
 @register_typeinfer(Clamp)

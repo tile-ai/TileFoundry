@@ -14,9 +14,7 @@ from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     register_access_relation,
-    register_type_relation,
 )
-from tilefoundry.visitor_registry.relation_build import elementwise_relation
 
 _COMMUTES_WITH = frozenset({"max", "min"})
 
@@ -28,7 +26,6 @@ class Softplus(Op):
     x = ParamDef(kind="input", pattern=Tensor)
 
 
-register_type_relation(Softplus)(elementwise_relation())
 
 
 @register_typeinfer(Softplus)

@@ -23,17 +23,13 @@ from tilefoundry.ir.types.shard import (
 )
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelationResult,
     AccessRelations,
-    build_relation,
-    elements_of,
+    BoundaryRelation,
+    coordinates_of,
+    identity_access,
     iterating,
-    moves,
     register_access_relation,
-    register_type_relation,
-    writes,
 )
-from tilefoundry.visitor_registry.relation_build import build_domain, identity_access
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
@@ -55,25 +51,6 @@ def _axis(call: "Call", ctx: "TypeInferContext", rank: int) -> int:
     return axis
 
 
-@register_type_relation(Stack)
-def _stack_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    rank = len(input_types[0].shape)
-    axis = _axis(call, ctx, rank)
-    output_shape = list(input_types[0].shape)
-    output_shape.insert(axis, len(input_types))
-    dims = [f"d{i}" for i in range(rank + 1)]
-    domain_text = ", ".join(dims)
-    input_text = ", ".join((*dims[:axis], *dims[axis + 1 :]))
-    input_maps = tuple(
-        isl.map(f"{{ [{domain_text}] -> [{input_text}] : d{axis} = {index} }}")
-        for index in range(len(input_types))
-    )
-    output_map = isl.map(f"{{ [{domain_text}] -> [{domain_text}] }}")
-    return AccessRelationResult(
-        domain=build_domain(tuple(output_shape)), maps=(*input_maps, output_map)
-    )
-
-
 @register_typeinfer(Stack)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if not call.args:
@@ -92,7 +69,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     reject_dynamic_shards(ctx, call, types, "Stack")
     require_compatible_meshes(ctx, call, types, "Stack")
     try:
-        relation = build_relation(call, tuple(types), ctx)
+        relation = coordinates_of(call, ctx)
         layout = derive_output_shard_layout(tuple(types), relation, new_shape, fresh_strides=True)
     except ValueError as error:
         ctx.error(
@@ -147,14 +124,13 @@ def _stack_access(call: "Call", ctx) -> AccessRelations:
         else isl.map(f"{{ [{domain}] -> [] : d{axis} = {position} }}")
         for position in range(len(call.args))
     )
-    produced = len(call.args) * elements_of(ctx.type_of(call.args[0]))
     return iterating(
         out_shape,
         AccessRelations(
             inputs=tuple(
-                moves(item, elements_of(ctx.type_of(arg)))
+                BoundaryRelation(item)
                 for item, arg in zip(inputs, call.args)
             ),
-            outputs=(writes(identity_access(rank), produced),),
+            outputs=(BoundaryRelation(identity_access(rank)),),
         ),
     )

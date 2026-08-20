@@ -19,18 +19,12 @@ from tilefoundry.ir.types.shard import Layout, try_c_order_strides
 from tilefoundry.ir.types.shard.shard_layout import Split, shard_layout_of, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelationResult,
     AccessRelations,
-    build_relation,
-    factored_image,
+    BoundaryRelation,
+    coordinates_of,
     iterating,
-    logical_axes_of,
-    moves,
     register_access_relation,
-    register_type_relation,
-    writes,
 )
-from tilefoundry.visitor_registry.isl_utility import to_domain
 from tilefoundry.visitor_registry.shard_propagate import (
     derive_output_shard_layout,
     partial_reductions_by_axis,
@@ -294,56 +288,6 @@ def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
             )
 
 
-@register_type_relation(Conv2D)
-def _conv2d_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    x, weight, _bias = input_types
-    op = call.target
-    k_h = static_dim_value(weight.shape[2])
-    k_w = static_dim_value(weight.shape[3])
-    in_per_group = (
-        x.shape[1]
-        if op.groups == 1
-        else static_dim_value(x.shape[1]) // op.groups
-    )
-    out_per_group = (
-        None
-        if op.groups == 1
-        else static_dim_value(weight.shape[0]) // op.groups
-    )
-    out_shape = _output_shape(
-        x, weight, op.stride, op.padding, op.dilation, k_h, k_w
-    )
-    domain, param_map = to_domain((*out_shape, in_per_group, k_h, k_w))
-    dims = [f"d{i}" for i in range(7)]
-    source = f"[{', '.join(dims)}]"
-    input_channel = (
-        "d4"
-        if op.groups == 1
-        else f"floor(d1/{out_per_group})*{in_per_group}+d4"
-    )
-
-    def spatial(out_dim: str, kernel_dim: str, stride: int, pad: int, dilation: int, k: int):
-        terms = [out_dim if stride == 1 else f"{stride}*{out_dim}"]
-        if k != 1:
-            terms.append(kernel_dim if dilation == 1 else f"{dilation}*{kernel_dim}")
-        expression = "+".join(terms)
-        return expression if pad == 0 else f"{expression}-{pad}"
-
-    input_map = isl.map(
-        f"{{ {source} -> [d0, {input_channel}, "
-        f"{spatial('d2', 'd5', op.stride[0], op.padding[0], op.dilation[0], k_h)}, "
-        f"{spatial('d3', 'd6', op.stride[1], op.padding[1], op.dilation[1], k_w)}] }}"
-    )
-    weight_map = isl.map(f"{{ {source} -> [d1, d4, d5, d6] }}")
-    bias_map = isl.map(f"{{ {source} -> [d1] }}")
-    output_map = isl.map(f"{{ {source} -> [d0, d1, d2, d3] }}")
-    return AccessRelationResult(
-        domain=domain,
-        maps=(input_map, weight_map, bias_map, output_map),
-        param_map=param_map,
-    )
-
-
 @register_typeinfer(Conv2D)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x = ctx.type_of(call.args[0])
@@ -360,7 +304,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
     _require_exact_partial_state(call, ctx, x, w, bias)
     _require_group_aligned_output_split(call, ctx, w, bias, _groups)
-    relation = build_relation(call, (x, w, bias), ctx)
+    relation = coordinates_of(call, ctx)
     try:
         shard = derive_output_shard_layout(
             (x, w, bias),
@@ -403,19 +347,21 @@ def _eval_conv2d(ctx):
 
 @register_access_relation(Conv2D)
 def _conv2d_access(call: "Call", ctx) -> AccessRelations:
-    """The receptive field, as the affine form the type relation already states.
+    """The receptive field, as one affine relation over the space it walks.
 
-    A window cannot say this: its offset is a value, and here it moves affinely
-    with the output coordinate. Every amount comes off the output's extents and
-    the contraction's rather than off an operand's shape, because a replicated
-    weight looks whole to every participant.
+    Where a window sits moves affinely with the output coordinate, so this is a
+    relation and not a window: the offset is not a value, it is the coordinate.
+    The space walked is what the result has, plus the contraction and the two
+    kernel taps, all of them derived from the operands and the Op's own strides
+    because the result's Type is what this answer produces.
     """
-    x = _by_logical_axis(ctx, call.args[0])
-    weight = _by_logical_axis(ctx, call.args[1])
-    result = _by_logical_axis(ctx, call)
+    x = ctx.type_of(call.args[0])
+    weight = ctx.type_of(call.args[1])
     op = call.target
-    k_h, k_w = weight[2], weight[3]
-    contraction = weight[1]
+    k_h = static_dim_value(weight.shape[2])
+    k_w = static_dim_value(weight.shape[3])
+    contraction = weight.shape[1]
+    result = _output_shape(x, weight, op.stride, op.padding, op.dilation, k_h, k_w)
     dims = ["n", "co", "oh", "ow", "ci", "kh", "kw"]
     domain = ", ".join(dims)
 
@@ -428,121 +374,26 @@ def _conv2d_access(call: "Call", ctx) -> AccessRelations:
 
     height = spatial("oh", "kh", op.stride[0], op.padding[0], op.dilation[0], k_h)
     width = spatial("ow", "kw", op.stride[1], op.padding[1], op.dilation[1], k_w)
-    guard = " and ".join(
-        (f"0 <= {height} < {x[2]}", f"0 <= {width} < {x[3]}")
-    )
-    groups = _groups_reached(call, ctx, result[1], op.groups)
-    per_group_out = max(result[1] // groups, 1)
-    channel = (
-        "ci"
-        if op.groups == 1
-        else f"floor(co/{per_group_out})*{contraction}+ci"
-    )
-    def spread(reads, value) -> str:
-        """One expression per position of *value* in this view."""
-        return ", ".join(
-            factored_image(reads, ctx.type_of(value), ctx.type_of(value))
-        )
-    reached = isl.map(
-        f"{{ [{domain}] -> "
-        f"[{spread(['n', channel, height, width], call.args[0])}] : {guard} }}"
-    )
-    touched = _reachable_rows(x[2], op.stride[0], op.padding[0], op.dilation[0], k_h, result[2])
-    across = _reachable_rows(x[3], op.stride[1], op.padding[1], op.dilation[1], k_w, result[3])
+    guard = " and ".join((f"0 <= {height} < {x.shape[2]}", f"0 <= {width} < {x.shape[3]}"))
+    per_group_out = max(weight.shape[0] // op.groups, 1) if op.groups != 1 else 1
+    channel = "ci" if op.groups == 1 else f"floor(co/{per_group_out})*{contraction}+ci"
+    reached = isl.map(f"{{ [{domain}] -> [n, {channel}, {height}, {width}] : {guard} }}")
     return iterating(
-        (result[0], result[1], result[2], result[3], contraction, k_h, k_w),
+        (*result, contraction, k_h, k_w),
         AccessRelations(
             inputs=(
-                moves(reached, result[0] * contraction * groups * touched * across),
-                moves(
-                    isl.multi_aff(
-                        f"{{ [{domain}] -> "
-                        f"[{spread(['co', 'ci', 'kh', 'kw'], call.args[1])}] }}"
-                    ),
-                    result[1] * contraction * k_h * k_w,
-                ),
-                moves(
-                    isl.multi_aff(
-                        f"{{ [{domain}] -> [{spread(['co'], call.args[2])}] }}"
-                    ),
-                    result[1],
-                ),
+                BoundaryRelation(reached),
+                BoundaryRelation(isl.multi_aff(f"{{ [{domain}] -> [co, ci, kh, kw] }}")),
+                BoundaryRelation(isl.multi_aff(f"{{ [{domain}] -> [co] }}")),
             ),
             outputs=(
-                writes(
-                    isl.multi_aff(
-                        f"{{ [{domain}] -> "
-                        f"[{spread(['n', 'co', 'oh', 'ow'], call)}] }}"
-                    ),
-                    result[0] * result[1] * result[2] * result[3],
-                ),
+                BoundaryRelation(isl.multi_aff(f"{{ [{domain}] -> [n, co, oh, ow] }}")),
             ),
         ),
     )
 
 
-def _by_logical_axis(ctx, value) -> list[int]:
-    """One extent per logical axis of a value, however its layout factors them.
-
-    A canonical `ShardLayout` splits a logical axis into several positions, so
-    the projected shape is not indexable by `N`, `C`, `H`, `W`. Folding those
-    positions back onto the axes they belong to gives four numbers again, and
-    they are the participant's, which is what every quantity here is asked for.
-    """
-    local = ctx.local_type_of(value)
-    logical = ctx.type_of(value)
-    extents = [1] * len(logical.shape)
-    for position, owner in enumerate(logical_axes_of(local, logical)):
-        extent = local.shape[position]
-        if not isinstance(extent, int) or isinstance(extent, bool):
-            raise NotImplementedError(
-                f"Conv2D access_relation: static extents required, got {local.shape}"
-            )
-        extents[owner] *= extent
-    return extents
 
 
-def _groups_reached(call: "Call", ctx, out_channels, groups: int) -> int:
-    """How many input-channel groups this participant's output channels span.
-
-    The contraction extent is one group's worth, so a participant computing two
-    groups reads two of them. Which groups those are follows from the whole
-    program's output-channel count, not this participant's: the divisor is the
-    Op's, and only the dividend is projected.
-    """
-    if groups == 1:
-        return 1
-    whole = ctx.type_of(call.args[1]).shape[0]
-    if any(
-        not isinstance(value, int) or isinstance(value, bool)
-        for value in (whole, out_channels)
-    ):
-        raise NotImplementedError(
-            f"Conv2D access_relation: grouped output channels must be static, "
-            f"got {out_channels!r} of {whole!r}"
-        )
-    per_group = whole // groups
-    return -(-out_channels // per_group)
 
 
-def _reachable_rows(extent, stride: int, pad: int, dilation: int, kernel, out_extent) -> int:
-    """How many source coordinates one axis of this participant's output reaches.
-
-    A guarded load fetches nothing outside the source, so a padded coordinate is
-    clipped away rather than charged. Only an explicit pad or materialise moves
-    those bytes.
-    """
-    if any(
-        not isinstance(value, int) or isinstance(value, bool)
-        for value in (extent, kernel, out_extent)
-    ):
-        raise NotImplementedError(
-            f"Conv2D access_relation: static extents required, got "
-            f"{(extent, kernel, out_extent)}"
-        )
-    reached = {
-        position * stride + tap * dilation - pad
-        for position in range(out_extent)
-        for tap in range(kernel)
-    }
-    return sum(1 for coordinate in reached if 0 <= coordinate < extent)

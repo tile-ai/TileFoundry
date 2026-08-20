@@ -35,11 +35,9 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
-    elements_of,
+    BoundaryRelation,
     iterating,
-    moves,
     register_access_relation,
-    writes,
 )
 
 
@@ -242,15 +240,13 @@ def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelat
         out_dims = (outer + ", ") if outer else ""
         scale_rel = isl.map(f"{{ [{dims}] -> [{out_dims}floor({last}/{group})] }}")
 
-    quantised = elements_of(x_ty)
-    scales = quantised // group if rank and group else quantised
     return iterating(
         x_ty.shape,
         AccessRelations(
-            inputs=(moves(ident, quantised),),
+            inputs=(BoundaryRelation(ident),),
             outputs=(
-                writes(ident, quantised),
-                writes(scale_rel, scales),
+                BoundaryRelation(ident),
+                BoundaryRelation(scale_rel),
             ),
         ),
     )

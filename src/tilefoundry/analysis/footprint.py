@@ -26,12 +26,10 @@ from tilefoundry.ir.types.shard import shard_layout_of
 from tilefoundry.ir.types.shard.shard_layout import split_target_axes
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
-    StorageEffectKind,
     access_relation_registry,
     index_set,
     relation_of,
     relations_of,
-    storage_effect_of,
 )
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
@@ -407,25 +405,14 @@ def _within(access: isl.map, held: TensorType) -> isl.map:
 def _touched(call: Call, relations: AccessRelations):
     """Each operand this Call reaches into, paired with the boundary saying where.
 
-    An Op that overwrites part of its destination states two things about that
-    operand: the window it writes, and the rest it keeps. Only the first is
-    reached -- the bytes it kept are the ones it did not touch -- so the written
-    output answers for that operand and the preserved input is passed over.
+    One boundary per operand, which is what the operand's own relation says it
+    reaches. A result is somewhere of its own here, so an Op that leaves part of
+    a container alone reaches only the part it read: the rest it kept is bytes it
+    did not touch on this side.
     """
-    claim = relations.storage_effect or storage_effect_of(relations)
-    updated = (
-        set(claim.operands)
-        if claim is not None and claim.kind is StorageEffectKind.UPDATE
-        else set()
-    )
     for index, boundary in enumerate(relations.inputs):
-        if index < len(call.args) and index not in updated:
-            yield index, boundary
-    if len(relations.outputs) != 1:
-        return
-    for index in sorted(updated):
         if index < len(call.args):
-            yield index, relations.outputs[0]
+            yield index, boundary
 
 
 def _relation_cases(

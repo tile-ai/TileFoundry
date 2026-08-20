@@ -10,13 +10,10 @@ from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelationResult,
-    build_relation,
+    coordinates_of,
     identity_relations,
     register_access_relation,
-    register_type_relation,
 )
-from tilefoundry.visitor_registry.relation_build import build_domain, identity_map
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
@@ -29,24 +26,12 @@ class Cast(Op):
 register_access_relation(Cast)(identity_relations(1))
 
 
-@register_type_relation(Cast)
-def _cast_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Forward relation for Cast: identity.
-
-    Forward relation for Cast: identity — only the dtype changes, shape and
-    layout pass through unchanged.
-    """
-    (x,) = input_types
-    ident = identity_map(len(x.shape))
-    return AccessRelationResult(domain=build_domain(x.shape), maps=(ident, ident))
-
-
 @register_typeinfer(Cast)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     new_layout = x_ty.layout
     if shard_layout_of(x_ty.layout) is not None:
-        relation = build_relation(call, (x_ty,), ctx)
+        relation = coordinates_of(call, ctx)
         derived = derive_output_shard_layout((x_ty,), relation, x_ty.shape)
         if derived is not None:
             new_layout = derived

@@ -13,7 +13,7 @@ Per-Op semantic derivation — typeinfer, the forward access relation, shard
 propagation — is owned by [semantic-analysis](./semantic-analysis.md), and the
 registries behind it by [visitor-registry](./visitor-registry.md); the
 polyhedral model consumes the forward relation
-([visitor-registry §4.1](./visitor-registry.md#41-forward-relation-service--type_relation))
+([visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation))
 rather than restating it.
 
 **Layering.** The decisions taken over these facts are owned by
@@ -136,7 +136,7 @@ dependents) and classifies every node it meets:
 - constraints:
   - Each statement's access relations MUST come from the forward
     (input-type-driven) relation service
-    ([visitor-registry §4.1](./visitor-registry.md#41-forward-relation-service--type_relation)).
+    ([visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation)).
     `extract` MUST stamp the statement and buffer tuple names onto each
     returned map and restrict it to the paired domain, and MUST reuse each
     access map's own formula unchanged — no retiling happens here.
@@ -328,7 +328,7 @@ Each owns its record types and declares its dependencies and output additions.
 | Selector | Requires | Owns | Attaches to | Rests on | Text summary adds | Annotates equations |
 |---|---|---|---|---|---|---|
 | `compute-cost` | - | `ComputeCostMetadata` | every measured Call and the Function | the authored program | `compute-cost` | every measured Call |
-| `memory` | - | `MemoryMetadata`, `TrafficMetadata`, `LoopFootprintMetadata`, `BufferAliasMetadata`, `BufferAllocationMetadata` | `MemoryMetadata` on the Function; `TrafficMetadata` and `BufferAliasMetadata` on every measured Call and the Function; `LoopFootprintMetadata` on every `GridRegionExpr` | the authored program, `MemoryHierarchyFacts` | `peak-footprint`, `traffic`, `advisory` | none |
+| `memory` | - | `MemoryMetadata`, `TrafficMetadata`, `LoopFootprintMetadata`, `BufferAllocationMetadata` | `MemoryMetadata` on the Function; `TrafficMetadata` on every measured Call and the Function; `LoopFootprintMetadata` on every `GridRegionExpr` | the authored program, `MemoryHierarchyFacts` | `peak-footprint`, `traffic`, `advisory` | none |
 | `roofline` | `compute-cost`, `memory` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | `roofline` | every measured Call |
 | `performance` | `compute-cost`, `memory` | `PerformanceMetadata`, `PerformanceSummaryMetadata` | `PerformanceMetadata` on every Call with a modeled duration; `PerformanceSummaryMetadata` on the Function | `ThroughputFacts`, `ParallelCapacityFacts`, `MemoryHierarchyFacts` | `performance` | every Call with a modeled duration |
 
@@ -534,45 +534,28 @@ Each reported Call's JSON projection is under its `compute-cost` key:
     occupies several levels: the aggregate is the conservative placement charge
     while the operand entry is the evaluator's movement amount.
 
-This family also settles where each Call's result bytes live, so that the
-families reading it do not each re-derive the answer and disagree.
-
-```python
-class BufferAliasMetadata(IRMetadata):
-    """Where one Call's result bytes live.
-
-    Attributes:
-        kind: attribute; `"produce"`, `"forward"`, or `"update"`, after the proof.
-        aliased_operands: attribute; operand positions the result lives in.
-    """
-
-    kind: str = "produce"
-    aliased_operands: tuple[int, ...] = ()
-```
+Where a value's bytes live is not settled here and is not inferred from what an
+Op moves.
 
 - constraints:
-  - The conclusion MUST come from the storage-effect claims of
-    [visitor-registry §4.2](./visitor-registry.md#42-per-boundary-relation-service--access_relation)
-    and MUST be written by this family alone. An Op that could forward or update but whose
-    proof did not close MUST be recorded as `"produce"`.
-  - Every position in `aliased_operands` MUST resolve to the same base, so a
-    reader following those operand edges reaches one value. `"produce"` MUST
-    carry no positions.
-  - A `"forward"` or `"update"` conclusion MUST NOT introduce movement, and MUST
-    NOT change what an Op's own cost evaluator reports. It corrects this
-    family's record in exactly two directions: a proven forward retires the copy
-    the operation reported it would make, and an update whose proof did not
-    close carries the untouched part of its destination into a result of its
-    own.
-  - A caller-owned parameter MUST NOT be reused by an update. Donation is a
-    contract with the caller, not a conclusion this family may draw.
+  - A Call whose Op registers `renames`
+    ([visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation))
+    is another name for that operand and MUST be given no bytes of its own, and
+    only when both ends sit at one storage level. Every other result, including
+    one that overwrites a destination, MUST be given bytes of its own.
+  - What an occurrence moves is its Op's own registered answer. This family MUST
+    NOT correct it by where the result turned out to be: an operation that
+    computed something computed it, and a plan that lands it in an operand's
+    buffer is that plan's saving, not this occurrence's.
+  - A caller-owned parameter MUST NOT be reused. Donation is a contract with the
+    caller, not a conclusion this family may draw.
 
 #### 2.2.2 `memory`
 
 `memory` measures whole-Function value lifetimes and footprints, decides where
 each value's bytes live, and states what every occurrence moves and at which
-level. The movement is read off the Op's own registered evaluator, corrected by
-the alias proof this family already settles for lifetimes.
+level. The movement is read off the Op's own registered evaluator and the
+amounts its access relations reach.
 
 ```python
 class TrafficMetadata(IRMetadata):
@@ -789,7 +772,7 @@ where each one sits.
 | `MemoryMetadata.footprint` | One `LevelFootprint` per occupied storage level. | As above |
 | `MemoryMetadata.lifetimes` | Every value residency except a `Reshape`, which aliases its input. | As above |
 | `MemoryMetadata.advisories` | Explicit peak overflow, cache/shared-capacity division, and same-scope authored-loop access-footprint findings. | `MemoryHierarchyFacts` |
-| `TrafficMetadata.whole` | On a Call, take the Op evaluator's per-operand movement for one occurrence, correct it by the alias proof, charge concrete tensor leaves to their storage levels, and group by level. On a Function, sum those over every reachable occurrence, each counted as often as its authored loops repeat it. A Type with leaves at several levels keeps those leaf bytes separate. A `UMAT` leaf has no residency of its own: when it appears in `Call.args`, charge its own bytes at the target's established `rmem` materialization level; when it appears only in an Op attribute, charge nothing. A Function Call takes the callee's grouped total. | No |
+| `TrafficMetadata.whole` | On a Call, take the Op evaluator's per-operand movement for one occurrence, charge concrete tensor leaves to their storage levels, and group by level. On a Function, sum those over every reachable occurrence, each counted as often as its authored loops repeat it. A Type with leaves at several levels keeps those leaf bytes separate. A `UMAT` leaf has no residency of its own: when it appears in `Call.args`, charge its own bytes at the target's established `rmem` materialization level; when it appears only in an Op attribute, charge nothing. A Function Call takes the callee's grouped total. | No |
 | `TrafficMetadata.per_unit` | The same one occurrence, asked of the Op's access relation in the analysed level's window, charged at the levels the operand's projected Type names. On a Function, summed over occurrences with the same repetition. Which direction an operand moves stays the evaluator's answer. An Op with no registered relation falls back to the evaluator over projected Types. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `TrafficMetadata.operands` | One occurrence's evaluator entries in order `(*call.args, call)`. Empty on a Function and on a Function Call, neither of which has a split. | No |
 
@@ -1349,7 +1332,6 @@ class AnalysisCheckContext:
     level: str | None
     whole: CostEvaluator
     local: CostEvaluator
-    aliases: dict[int, object]
 
 
 class OccurrenceProvenance(IRMetadata):

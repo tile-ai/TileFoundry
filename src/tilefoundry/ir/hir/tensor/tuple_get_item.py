@@ -8,11 +8,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TupleType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    StorageEffectClaim,
-    StorageEffectKind,
-    StorageSpan,
     register_access_relation,
-    static_bytes,
     view_relations,
 )
 
@@ -31,22 +27,11 @@ class TupleGetItem(Op):
 
 
 
-def _tuple_get_item_storage(call: "Call", ctx) -> StorageEffectClaim | None:
-    """One field is the run of the tuple the earlier fields do not cover."""
-    tuple_type = ctx.type_of(call.args[0])
-    if not isinstance(tuple_type, TupleType):
-        return StorageEffectClaim(StorageEffectKind.FORWARD, (0,))
-    sizes = [static_bytes(field) for field in tuple_type.fields]
-    if any(size is None for size in sizes):
-        return StorageEffectClaim(StorageEffectKind.FORWARD, (0,))
-    index = call.target.index
-    offset = sum(size for size in sizes[:index] if size is not None)
-    return StorageEffectClaim(
-        StorageEffectKind.FORWARD, (0,), (StorageSpan(0, offset, sizes[index] or 0),)
-    )
 
 
-register_access_relation(TupleGetItem)(view_relations(0, _tuple_get_item_storage, field=lambda call, ctx: call.target.index))
+register_access_relation(TupleGetItem)(
+    view_relations(0, field=lambda call, ctx: call.target.index)
+)
 
 
 @register_typeinfer(TupleGetItem)

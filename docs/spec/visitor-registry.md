@@ -272,262 +272,96 @@ expression structure and needs to recompute types, it calls
 `typeinfer_registry.lookup(...)` directly (see
 [passes](./passes.md)).
 
-### 4.1 Forward relation service — `type_relation`
+### 4.1 Access relation service — `access_relation`
 
-A second registry exposes each op's access relation as a **forward**
-service that typeinfer consumes. Its result carrier is:
-
-```python
-@dataclass
-class AccessRelationResult:
-    domain: isl.set             # the op's bounded iteration domain as an isl.set
-    maps: tuple[isl.map, ...]   # one access isl.map per boundary value, in boundary order (inputs then outputs)
-    param_map: dict             # domain's isl parameter name -> the ShapeDim it stands for; this Call's own data, never shared
-```
-
-- constraints:
-  - the carrier holds **no** tensor shape; the output shape is typeinfer-side
-    data (see [semantic-analysis §1.1](./semantic-analysis.md#11-relation-derived-type-behavior)).
-
-#### `domain`
-
-The op's bounded iteration domain as an `isl.set`. Static iteration
-extents are constant constraints (`0 <= i < N`); a bare `DimVar` extent is
-a same-name isl parameter bound to its own `[lo, hi)`. Any other
-`ShapeDim` expression binds to a fresh opaque isl parameter instead — its
-arithmetic structure never enters isl, only its value range does — keyed
-so the same expression always binds to the same parameter. The domain's
-rank is fixed and is read from the input types.
-
-#### `param_map`
-
-Maps each of `domain`'s isl parameter names back to the `ShapeDim` it
-stands for. Built once alongside `domain` and carried on this result —
-never module-level state, so it is safe across concurrent or repeated
-relation builds. The output-shape derivation that consumes `domain` reads
-`param_map` to resolve a recovered isl expression back to a `ShapeDim`.
-
-#### `maps`
-
-One access `isl.map` per boundary value, in boundary order — inputs
-first, then outputs — each mapping the iteration domain to that tensor's
-index space. The carrier holds **no** tensor shape: the output shape is
-typeinfer-side data, not part of the relation (see
-[semantic-analysis §1.1](./semantic-analysis.md#11-relation-derived-type-behavior)).
-
-Registry + decorator:
+One registry over the Op classes says where each Op reads and writes, and every
+reader asks it. Typeinfer asks it to derive the result's Type, the polyhedral
+model asks it for dependences, and the movement family asks it how much crossed
+each boundary. There is no second registry and no fallback: a boundary nobody
+can price is a boundary nobody can schedule.
 
 ```python
-type_relation_registry: AnalysisRegistry[type[Op]]     # forward relation registry keyed by type[Op]
-def register_type_relation(op_cls: type[Op]): ...       # decorator: register a type_relation handler for one Op class
-```
+AccessPattern = Union["isl.multi_aff", "isl.map", AffineAccess]
 
-Handler signature:
-`(call: Call, input_types: tuple[Type, ...], ctx: TypeInferContext) -> AccessRelationResult`.
-
-The handler MUST read only `input_types` and the op's attributes. It MUST
-NOT read the Call's own output type (`ctx.type_of(call)`), so the builder
-runs before the output type exists and typeinfer can call it without a
-cycle. `build_relation(call, input_types, ctx)` looks the handler up and
-returns its result, or `None` when the op has no registered builder.
-
-### 4.2 Per-boundary relation service — `access_relation`
-
-A second, independent registry over the same Op classes. Where `type_relation`
-([§4.1](#41-forward-relation-service--type_relation)) returns one iteration domain plus one map per boundary and drives
-typeinfer, this one classifies each boundary on its own, and says where the
-result's bytes live on the same value.
-
-```python
-AccessPattern = Union["isl.multi_aff", "isl.map", IndexedAccess, WindowAccess]
-
-class IndexedAccess:
-    """A boundary read through the values of another operand.
+class AffineAccess:
+    """One boundary's relation, together with what its parameters are.
 
     Attributes:
-        index_operand: attribute; Which operand's elements name the coordinates.
-        axis: attribute; The axis of this boundary's own value they index.
+        relation: attribute; Which coordinates of its own value it reaches.
+        parameters: attribute; Each isl parameter name paired with the operand element or dimension it is.
     """
 
-    index_operand: int
-    axis: int
+    relation: "isl.map"
+    parameters: tuple[tuple[str, object], ...] = ()
 
-class OperandValue:
-    """One runtime number an access depends on, and what it may be.
-
-    Attributes:
-        operand: attribute; Which operand carries the value.
-        element: attribute; Which field, when that operand is a tuple.
-        bound: attribute; The Op's own contract for what the value may be.
-    """
-
-    operand: int
-    element: int | None = None
-    bound: tuple[int, int] | None = None
-
-class WindowAccess:
-    """A boundary read or written as a window, one entry per axis.
+class BoundaryRelation:
+    """One boundary, as the coordinates it reaches and nothing else.
 
     Attributes:
-        offsets: attribute; Where the window starts on each axis.
-        extents: attribute; How far it runs, which the offsets do not change.
-        complement: attribute; The container outside the window instead.
-    """
-
-    offsets: tuple[OperandValue | int, ...]
-    extents: tuple[OperandValue | ShapeDim, ...]
-    complement: bool = False
-
-class StorageEffectKind(enum.Enum):
-    PRODUCE = "produce"
-    FORWARD = "forward"
-    UPDATE = "update"
-
-class StorageSpan:
-    operand: int
-    offset: int
-    size: int
-
-class StorageEffectClaim:
-    """What one Op says about its own result's bytes. Not a proof."""
-
-    kind: StorageEffectKind = StorageEffectKind.PRODUCE
-    operands: tuple[int, ...] = ()
-    spans: tuple[StorageSpan, ...] = ()
-    spans_required: bool = False
-
-class AccessQuantity:
-    """How much one boundary moves in one execution, exactly or within a range.
-
-    Attributes:
-        lower: attribute; The fewest elements it can move.
-        upper: attribute; The most.
-        provenance: attribute; Which Op invariant a range came from.
-    """
-
-    lower: int
-    upper: int
-    provenance: str | None = None
-
-class AccessMode(enum.Enum):
-    READ = "read"
-    WRITE = "write"
-    TRANSFER = "transfer"
-
-class StorageLink:
-    """One region an output may share with an input, and how much of it.
-
-    Attributes:
-        kind: attribute; `"forward"` for the result's own bytes, `"preserve"` for a container's.
-        input: attribute; Which operand the region is shared with.
-        where: attribute; One output coordinate to the input coordinate holding it.
-        quantity: attribute; How many elements the region holds.
-        input_field: attribute; Which field of a tuple operand, when it is one.
-    """
-
-    kind: str
-    input: int
-    where: AccessPattern
-    quantity: AccessQuantity
-    input_field: int | None = None
-
-class OutputStorage:
-    """Where one output's bytes may already be. No links means fresh bytes."""
-
-    links: tuple[StorageLink, ...] = ()
-
-class BoundaryAccess:
-    """One boundary: where it reads, how much it moves, and what for.
-
-    Attributes:
-        pattern: attribute; Which coordinates of its own value it reaches.
-        quantity: attribute; How many elements crossed it.
-        mode: attribute; Whether it consumes, produces, or re-addresses them.
-        storage: attribute; An output's links to the bytes it may already be in.
+        pattern: attribute; The relation from the Op's iteration space to that value's coordinates.
     """
 
     pattern: AccessPattern
-    quantity: AccessQuantity
-    mode: AccessMode = AccessMode.READ
-    storage: OutputStorage | None = None
 
 class AccessRelations:
-    """One `BoundaryAccess` per boundary value, in boundary order."""
+    """One `BoundaryRelation` per boundary value, in boundary order."""
 
-    inputs: tuple[BoundaryAccess, ...]
-    outputs: tuple[BoundaryAccess, ...]
-    storage_effect: StorageEffectClaim | None = None
+    inputs: tuple[BoundaryRelation, ...]
+    outputs: tuple[BoundaryRelation, ...]
 
+def coordinates_of(call, ctx) -> AccessRelations: ...
+def relations_of(call, ctx) -> AccessRelations: ...
 def access_elements(
     relations: AccessRelations, *, boundary: int, output: bool = False
-) -> AccessQuantity | None: ...
+) -> int | None: ...
 ```
 
 Registry + decorator:
 
 ```python
 access_relation_registry: AnalysisRegistry     # keyed by type[Op]
-def register_access_relation(op_cls: type): ...
+def register_access_relation(op_cls: type, *, renames: int | None = None): ...
 ```
-- constraints:
-  - The canonical carrier is `isl.multi_aff`. An `isl.map` is allowed where the
-    relation is reduction-like or otherwise many-to-one.
-  - A boundary whose addresses come from a runtime value MUST carry
-    `IndexedAccess` or `WindowAccess`, naming the operands that decide them.
-    Each is a distinct type from either isl carrier, so a consumer can never
-    read a lookup as an identity. There MUST be no way to register a boundary
-    that says nothing, and no generic whole-boundary fallback: a boundary
-    nobody can price is a boundary nobody can schedule.
-  - Every boundary MUST state its own `quantity`, and it MUST NOT be derived
-    from the pattern. A pattern is a dependence and a quantity is a movement:
-    every output of a scan depends on the whole input the scan reads once, and
-    a matrix product's result domain says nothing about how large its operands
-    were. `access_elements` reads back what the Op said and computes nothing.
-  - A quantity MUST NOT depend on values nobody has bound: a gather reads one
-    source slice per index element, a window reads its own extent and its
-    complement the rest. One that genuinely does MUST come from the Op's own
-    contract as a range naming its `provenance`, and a consumer taking `upper`
-    MUST say that it did. Widening to the whole operand is not such a range.
-  - `inputs` has one entry per input arg in argument order; `outputs` has one
-    per output, which for a `TupleType` result is one per field. Registration
-    MUST hold what a handler returns to the Call it was asked about and refuse a
-    count that does not match, because a description of a different program is
-    otherwise found by whichever consumer indexes past the end of it.
-  - A quantity MUST be a non-negative whole number of elements, and a pattern
-    MUST be one of the stated carriers. Construction MUST refuse anything else
-    rather than let it reach a consumer, and an Op whose own contract is
-    violated by a written-down value MUST refuse there rather than report an
-    impossible amount.
-  - Every boundary MUST state a `mode`. An input MUST be `READ` or `TRANSFER`
-    and an output `WRITE` or `TRANSFER`. `READ` and `WRITE` are charged whether
-    or not the bytes turn out to be where they already were; `TRANSFER` is the
-    only mode that can come to nothing, and only when its links are shown to
-    name the same addresses.
-  - Only an output MUST carry `storage`, and a `TRANSFER` output MUST carry at
-    least one link: a boundary whose whole purpose is to re-address bytes that
-    names none of them says nothing. An output with no links produces its own
-    bytes.
-  - A link's `where` MUST read one coordinate of its output and answer with the
-    coordinate of its input holding it, so it MUST be asked by as many
-    coordinates as that output has and MUST name as many as that input has.
-    Both are held at registration, because a link asked by the wrong number is
-    a link to some other value and composes without complaining.
-  - A link MUST state its own `quantity`, which is how much the linked region
-    holds and is never measured off `where`. It MUST name `input_field` when
-    its operand is a tuple, because which field it took decides which bytes it
-    is, and MUST NOT when the operand is one tensor.
-  - `storage_effect` is the older whole-Call form of the same subject and states
-    where the result's bytes live as a claim, not a proof: an Op that omits it
-    produces its own bytes, and an identity relation alone never establishes an
-    alias. Per-region statements belong in the links, which can say what a claim
-    cannot -- an unbound window start, a transposed mapping, one field of
-    several. Whether either holds over a whole function is settled by the
-    consumer that walks it.
 
-The two registries are peers, not layers: a given Op MAY register with either,
-both, or neither. The polyhedral model ([analysis §1](./analysis.md#1-polyhedral-model))
-reads only [§4.1](#41-forward-relation-service--type_relation)'s forward relation, so an Op it must cover needs a
-`type_relation` regardless of what it registers here.
+- constraints:
+  - A handler has the shape `(call, ctx) -> AccessRelations`. It MUST NOT read
+    the Call's own Type: typeinfer asks it in order to derive that Type, so a
+    handler that asked back would be asking for its own answer. It MAY read its
+    operands' Types, its Op's attributes, and the values its parameters bind.
+  - Every `BoundaryRelation.pattern` is a relation from the Op's **whole
+    iteration space** to the coordinates that boundary reaches, stated in the
+    axes the value was written in. Every boundary of one Op shares that space; a
+    boundary MAY be partial in it, which is one relation empty somewhere rather
+    than a second space. There is no separate domain field: what an Op walks is
+    the union of its boundary domains.
+  - A coordinate an Op only learns at run time is a **parameter** of the
+    relation, paired in `parameters` with the operand element or dimension it
+    is, so whoever restricts the relation binds it rather than guessing. A
+    parameter nobody binds is a hole and MUST be refused; one name MUST be one
+    value across the whole Op.
+  - `inputs` has one entry per input arg in argument order; `outputs` has one
+    per output, which for a `TupleType` result is one per field. `coordinates_of`
+    holds the input count, each input image's rank against the supplied Type,
+    the shared iteration arity, boundedness once parameters are bound, and
+    parameter closure -- all before any Type is derived. `relations_of` adds
+    what needs the derived Type: one boundary per output field, at that field's
+    rank in this view.
+  - How much a boundary moves MUST NOT be a second field. It is what the
+    relation reaches over the coordinates its Op iterates, counted by
+    `access_elements`; reaching the same element from many coordinates is one
+    element moved, so an inner iteration axis costs nothing. A projection or a
+    count that cannot be derived MUST fail closed rather than fall back on a
+    stated number.
+  - `relations_of` carries every boundary from logical axes onto the positions
+    the reader addresses, by composing with the layout the value ended up with,
+    and holds every boundary to the iterations this participant performs. A
+    value nobody divided is addressed whole by every participant, so leaving one
+    boundary unheld would charge one participant what all of them read.
+  - `renames` says the Op's result is another name for that operand. It is a
+    statement about what the Op reads, not a proof: whether the two ends can be
+    given one address is the allocation's question
+    ([analysis §2.2.2](./analysis.md#222-memory)),
+    and bytes are shared within one storage level and nowhere else.
 
 ## 5. Instance 2 — `verify`
 

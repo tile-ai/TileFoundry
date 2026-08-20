@@ -23,7 +23,6 @@ from tilefoundry.ir.core import (
     Tuple,
     Var,
     binding_name,
-    get_metadata,
 )
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
@@ -33,8 +32,8 @@ from tilefoundry.ir.types.shard import Topology
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target, UnsupportedCapabilityError
 from tilefoundry.visitor_registry.access_relation import (
-    access_relation_registry,
-    relations_of,
+    re_addressed_field,
+    re_addresses,
 )
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
@@ -51,7 +50,6 @@ from .facts import (
 from .footprint import loop_footprints
 from .metadata import (
     AllocationMetadata,
-    BufferAliasMetadata,
     BufferAllocationMetadata,
     BufferFootprint,
     BufferRef,
@@ -62,7 +60,7 @@ from .metadata import (
     TrafficMetadata,
     ValueLifetime,
 )
-from .movement import add_traffic, alias_conclusions, call_traffic
+from .movement import add_traffic, call_traffic
 from .walk import (
     attach,
     bytes_by_storage,
@@ -103,14 +101,32 @@ class _CachePressure:
 
 
 def _is_view(expr: Expr) -> bool:
-    """Whether *expr* lives in a buffer another value already owns.
+    """Whether *expr* is another name for a buffer some value already owns.
 
-    The conclusion is compute-cost's, from a proof against the operation's own
-    addresses. An operation that could have forwarded but did not prove it is
-    recorded as producing, and allocates here like anything else.
+    An Op registered as a re-addressing of one operand is one; everything else
+    is given bytes of its own. That is conservative on purpose: an operation
+    that lands in an operand's buffer is a fact about a plan, and no plan has
+    been made here.
     """
-    alias = get_metadata(expr, BufferAliasMetadata)
-    return alias is not None and alias.kind in ("forward", "update")
+    return _re_addressed(expr) is not None
+
+
+def _re_addressed(expr: Expr) -> "Expr | None":
+    """The value whose bytes *expr* is another name for, when it is one.
+
+    Bytes are shared within one storage level and nowhere else: a value that
+    came out at another level was copied there, whatever the Op that named it
+    calls itself.
+    """
+    if not isinstance(expr, Call):
+        return None
+    source = re_addresses(expr)
+    if source is None or source >= len(expr.args):
+        return None
+    operand = expr.args[source]
+    held = {leaf.storage for leaf in tensor_types(expr.type)}
+    theirs = {leaf.storage for leaf in tensor_types(operand.type)}
+    return operand if held <= theirs else None
 
 
 def _carried_origins(fn: Function) -> dict[int, Expr]:
@@ -139,15 +155,15 @@ def _base_of(
     seen: frozenset[int] = frozenset(),
     carried: dict[int, Expr] | None = None,
 ) -> Expr:
-    """Follow the proven operand edges to the value that owns the bytes."""
+    """Follow the re-addressing operand edges to the value that owns the bytes."""
     if id(expr) in seen:
         raise AnalysisError(f"{binding_name(expr) or 'a value'} aliases itself")
     if carried is not None and id(expr) in carried:
         return _base_of(carried[id(expr)], seen | {id(expr)}, carried)
-    alias = get_metadata(expr, BufferAliasMetadata)
-    if alias is None or not alias.aliased_operands:
+    reached = _re_addressed(expr)
+    if reached is None:
         return expr
-    return _base_of(expr.args[alias.aliased_operands[0]], seen | {id(expr)}, carried)
+    return _base_of(reached, seen | {id(expr)}, carried)
 
 
 def _label(expr: Expr, position: int) -> str:
@@ -830,10 +846,9 @@ def _renames(expr: Expr, carried: dict[int, Expr]) -> Expr:
     held = carried.get(id(expr))
     if held is not None:
         return held
-    alias = get_metadata(expr, BufferAliasMetadata)
-    if alias is None or alias.kind not in ("forward", "update") or not alias.aliased_operands:
+    reached = _re_addressed(expr)
+    if reached is None:
         return expr
-    reached = expr.args[alias.aliased_operands[0]]
     return expr if reached is expr else reached
 
 
@@ -864,10 +879,8 @@ def _refs_of(
         held = stated.get(id(owner))
         if held is None:
             return None
-        field, link = _renaming(expr, ctx, owner)
-        return _renamed(
-            expr, held, field, link, expr, ctx, facts, topology_levels, topologies
-        )
+        field = _renaming(expr, ctx, owner)
+        return _renamed(expr, held, field, facts, topology_levels, topologies)
     minted = numbers.get(id(owner))
     if minted is None:
         return None
@@ -899,31 +912,15 @@ def _refs_of(
     return tuple(refs)
 
 
-def _renaming(expr: Expr, ctx, operand: Expr) -> "tuple[int | None, object]":
-    """The one link by which this value renames *operand*, and the field it took.
+def _renaming(expr: Expr, ctx, operand: Expr) -> "int | None":
+    """Which field of *operand* this value renames, when it renames one of several.
 
-    A renaming states which operand it is of and, when that operand is a tuple,
-    which field. Anything else -- several links to one operand, or none -- is
-    not one renaming, and nothing about where its bytes are follows from it.
+    A renaming names the operand it is of and, when that operand is a tuple,
+    which field of it. Anything else renames the whole value and names no field.
     """
-    if ctx is None or not isinstance(expr, Call):
-        return None, None
-    if access_relation_registry.lookup(type(expr.target)) is None:
-        return None, None
-    try:
-        relations = relations_of(expr, ctx)
-    except (AnalysisError, NotImplementedError, ValueError):
-        return None, None
-    where = [index for index, arg in enumerate(expr.args) if arg is operand]
-    found = [
-        link
-        for output in relations.outputs
-        for link in (output.storage.links if output.storage else ())
-        if link.input in where
-    ]
-    if len(found) != 1:
-        return None, None
-    return found[0].input_field, found[0]
+    if ctx is None or _re_addressed(expr) is not operand:
+        return None
+    return re_addressed_field(expr, ctx)
 
 
 def _element_bytes(leaf) -> "int | None":
@@ -938,9 +935,6 @@ def _renamed(
     expr: Expr,
     owner: tuple[BufferRef, ...],
     start: "int | None",
-    link,
-    call: Expr,
-    ctx,
     facts: MemoryHierarchyFacts,
     topology_levels: tuple[str, ...],
     topologies: tuple[Topology, ...],
@@ -950,9 +944,8 @@ def _renamed(
     A value that renames all of another has its leaves, one for one. A value
     that renames one field of several is placed by the field its own operation
     named, because which field it took decides which buffer it is in. Where in
-    that buffer it begins follows from the link's own two sides, when they stay
-    a fixed distance apart; when they do not, the value is somewhere in those
-    bytes and this does not say where.
+    those bytes it begins is not said here: no plan has put the two ends at one
+    address, so the value is somewhere in them and that is all.
     """
     leaves = tensor_types(expr.type)
     if len(leaves) != len(owner):
@@ -1047,26 +1040,21 @@ def _record_movement(
     """Say what every occurrence moves, and whose bytes it moved them into.
 
     The Op's own registered evaluator answers how much crossed each boundary,
-    and the alias proof answers whether the crossing was a copy: an operation
-    shown to forward or update another was given that value's bytes and moved
-    none of them. The function's own total is the same bytes counted as often
-    as its loops repeat them.
+    The function's own total is the same bytes counted as often as its loops
+    repeat them.
     """
     scope = FunctionScope(module, fn)
     whole = CostEvaluator(CostContext(scope=scope))
     local = CostEvaluator(
         CostContext(scope=scope, level=level, topologies=topologies)
     )
-    settled = alias_conclusions(fn, whole)
     trips = enclosing_trips(fn.body)
     totals: dict[str, TrafficBytes] = {}
     shares: dict[str, TrafficBytes] = {}
     for expr in postorder(fn.body) if fn.body is not None else ():
         if not isinstance(expr, Call):
             continue
-        conclusion = settled[id(expr)]
-        attach(expr, conclusion.alias)
-        moved = call_traffic(expr, whole, local, conclusion)
+        moved = call_traffic(expr, whole, local)
         attach(expr, moved)
         add_traffic(totals, shares, moved, trips.get(id(expr), 1))
     attach(

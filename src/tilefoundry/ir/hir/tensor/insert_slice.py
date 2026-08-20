@@ -13,24 +13,13 @@ from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessMode,
-    AccessQuantity,
     AccessRelations,
-    BoundaryAccess,
-    OutputStorage,
-    StorageEffectClaim,
-    StorageLink,
-    control_leaves,
+    BoundaryRelation,
     control_read,
-    elements_of,
-    factored_window,
     iterating,
-    logical_axes_of,
     logical_coordinates,
-    moves,
     placed_window,
     register_access_relation,
-    update_destination,
     window_source,
 )
 
@@ -45,9 +34,6 @@ class InsertSlice(Op):
     offsets = ParamDef(kind="input", pattern=Scalar)
 
 
-def _insert_slice_storage(call: "Call", ctx) -> StorageEffectClaim | None:
-    """The window is written into dst; the result is that same buffer."""
-    return update_destination(call, ctx, destination=0)
 
 
 def _offset_axes(call: "Call", rank: int) -> tuple:
@@ -86,57 +72,29 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     wrote are different numbers, and the rest was already there.
     """
     result = ctx.type_of(call.args[0])
-    logical_result = result
-    rank = len(logical_result.shape)
+    rank = len(result.shape)
     update = ctx.type_of(call.args[1])
-    logical_update = ctx.type_of(call.args[1])
-    held_update = [1] * len(logical_update.shape)
-    for position, owner in enumerate(logical_axes_of(update, logical_update)):
-        held_update[owner] *= update.shape[position]
-    offsets, extents = factored_window(
-        _offset_axes(call, rank), tuple(held_update), result, logical_result
-    )
-    window = elements_of(update)
-    kept = elements_of(result) - window
+    offsets = _offset_axes(call, rank)
     complement, written = placed_window(
-        offsets, extents, len(result.shape), within=tuple(result.shape)
+        offsets, tuple(update.shape), rank, within=tuple(result.shape)
     )
     read_update = window_source(
-        _offset_axes(call, rank),
-        len(result.shape),
-        update,
-        logical_update,
-        logical_coordinates(result, logical_result),
-    )
-    preserve = StorageLink(
-        kind="preserve",
-        input=0,
-        where=complement,
-        quantity=AccessQuantity(kept, kept),
+        offsets, rank, update, update, logical_coordinates(result, result)
     )
     return iterating(
         result.shape,
     AccessRelations(
             inputs=(
-                BoundaryAccess(complement, AccessQuantity(kept, kept), AccessMode.TRANSFER),
-                moves(read_update, window),
+                BoundaryRelation(complement),
+                BoundaryRelation(read_update),
                 *(
-                    moves(
-                        control_read(len(result.shape), ctx, arg),
-                        control_leaves(ctx, arg),
-                    )
+                    BoundaryRelation(control_read(rank, ctx, arg))
                     for arg in call.args[2:]
                 ),
             ),
             outputs=(
-                BoundaryAccess(
-                    written,
-                    AccessQuantity(window, window),
-                    AccessMode.WRITE,
-                    OutputStorage((preserve,)),
-                ),
+                BoundaryRelation(written),
             ),
-            storage_effect=_insert_slice_storage(call, ctx),
         ),
     )
 

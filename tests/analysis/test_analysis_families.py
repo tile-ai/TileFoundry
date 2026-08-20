@@ -28,7 +28,6 @@ from tests.models.registry import CORPUS
 from tilefoundry import func, module
 from tilefoundry.analysis import (
     AllocationMetadata,
-    BufferAliasMetadata,
     ComputeCostMetadata,
     LoopFootprintMetadata,
     MemoryHierarchyFacts,
@@ -57,10 +56,7 @@ from tilefoundry.analysis.compute_cost import (
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.movement import (
     _call_movement,
-    _with_untouched_copy,
-    _without_forwarded_movement,
 )
-from tilefoundry.analysis.performance import _storage_of
 from tilefoundry.analysis.roofline import _cost_bound
 from tilefoundry.analysis.walk import postorder
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
@@ -801,114 +797,8 @@ def test_memory_holds_parameters_resident_past_their_last_reader() -> None:
     )
 
 
-def test_movement_costs_follow_each_operations_materialization() -> None:
-    functions = {function.name: function for function in _MovementCosts.functions}
-
-    for name in ("row", "column"):
-        function = functions[name]
-        result = analyze(_MovementCosts, function, analysis=("compute-cost", "memory"))
-        (move,) = _calls(result.function)
-        record = get_metadata(move, ComputeCostMetadata)
-        record_moved = get_metadata(move, TrafficMetadata)
-        assert record is not None
-        assert record_moved.at("gmem").total_bytes == 0
-        footprint = get_metadata(result.function, MemoryMetadata)
-        assert footprint is not None
-        assert all(item.persistent for item in footprint.lifetimes)
-
-    materialized = functions["materialized"]
-    result = analyze(_MovementCosts, materialized, analysis=("compute-cost", "memory"))
-    transpose, reshape = _calls(result.function)
-    transpose_cost = get_metadata(transpose, ComputeCostMetadata)
-    transpose_cost_moved = get_metadata(transpose, TrafficMetadata)
-    reshape_cost = get_metadata(reshape, ComputeCostMetadata)
-    reshape_cost_moved = get_metadata(reshape, TrafficMetadata)
-    assert transpose_cost is not None
-    moved = 1024 * 2048 * 4
-    assert transpose_cost_moved.at("gmem") == TrafficBytes(read=moved, write=moved)
-    assert reshape_cost is not None
-    assert reshape_cost_moved.at("gmem").total_bytes == 0
-    footprint = get_metadata(result.function, MemoryMetadata)
-    assert footprint is not None
-    assert any(not item.persistent and item.bytes == moved for item in footprint.lifetimes)
-
-    copied = functions["copied"]
-    result = analyze(_MovementCosts, copied, analysis=("compute-cost", "memory"))
-    selected, concat = _calls(result.function)
-    selected_cost = get_metadata(selected, ComputeCostMetadata)
-    selected_cost_moved = get_metadata(selected, TrafficMetadata)
-    concat_cost = get_metadata(concat, ComputeCostMetadata)
-    concat_cost_moved = get_metadata(concat, TrafficMetadata)
-    assert selected_cost is not None
-    selected_bytes = 256 * 2048 * 4
-    assert selected_cost_moved.at("gmem").total_bytes == 0
-    assert concat_cost is not None
-    assert get_metadata(concat, BufferAliasMetadata) == BufferAliasMetadata("produce")
-    assert concat_cost_moved.at("gmem") == TrafficBytes(
-        read=2 * selected_bytes,
-        write=2 * selected_bytes,
-    )
-
-    result = analyze(_MovementCosts, functions["tiled"], analysis=("compute-cost", "memory"))
-    *windows, joined = _calls(result.function)
-    assert get_metadata(joined, BufferAliasMetadata) == BufferAliasMetadata(
-        "forward", (0, 1)
-    )
-    joined_cost = get_metadata(joined, ComputeCostMetadata)
-    joined_cost_moved = get_metadata(joined, TrafficMetadata)
-    assert joined_cost is not None
-    assert joined_cost_moved.at("gmem").total_bytes == 0
-    footprint = get_metadata(result.function, MemoryMetadata)
-    assert footprint is not None
-    assert all(item.persistent for item in footprint.lifetimes)
-    assert all(
-        get_metadata(window, BufferAliasMetadata).kind == "forward" for window in windows
-    )
-
-    result = analyze(_MovementCosts, functions["swapped"], analysis=("compute-cost", "memory"))
-    swapped = _calls(result.function)[-1]
-    assert get_metadata(swapped, BufferAliasMetadata) == BufferAliasMetadata("produce")
-    whole = 1024 * 2048 * 4
-    assert get_metadata(swapped, TrafficMetadata).at("gmem") == TrafficBytes(
-        read=whole, write=whole
-    )
 
 
-def test_an_in_place_write_reuses_its_destination_only_when_nothing_reads_it_again() -> None:
-    """A functional update is free where it is the last reader, and a copy where it is not."""
-    functions = {function.name: function for function in _MovementCosts.functions}
-    whole = 1024 * 2048 * 4
-    window = 256 * 2048 * 4
-
-    result = analyze(_MovementCosts, functions["overwritten"], analysis="memory")
-    _made, write = _calls(result.function)
-    assert get_metadata(write, BufferAliasMetadata) == BufferAliasMetadata("update", (0,))
-    assert get_metadata(write, TrafficMetadata).at("gmem") == TrafficBytes(
-        read=window, write=window
-    )
-    reused = get_metadata(result.function, MemoryMetadata)
-    assert reused is not None
-    assert binding_name(write) not in {item.binding for item in reused.lifetimes}
-
-    for name, position in (("read_after_write", 1), ("written_through_a_view", 2)):
-        result = analyze(_MovementCosts, functions[name], analysis="memory")
-        write = _calls(result.function)[position]
-        assert get_metadata(write, BufferAliasMetadata) == BufferAliasMetadata("produce")
-        assert get_metadata(write, TrafficMetadata).at(
-            "gmem"
-        ) == TrafficBytes(read=whole, write=whole)
-        materialized = get_metadata(result.function, MemoryMetadata)
-        assert materialized is not None
-        assert (binding_name(write), whole) in {
-            (item.binding, item.bytes) for item in materialized.lifetimes
-        }
-
-    result = analyze(_MovementCosts, functions["donated"], analysis="memory")
-    (write,) = _calls(result.function)
-    assert get_metadata(write, BufferAliasMetadata) == BufferAliasMetadata("produce")
-    assert get_metadata(write, TrafficMetadata).at("gmem") == TrafficBytes(
-        read=whole, write=whole
-    )
 
 
 def test_a_view_keeps_the_buffer_it_reads_alive() -> None:
@@ -916,9 +806,7 @@ def test_a_view_keeps_the_buffer_it_reads_alive() -> None:
     held = next(function for function in _MovementCosts.functions if function.name == "held")
     result = analyze(_MovementCosts, held, analysis="memory")
 
-    made, window, consumer = _calls(result.function)
-    assert get_metadata(made, BufferAliasMetadata) == BufferAliasMetadata("produce")
-    assert get_metadata(window, BufferAliasMetadata) == BufferAliasMetadata("forward", (0,))
+    made, _window, consumer = _calls(result.function)
     record = get_metadata(result.function, MemoryMetadata)
     assert record is not None
     bindings = {item.binding: item for item in record.lifetimes}
@@ -988,31 +876,6 @@ def test_unmaterialized_shape_values_are_not_charged_as_attributes() -> None:
     assert traffic == ()
 
 
-def test_an_alias_correction_keeps_the_service_the_operation_asked_for() -> None:
-    """Correcting what an operation moves must not drop what it computes.
-
-    Both corrections rebuild the cost out of its traffic. A rebuild that forgets
-    the service work prices a comparison at nothing and says so in a record that
-    still has traffic and still reads as complete -- the reader has no way to
-    see the hole. The whole point of an alias proof is bytes; it has no opinion
-    about the work.
-    """
-    result_type = make_tensor_type((8,), DType.bool)
-    source = Var(type=make_tensor_type((8,)), name="source")
-    call = Call(type=result_type, target=Transpose(perm=(0,)), args=(source,))
-    cost = Cost(
-        {},
-        (TrafficBytes(read=1), TrafficBytes(write=1)),
-        {"predicate": 8},
-    )
-
-    forwarded = _without_forwarded_movement(call, cost, (0,))
-    assert forwarded.service == {"predicate": 8}
-    assert forwarded.traffic == (TrafficBytes(), TrafficBytes(write=0))
-
-    produced = _with_untouched_copy(call, cost, 0, result_type)
-    assert produced.service == {"predicate": 8}
-    assert produced.traffic[-1].write == tensor_bytes(result_type)
 
 
 def test_mixed_runtime_coordinates_are_charged_per_leaf() -> None:
@@ -1241,18 +1104,18 @@ def test_analysis_snapshot_drift_sentinel() -> None:
             {
                 "gmem": {"read": 8_407_240, "write": 8_396_936},
                 "rmem": {"read": 672, "write": 0},
-                    "smem": {"read": 13_274_816, "write": 13_037_248},
+                    "smem": {"read": 21_669_568, "write": 21_432_000},
             },
             {
                 "gmem": {"read": 4_472_832, "write": 8_536_064},
                 "rmem": {"read": 960, "write": 0},
-                    "smem": {"read": 779_812_864, "write": 469_434_368},
+                    "smem": {"read": 794_492_928, "write": 484_114_432},
             },
         ),
         "flash_split_traffic": {
             "gmem": {"read": 2_099_264, "write": 2_048},
             "rmem": {"read": 336, "write": 104},
-            "smem": {"read": 7_701_376, "write": 7_380_352},
+            "smem": {"read": 11_899_776, "write": 11_578_752},
         },
         "flash_split_offset_slice_traffic": (
             (
@@ -1716,8 +1579,7 @@ def test_a_view_and_its_base_are_one_rectangle_to_place() -> None:
 
     result = analyze(roomy, viewed, analysis=("memory", "performance"))
 
-    tile, view, _sum = _calls(result.function)
-    assert get_metadata(view, BufferAliasMetadata) == BufferAliasMetadata("forward", (0,))
+    tile, _view, _sum = _calls(result.function)
     record = get_metadata(result.function, MemoryMetadata)
     assert record is not None
     assert record.level("smem").peak_bytes == _RoomyShared.levels["smem"]
@@ -1728,74 +1590,8 @@ def test_a_view_and_its_base_are_one_rectangle_to_place() -> None:
     assert get_metadata(result.function, PerformanceSummaryMetadata) is not None
 
 
-def test_a_buffer_carried_round_a_loop_is_the_same_buffer_to_a_write() -> None:
-    """A loop hands its buffer forward under a new name, and it is the same one.
-
-    An in-place write inside a loop replaces bytes the previous trip is still a
-    reader of, and the name it reads them under is the one the loop carried, not
-    an operand of the write. Following only the write's own operand edges never
-    reaches that name; asking which allocation holds the bytes does, because
-    that is the question the family that placed them already answered.
-    """
-    case = next(item for item in CORPUS if item.id == "access_footprint.grouped_moe")
-    selected = case.analyze[0]
-    owner, entry = case.resolve(case.build(), selected.selector)
-    result = analyze(
-        owner, entry, analysis=("compute-cost", "memory"), dims=selected.dims
-    )
-    values = list(postorder(result.function.body))
-
-    updates = [
-        call
-        for call in values
-        if isinstance(call, Call)
-        and (get_metadata(call, BufferAliasMetadata) or BufferAliasMetadata()).kind
-        == "update"
-    ]
-    assert updates, "this program was expected to write into a destination"
-    for write in updates:
-        alias = get_metadata(write, BufferAliasMetadata)
-        written = _storage_of(write.args[alias.aliased_operands[0]])
-        assert written, "the destination of a write was never given an allocation"
-        carried = [
-            expr
-            for expr in values
-            if isinstance(expr, GridRegionExpr) and _storage_of(expr) & written
-        ]
-        assert carried, (
-            "no loop-carried name of the written buffer was read as that buffer"
-        )
 
 
-def test_an_overwrite_waits_for_everything_that_read_what_it_replaces() -> None:
-    """Every name for a buffer is that buffer, wherever the reader happens to run.
-
-    The reader here holds a reshard of the tile, not the tile the write was
-    handed, and it runs on the CTAs the write does not touch. Nothing about
-    participants keeps the two apart, so if the write did not wait it would
-    replace the bytes mid-read.
-    """
-    result = analyze(
-        _OverwrittenAcrossGroups,
-        _OverwrittenAcrossGroups.entry_function(),
-        analysis="performance",
-    )
-
-    _placed, made, moved, side, _joinable, _window, written, _out, _joined = _calls(
-        result.function
-    )
-    assert get_metadata(written, BufferAliasMetadata) == BufferAliasMetadata("update", (0,))
-    held = _storage_of(made)
-    assert held, "the tile this write reuses was never given an allocation"
-    assert _storage_of(moved) & held and _storage_of(written.args[0]) & held, (
-        "a name for the written buffer was not read as that buffer"
-    )
-    placements = _call_placements(_OverwrittenAcrossGroups, result.function, "cta")
-    assert placements[id(side)].isdisjoint(placements[id(written)])
-    assert (
-        get_metadata(side, PerformanceMetadata).timeline.end_ns
-        <= get_metadata(written, PerformanceMetadata).timeline.start_ns
-    )
 
 
 def test_a_machine_that_places_nothing_is_not_a_machine_that_fits() -> None:
@@ -2408,31 +2204,3 @@ def test_a_tuple_result_moves_what_every_field_of_it_states() -> None:
     assert cost_moved.per_unit_at("rmem") == TrafficBytes(read=512, write=48)
 
 
-def test_an_alias_correction_outlives_the_movement_the_relation_stated() -> None:
-    """What the proof concluded about bytes survives being restated per unit.
-
-    Per-unit movement is rebuilt from the Op's relation, which knows nothing
-    about where the result turned out to live. The proof is applied on top of
-    the rebuild, not under it -- otherwise an in-place write is charged again
-    and a materialised update loses the container it carries. Both are here: the
-    forwarded concat writes nothing, and the materialised update writes the
-    whole 8 MB of which 2 MB was given to it.
-    """
-    functions = {function.name: function for function in _MovementCosts.functions}
-
-    result = analyze(_MovementCosts, functions["tiled"], analysis="memory")
-    *_windows, joined = _calls(result.function)
-    assert get_metadata(joined, BufferAliasMetadata).kind == "forward"
-    forwarded_moved = get_metadata(joined, TrafficMetadata)
-    assert forwarded_moved.per_unit_at("gmem") == TrafficBytes()
-    assert forwarded_moved.at("gmem") == TrafficBytes()
-
-    result = analyze(_MovementCosts, functions["read_after_write"], analysis=("compute-cost", "memory"))
-    written = next(
-        call for call in _calls(result.function) if type(call.target).__name__ == "InsertSlice"
-    )
-    assert get_metadata(written, BufferAliasMetadata).kind == "produce"
-    carried_moved = get_metadata(written, TrafficMetadata)
-    whole = 1024 * 2048 * 4
-    assert carried_moved.per_unit_at("gmem") == TrafficBytes(read=whole, write=whole)
-    assert carried_moved.at("gmem") == TrafficBytes(read=whole, write=whole)

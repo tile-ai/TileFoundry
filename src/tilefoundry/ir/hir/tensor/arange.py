@@ -15,7 +15,10 @@ from tilefoundry.ir.types.dim import is_dim_expr
 from tilefoundry.ir.types.shape_dim import ShapeDim
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    identity_relations,
+    AccessRelations,
+    BoundaryRelation,
+    identity_access,
+    iterating,
     register_access_relation,
 )
 
@@ -29,7 +32,17 @@ class Arange(Op):
     step = ParamDef(kind="attribute", annotation=int, default=1)
 
 
-register_access_relation(Arange)(identity_relations(0))
+@register_access_relation(Arange)
+def _arange_access(call: "Call", ctx) -> AccessRelations:
+    """A sequence made from its own attributes: nothing read, every index written.
+
+    The length is the Op's, not an operand's -- there are no operands -- so the
+    space walked comes off the attribute that states the result.
+    """
+    return iterating(
+        call.target.type.shape,
+        AccessRelations(inputs=(), outputs=(BoundaryRelation(identity_access(1)),)),
+    )
 
 
 @register_typeinfer(Arange)

@@ -72,20 +72,6 @@ class TrafficMetadata(IRMetadata):
         )
 
 
-@dataclass(frozen=True)
-class BufferAliasMetadata(IRMetadata):
-    """Where one Call's result bytes live.
-
-    ``kind`` is the conclusion of a proof, not the operation's own claim: a
-    forwarding or updating operation whose proof did not close is recorded as
-    ``"produce"``. Every operand in ``aliased_operands`` resolves to the same
-    base, which a consumer reaches by following those operand edges; naming
-    operands rather than a value keeps that walk on the edges both sides already
-    agree on.
-    """
-
-    kind: str = "produce"
-    aliased_operands: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -275,7 +261,6 @@ class PerformanceSummaryMetadata(IRMetadata):
 
 __all__ = [
     "AllocationMetadata",
-    "BufferAliasMetadata",
     "BufferFootprint",
     "ComputeCostMetadata",
     "LevelFootprint",

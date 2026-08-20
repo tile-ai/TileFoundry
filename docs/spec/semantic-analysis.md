@@ -5,8 +5,8 @@ contracts that derive types, access relations, and shard layouts over the IR.
 Each service is a registry-backed derived visitor: the common registration and
 dispatch mechanism is owned by [visitor-registry](./visitor-registry.md); this
 file owns each service's requirements, handler shape, required context, and the
-semantic rules it enforces. The forward relation's own result carrier is owned by
-[visitor-registry §4.1](./visitor-registry.md#41-forward-relation-service--type_relation);
+semantic rules it enforces. The access relation's own carrier is owned by
+[visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation);
 this file links to it rather than redefining it.
 
 ## 1. Type propagation
@@ -31,14 +31,13 @@ never needs its own function-boundary case.
 
 ### 1.1 Relation-derived type behavior
 
-An op's typeinfer MAY derive the output type from a forward access
-relation ([visitor-registry §4.1](./visitor-registry.md#41-forward-relation-service--type_relation))
-rather than from a hand-written rule. The relation describes one
-shared iteration domain and, per boundary, an access map from that
-domain to the tensor's index space. The relation carries **no tensor
-shape**: the output shape is typeinfer-side data, derived from the
-op's shape rule or (where implemented) from the relation by composing
-the output access map over the domain.
+An op's typeinfer MAY derive the output type from the Op's access relations
+([visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation))
+rather than from a hand-written rule. Every boundary states an access map from
+the Op's own iteration space to that tensor's index space, and what the Op walks
+is the union of those domains. The relations carry **no tensor shape**: the
+output shape is typeinfer-side data, derived from the op's shape rule or from
+the extents the output relation reaches.
 
 Within the relation:
 
@@ -56,16 +55,16 @@ defined in [§3.2](#32-relation-driven-shard-propagation).
 
 ### 1.2 Domain construction and output shape derivation
 
-Output access-map arity is validated by the relation service
-([visitor-registry §4.1](./visitor-registry.md#41-forward-relation-service--type_relation)).
+Every boundary's image rank is held to the Type of the value it describes by the
+relation service ([visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation)).
 
 ## 2. Access relation analysis
 
-The forward access relation is the boundary model shared by relation-derived
-type behavior and shard propagation: one iteration domain plus, per boundary, an
-affine access map from that domain to a tensor's index space. Its result carrier
-`AccessRelationResult` and the registry that produces it are both defined in
-[visitor-registry §4.1](./visitor-registry.md#41-forward-relation-service--type_relation).
+The access relation is the boundary model shared by relation-derived type
+behavior, shard propagation, dependence and movement: per boundary, an affine
+access map from the Op's own iteration space to a tensor's index space. Its
+carrier `AccessRelations` and the registry that produces it are both defined in
+[visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation).
 The polyhedral model that lifts a whole `Function` body out of these per-op
 relations is owned by [analysis §1](./analysis.md#1-polyhedral-model).
 The rule reads only the access maps' affine structure (which domain dim each

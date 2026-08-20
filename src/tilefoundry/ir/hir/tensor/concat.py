@@ -28,25 +28,12 @@ from tilefoundry.ir.types.shard import (
 from tilefoundry.ir.types.shard.shard_layout import split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessMode,
-    AccessQuantity,
-    AccessRelationResult,
     AccessRelations,
-    BoundaryAccess,
-    StorageEffectClaim,
-    StorageEffectKind,
-    StorageLink,
-    StorageSpan,
-    build_relation,
-    elements_of,
+    BoundaryRelation,
+    coordinates_of,
     iterating,
     register_access_relation,
-    register_type_relation,
-    same_placement,
-    static_bytes,
-    transfers,
 )
-from tilefoundry.visitor_registry.isl_utility import to_domain
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
@@ -78,28 +65,6 @@ def _axis(call: "Call", ctx: "TypeInferContext", rank: int) -> int:
     return axis
 
 
-def _concat_storage(call: "Call", ctx) -> StorageEffectClaim | None:
-    """Putting pieces side by side is free only when they already lie that way.
-
-    Every input is claimed whole; composition then holds them to one base and to
-    one unbroken run, which is what a concatenation of a value's own pieces is
-    and what a concatenation of unrelated values is not.
-    """
-    result = ctx.type_of(call)
-    spans: list[StorageSpan] = []
-    for index, arg in enumerate(call.args):
-        if not same_placement(ctx.type_of(arg), result):
-            return None
-        size = static_bytes(ctx.type_of(arg))
-        if size is None or size == 0:
-            return None
-        spans.append(StorageSpan(index, 0, size))
-    return StorageEffectClaim(
-        StorageEffectKind.FORWARD,
-        tuple(range(len(call.args))),
-        tuple(spans),
-        spans_required=True,
-    )
 
 
 @register_access_relation(Concat)
@@ -131,81 +96,23 @@ def _concat_access(call: "Call", ctx) -> AccessRelations:
             )
         )
         offset += extent
-    links, offset = [], 0
-    for index, type_ in enumerate(types):
-        extent = type_.shape[axis]
-        held = elements_of(type_)
-        piece = list(dims)
-        if offset:
-            piece[axis] = f"d{axis} - {offset}"
-        links.append(
-            StorageLink(
-                kind="forward",
-                input=index,
-                where=isl.multi_aff(f"{{ [{domain_text}] -> [{', '.join(piece)}] }}"),
-                quantity=AccessQuantity(held, held),
-            )
-        )
-        offset += extent
     out_shape = (
         *types[0].shape[:axis],
         sum(extents),
         *types[0].shape[axis + 1 :],
     )
-    whole = sum(elements_of(type_) for type_ in types)
     return iterating(
         out_shape,
     AccessRelations(
             inputs=tuple(
-                BoundaryAccess(
-                    item, AccessQuantity(elements_of(type_), elements_of(type_)),
-                    AccessMode.TRANSFER,
-                )
+                BoundaryRelation(item)
                 for item, type_ in zip(inputs, types)
             ),
             outputs=(
-                transfers(
-                    isl.multi_aff(f"{{ [{domain_text}] -> [{domain_text}] }}"),
-                    AccessQuantity(whole, whole),
-                    *links,
-                ),
+                BoundaryRelation(isl.multi_aff(f"{{ [{domain_text}] -> [{domain_text}] }}")),
             ),
-            storage_effect=_concat_storage(call, ctx),
         ),
     )
-
-
-@register_type_relation(Concat)
-def _concat_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Map every input into its segment of the concatenated output."""
-    rank = len(input_types[0].shape)
-    axis = _axis(call, ctx, rank)
-    extents = tuple(type_.shape[axis] for type_ in input_types)
-    if any(not isinstance(extent, int) or isinstance(extent, bool) for extent in extents):
-        raise NotImplementedError(
-            f"Concat type_relation: concat-axis extents must be static ints, got {extents}"
-        )
-    output_shape = list(input_types[0].shape)
-    output_shape[axis] = sum(extents)
-    output_shape = tuple(output_shape)
-    domain, param_map = to_domain(output_shape)
-    dims = [f"d{i}" for i in range(rank)]
-    domain_text = ", ".join(dims)
-    input_maps = []
-    offset = 0
-    for extent in extents:
-        input_dims = list(dims)
-        if offset:
-            input_dims[axis] = f"d{axis} - {offset}"
-        input_text = ", ".join(input_dims)
-        input_maps.append(
-            isl.map(
-                f"{{ [{domain_text}] -> [{input_text}] : {offset} <= d{axis} < {offset + extent} }}"
-            )
-        )
-        offset += extent
-    output_map = isl.map(f"{{ [{domain_text}] -> [{domain_text}] }}")
-    return AccessRelationResult(domain=domain, maps=(*input_maps, output_map), param_map=param_map)
 
 
 def _reject_concat_axis_splits(call, ctx, types, axis: int) -> None:
@@ -252,7 +159,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     require_compatible_meshes(ctx, call, types, "Concat")
     _reject_concat_axis_splits(call, ctx, types, axis)
     try:
-        relation = build_relation(call, tuple(types), ctx)
+        relation = coordinates_of(call, ctx)
         layout = derive_output_shard_layout(tuple(types), relation, new_shape, fresh_strides=True)
     except ValueError as error:
         ctx.error(

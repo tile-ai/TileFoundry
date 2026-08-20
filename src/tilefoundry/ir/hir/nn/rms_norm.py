@@ -20,19 +20,14 @@ from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelationResult,
     AccessRelations,
-    elements_of,
+    BoundaryRelation,
     factored_image,
     iterating,
     logical_term,
-    moves,
     normalised_rows,
     register_access_relation,
-    register_type_relation,
-    writes,
 )
-from tilefoundry.visitor_registry.isl_utility import to_domain
 
 
 def _identity(rank: int) -> "isl.multi_aff":
@@ -96,51 +91,11 @@ def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
         rows,
         AccessRelations(
             inputs=(
-                moves(isl.map(element), elements_of(x_ty)),
-                moves(
-                    isl.map(f"{{ [{domain}] -> [{across}]{where} }}"), elements_of(w_ty)
-                ),
+                BoundaryRelation(isl.map(element)),
+                BoundaryRelation(isl.map(f"{{ [{domain}] -> [{across}]{where} }}")),
             ),
-            outputs=(writes(isl.map(element), elements_of(x_ty)),),
+            outputs=(BoundaryRelation(isl.map(element)),),
         ),
-    )
-
-
-@register_type_relation(RMSNorm)
-def _rms_norm_type_relation(call: "Call", input_types, ctx) -> AccessRelationResult:
-    """Model fused row-wise RMSNorm with batch axes as the domain.
-
-    The reduced axis remains a range dimension shared by input, weight, and
-    output maps. Local projection handles sharding before this relation.
-    """
-    x, weight = input_types
-    x_shape, w_shape = x.shape, weight.shape
-    if len(x_shape) < 1 or len(w_shape) != 1:
-        raise NotImplementedError(
-            "RMSNorm type_relation: x must be rank >= 1 and weight rank-1, "
-            f"got x.shape={x_shape} weight.shape={w_shape}"
-        )
-    if x_shape[-1] != w_shape[0]:
-        raise NotImplementedError(
-            f"RMSNorm type_relation: x last dim {x_shape[-1]} != weight dim {w_shape[0]}"
-        )
-    reduce_extent = x_shape[-1]
-    if not isinstance(reduce_extent, int) or isinstance(reduce_extent, bool):
-        raise NotImplementedError(
-            "RMSNorm type_relation: reduction axis must be a static int, "
-            f"got {reduce_extent!r} -- a dynamic reduction axis has no isl "
-            "representation here"
-        )
-
-    batch_shape = x_shape[:-1]
-    domain, param_map = to_domain(batch_shape)
-    dims = [f"d{i}" for i in range(len(batch_shape))]
-    src = "[" + ", ".join(dims) + "]"
-    row = ", ".join(dims + ["j"])
-    row_map = isl.map(f"{{ {src} -> [{row}] : 0 <= j < {reduce_extent} }}")
-    weight_map = isl.map(f"{{ {src} -> [j] : 0 <= j < {reduce_extent} }}")
-    return AccessRelationResult(
-        domain=domain, maps=(row_map, weight_map, row_map), param_map=param_map
     )
 
 
