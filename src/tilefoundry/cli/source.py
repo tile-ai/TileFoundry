@@ -87,18 +87,25 @@ def select_ir(namespace: dict[str, object], selector: str | None) -> Module:
 def _statement_codes(path: Path) -> list[tuple[ast.stmt, object]]:
     """Each top-level statement of *path*, compiled to run on its own.
 
-    A `__future__` import governs how the statements after it compile, so the
-    file's own ones prefix every statement; compiled alone a statement would not
-    have them. The compile does not inherit this caller's flags either: what a
-    file postpones is the file's own decision, and inheriting would hand postponed
-    annotations to one that never asked for them.
+    The whole file is compiled first and thrown away, so every rule Python
+    applies to a module still applies: a misplaced `__future__` import is refused
+    there. Executing less of a file is what a selector asks for; accepting more of
+    the language is not. Those imports govern the statements after them, so the
+    leading run of them prefixes every statement -- alone, a statement would not
+    have them -- and the compile does not inherit this caller's flags, because
+    what a file postpones is the file's own decision.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    future = [
-        item
-        for item in tree.body
-        if isinstance(item, ast.ImportFrom) and item.module == "__future__"
-    ]
+    text = path.read_text(encoding="utf-8")
+    compile(text, str(path), "exec", dont_inherit=True)
+    tree = ast.parse(text, filename=str(path))
+    future: list[ast.stmt] = []
+    for item in tree.body:
+        if isinstance(item, ast.ImportFrom) and item.module == "__future__":
+            future.append(item)
+            continue
+        if isinstance(item, ast.Expr) and isinstance(item.value, ast.Constant):
+            continue
+        break
     codes = []
     for statement in tree.body:
         if statement in future:
@@ -108,29 +115,105 @@ def _statement_codes(path: Path) -> list[tuple[ast.stmt, object]]:
     return codes
 
 
+def _at_module_level(statement: ast.stmt) -> set[str]:
+    """The names *statement* reads while the file runs.
+
+    A function body runs when something calls it, not when the file loads, so the
+    names inside one are not read here -- which is also why a parameter sharing a
+    name with something at module level is not a mention of it. What decorates,
+    defaults or annotates that function is read now, and so is everything a class
+    body does directly.
+    """
+    found: set[str] = set()
+    skip = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+
+    def walk(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, skip):
+                evaluated: list[ast.AST] = list(getattr(child, "decorator_list", ()))
+                evaluated.extend(child.args.defaults or ())
+                evaluated.extend(
+                    item for item in (child.args.kw_defaults or ()) if item is not None
+                )
+                if getattr(child, "returns", None) is not None:
+                    evaluated.append(child.returns)
+                evaluated.extend(
+                    argument.annotation
+                    for argument in ast.walk(child.args)
+                    if isinstance(argument, ast.arg) and argument.annotation is not None
+                )
+                for part in evaluated:
+                    walk(ast.Module(body=[ast.Expr(value=part)], type_ignores=[]))
+                continue
+            if isinstance(child, ast.Name):
+                found.add(child.id)
+            walk(child)
+
+    walk(ast.Module(body=[statement], type_ignores=[]))
+    return found
+
+
+def _binds(statement: ast.stmt, name: str) -> bool:
+    """Whether *statement* is what gives *name* its value."""
+    if isinstance(statement, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        return statement.name == name
+    if isinstance(statement, (ast.Import, ast.ImportFrom)):
+        return any(
+            (alias.asname or alias.name.partition(".")[0]) == name
+            for alias in statement.names
+        )
+    targets: tuple = ()
+    if isinstance(statement, ast.Assign):
+        targets = tuple(statement.targets)
+    elif isinstance(statement, (ast.AnnAssign, ast.AugAssign)):
+        targets = (statement.target,)
+    return any(
+        isinstance(item, ast.Name) and item.id == name
+        for target in targets
+        for item in ast.walk(target)
+    )
+
+
+def _follows_from(error: BaseException, aside: list[ast.stmt]) -> bool:
+    """Whether *error* is a consequence of a statement already set aside.
+
+    A statement that was set aside bound nothing, so one reaching for what it
+    would have bound fails for that reason rather than its own. Reporting the
+    second failure would name the symptom: the file that could not import its
+    sibling would be described as a file with an undefined name in it.
+    """
+    return isinstance(error, NameError) and any(
+        _binds(statement, error.name or "") for statement in aside
+    )
+
+
 def _run_for_selection(path: Path, module: object, root: str) -> None:
     """Execute *path* for the one root *root* names, statement by statement.
 
-    A class that refuses to be built refuses while the file runs, so a file with
-    one unfinished program could not be asked about a finished one beside it.
-    Naming a root makes the rest a different question: a statement that fails is
-    set aside rather than ending the load, and the selection is asked for after.
-    Nothing is dropped unexecuted, so a statement the selection does need still
-    runs and still binds what it binds. A missing root at the end means something
-    the selection needed failed, and the first such failure is the answer.
+    A class that refuses to be built refuses while the file runs, so naming one
+    root makes the rest a different question: a statement that is not the
+    selection's is set aside when it fails. One that is -- binding the root, or
+    reading it while the file runs -- is building or reconfiguring what was asked
+    for, so its failure is raised even when something failed earlier and even when
+    the root is already bound. Nothing is dropped unexecuted; a missing root at the
+    end means something it needed failed, and the first of those is the reason.
     """
-    first_error: BaseException | None = None
+    first: BaseException | None = None
+    aside: list[ast.stmt] = []
     for statement, code in _statement_codes(path):
         try:
             exec(code, module.__dict__)  # noqa: S102 — the authored file
         except BaseException as error:  # noqa: BLE001 — one unfinished statement
             if isinstance(error, (KeyboardInterrupt, SystemExit)):
                 raise
-            if first_error is None:
-                first_error = error
-            _ = statement
-    if root not in module.__dict__ and first_error is not None:
-        raise first_error
+            mine = _binds(statement, root) or root in _at_module_level(statement)
+            if mine and not _follows_from(error, aside):
+                raise
+            aside.append(statement)
+            if first is None:
+                first = error
+    if root not in module.__dict__ and first is not None:
+        raise first
 
 
 def load_namespace(source: str) -> tuple[dict[str, object], str | None]:

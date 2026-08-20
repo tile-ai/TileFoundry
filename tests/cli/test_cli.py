@@ -12,6 +12,7 @@ import pytest
 import tilefoundry.cli.target as target_cli
 from tests.fixtures.shapes.composed_leaf_source import composed_leaf_source
 from tests.fixtures.shapes.neighbour_sources import (
+    both_roots_unsound,
     broken_after,
     broken_before,
     broken_beside_a_future_annotation,
@@ -20,6 +21,8 @@ from tests.fixtures.shapes.neighbour_sources import (
     broken_beside_an_eager_annotation,
     broken_inside_a_compound_statement,
     broken_named_like_a_local,
+    configured_after_it_is_built,
+    future_import_out_of_place,
 )
 from tilefoundry import cli
 from tilefoundry.cli.source import (
@@ -269,6 +272,51 @@ def test_naming_one_root_does_not_ask_about_the_rest_of_its_file(
 
     assert report["module"] == named, "a root reached by a second name keeps its own"
     assert report["totals"]["flops"]
+
+
+def test_the_selection_own_refusal_is_the_one_reported(tmp_path) -> None:
+    """When the selection refuses too, its reason is the answer.
+
+    Something else in the file refuses first, in the same way and for its own
+    entry. Reporting that one would answer about a program nobody named and hide
+    the only reason the caller can act on. Setting a failure aside is for failures
+    that are not the selection's.
+    """
+    source = tmp_path / "both.py"
+    source.write_text(both_roots_unsound(), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="'absent_from_sound' names no") as raised:
+        load_namespace(f"{source}:Sound")
+
+    assert "'nope'" not in str(raised.value)
+
+
+def test_a_failure_that_reconfigures_the_selection_is_not_set_aside(tmp_path) -> None:
+    """A statement that writes the selection is part of building it.
+
+    The root is already bound when that statement runs, so asking only whether it
+    is bound says yes. What it is bound to would not be what the file describes,
+    and answering about that is worse than refusing.
+    """
+    source = tmp_path / "configured.py"
+    source.write_text(configured_after_it_is_built(), encoding="utf-8")
+
+    with pytest.raises(AttributeError, match="no_such_attribute"):
+        load_namespace(f"{source}:Sound")
+
+
+def test_a_file_no_interpreter_accepts_is_not_accepted_here(tmp_path) -> None:
+    """The load may execute less of a file, never more of a language.
+
+    A `__future__` import governs how a file compiles, so Python requires it
+    before there is anything to govern. Gathering a file's `__future__` imports
+    and putting them in front would accept a file that does not compile.
+    """
+    source = tmp_path / "misplaced.py"
+    source.write_text(future_import_out_of_place(), encoding="utf-8")
+
+    with pytest.raises(SyntaxError, match="beginning of the file"):
+        load_namespace(f"{source}:Sound")
 
 
 def test_a_selected_load_still_postpones_the_annotations_the_file_postponed(

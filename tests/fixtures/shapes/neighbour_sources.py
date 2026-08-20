@@ -147,3 +147,42 @@ def broken_beside_an_eager_annotation() -> str:
         + _UNSOUND
         + _SOUND
     )
+
+
+def both_roots_unsound() -> str:
+    """Two roots that both refuse, so which one is reported is the question.
+
+    The unrelated one refuses first. A load that reported the first refusal it saw
+    would answer about a program nobody asked about, and the selection's own
+    reason -- the only one the caller can act on -- would be the one thrown away.
+    """
+    return (
+        _HEAD
+        + _UNSOUND
+        + _SOUND.replace("entry='kernel'", "entry='absent_from_sound'", 1)
+    )
+
+
+def configured_after_it_is_built() -> str:
+    """A sound root, then a statement that reconfigures it and fails.
+
+    The root is bound by the time that statement runs, so asking only whether it
+    is bound says yes. What it is bound to is not what the file describes: the
+    statement meant to replace it never finished, so the answer would be a program
+    the file does not state.
+    """
+    return _HEAD + _SOUND + "Sound = Sound.no_such_attribute\n"
+
+
+def future_import_out_of_place() -> str:
+    """A `__future__` import after an ordinary statement.
+
+    Python refuses this: the import governs how the file compiles, so it has to
+    come before there is anything to govern. A load that gathered the file's
+    `__future__` imports from anywhere and put them in front would accept a file
+    no interpreter does.
+    """
+    return (
+        "x = 1\n"
+        "from __future__ import annotations\n" + _HEAD + _UNSOUND + _SOUND
+    )

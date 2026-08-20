@@ -62,11 +62,30 @@ boundaries are different:
   it turns out to read, and a reader cannot decide that from the text without
   deciding which names are a function's own.
 
-  `SOURCE`'s own `__future__` imports MUST prefix each statement so that they still
-  govern it, and each statement MUST be compiled without inheriting the compiling
-  code's own `__future__` flags. What a file postpones is that file's decision: a
-  file that postpones its annotations MUST keep them postponed, and one that does
-  not MUST have them evaluated, exactly as loading it as one unit would.
+  `SOURCE` MUST first be compiled whole, so that every rule the language applies
+  to a module still applies: a `__future__` import that is not at the beginning of
+  the file MUST be refused here exactly as an interpreter refuses it. Executing
+  less of a file is what a selector asks for; accepting more of the language is
+  not.
+
+  `SOURCE`'s leading `__future__` imports MUST then prefix each statement so that
+  they still govern it, and each statement MUST be compiled without inheriting the
+  compiling code's own `__future__` flags. What a file postpones is that file's
+  decision: a file that postpones its annotations MUST keep them postponed, and
+  one that does not MUST have them evaluated, exactly as loading it as one unit
+  would.
+
+  A statement that is the selection's own MUST NOT be set aside. That is one that
+  binds the selected root, or that reads it while the file runs -- a function body
+  is not read then, so a parameter sharing the root's name is not a reading of it.
+  Such a statement is building or reconfiguring what was named, so its failure
+  MUST be reported even when an earlier statement also failed and even when the
+  root is already bound.
+
+  The exception is a failure that follows from one already set aside: a statement
+  reaching for a name that a set-aside statement would have bound fails for that
+  reason rather than its own, and reporting it would name the symptom instead of
+  the cause. Such a failure MUST be set aside too.
 
   The selected root MUST then be resolved from what the load bound. If it is not
   bound, the load MUST fail with the first failure it set aside, because something
