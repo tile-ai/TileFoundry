@@ -23,7 +23,9 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
     elements_of,
+    logical_coordinates,
     moves,
+    reached_at,
     register_access_relation,
     register_type_relation,
     writes,
@@ -65,19 +67,30 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_access_relation(RMSNorm)
 def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
-    """GLOBAL level: x identity, weight identity.
+    """GLOBAL level: x read where it is written, the weight where it broadcasts.
 
-    GLOBAL level: x identity, weight identity (broadcast along last dim
-    treated as identity at GLOBAL black-box; reduction is internal to the
-    op).
+    Both boundaries answer about the result's own coordinates, so the rank-1
+    weight is read at the last logical axis rather than over a domain of its
+    own -- every row reaches the same weights, which is one weight element each
+    and not one per row. The reduction is internal to the op.
     """
     x_ty = ctx.local_type_of(call.args[0])
     w_ty = ctx.local_type_of(call.args[1])
+    logical_x = ctx.type_of(call.args[0])
     rank = len(x_ty.shape)
+    carried = logical_coordinates(x_ty, logical_x)
     return AccessRelations(
         inputs=(
             moves(_identity(rank), elements_of(x_ty)),
-            moves(_identity(1), elements_of(w_ty)),
+            moves(
+                reached_at(
+                    rank,
+                    w_ty,
+                    ctx.type_of(call.args[1]),
+                    {0: carried.get(len(logical_x.shape) - 1, "0")},
+                ),
+                elements_of(w_ty),
+            ),
         ),
         outputs=(writes(_identity(rank), elements_of(x_ty)),),
     )

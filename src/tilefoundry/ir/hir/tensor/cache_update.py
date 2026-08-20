@@ -24,6 +24,7 @@ from tilefoundry.visitor_registry.access_relation import (
     OutputStorage,
     StorageEffectClaim,
     StorageLink,
+    control_read,
     elements_of,
     factored_window,
     logical_axes_of,
@@ -34,7 +35,6 @@ from tilefoundry.visitor_registry.access_relation import (
     update_destination,
     window_source,
 )
-from tilefoundry.visitor_registry.relation_build import identity_access
 
 
 @register_op(name="cache_update")
@@ -151,8 +151,8 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
     return AccessRelations(
         inputs=(
             BoundaryAccess(complement, kept, AccessMode.TRANSFER),
-            moves(_scalar_access(ctx, call.args[1]), 1),
-            moves(_scalar_access(ctx, call.args[2]), 1),
+            moves(control_read(len(local_cache.shape), ctx, call.args[1]), 1),
+            moves(control_read(len(local_cache.shape), ctx, call.args[2]), 1),
             BoundaryAccess(
                 window_source(
                     (0, start, *(0 for _ in cache[2:])),
@@ -287,16 +287,6 @@ def _eval_cache_update(ctx):
 
 
 __all__ = ["CacheUpdate"]
-
-
-def _scalar_access(ctx, arg) -> "isl.multi_aff":
-    """A scalar operand, at whatever rank its own view gives it.
-
-    A rank-0 value can arrive as a rank-1 position under a layout, and an image
-    that names no coordinate cannot be composed with one that has a position.
-    """
-    held = ctx.local_type_of(arg)
-    return identity_access(len(held.shape) if hasattr(held, "shape") else 0)
 
 
 def _by_logical_axis(local, logical) -> list:

@@ -908,6 +908,56 @@ def placed_window(offsets: tuple, extents: tuple, rank: int) -> tuple:
     )
 
 
+def control_leaves(ctx, arg) -> int:
+    """How many numbers one operand carries for placing or sizing a window.
+
+    A window is placed by one number per axis it is placed on, and an operand
+    holding several of them carries several: a tuple of offsets is read once per
+    field, not once.
+    """
+    stated = ctx.type_of(arg)
+    return len(stated.fields) if isinstance(stated, TupleType) else 1
+
+
+def _control_space(rank: int, ctx, arg) -> "tuple[str, str, str]":
+    """The domain, image and reach of one control operand's own coordinates.
+
+    A tuple of numbers is indexed flat, one leaf per field. A lone scalar's legal
+    index set is the single point, at whatever positions its own view gives it.
+    """
+    domain = ", ".join(f"d{index}" for index in range(rank))
+    stated = ctx.type_of(arg)
+    if isinstance(stated, TupleType):
+        return domain, "l", f"0 <= l < {len(stated.fields)}"
+    held = ctx.local_type_of(arg)
+    return domain, ", ".join("0" for _ in range(len(getattr(held, "shape", ()) or ()))), ""
+
+
+def control_read(rank: int, ctx, arg) -> "AffineAccess":
+    """The control numbers one operand carries, each read once.
+
+    The domain is the result's positions like every other boundary, because a
+    reader applies one execution domain to all of them and a boundary with a rank
+    of its own is one it cannot answer. What it reaches is one point per number,
+    so a reader counts the numbers rather than believing an empty set.
+    """
+    domain, image, reach = _control_space(rank, ctx, arg)
+    where = f" : {reach}" if reach else ""
+    return AffineAccess(isl.map(f"{{ [{domain}] -> [{image}]{where} }}"))
+
+
+def addresses_only(rank: int, ctx, arg) -> "AffineAccess":
+    """An operand a view is addressed with and does not read.
+
+    A slice's bounds say which bytes the result already is; being handed them is
+    not reading them. The empty relation over the same coordinates is that
+    answer -- not an identity over the result, which would charge a whole window
+    to a scalar nobody moved.
+    """
+    domain, image, _reach = _control_space(rank, ctx, arg)
+    return AffineAccess(isl.map(f"{{ [{domain}] -> [{image}] : false }}"))
+
+
 def reached_at(
     rank: int,
     local: "Type",
@@ -1201,10 +1251,6 @@ def view_relations(
         moved = elements_of(result)
         held = AccessQuantity(moved, moved)
 
-        def _rank_of(arg) -> int:
-            type_ = ctx.local_type_of(arg)
-            return len(type_.shape) if hasattr(type_, "shape") else out_rank
-
         if mapping is not None:
             reads, written = mapping(call, ctx)
         else:
@@ -1249,7 +1295,7 @@ def view_relations(
         return AccessRelations(
             inputs=tuple(
                 BoundaryAccess(
-                    reads if index == source else _identity(_rank_of(arg)),
+                    reads if index == source else addresses_only(out_rank, ctx, arg),
                     held if index == source else AccessQuantity(0, 0),
                     AccessMode.TRANSFER if index == source else AccessMode.READ,
                 )

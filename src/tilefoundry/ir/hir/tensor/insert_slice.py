@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import isl
-
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue
 from tilefoundry.ir.core import Constant, Op, Tuple
@@ -11,7 +9,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Scalar, Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
-from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -22,6 +20,8 @@ from tilefoundry.visitor_registry.access_relation import (
     OutputStorage,
     StorageEffectClaim,
     StorageLink,
+    control_leaves,
+    control_read,
     elements_of,
     factored_window,
     logical_axes_of,
@@ -32,7 +32,6 @@ from tilefoundry.visitor_registry.access_relation import (
     update_destination,
     window_source,
 )
-from tilefoundry.visitor_registry.relation_build import identity_access
 
 
 @register_op(name="insert_slice")
@@ -117,7 +116,10 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
             BoundaryAccess(complement, AccessQuantity(kept, kept), AccessMode.TRANSFER),
             moves(read_update, window),
             *(
-                moves(_scalar_access(ctx, arg), _controls(ctx, arg))
+                moves(
+                    control_read(len(result.shape), ctx, arg),
+                    control_leaves(ctx, arg),
+                )
                 for arg in call.args[2:]
             ),
         ),
@@ -232,23 +234,3 @@ def _eval_insert_slice(ctx):
 
 __all__ = ["InsertSlice"]
 
-
-def _controls(ctx, arg) -> int:
-    """How many numbers one operand carries for placing the window.
-
-    A window is placed by one number per axis it is placed on, and an operand
-    holding several of them carries several: a rank-N tuple of offsets is read N
-    times over, not once.
-    """
-    stated = ctx.type_of(arg)
-    return len(stated.fields) if isinstance(stated, TupleType) else 1
-
-
-def _scalar_access(ctx, arg) -> "isl.multi_aff":
-    """A scalar operand, at whatever rank its own view gives it.
-
-    A rank-0 value can arrive as a rank-1 position under a layout, and an image
-    that names no coordinate cannot be composed with one that has a position.
-    """
-    held = ctx.local_type_of(arg)
-    return identity_access(len(held.shape) if hasattr(held, "shape") else 0)
