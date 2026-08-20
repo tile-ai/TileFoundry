@@ -19,6 +19,7 @@ import isl
 
 from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
 from tilefoundry.ir.types.shape_dim import ShapeDim
+from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import Layout, try_c_order_strides
 from tilefoundry.ir.types.shard.int_tuple import flatten
 from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis, shard_layout_of
@@ -901,11 +902,94 @@ def placed_window(offsets: tuple, extents: tuple, rank: int) -> tuple:
     prefix = isl_parameters(parameters)
     where = f" : {' and '.join(guards)}" if guards else ""
     reached = isl.map(f"{prefix}{{ [{domain}] -> [{domain}]{where} }}")
-    whole = isl.map(f"{{ [{domain}] -> [{domain}] }}")
+    whole = isl.map(f"{prefix}{{ [{domain}] -> [{domain}] }}")
+    left = whole.subtract(reached).intersect_params(reached.params())
     return (
-        AffineAccess(whole.subtract(reached), tuple(parameters)),
+        AffineAccess(left, tuple(parameters)),
         AffineAccess(reached, tuple(parameters)),
     )
+
+
+def index_set(shape) -> "isl.set | None":
+    """The coordinates one value legally has, or nothing when its shape is not numbers."""
+    if any(
+        not isinstance(extent, int) or isinstance(extent, bool) or extent < 0
+        for extent in shape
+    ):
+        return None
+    if not shape:
+        return isl.set("{ [] }")
+    names = ", ".join(f"d{index}" for index in range(len(shape)))
+    guards = " and ".join(f"0 <= d{index} < {extent}" for index, extent in enumerate(shape))
+    return isl.set(f"{{ [{names}] : {guards} }}")
+
+
+def _as_number(value) -> int | None:
+    """The number a bound parameter's value is, when it is one."""
+    number = static_dim_value(value)
+    if number is not None:
+        return number
+    inner = getattr(value, "value", None)
+    return inner if isinstance(inner, int) and not isinstance(inner, bool) else None
+
+
+def settled(pattern: "AccessPattern") -> "isl.map":
+    """One relation with every parameter fixed to a number.
+
+    A parameter bound to something that has a value is fixed to that value. One
+    whose value nobody here holds is fixed to the smallest the relation itself
+    allows: the first legal iteration of a loop, the smallest legal window of a
+    runtime extent. Either way a reader gets a number it can check rather than a
+    range it has to interpret.
+    """
+    relation = pattern.relation if isinstance(pattern, AffineAccess) else pattern
+    if isinstance(relation, isl.multi_aff):
+        relation = isl.map.from_multi_aff(relation)
+    bound = dict(pattern.parameters) if isinstance(pattern, AffineAccess) else {}
+    names = [
+        relation.get_dim_name(isl.dim_type.PARAM, index)
+        for index in range(relation.dim(isl.dim_type.PARAM))
+    ]
+    if not names:
+        return relation
+    space = f"[{', '.join(names)}] -> "
+    legal = relation.params()
+    for name in names:
+        number = _as_number(bound.get(name))
+        if number is None:
+            probe = isl.set(f"{space}{{ [x] : x = {name} }}").intersect_params(legal)
+            smallest = str(probe.dim_min_val(0))
+            try:
+                number = int(smallest)
+            except ValueError:
+                raise ValueError(
+                    f"a relation leaves {name!r} at {smallest} because it does not "
+                    "state what that parameter may be; a boundary nobody can bind "
+                    "is not one a reader can count"
+                ) from None
+        legal = legal.intersect(isl.set(f"{space}{{ : {name} = {number} }}"))
+    return relation.intersect_params(legal)
+
+
+def reached_elements(
+    pattern: "AccessPattern", domain: "isl.set", box: "isl.set | None" = None
+) -> int | None:
+    """How many distinct boundary elements one execution domain reaches.
+
+    A boundary's quantity is not a second field to keep in step: it is what the
+    relation says once the domain this Call actually runs over is applied to it.
+    Reaching the same element from many coordinates is one element moved, not
+    many dependences, and reaching past the coordinates the operand has is not
+    reaching at all.
+    """
+    relation = settled(pattern)
+    image = domain.apply(relation)
+    if box is not None and box.tuple_dim() == image.tuple_dim():
+        image = image.intersect(box)
+    try:
+        return int(str(image.count_val()))
+    except ValueError:
+        return None
 
 
 def control_leaves(ctx, arg) -> int:

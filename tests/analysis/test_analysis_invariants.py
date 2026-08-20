@@ -165,6 +165,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessMode,
     AccessQuantity,
     AccessRelations,
+    AffineAccess,
     BoundaryAccess,
     IndexedAccess,
     OutputStorage,
@@ -174,8 +175,10 @@ from tilefoundry.visitor_registry.access_relation import (
     StorageSpan,
     access_relation_registry,
     build_relation,
+    index_set,
     linearized_view,
     moves,
+    reached_elements,
     register_access_relation,
     transfers,
     writes,
@@ -3070,6 +3073,57 @@ def _reached(pattern, extent: int):
     """The coordinates a window reaches, walking every element it has."""
     domain = isl.set(f"{{ [d0] : 0 <= d0 < {extent} }}")
     return domain.apply(pattern.relation)
+
+
+def test_what_a_boundary_moves_is_what_its_relation_reaches() -> None:
+    """A quantity is not a second field to keep in step with a relation.
+
+    Reaching one element from many coordinates moves it once, so a broadcast
+    costs its source and not its dependences. Reaching past the coordinates an
+    operand has is not reaching, so a relation stated over a bigger container
+    still answers for the smaller one it was given.
+    """
+    positions = isl.set("{ [d0, d1] : 0 <= d0 < 8 and 0 <= d1 < 4 }")
+    replicated = AffineAccess(isl.map("{ [d0, d1] -> [0, d1] }"))
+    assert reached_elements(replicated, positions, index_set((1, 4))) == 4, (
+        "one row read by eight is one row moved"
+    )
+    beyond = AffineAccess(isl.map("{ [d0, d1] -> [d0, d1] }"))
+    assert reached_elements(beyond, positions, index_set((2, 4))) == 8, (
+        "and coordinates the operand does not have are not reached at all"
+    )
+
+
+def test_an_unbound_parameter_settles_at_the_smallest_window_it_allows() -> None:
+    """A runtime scalar leaves one number to pick, and the Op says which.
+
+    The window `s` rows wide is any of them, so a single answer has to come from
+    somewhere; the smallest the relation itself permits is the one a reader can
+    check, and it is the same choice on every boundary of the call -- what was
+    written and what was left alone still add up to the cache.
+    """
+    ctx = TypeInferContext()
+    call = Call(
+        type=make_tensor_type((2, 16, 4, 8), DType.bf16),
+        target=CacheUpdate(),
+        args=(
+            Var(type=make_tensor_type((2, 16, 4, 8), DType.bf16), name="cache"),
+            Var(type=make_tensor_type((), DType.i32), name="cur_pos"),
+            Var(type=make_tensor_type((), DType.i32), name="s"),
+            Var(type=make_tensor_type((2, 5, 4, 8), DType.bf16), name="new"),
+        ),
+    )
+    relations = access_relation_registry.lookup(CacheUpdate)(call, ctx)
+    cache = index_set((2, 16, 4, 8))
+    per_row, held = 2 * 4 * 8, 2 * 16 * 4 * 8
+
+    written = reached_elements(relations.outputs[0].pattern, cache, cache)
+    assert written == per_row, "one row is the smallest window this Op describes"
+    kept = reached_elements(relations.inputs[0].pattern, cache, cache)
+    assert kept == held - per_row, "and the rest of the cache is what it left"
+    assert reached_elements(relations.inputs[2].pattern, cache, index_set(())) == 1, (
+        "the row count itself is one number, read once"
+    )
 
 
 def test_a_window_states_its_coefficients_and_binds_what_it_cannot_know() -> None:
