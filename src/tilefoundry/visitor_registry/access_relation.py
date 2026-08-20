@@ -664,7 +664,7 @@ def _check_image_ranks(call, ctx, relations: AccessRelations, op_cls: type) -> N
             for link in links:
                 if not link.quantity.upper:
                     continue
-                source = ctx.local_type_of(call.args[link.input])
+                source = ctx.type_of(call.args[link.input])
                 if link.input_field is not None and isinstance(source, TupleType):
                     source = source.fields[link.input_field]
                 _hold_rank(
@@ -673,7 +673,11 @@ def _check_image_ranks(call, ctx, relations: AccessRelations, op_cls: type) -> N
                     f"{side} {index}'s link",
                     op_cls,
                 )
-                _hold_domain(link.where, wanted, f"{side} {index}'s link", op_cls)
+                asked = _domain_rank(boundary.pattern)
+                if asked is not None:
+                    _hold_domain(
+                        link.where, asked, f"{side} {index}'s link", op_cls
+                    )
 
 
 
@@ -703,10 +707,10 @@ def _domain_rank(pattern: "AccessPattern") -> int | None:
 
 
 def _hold_domain(pattern: "AccessPattern", wanted: int, where: str, op_cls: type) -> None:
-    """Refuse a link asked by a different number of coordinates than it has.
+    """Refuse a link asked by different coordinates than its own boundary.
 
-    A link answers for one coordinate of its output, so it is asked by as many
-    as that output has. One asked by fewer is a link to some other value, and
+    A link answers for the output it belongs to, so it is asked by the same
+    coordinates that output is. One asked by fewer is a link to some other value, and
     the reader that composes it with this occurrence finds that out too late to
     say whose bytes it was talking about.
     """
@@ -767,8 +771,8 @@ def coordinates_of(call, ctx) -> AccessRelations:
     This is what type inference asks, so nothing here may consult the Type being
     derived -- but the operands, the attributes and the relations themselves are
     all present, and an answer wrong about those is wrong for every reader. So:
-    one boundary per operand, each read at the rank of the operand supplied, one
-    space shared by every boundary, and no parameter left for nobody to bind.
+    one boundary per operand, each read at the rank of the operand's own axes,
+    one space shared by every boundary, and no parameter left for nobody to bind.
     """
     op_cls = type(call.target)
     handler = access_relation_registry.lookup(op_cls)
@@ -785,7 +789,7 @@ def coordinates_of(call, ctx) -> AccessRelations:
             f"with {len(call.args)}"
         )
     for index, (boundary, arg) in enumerate(zip(relations.inputs, call.args)):
-        supplied = ctx.local_type_of(arg)
+        supplied = ctx.type_of(arg)
         if isinstance(supplied, TupleType) or not boundary.quantity.upper:
             continue
         _hold_rank(
@@ -883,16 +887,158 @@ def _hold_parameters_bound(relations: AccessRelations, op_cls: type) -> None:
                 )
 
 
+def projected(relations: AccessRelations, call, ctx) -> AccessRelations:
+    """Every boundary in the coordinates the reader asking can address.
+
+    An Op states where it reads and writes among logical axes, because that is
+    all it can know before anything is placed. A reader addresses positions, and
+    which ones a logical coordinate is depends on the layout the value ended up
+    with, so the two are composed here for every Op. That composition also holds
+    a participant to its own iterations; nothing is narrowed against the other
+    boundaries after it, their shared space containing each already and
+    intersecting only dragging in parameters a boundary never spoke of.
+    """
+    held = ctx.local_type_of(call)
+    fields = held.fields if isinstance(held, TupleType) else (held,)
+    logical = ctx.type_of(call)
+    logical_fields = logical.fields if isinstance(logical, TupleType) else (logical,)
+    bindings = _bindings_of(relations)
+
+    def views(index: int, side: str) -> tuple:
+        if side == "output":
+            return (
+                fields[index] if index < len(fields) else None,
+                logical_fields[index] if index < len(logical_fields) else None,
+            )
+        arg = call.args[index]
+        return ctx.local_type_of(arg), ctx.type_of(arg)
+
+    carried = {
+        side: tuple(
+            _addressed(boundary, *views(index, side), bindings, side, index, call)
+            for index, boundary in enumerate(boundaries)
+        )
+        for side, boundaries in (("input", relations.inputs), ("output", relations.outputs))
+    }
+    boxes = {
+        "input": tuple(
+            index_set(tuple(view.shape)) if isinstance(view, TensorType) else None
+            for view in (ctx.local_type_of(arg) for arg in call.args)
+        ),
+        "output": tuple(
+            index_set(tuple(field.shape)) if isinstance(field, TensorType) else None
+            for field in fields
+        ),
+    }
+    return AccessRelations(
+        inputs=tuple(
+            _moving(
+                boundary,
+                boxes["input"][index] if index < len(boxes["input"]) else None,
+                "input",
+                index,
+                call,
+            )
+            for index, boundary in enumerate(carried["input"])
+        ),
+        outputs=tuple(
+            _moving(
+                boundary,
+                boxes["output"][index] if index < len(boxes["output"]) else None,
+                "output",
+                index,
+                call,
+            )
+            for index, boundary in enumerate(carried["output"])
+        ),
+        storage_effect=relations.storage_effect,
+    )
+
+
+def _bindings_of(relations: AccessRelations) -> dict:
+    """Every parameter this Op binds, by name, across all of its boundaries.
+
+    One name is one value for the whole Op, so a relation that gains a parameter
+    by being composed or restricted still knows what it stands for.
+    """
+    bindings: dict = {}
+    for _side, _index, pattern in _affine_boundaries(relations):
+        bindings.update(getattr(pattern, "parameters", ()) or ())
+    return bindings
+
+
+def _addressed(
+    boundary: "BoundaryAccess", local, logical, bindings: dict, side: str, index: int, call
+) -> "BoundaryAccess":
+    """One boundary's image carried from logical axes onto the positions it has."""
+    pattern = boundary.pattern
+    if not isinstance(pattern, (AffineAccess, isl.map, isl.multi_aff)):
+        raise ValueError(
+            f"{type(call.target).__name__} states {side} {index} as a "
+            f"{type(pattern).__name__}, which no reader can carry onto positions"
+        )
+    relation = relation_of(pattern)
+    if not isinstance(local, TensorType) or not isinstance(logical, TensorType):
+        return _rebuilt(boundary, relation, bindings)
+    if relation.dim(isl.dim_type.OUT) != len(logical.shape):
+        raise ValueError(
+            f"{type(call.target).__name__} reads {side} {index} at "
+            f"{relation.dim(isl.dim_type.OUT)} coordinates, and that value has "
+            f"{len(logical.shape)} axes of its own; a canonical relation is "
+            "stated in the axes an Op was written in"
+        )
+    return _rebuilt(boundary, relation.apply_range(positions_of(local, logical)), bindings)
+
+
+def _rebuilt(boundary: "BoundaryAccess", relation: "isl.map", bindings: dict):
+    """One boundary carrying a relation, with what its parameters stand for."""
+    return dataclasses.replace(
+        boundary,
+        pattern=AffineAccess(
+            relation,
+            tuple(
+                (name, bindings[name])
+                for name in (
+                    relation.get_dim_name(isl.dim_type.PARAM, index)
+                    for index in range(relation.dim(isl.dim_type.PARAM))
+                )
+                if name in bindings
+            ),
+        ),
+    )
+
+
+def _moving(boundary: "BoundaryAccess", box, side: str, index: int, call):
+    """One boundary charged what its own relation reaches, not what it was told.
+
+    An Op states its movement in logical terms because that is all it can know;
+    how much of that crosses here is what the projected relation says. There is
+    no falling back on what it said, because two answers is the thing this
+    milestone exists to remove.
+    """
+    reached = reached_elements(boundary.pattern, box)
+    if reached is None:
+        raise ValueError(
+            f"{type(call.target).__name__} states {side} {index} as "
+            f"{relation_of(boundary.pattern)}, which reaches no countable number "
+            "of elements here"
+        )
+    return dataclasses.replace(
+        boundary,
+        quantity=AccessQuantity(reached, reached, boundary.quantity.provenance),
+    )
+
+
 def relations_of(call, ctx) -> AccessRelations:
     """One Op's coordinates, held also against the Type the Call now has.
 
-    Everything checkable before the Type is checked before it, so what is left
-    here is what genuinely needs the answer: one boundary per output field, each
-    written at the rank that field has, and the legacy links and claim held to
-    the operands they name.
+    The Op stated its coordinates in its own axes; here they are carried onto the
+    positions this reader addresses, and then held to the Call. What is checked
+    is what needs the Type: one boundary per output field, each written at the
+    rank that field has, and the legacy links and claim held to their operands.
     """
     op_cls = type(call.target)
-    relations = coordinates_of(call, ctx)
+    relations = projected(coordinates_of(call, ctx), call, ctx)
     _wanted_inputs, wanted_outputs = _boundaries_of(call, ctx)
     if len(relations.outputs) != wanted_outputs:
         raise ValueError(
@@ -1469,6 +1615,34 @@ def self_image(local: "Type", logical: "Type") -> "isl.multi_aff":
     return isl.multi_aff(f"{{ [{domain}] -> [{image}] }}")
 
 
+def positions_of(local: "Type", logical: "Type") -> "isl.map":
+    """Where one value's logical coordinates live among the positions it has.
+
+    A layout may factor a logical axis into several positions, and then a
+    coordinate on that axis is the mixed-radix digits of those positions: the
+    outer ones are what it divides by, the inner ones what it is left with. A
+    position a participant holds one of contributes nothing to vary over, its
+    coordinate being the participant's identity rather than the expression's.
+    Composing an Op's logical relation with this is how a reader gets the
+    coordinates it can address, without any Op saying how.
+    """
+    belongs = logical_axes_of(local, logical)
+    coordinates = ", ".join(f"c{axis}" for axis in range(len(logical.shape)))
+    image = factored_image(
+        [f"c{axis}" for axis in range(len(logical.shape))], local, logical
+    )
+    guards = []
+    held: dict[int, int] = {}
+    for position, owner in enumerate(belongs):
+        extent = local.shape[position]
+        if isinstance(extent, int) and not isinstance(extent, bool):
+            held[owner] = held.get(owner, 1) * extent
+    for axis, extent in sorted(held.items()):
+        guards.append(f"0 <= c{axis} < {extent}")
+    where = f" : {' and '.join(guards)}" if guards else ""
+    return isl.map(f"{{ [{coordinates}] -> [{', '.join(image)}]{where} }}")
+
+
 def factored_image(reads: "Sequence[str]", local: "Type", logical: "Type") -> list[str]:
     """Spread one expression per logical axis over the positions it occupies.
 
@@ -1500,21 +1674,15 @@ def factored_image(reads: "Sequence[str]", local: "Type", logical: "Type") -> li
 
 
 def elementwise_elements(arg, call, ctx) -> int:
-    """What one participant reads of *arg* to produce its share of *call*.
+    """What is read of *arg* to produce one *call*, in the axes it was written in.
 
-    A participant reads no more of an operand than it produces, and no more than
-    the operand holds -- the second half being what makes a broadcast operand
-    cost its own smaller size. The bound matters most where an operand is not
-    sharded at all: a replicated source projects to the whole of itself, and
-    charging that to every participant multiplies one read by the number of them.
+    An Op says how much it moves in logical terms, because that is all it knows
+    before anything is placed. What one participant moves of that is the
+    projection's answer: the elements its own share of the relation reaches, so a
+    replicated operand costs itself once rather than once per participant.
     """
-    type_ = ctx.local_type_of(arg)
-    if not isinstance(type_, TensorType):
-        return 0
-    produced = ctx.local_type_of(call)
-    if not isinstance(produced, TensorType):
-        return elements_of(type_)
-    return min(elements_of(type_), elements_of(produced))
+    type_ = ctx.type_of(arg)
+    return elements_of(type_) if isinstance(type_, TensorType) else 0
 
 
 def _identity(rank: int) -> "isl.multi_aff":
@@ -1532,11 +1700,11 @@ def measures_without_reading(call, ctx) -> AccessRelations:
     empty map, nothing crossing -- rather than an identity claiming a read the
     Op never performs.
     """
-    result = ctx.local_type_of(call)
+    result = ctx.type_of(call.args[0]) if call.args else None
     out_rank = len(result.shape) if hasattr(result, "shape") else 0
 
     def _empty(arg) -> "isl.map":
-        type_ = ctx.local_type_of(arg)
+        type_ = ctx.type_of(arg)
         in_rank = len(type_.shape) if hasattr(type_, "shape") else 0
         reads = ", ".join(f"i{index}" for index in range(in_rank))
         domain = ", ".join(f"d{index}" for index in range(out_rank))
@@ -1608,7 +1776,7 @@ def view_relations(
     """
 
     def _handler(call, ctx) -> AccessRelations:
-        result = ctx.local_type_of(call)
+        result = ctx.type_of(call.args[source])
         out_rank = len(result.shape) if hasattr(result, "shape") else 0
         walked = out_rank if over is None else len(tuple(over(call, ctx)))
         moved = elements_of(result)
@@ -1617,37 +1785,8 @@ def view_relations(
         if mapping is not None:
             reads, written = mapping(call, ctx)
         else:
-            held_type = ctx.local_type_of(call.args[source])
-            logical_source = ctx.type_of(call.args[source])
-            logical_result = ctx.type_of(call)
-            carried = (
-                logical_coordinates(result, logical_result)
-                if hasattr(logical_result, "shape")
-                else {}
-            )
-            spread = (
-                factored_image(
-                    [
-                        carried.get(axis, "0")
-                        for axis in range(len(getattr(logical_result, "shape", ())))
-                    ],
-                    held_type,
-                    logical_source,
-                )
-                if hasattr(held_type, "shape")
-                else []
-            )
-            domain = ", ".join(f"d{index}" for index in range(out_rank))
-            reads = (
-                isl.multi_aff(f"{{ [{domain}] -> [{', '.join(spread)}] }}")
-                if spread
-                else _identity(walked)
-            )
-            written = (
-                self_image(result, logical_result)
-                if hasattr(logical_result, "shape")
-                else _identity(out_rank)
-            )
+            reads = _identity(walked)
+            written = _identity(out_rank)
         link = StorageLink(
             kind="forward",
             input=source,
@@ -1688,15 +1827,15 @@ def identity_relations(
     """
 
     def _handler(call, ctx) -> AccessRelations:
-        result = ctx.local_type_of(call)
-        out_rank = len(result.shape)
+        walked = ctx.type_of(call.args[0])
+        out_rank = len(walked.shape)
 
         def _rank_of(arg) -> int:
-            ty = ctx.local_type_of(arg)
+            ty = ctx.type_of(arg)
             return len(ty.shape) if hasattr(ty, "shape") else out_rank
 
         return iterating(
-            result.shape,
+            walked.shape,
             AccessRelations(
                 inputs=tuple(
                     moves(
@@ -1705,7 +1844,7 @@ def identity_relations(
                     )
                     for index in range(n_inputs)
                 ),
-                outputs=(writes(_identity(out_rank), elements_of(result)),),
+                outputs=(writes(_identity(out_rank), elements_of(walked)),),
                 storage_effect=None if storage is None else storage(call, ctx),
             ),
         )
@@ -1847,6 +1986,8 @@ __all__ = [
     "StorageLink",
     "elementwise_elements",
     "factored_image",
+    "positions_of",
+    "projected",
     "logical_axes_of",
     "logical_coordinates",
     "factored_window",

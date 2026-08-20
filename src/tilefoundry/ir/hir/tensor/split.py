@@ -23,7 +23,6 @@ from tilefoundry.ir.types.shard import (
 from tilefoundry.ir.types.shard.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.shard.shard_layout import Split as SplitAttr
 from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis, split_target_axes
-from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessMode,
@@ -32,11 +31,8 @@ from tilefoundry.visitor_registry.access_relation import (
     BoundaryAccess,
     StorageLink,
     elements_of,
-    factored_image,
     iterating,
-    logical_coordinates,
     register_access_relation,
-    self_image,
     transfers,
 )
 
@@ -146,11 +142,9 @@ def _split_access(call: "Call", ctx) -> AccessRelations:
     which is why its own boundary is the full domain rather than the first
     part's map -- under that, every later part would vanish.
     """
-    source = ctx.local_type_of(call.args[0])
-    logical_source = ctx.type_of(call.args[0])
-    result = ctx.type_of(call)
-    fields = result.fields if isinstance(result, TupleType) else (result,)
-    rank = len(logical_source.shape)
+    source = ctx.type_of(call.args[0])
+    logical_source = source
+    rank = len(source.shape)
     axis = call.target.axis + rank if call.target.axis < 0 else call.target.axis
     parts = call.target.num_splits
     extent = logical_source.shape[axis]
@@ -161,29 +155,25 @@ def _split_access(call: "Call", ctx) -> AccessRelations:
         )
     chunk = extent // parts
 
+    piece = (*source.shape[:axis], chunk, *source.shape[axis + 1 :])
+    moved = 1
+    for size in piece:
+        moved *= size if isinstance(size, int) else 1
+    domain = ", ".join(f"d{index}" for index in range(rank))
     sources, outputs, held = [], [], []
-    for part, field in enumerate(fields):
-        local_field = (
-            field
-            if getattr(ctx, "level", None) is None
-            else local_type_of(field, level=ctx.level, topologies=ctx.topologies)
-        )
-        carried = logical_coordinates(local_field, field)
-        reads = [carried.get(index, "0") for index in range(rank)]
-        walked = reads[axis]
-        reads[axis] = walked if not part else f"{walked} + {part * chunk}"
-        domain = ", ".join(f"d{index}" for index in range(len(local_field.shape)))
-        image = ", ".join(factored_image(reads, source, logical_source))
-        sources.append(isl.multi_aff(f"{{ [{domain}] -> [{image}] }}"))
-        outputs.append(self_image(local_field, field))
-        held.append(elements_of(local_field))
+    for part in range(parts):
+        reads = [f"d{index}" for index in range(rank)]
+        reads[axis] = reads[axis] if not part else f"d{axis} + {part * chunk}"
+        sources.append(isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}"))
+        outputs.append(identity_access(rank))
+        held.append(moved)
 
     return iterating(
-        source.shape,
-    AccessRelations(
+        piece,
+        AccessRelations(
             inputs=(
                 BoundaryAccess(
-                    self_image(source, logical_source),
+                    identity_access(rank),
                     AccessQuantity(elements_of(source), elements_of(source)),
                     AccessMode.TRANSFER,
                 ),

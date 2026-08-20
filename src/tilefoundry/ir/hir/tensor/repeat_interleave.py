@@ -114,17 +114,24 @@ def _repeat_interleave_access(call: "Call", ctx) -> AccessRelations:
     positions depend on one element is the pattern's business; the element still
     crossed the boundary once.
     """
-    source = ctx.local_type_of(call.args[0])
-    result = ctx.local_type_of(call)
-    rank = len(result.shape)
+    source = ctx.type_of(call.args[0])
+    rank = len(source.shape)
     axis = call.target.axis + rank if call.target.axis < 0 else call.target.axis
     repeats = call.target.repeats
     dims = [f"d{index}" for index in range(rank)]
     reads = list(dims)
     reads[axis] = f"floor(d{axis} / {repeats})" if repeats != 1 else dims[axis]
     domain = ", ".join(dims)
+    out_shape = (
+        *source.shape[:axis],
+        source.shape[axis] * repeats,
+        *source.shape[axis + 1 :],
+    )
+    produced = 1
+    for extent in out_shape:
+        produced *= extent if isinstance(extent, int) else 1
     return iterating(
-        result.shape,
+        out_shape,
     AccessRelations(
             inputs=(
                 moves(
@@ -132,6 +139,6 @@ def _repeat_interleave_access(call: "Call", ctx) -> AccessRelations:
                     elements_of(source),
                 ),
             ),
-            outputs=(writes(identity_access(rank), elements_of(result)),),
+            outputs=(writes(identity_access(rank), produced),),
         ),
     )

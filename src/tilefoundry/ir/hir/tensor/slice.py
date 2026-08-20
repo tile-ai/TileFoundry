@@ -41,11 +41,8 @@ from tilefoundry.visitor_registry.access_relation import (
     StorageEffectKind,
     StorageSpan,
     dense,
-    factored_image,
-    logical_coordinates,
     register_access_relation,
     same_placement,
-    self_image,
     static_bytes,
     view_relations,
 )
@@ -240,14 +237,11 @@ def _slice_view(call: "Call", ctx) -> tuple:
     inside what it reads, whichever of its extent, size, stride and start turn out
     to be numbers.
     """
-    result = ctx.local_type_of(call)
-    logical_result = ctx.type_of(call)
-    source = ctx.local_type_of(call.args[0])
     logical_source = ctx.type_of(call.args[0])
     given = call.args[1]
     offsets = given.elements if isinstance(given, Tuple) else (given,)
     sizes, strides = tuple(call.target.sizes), tuple(call.target.strides)
-    carried = logical_coordinates(result, logical_result)
+    carried = {axis: f"d{axis}" for axis in range(len(logical_source.shape))}
 
     reads: list[str] = []
     guards: list[str] = []
@@ -269,14 +263,14 @@ def _slice_view(call: "Call", ctx) -> tuple:
     names = [name for name, _value in parameters]
     prefix = f"[{', '.join(names)}] -> " if names else ""
     where = f" : {' and '.join(guards)}" if guards else ""
-    domain = ", ".join(f"d{index}" for index in range(len(result.shape)))
-    image = ", ".join(factored_image(reads, source, logical_source))
+    rank = len(sizes) or len(logical_source.shape)
+    domain = ", ".join(f"d{index}" for index in range(rank))
     return (
         AffineAccess(
-            isl.map(f"{prefix}{{ [{domain}] -> [{image}]{where} }}"),
+            isl.map(f"{prefix}{{ [{domain}] -> [{', '.join(reads)}]{where} }}"),
             tuple(parameters),
         ),
-        self_image(result, logical_result),
+        identity_access(rank),
     )
 
 

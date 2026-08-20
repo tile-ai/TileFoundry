@@ -441,7 +441,7 @@ def _conv2d_access(call: "Call", ctx) -> AccessRelations:
     def spread(reads, value) -> str:
         """One expression per position of *value* in this view."""
         return ", ".join(
-            factored_image(reads, ctx.local_type_of(value), ctx.type_of(value))
+            factored_image(reads, ctx.type_of(value), ctx.type_of(value))
         )
     reached = isl.map(
         f"{{ [{domain}] -> "

@@ -147,9 +147,9 @@ def _index_add_access(call: "Call", ctx) -> AccessRelations:
     payload's own row is `i` where the destination's is `index[i]`, so from here
     it too is a row nobody named, and reaching all of them is the payload.
     """
-    dst = ctx.local_type_of(call.args[0])
-    index = ctx.local_type_of(call.args[1])
-    src = ctx.local_type_of(call.args[2])
+    dst = ctx.type_of(call.args[0])
+    index = ctx.type_of(call.args[1])
+    src = ctx.type_of(call.args[2])
     logical_dst = ctx.type_of(call.args[0])
     rank = len(dst.shape)
     dim = call.target.dim + rank if call.target.dim < 0 else call.target.dim

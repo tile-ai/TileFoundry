@@ -24,7 +24,6 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     elements_of,
     iterating,
-    logical_coordinates,
     moves,
     reached_at,
     register_access_relation,
@@ -119,18 +118,22 @@ def _index_select_access_relation(call: "Call", ctx) -> AccessRelations:
     lives in the index, not here. The index itself is read at the coordinate the
     result reached, one element per selected slice.
     """
-    source_ty, index_ty = ctx.local_type_of(call.args[0]), ctx.local_type_of(call.args[1])
-    logical_source, logical_index = ctx.type_of(call.args[0]), ctx.type_of(call.args[1])
-    out_ty, logical_out = ctx.local_type_of(call), ctx.type_of(call)
-    axis = _norm_dim(call.target.dim, len(logical_source.shape))
-    rank = len(out_ty.shape)
-    carried = logical_coordinates(out_ty, logical_out)
+    source_ty, index_ty = ctx.type_of(call.args[0]), ctx.type_of(call.args[1])
+    logical_source, logical_index = source_ty, index_ty
+    axis = _norm_dim(call.target.dim, len(source_ty.shape))
+    out_shape = (
+        *source_ty.shape[:axis],
+        index_ty.shape[0],
+        *source_ty.shape[axis + 1 :],
+    )
+    rank = len(out_shape)
+    carried = {position: f"d{position}" for position in range(rank)}
     slice_size = math.prod(
         extent for position, extent in enumerate(source_ty.shape) if position != axis
     )
     return iterating(
-        out_ty.shape,
-    AccessRelations(
+        out_shape,
+        AccessRelations(
             inputs=(
                 moves(
                     reached_at(rank, source_ty, logical_source, carried, free=(axis,)),
@@ -141,7 +144,9 @@ def _index_select_access_relation(call: "Call", ctx) -> AccessRelations:
                     elements_of(index_ty),
                 ),
             ),
-            outputs=(writes(identity_access(rank), elements_of(out_ty)),),
+            outputs=(
+                writes(identity_access(rank), elements_of(index_ty) * slice_size),
+            ),
         ),
     )
 

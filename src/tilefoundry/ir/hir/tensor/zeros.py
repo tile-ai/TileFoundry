@@ -50,11 +50,13 @@ def _zeros_access(call: "Call", ctx) -> AccessRelations:
     the whole of what this Op does and why it is worth stating rather than
     leaving to a default that would invent one.
     """
-    result = ctx.local_type_of(call)
+    allocated = call.target.type
     return iterating(
-        result.shape,
-    AccessRelations(
+        allocated.shape,
+        AccessRelations(
             inputs=(),
-            outputs=(writes(identity_access(len(result.shape)), elements_of(result)),),
+            outputs=(
+                writes(identity_access(len(allocated.shape)), elements_of(allocated)),
+            ),
         ),
     )

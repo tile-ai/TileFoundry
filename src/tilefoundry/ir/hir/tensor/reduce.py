@@ -26,9 +26,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     build_relation,
     elements_of,
-    factored_image,
     iterating,
-    logical_coordinates,
     moves,
     register_access_relation,
     register_type_relation,
@@ -172,6 +170,14 @@ def _eval_reduce(ctx):
     return TensorValue(data=out, type=ctx.result_type)
 
 
+def _kept(shape: tuple) -> int:
+    """How many elements a shape of numbers holds."""
+    counted = 1
+    for extent in shape:
+        counted *= extent if isinstance(extent, int) else 1
+    return counted
+
+
 @register_access_relation(Reduce)
 def _reduce_access(call: "Call", ctx) -> AccessRelations:
     """Every source coordinate feeding a result coordinate, read once.
@@ -183,38 +189,37 @@ def _reduce_access(call: "Call", ctx) -> AccessRelations:
     correspondence to the result comes from both layouts, since a result
     coordinate names a logical axis and not a position.
     """
-    source = ctx.local_type_of(call.args[0])
-    result = ctx.local_type_of(call)
-    logical_source = ctx.type_of(call.args[0])
-    logical_result = ctx.type_of(call)
+    source = ctx.type_of(call.args[0])
     rank = len(source.shape)
     axes = tuple(
-        axis + len(logical_source.shape) if axis < 0 else axis
-        for axis in call.target.axes
+        axis + rank if axis < 0 else axis for axis in call.target.axes
     )
-    carried = logical_coordinates(source, logical_source)
-    surviving = [axis for axis in range(len(logical_source.shape)) if axis not in axes]
+    out_shape = tuple(
+        (1 if axis in axes else extent)
+        for axis, extent in enumerate(source.shape)
+        if call.target.keepdim or axis not in axes
+    )
+    carried = {axis: f"d{axis}" for axis in range(rank)}
+    surviving = [axis for axis in range(rank) if axis not in axes]
     came_from = (
-        {axis: axis for axis in range(len(logical_source.shape))}
+        {axis: axis for axis in range(rank)}
         if call.target.keepdim
         else dict(enumerate(surviving))
     )
     writes_at = [
         "0"
         if axis not in came_from or came_from[axis] in axes
-        else carried.get(came_from[axis], "0")
-        for axis in range(len(logical_result.shape))
+        else carried[came_from[axis]]
+        for axis in range(len(out_shape))
     ]
-    collapses = ", ".join(factored_image(writes_at, result, logical_result))
+    collapses = ", ".join(writes_at)
     domain = ", ".join(f"d{index}" for index in range(rank))
     return iterating(
         source.shape,
         AccessRelations(
             inputs=(moves(identity_access(rank), elements_of(source)),),
             outputs=(
-                writes(
-                    isl.map(f"{{ [{domain}] -> [{collapses}] }}"), elements_of(result)
-                ),
+                writes(isl.map(f"{{ [{domain}] -> [{collapses}] }}"), _kept(out_shape)),
             ),
         ),
     )

@@ -97,7 +97,7 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     value's head_dim coordinate and at any row those axes could name -- the row
     is an element of `pos_ids`, which nothing here holds, read whole by both.
     """
-    q_ty, k_ty = ctx.local_type_of(call.args[0]), ctx.local_type_of(call.args[1])
+    q_ty, k_ty = ctx.type_of(call.args[0]), ctx.type_of(call.args[1])
     logical_q = ctx.type_of(call.args[0])
     rank = len(q_ty.shape)
     head_dim = len(logical_q.shape) - 1
@@ -109,11 +109,11 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     narrower = index_set(tuple(k_ty.shape))
     if narrower is not None:
         grouped = grouped.intersect_range(narrower)
-    positions = ctx.local_type_of(call.args[4])
+    positions = ctx.type_of(call.args[4])
     taken = elements_of(positions)
     tables = []
     for operand in (2, 3):
-        table = ctx.local_type_of(call.args[operand])
+        table = ctx.type_of(call.args[operand])
         logical_table = ctx.type_of(call.args[operand])
         rows = len(logical_table.shape) - 1
         tables.append(

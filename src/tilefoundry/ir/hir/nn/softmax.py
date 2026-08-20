@@ -42,7 +42,7 @@ def _softmax_access(call: "Call", ctx) -> AccessRelations:
     believe each output element depends on one input element, and tile an axis
     that cannot be tiled.
     """
-    x_ty = ctx.local_type_of(call.args[0])
+    x_ty = ctx.type_of(call.args[0])
     logical_x = ctx.type_of(call.args[0])
     authored = call.target.axis
     axis = authored + len(logical_x.shape) if authored < 0 else authored
@@ -54,7 +54,7 @@ def _softmax_access(call: "Call", ctx) -> AccessRelations:
         rows,
         AccessRelations(
             inputs=(moves(row, elements_of(x_ty)),),
-            outputs=(writes(row, elements_of(ctx.local_type_of(call))),),
+            outputs=(writes(row, elements_of(x_ty)),),
         ),
     )
 

@@ -77,8 +77,8 @@ def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
     and the row is what each boundary reaches. The weight matches that axis and
     nothing else, so every row reaches all of it -- one weight element each.
     """
-    x_ty = ctx.local_type_of(call.args[0])
-    w_ty = ctx.local_type_of(call.args[1])
+    x_ty = ctx.type_of(call.args[0])
+    w_ty = ctx.type_of(call.args[1])
     logical_x = ctx.type_of(call.args[0])
     normalised = len(logical_x.shape) - 1
     rows, names, guards = normalised_rows(x_ty, logical_x, normalised)

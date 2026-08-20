@@ -19,10 +19,8 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     build_relation,
     elements_of,
-    factored_image,
     iterating,
     logical_axes_of,
-    logical_coordinates,
     moves,
     register_access_relation,
     register_type_relation,
@@ -68,27 +66,27 @@ def _held_axis(local, logical, axis: int) -> int:
 
 
 def _operand_reads(
-    local, logical, carried: dict, out_logical, inner: str, *, contracts_last: bool
+    shape: tuple, out_shape: tuple, inner: str, *, contracts_last: bool
 ) -> list[str]:
-    """One expression per logical axis of an operand of the contraction.
+    """One coordinate per axis of an operand of the contraction.
 
     The two matrix axes are the contraction and the one the result keeps; which
     is which is the only difference between the two operands. Batch axes are
     right-aligned against the result's, and one the operand broadcasts reads its
     only coordinate rather than the result's.
     """
-    rank = len(logical.shape)
-    shift = len(out_logical.shape) - rank
+    rank = len(shape)
+    shift = len(out_shape) - rank
     reads: list[str] = []
     for axis in range(rank):
         if axis == rank - 1:
-            reads.append(inner if contracts_last else carried.get(len(out_logical.shape) - 1, "0"))
+            reads.append(inner if contracts_last else f"d{len(out_shape) - 1}")
         elif axis == rank - 2:
-            reads.append(carried.get(len(out_logical.shape) - 2, "0") if contracts_last else inner)
-        elif is_one(logical.shape[axis]) and not is_one(out_logical.shape[axis + shift]):
+            reads.append(f"d{len(out_shape) - 2}" if contracts_last else inner)
+        elif is_one(shape[axis]) and not is_one(out_shape[axis + shift]):
             reads.append("0")
         else:
-            reads.append(carried.get(axis + shift, "0"))
+            reads.append(f"d{axis + shift}")
     return reads
 
 
@@ -100,51 +98,56 @@ def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
     asked by rather than something existential inside an image, and the result is
     accumulated over it. Reading an operand at the result's own coordinates would
     claim a shape it does not have the moment the summed and kept axes differ in
-    extent. The summed extent is this participant's own, that axis being one a
-    layout can split, and an operand holding less of it answers on that much.
+    extent. Which positions any of these coordinates are is the reader's
+    question; the result's own extents follow from the operands.
     """
-    lhs_ty = ctx.local_type_of(call.args[0])
-    rhs_ty = ctx.local_type_of(call.args[1])
-    out_ty = ctx.local_type_of(call)
-    logical_lhs = ctx.type_of(call.args[0])
-    logical_rhs = ctx.type_of(call.args[1])
-    logical_out = ctx.type_of(call)
-    rank = len(out_ty.shape)
-    carried = logical_coordinates(out_ty, logical_out)
-    operands = (
-        (lhs_ty, logical_lhs, True),
-        (rhs_ty, logical_rhs, False),
-    )
-    helds = tuple(
-        _held_axis(local, logical, len(logical.shape) - (1 if last else 2))
-        for local, logical, last in operands
-    )
-    contracted = max(helds)
+    lhs = ctx.type_of(call.args[0])
+    rhs = ctx.type_of(call.args[1])
+    batch = _broadcast_batch(lhs.shape[:-2], rhs.shape[:-2])
+    if batch is None:
+        raise ValueError(
+            f"MatMul batches {tuple(lhs.shape[:-2])} against "
+            f"{tuple(rhs.shape[:-2])}, which do not broadcast"
+        )
+    out_shape = (*batch, lhs.shape[-2], rhs.shape[-1])
+    summed = lhs.shape[-1]
+    rank = len(out_shape)
     dims = ", ".join((*(f"d{index}" for index in range(rank)), "k"))
-
+    inner = "0" if is_one(summed) else "k"
     inputs = []
-    for (local, logical, contracts_last), held in zip(operands, helds):
-        inner = "0" if held == 1 else "k"
-        reads = _operand_reads(
-            local, logical, carried, logical_out, inner, contracts_last=contracts_last
-        )
-        image = ", ".join(factored_image(reads, local, logical))
-        guard = "" if held == contracted else f" : 0 <= k < {held}"
+    for shape, contracts_last, held in (
+        (tuple(lhs.shape), True, lhs.shape[-1]),
+        (tuple(rhs.shape), False, rhs.shape[-2]),
+    ):
+        reads = _operand_reads(shape, out_shape, inner, contracts_last=contracts_last)
         inputs.append(
-            moves(isl.map(f"{{ [{dims}] -> [{image}]{guard} }}"), elements_of(local))
+            moves(
+                isl.map(f"{{ [{dims}] -> [{', '.join(reads)}] }}"),
+                elements_of(ctx.type_of(call.args[0 if contracts_last else 1])),
+            )
         )
+        del held
     accumulates = ", ".join(f"d{index}" for index in range(rank))
     return iterating(
-        (*out_ty.shape, contracted),
+        (*out_shape, summed),
         AccessRelations(
             inputs=tuple(inputs),
             outputs=(
                 writes(
-                    isl.map(f"{{ [{dims}] -> [{accumulates}] }}"), elements_of(out_ty)
+                    isl.map(f"{{ [{dims}] -> [{accumulates}] }}"),
+                    _elements(out_shape),
                 ),
             ),
         ),
     )
+
+
+def _elements(shape: tuple) -> int:
+    """How many elements a shape of numbers holds."""
+    counted = 1
+    for extent in shape:
+        counted *= extent if isinstance(extent, int) else 1
+    return counted
 
 
 @register_type_relation(MatMul)

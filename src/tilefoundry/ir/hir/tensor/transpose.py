@@ -17,16 +17,17 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     StorageEffectClaim,
     build_relation,
-    factored_image,
     forward_whole,
-    logical_coordinates,
     register_access_relation,
     register_type_relation,
     same_placement,
-    self_image,
     view_relations,
 )
-from tilefoundry.visitor_registry.relation_build import build_domain, identity_map
+from tilefoundry.visitor_registry.relation_build import (
+    build_domain,
+    identity_access,
+    identity_map,
+)
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
@@ -68,25 +69,18 @@ def _transpose_storage(call: "Call", ctx) -> StorageEffectClaim | None:
 def _transpose_view(call: "Call", ctx) -> tuple:
     """Result axis k is source axis perm[k], stated in both sides' positions.
 
-    A permutation walks what it reads, so the source's own positions are the
-    coordinates and the permutation happens on the way out. It is stated over
-    logical axes and a layout may factor either side into more positions than
-    that, so the source's coordinates are rebuilt per logical axis, permuted,
-    and spread over the result's positions.
+    A permutation walks what it reads, so the source's own axes are the
+    coordinates and the permutation happens on the way out. Which positions those
+    axes are is the reader's question, asked of every Op the same way.
     """
     perm = tuple(call.target.perm)
-    result = ctx.local_type_of(call)
-    source = ctx.local_type_of(call.args[0])
-    logical_source = ctx.type_of(call.args[0])
-    carried = logical_coordinates(source, logical_source)
-    writes_at = ["0"] * len(perm)
-    for result_axis, source_axis in enumerate(perm):
-        writes_at[result_axis] = carried.get(source_axis, "0")
-    domain = ", ".join(f"d{index}" for index in range(len(source.shape)))
-    image = ", ".join(factored_image(writes_at, result, ctx.type_of(call)))
+    source = ctx.type_of(call.args[0])
+    rank = len(source.shape)
+    writes_at = [f"d{source_axis}" for source_axis in perm]
+    domain = ", ".join(f"d{index}" for index in range(rank))
     return (
-        self_image(source, logical_source),
-        isl.multi_aff(f"{{ [{domain}] -> [{image}] }}"),
+        identity_access(rank),
+        isl.multi_aff(f"{{ [{domain}] -> [{', '.join(writes_at)}] }}"),
     )
 
 

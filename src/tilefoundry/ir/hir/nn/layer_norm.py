@@ -155,16 +155,14 @@ def _layer_norm_access(call: "Call", ctx) -> AccessRelations:
     requires of them; the verifier refuses a split at or beyond that axis, so
     their footprint is the suffix's product in every view.
     """
-    x = ctx.local_type_of(call.args[0])
-    result = ctx.local_type_of(call)
-    logical = ctx.type_of(call)
+    x = ctx.type_of(call.args[0])
     authored = call.target.axis
-    axis = authored + len(logical.shape) if authored < 0 else authored
-    rows, names, guards = normalised_rows(result, logical, axis)
+    axis = authored + len(x.shape) if authored < 0 else authored
+    rows, names, guards = normalised_rows(x, x, axis)
     domain = ", ".join(f"d{index}" for index in range(len(rows)))
     where = f" : {' and '.join(guards)}" if guards else ""
     row = isl.map(f"{{ [{domain}] -> [{', '.join(names)}]{where} }}")
-    belongs = logical_axes_of(result, logical)
+    belongs = logical_axes_of(x, x)
     suffix = ", ".join(
         names[position] for position, owner in enumerate(belongs) if owner >= axis
     ) or "0"
@@ -174,9 +172,9 @@ def _layer_norm_access(call: "Call", ctx) -> AccessRelations:
         AccessRelations(
             inputs=(
                 moves(row, elements_of(x)),
-                moves(across, elements_of(ctx.local_type_of(call.args[1]))),
-                moves(across, elements_of(ctx.local_type_of(call.args[2]))),
+                moves(across, elements_of(ctx.type_of(call.args[1]))),
+                moves(across, elements_of(ctx.type_of(call.args[2]))),
             ),
-            outputs=(writes(row, elements_of(result)),),
+            outputs=(writes(row, elements_of(x)),),
         ),
     )

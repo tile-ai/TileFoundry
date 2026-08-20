@@ -85,10 +85,10 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     rather than the container: how big it is and how much of it this occurrence
     wrote are different numbers, and the rest was already there.
     """
-    result = ctx.local_type_of(call)
-    logical_result = ctx.type_of(call)
+    result = ctx.type_of(call.args[0])
+    logical_result = result
     rank = len(logical_result.shape)
-    update = ctx.local_type_of(call.args[1])
+    update = ctx.type_of(call.args[1])
     logical_update = ctx.type_of(call.args[1])
     held_update = [1] * len(logical_update.shape)
     for position, owner in enumerate(logical_axes_of(update, logical_update)):
@@ -97,7 +97,7 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
         _offset_axes(call, rank), tuple(held_update), result, logical_result
     )
     window = elements_of(update)
-    kept = elements_of(ctx.local_type_of(call.args[0])) - window
+    kept = elements_of(result) - window
     complement, written = placed_window(
         offsets, extents, len(result.shape), within=tuple(result.shape)
     )

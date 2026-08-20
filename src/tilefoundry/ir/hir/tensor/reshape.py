@@ -54,9 +54,9 @@ def _reshape_storage(call: Call, ctx) -> StorageEffectClaim | None:
 
 def _reshape_view(call: "Call", ctx) -> tuple:
     """Where a result coordinate sits in the source it was renamed from."""
-    out_shape = tuple(ctx.local_type_of(call).shape)
+    out_shape = tuple(call.target.new_shape)
     return (
-        linearized_view(out_shape, tuple(ctx.local_type_of(call.args[0]).shape)),
+        linearized_view(out_shape, tuple(ctx.type_of(call.args[0]).shape)),
         identity_access(len(out_shape)),
     )
 

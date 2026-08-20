@@ -252,7 +252,7 @@ def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     multi_aff. Output values/indices are leading-dims identity with a new
     independent topk axis.
     """
-    x_ty = ctx.local_type_of(call.args[0])
+    x_ty = ctx.type_of(call.args[0])
     rank = len(x_ty.shape)
     axis = call.target.axis
     if axis < 0:
@@ -267,15 +267,20 @@ def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
         in_rel = isl.map(f"{{ [j] -> [i{axis}] }}")
 
     out_id = isl.multi_aff(f"{{ [{out_dims}] -> [{out_dims}] }}")
-    fields = ctx.local_type_of(call).fields
+    picked = _static_dim_value(call.target.k)
+    if picked is None:
+        raise NotImplementedError(
+            f"TopK access relation: k must be a static extent here, got {call.target.k!r}"
+        )
+    out_shape = (*x_ty.shape[:axis], picked, *x_ty.shape[axis + 1 :])
+    produced = 1
+    for extent in out_shape:
+        produced *= extent if isinstance(extent, int) else 1
     return iterating(
-        fields[0].shape,
-    AccessRelations(
+        out_shape,
+        AccessRelations(
             inputs=(moves(in_rel, elements_of(x_ty)),),
-            outputs=(
-                writes(out_id, elements_of(fields[0])),
-                writes(out_id, elements_of(fields[1])),
-            ),
+            outputs=(writes(out_id, produced), writes(out_id, produced)),
         ),
     )
 

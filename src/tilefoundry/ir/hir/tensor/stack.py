@@ -134,9 +134,10 @@ def _stack_access(call: "Call", ctx) -> AccessRelations:
     every axis it has: borrowing an input's map would describe a value one axis
     short, pinned to whichever position that input landed at.
     """
-    result = ctx.local_type_of(call)
-    rank = len(result.shape)
+    stacked = tuple(ctx.type_of(call.args[0]).shape)
+    rank = len(stacked) + 1
     axis = _axis(call, ctx, rank - 1)
+    out_shape = (*stacked[:axis], len(call.args), *stacked[axis:])
     dims = [f"d{index}" for index in range(rank)]
     domain = ", ".join(dims)
     reads = ", ".join(dim for index, dim in enumerate(dims) if index != axis)
@@ -146,13 +147,14 @@ def _stack_access(call: "Call", ctx) -> AccessRelations:
         else isl.map(f"{{ [{domain}] -> [] : d{axis} = {position} }}")
         for position in range(len(call.args))
     )
+    produced = len(call.args) * elements_of(ctx.type_of(call.args[0]))
     return iterating(
-        result.shape,
-    AccessRelations(
+        out_shape,
+        AccessRelations(
             inputs=tuple(
-                moves(item, elements_of(ctx.local_type_of(arg)))
+                moves(item, elements_of(ctx.type_of(arg)))
                 for item, arg in zip(inputs, call.args)
             ),
-            outputs=(writes(identity_access(rank), elements_of(result)),),
+            outputs=(writes(identity_access(rank), produced),),
         ),
     )

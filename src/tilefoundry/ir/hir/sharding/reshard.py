@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import isl
-
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
@@ -29,18 +27,15 @@ from tilefoundry.visitor_registry.access_relation import (
     StorageEffectKind,
     StorageLink,
     elements_of,
-    factored_image,
     forward_whole,
     iterating,
-    logical_coordinates,
     register_access_relation,
     register_type_relation,
     same_placement,
-    self_image,
     transfers,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
-from tilefoundry.visitor_registry.relation_build import identity_map
+from tilefoundry.visitor_registry.relation_build import identity_access, identity_map
 
 
 def _dim_mul(a, b):
@@ -206,33 +201,20 @@ def _reshard_access(call: "Call", ctx) -> AccessRelations:
 
     A reshard moves a value between storages or redistributes it across
     positions; neither changes which logical element the result's index came
-    from, so the boundary is exactly identity and never opaque.
+    from, so the boundary is exactly identity and never opaque. Which positions
+    those indices are is the reader's question, not this one's.
     """
-    result = ctx.local_type_of(call)
-    rank = len(result.shape)
-    whole = elements_of(result)
+    logical = ctx.type_of(call.args[0])
+    rank = len(logical.shape)
+    whole = elements_of(logical)
     held = AccessQuantity(whole, whole)
-    dims = ", ".join(f"d{index}" for index in range(rank))
-    logical = ctx.type_of(call)
-    carried = logical_coordinates(result, logical)
-    spread = factored_image(
-        [carried.get(axis, "0") for axis in range(len(logical.shape))],
-        ctx.local_type_of(call.args[0]),
-        ctx.type_of(call.args[0]),
-    )
-    reads = isl.multi_aff(f"{{ [{dims}] -> [{', '.join(spread)}] }}")
-    written = self_image(result, logical)
-    link = StorageLink(
-        kind="forward",
-        input=0,
-        where=reads,
-        quantity=held,
-    )
+    reads = identity_access(rank)
+    link = StorageLink(kind="forward", input=0, where=reads, quantity=held)
     return iterating(
-        result.shape,
-    AccessRelations(
+        logical.shape,
+        AccessRelations(
             inputs=(BoundaryAccess(reads, held, AccessMode.TRANSFER),),
-            outputs=(transfers(written, held, link),),
+            outputs=(transfers(identity_access(rank), held, link),),
             storage_effect=_reshard_storage(call, ctx),
         ),
     )

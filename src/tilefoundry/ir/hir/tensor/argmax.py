@@ -129,7 +129,7 @@ def _argmax_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRela
     GLOBAL: input scanned over the reduction axis (isl.map). Output is
     identity over the leading dims (axis collapsed away).
     """
-    x_ty = ctx.local_type_of(call.args[0])
+    x_ty = ctx.type_of(call.args[0])
     rank = len(x_ty.shape)
     axis = call.target.axis
     if axis < 0:
@@ -143,11 +143,15 @@ def _argmax_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRela
     else:
         in_rel = isl.map(f"{{ [] -> [{in_dims}] }}")
         out_id = isl.multi_aff("{ [] -> [] }")
+    out_shape = (*x_ty.shape[:axis], *x_ty.shape[axis + 1 :])
+    produced = 1
+    for extent in out_shape:
+        produced *= extent if isinstance(extent, int) else 1
     return iterating(
-        ctx.local_type_of(call).shape,
-    AccessRelations(
+        out_shape,
+        AccessRelations(
             inputs=(moves(in_rel, elements_of(x_ty)),),
-            outputs=(writes(out_id, elements_of(ctx.local_type_of(call))),),
+            outputs=(writes(out_id, produced),),
         ),
     )
 
