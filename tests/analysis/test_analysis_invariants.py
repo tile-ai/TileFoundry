@@ -1813,6 +1813,45 @@ def test_a_boundary_reads_the_coordinates_its_op_actually_touches() -> None:
     )
 
 
+def test_a_partial_boundary_is_narrowed_and_not_cut_away() -> None:
+    """A participant's share cuts every boundary, and a partial one survives it.
+
+    An insert states two things about its destination: the window it writes and
+    the rest it keeps. Splitting that destination halves both -- the participant
+    keeps its own half of the complement -- and reading the window boundary's
+    silence outside its own coordinates as a restriction would cut the
+    complement to nothing instead.
+    """
+    cta = Topology("cta", 2)
+    mesh = make_mesh((2,), ("c",), topology=cta)
+    destination = make_shard_tensor_type(
+        (8,), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32
+    )
+    update = make_shard_tensor_type(
+        (4,), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32
+    )
+    call = Call(
+        type=destination,
+        target=InsertSlice(),
+        args=(
+            Var(type=destination, name="dst"),
+            Var(type=update, name="update"),
+            Constant(type=make_tensor_type((), DType.i64), value=2),
+        ),
+    )
+
+    whole = relations_of(call, TypeInferContext())
+    assert _counted(whole) == ([4, 4, 1], [4])
+
+    unit = relations_of(call, CostContext(level="cta", topologies=(cta,)))
+    assert _counted(unit) == ([2, 2, 1], [2]), (
+        "each participant keeps half the complement and writes half the window"
+    )
+    assert not relation_of(unit.inputs[0].pattern).is_empty(), (
+        "the rest of the container is still there to keep"
+    )
+
+
 def test_a_windows_amount_does_not_move_with_where_it_lands() -> None:
     """Where a window sits is a runtime fact; how much it covers is not.
 
@@ -2341,6 +2380,38 @@ def test_a_shard_is_a_view_of_one_buffer_and_not_a_buffer_of_its_own() -> None:
     assert set(covered) == set(whole)
     for key, union in covered.items():
         assert union.is_equal(whole[key].domain)
+
+
+def test_a_loop_carries_one_factorization_round_its_own_buffer() -> None:
+    """What a loop is entered with, names each trip, and yields is one buffer.
+
+    Three derivations reach the same value -- the init's own Op, the loop's phi,
+    and whatever the body computed -- and a layout that factors its axes one way
+    on the way in and another on the way out is two buffers under one name. The
+    plan and the type system then project it differently, which is a wrong
+    address rather than a wrong number.
+    """
+    _plan, function = _planned()
+    topologies = (Topology("cta", 8),)
+
+    def factored(expr) -> tuple:
+        held = local_type_of(expr.type, level="cta", topologies=topologies)
+        return tuple(tuple(leaf.shape) for leaf in tensor_types(held))
+
+    loops = [
+        expr for expr in postorder(function.body) if isinstance(expr, GridRegionExpr)
+    ]
+    assert loops, "this program was expected to carry a buffer round a loop"
+    for loop in loops:
+        for init, carried, yielded in zip(
+            loop.init_args, loop.carried_args, loop.yield_values, strict=True
+        ):
+            assert factored(init) == factored(carried) == factored(yielded), (
+                "one buffer round a loop is one factorization"
+            )
+        assert factored(loop) == tuple(
+            item for value in loop.yield_values for item in factored(value)
+        ), "and the loop's own result is what its last trip yielded"
 
 
 def test_a_participants_share_of_a_buffer_is_the_type_it_was_given() -> None:

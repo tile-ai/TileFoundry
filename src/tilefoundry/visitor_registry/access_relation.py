@@ -413,13 +413,14 @@ def projected(relations: AccessRelations, call, ctx) -> AccessRelations:
         )
         for side, boundaries in (("input", relations.inputs), ("output", relations.outputs))
     }
-    narrowed = {
+    answered = {
         side: tuple(
-            _is_narrowed(*views(index, side)) for index in range(len(boundaries))
+            _answered(boundary, views(index, side)[1])
+            for index, boundary in enumerate(boundaries)
         )
         for side, boundaries in (("input", relations.inputs), ("output", relations.outputs))
     }
-    share = _own_iterations(relations, placed, narrowed)
+    share = _own_iterations(relations, placed, answered)
     carried = {
         side: tuple(
             _addressed(relation, views(index, side)[0], bindings, side, index, call)
@@ -430,75 +431,83 @@ def projected(relations: AccessRelations, call, ctx) -> AccessRelations:
     if share is None:
         return AccessRelations(inputs=carried["input"], outputs=carried["output"])
     return AccessRelations(
-        inputs=tuple(_iterating_over(boundary, share) for boundary in carried["input"]),
-        outputs=tuple(_iterating_over(boundary, share) for boundary in carried["output"]),
+        inputs=tuple(
+            _iterating_over(boundary, share, bindings) for boundary in carried["input"]
+        ),
+        outputs=tuple(
+            _iterating_over(boundary, share, bindings) for boundary in carried["output"]
+        ),
     )
 
 
-def _is_narrowed(local, logical) -> bool:
-    """Whether this reader was handed less of a value than the program states."""
-    return (
-        isinstance(local, TensorType)
-        and isinstance(logical, TensorType)
-        and tuple(local.shape) != tuple(logical.shape)
-    )
+def _answered(boundary: "BoundaryRelation", logical) -> "isl.set":
+    """Where a boundary answers about coordinates the value actually has.
+
+    A relation may be written to reach past its value -- a window shifted back
+    to where it came from does -- and outside that it is saying nothing rather
+    than saying this participant does not iterate there.
+    """
+    relation = relation_of(boundary.pattern)
+    box = index_set(tuple(logical.shape)) if isinstance(logical, TensorType) else None
+    if box is None or box.tuple_dim() != relation.range().tuple_dim():
+        return relation.domain()
+    return relation.intersect_range(box).domain()
 
 
 def _own_iterations(
-    stated: AccessRelations, placed: dict, narrowed: dict
+    stated: AccessRelations, placed: dict, answered: dict
 ) -> "isl.set | None":
     """Which of an Op's iterations this participant performs, or None if all.
 
     A value handed out in pieces says which iterations belong to whoever holds
-    this piece: the ones whose coordinate of it they were given. Every boundary
-    is then held to those, because a value nobody divided is addressed whole by
-    each of them and would otherwise charge one participant what all of them
-    read. Only a divided value is asked -- an undivided one narrows nothing --
-    and only a boundary that answers about the whole space, since what a partial
-    one leaves out is left out for everybody.
+    this piece, and says it only where its boundary answers at all: outside
+    that, reading its silence as a restriction cuts away the very part another
+    boundary is there to describe. So each allows what it owns together with
+    everything it was not asked about, and one that reaches nothing allows all.
+    What a parameter may be travels with the answer.
     """
     walked = iteration_universe(stated)
     if walked is None:
         return None
     share = None
+    limits = None
     for side, boundaries in (("input", stated.inputs), ("output", stated.outputs)):
         for index, boundary in enumerate(boundaries):
-            if not narrowed[side][index]:
-                continue
             try:
-                if not relation_of(boundary.pattern).domain().is_equal(walked):
+                asked = relation_of(boundary.pattern)
+                if asked.is_empty():
                     continue
+                allowed = placed[side][index].domain().union(
+                    walked.subtract(answered[side][index])
+                )
+                bounds = asked.params()
             except isl.Error:  # pragma: no cover - unalignable parameter lists
                 continue
-            own = placed[side][index].domain()
-            share = own if share is None else share.intersect(own)
-    if share is None or share.is_equal(walked):
+            share = allowed if share is None else share.intersect(allowed)
+            limits = bounds if limits is None else limits.intersect(bounds)
+    if share is None:
         return None
-    return share.coalesce()
+    share = share.intersect(walked)
+    if limits is not None:
+        share = share.intersect_params(limits)
+    share = share.coalesce()
+    return None if share.is_equal(walked) else share
 
 
-def _iterating_over(boundary: "BoundaryRelation", share: "isl.set") -> "BoundaryRelation":
-    """One boundary held to the iterations its participant performs."""
-    pattern = boundary.pattern
-    relation = relation_of(pattern)
+def _iterating_over(
+    boundary: "BoundaryRelation", share: "isl.set", bindings: dict
+) -> "BoundaryRelation":
+    """One boundary held to the iterations its participant performs.
+
+    Restricting can bring in a parameter another boundary named, so what they
+    stand for comes from the whole Op rather than from this boundary alone.
+    """
+    relation = relation_of(boundary.pattern)
     try:
         held = relation.intersect_domain(share)
     except isl.Error:  # pragma: no cover - unalignable parameter lists
         return boundary
-    stated = dict(pattern.parameters) if isinstance(pattern, AffineAccess) else {}
-    return BoundaryRelation(
-        AffineAccess(
-            held,
-            tuple(
-                (name, stated[name])
-                for name in (
-                    held.get_dim_name(isl.dim_type.PARAM, index)
-                    for index in range(held.dim(isl.dim_type.PARAM))
-                )
-                if name in stated
-            ),
-        )
-    )
+    return _rebuilt(held, bindings)
 
 
 def parameters_of(relations: AccessRelations) -> dict:
@@ -1128,11 +1137,11 @@ def positions_of(local: "Type", logical: "Type") -> "isl.map":
 
     A layout may factor a logical axis into several positions, and then a
     coordinate on that axis is the mixed-radix digits of those positions: the
-    outer ones are what it divides by, the inner ones what it is left with. A
-    position a participant holds one of contributes nothing to vary over, its
-    coordinate being the participant's identity rather than the expression's.
+    outer ones are what it divides by, the inner ones what it is left with.
     Composing an Op's logical relation with this is how a reader gets the
-    coordinates it can address, without any Op saying how.
+    coordinates it can address, without any Op saying how. An axis nobody
+    divided is left unguarded, holding all of it saying nothing about whose
+    iterations are whose.
     """
     belongs = logical_axes_of(local, logical)
     coordinates = ", ".join(f"c{axis}" for axis in range(len(logical.shape)))
@@ -1146,6 +1155,9 @@ def positions_of(local: "Type", logical: "Type") -> "isl.map":
         if isinstance(extent, int) and not isinstance(extent, bool):
             held[owner] = held.get(owner, 1) * extent
     for axis, extent in sorted(held.items()):
+        whole = logical.shape[axis] if axis < len(logical.shape) else None
+        if isinstance(whole, int) and not isinstance(whole, bool) and extent >= whole:
+            continue
         guards.append(f"0 <= c{axis} < {extent}")
     where = f" : {' and '.join(guards)}" if guards else ""
     return isl.map(f"{{ [{coordinates}] -> [{', '.join(image)}]{where} }}")

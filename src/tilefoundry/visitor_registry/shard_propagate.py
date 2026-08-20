@@ -59,20 +59,17 @@ def _equal_axis(m: "isl.map", out_axis: int, in_dim: int) -> "isl.map":
 
 
 def _tracked_anyway(m: "isl.map", out_axis: int) -> "int | None":
-    """The domain dim a constant-looking axis is, when the space fixes them both.
+    """Whether a constant-looking axis provably *is* its own domain dim.
 
     An access map is restricted to the space its Op walks, and within a space
     that gives a dim one value the coordinate and the constant it equals are the
-    same expression: isl prints whichever it likes. Asking the relation rather
-    than the spelling is what keeps an axis of extent one a projection of the
-    dim it came from instead of a broadcast of nothing.
+    same expression: isl prints whichever it likes. Only the axis's own dim is
+    accepted, so what is recovered is the projection that was written and never
+    some other dim that happens to hold the same value.
     """
-    tracked = [
-        dim
-        for dim in range(m.dim(isl.dim_type.IN))
-        if m.is_subset(_equal_axis(m, out_axis, dim))
-    ]
-    return min(tracked) if tracked else None
+    if out_axis >= m.dim(isl.dim_type.IN):
+        return None
+    return out_axis if m.is_subset(_equal_axis(m, out_axis, out_axis)) else None
 
 
 def _result_access(
@@ -158,10 +155,9 @@ def _carrier_layout(
     """Transform a covering input shard layout into the output layout.
 
     Route positions through domain projections and emit them in output-axis
-    order, including permutations and fully reduced axes. Preserve strides for
-    views or rebuild C-order strides for fresh buffers. Return ``None`` when
-    projection, output coverage, or propagated sharding is incomplete so a
-    partial contributor cannot replace layout synthesis.
+    order. This carries a physical factorization across, so anything short of an
+    exact coordinate projection returns ``None`` and lets synthesis build a
+    canonical layout instead.
     See [shard §6](docs/spec/shard.md#6-shardattr) and
     [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
