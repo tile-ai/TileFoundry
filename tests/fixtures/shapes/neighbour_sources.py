@@ -186,3 +186,70 @@ def future_import_out_of_place() -> str:
         "x = 1\n"
         "from __future__ import annotations\n" + _HEAD + _UNSOUND + _SOUND
     )
+
+
+def unsound_with_a_same_named_attribute() -> str:
+    """The unsound root sets a class attribute called `Sound`.
+
+    Writing a name is not reading one. A class that only happens to have an
+    attribute spelled like the selection has said nothing about it, so its own
+    refusal is still not the selection's.
+    """
+    return (
+        _HEAD
+        + _UNSOUND.replace("class Unsound:\n", "class Unsound:\n    Sound = 1\n", 1)
+        + _SOUND
+    )
+
+
+def unsound_with_a_same_named_comprehension() -> str:
+    """The unsound root binds `Sound` as a comprehension variable.
+
+    The name lives for the length of the comprehension and means nothing outside
+    it, so a load that treated it as a reading of the selection would block on a
+    coincidence of spelling.
+    """
+    return (
+        _HEAD
+        + _UNSOUND.replace(
+            "class Unsound:\n",
+            "class Unsound:\n    counted = [Sound for Sound in range(3)]\n",
+            1,
+        )
+        + _SOUND
+    )
+
+
+def documented_and_postponed() -> str:
+    """A module docstring, then a `__future__` import, then the roots.
+
+    Both are things a file states about itself, and each statement executed on its
+    own has to keep them. A docstring is a docstring because it comes first, so a
+    load that put anything in front of it would leave the file with none.
+    """
+    return (
+        '"""The file\'s own docstring."""\n'
+        "from __future__ import annotations\n"
+        + _HEAD
+        + _UNSOUND
+        + _SOUND
+        + "SEEN = __doc__\n"
+    )
+
+
+def unsound_by_control_exception() -> str:
+    """The unsound root raises something that is not an `Exception`.
+
+    Setting a failure aside is for an unfinished program. A control exception is
+    not that: it is the interpreter unwinding for its own reasons, and catching it
+    to carry on with the load would be answering while something else is ending.
+    """
+    return (
+        _HEAD
+        + _UNSOUND.replace(
+            "class Unsound:\n",
+            "class Unsound:\n    raise GeneratorExit('unwinding')\n",
+            1,
+        )
+        + _SOUND
+    )

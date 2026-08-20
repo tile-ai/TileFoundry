@@ -106,11 +106,20 @@ def _statement_codes(path: Path) -> list[tuple[ast.stmt, object]]:
         if isinstance(item, ast.Expr) and isinstance(item.value, ast.Constant):
             continue
         break
+    documented = (
+        tree.body[0]
+        if tree.body
+        and isinstance(tree.body[0], ast.Expr)
+        and isinstance(tree.body[0].value, ast.Constant)
+        and isinstance(tree.body[0].value.value, str)
+        else None
+    )
     codes = []
     for statement in tree.body:
         if statement in future:
             continue
-        unit = ast.Module(body=[*future, statement], type_ignores=[])
+        prefix = () if statement is documented else future
+        unit = ast.Module(body=[*prefix, statement], type_ignores=[])
         codes.append((statement, compile(unit, str(path), "exec", dont_inherit=True)))
     return codes
 
@@ -118,38 +127,65 @@ def _statement_codes(path: Path) -> list[tuple[ast.stmt, object]]:
 def _at_module_level(statement: ast.stmt) -> set[str]:
     """The names *statement* reads while the file runs.
 
-    A function body runs when something calls it, not when the file loads, so the
-    names inside one are not read here -- which is also why a parameter sharing a
-    name with something at module level is not a mention of it. What decorates,
-    defaults or annotates that function is read now, and so is everything a class
-    body does directly.
+    Reads, not spellings. A name being written is not a reading of it, so a class
+    whose body assigns one has said nothing about what that name means elsewhere.
+    A comprehension's own variable means nothing outside it, so it shadows.
+
+    A function body runs when something calls it, not when the file loads, so its
+    names are not read here -- which is why a parameter sharing a module-level
+    name is not a mention of it. What decorates, defaults or annotates that
+    function is read now, and so is everything a class body does directly.
     """
     found: set[str] = set()
-    skip = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+    scopes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+    comprehensions = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 
-    def walk(node: ast.AST) -> None:
+    def evaluated_around(node: ast.AST) -> list[ast.AST]:
+        """The parts of a function definition the file evaluates as it passes it."""
+        parts: list[ast.AST] = list(getattr(node, "decorator_list", ()))
+        parts.extend(node.args.defaults or ())
+        parts.extend(item for item in (node.args.kw_defaults or ()) if item is not None)
+        if getattr(node, "returns", None) is not None:
+            parts.append(node.returns)
+        parts.extend(
+            argument.annotation
+            for argument in ast.walk(node.args)
+            if isinstance(argument, ast.arg) and argument.annotation is not None
+        )
+        return parts
+
+    def walk(node: ast.AST, bound: frozenset[str]) -> None:
+        if isinstance(node, ast.Name):
+            if isinstance(node.ctx, ast.Load) and node.id not in bound:
+                found.add(node.id)
+            return
+        if isinstance(node, scopes):
+            for part in evaluated_around(node):
+                walk(part, bound)
+            return
+        if isinstance(node, comprehensions):
+            inner = bound | {
+                item.id
+                for generator in node.generators
+                for item in ast.walk(generator.target)
+                if isinstance(item, ast.Name)
+            }
+            for index, generator in enumerate(node.generators):
+                walk(generator.iter, bound if index == 0 else inner)
+                for condition in generator.ifs:
+                    walk(condition, inner)
+            for part in (
+                getattr(node, "elt", None),
+                getattr(node, "key", None),
+                getattr(node, "value", None),
+            ):
+                if part is not None:
+                    walk(part, inner)
+            return
         for child in ast.iter_child_nodes(node):
-            if isinstance(child, skip):
-                evaluated: list[ast.AST] = list(getattr(child, "decorator_list", ()))
-                evaluated.extend(child.args.defaults or ())
-                evaluated.extend(
-                    item for item in (child.args.kw_defaults or ()) if item is not None
-                )
-                if getattr(child, "returns", None) is not None:
-                    evaluated.append(child.returns)
-                evaluated.extend(
-                    argument.annotation
-                    for argument in ast.walk(child.args)
-                    if isinstance(argument, ast.arg) and argument.annotation is not None
-                )
-                for part in evaluated:
-                    walk(ast.Module(body=[ast.Expr(value=part)], type_ignores=[]))
-                continue
-            if isinstance(child, ast.Name):
-                found.add(child.id)
-            walk(child)
+            walk(child, bound)
 
-    walk(ast.Module(body=[statement], type_ignores=[]))
+    walk(statement, frozenset())
     return found
 
 
@@ -203,9 +239,7 @@ def _run_for_selection(path: Path, module: object, root: str) -> None:
     for statement, code in _statement_codes(path):
         try:
             exec(code, module.__dict__)  # noqa: S102 — the authored file
-        except BaseException as error:  # noqa: BLE001 — one unfinished statement
-            if isinstance(error, (KeyboardInterrupt, SystemExit)):
-                raise
+        except Exception as error:  # noqa: BLE001 — one unfinished statement
             mine = _binds(statement, root) or root in _at_module_level(statement)
             if mine and not _follows_from(error, aside):
                 raise

@@ -70,17 +70,25 @@ boundaries are different:
 
   `SOURCE`'s leading `__future__` imports MUST then prefix each statement so that
   they still govern it, and each statement MUST be compiled without inheriting the
-  compiling code's own `__future__` flags. What a file postpones is that file's
+  compiling code's own `__future__` flags. The module docstring MUST NOT be
+  prefixed: it is the docstring because nothing precedes it, and a load that put
+  anything in front of it would leave the module with none. What a file postpones is that file's
   decision: a file that postpones its annotations MUST keep them postponed, and
   one that does not MUST have them evaluated, exactly as loading it as one unit
   would.
 
   A statement that is the selection's own MUST NOT be set aside. That is one that
-  binds the selected root, or that reads it while the file runs -- a function body
-  is not read then, so a parameter sharing the root's name is not a reading of it.
+  binds the selected root, or that reads it while the file runs. Reads means free
+  reads and not spellings: a name being written is not a reading of it, a
+  comprehension's own variable shadows the name it spells, and a function body is
+  not read then -- so a class attribute, a comprehension variable, or a parameter
+  sharing the root's name is not a reading of it. What decorates, defaults or
+  annotates a function IS read then.
   Such a statement is building or reconfiguring what was named, so its failure
   MUST be reported even when an earlier statement also failed and even when the
-  root is already bound.
+  root is already bound. Only an `Exception` MAY be set aside at all: anything
+  else is the interpreter unwinding rather than an unfinished program, and MUST
+  propagate.
 
   The exception is a failure that follows from one already set aside: a statement
   reaching for a name that a set-aside statement would have bound fails for that

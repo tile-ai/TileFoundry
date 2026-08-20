@@ -22,7 +22,11 @@ from tests.fixtures.shapes.neighbour_sources import (
     broken_inside_a_compound_statement,
     broken_named_like_a_local,
     configured_after_it_is_built,
+    documented_and_postponed,
     future_import_out_of_place,
+    unsound_by_control_exception,
+    unsound_with_a_same_named_attribute,
+    unsound_with_a_same_named_comprehension,
 )
 from tilefoundry import cli
 from tilefoundry.cli.source import (
@@ -237,6 +241,8 @@ def test_analysis_reports_distinguish_cuda_products(tmp_path, capsys) -> None:
         broken_inside_a_compound_statement,
         broken_beside_an_alias,
         broken_beside_a_future_annotation,
+        unsound_with_a_same_named_attribute,
+        unsound_with_a_same_named_comprehension,
     ),
     ids=(
         "unsound-last",
@@ -246,6 +252,8 @@ def test_analysis_reports_distinguish_cuda_products(tmp_path, capsys) -> None:
         "unsound-inside-a-compound-statement",
         "selector-names-an-alias",
         "postponed-annotations",
+        "unsound-writes-a-same-named-attribute",
+        "unsound-binds-a-same-named-comprehension",
     ),
 )
 def test_naming_one_root_does_not_ask_about_the_rest_of_its_file(
@@ -272,6 +280,38 @@ def test_naming_one_root_does_not_ask_about_the_rest_of_its_file(
 
     assert report["module"] == named, "a root reached by a second name keeps its own"
     assert report["totals"]["flops"]
+
+
+def test_a_selected_load_keeps_the_docstring_the_file_states(tmp_path) -> None:
+    """A file's docstring survives being executed one statement at a time.
+
+    A docstring is a docstring because nothing precedes it, so prefixing anything
+    to its statement leaves the module with none -- and a later statement reading
+    `__doc__` then reads something the file does not say. The file's `__future__`
+    import has to keep governing at the same time, which is what makes this two
+    facts rather than one.
+    """
+    source = tmp_path / "documented.py"
+    source.write_text(documented_and_postponed(), encoding="utf-8")
+
+    namespace, _selector = load_namespace(f"{source}:Sound")
+
+    assert namespace["__doc__"] == "The file's own docstring."
+    assert namespace["SEEN"] == "The file's own docstring."
+
+
+def test_a_control_exception_is_not_set_aside(tmp_path) -> None:
+    """Setting a failure aside is for an unfinished program, not for unwinding.
+
+    A `GeneratorExit` is not an unfinished program: it is the interpreter ending
+    something for its own reasons. Catching it to carry on with the load would
+    answer while that unwinding is still in progress.
+    """
+    source = tmp_path / "control.py"
+    source.write_text(unsound_by_control_exception(), encoding="utf-8")
+
+    with pytest.raises(GeneratorExit):
+        load_namespace(f"{source}:Sound")
 
 
 def test_the_selection_own_refusal_is_the_one_reported(tmp_path) -> None:
