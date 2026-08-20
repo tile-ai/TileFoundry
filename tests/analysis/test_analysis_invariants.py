@@ -1470,13 +1470,17 @@ def test_a_window_is_stated_in_the_positions_its_layout_made() -> None:
         )
         for level in (None, "cta")
     )
-    assert (whole.inputs[0].pattern.offsets, whole.inputs[0].pattern.extents) == (
-        (0, 3),
-        (4, 2),
+    assert whole.inputs[0].pattern.relation.dim(isl.dim_type.IN) == 2, (
+        "the whole program states the window on the two axes it has"
     )
-    assert (unit.inputs[0].pattern.offsets, unit.inputs[0].pattern.extents) == (
-        (0, 0, 3),
-        (1, 2, 2),
+    assert unit.inputs[0].pattern.relation.dim(isl.dim_type.IN) == 3, (
+        "one participant states it on the three positions its layout made"
+    )
+    kept = whole.inputs[0].pattern.relation
+    assert not kept.is_empty(), "a window inside a container leaves the rest"
+    inside = isl.set("{ [d0, d1] : 0 <= d0 < 4 and 3 <= d1 < 5 }")
+    assert inside.apply(kept).is_empty(), (
+        "what the destination keeps is exactly what the window does not cover"
     )
 
     cache = CacheUpdate()
@@ -1630,12 +1634,23 @@ def test_a_windows_amount_does_not_move_with_where_it_lands() -> None:
 
     top, middle, bottom = written(axes(0, 0)), written(axes(1, 0)), written(axes(2, 0))
     assert top[:2] == middle[:2] == bottom[:2] == ([12, 12, 2], [12])
-    assert top[2].offsets == (0, 0)
-    assert bottom[2].offsets == (2, 0)
+    assert top[2].relation != bottom[2].relation, (
+        "where the window lands is what the relation is for"
+    )
+    assert isl.set("{ [d0, d1] : 0 <= d0 < 2 and 0 <= d1 < 6 }").apply(
+        top[2].relation
+    ).is_empty(), "a window at the top leaves the rows below it"
+    assert isl.set("{ [d0, d1] : 2 <= d0 < 4 and 0 <= d1 < 6 }").apply(
+        bottom[2].relation
+    ).is_empty(), "and one at the bottom leaves the rows above"
 
-    runtime = written(axes(Var(type=make_tensor_type((), DType.i64), name="row"), 0))
+    row = Var(type=make_tensor_type((), DType.i64), name="row")
+    runtime = written(axes(row, 0))
     assert runtime[:2] == top[:2]
-    assert runtime[2].offsets == (OperandValue(operand=2, element=0), 0)
+    (name, bound_to), = runtime[2].parameters
+    assert name == "o0" and bound_to is row, (
+        "an offset only known later is the value it is, not its spelling"
+    )
 
     induction = Var(type=make_tensor_type((), DType.i64), name="row")
     body = Call(
@@ -1659,7 +1674,7 @@ def test_a_windows_amount_does_not_move_with_where_it_lands() -> None:
     )
     counted = written(loop.body.args[2])
     assert counted[:2] == top[:2]
-    assert counted[2].offsets == (OperandValue(operand=2, element=0), 0)
+    assert [name for name, _value in counted[2].parameters] == ["o0"]
 
 
 def test_an_unbound_row_count_states_its_range_and_where_it_came_from() -> None:

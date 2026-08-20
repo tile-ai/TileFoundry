@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import isl
+
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue
 from tilefoundry.ir.core import Constant, Op, Tuple
@@ -16,15 +18,17 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessMode,
     AccessQuantity,
     AccessRelations,
+    AffineAccess,
     BoundaryAccess,
-    OperandValue,
     OutputStorage,
     StorageEffectClaim,
     StorageLink,
-    WindowAccess,
+    affine_term,
     elements_of,
+    factored_image,
     factored_window,
     logical_axes_of,
+    logical_coordinates,
     moves,
     register_access_relation,
     update_destination,
@@ -48,27 +52,94 @@ def _insert_slice_storage(call: "Call", ctx) -> StorageEffectClaim | None:
 
 
 def _offset_axes(call: "Call", rank: int) -> tuple:
-    """Where the window starts on each axis, by value or by reference.
+    """Where the window starts on each axis, as a number or as the value it is.
 
     The offsets arrive either as one tuple naming every axis or as one rank-0
-    scalar starting the window on axis zero, and a literal is worth keeping as a
-    number: an address that is written down is not a runtime value.
+    scalar starting the window on axis zero. A literal is worth keeping as a
+    number -- an address written down is not a runtime value -- and anything else
+    is kept as the operand element it is, so a relation can name it.
     """
     given = call.args[2]
     if isinstance(given, Tuple):
-        elements = given.elements
         return tuple(
             int(item.value)
             if isinstance(item, Constant) and isinstance(item.value, int)
-            else OperandValue(operand=2, element=axis)
-            for axis, item in enumerate(elements)
+            else item
+            for item in given.elements
         )
     start = (
         int(given.value)
         if isinstance(given, Constant) and isinstance(given.value, int)
-        else OperandValue(operand=2)
+        else given
     )
     return (start, *(0 for _ in range(rank - 1)))
+
+
+def _placed(offsets: tuple, extents: tuple, rank: int) -> tuple:
+    """Where the window sits among the result's own positions, and what is left.
+
+    The domain is the result's positions, so both answers are about the same
+    coordinates: the write reaches the window, and what the destination keeps is
+    every position the window does not cover. An offset only known later is a
+    parameter bound to the value it is, and a window begins inside what it is
+    placed in.
+    """
+    domain = ", ".join(f"d{index}" for index in range(rank))
+    guards: list[str] = []
+    parameters: list[tuple[str, object]] = []
+    for position in range(rank):
+        begin, bound = affine_term(offsets[position], f"o{position}")
+        parameters.extend(bound)
+        if bound:
+            guards.append(f"0 <= {begin}")
+        extent = extents[position]
+        if begin == "0":
+            guards.append(f"0 <= d{position} < {extent}")
+            continue
+        guards.append(f"{begin} <= d{position} < {begin} + {extent}")
+    prefix = _prefix(parameters)
+    where = f" : {' and '.join(guards)}" if guards else ""
+    written = isl.map(f"{prefix}{{ [{domain}] -> [{domain}]{where} }}")
+    whole = isl.map(f"{{ [{domain}] -> [{domain}] }}")
+    return (
+        AffineAccess(whole.subtract(written), tuple(parameters)),
+        AffineAccess(written, tuple(parameters)),
+    )
+
+
+def _read_update(call: "Call", ctx, offsets: tuple, rank: int) -> AffineAccess:
+    """The update read at its own coordinates, from where the window put them.
+
+    The window covers the update's shape wherever it lands, so the coordinate
+    read is the one written shifted back to where the window starts. The shift is
+    per logical axis, because that is what the offsets are stated against, and
+    only then spread over the positions the update's own layout made -- which are
+    not the result's.
+    """
+    result = ctx.local_type_of(call)
+    logical_result = ctx.type_of(call)
+    update = ctx.local_type_of(call.args[1])
+    logical_update = ctx.type_of(call.args[1])
+    carried = logical_coordinates(result, logical_result)
+    parameters: list[tuple[str, object]] = []
+    reads: list[str] = []
+    for axis in range(len(logical_update.shape)):
+        walked = carried.get(axis, "0")
+        begin, bound = affine_term(offsets[axis] if axis < len(offsets) else 0, f"o{axis}")
+        parameters.extend(bound)
+        reads.append(walked if begin == "0" else f"{walked} - {begin}")
+    domain = ", ".join(f"d{index}" for index in range(rank))
+    image = ", ".join(factored_image(reads, update, logical_update))
+    return AffineAccess(
+        isl.map(f"{_prefix(parameters)}{{ [{domain}] -> [{image}] }}"),
+        tuple(parameters),
+    )
+
+
+def _prefix(parameters: list) -> str:
+    """The isl parameter list a relation needs, or nothing when it needs none."""
+    names = list(dict.fromkeys(name for name, _value in parameters))
+    return f"[{', '.join(names)}] -> " if names else ""
 
 
 @register_access_relation(InsertSlice)
@@ -95,7 +166,10 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     )
     window = elements_of(update)
     kept = elements_of(ctx.local_type_of(call.args[0])) - window
-    complement = WindowAccess(offsets, extents, complement=True)
+    complement, written = _placed(offsets, extents, len(result.shape))
+    read_update = _read_update(
+        call, ctx, _offset_axes(call, rank), len(result.shape)
+    )
     preserve = StorageLink(
         kind="preserve",
         input=0,
@@ -105,10 +179,7 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     return AccessRelations(
         inputs=(
             BoundaryAccess(complement, AccessQuantity(kept, kept), AccessMode.TRANSFER),
-            moves(
-                WindowAccess(tuple(0 for _ in update.shape), tuple(update.shape)),
-                window,
-            ),
+            moves(read_update, window),
             *(
                 moves(_scalar_access(ctx, arg), _controls(ctx, arg))
                 for arg in call.args[2:]
@@ -116,7 +187,7 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
         ),
         outputs=(
             BoundaryAccess(
-                identity_access(len(result.shape)),
+                written,
                 AccessQuantity(window, window),
                 AccessMode.WRITE,
                 OutputStorage((preserve,)),

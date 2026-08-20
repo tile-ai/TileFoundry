@@ -861,6 +861,19 @@ def holds_whole_axis(local: "Type", logical: "Type", axis: int) -> bool:
     return held == logical.shape[axis]
 
 
+def affine_term(value, name: str) -> "tuple[str, tuple[tuple[str, object], ...]]":
+    """One number of a relation, as a coefficient or as a bound parameter.
+
+    A number written down is a coefficient of the map. Anything else is a
+    parameter carrying the value it is, so whoever restricts the relation
+    resolves it rather than reading its spelling. The caller states what it
+    guarantees about the parameter; nothing is guaranteed here.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value), ()
+    return name, ((name, value),)
+
+
 def factored_window(
     offsets: "Sequence[object]", extents: "Sequence[object]", local: "Type", logical: "Type"
 ) -> tuple[tuple, tuple]:
@@ -1281,6 +1294,7 @@ __all__ = [
     "moves_between",
     "OperandValue",
     "access_elements",
+    "affine_term",
     "WindowAccess",
     "AccessRelations",
     "AccessRelationResult",
