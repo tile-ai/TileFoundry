@@ -20,6 +20,7 @@ from tilefoundry.ir.types.dim import (
     DimSub,
     simplify_dim,
 )
+from tilefoundry.ir.types.dim_isl import dim_range
 from tilefoundry.ir.types.shape_helpers import i64_const
 from tilefoundry.ir.types.shard import (
     ComposedLayout,
@@ -31,14 +32,14 @@ from tilefoundry.ir.types.shard.shard_layout import (
     layout_axis_to_tensor_axis,
     split_target_axes,
 )
+from tilefoundry.ir.types.substitute import dim_vars_by_name
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    OperandValue,
+    AffineAccess,
     StorageEffectClaim,
     StorageEffectKind,
     StorageSpan,
-    WindowAccess,
     dense,
     factored_image,
     logical_coordinates,
@@ -121,42 +122,160 @@ def _window_span(call: "Call", ctx, source, result) -> "StorageSpan | None":
     return StorageSpan(0, offset, size)
 
 
-def _slice_view(call: "Call", ctx) -> tuple:
-    """A window reads its own extent, offset by where it starts.
+class _Unbounded(ValueError):
+    """A relation would have a parameter nothing can bound."""
 
-    The offsets are per logical axis, so the result's coordinates are rebuilt
-    per logical axis, shifted there, and only then spread over the source's
-    positions -- a layout may give either side more positions than the Op has
-    axes. A start that only arrives at run time is not an affine coordinate, so
-    the pattern says so with a window rather than pretending to a map, and a
-    window is then compared as a window.
+
+def _literal(value) -> int | None:
+    """*value* as a number, when it is one."""
+    resolved = _constant_int(value) if isinstance(value, Expr) else value
+    if isinstance(resolved, int) and not isinstance(resolved, bool):
+        return resolved
+    return None
+
+
+def _declared_range(value) -> "tuple[int, int] | None":
+    """The range *value*'s own dimensions declare it to run over, inclusive.
+
+    Asked of the one thing that already answers it. Taking every dimension at its
+    smallest and then at its largest is not the interval of an expression over
+    them -- `n - m + 10` is smallest where `n` is and `m` is not -- so the bounds
+    come from the shared dimension arithmetic rather than from a second reading of
+    it here.
+    """
+    if not dim_vars_by_name(value):
+        return None
+    try:
+        low, high = dim_range(value)
+    except (ArithmeticError, TypeError, ValueError):
+        return None
+    return (low, high - 1)
+
+
+class _Axis:
+    """One logical axis of a window, as terms of the relation being built.
+
+    Every number the axis is built from is either a coefficient of the map or a
+    parameter of it bound to the value it is. A parameter nothing can bound is
+    refused: a relation with a hole in it is not bounded, and calling it bounded
+    would let a consumer count coordinates nobody said were reached.
+    """
+
+    def __init__(self, axis: int, extent, size, stride) -> None:
+        self.params: list[tuple[str, object]] = []
+        self.guards: list[str] = []
+        self.extent = self._term(extent, f"n{axis}", floor=0)
+        self.size = self._term(size, f"z{axis}", floor=0)
+        self.stride = self._coefficient(stride, f"t{axis}")
+
+    def _coefficient(self, value, name: str) -> str:
+        """A stride, which has to be a number rather than a parameter.
+
+        A stride multiplies the coordinate walked, so one nobody has chosen would
+        put a parameter against a variable, which no bound rescues. No authored
+        program reaches this: the parser refuses a run-time step, and a step
+        written as a dimension is a number by the time anything asks. It guards
+        the invariant, so a stride that is somehow not a number says so rather
+        than being rendered into a relation that cannot hold.
+        """
+        literal = _literal(value)
+        if literal is None:
+            raise _Unbounded(
+                f"{name} is not a number, and a stride multiplies the coordinate "
+                f"it steps, so this window's reach is not an affine relation"
+            )
+        if literal < 1:
+            raise _Unbounded(f"{name} steps by {literal}, which walks nowhere")
+        return str(literal)
+
+    def _term(self, value, name: str, *, floor: int) -> str:
+        literal = _literal(value)
+        if literal is not None:
+            return str(literal)
+        declared = _declared_range(value)
+        if declared is None:
+            raise _Unbounded(
+                f"{name} states no range, so nothing bounds it; a window's "
+                f"relation cannot be bounded without one"
+            )
+        low, high = max(declared[0], floor), declared[1]
+        if high < low:
+            raise _Unbounded(f"{name} declares {declared}, which leaves it nothing to be")
+        self.params.append((name, value))
+        self.guards.append(f"{low} <= {name} <= {high}")
+        return name
+
+    def start(self, value, axis: int) -> str:
+        """The axis's own start, as a coefficient or a parameter it constrains.
+
+        A window lands inside what it reads: its last element sits at
+        `start + (size - 1) * stride`, and that has to be a position the axis
+        has. The constraint is written against whatever the extent, the size and
+        the stride turned out to be, so one relation says it however many of
+        them are only known later. It is not clamped: a window that fits nowhere
+        has no legal start, and saying it starts at zero would be inventing one.
+        """
+        literal = _literal(value)
+        name = str(literal) if literal is not None else f"s{axis}"
+        if literal is None:
+            self.params.append((name, value))
+        self.guards.append(f"0 <= {name}")
+        reach = (
+            name
+            if self.size == "1"
+            else f"{name} + ({self.size} - 1) * {self.stride}"
+        )
+        self.guards.append(f"{reach} <= {self.extent} - 1")
+        return name
+
+
+def _slice_view(call: "Call", ctx) -> tuple:
+    """A window reads its own extent, at the stride and offset it was given.
+
+    The offsets are per logical axis, so the result's coordinates are rebuilt per
+    logical axis, scaled by the stride, shifted by the start, and only then spread
+    over the source's positions -- a layout may give either side more positions
+    than the Op has axes. Whatever the Op only learns later is a parameter bound
+    to the value it is, and the axis constrains them together: a window lands
+    inside what it reads, whichever of its extent, size, stride and start turn out
+    to be numbers.
     """
     result = ctx.local_type_of(call)
     logical_result = ctx.type_of(call)
     source = ctx.local_type_of(call.args[0])
     logical_source = ctx.type_of(call.args[0])
-    starts = _static_window(call, logical_source)
-    extents = tuple(result.shape)
-    if starts is None:
-        return (
-            WindowAccess(
-                tuple(
-                    OperandValue(operand=1, element=axis) for axis in range(len(extents))
-                ),
-                extents,
-            ),
-            WindowAccess(tuple(0 for _ in extents), extents),
-        )
+    given = call.args[1]
+    offsets = given.elements if isinstance(given, Tuple) else (given,)
+    sizes, strides = tuple(call.target.sizes), tuple(call.target.strides)
     carried = logical_coordinates(result, logical_result)
-    reads = []
+
+    reads: list[str] = []
+    guards: list[str] = []
+    parameters: list[tuple[str, object]] = []
     for axis in range(len(logical_source.shape)):
+        term = _Axis(
+            axis,
+            logical_source.shape[axis],
+            sizes[axis] if axis < len(sizes) else 1,
+            strides[axis] if axis < len(strides) else 1,
+        )
+        begin = term.start(offsets[axis] if axis < len(offsets) else 0, axis)
+        parameters.extend(term.params)
+        guards.extend(term.guards)
         walked = carried.get(axis, "0")
-        start = starts[axis] if axis < len(starts) else 0
-        reads.append(walked if not start else f"{walked} + {start}")
+        stepped = walked if term.stride == "1" else f"{term.stride} * ({walked})"
+        reads.append(stepped if begin == "0" else f"{stepped} + {begin}")
+
+    names = [name for name, _value in parameters]
+    prefix = f"[{', '.join(names)}] -> " if names else ""
+    where = f" : {' and '.join(guards)}" if guards else ""
     domain = ", ".join(f"d{index}" for index in range(len(result.shape)))
     image = ", ".join(factored_image(reads, source, logical_source))
     return (
-        isl.multi_aff(f"{{ [{domain}] -> [{image}] }}"),
+        AffineAccess(
+            isl.map(f"{prefix}{{ [{domain}] -> [{image}]{where} }}"),
+            tuple(parameters),
+        ),
         self_image(result, logical_result),
     )
 

@@ -149,7 +149,11 @@ from tilefoundry.ir.types import (
     make_tensor_type,
     tensor_bytes,
 )
-from tilefoundry.ir.types.shard import Topology, make_mesh
+from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.dim_isl import dim_range
+from tilefoundry.ir.types.shape_helpers import i64_const
+from tilefoundry.ir.types.shard import Layout, ShardLayout, Topology, make_mesh
+from tilefoundry.ir.types.shard.layout_algebra import try_c_order_strides
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial
 from tilefoundry.ir.types.shard.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.storage import StorageKind
@@ -2941,6 +2945,212 @@ def test_a_window_whose_start_is_only_known_at_run_time_is_still_a_window() -> N
         assert moved.get("gmem", TrafficBytes()).read < tensor_bytes(expr.type), (
             "a window was charged for reading the bytes it only named"
         )
+
+
+def _slice_relation(source_shape, sizes, strides, starts, *, split_over=None):
+    """The relation one Slice states, built through the registered handler.
+
+    `Slice.sizes` is how many elements the window has, not how far it reaches, so
+    the result's shape is those sizes whatever the strides are.
+
+    *split_over* gives the source a layout that factors its first axis over that
+    many participants, so the relation has to spread the logical coordinate it
+    walks over the positions the layout made.
+    """
+    out_shape = tuple(sizes)
+    source = make_tensor_type(source_shape, storage=StorageKind.GMEM)
+    result = make_tensor_type(out_shape, storage=StorageKind.GMEM)
+    held = source
+    if split_over is not None:
+        first = source_shape[0] // split_over
+        held = make_tensor_type(
+            (first, *source_shape[1:]),
+            layout=ShardLayout(
+                Layout(
+                    (first, *source_shape[1:]),
+                    try_c_order_strides((first, *source_shape[1:])),
+                ),
+                (ShardSplit(0),),
+                make_mesh(
+                    (split_over,), ("block",), Topology("cta", split_over)
+                ),
+            ),
+            storage=StorageKind.GMEM,
+        )
+    operand = Var(type=source, name="x")
+    elements = tuple(
+        i64_const(start)
+        if isinstance(start, int)
+        else Var(type=make_tensor_type((), storage=StorageKind.GMEM), name=start)
+        for start in starts
+    )
+    offsets = Tuple(
+        type=TupleType(tuple(item.type for item in elements)), elements=elements
+    )
+    call = Call(
+        type=result,
+        target=SliceOp(sizes=tuple(sizes), strides=tuple(strides)),
+        args=(operand, offsets),
+    )
+    handler = access_relation_registry.lookup(SliceOp)
+    relations = handler(
+        call,
+        _TypesOnly(
+            {id(operand): source, id(call): result},
+            local={id(operand): held, id(call): result},
+        ),
+    )
+    return relations.inputs[0].pattern
+
+
+class _TypesOnly:
+    """The little a relation handler asks of a context: the types it is given."""
+
+    def __init__(self, types: dict, local: dict | None = None) -> None:
+        self._types = types
+        self._local = types if local is None else local
+
+    def type_of(self, expr):
+        found = self._types.get(id(expr))
+        return expr.type if found is None else found
+
+    def local_type_of(self, expr):
+        found = self._local.get(id(expr))
+        return expr.type if found is None else found
+
+
+def _reached(pattern, extent: int):
+    """The coordinates a window reaches, walking every element it has."""
+    domain = isl.set(f"{{ [d0] : 0 <= d0 < {extent} }}")
+    return domain.apply(pattern.relation)
+
+
+def test_a_window_states_its_coefficients_and_binds_what_it_cannot_know() -> None:
+    """Every number a window is built from is in the relation, one way or another.
+
+    A start or a stride written down is a coefficient. One that is not is a
+    parameter bound to the operand element it is, so whoever restricts the
+    relation resolves it rather than guessing, and constrained by what the Op
+    guarantees: the last element a window touches is `start + (size - 1) * stride`
+    and that has to be a position the axis has.
+    """
+    static = _slice_relation((10,), (4,), (1,), (2,))
+    assert static.parameters == ()
+    assert str(_reached(static, 4)) == "{ [i0] : 2 <= i0 <= 5 }"
+
+    strided = _slice_relation((10,), (4,), (2,), (1,))
+    assert strided.parameters == ()
+    walked = _reached(strided, 4)
+    assert int(str(walked.count_val())) == 4, "sizes are elements, not reach"
+    assert str(walked.dim_max_val(0)) == "7", "the last of four at stride two from one"
+
+    runtime = _slice_relation((10,), (4,), (2,), ("begin",))
+    (name, bound_to), = runtime.parameters
+    assert name == "s0"
+    assert isinstance(bound_to, Var) and bound_to.name == "begin"
+    assert "s0 <= 3" in str(runtime.relation), (
+        "extent 10, size 4, stride 2 leaves room for a start of 3"
+    )
+
+    factored = _slice_relation((16, 4), (8, 4), (1, 1), (2, 0), split_over=4)
+    assert factored.parameters == ()
+    assert factored.relation.dim(isl.dim_type.OUT) == 2, (
+        "the image names one coordinate per position the layout gave the source"
+    )
+
+
+def test_an_open_extent_constrains_the_start_against_that_extent() -> None:
+    """A range is not its own largest value, so the start is bound to it.
+
+    A dimension left open is chosen later, and a start legal at the top of its
+    range is not legal further down. So the extent is a parameter too, bound to
+    the dimension it is, and the start is constrained against that parameter
+    rather than against the one number the range happens to stop at.
+    """
+    opened = _slice_relation((DimVar("open_n", 1, 33),), (4,), (1,), ("begin",))
+
+    assert [name for name, _value in opened.parameters] == ["n0", "s0"]
+    extent, start = (value for _name, value in opened.parameters)
+    assert isinstance(extent, DimVar) and extent.name == "open_n"
+    assert isinstance(start, Var) and start.name == "begin"
+
+    at_five = opened.relation.intersect_params(isl.set("[n0, s0] -> { : n0 = 5 }"))
+    assert "s0 <= 1" in str(at_five), (
+        "five positions with a window of four leave room for a start of one"
+    )
+    at_top = opened.relation.intersect_params(isl.set("[n0, s0] -> { : n0 = 32 }"))
+    assert "s0 <= 28" in str(at_top)
+
+
+def test_an_extent_over_several_dimensions_takes_its_real_interval() -> None:
+    """An expression's range is not every dimension at once at one end.
+
+    `n - m + 10` is smallest where `n` is smallest and `m` is largest, so reading
+    both at their low end and then both at their high end says the extent is
+    exactly ten -- which would fix a parameter that is nothing of the kind. The
+    bounds come from the shared dimension arithmetic, which already answers this.
+    """
+    n, m = DimVar("n", 1, 10), DimVar("m", 1, 10)
+    assert dim_range(n - m + 10) == (2, 19)
+
+    mixed = _slice_relation((n - m + 10,), (4,), (1,), ("begin",))
+
+    relation = str(mixed.relation)
+    assert "2 <= n0 <= 18" in relation, "the interval the dimensions really allow"
+    assert "s0 <= -4 + n0" in relation, "and the start bound against it"
+
+
+def test_a_window_cannot_begin_before_what_it_reads() -> None:
+    """A start below zero is not a smaller window, it is no window.
+
+    Left unconstrained, a negative start describes coordinates the operand does
+    not have, and bounding the image afterwards would quietly turn that into a
+    smaller legal-looking access instead of refusing it. Both the start written
+    down and the one arriving later are held to it.
+    """
+    written = _slice_relation((10,), (4,), (1,), (-1,))
+    assert written.relation.is_empty()
+
+    arriving = _slice_relation((10,), (4,), (1,), ("begin",))
+    at_minus_one = arriving.relation.intersect_params(
+        isl.set("[s0] -> { : s0 = -1 }")
+    )
+    assert at_minus_one.is_empty()
+    at_zero = arriving.relation.intersect_params(isl.set("[s0] -> { : s0 = 0 }"))
+    assert not at_zero.is_empty()
+
+
+def test_an_axis_may_have_no_positions_at_all() -> None:
+    """An extent of zero is an extent, and the window is what fails to fit.
+
+    A dimension declaring that it may be zero is entitled to be zero, so the
+    relation must not rule that out to keep itself tidy. What rules it out for a
+    window of four is the window: no start puts four elements inside none.
+    """
+    opened = _slice_relation((DimVar("open_n", 0, 9),), (4,), (1,), ("begin",))
+
+    assert "0 <= n0" in str(opened.relation), "a zero extent is not excluded"
+    empty = opened.relation.intersect_params(isl.set("[n0, s0] -> { : n0 = 0 }"))
+    assert empty.is_empty(), "four elements do not fit in none"
+    fits = opened.relation.intersect_params(isl.set("[n0, s0] -> { : n0 = 8 }"))
+    assert not fits.is_empty()
+
+
+def test_a_window_that_fits_nowhere_reaches_nothing() -> None:
+    """A window too big for its axis has no legal start, and says so.
+
+    Clamping the start to zero would answer that it begins at the beginning,
+    which is a fact about no program: eight elements do not fit in four however
+    they are placed. An empty relation is what reaching nothing looks like.
+    """
+    for starts in ((0,), ("begin",)):
+        oversize = _slice_relation((4,), (8,), (1,), starts)
+        assert oversize.relation.is_empty(), (
+            "a window that cannot fit was given a start anyway"
+        )
+
+    fits = _slice_relation((4,), (4,), (1,), (0,))
+    assert not fits.relation.is_empty()
 
 
 def test_a_field_is_placed_in_the_buffer_that_field_is_in() -> None:

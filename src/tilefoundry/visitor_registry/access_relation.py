@@ -81,7 +81,49 @@ class WindowAccess:
     complement: bool = False
 
 
-AccessPattern = Union["isl.multi_aff", "isl.map", IndexedAccess, WindowAccess]
+@dataclass(frozen=True)
+class AffineAccess:
+    """One boundary's relation, together with what its parameters are.
+
+    A coordinate an Op only learns at run time is a parameter of the relation
+    rather than a hole in it: which coordinates are reached depends on the value,
+    and the relation says so by naming the value it depends on. Each entry pairs
+    the parameter's name in *relation* with the operand element or dimension it
+    is, so whoever restricts the relation can bind it rather than guess it.
+
+    A relation with no parameters is the ordinary case and states none.
+    """
+
+    relation: "isl.map"
+    parameters: tuple[tuple[str, object], ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.relation, isl.map):
+            raise ValueError(
+                f"an affine access is a relation, not {self.relation!r}"
+            )
+        named = {
+            self.relation.get_dim_name(isl.dim_type.PARAM, index)
+            for index in range(self.relation.dim(isl.dim_type.PARAM))
+        }
+        bound: dict[str, object] = {}
+        for name, value in self.parameters:
+            if name in bound and bound[name] is not value:
+                raise ValueError(
+                    f"an affine access binds {name!r} to two different values; one "
+                    f"name in one relation is one value"
+                )
+            bound[name] = value
+        if named != set(bound):
+            raise ValueError(
+                f"an affine access binds {sorted(bound)} but its relation names "
+                f"{sorted(named)}; a parameter nobody can bind is a hole"
+            )
+
+
+AccessPattern = Union[
+    "isl.multi_aff", "isl.map", AffineAccess, IndexedAccess, WindowAccess
+]
 
 
 
@@ -180,7 +222,8 @@ class StorageLink:
                 f"{self.input_field!r}"
             )
         if not isinstance(
-            self.where, (isl.multi_aff, isl.map, IndexedAccess, WindowAccess)
+            self.where,
+            (isl.multi_aff, isl.map, AffineAccess, IndexedAccess, WindowAccess),
         ):
             raise ValueError(
                 f"a link reads through a relation, a lookup or a window, not "
@@ -227,7 +270,8 @@ class BoundaryAccess:
         if self.storage is not None and not isinstance(self.storage, OutputStorage):
             raise ValueError(f"a boundary's storage is an OutputStorage, not {self.storage!r}")
         if not isinstance(
-            self.pattern, (isl.multi_aff, isl.map, IndexedAccess, WindowAccess)
+            self.pattern,
+            (isl.multi_aff, isl.map, AffineAccess, IndexedAccess, WindowAccess),
         ):
             raise ValueError(
                 f"a boundary reads through a relation, a lookup or a window, "
@@ -554,6 +598,8 @@ def _image_rank(pattern: "AccessPattern") -> int | None:
     checked is what keeps a boundary from carrying a logical window against a
     factored image of the same value.
     """
+    if isinstance(pattern, AffineAccess):
+        return pattern.relation.dim(isl.dim_type.OUT)
     if isinstance(pattern, (isl.multi_aff, isl.map)):
         return pattern.dim(isl.dim_type.OUT)
     if isinstance(pattern, WindowAccess):
@@ -627,6 +673,8 @@ def _domain_rank(pattern: "AccessPattern") -> int | None:
     A window is asked by one offset and one extent per coordinate of the value
     it is a window of, which is the same question an affine domain answers.
     """
+    if isinstance(pattern, AffineAccess):
+        return pattern.relation.dim(isl.dim_type.IN)
     if isinstance(pattern, (isl.multi_aff, isl.map)):
         return pattern.dim(isl.dim_type.IN)
     if isinstance(pattern, WindowAccess):
@@ -1226,6 +1274,7 @@ __all__ = [
     "AccessPattern",
     "AccessQuantity",
     "BoundaryAccess",
+    "AffineAccess",
     "IndexedAccess",
     "elements_of",
     "moves",
