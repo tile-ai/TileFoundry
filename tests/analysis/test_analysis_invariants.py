@@ -772,11 +772,12 @@ def test_a_data_dependent_read_is_a_relation_and_not_a_function() -> None:
 def test_a_relation_says_how_a_data_dependent_operand_is_read() -> None:
     """A table read through positions is a lookup, not an unknown.
 
-    At this level a rotation's tables are indexed by data, so the relation names
-    the operand those indices come from and the operand being indexed. Which
-    entry it lands on is not known here; telling a lookup from an identity is
-    the safety property, because a relation that returned an identity for a
-    lookup would be believed.
+    At this level a rotation's tables are indexed by data, so which entry the
+    read lands on is not known here. Telling a lookup from an identity is the
+    whole safety property: a relation that returned a function for a lookup
+    would be believed, so this one is not a function, and instead reaches every
+    entry the table could name. That keeps it countable rather than opaque, and
+    an over-count for a table larger than the positions asking for it.
     """
     heads = make_tensor_type((1, 4, HEAD_DIM), DType.bf16)
     tables = make_tensor_type((4096, HEAD_DIM), DType.bf16)
@@ -789,17 +790,21 @@ def test_a_relation_says_how_a_data_dependent_operand_is_read() -> None:
         Var(type=tables, name="sin"),
         Var(type=positions, name="pos"),
     )
+    rotated = isl.set(f"{{ [d0, d1, d2] : 0 <= d0 < 1 and 0 <= d1 < 32 and 0 <= d2 < {HEAD_DIM} }}")
 
     assert len(relation.inputs) == 5
     assert isinstance(relation.inputs[0].pattern, isl.multi_aff)
     assert isinstance(relation.inputs[1].pattern, isl.multi_aff)
-    assert relation.inputs[2].pattern == IndexedAccess(
-        index_operand=4, axis=0
-    )
-    assert relation.inputs[3].pattern == IndexedAccess(
-        index_operand=4, axis=0
-    )
-    assert isinstance(relation.inputs[4].pattern, isl.multi_aff)
+    for lookup in (relation.inputs[2], relation.inputs[3]):
+        read = lookup.pattern.relation
+        assert not read.is_single_valued(), (
+            "a lookup cannot promise the entry it lands on"
+        )
+        assert int(str(rotated.apply(read).count_val())) == 4096 * HEAD_DIM, (
+            "so it states every entry the table has, which is an answer"
+        )
+    asked = rotated.apply(relation.inputs[4].pattern.relation)
+    assert int(str(asked.count_val())) == 1, "the one position that decided all of it"
     assert len(relation.outputs) == 2
     assert all(isinstance(item.pattern, isl.multi_aff) for item in relation.outputs)
 
@@ -1267,30 +1272,44 @@ def test_a_tile_instruction_does_not_divide_under_projection() -> None:
 def test_an_indexed_update_keeps_its_container_and_writes_the_rows_it_names() -> None:
     """Which rows are written and where the container lives are two questions.
 
-    The index answers the first, so that side is a lookup. It answers nothing
-    about the second: the whole destination is preserved through one affine
-    identity link, because these are the same bytes whichever rows get
-    overwritten. A repeated index writes one row twice and an out-of-order one
-    writes no window at all, and neither changes a quantity -- there is no
-    subtraction left to go negative.
+    The index answers the first, so those boundaries reach every row the axis
+    could legally name rather than claiming one. It answers nothing about the
+    second: the whole destination is preserved through one affine identity link,
+    because these are the same bytes whichever rows get overwritten. A repeated
+    index writes one row twice and an out-of-order one writes no window at all,
+    and neither changes a quantity -- there is no subtraction left to go
+    negative.
     """
     shapes = (
         make_tensor_type((4, 8), DType.f32),
         make_tensor_type((2,), DType.i64),
         make_tensor_type((2, 8), DType.f32),
     )
+    container = isl.set("{ [d0, d1] : 0 <= d0 < 4 and 0 <= d1 < 8 }")
+
+    def reaches(pattern) -> int:
+        return int(str(container.apply(pattern.relation).count_val()))
+
     copied = _asked(IndexCopy(dim=0), shapes[0], *shapes)
     assert _counted(copied) == ([32, 2, 16], [16])
     assert copied.inputs[0].mode is AccessMode.TRANSFER
-    assert isinstance(copied.inputs[2].pattern, isl.multi_aff)
+    assert reaches(copied.inputs[2].pattern) == 16, (
+        "the payload rows land wherever the index says, so all of them are read"
+    )
 
     added = _asked(IndexAdd(dim=0), shapes[0], *shapes)
     assert _counted(added) == ([16, 2, 16], [16])
     assert added.inputs[0].mode is AccessMode.READ
-    assert added.inputs[0].pattern == IndexedAccess(index_operand=1, axis=0)
+    assert reaches(added.inputs[0].pattern) == 32, (
+        "and the rows added to are any of the container's, for the same reason"
+    )
 
     for relations in (copied, added):
-        assert relations.outputs[0].pattern == IndexedAccess(index_operand=1, axis=0)
+        written = relations.outputs[0].pattern
+        assert not written.relation.is_single_valued(), (
+            "a scatter cannot promise the row it lands on"
+        )
+        assert reaches(written) == 32
         (link,) = relations.outputs[0].storage.links
         assert link.kind == "preserve" and link.quantity == AccessQuantity(32, 32)
         assert isinstance(link.where, isl.multi_aff)

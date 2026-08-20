@@ -17,11 +17,12 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessQuantity,
     AccessRelations,
     BoundaryAccess,
-    IndexedAccess,
     OutputStorage,
     StorageLink,
     elements_of,
+    logical_coordinates,
     moves,
+    reached_at,
     register_access_relation,
 )
 from tilefoundry.visitor_registry.relation_build import identity_access
@@ -64,23 +65,27 @@ __all__ = ["IndexCopy"]
 def _index_copy_access(call: "Call", ctx) -> AccessRelations:
     """The rows the index names are replaced; the container around them is kept.
 
-    Two questions, and the index answers only one. Which rows are written is
-    chosen by its values, so that side is a lookup. Where the container lives is
-    not: the whole destination is preserved through one affine identity link,
-    because these are the same bytes whichever rows get overwritten.
-
-    The payload is affine identity over its own occurrence domain: its
-    coordinate is `i` where the destination's is `index[i]`, which is why a
-    sharded version needs two mappings on one boundary and is refused earlier.
+    Two questions, and the index answers only one. Which rows are reached its
+    values decide, so those boundaries cover every row the axis could legally
+    name; no relation here holds the deciding element. Where the container lives
+    it answers not at all: the destination is preserved whole through one affine
+    identity link, being the same bytes whichever rows get overwritten. The
+    payload's own row is `i` where the destination's is `index[i]`, so from here
+    it too is a row nobody named, and reaching all of them is the payload.
     """
     dst = ctx.local_type_of(call.args[0])
     index = ctx.local_type_of(call.args[1])
     src = ctx.local_type_of(call.args[2])
+    logical_dst = ctx.type_of(call.args[0])
     rank = len(dst.shape)
     dim = call.target.dim + rank if call.target.dim < 0 else call.target.dim
     held = elements_of(dst)
     touched = elements_of(src)
     identity = identity_access(rank)
+    carried = logical_coordinates(dst, logical_dst)
+    rows = reached_at(rank, dst, logical_dst, carried, free=(dim,))
+    named = reached_at(rank, index, ctx.type_of(call.args[1]), {}, free=(0,))
+    payload = reached_at(rank, src, ctx.type_of(call.args[2]), carried, free=(dim,))
     preserve = StorageLink(
         kind="preserve",
         input=0,
@@ -94,12 +99,12 @@ def _index_copy_access(call: "Call", ctx) -> AccessRelations:
                 AccessQuantity(held, held),
                 AccessMode.TRANSFER,
             ),
-            moves(identity_access(1), elements_of(index)),
-            moves(identity, touched),
+            moves(named, elements_of(index)),
+            moves(payload, touched),
         ),
         outputs=(
             BoundaryAccess(
-                IndexedAccess(index_operand=1, axis=dim),
+                rows,
                 AccessQuantity(touched, touched),
                 AccessMode.WRITE,
                 OutputStorage((preserve,)),

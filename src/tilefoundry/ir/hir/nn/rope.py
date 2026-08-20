@@ -26,14 +26,16 @@ from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelationResult,
     AccessRelations,
-    IndexedAccess,
     elements_of,
+    logical_coordinates,
     moves,
+    reached_at,
     register_access_relation,
     register_type_relation,
     writes,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
+from tilefoundry.visitor_registry.relation_build import identity_access
 
 
 @register_op
@@ -84,44 +86,58 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
 
 @register_access_relation(RoPE)
 def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelations:
-    """GLOBAL level.
+    """GLOBAL level: a rotation per element, read out of a table by position.
 
-    Inputs:
-      - q, k: per-element identity (rotation is per (token, head, head_dim/2 pair))
-      - cos_cache, sin_cache: one row per position, named by pos_ids
-      - pos_ids: read whole, once per output row
-
-    Outputs:
-      - q_rope, k_rope: per-element identity vs Q / K respectively.
+    Every boundary answers about the rotated value's own coordinates. Q and K
+    are read and written where those say; grouped-query K holds fewer heads, and
+    the identity over this domain reaches exactly the heads it has. A table
+    carries head_dim on its last axis and rows on the ones before, so it is read
+    at the value's own head_dim coordinate and at any row those axes could
+    legally name -- the row is an element of `pos_ids`, which no relation here
+    holds. `pos_ids` is read whole, each element naming a row some token wanted.
     """
-    q_ty = ctx.local_type_of(call.args[0])
-    k_ty = ctx.local_type_of(call.args[1])
-
-    def _ident(rank: int) -> "isl.multi_aff":
-        dims = ", ".join(f"i{i}" for i in range(rank))
-        return isl.multi_aff(f"{{ [{dims}] -> [{dims}] }}")
-
-    q_id = _ident(len(q_ty.shape))
-    k_id = _ident(len(k_ty.shape))
-
-    pos_ty = ctx.local_type_of(call.args[4])
-    positions = _ident(len(pos_ty.shape))
-    taken = elements_of(pos_ty)
-    tables = tuple(
-        moves(
-            IndexedAccess(index_operand=4, axis=0),
-            taken * (elements_of(ctx.local_type_of(call.args[operand])) // ctx.local_type_of(call.args[operand]).shape[0]),
+    q_ty, k_ty = ctx.local_type_of(call.args[0]), ctx.local_type_of(call.args[1])
+    logical_q = ctx.type_of(call.args[0])
+    rank = len(q_ty.shape)
+    head_dim = len(logical_q.shape) - 1
+    carried = logical_coordinates(q_ty, logical_q)
+    value = identity_access(rank)
+    positions = ctx.local_type_of(call.args[4])
+    taken = elements_of(positions)
+    tables = []
+    for operand in (2, 3):
+        table = ctx.local_type_of(call.args[operand])
+        logical_table = ctx.type_of(call.args[operand])
+        rows = len(logical_table.shape) - 1
+        tables.append(
+            moves(
+                reached_at(
+                    rank,
+                    table,
+                    logical_table,
+                    {rows: carried.get(head_dim, "0")},
+                    free=tuple(range(rows)),
+                ),
+                taken * (elements_of(table) // table.shape[0]),
+            )
         )
-        for operand in (2, 3)
-    )
     return AccessRelations(
         inputs=(
-            moves(q_id, elements_of(q_ty)),
-            moves(k_id, elements_of(k_ty)),
+            moves(value, elements_of(q_ty)),
+            moves(value, elements_of(k_ty)),
             *tables,
-            moves(positions, taken),
+            moves(
+                reached_at(
+                    rank,
+                    positions,
+                    ctx.type_of(call.args[4]),
+                    {},
+                    free=tuple(range(len(ctx.type_of(call.args[4]).shape))),
+                ),
+                taken,
+            ),
         ),
-        outputs=(writes(q_id, elements_of(q_ty)), writes(k_id, elements_of(k_ty))),
+        outputs=(writes(value, elements_of(q_ty)), writes(value, elements_of(k_ty))),
     )
 
 
