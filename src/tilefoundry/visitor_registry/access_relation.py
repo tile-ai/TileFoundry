@@ -761,33 +761,129 @@ def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
     return decorate
 
 
-def relations_of(call, ctx) -> AccessRelations:
-    """One Op's coordinates, held against the Call now that it has a Type.
+def coordinates_of(call, ctx) -> AccessRelations:
+    """One Op's coordinates, held to everything knowable before its Type is.
 
-    One entry per operand and one per output, every image at the rank of what it
-    reaches, and every link's element width against the operand it names. A
-    reader that already has the Call's Type asks through here; type inference,
-    which is deriving that Type, asks the registry directly.
+    This is what type inference asks, so nothing here may consult the Type being
+    derived -- but the operands, the attributes and the relations themselves are
+    all present, and an answer wrong about those is wrong for every reader. So:
+    one boundary per operand, each read at the rank of the operand supplied, one
+    space shared by every boundary, and no parameter left for nobody to bind.
     """
-    handler = access_relation_registry.lookup(type(call.target))
+    op_cls = type(call.target)
+    handler = access_relation_registry.lookup(op_cls)
     if handler is None:
         raise ValueError(
-            f"{type(call.target).__name__} states no access relations, and there "
-            "is no fallback: register one with register_access_relation"
+            f"{op_cls.__name__} states no access relations, and there is no "
+            "fallback: register one with register_access_relation"
         )
-    op_cls = type(call.target)
     relations = handler(call, ctx)
-    wanted_inputs, wanted_outputs = _boundaries_of(call, ctx)
-    for side, stated, wanted in (
-        ("input", len(relations.inputs), wanted_inputs),
-        ("output", len(relations.outputs), wanted_outputs),
-    ):
-        if stated != wanted:
-            raise ValueError(
-                f"{op_cls.__name__} describes {stated} {side} "
-                f"boundar{'y' if stated == 1 else 'ies'} of a call with "
-                f"{wanted}"
-            )
+    if len(relations.inputs) != len(call.args):
+        raise ValueError(
+            f"{op_cls.__name__} describes {len(relations.inputs)} input "
+            f"boundar{'y' if len(relations.inputs) == 1 else 'ies'} of a call "
+            f"with {len(call.args)}"
+        )
+    for index, (boundary, arg) in enumerate(zip(relations.inputs, call.args)):
+        supplied = ctx.local_type_of(arg)
+        if isinstance(supplied, TupleType) or not boundary.quantity.upper:
+            continue
+        _hold_rank(
+            boundary.pattern,
+            len(supplied.shape) if isinstance(supplied, TensorType) else 0,
+            f"input {index}",
+            op_cls,
+        )
+    _hold_one_space(relations, op_cls)
+    _hold_parameters_bound(relations, op_cls)
+    return relations
+
+
+def _hold_one_space(relations: AccessRelations, op_cls: type) -> None:
+    """Refuse boundaries of one Op that are asked by different coordinates.
+
+    An Op walks one iteration space and every boundary answers about it, so two
+    asked by different coordinates describe two Ops. A boundary may answer on
+    part of that space -- the piece a grouped rotation writes, the positions a
+    window leaves alone -- so what must agree is the coordinates it is asked by,
+    and every part must lie inside the whole they make.
+    """
+    walked: tuple | None = None
+    whole = None
+    for side, boundaries in (("input", relations.inputs), ("output", relations.outputs)):
+        for index, boundary in enumerate(boundaries):
+            if not isinstance(boundary.pattern, (AffineAccess, isl.map, isl.multi_aff)):
+                continue
+            own = relation_of(boundary.pattern).domain()
+            rank = own.dim(isl.dim_type.SET)
+            if walked is None:
+                walked, whole = (rank, f"{side} {index}"), own
+                continue
+            if rank != walked[0]:
+                raise ValueError(
+                    f"{op_cls.__name__} is asked by {walked[0]} coordinates at "
+                    f"{walked[1]} and by {rank} at {side} {index}; one Op walks "
+                    "one space"
+                )
+            whole = whole.union(own)
+    if whole is None:
+        return
+    for side, boundaries in (("input", relations.inputs), ("output", relations.outputs)):
+        for index, boundary in enumerate(boundaries):
+            if not isinstance(boundary.pattern, (AffineAccess, isl.map, isl.multi_aff)):
+                continue
+            own = relation_of(boundary.pattern).domain()
+            if not own.is_subset(whole):
+                raise ValueError(
+                    f"{op_cls.__name__} is asked at {own} on {side} {index}, "
+                    f"which is outside the {whole} it walks"
+                )
+
+
+def _hold_parameters_bound(relations: AccessRelations, op_cls: type) -> None:
+    """Refuse a relation naming a parameter nothing says the value of.
+
+    A parameter is how a relation carries what it cannot know yet, so one nobody
+    binds is a hole: whoever counts it will either refuse or answer for a value
+    the program never had.
+    """
+    for side, boundaries in (("input", relations.inputs), ("output", relations.outputs)):
+        for index, boundary in enumerate(boundaries):
+            pattern = boundary.pattern
+            if not isinstance(pattern, (AffineAccess, isl.map, isl.multi_aff)):
+                continue
+            relation = relation_of(pattern)
+            bound = {
+                name for name, _value in (getattr(pattern, "parameters", ()) or ())
+            }
+            named = {
+                relation.get_dim_name(isl.dim_type.PARAM, position)
+                for position in range(relation.dim(isl.dim_type.PARAM))
+            }
+            if named - bound:
+                raise ValueError(
+                    f"{op_cls.__name__} names {sorted(named - bound)} at {side} "
+                    f"{index} and binds nothing to them"
+                )
+
+
+def relations_of(call, ctx) -> AccessRelations:
+    """One Op's coordinates, held also against the Type the Call now has.
+
+    Everything checkable before the Type is checked before it, so what is left
+    here is what genuinely needs the answer: one boundary per output field, each
+    written at the rank that field has, and the legacy links and claim held to
+    the operands they name.
+    """
+    op_cls = type(call.target)
+    relations = coordinates_of(call, ctx)
+    _wanted_inputs, wanted_outputs = _boundaries_of(call, ctx)
+    if len(relations.outputs) != wanted_outputs:
+        raise ValueError(
+            f"{op_cls.__name__} describes {len(relations.outputs)} output "
+            f"boundar{'y' if len(relations.outputs) == 1 else 'ies'} of a call "
+            f"with {wanted_outputs}"
+        )
     _check_links_against(call, ctx, relations, op_cls)
     _check_lookups_against(call, ctx, relations, op_cls)
     _check_image_ranks(call, ctx, relations, op_cls)
@@ -1757,6 +1853,7 @@ __all__ = [
     "type_relation_registry",
     "register_access_relation",
     "relations_of",
+    "coordinates_of",
     "register_type_relation",
     "identity_relations",
     "build_relation",

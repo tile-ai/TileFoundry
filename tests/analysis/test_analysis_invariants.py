@@ -3736,7 +3736,8 @@ def test_a_link_is_asked_by_as_many_coordinates_as_its_output_has() -> None:
     A map indexed by fewer is a link to some other value, and it composes with
     this occurrence without complaining: the reader finds out only when the
     spaces refuse to meet, by which point the answer has been a conservative
-    charge rather than a refused handler for however long.
+    charge rather than a refused handler for however long. The boundaries
+    themselves agree here, so this is the link and nothing else.
     """
 
     class _AsksTooFew(Op):
@@ -3749,13 +3750,15 @@ def test_a_link_is_asked_by_as_many_coordinates_as_its_output_has() -> None:
         held = AccessQuantity(4, 4)
         return AccessRelations(
             inputs=(
-                BoundaryAccess(identity_access(1), held, AccessMode.TRANSFER),
+                BoundaryAccess(identity_access(2), held, AccessMode.TRANSFER),
             ),
             outputs=(
                 transfers(
                     identity_access(2),
                     held,
-                    StorageLink("forward", 0, identity_access(1), held),
+                    StorageLink(
+                        "forward", 0, isl.map("{ [d0] -> [d0, 0] }"), held
+                    ),
                 ),
             ),
         )
@@ -3763,7 +3766,7 @@ def test_a_link_is_asked_by_as_many_coordinates_as_its_output_has() -> None:
     call = Call(
         type=make_tensor_type((2, 2), DType.f32),
         target=_AsksTooFew(),
-        args=(Var(type=make_tensor_type((4,), DType.f32), name="x"),),
+        args=(Var(type=make_tensor_type((2, 2), DType.f32), name="x"),),
     )
     with pytest.raises(ValueError, match="from 1 coordinates, and it has 2"):
         relations_of(call, CostContext())
