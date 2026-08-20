@@ -177,6 +177,7 @@ from tilefoundry.visitor_registry.access_relation import (
     StorageSpan,
     access_relation_registry,
     build_relation,
+    coordinates_of,
     index_set,
     linearized_view,
     moves,
@@ -846,6 +847,114 @@ def _walked_by(relations: AccessRelations) -> "isl.set":
         )
     assert walked is not None
     return walked
+
+
+def test_what_one_op_states_about_its_own_space_is_checked_before_its_type() -> None:
+    """The two ways a space is wrong, and the three ways it is legitimately partial.
+
+    Type inference has to be handed something already worth believing, and what
+    is checkable without the Type is the space itself: every boundary asked by
+    the same coordinates, and each one's own part of it bounded once parameters
+    stand for values. Neither refuses a boundary for answering on part of the
+    space, which is how real Ops are written.
+    """
+
+    def asked(name, inputs, outputs):
+        target = type(name, (Op,), {})
+        register_typeinfer(target)(lambda call, ctx: make_tensor_type((4,), DType.f32))
+        register_access_relation(target)(
+            lambda call, ctx: AccessRelations(
+                inputs=tuple(
+                    moves(pattern, 4) for pattern in inputs
+                ),
+                outputs=tuple(writes(pattern, 4) for pattern in outputs),
+            )
+        )
+        return Call(
+            type=make_tensor_type((4,), DType.f32),
+            target=target(),
+            args=(Var(type=make_tensor_type((4,), DType.f32), name="x"),),
+        )
+
+    two_ranks = asked(
+        "_AsksTwoRanks",
+        (isl.map("{ [d0, d1] -> [d0] : 0 <= d0 < 4 and 0 <= d1 < 4 }"),),
+        (_bounded(1),),
+    )
+    with pytest.raises(ValueError, match="one Op walks one space"):
+        coordinates_of(two_ranks, TypeInferContext())
+
+    open_ended = asked(
+        "_LeavesItOpen",
+        (isl.map("{ [d0] -> [d0] : 0 <= d0 }"),),
+        (_bounded(1),),
+    )
+    with pytest.raises(ValueError, match="no parameter binding makes bounded"):
+        coordinates_of(open_ended, TypeInferContext())
+
+    empty_beside_full = asked(
+        "_AddressesWithoutReading",
+        (isl.map("{ [d0] -> [d0] : false }"),),
+        (_bounded(1),),
+    )
+    coordinates_of(empty_beside_full, TypeInferContext())
+
+    parametric = asked(
+        "_WaitsForAValue",
+        (AffineAccess(
+            isl.map("[n] -> { [d0] -> [d0] : 0 <= d0 < n and 0 < n <= 4 }"),
+            (("n", DimVar("n", 1, 5)),),
+        ),),
+        (_bounded(1),),
+    )
+    coordinates_of(parametric, TypeInferContext())
+
+
+def test_the_partial_spaces_real_ops_state_are_accepted() -> None:
+    """Three shapes that answer on part of a space, each for its own reason.
+
+    A slice is handed its bounds and never reads them, so that boundary answers
+    nowhere. An insert writes a window and keeps everything else, so those two
+    do not meet. A grouped rotation walks one coordinate saying which value it
+    is rotating, and each side answers at one value of it. All three are what
+    the checks have to admit while still refusing an unwalkable space.
+    """
+    bounds = Tuple(
+        type=TupleType(fields=(make_tensor_type((), DType.i64),)),
+        elements=(Constant(type=make_tensor_type((), DType.i64), value=2),),
+    )
+    window = Call(
+        type=make_tensor_type((4,), DType.f32),
+        target=SliceOp(sizes=(4,), strides=(1,)),
+        args=(Var(type=make_tensor_type((10,), DType.f32), name="x"), bounds),
+    )
+    addressed = coordinates_of(window, TypeInferContext())
+    assert relation_of(addressed.inputs[1].pattern).is_empty(), (
+        "a slice is handed its bounds and reads none of them"
+    )
+    assert not relation_of(addressed.inputs[0].pattern).is_empty()
+
+    dst = make_tensor_type((10,), DType.f32)
+    inserted = Call(
+        type=dst,
+        target=InsertSlice(),
+        args=(
+            Var(type=dst, name="dst"),
+            Var(type=make_tensor_type((4,), DType.f32), name="update"),
+            Constant(type=make_tensor_type((), DType.i64), value=2),
+        ),
+    )
+    placed = coordinates_of(inserted, TypeInferContext())
+    kept = relation_of(placed.inputs[0].pattern).domain()
+    written = relation_of(placed.outputs[0].pattern).domain()
+    assert not kept.is_equal(written), "what it keeps is what the window is not"
+    assert kept.intersect(written).is_empty()
+
+    rotated = extract(rope_gqa)
+    walked = sorted(str(unit.name) for unit in rotated.units)
+    assert walked == ["RoPE_0", "RoPE_1"], (
+        "and a rotation's two instances answer at one value of that coordinate each"
+    )
 
 
 def test_one_relation_answers_before_its_result_type_exists() -> None:
