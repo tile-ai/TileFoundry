@@ -50,6 +50,34 @@ containing `SOURCE` MUST be first on the Python module search path, so a file be
 it MAY be imported by its module name. A command MUST capture and suppress standard
 output that `SOURCE` emits while loading.
 
+How much of `SOURCE` is executed depends on whether it named a root, and the two
+boundaries are different:
+
+- Without a selector, `SOURCE` MUST be executed as one unit. The command was asked
+  about the file, so the first statement that fails is the answer and MUST be
+  reported as itself.
+- With a selector, each top-level statement of `SOURCE` MUST be executed on its own
+  and in source order, and one that fails MUST be set aside rather than ending the
+  load. No statement MAY be skipped unexecuted: what the selection needs is whatever
+  it turns out to read, and a reader cannot decide that from the text without
+  deciding which names are a function's own.
+
+  `SOURCE`'s own `__future__` imports MUST prefix each statement so that they still
+  govern it, and each statement MUST be compiled without inheriting the compiling
+  code's own `__future__` flags. What a file postpones is that file's decision: a
+  file that postpones its annotations MUST keep them postponed, and one that does
+  not MUST have them evaluated, exactly as loading it as one unit would.
+
+  The selected root MUST then be resolved from what the load bound. If it is not
+  bound, the load MUST fail with the first failure it set aside, because something
+  the selection needed is what failed. A root reached under a second name is that
+  same root and keeps its own name.
+
+A class body runs when the file does, so a class that refuses to be built refuses
+there. The selector boundary above is what makes naming one root of a file a
+question about that root: a file is where programs are kept, not a claim that all
+of them are finished.
+
 `check` reads the same `SOURCE` shape and one thing more: its selector MAY name a
 runtime twin instead of an authored Module. A twin generated from an authored
 Module states which Module that is ([runtime §1.1](./runtime.md#11-runtimemodule)),

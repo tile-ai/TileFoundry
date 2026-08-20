@@ -71,3 +71,79 @@ def broken_before() -> str:
 def broken_beside_a_parent() -> str:
     """`Unsound` between a child and the sound parent that reaches it."""
     return _HEAD + _CHILD + _UNSOUND + _PARENT
+
+
+def broken_named_like_a_local() -> str:
+    """The unsound root is called `x`, which is also the sound kernel's parameter.
+
+    Nothing connects the two: one is a module-level class and the other is a name
+    bound inside a function. A reading that collects every name a class mentions
+    cannot tell them apart, and concludes the selection needs the unsound class.
+    """
+    return _HEAD + _UNSOUND.replace("class Unsound:", "class x:") + _SOUND
+
+
+def broken_inside_a_compound_statement() -> str:
+    """The unsound root is defined inside a top-level `if`.
+
+    A statement that is not itself a class definition still defines one, so a
+    reading that only recognises a bare `class` at the top level sees a statement
+    that binds nothing and keeps it.
+    """
+    guarded = "if N:\n" + "".join(
+        f"    {line}\n" for line in _UNSOUND.splitlines()
+    )
+    return _HEAD + guarded + _SOUND
+
+
+def broken_beside_an_alias() -> str:
+    """The selector names `Root`, an alias of the sound class rather than a class.
+
+    A selector names a root of the file, and a root reached by a second name is
+    still that root. A reading that looks for a class statement of the selected
+    name finds none and gives up on isolating anything.
+    """
+    return _HEAD + _UNSOUND + _SOUND.replace("class Sound:", "class Built:") + "Root = Built\n"
+
+
+def broken_beside_a_future_annotation() -> str:
+    """A file whose annotations are postponed, holding one unsound root.
+
+    `from __future__ import annotations` governs the statements after it, so a
+    statement compiled without it in front reads a forward-referencing annotation
+    as a name to resolve now. The dataclass here annotates a class defined below
+    it, which is exactly what that import is for, and which fails without it.
+    """
+    return (
+        "from __future__ import annotations\n"
+        + _HEAD
+        + "from dataclasses import dataclass\n"
+        "@dataclass\n"
+        "class Holder:\n"
+        "    later: Described\n"
+        "class Described:\n"
+        "    pass\n"
+        + _UNSOUND
+        + _SOUND
+    )
+
+
+def broken_beside_an_eager_annotation() -> str:
+    """The same file with no `__future__` import, so its annotations are eager.
+
+    What a file postpones is the file's own decision. This one postpones nothing
+    and annotates a class defined above it, so the annotation is that class rather
+    than its name -- which is what a load that handed out postponed annotations to
+    a file that never asked for them would get wrong.
+    """
+    return (
+        _HEAD
+        + "from dataclasses import dataclass\n"
+        "class Described:\n"
+        "    pass\n"
+        "@dataclass\n"
+        "class Holder:\n"
+        "    later: Described\n"
+        + _UNSOUND
+        + _SOUND
+    )

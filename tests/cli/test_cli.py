@@ -14,10 +14,19 @@ from tests.fixtures.shapes.composed_leaf_source import composed_leaf_source
 from tests.fixtures.shapes.neighbour_sources import (
     broken_after,
     broken_before,
+    broken_beside_a_future_annotation,
     broken_beside_a_parent,
+    broken_beside_an_alias,
+    broken_beside_an_eager_annotation,
+    broken_inside_a_compound_statement,
+    broken_named_like_a_local,
 )
 from tilefoundry import cli
-from tilefoundry.cli.source import load_authored_ir, one_extent_per_dim
+from tilefoundry.cli.source import (
+    load_authored_ir,
+    load_namespace,
+    one_extent_per_dim,
+)
 from tilefoundry.target import CpuTarget, registered_targets
 
 
@@ -217,8 +226,24 @@ def test_analysis_reports_distinguish_cuda_products(tmp_path, capsys) -> None:
 
 @pytest.mark.parametrize(
     "written",
-    (broken_after, broken_before, broken_beside_a_parent),
-    ids=("unsound-last", "unsound-first", "unsound-between-child-and-parent"),
+    (
+        broken_after,
+        broken_before,
+        broken_beside_a_parent,
+        broken_named_like_a_local,
+        broken_inside_a_compound_statement,
+        broken_beside_an_alias,
+        broken_beside_a_future_annotation,
+    ),
+    ids=(
+        "unsound-last",
+        "unsound-first",
+        "unsound-between-child-and-parent",
+        "unsound-named-like-a-kernel-local",
+        "unsound-inside-a-compound-statement",
+        "selector-names-an-alias",
+        "postponed-annotations",
+    ),
 )
 def test_naming_one_root_does_not_ask_about_the_rest_of_its_file(
     tmp_path, capsys, written
@@ -234,13 +259,54 @@ def test_naming_one_root_does_not_ask_about_the_rest_of_its_file(
     """
     source = tmp_path / "neighbours.py"
     source.write_text(written(), encoding="utf-8")
-    selected = "Parent" if written is broken_beside_a_parent else "Sound"
+    selected, named = {
+        broken_beside_a_parent: ("Parent", "Parent"),
+        broken_beside_an_alias: ("Root", "Built"),
+    }.get(written, ("Sound", "Sound"))
 
     assert cli.main(["analyze", f"{source}:{selected}", "--compute-cost", "--json"]) == 0
     report = json.loads(capsys.readouterr().out)
 
-    assert report["module"] == selected
+    assert report["module"] == named, "a root reached by a second name keeps its own"
     assert report["totals"]["flops"]
+
+
+def test_a_selected_load_still_postpones_the_annotations_the_file_postponed(
+    tmp_path,
+) -> None:
+    """Setting a failed statement aside must not quietly demote a sound one.
+
+    `from __future__ import annotations` governs the statements after it, so each
+    one executed on its own needs it in front. Without that, a forward-referencing
+    annotation is a name to resolve now, it raises, and the statement holding it
+    is set aside -- leaving the selection loadable and something else in the file
+    silently missing. Asking only whether the selection loaded would not notice,
+    so this asks for the statement that depends on the import.
+    """
+    source = tmp_path / "postponed.py"
+    source.write_text(broken_beside_a_future_annotation(), encoding="utf-8")
+
+    namespace, selector = load_namespace(f"{source}:Sound")
+
+    assert selector == "Sound"
+    assert "Sound" in namespace
+    assert namespace["Holder"].__annotations__["later"] == "Described"
+
+
+def test_a_selected_load_does_not_postpone_what_the_file_did_not(tmp_path) -> None:
+    """A file that postpones nothing keeps its annotations evaluated.
+
+    What a file postpones is its own decision, so the statements executed for a
+    selection must not inherit the postponement of whatever compiled them. This
+    file annotates a class defined above it, and the annotation is that class --
+    not the string a postponing load would leave behind.
+    """
+    source = tmp_path / "eager.py"
+    source.write_text(broken_beside_an_eager_annotation(), encoding="utf-8")
+
+    namespace, _selector = load_namespace(f"{source}:Sound")
+
+    assert namespace["Holder"].__annotations__["later"] is namespace["Described"]
 
 
 @pytest.mark.parametrize(
