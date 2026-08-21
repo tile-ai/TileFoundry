@@ -791,36 +791,25 @@ peak-footprint=<level>:<int>[,<level>:<int>...]
 advisory="<text>"
 ```
 
-An empty footprint states the family name alone; each advisory is its own line, so
-a program with none adds none. An advisory is a sentence, so it is quoted and
-escaped ([inspection §2.8](./inspection.md#28-record-comment-forms)); JSON carries
-the same text raw.
-
-The record's single-line comment form projects the footprint it holds;
-`lifetimes` is read from JSON, not from a line:
+An empty footprint states the family name alone; each advisory is its own line
+and is quoted and escaped
+([inspection §2.8](./inspection.md#28-record-comment-forms)). The record's own
+comment form projects the footprint it holds, and `lifetimes` is read from JSON:
 
 ```text
 memory peak=<level>:<int>[,...] persistent=<int> advisories=<int>
 ```
 
 Every measured Call also receives a `traffic` annotation, whose `operands` split
-is one layer finer and so is emitted only when asked for
-([cli Analyze](./cli.md#analyze)) and is absent from a Function, which has no
-split:
+is emitted only when asked for ([cli Analyze](./cli.md#analyze)) and is absent
+from a Function, which has no split:
 
 ```text
 traffic traffic=<level>:r<int>/w<int>@r<int>/w<int>[,...][ operands=<position>:r<int>/w<int>[,...]]
 ```
 
-Its JSON projection is under the reported value's `traffic` key:
-
-```text
-{"whole": {<level>: {"read": <int>, "write": <int>}},
- "per_unit": {<level>: {"read": <int>, "write": <int>}},
- "operands": [{"arg": <position>, "name": <name>, "type": <type>,
-               "read": <int>, "write": <int>}, ...]}
-```
-
+Its JSON projection is under the reported value's `traffic` key, with `whole`,
+`per_unit` and one `operands` entry per position carrying `read` and `write`.
 The `analyze` equation printer emits no memory annotation because that record is
 attached only to the Function. Its full JSON projection is under
 `function_records.memory`:
