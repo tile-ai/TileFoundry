@@ -1,13 +1,13 @@
-"""Measure function residency against the target memory hierarchy, and place it.
+"""Measure function residency against the target memory hierarchy, and fit it.
 
 Lifetime order comes from authored IR and residency is projected to each
 explicit level's owner. A single value exceeding a level is an error; peak and
 cache overflow are advisories.
 
-``_ALLOCATED_LEVELS`` are then addressed: buffers live at once get byte ranges of
-their own within the stated capacity, and authored order already fixes the
-lifetimes. A program whose buffers cannot be placed is refused here, so a
-recorded allocation is always one that holds.
+``_ALLOCATED_LEVELS`` are then shown to fit: what is live at once has to sit in
+the stated capacity somewhere, and authored order already fixes the lifetimes.
+A program whose buffers cannot be fitted is refused here, so a recorded
+allocation is always a capacity question that was settled.
 """
 
 from __future__ import annotations

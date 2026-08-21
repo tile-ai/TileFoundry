@@ -118,4 +118,3 @@ def _eval_split(ctx):
             for part, field_type in zip(parts, ctx.result_type.fields)
         )
     )
-

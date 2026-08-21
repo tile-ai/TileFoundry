@@ -508,4 +508,3 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
             moved=crossed,
             level="cta",
         )
-

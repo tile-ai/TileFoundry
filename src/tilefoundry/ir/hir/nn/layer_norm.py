@@ -92,4 +92,3 @@ def _eval_layer_norm(ctx):
     axis = ctx.op.axis + rank if ctx.op.axis < 0 else ctx.op.axis
     out = F.layer_norm(x, tuple(x.shape[axis:]), weight, bias, ctx.op.eps)
     return TensorValue(data=out, type=ctx.result_type)
-

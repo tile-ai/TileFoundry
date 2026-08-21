@@ -130,10 +130,10 @@ class ValueLifetime:
 
 @dataclass(frozen=True)
 class AllocationMetadata:
-    """What deciding this function's byte addresses took.
+    """What showing this function's buffers fit took.
 
-    The addresses themselves are proof rather than a conclusion, so none of them
-    appear here. What a reader can act on is whether the question was settled.
+    Where any of them would sit is the solver's business and appears nowhere
+    here. What a reader can act on is whether the question was settled.
     """
 
     solver_status: str

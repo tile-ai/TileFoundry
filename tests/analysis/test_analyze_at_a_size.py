@@ -17,6 +17,8 @@ from dataclasses import replace
 import pytest
 
 from tests.fixtures.placed.gqa_decode import GqaOnline
+from tests.fixtures.placed.mha_decode_paged import LongerCache, ShorterCache
+from tests.fixtures.placed.qwen3_1_7b_pd import PrefillLayer
 from tests.models.corpus import ConcreteCase, placed_cases
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry.analysis import (
@@ -51,7 +53,6 @@ from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFa
 CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT}
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
-LOGICAL_FAMILIES = ("compute-cost", "memory", "roofline")
 INVENTORY = [pytest.param(case, id=case.id) for case in placed_cases()]
 
 
@@ -123,12 +124,92 @@ def assert_performance_contract(result: AnalysisResult) -> None:
         runs, available = span // duration, repeats.get(id(expr), 1)
         assert 1 <= runs <= available and available % runs == 0, describe(expr)
     assert bool(timed) is bool(predicted_ns)
+    _every_number_counts_something(result)
     for expr in postorder(fn.body):
         if not isinstance(expr, GridRegionExpr):
             continue
         assert get_metadata(expr, PerformanceMetadata) is None, describe(expr)
         assert get_metadata(expr, PerformanceSummaryMetadata) is None, describe(expr)
         assert get_metadata(expr, LoopFootprintMetadata) is not None, describe(expr)
+
+
+@pytest.mark.parametrize(
+    ("smaller", "larger"),
+    (
+        ((ShorterCache, None), (LongerCache, None)),
+        (
+            (PrefillLayer, {"ctx_len": 512, "seq": 1}),
+            (PrefillLayer, {"ctx_len": 4608, "seq": 1}),
+        ),
+        (
+            (PrefillLayer, {"ctx_len": 0, "seq": 512}),
+            (PrefillLayer, {"ctx_len": 512, "seq": 512}),
+        ),
+    ),
+    ids=("paged-kv", "qwen-decode-history", "qwen-prefill-history"),
+)
+def test_more_of_the_same_work_is_never_predicted_to_take_less_time(
+    smaller, larger
+) -> None:
+    """A longer cache and a longer history are more of the same program.
+
+    Nothing here says how much longer the prediction should be: a model that got
+    the direction wrong would be reporting that reading twice the cache costs
+    less than reading half of it, which is the one comparison a reader makes
+    without being told to.
+    """
+    assert _predicted_ns(*smaller) <= _predicted_ns(*larger)
+
+
+def _every_number_counts_something(result: AnalysisResult) -> None:
+    """Every quantity these four families report is a count, so none is below zero.
+
+    Work, bytes, a footprint and a bound are all counts of something that
+    happened or has to happen. A negative one is not a small answer but a
+    derivation that ran backwards -- a projection dividing what it should have
+    multiplied, or a difference taken the wrong way round -- and it would then be
+    added into a total that still looks plausible.
+    """
+    fn = result.function
+    for expr in (fn, *postorder(fn.body)):
+        for record, rows in (
+            (ComputeCostMetadata, ("flops", "flops_per_unit", "service", "service_per_unit")),
+            (TrafficMetadata, ()),
+            (MemoryMetadata, ()),
+            (RooflineMetadata, ()),
+            (PerformanceMetadata, ()),
+        ):
+            held = get_metadata(expr, record)
+            if held is None:
+                continue
+            for field in rows:
+                for name, value in getattr(held, field):
+                    assert value >= 0, f"{describe(expr)}: {field}[{name}] = {value}"
+            if record is TrafficMetadata:
+                for field in ("whole", "per_unit"):
+                    for level, moved in getattr(held, field):
+                        assert moved.read >= 0 and moved.write >= 0, (
+                            f"{describe(expr)}: {field}[{level}] = {moved}"
+                        )
+                for position, moved in enumerate(held.operands):
+                    assert moved.read >= 0 and moved.write >= 0, (
+                        f"{describe(expr)}: operand {position} = {moved}"
+                    )
+            if record is MemoryMetadata:
+                for level in held.footprint:
+                    assert level.peak_bytes >= 0 and level.persistent_bytes >= 0
+                for item in held.lifetimes:
+                    assert item.bytes >= 0 and 0 <= item.defined_at <= item.last_used_at
+            if record is RooflineMetadata:
+                assert held.ideal_ns >= 0 and held.compute_ns >= 0 and held.memory_ns >= 0
+            if record is PerformanceMetadata:
+                assert 0 <= held.timeline.start_ns <= held.timeline.end_ns
+    for expr in postorder(fn.body):
+        record = get_metadata(expr, LoopFootprintMetadata)
+        if record is None:
+            continue
+        for item in record.footprints:
+            assert item.bytes >= 0 and item.device_bytes >= 0 and item.repeated_bytes >= 0
 
 
 @pytest.mark.parametrize("case", INVENTORY)
@@ -181,11 +262,10 @@ def _predicted_ns(module, dims=None) -> int:
 
 @pytest.mark.parametrize("family", FAMILIES)
 def test_the_result_names_the_function_that_carries_the_records(family: str) -> None:
-    """The records are written onto the program that was measured, and that is the derived one.
+    """The records are written onto the program measured, which is the derived one.
 
-    The records are written onto the program that was measured, and that is
-    the derived one. Handing back the symbolic input would send a reader looking
-    for records on a function that has none.
+    Handing back the symbolic input would send a reader looking for records on a
+    function that has none.
     """
     module, authored, dims = _subject(family)
 

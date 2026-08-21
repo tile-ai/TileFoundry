@@ -596,7 +596,7 @@ class AllocationMetadata:
     """What showing this function's buffers fit came to.
 
     Attributes:
-        solver_status: attribute; `"optimal"`, `"feasible"`, `"unknown"` or `"infeasible"`.
+        solver_status: attribute; `"optimal"` or `"feasible"`.
     """
 
     solver_status: str

@@ -115,6 +115,52 @@ def test_schedule_rejects_several_extents_per_dimension(capsys) -> None:
     assert "asking several EXTENTs together is for check" in refused
 
 
+_NEIGHBOURS = """from tilefoundry import func, module
+from tilefoundry.dsl import Mesh, Tensor, Topology, tf
+from tilefoundry.target import CudaTarget
+
+N = 132 * 128
+_H200 = CudaTarget('nvidia.h200_sxm')
+
+
+@module(entry='nope', target=_H200, topologies=(Topology('cta', 132),))
+class Unsound:
+    @func
+    def kernel(x: Tensor[(N,), 'f32']) -> Tensor[(N,), 'f32']:
+        return tf.square(x)
+
+
+@module(entry='kernel', target=_H200, topologies=(Topology('cta', 132),))
+class Sound:
+    @func
+    def kernel(x: Tensor[(N,), 'f32']) -> Tensor[(N,), 'f32']:
+        with Mesh(('cta',), layout=(132,), names=('block',)) as m:
+            placed = tf.reshard(x, (N @ m.block,), 'gmem')
+            return tf.reshard(tf.square(placed), (N @ m.block,), 'gmem')
+"""
+
+
+def test_naming_one_root_does_not_ask_about_the_rest_of_its_file(tmp_path, capsys) -> None:
+    """A selector names one root, and the rest of the file is a different question.
+
+    The unsound root here states an entry naming no function it collected, and it
+    is written first, so a reading that only survives when the broken one comes
+    last is one that got away with it. Asking about the sound root has to answer
+    about the sound root; asking about the file still has to refuse, because then
+    the broken root is one of the programs that was asked for.
+    """
+    source = tmp_path / "neighbours.py"
+    source.write_text(_NEIGHBOURS, encoding="utf-8")
+
+    assert cli.main(["analyze", f"{source}:Sound", "--compute-cost", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["module"] == "Sound"
+    assert report["totals"]["flops"]
+
+    assert cli.main(["analyze", str(source), "--compute-cost", "--json"]) == 1
+    assert "nope" in capsys.readouterr().err
+
+
 def test_analyze_help_explains_topology_effects_and_assumptions(capsys) -> None:
     with pytest.raises(SystemExit) as stopped:
         cli.main(["analyze", "--help"])
