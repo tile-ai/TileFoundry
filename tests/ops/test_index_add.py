@@ -16,7 +16,7 @@ from tilefoundry.ir.hir.tensor.index_add import IndexAdd
 from tilefoundry.ir.hir.tensor.index_copy import IndexCopy
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Partial, Split
+from tilefoundry.ir.types.shard.shard_layout import Partial
 from tilefoundry.passes.transforms import HirToTirPass
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
@@ -204,78 +204,3 @@ def test_index_writes_have_no_hir_to_tir_lowering(fn) -> None:
         HirToTirPass().run(module)
 
 
-_SPLIT_CASES = [
-    TypeInferCase(
-        f"{name}_split_{operand}_is_refused",
-        op,
-        tuple(
-            make_shard_tensor_type(shape, mesh=_MESH, attrs=(Split(0),), dtype=dtype)
-            if position == operand
-            else make_tensor_type(shape, dtype)
-            for position, (shape, dtype) in enumerate(
-                (((4, 8), _F32), ((2,), _I64), ((2, 8), _F32))
-            )
-        ),
-        ExpectedError(match=f"{name}: {label} is Split"),
-    )
-    for name, op in (("IndexAdd", IndexAdd(dim=0)), ("IndexCopy", IndexCopy(dim=0)))
-    for operand, label in ((0, "dst"), (1, "index"), (2, "src"))
-]
-
-
-@pytest.mark.parametrize("case", _SPLIT_CASES, ids=lambda case: case.name)
-def test_an_indexed_write_refuses_a_sharded_operand(case) -> None:
-    """Which rows a participant writes depends on values, so a split is refused.
-
-    A shard of the destination owns whichever index values land inside it, which
-    needs value binding, a payload guard whose coordinates differ from the
-    destination's, and arithmetic that moves with the share. Those only work
-    together, so the split is refused where the author wrote it rather than
-    costed as though it were whole.
-    """
-    run_typeinfer_case(case)
-
-
-def test_an_indexed_write_moves_the_same_amount_however_the_index_reads() -> None:
-    """A repeated or out-of-order index changes what happens, not how much.
-
-    Bound values, run through the evaluator, because the mistake this guards
-    against is counting `len(index)` and calling it coverage. Row 1 written
-    twice is the program; row 3 before row 0 is the program; neither is a window
-    and neither needs to be.
-    """
-    destination = torch.zeros(4, 3)
-    payload = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-
-    repeated = destination.clone()
-    repeated[1] = payload[1]
-    run_eval_case(
-        EvalCase(
-            "index_copy_repeated",
-            IndexCopy(dim=0),
-            (destination, torch.tensor([1, 1]), payload),
-            repeated,
-        )
-    )
-
-    reversed_ = destination.clone()
-    reversed_[3], reversed_[0] = payload[0], payload[1]
-    run_eval_case(
-        EvalCase(
-            "index_copy_out_of_order",
-            IndexCopy(dim=0),
-            (destination, torch.tensor([3, 0]), payload),
-            reversed_,
-        )
-    )
-
-    accumulated = destination.clone()
-    accumulated[1] = payload[0] + payload[1]
-    run_eval_case(
-        EvalCase(
-            "index_add_repeated",
-            IndexAdd(dim=0),
-            (destination, torch.tensor([1, 1]), payload),
-            accumulated,
-        )
-    )

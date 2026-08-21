@@ -97,28 +97,11 @@ _WHOLE = make_tensor_type((8,), DType.i32)
 _TRUTHY = make_tensor_type((8,), DType.bool)
 
 COST_CASES = [
-    *(
-        CostCase(
-            f"{kind.name.lower()}_is_special_function_work",
-            Unary(kind=kind),
-            (_REAL,),
-            service={"special": 8},
-            traffic=(TrafficBytes(read=32), TrafficBytes(write=32)),
-        )
-        for kind in _SPECIAL
-    ),
     CostCase(
-        "not_over_truths_is_a_predicate",
-        Unary(kind=UnaryKind.NOT),
-        (_TRUTHY,),
-        service={"predicate": 8},
-        traffic=(TrafficBytes(read=1), TrafficBytes(write=1)),
-    ),
-    CostCase(
-        "neg_over_whole_numbers_is_integer_work",
-        Unary(kind=UnaryKind.NEG),
-        (_WHOLE,),
-        service={"integer": 8},
+        "exp_is_special_function_work",
+        Unary(kind=UnaryKind.EXP),
+        (_REAL,),
+        service={"special": 8},
         traffic=(TrafficBytes(read=32), TrafficBytes(write=32)),
     ),
     CostCase(

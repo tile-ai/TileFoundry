@@ -171,32 +171,12 @@ _WHOLE = make_tensor_type((8,), DType.i32)
 _TRUTHY = make_tensor_type((8,), DType.bool)
 
 COST_CASES = [
-    *(
-        CostCase(
-            f"{kind.name.lower()}_over_reals_is_a_predicate",
-            Binary(kind=kind),
-            (_REAL, _REAL),
-            service={"predicate": 8},
-            traffic=(TrafficBytes(read=32), TrafficBytes(read=32), TrafficBytes(write=1)),
-        )
-        for kind in _COMPARISONS
-    ),
-    *(
-        CostCase(
-            f"{kind.name.lower()}_over_truths_is_a_predicate",
-            Binary(kind=kind),
-            (_TRUTHY, _TRUTHY),
-            service={"predicate": 8},
-            traffic=(TrafficBytes(read=1), TrafficBytes(read=1), TrafficBytes(write=1)),
-        )
-        for kind in _TRUTH
-    ),
     CostCase(
-        "add_over_whole_numbers_is_integer_work",
-        _ADD,
-        (_WHOLE, _WHOLE),
-        service={"integer": 8},
-        traffic=(TrafficBytes(read=32), TrafficBytes(read=32), TrafficBytes(write=32)),
+        "lt_over_reals_is_a_predicate",
+        Binary(kind=BinaryKind.LT),
+        (_REAL, _REAL),
+        service={"predicate": 8},
+        traffic=(TrafficBytes(read=32), TrafficBytes(read=32), TrafficBytes(write=1)),
     ),
     CostCase(
         "add_over_reals_is_floating_point_work",

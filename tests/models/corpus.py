@@ -378,16 +378,11 @@ class ModelCase:
 
 @dataclass(frozen=True)
 class ConcreteCase:
-    """One program at one set of extents, ready to be asked a question.
+    """One placed program at one set of extents, ready to be asked a question.
 
-    A case of the model corpus and a root of the placed fixtures are the same
-    thing once both are concrete -- a Module to measure against, a Function of
-    it, and the extents to ask at -- so whatever asks about them is written once
-    and never has to know which of the two lists a program came from.
-
-    The program is built when it is asked for rather than when the inventory is
-    made: collecting a parametrized test would otherwise specialise every model
-    in the repository before running anything.
+    Built when it is asked for rather than when the inventory is made:
+    collecting a parametrized test would otherwise specialise every root in the
+    directory before running anything.
     """
 
     id: str
@@ -396,17 +391,6 @@ class ConcreteCase:
 
     def program(self) -> tuple[Module, Function]:
         return self.build()
-
-    def places(self, level: str = "cta") -> bool:
-        """Whether any occurrence of this program was authored inside *level*.
-
-        Asked of the concrete HIR, so it is a fact about the program rather than
-        a flag somebody set beside it: a model whose kernels are written outside
-        any Mesh has nothing that says which participants run them, however many
-        of that level its Module declares it has.
-        """
-        owner, function = self.program()
-        return states_execution_domain(owner, function, self.dims, level)
 
 
 def states_execution_domain(
