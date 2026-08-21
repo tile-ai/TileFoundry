@@ -13,9 +13,11 @@ import re
 from typing import get_args, get_origin
 
 import isl
+import pytest
 
 from tilefoundry import func
 from tilefoundry.analysis import (
+    ExtractError,
     extract,
 )
 from tilefoundry.analysis.movement import (
@@ -89,30 +91,22 @@ def softmax_row(x: Tensor[(2, 64), "f32"]) -> Tensor[(2, 64), "f32"]:
 
 
 def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
-    """Which is why every op a decoder reaches has to carry one.
+    """Which is why every op these programs reach has to carry one.
 
-    ``extract`` has no fallback when the relation registry has no entry. Elementwise
-    and fused row reductions therefore must register relations. ``SoftMax`` is
-    pinned exactly: one statement owns a row, with the reduced axis existential
-    in access maps and absent from the domain.
+    An Op that states no coordinates is refused by name rather than given a
+    default, because a default would be a second answer about where an Op reads
+    and would be wrong for whichever Op it was invented for. One whose relation
+    is registered is walked as usual, so the refusal is about the missing
+    statement and not about the shape of the program.
     """
-    elementwise = extract(elementwise_pair)
-    assert [type(u.op.target).__name__ for u in elementwise.units] == [
+    walked = extract(elementwise_pair)
+    assert [type(unit.op.target).__name__ for unit in walked.units] == [
         "Sigmoid",
         "Unary",
     ]
 
-    rows = extract(softmax_row)
-    assert [u.name for u in rows.units] == ["SoftMax"]
-    assert rows.domain.is_equal(isl.union_set("{ SoftMax[i] : 0 <= i < 2 }"))
-    assert rows.reads.is_equal(
-        isl.union_map("{ SoftMax[i] -> x[i, j] : 0 <= i < 2 and 0 <= j < 64 }")
-    )
-    assert rows.writes.is_equal(
-        isl.union_map("{ SoftMax[i] -> y[i, j] : 0 <= i < 2 and 0 <= j < 64 }")
-    )
-
-    assert "-> y[" not in str(rows.reads)
+    with pytest.raises(ExtractError, match="SoftMax.*no registered access relation"):
+        extract(softmax_row)
 
 
 

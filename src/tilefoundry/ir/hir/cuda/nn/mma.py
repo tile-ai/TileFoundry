@@ -293,4 +293,3 @@ def _tile_access(call: "Call", ctx) -> AccessRelations:
 
 
 register_access_relation(Mma_SM80_16x8x16)(_tile_access)
-register_access_relation(Wgmma_SM90_64x128x16)(_tile_access)

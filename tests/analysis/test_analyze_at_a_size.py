@@ -78,13 +78,15 @@ def assert_performance_contract(result: AnalysisResult) -> None:
     The prediction contains each occurrence it timed and is no faster than the
     ideal bound. An occurrence's duration is its own compute-cost record priced
     at the target's rates, and a solve that proved nothing says so. One a loop
-    repeats is written once, so its interval is that many of its own durations.
+    repeats is written once, so its interval is that many of its own durations
+    and its last trip still lands inside the prediction that contains it.
     A loop is not an occurrence and carries no timeline of its own, and still
     states the buffers it touches.
     """
     fn = result.function
     summary = get_metadata(fn, PerformanceSummaryMetadata)
     assert summary is not None
+    assert 0 <= summary.timeline.start_ns <= summary.timeline.end_ns
     placement = get_metadata(fn, MemoryMetadata)
     assert placement is not None and placement.allocation is not None
     assert placement.allocation.solver_status in ("optimal", "feasible")
@@ -123,6 +125,12 @@ def assert_performance_contract(result: AnalysisResult) -> None:
         assert span % duration == 0, describe(expr)
         runs, available = span // duration, repeats.get(id(expr), 1)
         assert 1 <= runs <= available and available % runs == 0, describe(expr)
+        trips, stride = record.timeline.trips, record.timeline.stride_ns
+        assert 1 <= trips <= available and available % trips == 0, describe(expr)
+        assert (stride == 0) if trips == 1 else (stride >= span), describe(expr)
+        assert (
+            record.timeline.end_ns + (trips - 1) * stride <= summary.timeline.end_ns
+        ), describe(expr)
     assert bool(timed) is bool(predicted_ns)
     _every_number_counts_something(result)
     for expr in postorder(fn.body):

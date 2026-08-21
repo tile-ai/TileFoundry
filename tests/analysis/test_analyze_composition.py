@@ -124,4 +124,3 @@ def test_analyze_keeps_a_provider_value_error_and_rejects_over_limit_topology() 
     )
     with pytest.raises(ValueError, match="1 <= extent <= 1024"):
         analyze(over_limit, function, analysis="roofline")
-

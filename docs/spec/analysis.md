@@ -618,30 +618,22 @@ class MemoryMetadata(IRMetadata):
 ```
 
 Every traffic amount here is what a boundary's own relation reaches. The Op's
-evaluator says which way each boundary moves and whether the operation
-materialises anything; it does not say how much, and an Op with no relation
-fails closed rather than having its evaluator's number read as the amount.
+evaluator says which way each boundary moves and whether it materialises
+anything; it does not say how much, and an Op with no relation fails closed.
 
 - constraints:
-  - One relation MUST answer the same way for the whole program and for one
-    unit, from one registration. A second handler for the per-unit question
-    would be two statements of one fact, kept equal by hand.
-  - Projecting an operand's Type is not enough: a value nobody sharded projects
-    to the whole of itself, so charging that to every participant multiplies one
-    read by the number of them. Every boundary MUST be held to the iterations
-    its participant performs, which is what makes a broadcast operand cost its
-    own size and a `Reshard` cost the distinct coordinates it reaches rather
-    than a full source per participant.
-  - A `UMAT` operand appearing in `Call.args` MUST contribute its own logical
-    bytes at `rmem`; a `UMAT` value appearing only in an Op attribute MUST
-    contribute no traffic.
-  - A Type with concrete and `UMAT` leaves MUST charge each leaf's bytes at its
-    own level. It MUST NOT assign the aggregate movement of the operand to the
-    one concrete level merely because that is the only committed level.
-  - Per-level `whole` and `operands` MUST NOT be assumed equal for a Type whose
-    leaves occupy several levels: `whole` groups each leaf's bytes under the
-    level that leaf sits at, while an `operands` entry is one boundary's own
-    amount over all of them. Where those bytes were placed enters neither.
+  - One relation MUST answer for the whole program and for one unit, from one
+    registration; every boundary MUST be held to the iterations its participant
+    performs. Projecting an operand's Type is not enough, because a value nobody
+    sharded projects to the whole of itself: that is what makes a broadcast
+    operand cost its own size and a `Reshard` the distinct coordinates it
+    reaches rather than a full source per participant.
+  - Each leaf's bytes are charged at the level that leaf sits at. A `UMAT` leaf
+    in `Call.args` charges its own bytes at `rmem` and one appearing only in an
+    Op attribute charges nothing, so `whole` and an `operands` entry MUST NOT be
+    assumed equal for a Type whose leaves occupy several levels: the first groups
+    leaves by level, the second is one boundary's amount over all of them. Where
+    those bytes were placed enters neither.
   - Two operands MAY name the same value; the `operands` split MUST keep their
     positions distinct, and MUST omit an entry it cannot state rather than emit
     it empty.
@@ -946,11 +938,8 @@ class ThroughputFacts:
 ```
 
 What one unit gets through is a separate projection, read by `performance`
-rather than by `roofline`. A bound over the whole device and the time one CTA
-takes are not the same number divided: the device peaks are stated per dtype and
-per second, while the work a program asks for that is not floating point at all
--- a comparison, a select, an integer add, a local move -- has its own published
-instruction throughput and no dtype to be filed under.
+rather than by `roofline`: work that is not floating point at all has its own
+published instruction throughput and no dtype to be filed under.
 
 ```python
 class PerformanceServiceFacts:
@@ -973,19 +962,15 @@ class PerformanceServiceFacts:
     def bandwidth(self, level: str) -> int | None: ...
 ```
 
-The service kinds a target states are named by the operations that record them:
-`integer`, `predicate`, `select` and `special`. The names are this project's,
-not any vendor's -- a hardware table names instructions, not services -- so each
-MUST say in its provenance which published row it was derived from. A service is
-work the machine does, not movement it makes: bytes are stated as traffic and
-priced by a bandwidth, never by standing an instruction rate in for one.
+The service kinds a target states are `integer`, `predicate`, `select` and
+`special`. The names are this project's, not any vendor's, so each MUST say in
+its provenance which published row it was derived from. A service is work the
+machine does, not movement it makes: bytes are priced by a bandwidth, never by
+standing an instruction rate in for one.
 
-Requesting roofline adds this verdict and the Function's own work line to the
-summary. The two quantities the bound divides -- the summed `flops` and the
-bandwidth-level bytes -- are promoted as `totals`, because they are the evidence
-for the verdict rather than a dependency's own conclusion. Nothing else its
-dependencies wrote is promoted: no footprint, no advisory, and no separate
-traffic line. Asking for `memory` is what states those
+Requesting roofline adds this verdict and the two quantities the bound divides
+-- the summed `flops` and the bandwidth-level bytes -- as `totals`. Nothing else
+its dependencies wrote is promoted; asking for `memory` is what states those
 ([§2.2.2](#222-memory)).
 
 ```text
@@ -1030,22 +1015,17 @@ as defined in that family's section.
     movement overlap within one occurrence, so its duration is the greater of
     the two sides rather than their sum.
   - Traffic at a level with no stated one-unit bandwidth MUST remain visible in
-    `TrafficMetadata` and MUST NOT enter a duration. A rate nobody published is
-    not one this may invent, and an instruction throughput standing in for a
-    bandwidth prices a move as though it were arithmetic. A model that does time
-    those bytes states its own rate for them.
+    `TrafficMetadata` and MUST NOT enter a duration: an instruction throughput
+    standing in for a bandwidth prices a move as though it were arithmetic.
   - Having moved bytes and having work this can time are different questions.
     What decides the second is the quantities a rate exists for: nonzero
     `flops_per_unit`, nonzero `service_per_unit`, or nonzero
     `TrafficMetadata.per_unit` at `bandwidth_level`. An occurrence with none of
-    them MUST take zero time and MUST NOT be required to carry an execution
-    placement -- there is no
-    interval to lay on a participant. Its movement at any other level MUST still
-    be recorded: it is untimed, not absent.
-  - Work of a dtype or a kind the target states no one-unit throughput for MUST
-    refuse rather than price at zero: it belongs on the same clock as the rest
-    of the work, so pricing it at nothing would leave a hole inside a number the
-    reader takes as whole.
+    them MUST take zero time, MUST NOT be required to carry an execution
+    placement, and MUST still record its movement at any other level: it is
+    untimed, not absent. Work of a dtype or kind the target states no one-unit
+    throughput for MUST refuse rather than price at zero, because that would
+    leave a hole inside a number the reader takes as whole.
   - A predicate MUST NOT be recorded as floating-point work. A comparison
     records `predicate` service and a selection records `select`; neither has a
     FLOP count, and neither MAY be priced at zero for want of one.

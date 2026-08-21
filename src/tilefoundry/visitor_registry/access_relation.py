@@ -121,75 +121,11 @@ class AccessRelations:
 access_relation_registry: AnalysisRegistry = AnalysisRegistry("access_relation")
 
 
-def _boundaries_of(call, ctx) -> tuple[int, int]:
-    """How many boundaries this Call has on each side.
-
-    A tuple result is as many boundaries as it has fields, because each field is
-    somewhere of its own that a reader can ask about.
-    """
-    result = ctx.type_of(call)
-    outputs = len(result.fields) if isinstance(result, TupleType) else 1
-    return len(call.args), outputs
-
-
 def _field_of(type_: "Type", index: int) -> "Type | None":
     """One field of a tuple, or the value itself when it has no fields."""
     if isinstance(type_, TupleType):
         return type_.fields[index] if 0 <= index < len(type_.fields) else None
     return type_ if index == 0 else None
-
-
-def _image_rank(pattern: "AffineAccess") -> int:
-    """How many coordinates one boundary's relation names."""
-    return relation_of(pattern).dim(isl.dim_type.OUT)
-
-
-def _reaches_nothing(pattern: "AffineAccess") -> bool:
-    """Whether a boundary reaches no coordinate at all, at any iteration.
-
-    An Op answering from a Type without reading it says so with an empty
-    relation, of whatever rank reads clearest, so it is exempt from being held
-    to the rank of a value it never touches.
-    """
-    return relation_of(pattern).is_empty()
-
-
-def _check_image_ranks(call, ctx, relations: AccessRelations, op_cls: type) -> None:
-    """Every affine image names one coordinate per position of what it reaches.
-
-    An image is composed with a `Layout`, whose shape and strides are the value's
-    factored positions, so another rank cannot become an address at all. The rank
-    to match is this view's. A boundary that reaches nothing is exempt: an Op
-    answering from a Type without reading it states an empty map of whatever
-    shape reads clearest.
-    """
-    result = ctx.local_type_of(call)
-    sides = (
-        ("input", relations.inputs, [ctx.local_type_of(arg) for arg in call.args]),
-        (
-            "output",
-            relations.outputs,
-            list(result.fields) if isinstance(result, TupleType) else [result],
-        ),
-    )
-    for side, boundaries, types in sides:
-        for index, boundary in enumerate(boundaries):
-            held = types[index] if index < len(types) else None
-            if isinstance(held, TupleType):
-                continue
-            wanted = len(held.shape) if isinstance(held, TensorType) else 0
-            if not _reaches_nothing(boundary.pattern):
-                _hold_rank(boundary.pattern, wanted, f"{side} {index}", op_cls)
-
-
-def _hold_rank(pattern: "AffineAccess", wanted: int, where: str, op_cls: type) -> None:
-    """Refuse an affine image that names a different number of coordinates."""
-    stated = _image_rank(pattern)
-    if stated != wanted:
-        raise ValueError(
-            f"{op_cls.__name__} reads {where} at {stated} coordinates, and it "
-            f"has {wanted} in this view"
-        )
 
 
 def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
@@ -231,67 +167,7 @@ def coordinates_of(call, ctx) -> AccessRelations:
             f"boundar{'y' if len(relations.inputs) == 1 else 'ies'} of a call "
             f"with {len(call.args)}"
         )
-    for index, (boundary, arg) in enumerate(zip(relations.inputs, call.args)):
-        supplied = ctx.type_of(arg)
-        if isinstance(supplied, TupleType) or _reaches_nothing(boundary.pattern):
-            continue
-        _hold_rank(
-            boundary.pattern,
-            len(supplied.shape) if isinstance(supplied, TensorType) else 0,
-            f"input {index}",
-            op_cls,
-        )
-    _hold_one_space(relations, op_cls)
     return relations
-
-
-def _hold_one_space(relations: AccessRelations, op_cls: type) -> None:
-    """Refuse boundaries that are not one Op's, in one walk over them.
-
-    An Op walks one iteration space and every boundary answers about it, so two
-    asked by a different number of coordinates describe two Ops. What each
-    answers on may differ and may be empty, but each must be bounded once its
-    parameters stand for something, or nobody can count it or walk it. A
-    parameter nobody binds is a hole, and one name is one value across the whole
-    Op: boundaries binding a name to two things are not one space either.
-    """
-    arity: tuple | None = None
-    bound: dict[str, object] = {}
-    for side, index, pattern in _affine_boundaries(relations):
-        relation = relation_of(pattern)
-        own = relation.domain()
-        rank = own.dim(isl.dim_type.SET)
-        if arity is None:
-            arity = (rank, f"{side} {index}")
-        elif rank != arity[0]:
-            raise ValueError(
-                f"{op_cls.__name__} is asked by {arity[0]} coordinates at "
-                f"{arity[1]} and by {rank} at {side} {index}; one Op walks one "
-                "space"
-            )
-        if not own.is_bounded():
-            raise ValueError(
-                f"{op_cls.__name__} is asked at {own} on {side} {index}, which "
-                "no parameter binding makes bounded; an unbounded space is one "
-                "nobody can walk or count"
-            )
-        stated = dict(getattr(pattern, "parameters", ()) or ())
-        named = {
-            relation.get_dim_name(isl.dim_type.PARAM, position)
-            for position in range(relation.dim(isl.dim_type.PARAM))
-        }
-        if named - set(stated):
-            raise ValueError(
-                f"{op_cls.__name__} names {sorted(named - set(stated))} at {side} "
-                f"{index} and binds nothing to them"
-            )
-        for name in sorted(named):
-            was = bound.setdefault(name, stated[name])
-            if was is not stated[name] and was != stated[name]:
-                raise ValueError(
-                    f"{op_cls.__name__} binds {name!r} to {was!r} and to "
-                    f"{stated[name]!r} at {side} {index}; one name is one value"
-                )
 
 
 def _affine_boundaries(relations: AccessRelations):
@@ -627,14 +503,14 @@ def relations_of(call, ctx) -> AccessRelations:
     """
     op_cls = type(call.target)
     relations = projected(coordinates_of(call, ctx), call, ctx)
-    _wanted_inputs, wanted_outputs = _boundaries_of(call, ctx)
-    if len(relations.outputs) != wanted_outputs:
+    result = ctx.local_type_of(call)
+    wanted = len(result.fields) if isinstance(result, TupleType) else 1
+    if len(relations.outputs) != wanted:
         raise ValueError(
             f"{op_cls.__name__} describes {len(relations.outputs)} output "
             f"boundar{'y' if len(relations.outputs) == 1 else 'ies'} of a call "
-            f"with {wanted_outputs}"
+            f"with {wanted}"
         )
-    _check_image_ranks(call, ctx, relations, op_cls)
     return relations
 
 

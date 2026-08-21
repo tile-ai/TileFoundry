@@ -202,5 +202,3 @@ def test_index_writes_have_no_hir_to_tir_lowering(fn) -> None:
     module = Module(name="t", functions=(fn,), entry=fn.name)
     with pytest.raises(TypeError, match="no lowering registered"):
         HirToTirPass().run(module)
-
-
