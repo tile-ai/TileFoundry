@@ -12,7 +12,6 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.access_relation import (
-    AccessRelations,
     access_relation_registry,
     leaves_of,
     reached_elements,
@@ -30,166 +29,39 @@ from .walk import bytes_by_storage, describe
 _UMAT_CONSUMPTION_LEVEL = str(StorageKind.RMEM)
 
 
-def _call_movement(
-    call: Call,
-    cost: Cost,
-    charged: tuple[dict[str, int], ...],
-) -> tuple[tuple[tuple[str, TrafficBytes], ...], tuple[TrafficBytes, ...]]:
-    """What each operand of *call* moves, and where those bytes are charged.
-
-    How much moves is what that boundary's own relation reaches; which level it
-    moves at is where the leaf it reached lives. *charged* is that reading
-    already split by level, one mapping per operand, so a Type is never
-    re-expanded here: an operand reaching one leaf of two owes that leaf's
-    bytes at that leaf's level and nothing at the other's.
-    """
-    operands = (*call.args, call)
-    if len(cost.traffic) != len(operands):
-        raise AnalysisError(
-            f"{describe(call)}: cost reports {len(cost.traffic)} operands, "
-            f"the call has {len(operands)}"
-        )
-    if len(charged) != len(operands):  # pragma: no cover - internal caller contract
-        raise AnalysisError("cost movement needs one charge per operand")
-    reads: dict[str, int] = {}
-    writes: dict[str, int] = {}
-    for moved, split in zip(cost.traffic, charged):
-        for level, value in split.items():
-            if moved.read:
-                reads[level] = reads.get(level, 0) + value
-            if moved.write:
-                writes[level] = writes.get(level, 0) + value
-    levels = (
-        ()
-        if cost.bytes == 0
-        else tuple(
-            (level, TrafficBytes(reads.get(level, 0), writes.get(level, 0)))
-            for level in sorted(set(reads) | set(writes))
-        )
-    )
-    return levels, tuple(cost.traffic)
-
-
-def _stated_movement(
-    call: Call, cost: Cost, ctx: CostContext
-) -> tuple[tuple[TrafficBytes, ...], tuple[dict[str, int], ...]]:
-    """Per-operand movement as the Op's own access relation states it.
-
-    A Type says how big a value is, not how much of it this occurrence touches.
-    The relation is asked instead, in this context's window, so one handler
-    answers for the whole program and for one unit. Only the amount comes from
-    it: which direction an operand moves stays the cost's answer. Each amount
-    comes back twice, as the operand's own total and split by the level of every
-    leaf it reached, so one leaf of a mixed tuple owes bytes at its own level
-    alone. A boundary nothing can charge in bytes is refused.
-    """
-    relations = relations_of(call, ctx)
-    operands = (*call.args, call)
-    if len(cost.traffic) != len(operands):
-        raise AnalysisError(
-            f"{describe(call)}: cost reports {len(cost.traffic)} operands, "
-            f"the call has {len(operands)}"
-        )
-    stated: list[TrafficBytes] = []
-    charged: list[dict[str, int]] = []
-    for index, (operand, moved) in enumerate(zip(operands, cost.traffic)):
-        if index == len(call.args):
-            answer = _output_bytes(relations, ctx.local_type_of(call), umat_level=None)
-        else:
-            answer = _moved_bytes(
-                ctx.local_type_of(operand),
-                relations.inputs[index].pattern,
-                umat_level=_UMAT_CONSUMPTION_LEVEL,
-            )
-        if answer is None:
-            raise AnalysisError(
-                f"{describe(call)}: boundary {index} reaches coordinates nothing "
-                "here can charge in bytes"
-            )
-        moving, by_level = answer
-        stated.append(
-            TrafficBytes(moving if moved.read else 0, moving if moved.write else 0)
-        )
-        charged.append(by_level)
-    return tuple(stated), tuple(charged)
-
-
-def _output_bytes(
-    relations: AccessRelations, held: Type, *, umat_level: str | None
+def _reached_bytes(
+    boundaries: tuple[tuple[Type, object], ...], umat_level: str | None
 ) -> tuple[int, dict[str, int]] | None:
-    """Bytes the result moves, taking one output boundary per field it has.
-
-    A tuple result is as many boundaries as it has fields, each somewhere of its
-    own that the Op stated separately. Reading only the first would drop the
-    rest, and reading the tuple as one value has no element count to read at
-    all -- either way the relation's answer is replaced by the Type's size.
-    """
-    fields = held.fields if isinstance(held, TupleType) else (held,)
-    total = 0
-    by_level: dict[str, int] = {}
-    for position, field_ in enumerate(fields):
-        if not 0 <= position < len(relations.outputs):
-            return None
-        answer = _moved_bytes(
-            field_, relations.outputs[position].pattern, umat_level=umat_level
-        )
-        if answer is None:
-            return None
-        moving, levels = answer
-        total += moving
-        for level, value in levels.items():
-            by_level[level] = by_level.get(level, 0) + value
-    return total, by_level
-
-
-def _moved_bytes(
-    held: Type, pattern, *, umat_level: str | None
-) -> tuple[int, dict[str, int]] | None:
-    """The bytes one boundary moves of *held*, by the leaves it reaches.
+    """What one operand's boundaries reach, in bytes and per level.
 
     A structured operand is indexed by leaf and its leaves need not be the same
-    width or live at the same level, so which ones a boundary reaches is what
-    decides the bytes and where they are charged: charging the first for the one
-    that was taken is a wrong number at the right size. A single leaf is counted
-    in its own elements instead.
-    """
-    leaves = leaves_of(held)
-    if not leaves:
-        return None
-    if len(leaves) == 1:
-        size = _bytes_for(leaves[0], reached_elements(pattern))
-        if size is None:
-            return None
-        return _charged(((leaves[0], size),), umat_level)
-    reached = reached_leaves(pattern, len(leaves))
-    if reached is None:
-        return None
-    taken: list[tuple[TensorType, int]] = []
-    for leaf in sorted(reached):
-        size = static_bytes(leaves[leaf])
-        if size is None:
-            return None
-        taken.append((leaves[leaf], size))
-    return _charged(tuple(taken), umat_level)
-
-
-def _charged(
-    taken: tuple[tuple[TensorType, int], ...], umat_level: str | None
-) -> tuple[int, dict[str, int]]:
-    """One boundary's bytes, and the ones a level was named for.
-
-    An unmaterialized leaf has no residency of its own, so it is part of what
-    moved without being part of any level's traffic unless the caller says where
-    this occurrence materializes it.
+    width or live at the same level, so which ones a boundary reaches decides
+    both numbers: charging the first for the one that was taken is a wrong
+    number at the right size. A single leaf is counted in its own elements
+    instead. A leaf nobody materialised is part of what moved and part of no
+    level's traffic unless the caller says where this occurrence puts it.
     """
     total = 0
     by_level: dict[str, int] = {}
-    for leaf, size in taken:
-        total += size
-        level = umat_level if leaf.storage is StorageKind.UMAT else str(leaf.storage)
-        if level is None:
-            continue
-        by_level[level] = by_level.get(level, 0) + size
+    for held, pattern in boundaries:
+        leaves = leaves_of(held)
+        if not leaves:
+            return None
+        if len(leaves) == 1:
+            taken = {0: _bytes_for(leaves[0], reached_elements(pattern))}
+        else:
+            reached = reached_leaves(pattern, len(leaves))
+            if reached is None:
+                return None
+            taken = {index: static_bytes(leaves[index]) for index in sorted(reached)}
+        for index, size in taken.items():
+            if size is None:
+                return None
+            total += size
+            leaf = leaves[index]
+            level = umat_level if leaf.storage is StorageKind.UMAT else str(leaf.storage)
+            if level is not None:
+                by_level[level] = by_level.get(level, 0) + size
     return total, by_level
 
 
@@ -209,56 +81,91 @@ def _bytes_for(held: Type, elements: int | None) -> int | None:
     return -(-elements * bits // 8)
 
 
+def _movement(
+    call: Call, cost: Cost, ctx: CostContext, types: tuple[Type, ...]
+) -> tuple[tuple[tuple[str, TrafficBytes], ...], tuple[TrafficBytes, ...]]:
+    """What each operand of *call* moves, and the levels those bytes are at.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def _as_related(
-    expr: Call, cost: Cost, ctx: CostContext, types: tuple[Type, ...]
-) -> tuple[Cost, tuple[dict[str, int], ...]]:
-    """One cost with every amount taken from the Op's own relations.
-
-    Asked in the window the caller is asking about, because one handler answers
-    for the whole program and for one participant. A Function is not an Op with
-    boundaries of its own -- what it moves is what its body does, charged at the
-    levels its operands name here -- and every other target states its
-    coordinates or is refused.
+    A Type says how big a value is, not how much of it this occurrence touches,
+    so the amount is what that boundary's relation reaches in this context's
+    window -- one handler answering for the whole program and for one unit. The
+    direction stays the cost's answer and the level is where the reached leaf
+    lives, so one leaf of two owes its own bytes at its own level. A Function has
+    no boundaries of its own, and every other target states its coordinates or
+    is refused, as is a boundary nothing can charge in bytes.
     """
-    if isinstance(expr.target, Function):
-        return cost, tuple(
+    operands = (*call.args, call)
+    if len(cost.traffic) != len(operands):
+        raise AnalysisError(
+            f"{describe(call)}: cost reports {len(cost.traffic)} operands, "
+            f"the call has {len(operands)}"
+        )
+    stated = cost.traffic
+    if isinstance(call.target, Function):
+        charged = [
             bytes_by_storage(
                 type_,
-                umat_level=_UMAT_CONSUMPTION_LEVEL if index < len(expr.args) else None,
+                umat_level=_UMAT_CONSUMPTION_LEVEL if index < len(call.args) else None,
             )
             for index, type_ in enumerate(types)
+        ]
+    else:
+        if access_relation_registry.lookup(type(call.target)) is None:
+            raise AnalysisError(
+                f"{describe(call)}: states no access relations, so nothing here "
+                "says what it moves"
+            )
+        relations = relations_of(call, ctx)
+        result = ctx.local_type_of(call)
+        fields = result.fields if isinstance(result, TupleType) else (result,)
+        if len(fields) > len(relations.outputs):
+            raise AnalysisError(
+                f"{describe(call)}: states {len(relations.outputs)} output "
+                f"boundaries for a result of {len(fields)} fields"
+            )
+        amounts, charged = [], []
+        for index, moved in enumerate(cost.traffic):
+            if index == len(call.args):
+                asked = tuple(
+                    (field_, relations.outputs[position].pattern)
+                    for position, field_ in enumerate(fields)
+                )
+                level = None
+            else:
+                asked = (
+                    (types[index], relations.inputs[index].pattern),
+                )
+                level = _UMAT_CONSUMPTION_LEVEL
+            answer = _reached_bytes(asked, level)
+            if answer is None:
+                raise AnalysisError(
+                    f"{describe(call)}: boundary {index} reaches coordinates "
+                    "nothing here can charge in bytes"
+                )
+            moving, by_level = answer
+            amounts.append(
+                TrafficBytes(moving if moved.read else 0, moving if moved.write else 0)
+            )
+            charged.append(by_level)
+        stated = tuple(amounts)
+    reads: dict[str, int] = {}
+    writes: dict[str, int] = {}
+    for moved, split in zip(stated, charged):
+        for level, value in split.items():
+            if moved.read:
+                reads[level] = reads.get(level, 0) + value
+            if moved.write:
+                writes[level] = writes.get(level, 0) + value
+    moving = any(item.read or item.write for item in stated)
+    levels = (
+        tuple(
+            (level, TrafficBytes(reads.get(level, 0), writes.get(level, 0)))
+            for level in sorted(set(reads) | set(writes))
         )
-    if access_relation_registry.lookup(type(expr.target)) is None:
-        raise AnalysisError(
-            f"{describe(expr)}: states no access relations, so nothing here says "
-            "what it moves"
-        )
-    stated, charged = _stated_movement(expr, cost, ctx)
-    return Cost(cost.flops, stated, cost.service), charged
+        if moving
+        else ()
+    )
+    return levels, stated
 
 
 def call_traffic(
@@ -278,22 +185,16 @@ def call_traffic(
         local_cost = local.visit(expr)
     except (ValueError, VerifyError) as error:
         raise AnalysisError(str(error)) from None
-    whole_types = (
-        *(whole.ctx.local_type_of(arg) for arg in expr.args),
-        whole.ctx.local_type_of(expr),
-    )
-    local_types = (
-        *(local.ctx.local_type_of(arg) for arg in expr.args),
-        local.ctx.local_output_type(expr),
-    )
-    whole_cost, whole_charged = _as_related(expr, whole_cost, whole.ctx, whole_types)
-    local_cost, local_charged = _as_related(expr, local_cost, local.ctx, local_types)
-    traffic_by_level, operands = _call_movement(expr, whole_cost, whole_charged)
-    local_traffic, _local_operands = _call_movement(expr, local_cost, local_charged)
+    asked = []
+    for evaluator, cost in ((whole, whole_cost), (local, local_cost)):
+        types = (
+            *(evaluator.ctx.local_type_of(arg) for arg in expr.args),
+            evaluator.ctx.local_type_of(expr),
+        )
+        asked.append(_movement(expr, cost, evaluator.ctx, types))
+    (whole_levels, operands), (unit_levels, _unit_operands) = asked
     return TrafficMetadata(
-        whole=traffic_by_level,
-        per_unit=local_traffic,
-        operands=operands,
+        whole=whole_levels, per_unit=unit_levels, operands=operands
     )
 
 

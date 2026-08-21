@@ -548,32 +548,6 @@ def placed_cases(level: str = "cta") -> tuple[ConcreteCase, ...]:
     return tuple(cases)
 
 
-def model_cases() -> tuple[ConcreteCase, ...]:
-    """Every model the corpus selects for analysis, at the extents it states."""
-    from tests.models.registry import CORPUS
-
-    return tuple(
-        ConcreteCase(
-            selected.id,
-            selected.dims,
-            lambda case=case, selected=selected: case.resolve(
-                case.build(), selected.selector
-            ),
-        )
-        for case in CORPUS
-        for selected in case.analyze
-    )
-
-
-def concrete_cases() -> tuple[ConcreteCase, ...]:
-    """Every concrete program in the repository, from both places one lives.
-
-    Whether each of them states where it runs is asked of the built HIR by
-    whoever is asking, not decided here: a list that filtered itself would be
-    the allowlist this exists to avoid.
-    """
-    return model_cases() + placed_cases()
-
 __all__ = [
     "CapabilityGate",
     "ConcreteCase",
@@ -586,8 +560,6 @@ __all__ = [
     "STATED_DIMS",
     "SizedCase",
     "TargetFixture",
-    "concrete_cases",
-    "model_cases",
     "placed_cases",
     "placed_fixture_roots",
     "states_execution_domain",

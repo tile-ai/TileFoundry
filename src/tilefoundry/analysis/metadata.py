@@ -15,14 +15,6 @@ from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 
 @dataclass(frozen=True)
-class OccurrenceProvenance(IRMetadata):
-    """Identify the authored call and Function-call path of one occurrence."""
-
-    source_call: int
-    call_path: tuple[str, ...]
-
-
-@dataclass(frozen=True)
 class ComputeCostMetadata(IRMetadata):
     """Record one occurrence's work, or one Function's total work.
 
@@ -240,7 +232,6 @@ __all__ = [
     "LevelFootprint",
     "LoopFootprintMetadata",
     "MemoryMetadata",
-    "OccurrenceProvenance",
     "PerformanceMetadata",
     "PerformanceSummaryMetadata",
     "RooflineMetadata",

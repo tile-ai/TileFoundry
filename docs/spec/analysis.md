@@ -1286,17 +1286,12 @@ class AnalysisCheckContext:
     whole: CostEvaluator
     local: CostEvaluator
 
-
-class OccurrenceProvenance(IRMetadata):
-    source_call: int
-    call_path: tuple[str, ...]
 ```
 
 - constraints:
   - The operation MUST infer types over the full reachable Function graph and
     validate its caller/callee execution context, and MUST NOT run an analysis
     or schedule algorithm or attach derived Metadata to the authored IR.
-    `OccurrenceProvenance` belongs only to the returned analysis view.
   - The reachable Function and Mesh geometry and every effective Module
     topology extent MUST be concrete before this operation runs. Public Analyze
     and Schedule calls with `dims` MUST resolve all three through one binding
@@ -1328,9 +1323,7 @@ class OccurrenceProvenance(IRMetadata):
     paths MUST remain separate resources. Unequal types for one `(module path,
     weight name)` MUST fail. No constant value enters the IR.
   - Every primitive Call in the returned view MUST have a deterministic unique
-    binding and `OccurrenceProvenance(source_call, call_path)`. `source_call`
-    identifies its source Call and `call_path` identifies its Function-call
-    occurrence; loops do not add coordinates to the path.
+    binding.
   - `budget` MUST be a non-negative integer limiting the number of unique body
     expression nodes after inlining. An oversized view MUST fail with both its
     size and the limit and MUST NOT return a partial Function.

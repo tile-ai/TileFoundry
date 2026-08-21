@@ -26,7 +26,6 @@ from tilefoundry.ir.hir.specialize import (
     _record_complete_bindings,
     dim_vars_reached,
     is_concrete,
-    origin_of,
     specialize_concretely,
 )
 from tilefoundry.ir.types import Type, callable_type_for
@@ -64,7 +63,6 @@ from .facts import ParallelCapacityFacts, PerformanceServiceFacts, ThroughputFac
 from .metadata import (
     ComputeCostMetadata,
     MemoryMetadata,
-    OccurrenceProvenance,
     PerformanceMetadata,
     PerformanceSummaryMetadata,
     RooflineMetadata,
@@ -577,40 +575,6 @@ def _require_concrete_function_geometry(
         )
 
 
-def _authored_call(function: Function, call: Call) -> Call:
-    """Follow Function rebuilds to the authored Call at the same SSA position."""
-    current_function = function
-    current_call = call
-    seen: set[int] = set()
-    while id(current_function) not in seen:
-        seen.add(id(current_function))
-        origin = origin_of(current_function)
-        if origin is None:
-            return current_call
-        current_calls = tuple(
-            expr for expr in postorder(current_function.body) if isinstance(expr, Call)
-        )
-        origin_calls = tuple(
-            expr for expr in postorder(origin.body) if isinstance(expr, Call)
-        )
-        if len(current_calls) != len(origin_calls):
-            raise AnalysisError(
-                f"cannot trace Call provenance through rebuilt Function "
-                f"{current_function.name!r}: body shape changed"
-            )
-        try:
-            index = next(
-                index for index, candidate in enumerate(current_calls) if candidate is current_call
-            )
-        except StopIteration:
-            raise AnalysisError(
-                f"cannot trace a Call outside rebuilt Function {current_function.name!r}"
-            ) from None
-        current_function = origin
-        current_call = origin_calls[index]
-    raise AnalysisError(f"cyclic Function provenance on {current_function.name!r}")
-
-
 def _module_paths(module: Module) -> dict[int, str]:
     paths = {id(module): ""}
 
@@ -689,8 +653,7 @@ def _view_metadata(expr: Expr) -> tuple:
     return tuple(
         item
         for item in expr.metadata
-        if type(item) not in _DERIVED_METADATA
-        and type(item) not in {BindingMetadata, OccurrenceProvenance}
+        if type(item) not in _DERIVED_METADATA and type(item) is not BindingMetadata
     )
 
 
@@ -802,13 +765,7 @@ class _InlineMutator(ExprMutator):
                 self.active,
             )
             return self._finish(expr, rebuilt)
-        metadata = (
-            *_view_metadata(expr),
-            BindingMetadata(self.owner._binding()),
-            OccurrenceProvenance(
-                source_call=id(_authored_call(self.function, expr)), call_path=self.path
-            ),
-        )
+        metadata = (*_view_metadata(expr), BindingMetadata(self.owner._binding()))
         return self._finish(expr, replace(expr, args=new_args, metadata=metadata))
 
     def default_visit(self, expr: Expr) -> Expr:

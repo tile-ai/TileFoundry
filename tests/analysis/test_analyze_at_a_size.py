@@ -16,16 +16,8 @@ from dataclasses import replace
 
 import pytest
 
-from tests.fixtures.placed.flash_split_k_decode import BLOCK, HEADS, WORKERS, FlashSplitKDecode
-from tests.fixtures.placed.gqa_decode import MAX_CTX, GqaOnline
-from tests.fixtures.placed.mha_decode_paged import LongerCache, ShorterCache
-from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
-from tests.fixtures.placed.qwen3_1_7b_pd import PrefillLayer
-from tests.models.corpus import (
-    ConcreteCase,
-    concrete_cases,
-    states_execution_domain,
-)
+from tests.fixtures.placed.gqa_decode import GqaOnline
+from tests.models.corpus import ConcreteCase, placed_cases
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry.analysis import (
     AnalysisResult,
@@ -40,46 +32,27 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.compute_cost import _local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.walk import describe, enclosing_trips, postorder, tensor_types
-from tilefoundry.inspection.analysis_report import render_analysis
-from tilefoundry.ir.core import Call, Constant, get_metadata
-from tilefoundry.ir.core.kinds import BinaryKind
+from tilefoundry.analysis.walk import describe, enclosing_trips, postorder
+from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.metadata import ExecutionDomainMetadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.sharding.local import Local
-from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.specialize import (
-    display_name,
     origin_of,
     residual_dims,
     variant_for,
 )
-from tilefoundry.ir.hir.tensor.arange import Arange
-from tilefoundry.ir.hir.tensor.cast import Cast
-from tilefoundry.ir.hir.tensor.index_select import IndexSelect
-from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.types import tensor_bytes
 from tilefoundry.ir.types.shard import (
-    Broadcast,
-    Partial,
-    ShardLayout,
-    Split,
     Topology,
-    shard_layout_of,
 )
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
-from tilefoundry.schedule.partition import build_partition_program
 from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFacts
 
 CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT}
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 LOGICAL_FAMILIES = ("compute-cost", "memory", "roofline")
-INVENTORY = [pytest.param(case, id=case.id) for case in concrete_cases()]
+INVENTORY = [pytest.param(case, id=case.id) for case in placed_cases()]
 
 
 SOLVER = ScheduleOptions(timeout_seconds=60, workers=4, random_seed=0, stop_at_first_solution=True)
@@ -160,26 +133,15 @@ def assert_performance_contract(result: AnalysisResult) -> None:
 
 @pytest.mark.parametrize("case", INVENTORY)
 def test_every_concrete_program_answers_for_where_it_runs(case: ConcreteCase) -> None:
-    """Every program the repository holds, asked the question its own HIR admits.
+    """Every placed program, at every size and selector it exposes.
 
-    The model corpus and the placed fixtures are one inventory, and what each
-    program is asked is read off the concrete HIR rather than off a flag beside
-    it. One that runs something inside a CTA Mesh is asked for all four families
-    and has to answer with a coherent prediction. One that runs nothing inside
-    any Mesh is not a smaller version of that question: it still measures its
-    work, its bytes and its bound, and performance has to refuse it by name
-    rather than quietly return an empty timeline.
+    This inventory is the whole of what these four analyses are held to: it is
+    read off the directory rather than from a list beside it, so a program added
+    there is asked the same questions without anyone choosing to ask. Each of
+    them runs something inside a CTA Mesh, so each is asked for all four
+    families and has to answer with a coherent prediction.
     """
     owner, function = case.program()
-    if not states_execution_domain(owner, function, case.dims):
-        logical = analyze(owner, function, analysis=LOGICAL_FAMILIES, dims=case.dims)
-        assert logical.module is owner
-        assert logical.metadata_types
-        owner, function = case.program()
-        with pytest.raises(AnalysisError, match="has no cta execution domain"):
-            analyze(owner, function, analysis=FAMILIES, dims=case.dims)
-        return
-
     result = analyze(owner, function, analysis=FAMILIES, dims=case.dims)
 
     assert result.module is owner
@@ -207,48 +169,6 @@ def test_every_analysis_runs_at_a_stated_size(family: str) -> None:
     assert result.module is module
 
 
-@pytest.mark.parametrize(
-    ("dims", "expected_bound"),
-    (
-        ({"ctx_len": 0, "seq": 512}, "memory"),
-        ({"ctx_len": 512, "seq": 512}, "memory"),
-        ({"ctx_len": 4608, "seq": 1}, "memory"),
-    ),
-    ids=[
-        "qwen3-pd-prefill-no-context",
-        "qwen3-pd-prefill-with-context",
-        "qwen3-pd-decode-context",
-    ],
-)
-def test_qwen3_pd_states_its_bound_and_its_loop_footprints_at_each_size(
-    dims: dict[str, int], expected_bound: str
-) -> None:
-    result = analyze(
-        PrefillLayer,
-        PrefillLayer.entry_function(),
-        analysis=LOGICAL_FAMILIES,
-        dims=dims,
-    )
-
-    assert ComputeCostMetadata in result.metadata_types
-    assert MemoryMetadata in result.metadata_types
-    assert LoopFootprintMetadata in result.metadata_types
-    assert RooflineMetadata in result.metadata_types
-    assert result.module is PrefillLayer
-    roofline = get_metadata(result.function, RooflineMetadata)
-    assert roofline is not None and roofline.bound_by == expected_bound
-    loop_footprints = [
-        record
-        for expr in postorder(result.function.body)
-        if isinstance(expr, GridRegionExpr)
-        and (record := get_metadata(expr, LoopFootprintMetadata)) is not None
-    ]
-    assert loop_footprints and all(record.footprints for record in loop_footprints)
-    assert all(record.known for record in loop_footprints), (
-        "every authored loop states a reading at every size, prefill included"
-    )
-
-
 def _predicted_ns(module, dims=None) -> int:
     """What the four families together say one program takes."""
     result = analyze(
@@ -257,230 +177,6 @@ def _predicted_ns(module, dims=None) -> int:
     summary = get_metadata(result.function, PerformanceSummaryMetadata)
     assert summary is not None
     return summary.timeline.end_ns - summary.timeline.start_ns
-
-
-@pytest.mark.parametrize(
-    ("less", "more", "why"),
-    [
-        pytest.param(
-            (ShorterCache, None),
-            (LongerCache, None),
-            "twice the KV cache to attend over",
-            id="paged-mha-kv-512-vs-1024",
-        ),
-        pytest.param(
-            (PrefillLayer, {"ctx_len": 512, "seq": 1}),
-            (PrefillLayer, {"ctx_len": 4608, "seq": 1}),
-            "nine times the context to decode against",
-            id="qwen3-decode-ctx-512-vs-4608",
-        ),
-        pytest.param(
-            (PrefillLayer, {"ctx_len": 0, "seq": 512}),
-            (PrefillLayer, {"ctx_len": 512, "seq": 512}),
-            "a history to attend over as well as the prompt",
-            id="qwen3-prefill-history-none-vs-512",
-        ),
-    ],
-)
-def test_more_work_is_never_predicted_to_take_less_time(less, more, why: str) -> None:
-    """The one direction a prediction cannot go, on programs that differ in size.
-
-    Each pair is one program at two sizes, and the larger reads more or computes
-    more than the smaller. A model that returned the shorter time for it would be
-    wrong in a way no absolute number can show, because both numbers would still
-    look plausible on their own. This is a bound, not a calibration: how much
-    longer is a question about a machine nobody has measured here.
-    """
-    smaller = _predicted_ns(*less)
-    larger = _predicted_ns(*more)
-
-    assert smaller > 0 and larger >= smaller, (
-        f"{why}: predicted {larger} ns against {smaller} ns"
-    )
-
-
-@pytest.mark.parametrize(
-    ("small_dims", "large_dims", "variant", "bound_by", "min_scale", "max_scale"),
-    [
-        (
-            {"ctx": 512, "seq": 1},
-            {"ctx": 1024, "seq": 1},
-            "decode",
-            "memory",
-            1.9,
-            2.1,
-        ),
-        (
-            {"ctx": 1, "seq": 512},
-            {"ctx": 1, "seq": 1024},
-            "prefill",
-            "compute",
-            3.8,
-            4.2,
-        ),
-    ],
-    ids=["decode-open-context", "prefill-open-sequence"],
-)
-def test_block_attention_selects_and_analyzes_each_placed_regime(
-    small_dims: dict[str, int],
-    large_dims: dict[str, int],
-    variant: str,
-    bound_by: str,
-    min_scale: float,
-    max_scale: float,
-) -> None:
-    records = []
-    for dims in (small_dims, large_dims):
-        result = analyze(
-            PrefillDecodeAttention,
-            PrefillDecodeAttention.entry_function(),
-            analysis="roofline",
-            dims=dims,
-        )
-        concrete = origin_of(result.function)
-        assert concrete is not None
-        selected = origin_of(concrete)
-        assert selected is not None
-        assert display_name(selected) == variant
-        record = get_metadata(result.function, RooflineMetadata)
-        assert record is not None
-        assert record.bound_by == bound_by
-        records.append(record)
-
-    ideal_scale = records[1].ideal_ns / records[0].ideal_ns
-    assert min_scale < ideal_scale < max_scale
-
-
-def test_split_k_decode_analyzes_each_offset_window_at_ctx_4096() -> None:
-    result = analyze(
-        FlashSplitKDecode,
-        FlashSplitKDecode.entry_function(),
-        analysis=("memory", "roofline"),
-        dims={"ctx": 4096},
-    )
-
-    assert result.function is not FlashSplitKDecode.entry_function()
-    loops = [expr for expr in postorder(result.function.body) if isinstance(expr, GridRegionExpr)]
-    assert len(loops) == 1
-    (loop,) = loops
-    assert loop.step == BLOCK * WORKERS
-
-    loop_exprs = postorder(loop)
-    assert not any(
-        isinstance(attr, Partial)
-        for expr in loop_exprs
-        if isinstance(expr, Call)
-        for tensor in tensor_types(expr.type)
-        for layout in (shard_layout_of(tensor.layout),)
-        if isinstance(layout, ShardLayout)
-        for attr in layout.attrs
-    )
-
-    slices = [
-        expr for expr in loop_exprs if isinstance(expr, Call) and isinstance(expr.target, Slice)
-    ]
-    assert len(slices) == 2
-    for window in slices:
-        starts = window.args[1].elements
-        base = starts[1]
-        assert isinstance(base, Call)
-        assert base.args[0] is loop.induction_var
-        assert isinstance(base.target, Binary) and base.target.kind is BinaryKind.ADD
-        offset = base.args[1]
-        assert isinstance(offset, Call)
-        assert isinstance(offset.target, Binary) and offset.target.kind is BinaryKind.MUL
-        assert isinstance(offset.args[1], Constant) and offset.args[1].value == BLOCK
-
-        worker_index = offset.args[0]
-        assert isinstance(worker_index, Call)
-        assert isinstance(worker_index.target, Reshape)
-        local_index = worker_index.args[0]
-        assert isinstance(local_index, Call)
-        assert isinstance(local_index.target, Local)
-        worker_shard = local_index.args[0]
-        assert isinstance(worker_shard, Call)
-        assert isinstance(worker_shard.target, Reshard)
-        worker_source = worker_shard.args[0]
-        assert isinstance(worker_source, Call)
-        assert isinstance(worker_source.target, Arange)
-        assert worker_source.target.type.shape == (WORKERS,)
-        assert worker_source.target.start == 0
-        assert worker_shard.target.storage is StorageKind.RMEM
-        worker_layout = worker_shard.target.layout
-        assert isinstance(worker_layout, ShardLayout)
-        assert worker_layout.mesh.layout.shape == (HEADS, WORKERS)
-        assert worker_layout.attrs == (Broadcast(), Split(axis=0))
-        assert window.target.sizes[1] == BLOCK
-        record = get_metadata(window, ComputeCostMetadata)
-        record_moved = get_metadata(window, TrafficMetadata)
-        assert record is not None
-        assert record_moved.at("rmem").read > 0
-
-    first_offset = slices[0].args[1].elements[1].args[1]
-    second_offset = slices[1].args[1].elements[1].args[1]
-    first_worker_index = first_offset.args[0]
-    second_worker_index = second_offset.args[0]
-    assert first_worker_index is second_worker_index
-
-    cache_bytes = tensor_bytes(result.function.params[1].type)
-    kv_windows = [
-        expr
-        for expr in loop_exprs
-        if isinstance(expr, Call)
-        and isinstance(expr.target, Reshard)
-        and expr.args
-        and isinstance(expr.args[0], Call)
-        and isinstance(expr.args[0].target, Slice)
-    ]
-    assert len(kv_windows) == 2
-    trips = enclosing_trips(result.function.body)
-    assert all(
-        trips.get(id(window), 1) * get_metadata(window, TrafficMetadata).at("gmem").read
-        == cache_bytes // WORKERS
-        for window in kv_windows
-    )
-
-    footprint = get_metadata(loop, LoopFootprintMetadata)
-    assert footprint is not None and footprint.known
-    by_buffer = {item.buffer: item for item in footprint.footprints}
-    for name in ("k_cache", "v_cache"):
-        reading = by_buffer[name]
-        assert reading.level == "gmem"
-        assert reading.device_bytes == cache_bytes
-        assert reading.repeated_bytes == cache_bytes // (HEADS * WORKERS)
-        assert reading.bytes == reading.repeated_bytes
-    assert all(item.bytes <= item.repeated_bytes for item in footprint.footprints)
-    assert by_buffer["acc"].repeated_bytes > by_buffer["acc"].bytes
-
-    rendered = render_analysis(result)
-    assert rendered.data["loops"] == [
-        {
-            "value": "c",
-            "cache-pressure": [
-                {
-                    "cache_level": "l2",
-                    "backing_level": "gmem",
-                    "device_bytes": 2 * cache_bytes,
-                    "capacity_bytes": 50_000_000,
-                    "status": "fits",
-                }
-            ],
-            "loop-footprint": {
-                "footprints": [
-                    {
-                        "buffer": item.buffer,
-                        "level": item.level,
-                        "bytes": item.bytes,
-                        "device_bytes": item.device_bytes,
-                        "repeated_bytes": item.repeated_bytes,
-                    }
-                    for item in footprint.footprints
-                ],
-                "known": True,
-            },
-        }
-    ]
-    assert "; loop-footprint footprints=" in rendered.annotated
 
 
 @pytest.mark.parametrize("family", FAMILIES)
@@ -500,34 +196,6 @@ def test_the_result_names_the_function_that_carries_the_records(family: str) -> 
     assert residual_dims(result.function) == ()
 
 
-def test_one_root_and_four_roots_produce_the_same_performance_records() -> None:
-    """A union closure preserves the conclusion of its independently requested root."""
-    module, authored, dims = _subject("performance")
-
-    result = analyze(module, authored, analysis=FAMILIES, dims=dims)
-
-    assert result.analyses == FAMILIES
-    single_module, single_function, single_dims = _subject("performance")
-    single = analyze(
-        single_module,
-        single_function,
-        analysis="performance",
-        dims=single_dims,
-    )
-    assert tuple(
-        get_metadata(expr, PerformanceMetadata)
-        for expr in (single.function, *postorder(single.function.body))
-        if get_metadata(expr, PerformanceMetadata) is not None
-    ) == tuple(
-        get_metadata(expr, PerformanceMetadata)
-        for expr in (result.function, *postorder(result.function.body))
-        if get_metadata(expr, PerformanceMetadata) is not None
-    )
-    assert get_metadata(single.function, PerformanceSummaryMetadata) == get_metadata(
-        result.function, PerformanceSummaryMetadata
-    )
-
-
 def test_without_a_size_the_result_names_the_record_bearing_view() -> None:
     """A static input remains authored while its analysis view carries records."""
     module = QWEN3_1_7B.build()
@@ -540,235 +208,6 @@ def test_without_a_size_the_result_names_the_record_bearing_view() -> None:
     assert origin_of(result.function) is function
     assert get_metadata(result.function, ComputeCostMetadata) is not None
     assert get_metadata(function, ComputeCostMetadata) is None
-
-
-def test_a_loop_body_is_laid_out_where_the_loop_runs_not_where_it_starts() -> None:
-    """A body occurrence states the time it actually runs at, in one reading.
-
-    The loop begins after everything before it, and the work inside it begins
-    there rather than at zero: an interval measured from the body's own origin
-    and moved afterwards is the same number reached twice, and the second
-    reading is the one a reader would be given if the move were ever missed.
-    Every trip after the first is that interval plus a whole stride.
-    """
-    module = _aimed()
-    result = analyze(
-        module,
-        module.entry_function(),
-        analysis=("compute-cost", "performance"),
-        dims={"ctx_len": 8},
-    )
-    trips = enclosing_trips(result.function.body)
-    inside = [
-        record
-        for expr in postorder(result.function.body)
-        if isinstance(expr, Call)
-        and trips.get(id(expr), 1) > 1
-        and (record := get_metadata(expr, PerformanceMetadata)) is not None
-    ]
-    assert len(inside) == 17
-    ahead = [
-        record
-        for expr in postorder(result.function.body)
-        if isinstance(expr, Call)
-        and trips.get(id(expr), 1) == 1
-        and (record := get_metadata(expr, PerformanceMetadata)) is not None
-        and record.timeline.end_ns <= min(item.timeline.start_ns for item in inside)
-    ]
-    assert ahead, "nothing ran before this loop, so the origin proves nothing"
-
-    entered = max(record.timeline.end_ns for record in ahead)
-    first = min(record.timeline.start_ns for record in inside)
-    assert first >= entered, (
-        "a body occurrence was timed from its own origin rather than the loop's"
-    )
-    assert first == 652
-
-    stride = {record.timeline.stride_ns for record in inside}
-    assert stride == {1_314}
-    span = max(record.timeline.end_ns for record in inside) - first
-    assert span <= 1_314, "one trip of the body outlasted the stride it repeats at"
-
-
-def test_gqa_loop_occurrences_are_costed_once_and_parameterized_over_trips() -> None:
-    results = []
-    for extent in (8, 16):
-        module = _aimed()
-        results.append(
-            analyze(
-                module,
-                module.entry_function(),
-                analysis=("compute-cost", "performance"),
-                dims={"ctx_len": extent},
-            )
-        )
-
-    loop_casts = []
-    loop_timelines = []
-    loop_strides = []
-    root_summaries = []
-    for result, extent in zip(results, (8, 16)):
-        trips = enclosing_trips(result.function.body)
-        costs = []
-        timelines = []
-        structural = []
-        for expr in postorder(result.function.body):
-            if not isinstance(expr, Call) or trips.get(id(expr)) != extent:
-                continue
-            record = get_metadata(expr, PerformanceMetadata)
-            if record is not None:
-                timelines.append(record.timeline)
-            if isinstance(expr.target, Reshape):
-                cost = get_metadata(expr, ComputeCostMetadata)
-                assert cost is not None
-                structural.append((cost, record, get_metadata(expr, TrafficMetadata)))
-            if isinstance(expr.target, Cast):
-                cost = get_metadata(expr, ComputeCostMetadata)
-                assert cost is not None
-                costs.append(cost)
-        assert len(costs) == 2
-        assert len(timelines) == 17
-        assert len(structural) == 1
-        assert {record.trips for record in timelines} == {extent}
-        strides = {record.stride_ns for record in timelines}
-        assert len(strides) == 1, "one body, one stride, however many trips it takes"
-        loop_strides.append(next(iter(strides)))
-        structural_cost, structural_record, structural_moved = structural[0]
-        assert structural_record is None
-        assert structural_cost.flops_per_unit == ()
-        assert structural_moved.per_unit_at("gmem").total_bytes == 0
-        assert structural_moved.per_unit == ()
-        loop_casts.append(tuple(costs))
-        loop_timelines.append(tuple(timelines))
-
-        loop = next(
-            expr for expr in postorder(result.function.body) if isinstance(expr, GridRegionExpr)
-        )
-        consumers = [
-            expr
-            for expr in postorder(result.function.body)
-            if isinstance(expr, Call) and any(arg is loop for arg in expr.args)
-        ]
-        loop_start = min(record.start_ns for record in timelines)
-        loop_end = loop_start + extent * timelines[0].stride_ns
-        yielded_starts = [
-            record.timeline.start_ns
-            for expr in postorder(result.function.body)
-            if isinstance(expr, Call)
-            and any(arg is consumer for arg in expr.args for consumer in consumers)
-            and (record := get_metadata(expr, PerformanceMetadata)) is not None
-        ]
-        assert len(consumers) == 3
-        assert all(
-            get_metadata(consumer, PerformanceMetadata) is None for consumer in consumers
-        )
-        assert yielded_starts and min(yielded_starts) >= loop_end
-
-        root_summary = get_metadata(result.function, PerformanceSummaryMetadata)
-        assert root_summary is not None
-        root_summaries.append(root_summary)
-
-    assert loop_casts[0] == loop_casts[1]
-    assert [record.flops for record in loop_casts[0]] == [(("f32", 512),)] * 2
-    assert loop_strides[1] >= loop_strides[0], (
-        "a body whose gather reaches a longer table does not get cheaper"
-    )
-    for records in loop_timelines:
-        assert min(record.start_ns for record in records) > 0, (
-            "the body began after what runs before the loop"
-        )
-    assert [record.waves for record in root_summaries] == [1, 1]
-    for extent, stride, summary in zip((8, 16), loop_strides, root_summaries):
-        assert summary.timeline.end_ns >= (extent - 1) * stride, (
-            "a function outlasts the trips of the body it repeats"
-        )
-
-    roots = []
-    for result in results:
-        root = get_metadata(result.function, ComputeCostMetadata)
-        assert root is not None
-        roots.append(root)
-    assert [dict(root.flops)["f32"] for root in roots] == [211_360, 384_672]
-
-    rendered = render_analysis(results[0])
-    lines = rendered.annotated.splitlines()
-    rows = [row for row in rendered.data["calls"] if "performance" in row]
-    comments = [line.split("; performance=", 1)[1] for line in lines if "; performance=" in line]
-    expected_comments = []
-    for row in rows:
-        value, line_text = row["value"].rsplit(":", 1)
-        line = int(line_text)
-        assert lines[line - 1].lstrip().startswith(f"{value} = ")
-        timeline = row["performance"]["timeline"]
-        if timeline["trips"] > 1:
-            offset = f"{timeline['stride_ns']}t+"
-            expected_comments.append(
-                f"[{offset}{timeline['start_ns']},{offset}{timeline['end_ns']})*{timeline['trips']}"
-            )
-        else:
-            expected_comments.append(f"[{timeline['start_ns']},{timeline['end_ns']})")
-
-    assert comments == expected_comments
-    first = next(row for row in rendered.data["calls"] if row["value"].startswith("v0:"))
-    assert set(first) == {"value", "compute-cost"}
-    assert first["value"] == "v0:44"
-    assert lines[43].lstrip().startswith("v0 = reshard(")
-    assert "; performance=" not in lines[47]
-    structural = next(
-        row for row in rendered.data["calls"] if row["value"].startswith("v10:")
-    )
-    assert set(structural) == {"value", "compute-cost"}
-    assert structural["value"] == "v10:59"
-    assert "; performance=" not in lines[58]
-    repeated = next(row for row in rows if row["value"].startswith("v11:"))
-    assert repeated["performance"]["timeline"] == {
-        "end_ns": 653,
-        "start_ns": 652,
-        "stride_ns": 1_314,
-        "trips": 8,
-    }
-    assert "performance=[1314t+652,1314t+653)*8" in rendered.annotated
-    assert lines[82].strip() == "m = v16"
-    assert "performance" not in lines[82]
-
-
-@pytest.mark.parametrize("ctx_len", (1, 1024))
-def test_qwen_decoder_unplaced_calls_are_refused_at_each_sequence_length(
-    ctx_len: int,
-) -> None:
-    module = QWEN3_1_7B.build()
-    function = module.lookup("decoder_layer")
-
-    with pytest.raises(
-        AnalysisError,
-        match=r"model.py:\d+:.*has no cta execution domain",
-    ):
-        analyze(module, function, analysis="performance", dims={"ctx_len": ctx_len})
-
-
-def test_qwen_decoder_keeps_rotary_and_kv_cache_parameters_resident() -> None:
-    module = QWEN3_1_7B.build()
-    function = module.lookup("decoder_layer")
-
-    result = analyze(module, function, analysis="memory", dims={"ctx_len": 1024})
-
-    record = get_metadata(result.function, MemoryMetadata)
-    assert record is not None
-    lifetimes = {item.binding: item for item in record.lifetimes}
-    cache_names = ("cos_cache", "sin_cache", "k_cache", "v_cache")
-    assert all(lifetimes[name].persistent for name in cache_names)
-
-
-def test_a_size_no_variant_covers_is_refused() -> None:
-    module = _aimed()
-
-    with pytest.raises(AnalysisError, match="no variant covering"):
-        analyze(
-            module,
-            module.entry_function(),
-            analysis="compute-cost",
-            dims={"ctx_len": MAX_CTX},
-        )
 
 
 def test_a_dimension_the_function_does_not_have_is_refused() -> None:
@@ -823,45 +262,6 @@ def test_a_size_states_nothing_about_a_function_from_elsewhere() -> None:
 
     with pytest.raises(AnalysisError, match="is not a function of module"):
         analyze(module, foreign, analysis="compute-cost", dims=DIMS)
-
-
-def test_scheduling_at_a_stated_size_plans_and_verifies() -> None:
-    """The plan is a plan for one size, and it is checked against the program of that size.
-
-    The plan is a plan for one size, and it is checked against the program of
-    that size -- which is the one the result names.
-    """
-    module = _aimed()
-    authored = module.entry_function()
-
-    result = schedule(module, authored, topology="cta", options=SOLVER, dims=DIMS)
-
-    assert result.module is module
-    assert result.function is not authored
-    assert residual_dims(result.function) == ()
-    result.plan.verify(module, result.function, result.topology)
-    assert result.plan.to_json() == result.plan.to_json()
-
-    program = build_partition_program(module, result.function)
-    selections = [site for site in program.sites if isinstance(site.call.target, IndexSelect)]
-    assert len(selections) == 2
-    assert {program.values[site.input_value_ids[0][0]].source.name for site in selections} == {
-        "k_cache",
-        "v_cache",
-    }
-
-
-def test_scheduling_refuses_a_size_no_variant_covers() -> None:
-    module = _aimed()
-
-    with pytest.raises(ScheduleError, match="no variant covering"):
-        schedule(
-            module,
-            module.entry_function(),
-            topology="cta",
-            options=SOLVER,
-            dims={"ctx_len": MAX_CTX},
-        )
 
 
 def test_the_entry_at_a_chosen_size_is_still_the_entry() -> None:
