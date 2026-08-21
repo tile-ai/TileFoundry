@@ -11,6 +11,10 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+)
 
 _COMMUTES_WITH = frozenset()
 
@@ -45,3 +49,4 @@ def _eval_gelu(ctx):
     )
 
 
+register_access_relation(Gelu)(identity_relations(1))

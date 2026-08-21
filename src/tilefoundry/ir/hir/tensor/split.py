@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import isl
 import torch
 
 from tilefoundry.evaluator.registry import register_eval
@@ -23,6 +24,14 @@ from tilefoundry.ir.types.shard.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.shard.shard_layout import Split as SplitAttr
 from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelations,
+    AffineAccess,
+    BoundaryRelation,
+    identity_access,
+    iterating,
+    register_access_relation,
+)
 
 
 @register_op
@@ -117,4 +126,50 @@ def _eval_split(ctx):
             TensorValue(data=part, type=field_type)
             for part, field_type in zip(parts, ctx.result_type.fields)
         )
+    )
+
+
+@register_access_relation(Split)
+def _split_access(call: "Call", ctx) -> AccessRelations:
+    """One space, the source's, with each part written on its own run of it.
+
+    Every element of the source becomes an element of exactly one part, so the
+    space to walk is the source's and each output is partial in it: the run of
+    the split axis that part covers, shifted to that part's own coordinates.
+    Walking a part's own coordinates instead would say every part reads the
+    first one.
+    """
+    source = ctx.type_of(call.args[0])
+    rank = len(source.shape)
+    axis = call.target.axis + rank if call.target.axis < 0 else call.target.axis
+    parts = call.target.num_splits
+    extent = source.shape[axis]
+    if not isinstance(extent, int) or isinstance(extent, bool) or extent % parts:
+        raise NotImplementedError(
+            f"Split access_relation: axis {axis} extent {extent!r} does not "
+            f"divide into {parts} static parts"
+        )
+    chunk = extent // parts
+    domain = ", ".join(f"d{index}" for index in range(rank))
+    written = []
+    for part in range(parts):
+        writes = [f"d{index}" for index in range(rank)]
+        begin = part * chunk
+        if begin:
+            writes[axis] = f"d{axis} - {begin}"
+        written.append(
+            AffineAccess(
+                isl.map(
+                    f"{{ [{domain}] -> [{', '.join(writes)}] : "
+                    f"{begin} <= d{axis} < {begin + chunk} }}"
+                )
+            )
+        )
+
+    return iterating(
+        source.shape,
+        AccessRelations(
+            inputs=(BoundaryRelation(identity_access(rank)),),
+            outputs=tuple(BoundaryRelation(item) for item in written),
+        ),
     )

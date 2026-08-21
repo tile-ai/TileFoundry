@@ -6,6 +6,7 @@ The result is ``(x_q, x_scale)``. ``x_q`` preserves the input shape;
 
 from __future__ import annotations
 
+import isl
 import torch
 
 from tilefoundry.evaluator.registry import register_eval
@@ -32,6 +33,13 @@ from tilefoundry.ir.types.shard.shard_layout import (
     split_target_axes,
 )
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelations,
+    AffineAccess,
+    BoundaryRelation,
+    iterating,
+    register_access_relation,
+)
 
 
 @register_op
@@ -205,6 +213,45 @@ def _eval_quant(ctx):
             TensorValue(data=quantized, type=ctx.result_type.fields[0]),
             TensorValue(data=scale, type=ctx.result_type.fields[1]),
         )
+    )
+
+
+@register_access_relation(Quant)
+def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelations:
+    """GLOBAL black-box quant.
+
+    - input ``x`` is read element-wise → identity multi_aff over the rank-N
+      domain.
+    - output ``x_q`` is element-wise identity (same shape).
+    - output ``x_scale`` reduces over the in-group offset (last dim divided by
+      ``group``); expressed as an isl map ``[..., j] -> [..., j // group]``.
+    """
+    x_ty = ctx.type_of(call.args[0])
+    rank = len(x_ty.shape)
+    group = call.target.group
+
+    dims = ", ".join(f"i{k}" for k in range(rank))
+    ident = AffineAccess(isl.map(f"{{ [{dims}] -> [{dims}] }}"))
+
+    if rank == 0:
+        scale_rel = ident  # pragma: no cover
+    else:
+        outer = ", ".join(f"i{k}" for k in range(rank - 1))
+        last = f"i{rank - 1}"
+        out_dims = (outer + ", ") if outer else ""
+        scale_rel = AffineAccess(
+            isl.map(f"{{ [{dims}] -> [{out_dims}floor({last}/{group})] }}")
+        )
+
+    return iterating(
+        x_ty.shape,
+        AccessRelations(
+            inputs=(BoundaryRelation(ident),),
+            outputs=(
+                BoundaryRelation(ident),
+                BoundaryRelation(scale_rel),
+            ),
+        ),
     )
 
 

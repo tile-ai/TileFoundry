@@ -15,17 +15,11 @@ from typing import get_args, get_origin
 import isl
 import pytest
 
-from tilefoundry import func
-from tilefoundry.analysis import (
-    ExtractError,
-    extract,
-)
 from tilefoundry.analysis.movement import (
     _bytes_for,
     _reached_bytes,
     call_traffic,
 )
-from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- op names resolved dynamically
 from tilefoundry.inspection.values import (
     ENTRIES,
@@ -45,6 +39,10 @@ from tilefoundry.ir.core import (
     Tuple,
     Var,
 )
+from tilefoundry.ir.core.op import Op
+from tilefoundry.ir.core.op_registry import iter_schemas
+from tilefoundry.ir.core.param_def import ParamDef
+from tilefoundry.ir.core.pattern import Tensor as TensorPattern
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.slice import Slice as SliceOp
 from tilefoundry.ir.types import (
@@ -68,7 +66,7 @@ from tilefoundry.visitor_registry.access_relation import (
     relation_of,
     relations_of,
 )
-from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes
+from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 B, S, H, D = 1, 5, 2, 3
@@ -77,36 +75,50 @@ B, S, H, D = 1, 5, 2, 3
 HQ, HKV, HEAD_DIM, MAX_POS = 16, 8, 128, 8
 
 
-@func
-def elementwise_pair(x: Tensor[(64, 64), "f32"]) -> Tensor[(64, 64), "f32"]:
-    y = sigmoid(x)  # noqa: F405
-    z = exp(y)  # noqa: F405
-    return z
+def test_every_callable_op_states_its_coordinates_exactly_once() -> None:
+    """One canonical relation per Op, enumerated rather than listed by hand.
 
-
-@func
-def softmax_row(x: Tensor[(2, 64), "f32"]) -> Tensor[(2, 64), "f32"]:
-    y = softmax(x, axis=-1)  # noqa: F405
-    return y
+    Where an Op reads and writes is stated once, so type inference, the
+    polyhedral model, the loop footprint and the movement half read one answer.
+    The set is taken from the Op registry itself, so an Op added to the surface
+    joins this without anybody adding it here. The other dialect is not a Call
+    target of these analyses and an Op a test registers is not part of the
+    surface at all; both are left out by where they come from, not by name.
+    """
+    callable_ops = {
+        schema.op_class
+        for schema in iter_schemas()
+        if schema.dialect == "tf"
+        and schema.op_class is not None
+        and schema.op_class.__module__.startswith("tilefoundry.")
+    }
+    assert len(callable_ops) > 40, "the surface got smaller than this gate expects"
+    missing = sorted(
+        op.__name__ for op in callable_ops if access_relation_registry.lookup(op) is None
+    )
+    assert not missing, f"callable ops with no access relation: {missing}"
+    stated = set(access_relation_registry._map)
+    assert stated == callable_ops, sorted(
+        op.__name__ for op in stated ^ callable_ops
+    )
 
 
 def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
-    """Which is why every op these programs reach has to carry one.
+    """Which is why the gate above enumerates instead of listing.
 
     An Op that states no coordinates is refused by name rather than given a
     default, because a default would be a second answer about where an Op reads
-    and would be wrong for whichever Op it was invented for. One whose relation
-    is registered is walked as usual, so the refusal is about the missing
-    statement and not about the shape of the program.
+    and would be wrong for whichever Op it was invented for. Every Op the
+    surface can call states one, so this asks with an Op the surface cannot.
     """
-    walked = extract(elementwise_pair)
-    assert [type(unit.op.target).__name__ for unit in walked.units] == [
-        "Sigmoid",
-        "Unary",
-    ]
 
-    with pytest.raises(ExtractError, match="SoftMax.*no registered access relation"):
-        extract(softmax_row)
+    class Unstated(Op):
+        x = ParamDef(kind="input", pattern=TensorPattern)
+
+    held = make_tensor_type((4,), DType.f32)
+    call = Call(type=held, target=Unstated(), args=(Var(type=held, name="x"),))
+    with pytest.raises(ValueError, match="Unstated states no access relations"):
+        coordinates_of(call, TypeInferContext())
 
 
 

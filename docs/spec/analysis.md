@@ -640,52 +640,37 @@ anything; it does not say how much, and an Op with no relation fails closed.
 
 Capacity is settled against the authored definition order, which fixes every
 buffer's lifetime before any of them is measured, so the only open question is
-whether the ones live at once fit together. An arrangement is what answers that
-question and not what the family reports: addresses may exist inside the solver,
-and no address or per-value buffer identity is a conclusion of this analysis.
+whether the ones live at once fit together. An arrangement answers that question
+without being reported: no address or per-value buffer identity is a conclusion
+of this analysis.
 
 - constraints:
-  - Buffers MUST be placed for the addressable levels `gmem` and `smem` only.
-    Residency at another level MUST NOT create a placement and MUST NOT make a
-    program unplaceable: this model stops where its addressing does.
-  - A buffer MUST be placed once per capacity domain that holds it -- the whole
-    target for a level owned target-wide, one per owning position otherwise --
-    and two buffers in one domain MUST NOT overlap in both address and lifetime
-    at once. A level owned per unit of a topology level other than the one being
-    analysed cannot be projected onto it, and MUST fail rather than be assumed.
-  - A value that lives in another value's buffer MUST NOT be placed again;
-    reading through any of them keeps that one buffer live.
-  - `allocation` MUST be absent only when no level could be projected to place
-    anything against. A function with nothing addressable to place MUST record a
-    settled `allocation`: the question was asked and there was nothing to decide.
-  - An attached `solver_status` MUST be `"optimal"` or `"feasible"`. A placement
-    that cannot be made, cannot be expressed, or does not settle in time MUST
-    raise `AnalysisError` saying which of the three happened, and MUST NOT leave
-    a record behind. A single value larger than its level remains an error for
-    the same reason: no arrangement of anything places it.
-  - Domains holding the same buffers are one question; each distinct set MUST be
-    decided once. A domain whose contents fit at once MUST be settled without
-    searching, and one whose simultaneously live bytes exceed the capacity MUST
-    be reported infeasible without searching.
+  - Capacity MUST be settled for the addressable levels `gmem` and `smem` only,
+    once per capacity domain that holds a buffer -- the whole target for a level
+    owned target-wide, one per owning position otherwise -- with two buffers in
+    one domain never live in the same bytes at once. Residency at another level
+    MUST NOT make a program unplaceable, and a level owned per unit of a topology
+    level other than the one being analysed MUST fail rather than be assumed.
+    Domains holding the same buffers are one question, decided once.
+  - `allocation` MUST be absent only when no level could be projected against. A
+    function with nothing addressable MUST record a settled `allocation`: the
+    question was asked and there was nothing to decide. An attached
+    `solver_status` MUST be `"optimal"` or `"feasible"`; a domain that cannot
+    fit, cannot be expressed, or does not settle in time MUST raise
+    `AnalysisError` saying which of the three happened and leave no record. A
+    domain that fits at once MUST be settled without searching, and one whose
+    simultaneously live bytes exceed the capacity MUST be refused without
+    searching.
   - A Call's `whole`, `per_unit` and `operands` MUST state one occurrence. Only
     the Function record counts an occurrence as often as its authored loops
     repeat it, and its `operands` MUST be empty: which operand moved what
     belongs to the occurrence, not to the total.
-  - What an occurrence moves MUST be counted once, from the Op's own registered
-    evaluator, and MUST NOT be counted again from where the buffers landed: a
-    plan that lands a result in an operand's buffer is that plan's saving, not
-    this occurrence's. A function with no `allocation` therefore still carries
-    traffic, which is a
-    different question from whether a time may be reported for it
-    ([§2.2.4](#224-performance)), and the two MUST NOT be read as one.
-  - A capacity conclusion MUST NOT be used to invent a movement number. A window
-    whose start arrives at run time reads that start and names the bytes it
-    windows; a coordinate nobody has bound makes neither an address nor a copy,
-    and MUST NOT turn an addressing view into a full read of its source and a
-    write of its result.
-  - A level held per unit of work rather than shared is not searched at all, and
-    a value there MUST NOT make a program unplaceable: two such values are two
-    buffers however a plan would lay them out.
+  - A capacity conclusion MUST NOT correct or invent a movement number. What an
+    occurrence moves is counted once from its own boundaries, so a function with
+    no `allocation` still carries traffic -- a different question from whether a
+    time may be reported for it ([§2.2.4](#224-performance)) -- and a window
+    whose start arrives at run time reads that start rather than becoming a full
+    read of its source and a write of its result.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|

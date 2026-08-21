@@ -62,9 +62,6 @@ class AffineAccess:
             )
 
 
-
-
-
 @dataclass(frozen=True)
 class BoundaryRelation:
     """One boundary, as the coordinates it reaches and nothing else.
@@ -145,13 +142,12 @@ def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
 
 
 def coordinates_of(call, ctx) -> AccessRelations:
-    """One Op's coordinates, held to everything knowable before its Type is.
+    """One Op's coordinates, before anything derives what the Call returns.
 
     This is what type inference asks, so nothing here may consult the Type being
-    derived -- but the operands, the attributes and the relations themselves are
-    all present, and an answer wrong about those is wrong for every reader. So:
-    one boundary per operand, each read at the rank of the operand's own axes,
-    one space shared by every boundary, and no parameter left for nobody to bind.
+    derived. What is held is the one thing a caller counts on without that Type:
+    one boundary per operand, in argument order. Each carrier answers for its own
+    parameters when it is built.
     """
     op_cls = type(call.target)
     handler = access_relation_registry.lookup(op_cls)
@@ -1248,18 +1244,12 @@ __all__ = [
     "BoundaryRelation",
     "access_relation_registry",
     "coordinates_of",
-    "factored_image",
-    "broadcast_access",
     "index_set",
     "iterating",
     "identity_access",
     "identity_relations",
-    "linearized_view",
     "logical_axes_of",
     "logical_coordinates",
-    "logical_term",
-    "measures_without_reading",
-    "normalised_rows",
     "placed_window",
     "boundary_maps",
     "projected",

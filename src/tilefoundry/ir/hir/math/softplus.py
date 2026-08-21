@@ -11,6 +11,10 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+)
 
 _COMMUTES_WITH = frozenset({"max", "min"})
 
@@ -37,3 +41,4 @@ def _eval_softplus(ctx):
     return TensorValue(data=torch.nn.functional.softplus(ctx.args[0].data), type=ctx.result_type)
 
 
+register_access_relation(Softplus)(identity_relations(1))
