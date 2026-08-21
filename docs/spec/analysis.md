@@ -328,7 +328,7 @@ Each owns its record types and declares its dependencies and output additions.
 | Selector | Requires | Owns | Attaches to | Rests on | Text summary adds | Annotates equations |
 |---|---|---|---|---|---|---|
 | `compute-cost` | - | `ComputeCostMetadata` | every measured Call and the Function | the authored program | `compute-cost` | every measured Call |
-| `memory` | - | `MemoryMetadata`, `TrafficMetadata`, `LoopFootprintMetadata`, `BufferAllocationMetadata` | `MemoryMetadata` on the Function; `TrafficMetadata` on every measured Call and the Function; `LoopFootprintMetadata` on every `GridRegionExpr` | the authored program, `MemoryHierarchyFacts` | `peak-footprint`, `traffic`, `advisory` | none |
+| `memory` | - | `MemoryMetadata`, `TrafficMetadata`, `LoopFootprintMetadata` | `MemoryMetadata` on the Function; `TrafficMetadata` on every measured Call and the Function; `LoopFootprintMetadata` on every `GridRegionExpr` | the authored program, `MemoryHierarchyFacts` | `peak-footprint`, `traffic`, `advisory` | none |
 | `roofline` | `compute-cost`, `memory` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | `roofline` | every measured Call |
 | `performance` | `compute-cost`, `memory` | `PerformanceMetadata`, `PerformanceSummaryMetadata` | `PerformanceMetadata` on every Call with a modeled duration; `PerformanceSummaryMetadata` on the Function | `ThroughputFacts`, `ParallelCapacityFacts`, `MemoryHierarchyFacts` | `performance` | every Call with a modeled duration |
 
@@ -592,36 +592,8 @@ class ValueLifetime:
     last_used_at: int
     persistent: bool = False
 
-class BufferRef:
-    """Where one value's bytes are, and how a coordinate of it becomes a byte.
-
-    Attributes:
-        buffer_id: attribute; Which allocation of the function holds them.
-        level: attribute; The storage level that allocation is at.
-        offset: attribute; Where this range starts in bytes from the buffer, or None when nothing places it.
-        size: attribute; How many bytes this range covers, or the allocation it is somewhere in.
-        shape: attribute; The extents the offset and size are stated against.
-        layout: attribute; How a coordinate of those extents becomes an address.
-    """
-
-    buffer_id: int
-    level: str
-    offset: int | None
-    size: int
-    shape: tuple = ()
-    layout: object = None
-
-class BufferAllocationMetadata(IRMetadata):
-    """Where each of one value's fields lives; one entry for a plain Tensor.
-
-    Attributes:
-        fields: attribute; One `BufferRef` per tensor leaf, in type order.
-    """
-
-    fields: tuple[BufferRef, ...] = ()
-
 class AllocationMetadata:
-    """What deciding this function's byte addresses came to.
+    """What showing this function's buffers fit came to.
 
     Attributes:
         solver_status: attribute; `"optimal"`, `"feasible"`, `"unknown"` or `"infeasible"`.
@@ -636,7 +608,7 @@ class MemoryMetadata(IRMetadata):
         footprint: attribute; One row per level the function places values in.
         lifetimes: attribute; One entry per value residency.
         advisories: attribute; Capacity findings that do not invalidate the program.
-        allocation: attribute; What placing the addressable buffers came to.
+        allocation: attribute; What showing the addressable buffers fit came to.
     """
 
     footprint: tuple[LevelFootprint, ...] = ()
@@ -674,9 +646,11 @@ fails closed rather than having its evaluator's number read as the amount.
     positions distinct, and MUST omit an entry it cannot state rather than emit
     it empty.
 
-Addresses are assigned against the authored definition order, which fixes every
-buffer's lifetime before any of them is placed, so the only open question is
-where each one sits.
+Capacity is settled against the authored definition order, which fixes every
+buffer's lifetime before any of them is measured, so the only open question is
+whether the ones live at once fit together. An arrangement is what answers that
+question and not what the family reports: addresses may exist inside the solver,
+and no address or per-value buffer identity is a conclusion of this analysis.
 
 - constraints:
   - Buffers MUST be placed for the addressable levels `gmem` and `smem` only.
@@ -701,11 +675,6 @@ where each one sits.
     decided once. A domain whose contents fit at once MUST be settled without
     searching, and one whose simultaneously live bytes exceed the capacity MUST
     be reported infeasible without searching.
-  - Every value whose bytes were placed MUST carry a `BufferAllocationMetadata`
-    naming the buffer each of its leaves is in. A value only some of whose
-    leaves could be placed MUST carry none: a partial address is not one. Values
-    sharing a `buffer_id` are in one allocation, and the refs a value owns tile
-    it in `offset` order.
   - A Call's `whole`, `per_unit` and `operands` MUST state one occurrence. Only
     the Function record counts an occurrence as often as its authored loops
     repeat it, and its `operands` MUST be empty: which operand moved what
@@ -717,27 +686,14 @@ where each one sits.
     traffic, which is a
     different question from whether a time may be reported for it
     ([§2.2.4](#224-performance)), and the two MUST NOT be read as one.
-  - A value living in another's bytes MUST state an `offset` of `None` over the
-    containing allocation's size: it is somewhere in those bytes, and where it
-    sits and whether it moved are different questions. An address MUST NOT be
-    recovered by measuring from the front of the buffer that contains it, which
-    is wrong by wherever the containing value really began.
-  - An allocation fact MUST NOT be used to invent a movement number. A window
+  - A capacity conclusion MUST NOT be used to invent a movement number. A window
     whose start arrives at run time reads that start and names the bytes it
     windows; a coordinate nobody has bound makes neither an address nor a copy,
     and MUST NOT turn an addressing view into a full read of its source and a
     write of its result.
-  - A level held per unit of work rather than shared is not searched for
-    addresses, and a value there MUST still receive a `buffer_id` of its own.
-    Two such values are two buffers however their offsets read.
-  - `BufferRef.shape` and `BufferRef.layout` are the value's at the level's
-    owner, and they are the coordinate space `offset` and `size` are stated
-    against. A `layout` of `None` over a fully static `shape` MUST be read as
-    `Layout(shape, try_c_order_strides(shape))`: a value that states no layout
-    is dense in its own coordinates. A `shape` that is not fully static leaves
-    `try_c_order_strides` undefined, and the addressing MUST stay unknown rather
-    than be assumed dense. Not stating a layout and not knowing one are
-    different, and only the first is dense.
+  - A level held per unit of work rather than shared is not searched at all, and
+    a value there MUST NOT make a program unplaceable: two such values are two
+    buffers however a plan would lay them out.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
@@ -1278,9 +1234,9 @@ model.
     that full span. Loop-invariant values remain single occurrences outside it.
   - What an occurrence waits for MUST be read off the program's own structure:
     the values it names, the loop it sits in, and the participants it runs on.
-    An ordering MUST NOT be inferred from an allocation -- two values sharing a
-    `buffer_id` are a plan's decision and no plan has been made -- and no
-    occurrence is held back for a write nobody proved happens in place.
+    An ordering MUST NOT be inferred from an allocation -- which values share
+    bytes is a plan's decision and no plan has been made -- and no occurrence is
+    held back for a write nobody proved happens in place.
   - Occurrences MUST be laid out in inline occurrence order. Reordering
     independent work is a schedule's decision, not an analysis's: what overlaps
     is what the program's own placement made independent, and the reported time

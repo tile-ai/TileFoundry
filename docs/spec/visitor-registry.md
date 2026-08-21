@@ -309,9 +309,6 @@ class AccessRelations:
 
 def coordinates_of(call, ctx) -> AccessRelations: ...
 def relations_of(call, ctx) -> AccessRelations: ...
-def access_elements(
-    relations: AccessRelations, *, boundary: int, output: bool = False
-) -> int | None: ...
 ```
 
 Registry + decorator:
@@ -351,8 +348,8 @@ def register_access_relation(op_cls: type): ...
     what needs the derived Type: one boundary per output field, at that field's
     rank in this view.
   - How much a boundary moves MUST NOT be a second field. It is what the
-    relation reaches over the coordinates its Op iterates, counted by
-    `access_elements`; reaching the same element from many coordinates is one
+    relation reaches over the coordinates its Op iterates, counted from the
+    relation's own image; reaching the same element from many coordinates is one
     element moved, so an inner iteration axis costs nothing. A projection or a
     count that cannot be derived MUST fail closed rather than fall back on a
     stated number.

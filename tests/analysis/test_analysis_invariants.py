@@ -50,12 +50,9 @@ from tilefoundry.analysis import (
     check_program,
     extract,
 )
-from tilefoundry.analysis.buffer_plan import BufferPlan, PlannedBuffer, build_buffer_plan
 from tilefoundry.analysis.check import _call_placements
 from tilefoundry.analysis.facts import ThroughputFacts
 from tilefoundry.analysis.metadata import (
-    BufferAllocationMetadata,
-    BufferRef,
     ComputeCostMetadata,
     MemoryMetadata,
     TrafficMetadata,
@@ -2556,81 +2553,19 @@ def test_a_reported_record_keys_every_field_by_its_own_name() -> None:
                     assert value == str(stated), (key, value, stated)
 
 
-def _planned() -> tuple[object, object]:
-    """The decode program's buffers, whole and as one participant sees them.
-
-    Eight CTAs share one allocation. Query heads are the interesting axis: 32 of
-    them, factored `(4, 8)` and split on the 8, so a CTA holds four heads that
-    are eight apart rather than four in a row.
-    """
-    aimed = replace(
-        GqaOnline, target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 8),)
-    )
-    result = analyze(
-        aimed, aimed.entry_function(), analysis="memory", level="cta", dims={"ctx_len": 1024}
-    )
-    plan = build_buffer_plan(result.function, "cta")
-    return plan, result.function
-
-
-def test_a_participant_owns_the_positions_its_layout_gave_it() -> None:
-    """What a shard holds is a run of layout positions, not a run of an axis.
-
-    Thirty-two heads over eight CTAs is four heads each, and which four depends
-    on which position the mesh divides. Here the axis is factored `(4, 8)` and
-    the 8 is divided, so CTA 3 holds heads 3, 11, 19 and 27. Stated as a logical
-    range that would be heads 12 through 15: the right count of the wrong data,
-    which is why the domain is written in positions.
-    """
-    plan, _ = _planned()
-    heads = next(item for item in plan.buffers if item.extents == (1, 1, 4, 8, 128))
-    assert heads.ref.shape == (1, 1, 32, 128)
-
-    mine = next(
-        item
-        for item in plan.project(3).buffers
-        if (item.binding, item.field) == (heads.binding, heads.field)
-    )
-    assert mine.origin == (0, 0, 0, 3, 0)
-    assert mine.extents == (1, 1, 4, 1, 128)
-    assert mine.domain.is_equal(
-        isl.set("{ [0, 0, i2, 3, i4] : 0 <= i2 < 4 and 0 <= i4 < 128 }")
-    )
-
-
-def test_a_shard_is_a_view_of_one_buffer_and_not_a_buffer_of_its_own() -> None:
-    """Projection narrows what a participant sees, never where the bytes are.
-
-    Every participant names the same buffer at the same address, so a reader
-    that adds up per-participant traffic against buffer numbers is adding up
-    one allocation. Together they cover it exactly, because a shard that no
-    one holds is a byte no one wrote and one two hold is one counted twice.
-    """
-    plan, _ = _planned()
-    whole = {(item.binding, item.field): item for item in plan.buffers}
-    covered: dict[tuple[str, int], object] = {}
-    for participant in range(8):
-        for item in plan.project(participant).buffers:
-            key = (item.binding, item.field)
-            assert item.ref == whole[key].ref
-            seen = covered.get(key)
-            covered[key] = item.domain if seen is None else seen.union(item.domain)
-    assert set(covered) == set(whole)
-    for key, union in covered.items():
-        assert union.is_equal(whole[key].domain)
-
-
 def test_a_loop_carries_one_factorization_round_its_own_buffer() -> None:
     """What a loop is entered with, names each trip, and yields is one buffer.
 
     Three derivations reach the same value -- the init's own Op, the loop's phi,
     and whatever the body computed -- and a layout that factors its axes one way
-    on the way in and another on the way out is two buffers under one name. The
-    plan and the type system then project it differently, which is a wrong
-    address rather than a wrong number.
+    on the way in and another on the way out is two buffers under one name,
+    which a relation written against one of them prices against the other.
     """
-    _plan, function = _planned()
     topologies = (Topology("cta", 8),)
+    aimed = replace(GqaOnline, target=CudaTarget("nvidia.h200_sxm"), topologies=topologies)
+    function = analyze(
+        aimed, aimed.entry_function(), analysis="memory", level="cta", dims={"ctx_len": 1024}
+    ).function
 
     def factored(expr) -> tuple:
         held = local_type_of(expr.type, level="cta", topologies=topologies)
@@ -2650,87 +2585,6 @@ def test_a_loop_carries_one_factorization_round_its_own_buffer() -> None:
         assert factored(loop) == tuple(
             item for value in loop.yield_values for item in factored(value)
         ), "and the loop's own result is what its last trip yielded"
-
-
-def test_a_participants_share_of_a_buffer_is_the_type_it_was_given() -> None:
-    """The plan and the type system project the same program the same way.
-
-    They are separate derivations -- one from the mesh coordinate a position is
-    divided by, one from the local shape the type carries -- and a difference
-    between them would mean an access relation written against one and priced
-    against the other.
-    """
-    plan, function = _planned()
-    topologies = (Topology("cta", 8),)
-    stated: dict[int, list[tuple[int, ...]]] = {}
-    for expr in (*function.params, *postorder(function.body)):
-        if get_metadata(expr, BufferAllocationMetadata) is None:
-            continue
-        local = local_type_of(expr.type, level="cta", topologies=topologies)
-        stated[id(expr)] = [tuple(leaf.shape) for leaf in tensor_types(local)]
-    assert stated
-    checked = 0
-    for participant in range(8):
-        for item in plan.project(participant).buffers:
-            held = stated[item.expr_id]
-            if item.field < len(held):
-                assert item.extents == held[item.field]
-                checked += 1
-    assert checked
-
-
-def test_a_buffer_no_participant_holds_is_not_in_that_participants_plan() -> None:
-    """A mesh that names some participants leaves the rest nothing to see."""
-    mesh = make_mesh((2,), ("c",), topology=Topology("cta", 4))
-    held = make_shard_tensor_type((8,), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32)
-    item = PlannedBuffer(
-        expr_id=1,
-        binding="x",
-        field=0,
-        ref=BufferRef(0, "gmem", 0, 32, (8,), held.layout),
-        origin=(0, 0),
-        extents=(2, 4),
-    )
-    plan = BufferPlan(level="cta", buffers=(item,))
-    assert plan.project(1).buffers[0].origin == (1, 0)
-    assert plan.project(3).buffers == ()
-
-
-def test_the_fields_of_one_value_tile_the_allocation_it_was_given() -> None:
-    """An address means something only if the bytes behind it are the value's.
-
-    Leaves that share a buffer are laid out consecutively inside the allocation
-    the value's lifetime was sized by, so the last one ends exactly where that
-    allocation does. A gap would mean bytes charged to a value no field of it
-    occupies, and an overrun would mean two values sharing bytes neither one
-    placed. Leaves in different buffers are a value naming other values' bytes
-    rather than holding any, and tile nothing; neither does a value only known
-    to be somewhere in a buffer, which has no offset to tile from.
-    """
-    plan, function = _planned()
-    record = get_metadata(function, MemoryMetadata)
-    sizes = {(item.level, item.binding): item.bytes for item in record.lifetimes}
-    owned: dict[tuple[int, str], list[PlannedBuffer]] = {}
-    for item in plan.buffers:
-        owned.setdefault((item.expr_id, item.ref.level), []).append(item)
-    assert owned
-    checked = 0
-    for (_value, level), held in owned.items():
-        refs = [item.ref for item in sorted(held, key=lambda item: item.field)]
-        if len({ref.buffer_id for ref in refs}) != 1:
-            continue
-        if any(ref.offset is None for ref in refs):
-            continue
-        cursor = refs[0].offset
-        for ref in refs:
-            assert ref.offset == cursor, (held[0].binding, level)
-            cursor += ref.size
-        stated = sizes.get((level, held[0].binding))
-        if stated is None:
-            continue
-        assert cursor - refs[0].offset == stated, (held[0].binding, level)
-        checked += 1
-    assert checked
 
 
 def _traffic_of(module, level, dims):
@@ -2807,19 +2661,19 @@ def test_a_unit_moves_the_share_of_a_buffer_it_was_given() -> None:
 
 
 def test_an_occurrence_nobody_placed_is_charged_for_the_copy_nobody_ruled_out() -> None:
-    """Addresses prove a move came to nothing; without them nothing is proven.
+    """A machine that places nothing still has to say what its program moved.
 
-    This program's machine places nothing it keeps, so no two values can be
-    shown to be the same bytes. What follows is that every transfer is a copy,
-    not that the program moves nothing: an unproven move is a move, and the
-    occurrence still says how much it moved.
+    This program's machine names no level to place anything against, so the
+    capacity question is never asked and no two values can be shown to be the
+    same bytes. What follows is that every transfer is a copy, not that the
+    program moves nothing: an unproven move is a move, and the occurrence still
+    says how much it moved.
     """
     result = analyze(
         _NoParallelLevel, _NoParallelLevel.entry_function(), analysis=("compute-cost", "memory")
     )
     function = result.function
     assert get_metadata(function, MemoryMetadata).allocation is None
-    assert build_buffer_plan(function, "cta").buffers == ()
 
     stated = _occurrences(function)
     assert stated
@@ -2891,6 +2745,18 @@ def test_a_contraction_reads_a_batch_it_broadcasts_at_one_coordinate() -> None:
     assert reached_elements(relations.inputs[0].pattern) == 128 * 64, (
         "read once, not once per batch the result has"
     )
+
+
+def _owned_bytes(function) -> list[int]:
+    """What each value this function produces was given, in definition order.
+
+    A parameter arrived with its bytes, so only the ones the body owns say
+    anything about what allocating a result came to. A value given nothing is
+    absent rather than zero: that is what re-describing another value's bytes
+    means.
+    """
+    record = get_metadata(function, MemoryMetadata)
+    return [item.bytes for item in record.lifetimes if not item.persistent]
 
 
 def _occurrences(function):
@@ -3142,9 +3008,8 @@ def test_a_window_is_given_bytes_of_its_own_and_still_moves_none() -> None:
         if isinstance(expr, Call) and isinstance(expr.target, SliceOp)
     ]
     assert len(windows) == 2
-    outer, inner = (get_metadata(expr, BufferAllocationMetadata) for expr in windows)
-    assert outer.fields[0].buffer_id != inner.fields[0].buffer_id, (
-        "no plan shares these addresses, so each window owns its own"
+    assert _owned_bytes(result.function) == [16 * 4, 8 * 4, 8 * 4], (
+        "no plan puts a window in its source, so each is given bytes its own size"
     )
 
     for expr in windows:
@@ -3175,9 +3040,9 @@ def test_a_window_whose_start_is_only_known_at_run_time_is_still_a_window() -> N
         if isinstance(expr, Call) and isinstance(expr.target, SliceOp)
     ]
     assert windows, "this program was expected to window something"
-    assert all(
-        get_metadata(expr, BufferAllocationMetadata) is not None for expr in windows
-    ), "every window of this program was given somewhere to be"
+    assert get_metadata(result.function, MemoryMetadata).allocation is not None, (
+        "every window of this program was still shown to fit somewhere"
+    )
     for expr in windows:
         moved = dict(get_metadata(expr, TrafficMetadata).whole)
         assert moved.get("gmem", TrafficBytes()).write == 0, (
@@ -3445,13 +3310,13 @@ def test_a_window_that_fits_nowhere_reaches_nothing() -> None:
     assert not fits.relation.is_empty()
 
 
-def test_a_field_is_placed_in_the_buffer_that_field_is_in() -> None:
-    """Taking the second of two is not taking the first of them.
+def test_a_field_taken_is_the_size_of_the_field_it_took() -> None:
+    """Taking the second of two is not taking both of them.
 
-    Sixteen floats into a thirty-two float value, the second half begins where
-    the first one ends. Taking one of them is given bytes of its own, because no
-    plan has put it in the tuple's, and it is still the size of the field it
-    took rather than of the field beside it.
+    Thirty-two floats split in half is two sixteen-float fields, and taking one
+    of them is given bytes of its own because no plan has put it in the tuple's.
+    What it is given is the size of the field it took rather than of the value it
+    took it from, and taking it moves nothing either way.
     """
     result = analyze(
         _TakesAField, _TakesAField.entry_function(), analysis=("compute-cost", "memory")
@@ -3461,21 +3326,8 @@ def test_a_field_is_placed_in_the_buffer_that_field_is_in() -> None:
         for expr in postorder(result.function.body)
         if isinstance(expr, Call) and isinstance(expr.target, TupleGetItem)
     )
-    parts = next(
-        expr
-        for expr in postorder(result.function.body)
-        if isinstance(expr, Call) and isinstance(expr.target, SplitOp)
-    )
-    fields = get_metadata(parts, BufferAllocationMetadata).fields
-    mine = get_metadata(taken, BufferAllocationMetadata).fields
-
-    assert [ref.size for ref in fields] == [16 * 4, 16 * 4]
-    assert fields[1].offset == fields[0].offset + 16 * 4
-    assert [ref.size for ref in mine] == [fields[1].size], (
-        "the field it took, not the one beside it"
-    )
-    assert mine[0].buffer_id not in {ref.buffer_id for ref in fields}, (
-        "and bytes of its own, because no plan has put it in the tuple's"
+    assert _owned_bytes(result.function) == [32 * 4, 16 * 4, 16 * 4], (
+        "the split holds both halves and the field taken holds one of them"
     )
     assert get_metadata(taken, TrafficMetadata).whole == ()
 
@@ -3563,10 +3415,9 @@ def test_re_indexing_something_unplaced_moves_none_of_it() -> None:
         if isinstance(expr, Call) and isinstance(expr.target, (SliceOp, Reshape))
     ]
     assert [type(expr.target).__name__ for expr in windows] == ["Slice", "Reshape"]
-    opened, flat = (
-        get_metadata(expr, BufferAllocationMetadata).fields[0] for expr in windows
+    assert _owned_bytes(result.function) == [16 * 4, 16 * 4], (
+        "the window owns its bytes and the reshape of them owns none"
     )
-    assert flat.buffer_id == opened.buffer_id, "a reshape is where what it renames is"
 
     assert dict(get_metadata(windows[0], TrafficMetadata).whole)["gmem"] == TrafficBytes(8, 0)
     assert get_metadata(windows[1], TrafficMetadata).whole == (), (
@@ -3576,7 +3427,7 @@ def test_re_indexing_something_unplaced_moves_none_of_it() -> None:
     assert dict(get_metadata(reader, TrafficMetadata).whole)["gmem"] == TrafficBytes(128, 64)
 
 
-def test_a_value_nobody_can_place_does_not_place_the_one_that_renames_it() -> None:
+def test_a_window_whose_start_is_a_value_reads_the_value_and_not_the_window() -> None:
     """A window whose start is a value reads the start, not the window.
 
     Where it lands is a number the run supplies, so the occurrence reads that
@@ -3595,9 +3446,8 @@ def test_a_value_nobody_can_place_does_not_place_the_one_that_renames_it() -> No
         if isinstance(expr, Call) and isinstance(expr.target, SliceOp)
     ]
     assert len(windows) == 2
-    held = [get_metadata(expr, BufferAllocationMetadata) for expr in windows]
-    assert held[0].fields[0].buffer_id != held[1].fields[0].buffer_id, (
-        "no plan shares these addresses, so each window owns its own"
+    assert _owned_bytes(result.function) == [16 * 4, 8 * 4, 8 * 4], (
+        "a window nobody could place is still given bytes its own size"
     )
 
     opened, into = (dict(get_metadata(expr, TrafficMetadata).whole) for expr in windows)

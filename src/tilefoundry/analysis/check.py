@@ -62,7 +62,6 @@ from .compute_cost import _call_cost_record, _is_structural_occurrence
 from .errors import AnalysisError
 from .facts import ParallelCapacityFacts, PerformanceServiceFacts, ThroughputFacts
 from .metadata import (
-    BufferAllocationMetadata,
     ComputeCostMetadata,
     MemoryMetadata,
     OccurrenceProvenance,
@@ -77,7 +76,6 @@ from .walk import describe, postorder, reachable_functions, tensor_types
 
 _INLINE_NODES = 10_000
 _DERIVED_METADATA = {
-    BufferAllocationMetadata,
     ComputeCostMetadata,
     MemoryMetadata,
     PerformanceMetadata,

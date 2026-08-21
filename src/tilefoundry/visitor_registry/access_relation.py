@@ -15,11 +15,9 @@ import isl
 
 from tilefoundry.ir.hir._helpers import is_one
 from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
-from tilefoundry.ir.types.dim_isl import dim_range, to_dim, to_domain
+from tilefoundry.ir.types.dim_isl import to_dim, to_domain
 from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.shard import Layout, try_c_order_strides
-from tilefoundry.ir.types.shard.int_tuple import flatten
-from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis, shard_layout_of
+from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis
 
 from .registries import AnalysisRegistry
 
@@ -85,49 +83,6 @@ class BoundaryRelation:
                 f"a boundary reaches its coordinates through an AffineAccess, "
                 f"which says what its parameters are; {self.pattern!r} does not"
             )
-
-
-def elements_of(type_: "Type") -> int:
-    """How many elements one boundary value holds, at most.
-
-    A shape is usually numbers by the time anything is counted, because a
-    program is specialised before it is measured. An axis still symbolic here
-    holds at most what its own declared range allows, which is an answer a
-    reader can check; one that declares no range is refused.
-    """
-    if not isinstance(type_, TensorType):
-        raise ValueError(f"{type_!r} is not one tensor boundary")
-    counted = 1
-    for extent in type_.shape:
-        if isinstance(extent, int) and not isinstance(extent, bool) and extent >= 0:
-            counted *= extent
-            continue
-        counted *= _most_of(extent, type_)
-    return counted
-
-
-def _most_of(extent, type_: "Type") -> int:
-    """The largest one symbolic axis declares it may be."""
-    try:
-        _low, high = dim_range(extent)
-    except (ArithmeticError, TypeError, ValueError):
-        raise ValueError(f"{type_!r} has no concrete element count") from None
-    return high - 1
-
-
-def access_elements(
-    relations: AccessRelations, *, boundary: int, output: bool = False
-) -> int | None:
-    """How many elements this boundary moves, as its own relation says.
-
-    Derived, never declared: the relation already says which coordinates are
-    reached, and counting them is the same question a quantity field answered
-    from a second place. ``None`` when there is no boundary there.
-    """
-    chosen = relations.outputs if output else relations.inputs
-    if not 0 <= boundary < len(chosen):
-        return None
-    return reached_elements(chosen[boundary].pattern)
 
 
 @dataclass(frozen=True)
@@ -738,22 +693,6 @@ def logical_coordinates(local: "Type", logical: "Type") -> dict[int, str]:
     return linear
 
 
-def holds_whole_axis(local: "Type", logical: "Type", axis: int) -> bool:
-    """Whether a participant holds all of one logical axis.
-
-    An Op that narrows or divides an axis states its offsets against the whole
-    of it. A participant holding a slice of that axis would need to know which
-    slice -- its own offset -- to say where those offsets land, and a projection
-    has extents and no offsets. So the question is asked, and the Op refuses
-    what it cannot say rather than answering for the first participant.
-    """
-    held = 1
-    for position, owner in enumerate(logical_axes_of(local, logical)):
-        if owner == axis:
-            held *= local.shape[position]
-    return held == logical.shape[axis]
-
-
 def affine_term(value, name: str) -> "tuple[str, tuple[tuple[str, object], ...]]":
     """One number of a relation, as a coefficient or as a bound parameter.
 
@@ -1177,24 +1116,6 @@ def isl_parameters(parameters: list) -> str:
     return f"[{', '.join(names)}] -> " if names else ""
 
 
-def self_image(local: "Type", logical: "Type") -> "AffineAccess":
-    """A value read at its own coordinates, with its fixed positions written down.
-
-    An identity over every position claims coordinates a participant does not
-    have: a position it holds one of is that participant's identity, and only
-    zero is in it. Writing the constant makes two names of the same bytes
-    compare equal instead of differing on an axis neither can vary.
-    """
-    rank = len(local.shape)
-    domain = ", ".join(f"d{index}" for index in range(rank))
-    carried = logical_coordinates(local, logical)
-    reads = [carried.get(axis, "0") for axis in range(len(logical.shape))]
-    image = ", ".join(factored_image(reads, local, logical))
-    if not rank:
-        return AffineAccess(isl.map("{ [] -> [] }"))
-    return AffineAccess(isl.map(f"{{ [{domain}] -> [{image}] }}"))
-
-
 def positions_of(local: "Type", logical: "Type") -> "isl.map":
     """Where one value's logical coordinates live among the positions it has.
 
@@ -1254,18 +1175,6 @@ def factored_image(reads: "Sequence[str]", local: "Type", logical: "Type") -> li
             image[position] = walked if position == carrying[0] else f"({walked}) mod {extent}"
             stride *= extent
     return image
-
-
-def elementwise_elements(arg, call, ctx) -> int:
-    """What is read of *arg* to produce one *call*, in the axes it was written in.
-
-    An Op says how much it moves in logical terms, because that is all it knows
-    before anything is placed. What one participant moves of that is the
-    projection's answer: the elements its own share of the relation reaches, so a
-    replicated operand costs itself once rather than once per participant.
-    """
-    type_ = ctx.type_of(arg)
-    return elements_of(type_) if isinstance(type_, TensorType) else 0
 
 
 def identity_access(rank: int) -> "AffineAccess":
@@ -1470,59 +1379,16 @@ def static_bytes(type_: "Type") -> int | None:
     return amount if isinstance(amount, int) else None
 
 
-def dense(type_: "Type") -> bool:
-    """Whether a Type's own elements sit in one unbroken row-major run.
-
-    A sharded Type is read through its per-position tile, which is the run one
-    position addresses. Anything this cannot decide -- a composed layout, a
-    symbolic stride -- is not dense here, so the proof that needed it fails.
-    """
-    if not isinstance(type_, TensorType):
-        return False
-    layout = type_.layout
-    shard = shard_layout_of(layout)
-    if shard is not None:
-        layout = shard.layout
-    if layout is None:
-        return True
-    if not isinstance(layout, Layout):
-        return False
-    if layout.strides is None:
-        return True
-    expected = try_c_order_strides(flatten(layout.shape))
-    return expected is not None and tuple(layout.strides) == expected
-
-
-def same_placement(left: "Type", right: "Type") -> bool:
-    """Whether two Types name the same storage, element size, and positions."""
-    if not (isinstance(left, TensorType) and isinstance(right, TensorType)):
-        return False
-    if left.storage != right.storage or left.dtype != right.dtype:
-        return False
-    left_shard, right_shard = shard_layout_of(left.layout), shard_layout_of(right.layout)
-    if left_shard is None or right_shard is None:
-        return left_shard is None and right_shard is None
-    return left_shard.mesh == right_shard.mesh
-
-
 __all__ = [
     "AccessRelations",
     "AffineAccess",
     "BoundaryRelation",
-    "access_elements",
     "access_relation_registry",
-    "affine_term",
     "coordinates_of",
-    "dense",
-    "elements_of",
-    "elementwise_elements",
     "factored_image",
-    "holds_whole_axis",
     "broadcast_access",
     "index_set",
-    "isl_parameters",
     "iterating",
-    "iteration_universe",
     "identity_access",
     "identity_relations",
     "linearized_view",
@@ -1532,12 +1398,8 @@ __all__ = [
     "measures_without_reading",
     "normalised_rows",
     "placed_window",
-    "parameters_of",
     "boundary_maps",
-    "positions_of",
     "projected",
-    "control_leaves",
-    "leaf_span",
     "leaves_of",
     "reached_elements",
     "reached_leaves",
@@ -1545,8 +1407,6 @@ __all__ = [
     "relation_of",
     "relations_of",
     "renaming_relation",
-    "same_placement",
-    "self_image",
     "settled",
     "shape_from_relation",
     "static_bytes",

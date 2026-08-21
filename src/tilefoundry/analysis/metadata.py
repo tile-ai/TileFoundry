@@ -137,32 +137,6 @@ class ValueLifetime:
 
 
 @dataclass(frozen=True)
-class BufferRef:
-    """Where one value's bytes are.
-
-    ``offset`` and ``size`` are the range this value occupies, and an ``offset``
-    of ``None`` means nothing places it absolutely: it is somewhere in ``size``
-    bytes of that buffer rather than at the front of them. Values sharing a
-    ``buffer_id`` are in one allocation, which is what says one of them lives in
-    another's bytes rather than in a copy of them.
-    """
-
-    buffer_id: int
-    level: str
-    offset: int | None
-    size: int
-    shape: tuple = ()
-    layout: object = None
-
-
-@dataclass(frozen=True)
-class BufferAllocationMetadata(IRMetadata):
-    """Where each of one value's fields lives. One entry for a plain Tensor."""
-
-    fields: tuple[BufferRef, ...] = ()
-
-
-@dataclass(frozen=True)
 class AllocationMetadata:
     """What deciding this function's byte addresses took.
 
