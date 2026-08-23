@@ -326,7 +326,7 @@ class Gemma2_2B:
         row = tf.reshape(
             tf.index_select(w_embed, token_ids, dim=0), new_shape=(1, S, config.hidden_size)
         )
-        return row * EMBED_SCALE
+        return row * tf.cast(EMBED_SCALE, dtype=_DT)
 
     @func
     def final_rms_norm(
@@ -344,8 +344,9 @@ class Gemma2_2B:
         # Soft-capped as `Gemma2ForCausalLM.forward` caps it, at
         # `final_logit_softcapping` rather than attention's cap.
         logits = tf.matmul(tf.reshape(hidden, new_shape=(1, config.hidden_size)), w_head)
-        z = logits / LOGIT_SOFTCAP
-        return tf.tanh(z) * LOGIT_SOFTCAP
+        softcap = tf.cast(LOGIT_SOFTCAP, dtype=_DT)
+        z = logits / softcap
+        return tf.tanh(z) * softcap
 
     @lm_head.converter("w_head")
     def _(
