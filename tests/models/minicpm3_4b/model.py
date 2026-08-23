@@ -364,7 +364,7 @@ class MiniCPM3_4B:
         row = tf.reshape(
             tf.index_select(w_embed, token_ids, dim=0), new_shape=(1, S, config.hidden_size)
         )
-        return row * EMBED_SCALE
+        return row * tf.cast(EMBED_SCALE, dtype=_DT)
 
     @func
     def final_rms_norm(
@@ -385,7 +385,9 @@ class MiniCPM3_4B:
     ) -> Tensor[(1, config.vocab_size), _DT]:
         # `MiniCPM3ForCausalLM.forward` divides the hidden state by
         # `logits_scaling` before the head, not after.
-        scaled = tf.reshape(hidden, new_shape=(1, config.hidden_size)) / LOGITS_SCALING
+        scaled = tf.reshape(hidden, new_shape=(1, config.hidden_size)) / tf.cast(
+            LOGITS_SCALING, dtype=_DT
+        )
         return tf.matmul(scaled, w_head)
 
     @lm_head.converter("w_head")
