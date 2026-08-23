@@ -3,7 +3,7 @@
 Both resolve to ``TensorType``; ``ConstTensor`` additionally marks the parsed
 parameter as an external constant.
 
-See [parser §1.4](docs/spec/parser.md#14-tensor-and-consttensor-annotations).
+See [parser §2.1](docs/spec/parser.md#21-syntax).
 """
 
 from __future__ import annotations

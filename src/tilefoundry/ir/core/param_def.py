@@ -5,7 +5,7 @@ patterns further filter IR values. ``optional`` permits ``None`` while a
 non-``MISSING`` default permits omission. ``__set_name__`` supplies the
 canonical parameter name.
 
-See [parser §2.1](docs/spec/parser.md#21-model).
+See [parser §2](docs/spec/parser.md#2-syntax-and-rules).
 """
 
 from __future__ import annotations

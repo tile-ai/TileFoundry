@@ -1,6 +1,6 @@
 """Define parser-backed ``@func`` and ``@prim_func`` decorators.
 
-The surface follows [parser §1](docs/spec/parser.md#1-dsl-syntax). A decorator
+The surface follows [parser §2](docs/spec/parser.md#2-syntax-and-rules). A decorator
 returns the parsed and verified IR node, not the original Python function.
 """
 
@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from enum import StrEnum
+from types import FunctionType
 from typing import Any, Callable, ClassVar, Literal
 
 from tilefoundry.ir.core.module import Module
@@ -18,9 +19,9 @@ from tilefoundry.ir.hir.specialize import DISPLAY_NAME
 from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.tir.intrinsic import intrinsic as _intrinsic
 from tilefoundry.ir.tir.verify import verify_prim_function
-from tilefoundry.module import UNDECLARED, _Entry, enclosing_declaration
-from tilefoundry.parser import parse_prim_func
-from tilefoundry.parser.hir_parser import _parse_func
+from tilefoundry.module import UNDECLARED, _Entry
+from tilefoundry.parser import FuncParserContext, FunctionRole, parse_function
+from tilefoundry.parser.ast_pattern import LexicalScope, module_context_for_frame
 from tilefoundry.target.base import target_instance
 
 
@@ -147,14 +148,8 @@ def _register(
     *,
     base: HirFunction | None = None,
 ) -> None:
-    """Validate and record a parser-time Function in its enclosing Module."""
-    entry = _enclosing_declaration()
-    ParsedFuncRules.check(kind, ir, binding_name, key, entry=entry, base=base)
-    if entry is None:
-        return
-    entry.bound[binding_name] = kind
-    if kind is not ParsedFuncKind.KERNEL:
-        entry.owned.add(id(ir))
+    """Compatibility no-op; FunctionPattern owns validation and registration."""
+    return None
 
 
 def _validate_one_pattern(pattern: Any) -> Pattern:
@@ -214,13 +209,65 @@ def _enclosing_declaration():
     here = __file__
     while frame is not None and frame.f_code.co_filename == here:
         frame = frame.f_back
-    return enclosing_declaration(frame)
+    return module_context_for_frame(frame)
 
 
 def _enclosing_topologies() -> tuple | None:
     """Find the declaration belonging to the enclosing ``@module`` class body."""
     entry = _enclosing_declaration()
     return entry.topologies if entry is not None else None
+
+
+def _parse_authored(
+    fn_inner: FunctionType,
+    *,
+    dialect: Literal["hir", "tir"],
+    role: FunctionRole,
+    binding_name: str,
+    base: HirFunction | None = None,
+    key: object | None = None,
+    target: object | None = None,
+    topologies: tuple | None = None,
+):
+    """Build one typed context and route every authored function through the API."""
+    module_context = _enclosing_declaration()
+    closure = _definition_namespace()
+    closure.update(fn_inner.__globals__)
+    if fn_inner.__closure__ is not None:
+        for name, cell in zip(fn_inner.__code__.co_freevars, fn_inner.__closure__):
+            try:
+                closure[name] = cell.cell_contents
+            except ValueError:
+                pass
+    use_owner_context = module_context is not None and (
+        role is not FunctionRole.ROOT or (target is None and topologies is None)
+    )
+    if use_owner_context:
+        context = module_context.function_context(
+            dialect=dialect,
+            role=role,
+            binding_name=binding_name,
+            closure=closure,
+            base=base,
+            key=key,
+        )
+    else:
+        topology_scope = {
+            getattr(topology, "name", str(index)): topology
+            for index, topology in enumerate(topologies or ())
+        }
+        context = FuncParserContext(
+            dialect=dialect,
+            role=role,
+            closure=closure,
+            topologies=topology_scope,
+            module_scope=LexicalScope(),
+            base=base,
+            key=key,
+            target=target if dialect == "tir" else None,
+            binding_name=binding_name,
+        )
+    return parse_function(fn_inner, context)
 
 
 def func(fn=None, *, topologies=UNDECLARED, target=None):
@@ -238,19 +285,13 @@ def func(fn=None, *, topologies=UNDECLARED, target=None):
     declared_topologies = None if topologies is UNDECLARED else tuple(topologies)
 
     def _wrap(fn_inner):
-        ParsedFuncRules.NAMING[ParsedFuncKind.KERNEL].check(
-            fn_inner.__name__,
-            _enclosing_declaration(),
-            kind=ParsedFuncKind.KERNEL,
-        )
-        extra_closure = _definition_namespace()
-        parse_topologies = declared_topologies
-        if parse_topologies is None:
-            parse_topologies = _enclosing_topologies()
-        ir = _parse_func(
-            fn_inner, topologies=parse_topologies or (),
-            extra_closure=extra_closure,
-            in_module_body=_enclosing_declaration() is not None,
+        ir = _parse_authored(
+            fn_inner,
+            dialect="hir",
+            role=FunctionRole.ROOT,
+            binding_name=fn_inner.__name__,
+            target=resolved_target,
+            topologies=declared_topologies,
         )
         verify_function(ir)
         _register(ParsedFuncKind.KERNEL, ir, fn_inner.__name__, None)
@@ -280,17 +321,14 @@ def _specialize(self: HirFunction, pattern: Any):
     pat = _validate_one_pattern(pattern)
 
     def _wrap_variant(fn_inner):
-        ParsedFuncRules.NAMING[ParsedFuncKind.VARIANT].check(
-            fn_inner.__name__,
-            _enclosing_declaration(),
-            kind=ParsedFuncKind.VARIANT,
-            base_name=self.name,
-        )
-        extra_closure = _definition_namespace()
-        ir = _parse_func(
-            fn_inner, topologies=_enclosing_topologies() or (),
-            specializations=(pat,), extra_closure=extra_closure,
-            in_module_body=_enclosing_declaration() is not None,
+        ir = _parse_authored(
+            fn_inner,
+            dialect="hir",
+            role=FunctionRole.VARIANT,
+            binding_name=fn_inner.__name__,
+            base=self,
+            key=pat,
+            topologies=_enclosing_topologies(),
         )
         if ir.body is None:
             raise TypeError(
@@ -301,14 +339,7 @@ def _specialize(self: HirFunction, pattern: Any):
         object.__setattr__(ir, DISPLAY_NAME, fn_inner.__name__)
         object.__setattr__(ir, "name", self.name)
         verify_function(ir)
-        _register(
-            ParsedFuncKind.VARIANT,
-            ir,
-            fn_inner.__name__,
-            pat,
-            base=self,
-        )
-        self.add_variant(ir)
+        _register(ParsedFuncKind.VARIANT, ir, fn_inner.__name__, pat, base=self)
         return ir
 
     return _wrap_variant
@@ -327,10 +358,14 @@ def _converter(self: HirFunction, weight_name: str):
     _validate_converter_weight_name(self, weight_name)
 
     def _wrap_converter(fn_inner):
-        extra_closure = _definition_namespace()
-        ir = _parse_func(
-            fn_inner, extra_closure=extra_closure,
-            in_module_body=_enclosing_declaration() is not None,
+        ir = _parse_authored(
+            fn_inner,
+            dialect="hir",
+            role=FunctionRole.CONVERTER,
+            binding_name=fn_inner.__name__,
+            base=self,
+            key=weight_name,
+            topologies=_enclosing_topologies(),
         )
         if ir.body is None:
             raise TypeError(
@@ -340,14 +375,7 @@ def _converter(self: HirFunction, weight_name: str):
 
         object.__setattr__(ir, "name", f"{self.name}.converter[{weight_name}]")
         verify_function(ir)
-        _register(
-            ParsedFuncKind.CONVERTER,
-            ir,
-            fn_inner.__name__,
-            weight_name,
-            base=self,
-        )
-        self.add_converter(weight_name, ir)
+        _register(ParsedFuncKind.CONVERTER, ir, fn_inner.__name__, weight_name, base=self)
         return ir
 
     return _wrap_converter
@@ -368,8 +396,13 @@ def prim_func(fn=None, *, target=None):
     resolved_target = target
 
     def _wrap(fn_inner):
-        extra_closure = _definition_namespace()
-        ir = parse_prim_func(fn_inner, target=resolved_target, extra_closure=extra_closure)
+        ir = _parse_authored(
+            fn_inner,
+            dialect="tir",
+            role=FunctionRole.ROOT,
+            binding_name=fn_inner.__name__,
+            target=resolved_target,
+        )
         verify_prim_function(ir)
         return ir
 

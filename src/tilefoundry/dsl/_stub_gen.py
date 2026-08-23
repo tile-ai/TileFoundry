@@ -3,8 +3,8 @@
 Inputs use ``Expr`` while attributes retain declared types and required imports.
 Overloads preserve registration order and include a runtime fallback signature.
 Generated files are gitignored and rebuilt through the DSL CLI. See
-[parser §2.4](docs/spec/parser.md#24-pyi-stub-regeneration) and
-[parser §1.7](docs/spec/parser.md#17-for-i-in-tile--for-i-in-range-hir-only).
+[parser §2](docs/spec/parser.md#2-syntax-and-rules) and
+[parser §2.1](docs/spec/parser.md#21-syntax).
 """
 
 from __future__ import annotations

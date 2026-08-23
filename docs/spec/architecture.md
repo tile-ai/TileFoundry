@@ -116,7 +116,7 @@ the layout / shard hierarchy diagram lives in [shard](./shard.md).
 The parser turns Python DSL source into a `core_ir.Module`. There are
 two layers: a **module layer** (`parse_module`, the sole top entry)
 that assembles the compilation unit, and a **function layer**
-(`parse_func` / `parse_prim_func`) that turns each `ast.FunctionDef`
+(`parse_function(fn, context)`) that turns each authored Python `FunctionType`
 into an `hir.Function` or `tir.PrimFunction`. The DSL surface
 (authoring namespace, OpSchema registry, dispatch tokens, AST
 subset, sugar disambiguation) and the lexical-env rules for

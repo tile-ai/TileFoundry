@@ -16,6 +16,7 @@ from typing import Any, Callable
 
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.expr import Expr
+from tilefoundry.ir.core.static_eval import eval_static
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
 from tilefoundry.ir.types.shape_dim import ShapeDim
@@ -31,8 +32,6 @@ from tilefoundry.ir.types.shard.shard_layout import (
 )
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 from tilefoundry.utils.spec_ref import spec_ref_render
-
-from .static_eval import eval_static
 
 _SHARD_ATTR = "[shard §6](docs/spec/shard.md#6-shardattr)"
 
@@ -59,7 +58,7 @@ def _is_layout_slot_constant(node: ast.AST) -> bool:
 
     ``Tensor[shape, dtype, storage]`` puts a storage name where a layout would
     go, and ``Tensor[shape, dtype, None, storage]`` leaves that slot empty
-    ([parser §1.4](docs/spec/parser.md#14-tensor-and-consttensor-annotations)
+    ([parser §2](docs/spec/parser.md#2-syntax-and-rules)
     makes both optional and independent). Neither is layout sugar, so neither
     may pull the annotation onto the sugar path.
     """
@@ -326,7 +325,7 @@ def _parse_shard_layout_sugar(
     Bare dimensions broadcast, ``dim @ mesh.axis`` splits, and a final set maps
     mesh axes to partial reductions. Unmentioned mesh axes broadcast. Missing
     both explicit and default mesh information is an error.
-    See [parser §1.5](docs/spec/parser.md#15-layout-sugar) and
+    See [parser §2](docs/spec/parser.md#2-syntax-and-rules) and
     [shard §6](docs/spec/shard.md#6-shardattr).
     """
     axis_node, strides, value_set_node = _split_layout_outer(node)
@@ -602,7 +601,7 @@ def _canonicalize_single_axis(
 
     Expand ``N @ m.a`` so the split-bound dimension has local size one. ``N``
     must divide evenly by the mesh extent or parsing raises ``ValueError``.
-    See [parser §1.5](docs/spec/parser.md#15-layout-sugar) and
+    See [parser §2](docs/spec/parser.md#2-syntax-and-rules) and
     [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
     extent = mesh.layout.shape[axis]

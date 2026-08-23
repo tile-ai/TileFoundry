@@ -91,7 +91,7 @@ invocation. Owning a `Function`, attaching a child `Module`, or declaring a
 Python-to-HIR entry and HIR-to-HIR device calls are governed by
 [hir §1.1](./hir.md#11-function).
 
-- `parse_module` (see [parser §1](./parser.md#1-dsl-syntax)) returns a `Module`.
+- `parse_module` (see [parser §2](./parser.md#2-syntax-and-rules)) returns a `Module`.
 - A bare `@func` / `@prim_func` becomes an implicit single-function
   `Module` whose `entry` is set to that function. A function that declares
   execution context of its own is therefore already a `Module`.
@@ -131,7 +131,7 @@ chain and is not copied onto each Module or Function.
   renamed by index) and one prototype serve any number of independent builds.
   - `methods` collects plain Python functions (orchestration methods, e.g.
   `forward` / `init_caches`; full collection rule in
-  [parser §2.7](./parser.md#27-module-authoring-surface)). A function name,
+  [parser §3](./parser.md#3-implementation-overview)). A function name,
   a child module name, and a method name MUST be disjoint at one `Module`'s
   own level — all three resolve through the same attribute surface ([§1.1](#11-function-access)
   below), so a name used by more than one would be ambiguous.
@@ -305,7 +305,7 @@ class SourceSpanMetadata(IRMetadata):
   - `SourceSpanMetadata` records the parser source range before type inference.
   - `ExecutionDomainMetadata` records the `with Mesh(...)` scopes a `Call` was
     written inside, outermost first
-    ([parser §1.6](./parser.md#16-with-mesh-as-m)). `at(level)` returns the
+    ([parser §2.1](./parser.md#21-syntax)). `at(level)` returns the
     innermost scope naming *level*, or `None` when none does. It states where
     the work ran, which is not what the result's layout states -- a value laid
     out across threads may have been produced by work one CTA did -- so the two

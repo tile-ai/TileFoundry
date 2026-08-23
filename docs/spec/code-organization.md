@@ -179,7 +179,7 @@ each get their own file. Codegen consumes TIR only.
 
 **Rule 5 — `<category>/__init__.py` re-export rules:** real Op submodules are
 re-exported; aliases are imported only for registration side effects; user imports
-go through [parser §2](./parser.md#2-dsl-namespace-surface).
+go through [parser §2](./parser.md#2-syntax-and-rules).
 
 **Rule 6 — one pass = one file.** A pass class lives in
 `passes/transforms/<pass_name>.py`; internal visitors / mutators stay in that file.
@@ -227,7 +227,7 @@ from tilefoundry.dsl import tf, T, Tensor
   sugar; it is owned by `tilefoundry.dsl` (defined under
   `tilefoundry.dsl._tensor`, re-exported as `tilefoundry.dsl.Tensor`). It
   is **not** the IR tensor type — the IR type carrier is
-  `tilefoundry.ir.types.TensorType`. See [parser §1.4](./parser.md#14-tensor-and-consttensor-annotations) for
+  `tilefoundry.ir.types.TensorType`. See [parser §2.1](./parser.md#21-syntax) for
   the annotation grammar.
 - `DType` is **not** re-exported. dtype values use string form in
   DSL source (`Tensor[(8,), "bf16"]`, `zeros((1, 64), "bf16", ...)`);

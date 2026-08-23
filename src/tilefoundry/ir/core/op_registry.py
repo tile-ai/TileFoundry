@@ -16,7 +16,7 @@ def _register_schema(schema: "OpSchema", *, prepend: bool = False) -> None:
     Ops append; aliases prepend and therefore win first-match resolution.
     Concrete-class lookup skips aliases whose ``op_class`` is ``None``.
 
-    See [parser §4.3](docs/spec/parser.md#43-opschema-and-overload-resolution).
+    See [parser §3](docs/spec/parser.md#3-implementation-overview).
     """
     key = (schema.dialect, schema.name)
     bucket = _schemas_by_dialect_name.setdefault(key, [])

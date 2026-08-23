@@ -4,7 +4,7 @@ Builtin module paths derive dialect and category; external operations provide
 them explicitly. Names default to the lowercase class name. Registration is
 the only route into the callable schema registry.
 
-See [parser §2.1](docs/spec/parser.md#21-model).
+See [parser §2](docs/spec/parser.md#2-syntax-and-rules).
 """
 
 from __future__ import annotations

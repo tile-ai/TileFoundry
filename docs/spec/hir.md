@@ -200,7 +200,7 @@ across sessions.
 `Tensor[..., (sugar)]` annotation on a parameter or return appears
 at the kernel boundary, where the underlying engine is a shared
 buffer handed across the FFI surface. When the surface sugar emits
-`Layout(strides=None)` ([parser.md §1.5](./parser.md#15-layout-sugar)),
+`Layout(strides=None)` ([parser.md §2.1](./parser.md#21-syntax)),
 function-signature binding MUST materialize it to **shared-engine
 C-order over the canonical global shape** before the resulting
 `TensorType` enters the body. Verbose `Layout(strides=tuple)`
@@ -355,7 +355,7 @@ class GridRegionExpr(Expr):
 `for i in range(...)` — lower to this one node; they share the domain
 `(start, extent, step)` and differ only in the loop-variable binding (`tile`
 binds a parser-side Python `slice`, while `range` binds a scalar; see
-[parser §1.7](./parser.md#17-for-i-in-tile--for-i-in-range-hir-only)). `range` is not unrolled. `induction_var` ranges
+[parser §2.1](./parser.md#21-syntax)). `range` is not unrolled. `induction_var` ranges
 over `range(start, extent, step)`: `start` and `extent` are the **half-open**
 `[start, extent)` Python-range endpoints (so `extent` is the **stop** value,
 not a count). `start` defaults to `0` (`tile(...)` and `range(stop)`); the
@@ -369,7 +369,7 @@ already a coordinate in `range(0, extent, step)`, not an ordinal to multiply by
 
 - When `start` / `extent` / `step` are static `int`, the trip count is
   recoverable from the node alone, without the parser-side window binding
-  ([parser §1.7](./parser.md#17-for-i-in-tile--for-i-in-range-hir-only)).
+  ([parser §2.1](./parser.md#21-syntax)).
 - Every `DimVar` referenced by a `ShapeDim` `start` / `extent` / `step` MUST
   be bound by the enclosing Function's parameter shapes. Resolution
   substitutes each such `DimVar` with the corresponding argument-shape
@@ -404,7 +404,7 @@ parser scope.
 `GridRegionExpr.type` is `TensorType` (single carry) or `TupleType`
 (multi-carry); the value is the Expr itself, not a `Call`.
 Parser-side rules: see
-[parser §5.1](./parser.md#51-gridregionexpr-carry-out-lifting).
+[parser §3](./parser.md#3-implementation-overview).
 
 **Minimal example** — loop-carried accumulator:
 
@@ -508,7 +508,7 @@ class Binary(Op):
   - Values follow torch pointwise semantics; dtypes do not promote. Both operands
     MUST already carry the same `dtype`, and typeinfer MUST reject a mismatch. A
     Python float scalar is given the other operand's float dtype by the authoring
-    surface, before it is an operand at all ([parser §1.9](./parser.md#19-compile-time-values)); a Python
+    surface, before it is an operand at all ([parser §2.1](./parser.md#21-syntax)); a Python
     integer is not.
   - The elementwise `min` / `max` kinds are also surfaced as `minimum` / `maximum`.
   - Equal plain layouts, or one plain layout paired with `layout=None`, pass

@@ -135,7 +135,7 @@ resolves to — an inherited Target or topology hierarchy prints nothing, so
 the declaration-versus-inheritance split survives the round trip. A declared
 Target prints as the `@module(target=...)` argument and a declared hierarchy
 as the `@module(topologies=...)` argument
-([parser §2.7](./parser.md#27-module-authoring-surface)).
+([parser §3](./parser.md#3-implementation-overview)).
 Every dimension referenced only by a declared topology expression MUST still
 be emitted in the dimension prelude. A topology `ShapeDim` MUST use the same
 DSL expression text as tensor and Mesh geometry, including public constructors
@@ -144,7 +144,7 @@ such as `ceildiv`, so importing restores the same expression tree.
 - constraints:
   - The decorator MUST print in its called form, `@module()` included. A bare
     decorator has not run while the class body is evaluated, so a body naming a
-    child call could not resolve it ([parser §1.1](./parser.md#11-decorators)).
+    child call could not resolve it ([parser §2.1](./parser.md#21-syntax)).
   - A nested Module MUST print before the owner's Functions, because a body
     calling one names the attribute it is bound to and a class body binds in the
     order it is written.
@@ -154,7 +154,7 @@ such as `ceildiv`, so importing restores the same expression tree.
     from the attached entry's identity and the recorded origin
     ([hir §1.1](./hir.md#11-function)), not from the name they share and not from
     the parser's consumed authoring record
-    ([parser §4.2](./parser.md#42-closure-then-registry-callee-resolution)):
+    ([parser §3](./parser.md#3-implementation-overview)):
     anything may be called the same, and two attributes may hold copies of one
     Module.
   - Such a call MUST print exactly the arguments `Call.args` carries
@@ -177,7 +177,7 @@ output supports two modes derived from the same pretty-print core:
 
 - `canonical` — round-trippable text used by `as_script()`, pass
   dumps, and viewer detail `code` blocks: the `Tensor[...]` form of
-  [parser §1.5](./parser.md#15-layout-sugar) (storage as the string
+  [parser §2.1](./parser.md#21-syntax) (storage as the string
   slot, `gmem` omitted).
 - `compact` — abbreviated, **display-only / non-round-trip** text for
   summaries / labels: `dtype[shape] {value-state?} @storage`. It inlines
@@ -245,7 +245,7 @@ def small_sequence(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
 
 The pattern prints in its constructor form (`DimVarRangePat("S", 1, 4)`;
 other `Pattern` subclasses fall back to `repr(pattern)`). The emitted binding
-mirrors the authoring surface ([parser.md §1.1](./parser.md#11-decorators));
+mirrors the authoring surface ([parser.md §2.1](./parser.md#21-syntax));
 when an IR variant has no display label, the printer synthesizes a valid binding
 from its canonical specialization signature. Because a
 dispatch prototype has a `DimVar` parameter, its rendering is a
@@ -267,7 +267,7 @@ MUST agree over
 - DType annotations and op attributes preserve the selected descriptor singleton
   through their canonical names
 - Partial layouts preserve mesh names through the canonical
-  [parser §1.5](./parser.md#15-layout-sugar) value-state form, and preserve `Partial.reduction` plus the
+  [parser §2.1](./parser.md#21-syntax) value-state form, and preserve `Partial.reduction` plus the
   attrs-position mesh axis in the underlying IR
 
 **Display-only** — the rendering of a function with a `DimVar` parameter, and

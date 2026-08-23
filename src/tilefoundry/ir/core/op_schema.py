@@ -23,7 +23,7 @@ class OpSchema:
     node; aliases have no ``op_class`` and may build another operation type.
     ``category`` organizes documentation but is not part of the surface path.
 
-    See [parser §2.1](docs/spec/parser.md#21-model).
+    See [parser §2](docs/spec/parser.md#2-syntax-and-rules).
     """
 
     name: str

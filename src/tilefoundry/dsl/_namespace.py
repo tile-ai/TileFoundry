@@ -5,7 +5,7 @@ Shared ``__getattr__`` / ``__dir__`` factory for the ``tf`` and ``T`` modules.
 Both dialect namespaces resolve names on demand against the OpSchema
 registry with the same algorithm; this module ships that algorithm once so
 ``dsl.tf`` / ``dsl.T`` shrink to a dialect string (and, for ``T``, a
-platform-sub-namespace pre-resolver, [parser §2.6](docs/spec/parser.md#26-platform-sub-namespaces)).
+platform-sub-namespace pre-resolver, [parser §2](docs/spec/parser.md#2-syntax-and-rules)).
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any, Callable, Iterable
 
 from tilefoundry.ir.core.op_registry import get_schemas, iter_schema_names
-from tilefoundry.parser.overload import resolve
+from tilefoundry.ir.core.overload import resolve
 
 PreResolver = Callable[[str], Any]
 
@@ -28,7 +28,7 @@ def make_dialect_namespace(
     runtime resolver. ``__all__`` is computed on demand so later registrations
     remain visible.
 
-    See [parser §2.3](docs/spec/parser.md#23-resolution-algorithm).
+    See [parser §2](docs/spec/parser.md#2-syntax-and-rules).
     """
 
     def __getattr__(name: str) -> Any:

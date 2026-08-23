@@ -917,7 +917,7 @@ class MmaOpSpec:
 
 The realized atom for an `op` (the CuTe `MMA_Atom` analog), built by
 `T.cuda.mma.atom(op=...)`
-([parser §2.6](./parser.md#26-platform-sub-namespaces)).
+([parser §2](./parser.md#2-syntax-and-rules)).
 
 ```python
 class MmaAtom:
@@ -981,7 +981,7 @@ with Mesh((Topology("thread", 32),), Layout(shape=(4, 8), strides=(1, 4))) as wa
   `atom.A/B/C` layout and fills it with its own `T.copy`. The
   accumulator is initialised with `Fill` and then read-modify-written.
 - `atom` is a compile-time attribute on the `Mma` Op
-  ([parser §2.6](./parser.md#26-platform-sub-namespaces)), not a runtime
+  ([parser §2](./parser.md#2-syntax-and-rules)), not a runtime
   operand. When absent, lowering takes the bare-`Mma` per-target path.
 
 ##### Verify

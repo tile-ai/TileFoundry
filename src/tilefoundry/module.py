@@ -74,10 +74,10 @@ def _retarget_module_calls(owner: str, functions, attached: dict) -> None:
     from tilefoundry.ir.core.expr import (  # noqa: PLC0415 — avoid import cycle
         Call,
     )
+    from tilefoundry.ir.core.module import _ModuleCallee  # noqa: PLC0415
     from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: PLC0415
     from tilefoundry.ir.hir.function import elaborate  # noqa: PLC0415
     from tilefoundry.ir.visitor import ExprWalker  # noqa: PLC0415
-    from tilefoundry.parser.base import _ModuleCallee  # noqa: PLC0415
 
     unattached: list[str] = []
 
@@ -161,7 +161,7 @@ def module(
     """Collect a class body into a ``Module``.
 
     Members may be DSL functions, child modules, or orchestration methods. See
-    [parser §2.7](docs/spec/parser.md#27-module-authoring-surface).
+    [parser §3](docs/spec/parser.md#3-implementation-overview).
 
     ``entry`` optionally names which collected function is the default step.
 
@@ -179,6 +179,29 @@ def module(
         target_instance(target)
     resolved_target = target
     declared_topologies = None if topologies is UNDECLARED else _validate(topologies)
+    if cls is None:
+        from tilefoundry.parser.ast_pattern import create_module_context  # noqa: PLC0415
+
+        owner_frame = sys._getframe(1)
+        context = create_module_context(
+            entry=entry,
+            target=resolved_target,
+            topologies=declared_topologies,
+            owner_frame=owner_frame,
+            source_filename=owner_frame.f_code.co_filename,
+        )
+
+        def _wrap_with_context(cls_inner):
+            try:
+                return context.finalize(cls_inner)
+            except Exception:
+                from tilefoundry.parser.ast_pattern import consume_module_context  # noqa: PLC0415
+
+                consume_module_context(context)
+                raise
+
+        return _wrap_with_context
+
     mine = _Entry(declared_topologies, sys._getframe(1))
     _DECLARING.append(mine)
 

@@ -1,6 +1,4 @@
-from __future__ import annotations
+from .ast_pattern import FuncParserContext, FunctionRole, ParseError
+from .parser_visitor import parse_function
 
-from .hir_parser import parse_func
-from .tir_parser import parse_prim_func
-
-__all__ = ["parse_func", "parse_prim_func"]
+__all__ = ["parse_function", "FuncParserContext", "FunctionRole", "ParseError"]

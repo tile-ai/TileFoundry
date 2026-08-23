@@ -475,7 +475,7 @@ Let `sl: ShardLayout`, `T: TensorType`, and `G = sl.layout.shape`.
   `N > mesh_extent(a)` is canonicalized at parse time into a
   factorised form (`(mesh_extent(a) @ m.a, N // mesh_extent(a))`); the
   factorised residual axis enters the IR as a non-`Split` layout dim. See
-  [parser §1.5](./parser.md#15-layout-sugar).
+  [parser §2.1](./parser.md#21-syntax).
 - `local_shape(sl)[k] = G[k] / sl.mesh.layout.shape[a] = 1` iff some mesh axis
   `a` has `sl.attrs[a] = Split(k)`.
 - `local_shape(sl)[k] = G[k]` otherwise.
@@ -543,7 +543,7 @@ not `Reshard`.
 
 Logical tensor `(2, 1536)` reshards via surface sugar
 `(2 @ m.x, 12 @ m.y, 128 @ m.t)` with `mesh=(x=2, y=4, t=32)`. Parser
-canonicalization ([§7.1.1](#711-layoutshape), [parser §1.5](./parser.md#15-layout-sugar)) expands `12 @ m.y` into
+canonicalization ([§7.1.1](#711-layoutshape), [parser §2.1](./parser.md#21-syntax)) expands `12 @ m.y` into
 `(4 @ m.y, 3)` and `128 @ m.t` into `(32 @ m.t, 4)` and emits
 `Layout(shape=(2, 4, 3, 32, 4), strides=None)` — un-materialized
 because the user wrote sugar ([§7.1.2](#712-layoutstrides)). Reshard typeinfer

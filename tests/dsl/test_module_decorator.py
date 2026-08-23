@@ -57,7 +57,7 @@ def test_attribute_access_ambiguous_name_and_real_fields():
 
     A duplicated function name is ambiguous under attribute access (raises),
     real Module fields are never intercepted, and ``function_named`` returns all
-    matches — the core-ir [parser §2.1](docs/spec/parser.md#21-model) ambiguity rule.
+    matches — the core-ir [parser §2](docs/spec/parser.md#2-syntax-and-rules) ambiguity rule.
     """
     base = _Demo.lookup("leaf")
     dup_a = dataclasses.replace(base, name="dup")

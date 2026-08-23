@@ -268,12 +268,16 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
                 dst_local = shard_layout_local_shape(dst_layout)
                 split_axes = {a.axis for a in dst_layout.attrs if isinstance(a, Split)}
                 non_split = [a for a in range(len(dst_local)) if a not in split_axes]
-                if len(logical_coords) != len(non_split):
+                if len(logical_coords) == len(dst_local):
+                    coordinate_axes = range(len(dst_local))
+                elif len(logical_coords) == len(non_split):
+                    coordinate_axes = non_split
+                else:
                     raise ValueError(
                         f"tensor_view: {len(logical_coords)} offsets for "
-                        f"{len(non_split)} local axes"
+                        f"{len(non_split)} or {len(dst_local)} local axes"
                     )
-                entries = tuple(zip(non_split, logical_coords, let.var.type.shape))
+                entries = tuple(zip(coordinate_axes, logical_coords, let.var.type.shape))
                 kept = tuple(
                     entry for entry in entries if int(upper_bound(dst_local[entry[0]])) != 1
                 )

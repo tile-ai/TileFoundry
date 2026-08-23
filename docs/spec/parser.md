@@ -1,1203 +1,279 @@
-# TileFoundry Spec — Parser
+# TileFoundry Spec - Parser
 
-The parser turns Python source decorated with TileFoundry's IR decorators
-into a `core_ir.Module`. This document covers the user-facing DSL
-syntax ([§1](#1-dsl-syntax)), the DSL namespace surface ([§2](#2-dsl-namespace-surface)), the parser architecture
-([§3](#3-parser-architecture)), the shared machinery both IRs use ([§4](#4-shared-parsing-machinery)), and the per-IR parser
-bodies ([§5](#5-hir-parser) / [§6](#6-tir-parser)). Validation and rejection rules are in [§7](#7-validation-and-rejection).
+The Parser accepts authored Python functions and produces HIR or TIR through one typed API.
 
-## 1. DSL syntax
+## 1. Public API
 
-This section is the language reference for TileFoundry DSL source.
-Each subsection introduces one construct using a grammar production
-followed by a short description and an example. Productions use
-the convention `lhs ::= rhs`; literal terminals are quoted; `*` is
-zero-or-more, `?` is optional.
-
-### 1.1 Decorators
-
-```
-decorator-form ::= '@tilefoundry.module'
-                 | '@tilefoundry.func'
-                 | '@tilefoundry.prim_func'
-```
-
-`@tilefoundry.module(entry="<name>")` decorates a class and evaluates to a
-`core_ir.Module`: the decorated name binds to the Module itself
-(not the class). It collects the class body's `@func` / `@prim_func` results,
-child `Module`s, and plain Python functions, in definition order, into the
-result's `functions` / `modules` / `methods` (full contract in
-[§2.7](#27-module-authoring-surface)); `entry` is an optional argument naming
-which collected function is the default step. A member MAY call a sibling
-**defined above it** —
-the call lowers to a `Call` targeting that sibling function; forward
-references (a callee declared below the caller) are unresolved (see
-[§3.3](#33-description)). Functions are reached by name on the result (see
-[core-ir §1.1](./core-ir.md#11-function-access)).
-
-`@tilefoundry.func` and `@tilefoundry.prim_func` decorate functions and
-evaluate to the parsed IR directly: `@func` to a `hir.Function`
-([hir.md §1.1](./hir.md#11-function)), `@prim_func` to a
-`tir.PrimFunction`. The decorated name binds to that IR node, not to
-the original Python function. Passing a standalone function to `compile` /
-`jit` lifts it into an implicit single-function `Module` whose `entry` is
-that function. `@func` parses with dispatch token `"hir"`, `@prim_func`
-with `"tir"`.
-
-A standalone `@func` MAY declare its own execution context —
-`@func(target=..., topologies=(...))`. Declaring either makes that function
-its own execution domain, so the decorated name binds to the implicit
-single-function `Module` carrying the declaration rather than to the
-`hir.Function`. A plain `@func` inside a `@module` class body never does
-this: the class declares the domain, and the member stays a `hir.Function`
-so it remains callable by its siblings and specializable through
-`.specialize`.
-A class-body `@func(topologies=(...))` instead binds a single-function child
-`Module`: it declares its own hierarchy and inherits the owning Module's Target.
-The printer MAY render the child as a nested `@module` class rather than
-reproduce the member-function form.
+`@module` executes its Python class body and finalizes the collected Functions, child Modules,
+and ordinary methods. `@func` produces an HIR Function; `@prim_func` produces a TIR PrimFunction.
+`specialize` and `converter` register variants and weight converters on an existing HIR Function.
 
 ```python
-# example
-@tilefoundry.module(entry="f")
-class M:
-    @tilefoundry.func
-    def g(...): ...
-
-    @tilefoundry.func
-    def f(...):
-        return g(...)   # sibling g is declared above → resolves to g's Function
+def parse_function(
+    fn: FunctionType, context: FuncParserContext
+) -> hir.Function | tir.PrimFunction: ...
 ```
 
-**Specialization decorators.** A function specializes its body per input
-shape through `Function.specialize`. The base function is defined with
-`@tilefoundry.func`; each variant is added by decorating a `def`
-with `@base.specialize(pattern)`:
+`FuncParserContext` carries the dialect, Function role, closure, topology scope, target, and
+optional base/key for one parse. `FunctionRole` is `ROOT`, `VARIANT`, or `CONVERTER`.
+`ParseError` is the single authored-source diagnostic type and includes source location and
+recursive parse situation. These are the only public parser symbols.
 
-```python
-# example
-S = DimVar("S", 1, 9)                                          # envelope [1, 9) = 1..8
+## 2. Syntax and Rules
 
-@tilefoundry.func
-def f(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
-    pass                                                       # prototype base
+### 2.1 Syntax
 
-@f.specialize(DimVarRangePat("S", 1, 5))
-def small_s(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
-    return small_impl(x)                                       # variant [1, 5) = 1..4
-
-@f.specialize(DimVarRangePat("S", 5, 9))
-def _(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
-    return large_impl(x)                                       # variant [5, 9), unlabelled
+<!-- parser-grammar:start -->
+```ebnf
+; root: function
+; literal: Python ast.Constant syntax, e.g. 1, "bf16", or None
+; name: Python variable name; primary: name/attribute base for calls and subscripts
+; expression: Python syntax composed from literals, names, primaries, and operators
+; runtime-expression: expression lowered to a TileFoundry IR Expr
+mesh-axis             ::= identifier
+                          | identifier '.' identifier
+dim-expr              ::= integer-literal
+                          | identifier
+                          | primary '.' identifier
+                          | dim-expr ('+' | '-' | '*' | '//' | '%') dim-expr
+                          | (identifier | primary '.' identifier) '(' (dim-expr (',' dim-expr)*)?
+                            ')'
+placed-layout         ::= '(' ((expression '@' ('(' mesh-axis (',' mesh-axis)* ')' | mesh-axis) |
+                          dim-expr) (',' (expression '@' ('(' mesh-axis (',' mesh-axis)* ')' |
+                          mesh-axis) | dim-expr))*)? ')'
+shape                 ::= '(' (dim-expr (',' dim-expr)*)? ')'
+                          | identifier
+                          | primary '.' identifier
+tensor-shape-layout   ::= placed-layout
+                          | shape
+dtype                 ::= string-literal
+                          | primary
+literal               ::= None
+                          | Ellipsis
+                          | boolean-literal
+                          | integer-literal
+                          | float-literal
+                          | complex-literal
+                          | string-literal
+                          | bytes-literal
+primary               ::= identifier
+                          | primary '.' identifier
+sequence              ::= '(' (expression (',' expression)*)? ')'
+                          | '[' (expression (',' expression)*)? ']'
+                          | '{' (expression (',' expression)*)? '}'
+dict                  ::= '{' (expression ':' expression (',' expression ':' expression)*)? '}'
+binary-operation      ::= expression ('+' | '-' | '*' | '/' | '//' | '%' | '**') expression
+unary-operation       ::= ('+' | '-' | 'not') expression
+slice                 ::= (expression)? ':' (expression)? (':' expression)?
+subscript             ::= expression '[' expression ']'
+expression            ::= literal
+                          | primary
+                          | sequence
+                          | dict
+                          | binary-operation
+                          | unary-operation
+                          | call
+                          | slice
+                          | subscript
+call                  ::= expression '(' ((expression | keyword-name '=' expression) (','
+                          (expression | keyword-name '=' expression))*)? ')'
+explicit-layout       ::= '(' (tensor-shape-layout | shape) ',' shape ')'
+plain-layout          ::= '(' (dim-expr (',' dim-expr)*)? ')'
+layout                ::= None
+                          | primary
+                          | call
+                          | explicit-layout
+                          | placed-layout
+                          | plain-layout
+storage               ::= string-literal
+                          | primary
+tensor-optional-slot  ::= layout
+                          | storage
+tensor                ::= tensor-head '[' '(' (tensor-shape-layout ',' dtype | tensor-shape-layout
+                          ',' dtype ',' tensor-optional-slot | tensor-shape-layout ',' dtype ','
+                          tensor-optional-slot ',' tensor-optional-slot) ')' ']'
+scalar-type           ::= primary
+type-annotation       ::= tensor
+                          | scalar-type
+signature             ::= (name ':' type-annotation (',' name ':' type-annotation)*)?
+return-type           ::= type-annotation
+loop-carry-statement  ::= expression '=' expression
+                          | 'for' name 'in' expression ':' loop-carry
+                          | statement
+loop-carry            ::= (loop-carry-statement (newline loop-carry-statement)*)?
+loop-header           ::= 'for' identifier 'in' ('tile' | 'range') '(' expression (',' expression)*
+                          ')' ':' loop-carry
+loop-body             ::= (statement (newline statement)*)?
+for                   ::= 'for' name 'in' expression ':' loop-body
+mesh-context          ::= ('Mesh' | primary '.' identifier) '(' (expression | ('layout' | 'names')
+                            '=' expression) (',' (expression | ('layout' | 'names') '='
+                            expression))* ')'
+                          | expression
+with                  ::= 'with' mesh-context ('as' identifier)? ':' block
+op-call               ::= primary '(' ((expression | keyword-name '=' expression) (',' (expression |
+                          keyword-name '=' expression))*)? ')'
+launch                ::= callee '(' ')'
+slice-endpoint-binary ::= index-endpoint dim-op index-endpoint
+mesh-coordinate       ::= identifier '.' identifier
+index-endpoint        ::= literal
+                          | primary
+                          | slice-endpoint-binary
+                          | mesh-coordinate
+                          | runtime-expression
+                          | expression
+index-slice           ::= (index-endpoint)? ':' (index-endpoint)? (':' index-endpoint)?
+subscript-index       ::= '(' ((index-slice | index-endpoint) (',' (index-slice |
+                            index-endpoint))*)? ')'
+                          | index-slice
+                          | index-endpoint
+subscript-expression  ::= runtime-expression '[' subscript-index ']'
+binary-expression     ::= runtime-expression binary-op runtime-expression
+                          | runtime-expression comparison-op runtime-expression
+                          | runtime-expression boolean-op runtime-expression
+unary-expression      ::= unary-op runtime-expression
+name                  ::= identifier
+constant              ::= boolean-literal
+                          | integer-literal
+                          | float-literal
+tuple-expression      ::= '(' (runtime-expression (',' runtime-expression)*)? ')'
+runtime-expression    ::= op-call
+                          | launch
+                          | subscript-expression
+                          | binary-expression
+                          | unary-expression
+                          | mesh-coordinate
+                          | name
+                          | constant
+                          | tuple-expression
+                          | tensor
+                          | primary '.' identifier
+tuple-assignment      ::= '(' identifier (',' identifier)* ')' '=' runtime-expression
+where-annotation      ::= 'where' '(' ')'
+statement             ::= for
+                          | with
+                          | tuple-assignment
+                          | identifier '=' (runtime-expression | expression)
+                          | identifier ':' (where-annotation | type-annotation) ('='
+                            (runtime-expression | expression))?
+                          | 'return' (runtime-expression)?
+                          | runtime-expression
+                          | 'pass'
+block                 ::= (statement (newline statement)*)?
+function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' block
 ```
-
-- `@tilefoundry.func` evaluates to the base `hir.Function`. `func()` has no
-  `specializations=` parameter; specialization is reachable only through
-  `.specialize`.
-- The prototype base body is `pass`: it declares the signature and dispatch
-  envelope only and parses to `Function.body is None`. The implementations
-  live in the variants ([hir.md §1.1](./hir.md#11-function)). A
-  `pass` body is legal only for a function that receives variants; a `pass`
-  body with no variants, or a real body combined with variants, is rejected.
-- `base.specialize(pattern)` returns a decorator. It parses the decorated
-  `def` into a variant `hir.Function` (same `name` as the base,
-  `specializations=(pattern,)`), registers it on `base.variants`, and
-  returns the variant.
-- The decorated identifier is the variant's **display label** and nothing more.
-  Variant naming, binding uniqueness, and lookup handles follow the contract in
-  [hir §1.1](./hir.md#11-function). The label MUST NOT become the variant's
-  `name`, and MUST NOT take part in equality, hashing, dispatch, or TIR
-  identity: the variants of one base share that base's name, and which one runs
-  is decided by the pattern alone.
-- `pattern` MUST be a single `DimVarRangePat` (see
-  [core-ir §3](./core-ir.md#3-pattern)); other `Pattern` subclasses are rejected for
-  v0. The referenced `DimVar` and its `(lo, hi)` envelope live on the base
-  parameter's shape. Each variant's range MUST fall within that envelope,
-  and the full variant set MUST partition it — disjoint and complete (see
-  [hir.md §1.1](./hir.md#11-function)). Two variants with the
-  same canonical signature are rejected.
-- A `DimVar` shape entry MAY be written **inline** (`DimVar("S", lo, hi)`
-  AST node in the shape tuple) or as a **named alias** (`S = DimVar("S",
-  lo, hi)` then `Tensor[(S,), ...]`). Both resolve to the same `DimVar`
-  instance (type-level cache keyed by `(name, lo, hi)`). A second `DimVar`
-  with the same `name` but conflicting `(lo, hi)` is a hard parse-time
-  error.
-- Variants accumulate on the base only during authoring. Once the base
-  enters a `Module` (see [core-ir §1](./core-ir.md#1-module)) it is sealed and
-  `.specialize` raises. A variant lives only inside `base.variants`; it is
-  never a separate `Module.functions` entry.
-
-### 1.2 DSL namespace
-
-```
-import-form         ::= 'from tilefoundry.dsl.tf import *'
-                      | 'from tilefoundry.dsl.T  import *'
-                      | 'from tilefoundry.dsl    import' ('tf' | 'T')
-
-namespace-callee    ::= ('tf' | 'T') '.' op-name
-```
-
-`tilefoundry.dsl.tf` (HIR) and `tilefoundry.dsl.T` (TIR) are the only
-DSL-facing entries to the Op catalogue. The mechanism that backs
-this surface is described in [§2](#2-dsl-namespace-surface).
-
-### 1.3 Op call
-
-```
-op-call             ::= callee '(' arg-list ')'
-callee              ::= op-name             ; bare-name path
-                      | namespace-callee    ; namespace-attribute path
-op-name             ::= identifier
-                      | identifier '_'      ; trailing-underscore = effect form (TIR only)
-```
-
-A bare-name callee MUST resolve to an `_op_schema`-bearing surface
-value (an `Op` class for real-Op schemas, or an alias builder
-function carrying `_op_schema` for surface-alias schemas) through
-the function's closure (typically established by an `import-form`) or,
-failing that, through `dispatch.resolve_callable`
-([§4.2](#42-closure-then-registry-callee-resolution)/[§4.3](#43-opschema-and-overload-resolution)) — the
-path a trailing-underscore `op-name` always takes, since nothing binds
-a literal `foo_` name in the closure. The namespace-callee form
-resolves on the namespace package directly ([§2](#2-dsl-namespace-surface)). When `op-name` is
-registered with multiple schemas ("overloads"), the parser uses
-first-match dispatch ([§4.3](#43-opschema-and-overload-resolution)). The trailing-underscore selector is
-gated to the TIR token; using it in HIR is a verify error.
-
-### 1.4 `Tensor[...]` and `ConstTensor[...]` annotations
-
-`Tensor` and `ConstTensor` are parser-owned **DSL authoring type sugar**,
-imported from `tilefoundry.dsl` (`from tilefoundry.dsl import Tensor`). It
-is distinct from the IR-level `tilefoundry.ir.types.TensorType` (the
-runtime carrier on `Expr.type`). The parser resolves a `Tensor[...]` literal
-into a `TensorType` both in parameter/return annotations and in expression
-positions that bind a `TensorType` operation attribute.
-
-```
-tensor-annot   ::= ('Tensor' | 'ConstTensor') '[' shape ',' dtype (',' layout)? (',' storage)? ']'
-shape          ::= '(' (dim (',' dim)*)? ')'        ; '()' is rank-0
-dim            ::= integer-literal | dim-Expr        ; dim-Expr per types §4
-dtype          ::= '"f32"' | '"f16"' | '"bf16"' | …  ; see types §3
-layout         ::= layout-sugar                      ; see §1.5
-                | 'ShardLayout(' … ')'              ; verbose, see shard §7
-storage        ::= '"host"' | '"gmem"' | '"smem"' | '"rmem"' | '"tmem"' | '"umat"'
-                | 'host' | 'gmem' | 'smem' | 'rmem' | 'tmem' | 'umat'
-```
-
-`Tensor[...]` and `ConstTensor[...]` resolve to the same ordinary `TensorType`;
-the latter sets `Var.is_const=True` on a function parameter. `is_const` marks
-external residency semantics only and does not embed a payload. `Tensor[...]` is
-the carrier of optional layout sugar; it does not
-own the sugar (which lives at [§1.5](#15-layout-sugar)). A rank-0 (scalar) tensor is
-written `Tensor[(), "bf16"]`; the form `Tensor["bf16"]` (without
-shape) is rejected.
-
-```python
-Tensor[(4096, 2048), "bf16"]
-Tensor[(4096, 2048), "bf16", (4096 @ gpu.cta, 2048)]
-Tensor[(4096, 2048), "bf16", (4096 @ gpu.cta, 2048), "smem"]
-Tensor[(4096 @ gpu.cta, 2048), "bf16", "smem"]       # placement in shape
-Tensor[(), "bf16"]                                    # scalar
-```
-
-- constraints:
-  - The dtype slot MUST use a canonical quoted `DType.name` from
-    [types §3](./types.md#3-dtype).
-  - The parser MUST normalize that string to the corresponding process-lifetime
-    descriptor before constructing `TensorType`.
-  - An unknown dtype string MUST be rejected; it MUST NOT fall back to another
-    descriptor.
-  - Bare storage names MUST resolve to the six constants exported by
-    `tilefoundry.dsl.storage`; they are equivalent to the quoted spellings.
-
-### 1.5 Layout sugar
-
-```
-layout-sugar  ::= axis-tuple                                            ; implicit strides, no value-state
-                | '(' axis-tuple ',' stride-tuple ')'                   ; explicit strides, no value-state
-                | '(' axis-tuple ',' value-state ')'                    ; implicit strides + value-state
-                | '(' axis-tuple ',' stride-tuple ',' value-state ')'   ; explicit strides + value-state
-axis-tuple    ::= '(' axis-spec (',' axis-spec)* ','? ')'
-axis-spec     ::= axis-extent                    ; a layout dim, not split (axis placement only)
-                | shape-extent '@' mesh-axis     ; Split(axis_index) on mesh-axis
-                | shape-extent '@' '(' mesh-axis (',' mesh-axis)* ')'  ; sequential decomposition
-axis-extent   ::= dim-expr
-shape-extent  ::= dim-expr
-dim-expr      ::= dim-atom | dim-expr dim-op dim-atom
-dim-atom      ::= integer-literal | dim-ref | dim-call | '(' dim-expr ')'
-dim-ref       ::= identifier                      ; closure-resolved ShapeDim
-dim-call      ::= identifier '(' dim-expr (',' dim-expr)* ')'
-dim-op        ::= '+' | '-' | '*' | '//' | '%'   ; bool rejected
-stride-tuple  ::= '(' integer-literal (',' integer-literal)* ','? ')'
-value-state   ::= '{' partial-spec (',' partial-spec)* ','? '}'  ; a set; only the last outer item
-partial-spec  ::= mesh-axis '@' 'P(' '"' reduction '"' ')'       ; Partial(reduction) on mesh-axis
-mesh-axis     ::= identifier '.' identifier      ; e.g. gpu.cta
-reduction     ::= 'sum' | 'max' | 'min' | …
-```
-
-A layout or mesh extent is a `ShapeDim`: a static integer or a
-closure-resolved `DimVar` / dim expression. A bare axis is `Broadcast`
-(carries no mesh binding). A symbolic split is canonicalizable when the split
-extent and mesh-axis extent are the same expression, which gives local extent
-one without symbolic division. Other symbolic split combinations MUST be
-rejected with a diagnostic that asks the author to bind dimensions first.
-The restricted static evaluator MUST keep the five `dim-op` forms as canonical
-dimension arithmetic when either operand is symbolic, including when a
-`dim-call` such as `ceildiv(...)` produced that operand.
-
-Implicit C-order strides retain symbolic products. HIR type inference may also
-retain an unconsumed symbolic local extent in a per-instance stride. Lowering
-and code generation keep the stricter boundary: all local extents MUST be
-concrete after dimension binding before storage is materialized.
-
-The `axis-tuple` carries only **axis placement** (`Split` inlined as
-`size @ mesh.axis`; a bare `size` is a non-split layout dim). The optional
-`{...}` **value-state** set carries the mesh-axis `Partial` states
-(`mesh.axis @ P("reduction")`). It is a Python `set` literal recognized at
-the AST level (its element order carries no meaning) and MUST be the **last
-item of the outer tuple**; it is never mixed into the `axis-tuple`. A mesh
-axis named in no `Split` and no `Partial` is `Broadcast` (the default) —
-Broadcast is never written. There is no `_ @ B(...)` / `_ @ P(...)` form.
-
-Outer-tuple discrimination: a bare `axis-tuple` is implicit-strides with no
-value-state; an outer length-2 tuple whose second item is a `stride-tuple`
-is explicit strides; length-2 whose second item is a `value-state` set is
-implicit-strides + value-state; length-3 `(axis-tuple, stride-tuple,
-value-state)` is explicit strides + value-state.
-
-`dim @ (m.a, m.b)` expands to one Split axis per mesh axis
-(each with extent = mesh extent), followed by a bare remainder axis
-of size `dim / ∏(mesh_extents)`. The remainder axis is always
-appended last; the mesh-axis order in the tuple determines the tensor
-axis order.
-
-**Several meshes in one layout.** A value may be distributed at more than one
-level at once -- a CTA owns a tile and a lane owns part of that tile -- and
-saying so names axes of more than one Mesh. Those meshes MUST be the enclosing
-`with Mesh(...)` scopes, and they compose outermost first
-([shard §5](./shard.md#5-mesh)) into the one Mesh the resulting `ShardLayout`
-carries, so this and one Mesh naming both levels produce the same IR. Which is
-inside which MUST come from the scopes rather than from the layout: a layout
-naming a mesh that is not a scope it is written inside is refused, because there
-is nothing that says how the two nest.
-
-**Canonicalization (single-mesh-axis form)**. Surface sugar
-`N @ m.a` where `N > mesh_extent(a)` MUST be expanded at parse time
-into the factorised pair `(mesh_extent(a) @ m.a, N // mesh_extent(a))`
-before the `ShardLayout` is constructed. The first element becomes
-a `Split` axis with `local_shape = 1`; the second becomes a bare
-residual axis (non-`Split`). `N // mesh_extent(a)` MUST divide `N`
-exactly; otherwise the sugar is rejected. The factorisation is
-opaque to the user: input `N @ m.a` and input
-`(mesh_extent(a) @ m.a, N // mesh_extent(a))` produce the same IR.
-
-#### Stride materialization (parser surface)
-
-The first sugar form
-(`'(' axis-spec ... ')'`) emits `Layout(shape=canonical,
-strides=None)` — the layout strides are deferred to `Reshard`
-typeinfer, which fills them in based on the storage-level direction
-(see [hir.md §1.3](./hir.md#13-op)). The
-verbose form (`'(' axis-tuple ',' stride-tuple ')'`) emits a
-concrete `strides` tuple; typeinfer respects it verbatim. The
-parser does NOT inspect `storage` or do any physical-materialization
-logic — that responsibility lives entirely in `Reshard` typeinfer.
-
-Spec: [shard.md §7.1.1](./shard.md#711-layoutshape),
-[hir.md §1.3](./hir.md#13-op).
-
-Layout sugar is accepted **anywhere the expected surface value is
-a `ShardLayout`**. Dispatch is annotation-driven (see [§4.4](#44-annotation-driven-sugar-dispatch)): the
-parser consults the position's expected `ParamDef.annotation` (or
-the `Tensor[...]` layout slot) to decide whether to invoke the
-sugar parser. Omitted mesh axes default to `Broadcast`. Sugar
-forms that would lose mesh / layout information fall through to
-the verbose `ShardLayout(...)` constructor.
-
-```python
-# Tensor[...] annotation slot
-Tensor[(4096, 2048), "bf16", (4096 @ gpu.cta, 2048)]
-
-# value-state set: a Partial on a mesh axis (implicit strides)
-Tensor[(4, 64), "f32", ((4 @ trd.l, 64), {trd.t @ P("sum")}), "smem"]
-
-# Op attribute slot whose ParamDef.annotation is ShardLayout
-reshard(x, layout=((2048 @ gpu.cta, 64), {gpu.warp @ P("sum")}))
-```
-
-### 1.6 `with Mesh(...) as m`
-
-```
-with-mesh   ::= 'with' 'Mesh' '(' mesh-args ')' 'as' identifier ':' suite
-```
-
-The `with Mesh(...) as m` grammar is shared by both dialects; the
-binding name `m` is visible only inside `suite`. The two dialects differ
-in what it lowers to:
-
-- **HIR** treats it as an **active mesh context** — a parser-lexical
-  alias for the constructed `Mesh`, so layout sugar ([§1.5](#15-layout-sugar)) may bind axes
-  with `… @ m.axis` and tensors authored under it reuse the one `Mesh`. In a layout
-  position, `m.axis` names the static mesh axis used by `dim @ m.axis`. In an HIR
-  Expr position, the same name is the current rank-0 coordinate along that axis; the
-  parser synthesizes the invariant index vector and its local view. Such a coordinate
-  may index an unplaced tensor in a runtime slice; indexing an already placed tensor
-  is rejected because its data-dependent mesh ownership is unresolved.
-  It is not a tensor-binding scope and emits **no IR node**, but every `Call`
-  built inside `suite` records the enclosing stack of these scopes, outermost
-  first, as `ExecutionDomainMetadata`
-  ([core-ir §2](./core-ir.md#2-expr)): where an occurrence was written is what
-  says which participants run it, and nothing else on the Call says it. Ordinary
-  values assigned inside `suite` follow normal function-body visibility
-  (not confined); `return` inside `suite` returns from the enclosing
-  `@func` (no mesh-region result), and a `@func` MUST NOT be defined
-  inside `suite`. A tensor's mesh/layout lives on its
-  `TensorType.layout`, not on the block it is written in; `reshard` is
-  the explicit boundary, and op typeinfer
-  ([hir §1.3](./hir.md#13-op)) decides whether values
-  combine.
-- **TIR** lowers it to an explicit `MeshScope` Stmt ([§6](#6-tir-parser)) carrying the
-  `Mesh` and the binding `Var`.
-
-### 1.7 `for i in tile(...)` / `for i in range(...)` (HIR-only)
-
-```
-for-loop    ::= 'for' identifier 'in' 'tile' '(' tile-args ')' ':' suite
-              | 'for' identifier 'in' 'range' '(' range-args ')' ':' suite
-tile-args   ::= extent-Expr ',' step-Expr
-range-args  ::= stop-Expr
-              | start-Expr ',' stop-Expr
-              | start-Expr ',' stop-Expr ',' step-Expr
-```
-
-Loop arguments are positional-only at the IR authoring surface; keyword
-arguments are rejected.
-
-`tile(...)` and `range(...)` share **one** loop domain `(start, extent,
-step)` and lower to the **same** `GridRegionExpr` ([hir §1.2](./hir.md#12-gridregionexpr)) —
-`range` is not a separate construct and is **not** statically unrolled. The
-only difference is the loop-variable binding:
-
-- `range(...)` binds `i` to a **scalar** induction var (`i: i64`); use it as
-  `x[i]` or write the window manually (`i : i + step`). Args follow Python
-  `range`: `range(stop)` (start `0`, step `1`), `range(start, stop)` (step
-  `1`), `range(start, stop, step)`.
-- `tile(extent, step)` binds `i` to the standard Python
-  `slice(iv, iv + step, 1)` so `x[:, i]` lifts to a `Slice` over
-  the current window. The grid domain already advances `iv` by `step`; the
-  binding MUST NOT multiply it again. In any other Expr position, including an
-  `insert_slice` offset tuple, `i` resolves to the scalar `slice.start`. The
-  Python `slice` is parser-only and does not reach IR; the grid-domain `start`
-  is `0`. A single-argument `tile(extent)` is rejected; use `range(extent)` for
-  scalar iteration.
-
-`start-Expr` / `extent-Expr` (the **stop** endpoint, not a length — the
-domain is half-open `[start, extent)`) / `step-Expr` MAY be any `ShapeDim`
-([types §4](./types.md#4-dim--symbolic-shape-dimensions)), including a dim expression such as `C // N`; the
-value is carried verbatim into `GridRegionExpr.start` / `.extent` / `.step`
-and resolved at evaluate time ([hir §1.2](./hir.md#12-gridregionexpr)).
-
-A tensor subscript `x[slice0, …]` inside a loop body lifts to a
-`hir.tensor.Slice` Op call.
-
-A subscript axis MAY **move** a tile window by a compile-time integer: `x[:, i + C]`
-reads `[lo + C, lo + C + step)`, the window `i` alone reads translated by `C`. The
-base is compile-time either way, so the moved start is a dim expression over `iv`
-and the axis keeps the static extent `i` alone gives it. Offsets accumulate, so
-`i + A + B` and `A + B + i` name one move by one sum, and each term is a
-compile-time integer on its own. `C - i` MUST be refused: it reverses the window
-rather than moving it. The loop domain, the window length, the offset and the axis
-extent are all compile-time, so a move whose first window would start before the
-axis, or whose last window would end past a static extent, MUST be refused where it
-is written — unlike an unmoved window's own tail, which the axis extent catches at
-evaluate time. In an Expr position `i + C` is ordinary scalar arithmetic over
-`slice.start` and carries none of this.
-
-An `ast.Assign` whose single Name target is
-bound in *outer* scope is a loop-carried rebinding (see [§5](#5-hir-parser) for the carry-out
-lift). A **nested** `for ... in tile/range(...)` is allowed and lifts to a
-nested `GridRegionExpr`; the carry scan recurses into nested loops, so an
-outer-scope name rebound only inside a nested loop is still carried across the
-outer loop (and the nested loop carries it too).
-
-### 1.8 Hard schedule constraints
-
-```
-constraint-annotation ::= 'where' '(' constraint-field (',' constraint-field)* ')'
-constraint-field     ::= 'layout' '=' layout-constraint
-                       | 'mesh' '=' mesh-expression
-                       | 'storage' '=' storage-expression
-layout-constraint    ::= layout-axis-tuple
-                       | '(' layout-axis-tuple ',' binding-set ')'
-binding-set          ::= '{' binding (',' binding)* '}'
-binding              ::= topology '@' 'B()'
-                       | topology '@' 'P(' string-literal ')'
-```
-
-`where(...)` is keyword-only and non-empty. A layout axis is `_`, an integer
-or symbolic extent, or `extent @ topology`. The split form binds an existing
-`Split` attribute to the physical layout position. `_` is a private
-constraint wildcard and is never stored as an entry in `Layout.shape`. `B()`
-and `P(...)` reuse the existing `Broadcast` and `Partial`
-`ShardAttr` values; a topology may be bound at most once in one layout
-constraint. `mesh` resolves to a `Mesh`, and `storage` resolves through the
-current storage-kind registry. CTA capability checks do not occur in this
-parser surface.
-
-### 1.9 Compile-time values
-
-A **compile-time value** is a Python number the parser can reach without building
-any IR: a numeric literal, a name captured from the enclosing scope, an attribute
-of a captured object, and arithmetic over those (`+ - * / // % **`, unary `-`).
-
-```
-compile-time-expr ::= number-literal | identifier | compile-time-expr '.' identifier
-                    | compile-time-expr binary-arith-op compile-time-expr
-                    | '-' compile-time-expr
-```
-
-- A compile-time value MAY appear anywhere a number is required: an attribute
-  argument, a shape or extent, a subscript index, or an op input, where it
-  becomes a rank-0 unmaterialized `Constant`.
-- A body-local assignment whose right-hand side is a compile-time value binds
-  **the value**, not an `Expr`; the name is then usable in every position above.
-  A tuple target binds one number per name when every element is a compile-time
-  number.
-- An op input that is a **Python float** carries no precision of its own: the
-  parser MUST give it the float dtype of the operands it is used with, and MUST
-  reject the call when those name more than one float dtype. A Python **integer**
-  keeps its own dtype, so combining one with a float tensor MUST still be
-  rejected ([hir §1.3](./hir.md#13-op)).
-- Evaluation MUST NOT call anything reached from a speculative position: a value
-  that is not statically reachable is parsed as IR instead.
-- Dimension arithmetic has one canonical spelling after it enters IR, including
-  shape annotations and op attributes. Slice endpoints that contain the same
-  runtime scalar value MAY cancel to a static window size; an unrelated runtime
-  endpoint remains invalid under the ordinary `ShapeDim` rule.
-
-A **compile-time list** holds `Expr` elements and never reaches the IR:
-
-```
-compile-time-list ::= '[' expr (',' expr)* ']'
-                    | '[' expr 'for' identifier 'in' compile-time-sequence ']'
-```
-
-- A comprehension MUST declare exactly one `for` clause, no `if` guard, and a
-  plain-name target. Its sequence MUST be either the builtin `range(...)` over
-  compile-time integers or a compile-time tuple / list; any other call MUST be
-  rejected rather than evaluated.
-- Subscripting the bound name with a compile-time integer selects one element.
-  Python's negative indexing applies.
-- The comprehension form is the fixed-length unrolled spelling; it does not
-  affect `for` ([§1.7](#17-for-i-in-tile--for-i-in-range-hir-only)), which always builds a `GridRegionExpr`.
-
-A tensor subscript resolves per axis: an `ast.Slice` keeps the axis, a
-compile-time integer **drops** it (as in torch), and a negative integer counts
-back from the axis extent, which MUST therefore be static.
-
-For a tensor slice, a run-time rank-0 integer is permitted as an endpoint only
-when the resulting window size is a compile-time dimension. The canonical
-spelling is `start:start + K`; the parser MUST reject an unrelated stop
-endpoint because `Slice.sizes` is a static attribute. The slice stride remains
-compile-time. An endpoint MAY also be a compile-time dimension, including the
-axis's own symbolic extent; its window size is symbolic accordingly. A tile
-window keeps its own length and MAY be **moved** by a compile-time offset instead
-([§1.7](#17-for-i-in-tile--for-i-in-range-hir-only)).
-
-## 2. DSL namespace surface
-
-### 2.1 Model
-
-The two namespaces are real Python modules; resolution is module
-`__getattr__` over the OpSchema registry. There is no
-`DslNamespace` class.
-
-```python
-# tilefoundry/ir/core/op_registry.py
-def _register_schema(schema: OpSchema, *, prepend: bool = False) -> None: ...
-def get_schemas(dialect: str, name: str) -> list[OpSchema]: ...
-def iter_schema_names(dialect: str) -> Iterable[str]: ...
-
-# tilefoundry/ir/core/op_schema.py — a frozen dataclass
-class OpSchema:
-    """Describe one registered callable schema.
-
-    Attributes:
-        name: attribute; Canonical callable name.
-        dialect: attribute; Surface dialect, `tf` or `T`.
-        category: attribute; Organizational group.
-        signature: attribute; Parameters in declaration order.
-        builder: attribute; Callable that constructs the IR operation.
-        op_class: attribute; Registered Op class, or None for an alias schema.
-    """
-
-    name: str
-    dialect: str
-    category: str
-    signature: tuple[ParamDef, ...]
-    builder: Callable[..., Any]
-    op_class: type | None = None
-
-# tilefoundry/dsl/tf/__init__.py        (TIR symmetric in tilefoundry/dsl/T)
-def __getattr__(name: str) -> type[Op] | Callable: ...
-def __dir__() -> list[str]: ...
-```
-
-### 2.2 Class diagram
+<!-- parser-grammar:end -->
+
+### 2.2 Rules
+
+<!-- parser-constraints:start -->
+| Owner | Situation | Rule | Statement | Source |
+| --- | --- | --- | --- | --- |
+| binary_expression | expression | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
+| binary_expression | expression | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
+| binary_expression | expression | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
+| binary_expression | slice_endpoint | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
+| binary_expression | slice_endpoint | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
+| binary_expression | slice_endpoint | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
+| binary_expression | subscript_index | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
+| binary_expression | subscript_index | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
+| binary_expression | subscript_index | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
+| dim_expr | dim_expr | ShapeDimRule | A shape dimension must be an integer, DimVar, or expression. | src/tilefoundry/parser/ast_pattern.py |
+| dim_expr | layout_extent | ShapeDimRule | A shape dimension must be an integer, DimVar, or expression. | src/tilefoundry/parser/ast_pattern.py |
+| dim_expr | layout_shape | ShapeDimRule | A shape dimension must be an integer, DimVar, or expression. | src/tilefoundry/parser/ast_pattern.py |
+| dim_expr | tensor_dim_expr | ShapeDimRule | A shape dimension must be an integer, DimVar, or expression. | src/tilefoundry/parser/ast_pattern.py |
+| dim_expr | tensor_optional_slot | ShapeDimRule | A shape dimension must be an integer, DimVar, or expression. | src/tilefoundry/parser/ast_pattern.py |
+| dim_expr | tensor_shape | ShapeDimRule | A shape dimension must be an integer, DimVar, or expression. | src/tilefoundry/parser/ast_pattern.py |
+| dtype | tensor_dtype | CanonicalDTypeRule | A dtype must resolve to a canonical DType. | src/tilefoundry/parser/ast_pattern.py |
+| explicit_layout | tensor_optional_slot | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
+| explicit_layout | tensor_optional_slot | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
+| function | function | FunctionDialectRule | A function kind and constructed value must agree with the active dialect. | src/tilefoundry/parser/pattern_nodes.py |
+| function | function | FunctionRegistrationRule | A validated function must be registered exactly once in its owning scope. | src/tilefoundry/parser/pattern_nodes.py |
+| function | function | FunctionReturnRule | A HIR function body's inferred type must match its return type. | src/tilefoundry/parser/pattern_nodes.py |
+| function | function | FunctionRoleValidationRule | A root, variant, or converter must satisfy its role before registration. | src/tilefoundry/parser/pattern_nodes.py |
+| function | function | FunctionSignatureRule | A function must construct an ordered parameter tuple. | src/tilefoundry/parser/pattern_nodes.py |
+| layout | tensor_optional_slot | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
+| layout | tensor_optional_slot | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
+| op_call | expression | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
+| op_call | expression | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
+| op_call | expression | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
+| op_call | slice_endpoint | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
+| op_call | slice_endpoint | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
+| op_call | slice_endpoint | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
+| op_call | subscript_index | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
+| op_call | subscript_index | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
+| op_call | subscript_index | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
+| placed_layout | layout_shape | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
+| placed_layout | layout_shape | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
+| placed_layout | tensor_optional_slot | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
+| placed_layout | tensor_optional_slot | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
+| placed_layout | tensor_shape | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
+| placed_layout | tensor_shape | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
+| plain_layout | tensor_optional_slot | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
+| plain_layout | tensor_optional_slot | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
+| shape | layout_shape | ShapeTupleRule | A shape must construct a tuple of dimensions. | src/tilefoundry/parser/ast_pattern.py |
+| shape | layout_strides | ShapeTupleRule | A shape must construct a tuple of dimensions. | src/tilefoundry/parser/ast_pattern.py |
+| shape | tensor_shape | ShapeTupleRule | A shape must construct a tuple of dimensions. | src/tilefoundry/parser/ast_pattern.py |
+| storage | tensor_optional_slot | StorageValueRule | Storage must resolve to a StorageKind. | src/tilefoundry/parser/ast_pattern.py |
+| tensor | annotation | TensorLayoutStorageRule | A tensor type must contain compatible layout and storage values. | src/tilefoundry/parser/ast_pattern.py |
+| tensor | annotation | TensorPositionRule | A tensor type's storage must be legal for its dialect and position. | src/tilefoundry/parser/ast_pattern.py |
+| tensor | expression | TensorLayoutStorageRule | A tensor type must contain compatible layout and storage values. | src/tilefoundry/parser/ast_pattern.py |
+| tensor | expression | TensorPositionRule | A tensor type's storage must be legal for its dialect and position. | src/tilefoundry/parser/ast_pattern.py |
+| tensor | slice_endpoint | TensorLayoutStorageRule | A tensor type must contain compatible layout and storage values. | src/tilefoundry/parser/ast_pattern.py |
+| tensor | slice_endpoint | TensorPositionRule | A tensor type's storage must be legal for its dialect and position. | src/tilefoundry/parser/ast_pattern.py |
+| tensor | subscript_index | TensorLayoutStorageRule | A tensor type must contain compatible layout and storage values. | src/tilefoundry/parser/ast_pattern.py |
+| tensor | subscript_index | TensorPositionRule | A tensor type's storage must be legal for its dialect and position. | src/tilefoundry/parser/ast_pattern.py |
+| tensor | type_annotation | TensorLayoutStorageRule | A tensor type must contain compatible layout and storage values. | src/tilefoundry/parser/ast_pattern.py |
+| tensor | type_annotation | TensorPositionRule | A tensor type's storage must be legal for its dialect and position. | src/tilefoundry/parser/ast_pattern.py |
+| unary_expression | expression | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
+| unary_expression | expression | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
+| unary_expression | expression | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
+| unary_expression | slice_endpoint | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
+| unary_expression | slice_endpoint | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
+| unary_expression | slice_endpoint | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
+| unary_expression | subscript_index | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
+| unary_expression | subscript_index | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
+| unary_expression | subscript_index | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
+| module | module_function | ModuleFunctionValidationRule | A module function must satisfy its root, variant, or converter role before mutation. | src/tilefoundry/parser/ast_pattern.py |
+| module | module_function | ModuleFunctionRegistrationRule | A validated module function must be recorded in declaration order. | src/tilefoundry/parser/ast_pattern.py |
+| module | module_finalization | ModuleFinalizationRule | A module declaration must contain valid unique members and a resolvable entry. | src/tilefoundry/parser/ast_pattern.py |
+
+<!-- parser-constraints:end -->
+
+## 3. Implementation Overview
+
+| Component | Responsibility |
+| --- | --- |
+| Parser API and Context | Receives authored Functions and carries dialect, role, scope, and recursion inputs. |
+| Executable Pattern Graph | Composes concrete AST elements into the Function root pattern. |
+| Match and Construction | Matches recursively into `AstMatch`, then constructs owner values on return. |
+| Ordered Rules | Validates and normalizes each owner value after construction. |
+| Module Build | Lets Python execute the class body, records Functions, and finalizes the Module. |
+| Pattern Visitor | Traverses the same graph to render this section's generated grammar and constraints. |
 
 ```mermaid
 classDiagram
-    class op_registry {
-        get_schemas(dialect, name) list~OpSchema~
-        iter_schema_names(dialect)
-        _register_schema(schema)
-    }
-    class OpSchema { name; dialect; category; signature; builder; op_class }
-    class tilefoundry_dsl_tf { __getattr__(name); __dir__() }
-    class tilefoundry_dsl_T  { __getattr__(name); __dir__() }
-    class Op { <<abstract>> }
-
-    op_registry "1" --> "*" OpSchema : indexes
-    tilefoundry_dsl_tf ..> op_registry : queries dialect="tf"
-    tilefoundry_dsl_T  ..> op_registry : queries dialect="T"
-    OpSchema --> Op : op_class (None for alias schemas)
+    ParserAPI --> FuncParserContext
+    ParserAPI --> FunctionPattern
+    AstPattern <|.. Element
+    Element o-- AstPattern
+    Element o-- AstRule
+    AstPattern --> AstMatch
+    PatternVisitor ..> AstPattern
+    ParserAPI ..> ModuleBuild
 ```
-
-### 2.3 Resolution algorithm
-
-The CPython attribute-access path runs `module.__getattr__(name)`
-for any name not found on the module's own namespace. Both
-namespaces implement it identically:
-
-```python
-def __getattr__(name: str) -> type[Op] | Callable:
-    """Resolve a dialect name to its Op class or alias builder."""
-    ...
-
-def __dir__() -> list[str]:
-    """Return the dialect's registered schema names."""
-    ...
-```
-
-`__getattr__` looks up `op_registry.get_schemas(_DIALECT, name)` and raises
-`AttributeError` on a miss; for a single real-Op schema it returns the `Op`
-class, for a surface-alias schema (`op_class is None`) the alias builder fn, and
-for more than one schema an overload resolver.
-
-Both forms (Op class for real-Op schemas, alias builder fn for
-alias schemas) carry an `_op_schema` attribute, so the parser's
-bare-name resolver looks the schema up with a single
-`getattr(val, "_op_schema", None)` regardless of which form was
-bound.
-
-`from tilefoundry.dsl.tf import *` invokes `__dir__` and then
-`__getattr__` for every returned name; `from tilefoundry.dsl import tf`
-binds the module object itself, leaving each later `tf.<name>`
-attribute access to `__getattr__`.
-
-### 2.4 `.pyi` stub regeneration
-
-The dynamic `__getattr__` surface is invisible to static analysers
-and editors. To restore IDE completion / type inference,
-`tilefoundry.dsl._stub_gen` emits per-namespace `.pyi` stubs derived
-from the OpSchema registry:
-
-```
-tilefoundry/dsl/tf/__init__.pyi      # generated, gitignored
-tilefoundry/dsl/T/__init__.pyi       # generated, gitignored
-```
-
-The CLI is `python -m tilefoundry.dsl regen`. The generator walks
-every `OpSchema` registered for the dialect and emits one
-`def <name>(<param>: <type>[, ...]) -> Expr: ...` signature per
-schema. Multi-schema overloads emit `@typing.overload` stubs in
-registration order, followed by a final non-overload signature
-that matches the runtime resolver.
-
-Conventions:
-
-- `kind="input"` ParamDefs render as `Expr` regardless of their
-  declared `annotation` (operands are always Exprs at the DSL
-  surface).
-- `kind="attribute"` ParamDefs render their `annotation` verbatim
-  (`int` / `str` / `ShardLayout` / …). Referenced types
-  are auto-imported in the generated header so the `.pyi` is
-  self-contained.
-- A `DType` attribute renders as `Literal[<canonical names>] | DType`, with the
-  `Literal` members derived from the closed descriptor set in
-  [types §3](./types.md#3-dtype). The string form is the canonical DSL authoring
-  path and the parser normalizes it to the corresponding descriptor at the call
-  boundary. A descriptor value remains accepted as the IR-canonical attribute
-  value in direct Python expressions.
-- Any other string-valued enum attribute, such as `ReduceKind`, renders as
-  `Literal[<member strings>] | <EnumType>`. Its `Literal` members derive from
-  the enum, and the parser normalizes a string to the corresponding enum member
-  at the call boundary.
-
-Stubs are not part of the runtime resolution path; the parser still
-goes through [§2.3](#23-resolution-algorithm). They exist solely so editors can show typed
-completions for `tf.<name>(...)`.
-
-### 2.5 Invariants
-
-- **Dialect isolation**. `tilefoundry.dsl.tf` MUST surface only
-  schemas with `dialect="tf"`; `tilefoundry.dsl.T` MUST surface only
-  schemas with `dialect="T"`. [§4.6](#46-per-dialect-strict-resolution)'s strict per-dialect resolution
-  depends on this.
-- **Late-registration visibility**. An Op registered after the
-  namespace module is first imported is visible on the next
-  `__getattr__` call; the namespace MUST NOT cache resolutions in
-  a way that would hide it.
-- **Implementation independence**. The DSL surface MUST NOT depend
-  on the `tilefoundry.ir.<dialect>.<category>` directory layout. DSL
-  source addresses Ops only through `(dialect, name)`.
-- **Single-schema identity**. For a single-schema name `n`,
-  `getattr(tilefoundry.dsl.tf, n) is get_schemas("tf", n)[0].op_class`.
-  No wrapper class is interposed.
-
-### 2.6 Platform sub-namespaces
-
-`tilefoundry.dsl.T` exposes platform-specific instruction and atom
-surfaces under a fixed set of **platform sub-namespaces** (e.g.
-`T.cuda`). `dsl.T.__getattr__` resolves a platform name **before** the
-OpSchema registry lookup ([§2.3](#23-resolution-algorithm)): a name in the platform set returns the
-platform namespace object; every other name falls through to the
-registry.
-
-- A platform sub-namespace is not an `Op` and carries no `_op_schema`.
-  It surfaces platform-specific descriptors (instruction specs, atoms)
-  only, never catalogue Ops. [§2.5](#25-invariants)'s dialect-isolation invariant is
-  unaffected — the platform set is disjoint from registered Op names.
-- The platform set is fixed; a name outside it MUST resolve as an
-  ordinary `dialect="T"` Op name, preserving late-registration
-  visibility ([§2.5](#25-invariants)).
-- `T.cuda.mma` is the CUDA MMA surface: `T.cuda.mma.<NAME>` is an
-  `MmaOpSpec` and `T.cuda.mma.atom(op=...)` an `MmaAtom`
-  ([tir §2.3](./tir.md#23-tir-ops)).
-  The folder name (`cuda`) matches `codegen/cuda/` and the runtime tree.
-
-In a `@prim_func` body a chain rooted at a platform sub-namespace is a
-**compile-time static binding**, not a runtime value: `op = T.cuda.mma.<NAME>`
-and `atom = T.cuda.mma.atom(op=op)` bind Python descriptor objects in
-the parser environment and emit no `LetStmt`. A subsequent `atom.A/B/C`
-attribute access resolves statically against the bound descriptor.
-
-The `.pyi` stub generator ([§2.4](#24-pyi-stub-regeneration)) emits the platform sub-namespace
-surface so editors complete `T.cuda.mma.<NAME>` and `.atom(...)`.
-
-### 2.7 `@module` authoring surface
-
-`@module(entry="<name>", target=..., topologies=(Topology(...), ...))` collects
-a class body into a `Module`
-([core-ir §1](./core-ir.md#1-module)). The decorated name binds to the
-resulting `Module`. `target` MUST be a constructed Target instance;
-a string MUST be refused and MUST NOT be resolved or constructed. The value
-declares the hardware the domain runs on. `topologies` declares the ordered
-`Topology` hierarchy (see below).
-
-A file of `@module` classes is an ordinary importable Python module: every name
-its class bodies read — the shape configuration above all — MUST resolve within
-that file, and the file MUST NOT require execution with a namespace injected into
-its globals. The Modules it defines are module-level values, so `import` reaches
-them, a linter sees them, and a CLI selector addresses them by name. A file that
-has to be executed with a namespace injected is reachable by none of those.
-
-A `@module` class body is evaluated once where it stands, so a body at file scope
-states one shape. A model asked about more than one structural configuration —
-shapes differing in a submodule count or a per-layer tuple, not only in a tensor
-axis — MAY instead place its class bodies in a function of that same file that
-takes the configuration as a parameter, and publish that function; each call
-states the same source at the shape its caller names. This is not injection: the
-file is still an ordinary import and the configurations are values its own
-package publishes. `@func` MUST resolve the names in its signature and body
-against the locals of every scope enclosing it, innermost first, so a parameter
-of that function is as visible to a nested class body as a module-level import
-is.
-
-- Every non-dunder class member MUST be one of three kinds: an `@func` /
-  `@prim_func` result (an `hir.Function` / `tir.PrimFunction`); a child
-  `Module` — or a tuple/list of them, how a factory attaches N identical
-  instances under one attribute (each already named by the factory, e.g.
-  `renamed(f"layer{i}")`); or a plain Python function (an orchestration
-  method, e.g. `forward` / `init_caches`). Any other member — a stray
-  attribute, an undecorated method that is neither a DSL function nor a
-  plain orchestration function, … — MUST be rejected. A specialization
-  variant (a `@base.specialize` def) and a per-weight converter (a
-  `@base.converter(name)` def,
-  [runtime §1.1.2](./runtime.md#112-weight-converter-and-prepare--forward))
-  are not standalone members — both live on their base function and are
-  skipped when collecting.
-- A nested `class` statement is a legal member when it is itself decorated
-  with `@module(...)`: by the time the outer class body finishes running,
-  the inner decorator has already replaced the name with a `Module`
-  instance, so it is collected as an ordinary child `Module`. An
-  *undecorated* nested class is rejected (it is none of the three kinds).
-- `@func` / `@prim_func` results are collected in **definition order** into
-  `Module.functions`; the class body MUST contain at least one. A child
-  `Module` is collected into `Module.modules`, renamed to the attribute it
-  is attached under — torch / HuggingFace checkpoint-naming semantics:
-  assigning a child to `self.self_attn` names it `self_attn` in the tree,
-  independent of the child's own class name
-  ([core-ir §1](./core-ir.md#1-module)). A plain Python function is
-  collected into `Module.methods` by its own name. A duplicate function
-  name, or duplicate child module name, across the class body MUST be
-  rejected.
-- A class body MUST declare at least one function, child `Module`, or plain
-  method; only an empty body MUST be rejected. A methods-only Module is therefore
-  valid — it composes the children it is given.
-- `entry` is optional. Supplied, it MUST name exactly one collected function and
-  an unknown name MUST be rejected. Omitted, the Module has no default step.
-- A method's name is free, but `forward` is the one a bare `<module>(...)`
-  delegates to; any other name is reached only by naming it. A class-body
-  `__call__` MUST be rejected: Python resolves a dunder on the type, so one
-  attached to the built Module instance would never run.
-- An HIR member MAY call a sibling HIR function **defined above it**. The call
-  resolves to a `Call` targeting that Function and remains inside the current
-  kernel invocation ([hir §1.1](./hir.md#11-function)); a forward reference to a
-  sibling defined below stays unresolved and MUST fail.
-- An HIR member MAY equally call a child `Module` bound **above it** in the same
-  class body; that form, what it resolves to, and what it refuses are
-  [§4.2](#42-closure-then-registry-callee-resolution).
-- The `topologies=(Topology(...), ...)` decorator argument declares the
-  domain's complete ordered hierarchy. Omitting it inherits the owning class's
-  hierarchy; `()` declares an explicitly topology-free domain. The value MUST
-  be a tuple of `Topology`; a value that is not MUST be rejected rather than
-  read as an empty hierarchy.
-- The printer emits this surface: shared meshes at module level (before the
-  class) so the class body stays function-and-nested-Module-only, then the
-  `@module(...)` decorator, then the functions and nested Modules. What that
-  decorator and that order print exactly is
-  [inspection §2.2](./inspection.md#22-module-printer).
-
-#### Design rationale
-
-`entry` is a function-name forward reference rather than a function object
-because a class decorator's arguments are evaluated before the class body runs,
-so the entry function does not yet exist when `@module(entry=...)` is called.
-
-The `topologies` decorator argument is evaluated before the class body runs.
-The resulting declaration is retained while that body is evaluated, so a
-function body MAY name a level of its domain (`with Mesh(("cta",), ...)`) when
-`@func` parses it. Nested `@module` bodies resolve the declaration belonging to
-their own class body first; omission walks outward to the owning class, while
-an explicit `()` stops inheritance. `target` needs no such early lookup because
-nothing consumes it until after the `Module` exists.
-
-## 3. Parser architecture
-
-### 3.1 Model
-
-The implementation lives under `tilefoundry/parser/`. The current
-function-level entry points are independent calls; there is no
-`ModuleContext` / `FunctionDecl` data class.
-
-```python
-# tilefoundry/parser/hir_parser.py
-def parse_func(fn, *, topologies=(), specializations=(), extra_closure=None) -> hir.Function: ...
-class _HirBodyVisitor(BaseExprVisitor): ...
-
-# tilefoundry/parser/tir_parser.py
-def parse_prim_func(fn, *, target=None, extra_closure=None) -> tir.PrimFunction: ...
-class _TirBodyVisitor(BaseExprVisitor): ...
-
-# tilefoundry/parser/base.py
-def extract_ast(fn) -> ast.FunctionDef: ...
-class BaseExprVisitor: ...
-
-# tilefoundry/parser/symtab.py
-class LexicalEnv:
-    def push_frame(self) -> None: ...
-    def pop_frame (self) -> dict[str, Any]: ...
-    def define    (self, name, value) -> None: ...
-    def lookup    (self, name) -> object: ...
-    def innermost_mesh(self) -> Mesh | None: ...
-
-# tilefoundry/parser/dispatch.py
-def resolve_op    (name) -> type | None: ...
-def resolve_stmt  (name) -> type | None: ...
-def resolve_schema(name, dialect: str = "tf") -> OpSchema | None: ...
-def resolve_callable(name, token: Literal["hir", "tir"]) -> tuple[str, type]: ...
-```
-
-Each function-level parser collects a closure dict from the live
-Python function (`_collect_closure(fn) -> dict[str, Any]`), reads
-the AST via `extract_ast(fn)`, and walks the body with the
-dialect's `BaseExprVisitor` subclass.
-
-### 3.2 Class diagram
 
 ```mermaid
-classDiagram
-    class parse_func
-    class parse_prim_func
-    class BaseExprVisitor   { <<abstract>> }
-    class _HirBodyVisitor
-    class _TirBodyVisitor
-    class LexicalEnv
-    class dispatch          { resolve_op; resolve_stmt; resolve_schema; resolve_callable }
-
-    parse_func ..> _HirBodyVisitor : drives
-    parse_prim_func ..> _TirBodyVisitor : drives
-    BaseExprVisitor <|-- _HirBodyVisitor
-    BaseExprVisitor <|-- _TirBodyVisitor
-    _HirBodyVisitor o-- LexicalEnv
-    _TirBodyVisitor o-- LexicalEnv
-    _HirBodyVisitor ..> dispatch : callee lookup
-    _TirBodyVisitor ..> dispatch : callee lookup
+flowchart TD
+    API["parse_function(fn, context)"] --> AST["Extract FunctionDef AST"]
+    AST --> ROOT["FunctionPattern.match"]
+    ROOT --> TREE["AstMatch tree"]
+    TREE --> BACKWARD["construct children, then apply Rules"]
+    BACKWARD --> FUNCTION["HIR Function / TIR PrimFunction"]
+    FUNCTION --> MODULE{"Module authoring context?"}
+    MODULE -->|yes| FINALIZE["registration / finalization"]
+    MODULE -->|no| RETURN["return standalone result"]
 ```
 
-### 3.3 Description
-
-`parse_func` / `parse_prim_func` consume a live Python function (`fn`);
-`topologies` supplies the parse-time namespace a body may name and is not
-retained on the resulting `Function`. The `@tilefoundry.module` decorator
-builds a `core_ir.Module` from the class's already-parsed `@func` /
-`@prim_func` methods and nested Modules. A standalone `@func` returns an
-`hir.Function`, or the implicit single-function `core_ir.Module` when its
-decorator declares execution context.
-
-The closure dict supplies same-module callee lookup. Names defined
-in the user's Python module (other `@func` / `@prim_func`
-functions, mesh / topology objects, Op classes imported from
-`tilefoundry.dsl.tf` / `T`) are visible through the closure. The
-closure also includes the `@func` / `@prim_func` bindings present in
-the *definition frame* when the decorator runs — for a
-`@tilefoundry.module` class body, that is the sibling methods declared
-above the one being parsed. Each such binding **is** the sibling's
-`hir.Function` / `tir.PrimFunction` IR node (the decorator evaluates to
-the IR directly, [§1.1](#11-decorators)), so a sibling callee resolves to that `Function`
-and becomes the `Call` target directly. This is what makes
-callee-before-caller sibling calls work; a forward reference is simply
-absent from the closure and fails as an unresolved callee. The merge is
-additive: it never shadows the function's own globals / freevars.
-
-`LexicalEnv` is a frame stack used by both body visitors for
-parser-time bindings (Mesh axes, the Python `slice` from two-argument `tile`, SSA
-aliasing). Frame push / pop matches the Python-source scope
-(`with Mesh(...)`, HIR grid loops).
-
-`dispatch.resolve_callable(name, token)` performs strict
-per-dialect Op resolution against `op_registry`; both body visitors'
-`ast.Name` callee resolution (`BaseExprVisitor._resolve_call_target`,
-shared by HIR and TIR) delegates to it once the closure path misses, and
-the TIR top-level-statement dispatch (`_call_as_top_level_stmt`) delegates
-to it for a bare-name effect Stmt / intrinsic before falling back to
-`call_to_op_call`. It never resolves an arbitrary Python name — only a
-name already cataloged as an Op / Stmt / intrinsic under the body's own
-dialect — so an undefined name still raises *unknown Op name*.
-
-There is no parser-side intermediate IR; function bodies translate
-directly into `core_ir` nodes plus dialect-specific subclasses.
-
-## 4. Shared parsing machinery
-
-### 4.1 Lexical environment
-
-Both parsers use the same lexical-env stack. `define(name, expr_node)`
-binds a Python name to an `Expr` object. Subsequent uses of that name
-reuse the same `Expr`, which is how HIR's SSA-as-DAG sharing falls
-out for free.
-
-### 4.2 Closure-then-registry callee resolution
-
-Bare-name callees resolve through the lexical env + the function's
-closure first — the common case, covering every name reached via a
-star-import or an explicit `tf.<name>` / `T.<name>` binding. When that
-misses, resolution falls through to `dispatch.resolve_callable(name,
-token)` ([§4.6](#46-per-dialect-strict-resolution)): dialect-strict dispatch against the Op / Stmt / intrinsic
-catalogue, not an arbitrary-name lookup, so a name that is neither bound
-in the closure nor cataloged under the body's own dialect still raises
-*unknown Op name*.
-
-A bare-name callee bound to a `Function` is that Function, and one bound to a
-`Module` is the function that Module's `entry` names
-([core-ir §1](./core-ir.md#1-module)). Those two are the only callee forms that
-resolve to a function, and either yields an ordinary Function `Call`
-([hir §1.1](./hir.md#11-function)). A `Module` callee belongs to the HIR body
-parser alone; in TIR a name bound to one is not a callee and still raises
-*unknown Op name*.
-
-- constraints:
-  - In an HIR body, a bare name bound to a `Module` MUST resolve to the function
-    that Module's `entry` names, and only while the calling function is being
-    authored inside an active `@module()` / `@module(...)` class body — the body
-    that attaches the callee and so gives the call a child to reach. Elsewhere
-    the callee MUST be refused naming that, whether or not the calling function
-    declares execution context of its own and whether or not something later
-    lifts it into a Module. Which declaration is active MUST be decided by the
-    declaring frame, not by one being open somewhere, so a declaration a failed
-    class body left open attaches nothing. Only a direct `name = <Module>`
-    binding in that body attaches a callable name; a name it does not attach
-    MUST be refused, naming what it does bind.
-  - A Module declaring no entry, and one whose entry is not an HIR `Function`,
-    MUST each be refused at the call site naming that reason, rather than
-    falling through to *unknown Op name* — the callee resolved, and what it
-    could not answer is which function a call of it runs.
-  - The parser MUST carry the binding name it reached that Module through as
-    private authoring state on the resulting `Call`. A class body is parsed
-    before its children are attached and attaching renames — so copies — the
-    Module the body named ([core-ir §1](./core-ir.md#1-module)), and that state
-    is what `@module` collection needs to rebuild every such call, inside a
-    specialization variant included, against the child attached under that name.
-    Two attributes may hold copies of one Module, and then the binding is the
-    only thing that says which copy a call meant. It is not part of the IR
-    contract: collection consumes it and takes it off the call, the rebuilt
-    `Call.target` having stated the callee.
-  - The parser MUST check a written call's arity against the supplied-parameter
-    set HIR resolves for it ([hir §1.1](./hir.md#11-function)), and where that
-    set is narrower than the declared parameters its diagnostic MUST count in
-    activations.
-  - An attribute callee whose base name is bound to a `Module` MUST be refused,
-    naming that a Module is called through its bare binding and its entry. This
-    holds for the attribute that names the entry as well: which name was written
-    is not what decides where a call goes.
-
-The closure binding for a name from `tilefoundry.dsl.tf` /
-`tilefoundry.dsl.T` is whatever its module `__getattr__` returns:
-
-- a real-Op class for single-schema names whose schema has an
-  `op_class` (e.g. `tf.matmul` → `MatMul`);
-- the alias's builder function for surface-alias schemas (e.g.
-  `tf.add` → `_add_alias`); the function carries `_op_schema` so
-  the parser still recovers the schema by attribute lookup.
-
-Both forms expose `_op_schema`, so the parser's
-`_resolve_call_target` returns an `OpSchema` uniformly. Namespace-
-attribute callees (`tf.add` / `T.copy`) skip the closure binding and
-go directly through `dispatch.resolve_schema(name, dialect)`, which
-honours alias prepend order — an alias schema (if any) wins over a
-legacy real-Op schema sharing the same name.
-
-### 4.3 OpSchema and overload resolution
-
-A registered Op has one or more `OpSchema` entries indexed by
-`(dialect, name)`. Each schema lists the Op's `ParamDef` descriptors
-(see [core-ir §2.3](./core-ir.md#23-op)). When the parser sees a callee:
-
-1. Look up the schema list via
-   `op_registry.get_schemas(dialect, name)`.
-2. Filter by arity. `ParamDef.is_required` (i.e. `default is
-   MISSING`) sets `n_min`; `optional` does NOT lower `n_min`.
-3. For the surviving candidates, walk each input ParamDef and run
-   `pattern.match(arg_type)`. `pattern is None` accepts any.
-4. Return the first schema whose every input pattern matches.
-   Registration order is the tiebreaker; there is no "best match"
-   search.
-
-### 4.4 Annotation-driven sugar dispatch
-
-At each attribute slot of a call, the parser consults the matched schema's
-`ParamDef.annotation` and invokes `parse_sugar(node, expected, ...)`:
-
-- `annotation=ShardLayout` → `expected=ShardLayout`
-- `annotation=Layout`      → `expected=Layout`
-- `annotation=TensorType`  → `expected=TensorType`
-
-```python
-def parse_sugar(
-    node: ast.AST,
-    expected: type,
-    *,
-    closure: dict[str, Any] | None = None,
-    mesh_resolver: Callable[[str], Mesh] | None = None,
-) -> Layout | ShardLayout | TensorType | None:
-    """Parse one type-directed layout or tensor-type sugar form.
-
-    Args:
-        node: Static tuple syntax.
-        expected: Required result family.
-        closure: Optional static-name bindings.
-        mesh_resolver: Optional lexical mesh lookup.
-
-    Returns:
-        The parsed value, or None when a TensorType head is not recognised.
-    """
-    ...
-```
-
-- constraints:
-  - The `Layout` branch MUST resolve closure-bound integer extents and
-    MUST derive C-order strides when the tuple omits them.
-
-Sugar dispatch is annotation-driven, not name-driven: an attribute
-called `shape` will not be parsed as layout sugar unless its
-ParamDef declares a layout annotation. Ops without a registered
-schema fall through to a small legacy heuristic
-(`attr_name == "layout"` ⇒ `ShardLayout` sugar) until they migrate.
-
-Attribute string normalization is also annotation-driven:
-
-- `annotation=DType` resolves a canonical string by descriptor `name` and
-  rejects any other string with a `VerifyError`.
-- A string-valued Enum annotation resolves by Enum value and rejects any other
-  string with a `VerifyError`.
-
-### 4.5 `Tensor[...]` type-literal surface
-
-`Tensor[shape, dtype, layout, storage]` is recognised by `parse_sugar`, the
-single public entry point for `Layout`, `ShardLayout`, and `TensorType` sugar.
-The caller supplies the expected result type plus contextual closure and mesh
-resolution. Both `@func` and `@prim_func` annotations and body expression
-positions use this entry point. The shape and dtype slots are required; layout
-and storage are optional. Placement sugar MAY appear directly in the shape
-slot, in which case the third slot is storage and no separate layout slot is
-accepted.
-
-The dtype slot MUST resolve to the canonical descriptor named by its string.
-Unknown names MUST be rejected and MUST NOT silently select `DType.f32`.
-
-### 4.6 Per-dialect strict resolution
-
-`parser.dispatch.resolve_callable(name, token)` does NOT fall back
-across dialects. An HIR-only Op (e.g. `rope`) raises *unknown TIR
-callable* in a TIR body, and a TIR-only Op (e.g. `copy`) raises
-*unknown HIR callable* in an HIR body. The trailing-underscore
-selector is gated to the TIR token only.
-
-### 4.7 Restricted static evaluation
-
-```python
-def eval_static(
-    node: ast.AST,
-    *,
-    closure: dict[str, Any],
-    lookup: Callable[[str], Any] | None = None,
-    allowed_nodes: tuple[type, ...] = ALL_NODES,
-    div: DivMode = "true",
-    attr_resolver: Callable[[Any, str], Any] | None = None,
-    on_closure_name: Callable[[Any, str], None] | None = None,
-) -> Any:
-    """Evaluate the parser's restricted static-AST subset.
-
-    Args:
-        node: AST node to evaluate.
-        closure: Python closure bindings.
-        lookup: Optional parser-lexical name resolver.
-        allowed_nodes: Admitted AST node classes.
-        div: Division policy.
-        attr_resolver: Optional attribute resolver.
-        on_closure_name: Optional closure-use callback.
-
-    Returns:
-        The statically evaluated value.
-    """
-    ...
-```
-
-- constraints:
-  - Lexical `lookup` MUST run before closure fallback.
-  - A node outside `allowed_nodes`, an unresolved name, or an unsupported
-    operator MUST raise `VerifyError`.
-  - `div="floor"` MUST affect `/`; `//` is always floor division.
-
-## 5. HIR parser
-
-The HIR parser walks an `@func` body. The body is a sequence of
-Python statements that the parser folds into a single `Expr` tree.
-
-| Python | HIR action |
-|---|---|
-| `x = expr` | `define(x, expr_node)`; no IR node. Subsequent `x` reuses the same `Expr` (SSA-as-DAG). |
-| `x + y` | `Call(Binary(kind=ADD), (x, y))`; the parser maps Python AST `BinOp` / `Compare` / `BoolOp` directly to a `Binary` instance with the matching `BinaryKind`. `UnaryOp` USub / Not maps similarly to `Unary(kind=NEG)` / `Unary(kind=NOT)`. AST `@` (matmul) routes to `MatMul` (a real Op, not kinded). |
-| `foo(a, b)` | `Call(target_op, args)` where `target_op` is constructed by the resolved schema's `builder` ([§4.2](#42-closure-then-registry-callee-resolution) / [§4.3](#43-opschema-and-overload-resolution)). For surface aliases (e.g. `add` / `cmp_eq` / `neg`), the alias's builder returns the kinded target Op (`Binary(kind=...)` / `Unary(kind=...)`); for real Ops, the default builder is the Op class itself. |
-| `for i in tile(...)` / `for i in range(...)` | `GridRegionExpr` (see [§1.7](#17-for-i-in-tile--for-i-in-range-hir-only) and below). |
-| `with Mesh(...) as m` | Push `m` onto the parser-lexical stack; pop on exit. No IR node. Every `Call` built inside carries the stack as `ExecutionDomainMetadata`. |
-| `return expr` | Sets `Function.body`. A `return` without a value is rejected. |
-| `return (a, b)` / `return a, b` | A literal tuple return (both spellings are the same AST) folds to a core `Tuple` body ([core-ir §2.2](./core-ir.md#22-var--constant--tuple)); `Function.return_type` is the `TupleType` of the element types. Callers destructure via the existing tuple-unpack rule (`o, s = f(...)`). |
-| `pass` | Accepted only as the **entire** body: sets `Function.body = None`, declaring a dispatch prototype whose implementations are registered via `.specialize`
-([hir §1.1](./hir.md#11-function)). A `pass` mixed with any other statement is rejected. |
-
-An assignment whose RHS computes a new expression records the LHS as that
-expression's binding. A bare-name RHS computes nothing: rebinding an existing
-value under either a new or existing name (for example `acc = x` to initialize
-a loop carry, or the final `m = m_new` carry update) MUST reuse the same `Expr`
-object without replacing its binding metadata. A new name updates the parser's
-symbol table; it does not add or rename an IR node.
-
-`for` / `if` / `while` over arbitrary ranges, conditionals, and other
-Stmt forms are TIR-only. They are rejected by the HIR parser.
-
-A `pass` body yields `Function.body is None`, declaring a **dispatch
-prototype** that awaits variants. Immediately after `@func def f: pass`
-and before any `@f.specialize(...)`, the base is transiently
-`body is None, variants == ()` — a valid *unsealed authoring* state. The
-sealed (verified) invariant is `body is None` ⟺ `variants != ()`
-([hir.md §1.1](./hir.md#11-function)); the verifier rejects a
-`body is None` function with no variants, a variant whose body is `pass`
-(a variant MUST carry a real body), and a real body combined with
-variants. The `@base.specialize(...)` parse rejects a `pass`-bodied
-variant directly.
-
-### 5.1 GridRegionExpr carry-out lifting
-
-Inside an HIR grid-loop body, an `ast.Assign` whose single
-`Name` target is already bound in *outer* scope is a loop-carried
-rebinding. The parser:
-
-1. Allocates a fresh phi `Var` per carry name (same type, same name).
-2. Records the phi in `GridRegionExpr.carried_args`.
-3. Snapshots the final RHS bound to that name as a `yield_value`.
-4. After the loop, rebinds the carry name in the outer frame to the
-   `GridRegionExpr` (single carry) or projects each carry value out
-   of its `TupleType` result (multi-carry).
-
-Only `=` assignments are accepted; `+=` is rejected. `return` and a
-nested `with` inside a loop body are rejected. A nested `for ... in
-tile/range(...)` IS allowed and lifts to a nested `GridRegionExpr`; the
-carry scan recurses into it, so an outer-scope name rebound only inside the
-nested loop is carried across both loops.
-
-### 5.2 Constraint attachment
-
-The HIR parser attaches one `ScheduleConstraintMetadata` record to one
-existing tensor `Expr`. Attachment MUST update that node in place: it MUST NOT
-rebuild the annotated value or any consumer in its SSA DAG. An annotation with
-a value still follows the assignment rule above, so it may annotate a newly
-computed RHS or bind another name to an existing value without copying it.
-Tensor parameters, tensor-valued intermediate SSA
-values, and bound tensor-valued `TupleGetItem` values are valid subjects.
-Whole tuples, shape scalars, unit values, direct subscripts, and unresolved
-names are rejected. Inline and standalone annotations for the same Expr are
-duplicates, not merged declarations. Diagnostics identify the subject and
-retain the authored source location. Constraint metadata does not alter the
-tensor type or introduce an HIR node.
-
-## 6. TIR parser
-
-The TIR parser walks a `@prim_func` body. The body is a sequence of
-imperative statements that fold into a `Sequential` of Stmts.
-
-| Python | TIR action |
-|---|---|
-| `x = expr` | `LetStmt(var=x, value=expr, body=<sequential rest>)`. The remaining body of the function is nested as `body`. |
-| `a = Tensor(...)` | `LetStmt(var=a, value=Call(tir.memory.AllocTensor, (), attrs=<TensorType fields>), body=<rest>)`. See [tir §2.3](./tir.md#23-tir-ops). |
-| `foo(a, b)` (effect Op) | `Evaluate(target_op, args)` Stmt. |
-| `foo(a, b)` (value Op) | `Call` Expr embedded in the right-hand side of a `LetStmt` or another Stmt's Expr field. |
-| `for i in range(...)` | `For(induction_var=i, start, stop, step, body)`. |
-| `if/elif/else` | `If(cond, then_body, else_body)`. |
-| `while` | `While(cond, body)`. |
-| `with Mesh(...) as m` | `MeshScope(mesh, binding=m, body)`. |
-| `return` | `Return()` Stmt. A `return value` is rejected. |
-
-TIR has no SSA-as-DAG sharing rule; every binding is an explicit
-`LetStmt`. `for i in tile(...)` is HIR-only and is rejected here.
-
-## 7. Validation and rejection
-
-- Any `ast` node not in [§4](#4-shared-parsing-machinery) / [§5](#5-hir-parser) is rejected — the unsupported
-  forms include `try` / `with` over non-Mesh contexts / `lambda` /
-  list / dict / set comprehensions / `yield` / `async`.
-- Cross-dialect callees fall through to *unknown callable* ([§4.6](#46-per-dialect-strict-resolution)).
-- A bare-name callee that the lexical env / closure does not
-  resolve to an `_op_schema`-bearing surface value (`Op` subclass or
-  alias builder function) is *unknown Op name*.
-- `Tensor[...]` with the wrong number of slots, an unknown dtype, a
-  non-injective layout, or an `ast.Slice` shape element is
-  rejected.
-- `for tile` is HIR-only; emitting it inside a `@prim_func` is
-  rejected. `with Mesh(...) as m` is accepted in both dialects — in a
-  `@prim_func` it lowers to a `MeshScope` Stmt ([§6](#6-tir-parser)), unlike the
-  no-IR-node HIR sugar ([§1.6](#16-with-mesh-as-m)).
-- Layout sugar that would lose mesh information falls through to the
-  verbose form ([§1.4](#14-tensor-and-consttensor-annotations)); if neither is acceptable, the type is
-  rejected.
+Pattern combinators serve both runtime matching and Spec traversal. `AstMatch` separates syntax
+matching from object construction, while each Rule reads the recursive context after its owner
+value exists. Module class control flow remains Python execution; no Module AST grammar exists.

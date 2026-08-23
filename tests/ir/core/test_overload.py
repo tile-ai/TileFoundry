@@ -1,4 +1,4 @@
-"""``parser.overload`` — F3 first-match contract."""
+"""``ir.core.overload`` — F3 first-match contract."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from typing import Any
 import pytest
 
 from tilefoundry.ir.core.op_schema import OpSchema
+from tilefoundry.ir.core.overload import OverloadError, filter_candidates, resolve
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Scalar, Tensor, TensorPat
-from tilefoundry.parser.overload import OverloadError, filter_candidates, resolve
 
 
 @dataclass(frozen=True)

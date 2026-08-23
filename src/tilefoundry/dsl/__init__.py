@@ -4,7 +4,7 @@ Registry-backed modules resolve operation names lazily; parser-owned tensor
 annotations and string dtype sugar complete the source surface. Generated
 stubs provide static completion.
 
-See [parser §2](docs/spec/parser.md#2-dsl-namespace-surface).
+See [parser §2](docs/spec/parser.md#2-syntax-and-rules).
 """
 
 from __future__ import annotations

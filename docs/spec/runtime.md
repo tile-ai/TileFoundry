@@ -166,7 +166,7 @@ class RuntimeFunction:
 A weight's converter is registered **per weight**, not per module:
 `@<compute_fn>.converter("<weight_name>")` decorates a throwaway `def` and
 registers it on the base function's `converters`
-([parser §2.7](./parser.md#27-module-authoring-surface)). Its parameters are
+([parser §3](./parser.md#3-implementation-overview)). Its parameters are
 the raw-checkpoint names, annotated like any `@func` parameter; it returns
 exactly the one declared `ConstTensor`'s shape / dtype. A weight needing no
 transform has no converter. Two converters registered for the same weight
@@ -382,7 +382,7 @@ entry point.  It accepts a `hir.Function` or `Module`, normalizes to a
   a conflicting explicit Target or `CompilerOptions.target` MUST fail.
 - Topology is declared by the `Module`; a single-function
   `@func(topologies=...)` declares it through the implicit `Module` that
-  decorator yields ([parser §1.1](./parser.md#11-decorators)).
+  decorator yields ([parser §2.1](./parser.md#21-syntax)).
 - Mesh layout is expressed in the DSL with lexical `with Mesh(...) as mesh` scopes.
 - `jit()` has no `cta_mesh` / `thread_mesh` parameters.
 

@@ -20,7 +20,7 @@ from tilefoundry.ir.types.shard.scope_match import (
     states_consistent_positions,
 )
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
-from tilefoundry.parser.sugar import parse_sugar
+from tilefoundry.ir.types.shard.sugar import parse_sugar
 from tilefoundry.schedule.partition.problem import _placement_relation
 
 
