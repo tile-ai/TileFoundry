@@ -19,7 +19,17 @@ from types import FrameType, SimpleNamespace
 from typing import Any, ClassVar, Generic, Protocol, TypeVar
 from typing import Literal as TypingLiteral
 
-from tilefoundry.ir.core import Call, Constant, ExecutionDomainMetadata, Expr, Var, VerifyError
+from tilefoundry.ir.core import (
+    BindingMetadata,
+    Call,
+    Constant,
+    ExecutionDomainMetadata,
+    Expr,
+    SourceSpanMetadata,
+    Var,
+    VerifyError,
+    replace_metadata,
+)
 from tilefoundry.ir.core.expr import Tuple as IrTuple
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module
@@ -67,6 +77,68 @@ from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 T = TypeVar("T")
 _RETURN_TYPE = "<return_type>"
 _TYPE_INFER_CONTEXT = "<type_infer_context>"
+
+
+@dataclass(frozen=True)
+class PatternFailure:
+    """A recognized pattern whose nested validation failed."""
+
+    pattern_id: str
+    node: object
+    detail: str
+    causes: tuple["PatternFailure", ...] = ()
+
+    def render(self, indent: int = 0) -> str:
+        lines = [f"{'  ' * indent}{self.pattern_id}: {self.detail}"]
+        for cause in self.causes:
+            lines.append(cause.render(indent + 1))
+        return "\n".join(lines)
+
+
+def _pattern_label(pattern: object) -> str:
+    label = getattr(pattern, "element_name", None)
+    if isinstance(label, str) and label:
+        return label
+    pattern_id = getattr(pattern, "pattern_id", None)
+    if isinstance(pattern_id, str) and pattern_id:
+        return pattern_id
+    node_type = getattr(pattern, "node_type", None)
+    if isinstance(node_type, type):
+        return node_type.__name__
+    return type(pattern).__name__
+
+
+def _wrap_failure(pattern: object, node: object, failure: PatternFailure) -> PatternFailure:
+    return PatternFailure(
+        pattern_id=_pattern_label(pattern),
+        node=node,
+        detail="nested pattern failed",
+        causes=(failure,),
+    )
+
+
+def attach_authored_metadata(value: object, node: ast.AST, context: "MatchContext") -> object:
+    """Attach source identity without copying lexical values such as parameter Vars."""
+    if not isinstance(value, Expr):
+        return value
+    owner = context.function or context.module
+    source_filename = owner.source_filename if owner is not None else "<string>"
+    line = getattr(node, "lineno", None)
+    column = getattr(node, "col_offset", None)
+    if isinstance(line, int) and isinstance(column, int):
+        value = replace_metadata(
+            value,
+            SourceSpanMetadata(
+                source_filename,
+                line,
+                column + 1,
+                getattr(node, "end_lineno", None),
+                getattr(node, "end_col_offset", None),
+            ),
+        )
+    if context.binding_name:
+        value = replace_metadata(value, BindingMetadata(context.binding_name))
+    return value
 
 
 runtime = SimpleNamespace(
@@ -146,7 +218,9 @@ class AstPattern(Protocol[T]):
 
     def accept(self, visitor: PatternVisitor[Any]) -> Any: ...
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[T] | None: ...
+    def match(
+        self, node: object, context: MatchContext
+    ) -> AstMatch[T] | PatternFailure | None: ...
 
 
 class PatternVisitor(Protocol[T]):
@@ -222,6 +296,8 @@ class ElementPattern(CombinatorPattern, Generic[T]):
         if syntax is None:
             raise TypeError(f"{type(self).__name__} has no executable syntax")
         matched = syntax.match(node, context)
+        if isinstance(matched, PatternFailure):
+            return _wrap_failure(self, node, matched)
         if matched is None:
             return None
         if isinstance(matched.pattern, ElementPattern):
@@ -250,8 +326,11 @@ class LazyPattern(CombinatorPattern):
             self._resolved = self.factory()
         return self._resolved
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | None:
-        return self.pattern.match(node, context)
+    def match(
+        self, node: object, context: MatchContext
+    ) -> AstMatch[Any] | PatternFailure | None:
+        matched = self.pattern.match(node, context)
+        return matched
 
 
 class AstNodePattern(CombinatorPattern):
@@ -259,12 +338,14 @@ class AstNodePattern(CombinatorPattern):
         self.node_type = node_type
         self.parts = tuple(parts)
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
         if not isinstance(node, self.node_type):
             return None
         matches: list[AstMatch[Any]] = []
         for part in self.parts:
             matched = part.match(node, context)
+            if isinstance(matched, PatternFailure):
+                return _wrap_failure(self, node, matched)
             if matched is None:
                 return None
             matches.append(matched)
@@ -282,11 +363,13 @@ class FieldPattern(CombinatorPattern):
         self.name = name
         self.pattern = pattern
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
         if not hasattr(node, self.name):
             return None
         value = getattr(node, self.name)
         matched = self.pattern.match(value, context)
+        if isinstance(matched, PatternFailure):
+            return _wrap_failure(self, node, matched)
         if matched is None:
             return None
         return AstMatch(
@@ -310,7 +393,7 @@ class LiteralPattern(CombinatorPattern):
         self.value = value
         self.value_type = value_type
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
         raw = node.value if isinstance(node, ast.Constant) else node
         if self.value is not dataclasses.MISSING and raw != self.value:
             return None
@@ -326,7 +409,7 @@ class ReferencePattern(CombinatorPattern):
         self.resolve = resolve
         self.expected = expected
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
         if not isinstance(node, (ast.Name, ast.Attribute)):
             return None
         captures: dict[str, object] = {}
@@ -345,12 +428,14 @@ class SequencePattern(CombinatorPattern):
     def __init__(self, *patterns: AstPattern[Any]):
         self.patterns = tuple(patterns)
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
         if not isinstance(node, (tuple, list)) or len(node) != len(self.patterns):
             return None
         matches: list[AstMatch[Any]] = []
         for value, pattern in zip(node, self.patterns):
             matched = pattern.match(value, context)
+            if isinstance(matched, PatternFailure):
+                return _wrap_failure(self, node, matched)
             if matched is None:
                 return None
             matches.append(matched)
@@ -367,11 +452,29 @@ class ChoicePattern(CombinatorPattern):
     def __init__(self, *patterns: AstPattern[Any]):
         self.patterns = tuple(patterns)
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
+        failures: list[PatternFailure] = []
         for pattern in self.patterns:
             matched = pattern.match(node, context)
+            if isinstance(matched, PatternFailure):
+                failures.append(matched)
+                continue
             if matched is not None:
                 return matched
+            failures.append(
+                PatternFailure(
+                    pattern_id=_pattern_label(pattern),
+                    node=node,
+                    detail="pattern did not match",
+                )
+            )
+        if failures:
+            return PatternFailure(
+                pattern_id="choice",
+                node=node,
+                detail="no choice matched",
+                causes=tuple(failures),
+            )
         return None
 
 
@@ -388,7 +491,7 @@ class ConditionPattern(CombinatorPattern):
         self.test = test
         self.pattern = pattern
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
         if not self.test(node, context):
             return None
         return self.pattern.match(node, context)
@@ -398,10 +501,12 @@ class OptionalPattern(CombinatorPattern):
     def __init__(self, pattern: AstPattern[Any]):
         self.pattern = pattern
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
         if node is None:
             return AstMatch(self, "optional", node, {}, "optional")
         matched = self.pattern.match(node, context)
+        if isinstance(matched, PatternFailure):
+            return _wrap_failure(self, node, matched)
         if matched is None:
             return None
         return AstMatch(
@@ -424,12 +529,14 @@ class RepeatPattern(CombinatorPattern):
     def _index_child(child: AstChild, index: int) -> AstChild:
         return dataclasses.replace(child, name=child.name.format(index=index))
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
         if not isinstance(node, (tuple, list)) or len(node) < self.minimum:
             return None
         matches: list[AstMatch[Any]] = []
         for index, value in enumerate(node):
             matched = self.pattern.match(value, context)
+            if isinstance(matched, PatternFailure):
+                return _wrap_failure(self, node, matched)
             if matched is None:
                 return None
             matches.append(
@@ -454,7 +561,7 @@ class PredicatePattern(CombinatorPattern):
         self.label = label
         self.predicate = predicate
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
         if not self.predicate(node, context):
             return None
         return AstMatch(self, "predicate", node, {}, "predicate")
@@ -465,7 +572,7 @@ class CapturePattern(CombinatorPattern):
         self.name = name
         self.extractor = extractor
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
         try:
             value = self.extractor(node, context)
         except (AttributeError, KeyError, TypeError, ValueError):
@@ -505,7 +612,7 @@ class ChildPattern(CombinatorPattern):
             self._pattern = pattern
         return pattern
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
         value = self.transform(node) if self.transform is not None else node
         if not isinstance(value, ast.AST):
             return None
@@ -538,8 +645,12 @@ class BranchPattern(CombinatorPattern):
         self.pattern = pattern
         self.pattern_id = pattern_id or branch_id
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | None:
+    def match(
+        self, node: object, context: MatchContext
+    ) -> AstMatch[Any] | PatternFailure | None:
         matched = self.pattern.match(node, context)
+        if isinstance(matched, PatternFailure):
+            return _wrap_failure(self, node, matched)
         if matched is None:
             return None
         return AstMatch(
@@ -564,11 +675,14 @@ class BindPattern(CombinatorPattern):
         self.pattern = pattern
         self.binder = binder
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
         matched = self.pattern.match(node, context)
+        if isinstance(matched, PatternFailure):
+            return _wrap_failure(self, node, matched)
         if matched is None:
             return None
-        return self.binder(node, context, matched)
+        bound = self.binder(node, context, matched)
+        return bound
 
 
 class LexicalScope:
@@ -1088,6 +1202,7 @@ class MatchContext:
     module: ModuleBuildContext | None
     situation: str
     role: str | None = None
+    binding_name: str | None = None
     expected_type: object | None = None
     lexical_scope: LexicalScope = field(default_factory=LexicalScope)
     parent: MatchContext | None = None
@@ -1119,6 +1234,7 @@ class MatchContext:
         *,
         situation: str,
         role: str | None = None,
+        binding_name: str | None = None,
         expected_type: object | None = None,
         values: Mapping[str, object] | None = None,
         isolated_scope: bool = False,
@@ -1149,6 +1265,7 @@ class MatchContext:
             module=module or self.module,
             situation=situation,
             role=role,
+            binding_name=binding_name,
             expected_type=expected_type,
             lexical_scope=scope,
             parent=self,
@@ -1257,6 +1374,8 @@ def parse_node(pattern: AstPattern[T], node: ast.AST, context: MatchContext) -> 
     """Select, recursively construct, and apply rules for one local pattern."""
 
     matched = pattern.match(node, context)
+    if isinstance(matched, PatternFailure):
+        raise ParseError.from_node(node, context, matched.render())
     if matched is None:
         raise ParseError.from_node(node, context)
     active_context = matched.construct_context or context
@@ -1264,9 +1383,17 @@ def parse_node(pattern: AstPattern[T], node: ast.AST, context: MatchContext) -> 
     for child in matched.children:
         if child.name in children:
             raise RuntimeError(f"duplicate AstChild name {child.name!r}")
+        binding_name = None
+        if child.name == "value":
+            binding_name = matched.captures.get("name")
+            if binding_name is None:
+                names = matched.captures.get("names")
+                if isinstance(names, tuple):
+                    binding_name = ", ".join(names)
         child_context = active_context.child(
             situation=child.situation,
             role=child.role,
+            binding_name=binding_name,
             expected_type=child.expected_type,
             values=child.values,
             isolated_scope=child.isolated_scope,
@@ -1502,6 +1629,7 @@ __all__ = [
     "ModuleBuildContext",
     "NamePattern",
     "ParseError",
+    "PatternFailure",
     "RenderVisitor",
     "ScalarTypePattern",
     "ShapePattern",

@@ -36,10 +36,12 @@ def _extract_function_def(fn: FunctionType) -> ast.FunctionDef:
     if not isinstance(fn, FunctionType):
         raise TypeError(f"parse_function expects a Python function, got {type(fn).__name__}")
     try:
-        source = textwrap.dedent(inspect.getsource(fn))
+        source_lines, start_line = inspect.getsourcelines(fn)
+        source = textwrap.dedent("".join(source_lines))
     except (OSError, TypeError) as error:
         raise TypeError("parse_function requires authored source for the function") from error
     module = ast.parse(source, filename=inspect.getsourcefile(fn) or "<string>")
+    ast.increment_lineno(module, start_line - 1)
     functions = [node for node in ast.walk(module) if isinstance(node, ast.FunctionDef)]
     if len(functions) != 1:
         raise TypeError("parse_function requires exactly one authored FunctionDef")

@@ -63,6 +63,7 @@ from .ast_pattern import (
     MatchContext,
     OptionalPattern,
     ParseError,
+    PatternFailure,
     PredicatePattern,
     ReferencePattern,
     RepeatPattern,
@@ -76,6 +77,7 @@ from .ast_pattern import (
     _infer_call,
     _resolve_reference,
     _slice_size,
+    attach_authored_metadata,
     runtime,
 )
 
@@ -1818,6 +1820,7 @@ class CallTypeInferenceRule:
     def apply(self, value, *, match, context):
         if not isinstance(value, runtime.Call):
             return value
+        value = attach_authored_metadata(value, match.node, context)
         infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
         if not isinstance(infer_context, runtime.TypeInferContext):
             infer_context = runtime.TypeInferContext()
@@ -3029,15 +3032,9 @@ class LoopHeaderPattern(ElementPattern):
                         ast.Call,
                         FieldPattern(
                             "func",
-                            AstNodePattern(
-                                ast.Name,
-                                FieldPattern(
-                                    "id",
-                                    ChoicePattern(LiteralPattern("tile"), LiteralPattern("range")),
-                                ),
-                            ),
+                            AstNodePattern(ast.Name),
                         ),
-                        FieldPattern("keywords", SequencePattern()),
+                        FieldPattern("keywords", RepeatPattern(AstNodePattern(ast.keyword))),
                         FieldPattern("args", RepeatPattern(AstNodePattern(ast.expr), minimum=1)),
                     ),
                 ),
@@ -3056,15 +3053,39 @@ class LoopHeaderPattern(ElementPattern):
     )
 
     @staticmethod
-    def _bind(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
+    def _bind(
+        node: object, context: MatchContext, matched: AstMatch[Any]
+    ) -> AstMatch[Any] | PatternFailure | None:
         assert isinstance(node, ast.For)
         assert isinstance(node.target, ast.Name)
         assert isinstance(node.iter, ast.Call)
         assert isinstance(node.iter.func, ast.Name)
         kind = node.iter.func.id
         count = len(node.iter.args)
+        if kind not in {"tile", "range"}:
+            return PatternFailure(
+                "loop_header",
+                node.iter.func,
+                "loop iterator must be tile(...) or range(...)",
+            )
+        if node.iter.keywords:
+            return PatternFailure(
+                "loop_header",
+                node.iter,
+                "tile()/range() does not accept keyword args (positional-only at the IR level)",
+            )
         if (kind == "tile" and count != 2) or (kind == "range" and count not in {1, 2, 3}):
-            return None
+            if kind == "tile" and count == 1:
+                detail = "tile(extent) is not supported; use range(extent)"
+            elif kind == "tile":
+                detail = f"tile() takes 2 arguments (extent, step), got {count}"
+            else:
+                detail = f"range() takes 1 to 3 arguments, got {count}"
+            return PatternFailure(
+                "loop_header",
+                node.iter,
+                detail,
+            )
         if kind == "tile":
             fields = ("extent", "step")
             defaults = {"start": 0}
