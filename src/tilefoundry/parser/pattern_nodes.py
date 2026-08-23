@@ -3774,6 +3774,8 @@ class FunctionPattern(ElementPattern):
                 and declared_return.storage == body.type.storage
                 and isinstance(declared_return.layout, runtime.ShardLayout)
                 and isinstance(body.type.layout, runtime.ShardLayout)
+                and isinstance(declared_return.layout.layout, runtime.Layout)
+                and isinstance(body.type.layout.layout, runtime.Layout)
                 and declared_return.layout.attrs == body.type.layout.attrs
                 and declared_return.layout.mesh == body.type.layout.mesh
                 and declared_return.layout.layout.strides is None
