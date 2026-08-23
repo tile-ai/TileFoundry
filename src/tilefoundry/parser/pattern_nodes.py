@@ -588,10 +588,6 @@ class PlacedLayoutPattern(ElementPattern):
     def construct(match, children, context):
         rank = match.captures["rank"]
         shape = tuple(children[f"extent_{axis}"] for axis in range(rank))
-        base = runtime.Layout(
-            shape=shape,
-            strides=runtime.c_order_strides(shape, mul=operator.mul),
-        )
         bindings = tuple(
             (*children[child_name], tensor_axis)
             for child_name, tensor_axis in match.captures["bindings"]
@@ -623,7 +619,12 @@ class PlacedLayoutPattern(ElementPattern):
                 raise ParseError.from_node(match.node, context, "mesh axis is bound more than once")
             attrs[target_axis] = runtime.Split(tensor_axis)
         try:
-            return runtime.ShardLayout(layout=base, attrs=tuple(attrs), mesh=mesh)
+            canonical = runtime.canonical_shard_layout(shape, mesh, tuple(attrs))
+            return runtime.ShardLayout(
+                layout=runtime.Layout(shape=canonical.layout.shape, strides=None),
+                attrs=canonical.attrs,
+                mesh=canonical.mesh,
+            )
         except (TypeError, ValueError) as error:
             raise ParseError.from_node(match.node, context, str(error)) from error
 

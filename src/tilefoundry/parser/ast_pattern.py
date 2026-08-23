@@ -56,6 +56,7 @@ from tilefoundry.ir.types.shard import (
     ShardLayout,
     Split,
     c_order_strides,
+    canonical_shard_layout,
     composed,
 )
 from tilefoundry.ir.types.shard.layout import LayoutBase
@@ -117,6 +118,7 @@ runtime = SimpleNamespace(
         Var=Var,
         DISPLAY_NAME=DISPLAY_NAME,
         c_order_strides=c_order_strides,
+        canonical_shard_layout=canonical_shard_layout,
         composed=composed,
         dim_expr=dim_expr,
         elaborate=elaborate,
