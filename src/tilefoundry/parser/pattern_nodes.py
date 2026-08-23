@@ -3765,6 +3765,26 @@ class FunctionPattern(ElementPattern):
                         "HIR pass prototype requires a return annotation",
                     )
                 declared_return = body.type
+            elif (
+                isinstance(declared_return, runtime.TensorType)
+                and isinstance(body, runtime.Expr)
+                and isinstance(body.type, runtime.TensorType)
+                and declared_return.shape == body.type.shape
+                and declared_return.dtype == body.type.dtype
+                and declared_return.storage == body.type.storage
+                and isinstance(declared_return.layout, runtime.ShardLayout)
+                and isinstance(body.type.layout, runtime.ShardLayout)
+                and declared_return.layout.attrs == body.type.layout.attrs
+                and declared_return.layout.mesh == body.type.layout.mesh
+                and declared_return.layout.layout.strides is None
+                and body.type.layout.layout.strides is not None
+            ):
+                declared_return = runtime.TensorType(
+                    shape=declared_return.shape,
+                    dtype=declared_return.dtype,
+                    layout=body.type.layout,
+                    storage=declared_return.storage,
+                )
             function_name = (
                 getattr(context.function.base, "name", None)
                 or context.function.base_name

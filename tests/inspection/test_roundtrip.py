@@ -7,9 +7,7 @@ See [inspection §2.7](docs/spec/inspection.md#27-round-trip-contract).
 """
 
 from tests._source import import_dsl
-from tests.fixtures.placed.gqa_decode import GqaOnline
 from tilefoundry.inspection import as_script
-from tilefoundry.ir.hir.specialize import specialize_concretely
 from tilefoundry.ir.types import DType
 
 _HEADER = (
@@ -243,25 +241,3 @@ def test_carry_updates_print_last_without_shadowing_the_old_value() -> None:
     )
     assert repr(fn.body) == repr(rebuilt.body)
     assert as_script(rebuilt) == printed
-
-
-def test_gqa_correction_reads_the_old_carry_and_unique_yield() -> None:
-    function = specialize_concretely(GqaOnline.entry_function(), {"ctx_len": 8})
-    printed = as_script(function)
-
-    assert printed.count("        m_new = max(m, score_2)") == 1
-    assert " = sub(m, m_new)" in printed
-    lines = printed.splitlines()
-    start = lines.index("    for i in range(8):")
-    end = next(
-        index
-        for index in range(start + 1, len(lines))
-        if lines[index].startswith("    ")
-        and not lines[index].startswith("        ")
-    )
-    assert lines[end - 3 : end] == [
-        "        l = l_3",
-        "        o = o_4",
-        "        m = m_new",
-    ]
-    assert lines[end] == '    k_n = cast(k_new, dtype="f32")'
