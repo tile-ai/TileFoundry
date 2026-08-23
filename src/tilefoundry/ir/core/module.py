@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from dataclasses import replace as _replace
 from typing import Mapping, Union
 
-from tilefoundry.ir.core.metadata import IRMetadata, get_metadata
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types.shard.mesh import Topology
@@ -24,23 +23,6 @@ from tilefoundry.utils.spec_ref import spec_ref_render
 
 ModuleFunction = Union[HirFunction, PrimFunction]
 
-
-@dataclass(frozen=True)
-class _ModuleCallee(IRMetadata):
-    """Authored binding that identifies the child Module a call reaches."""
-
-    binding: str
-    owner: "Module"
-
-
-def _authored_child_call(call):
-    record = get_metadata(call, _ModuleCallee)
-    return None if record is None else record.owner
-
-
-from tilefoundry.ir.hir._call_binding import set_authoring_reader  # noqa: E402
-
-set_authoring_reader(_authored_child_call)
 
 _MISSING_PREPARED_WEIGHT = (
     "[runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)"

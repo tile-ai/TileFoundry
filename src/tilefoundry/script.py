@@ -10,7 +10,7 @@ import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from types import FunctionType
-from typing import Any, Callable, ClassVar, Literal
+from typing import Any, Callable, ClassVar, Literal, Mapping
 
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
@@ -228,11 +228,14 @@ def _parse_authored(
     key: object | None = None,
     target: object | None = None,
     topologies: tuple | None = None,
+    module_context=None,
+    closure: Mapping[str, Any] | None = None,
 ):
     """Build one typed context and route every authored function through the API."""
-    module_context = _enclosing_declaration()
-    closure = _definition_namespace()
-    closure.update(fn_inner.__globals__)
+    module_context = module_context if module_context is not None else _enclosing_declaration()
+    closure = dict(closure) if closure is not None else _definition_namespace()
+    if fn_inner.__globals__ is not None:
+        closure.update(fn_inner.__globals__)
     if fn_inner.__closure__ is not None:
         for name, cell in zip(fn_inner.__code__.co_freevars, fn_inner.__closure__):
             try:
@@ -270,6 +273,94 @@ def _parse_authored(
     return parse_function(fn_inner, context)
 
 
+def _capture_function_closure(fn_inner: FunctionType) -> dict[str, Any]:
+    closure = _definition_namespace()
+    closure.update(fn_inner.__globals__)
+    if fn_inner.__closure__ is not None:
+        for name, cell in zip(fn_inner.__code__.co_freevars, fn_inner.__closure__):
+            try:
+                closure[name] = cell.cell_contents
+            except ValueError:
+                pass
+    return closure
+
+
+@dataclass
+class _DeferredFunction:
+    module_context: Any
+    fn_inner: FunctionType
+    dialect: Literal["hir", "tir"]
+    role: FunctionRole
+    binding_name: str
+    closure: Mapping[str, Any]
+    base: object | None = None
+    key: object | None = None
+    parsed: object | None = None
+    _tilefoundry_deferred: bool = True
+
+    def parse(self):
+        base = self.base.parsed if isinstance(self.base, _DeferredFunction) else self.base
+        if self.role is FunctionRole.CONVERTER:
+            _validate_converter_weight_name(base, self.key)
+        self.parsed = _parse_authored(
+            self.fn_inner,
+            dialect=self.dialect,
+            role=self.role,
+            binding_name=self.binding_name,
+            base=base,
+            key=self.key,
+            module_context=self.module_context,
+            closure=self.closure,
+        )
+        if self.dialect == "hir":
+            if self.role is FunctionRole.VARIANT:
+                object.__setattr__(self.parsed, DISPLAY_NAME, self.binding_name)
+                object.__setattr__(self.parsed, "name", base.name)
+            elif self.role is FunctionRole.CONVERTER:
+                object.__setattr__(
+                    self.parsed,
+                    "name",
+                    f"{base.name}.converter[{self.key}]",
+                )
+        return self.parsed
+
+    def specialize(self, pattern: Any):
+        pat = _validate_one_pattern(pattern)
+
+        def _wrap_variant(fn_inner):
+            declaration = _DeferredFunction(
+                self.module_context,
+                fn_inner,
+                "hir",
+                FunctionRole.VARIANT,
+                fn_inner.__name__,
+                _capture_function_closure(fn_inner),
+                base=self,
+                key=pat,
+            )
+            self.module_context.declarations.append(declaration)
+            return declaration
+
+        return _wrap_variant
+
+    def converter(self, weight_name: str):
+        def _wrap_converter(fn_inner):
+            declaration = _DeferredFunction(
+                self.module_context,
+                fn_inner,
+                "hir",
+                FunctionRole.CONVERTER,
+                fn_inner.__name__,
+                _capture_function_closure(fn_inner),
+                base=self,
+                key=weight_name,
+            )
+            self.module_context.declarations.append(declaration)
+            return declaration
+
+        return _wrap_converter
+
+
 def func(fn=None, *, topologies=UNDECLARED, target=None):
     """Decorator: parse an ``@func``-decorated function into HIR.
 
@@ -285,6 +376,18 @@ def func(fn=None, *, topologies=UNDECLARED, target=None):
     declared_topologies = None if topologies is UNDECLARED else tuple(topologies)
 
     def _wrap(fn_inner):
+        module_context = _enclosing_declaration()
+        if module_context is not None and not declares_context:
+            declaration = _DeferredFunction(
+                module_context,
+                fn_inner,
+                "hir",
+                FunctionRole.ROOT,
+                fn_inner.__name__,
+                _capture_function_closure(fn_inner),
+            )
+            module_context.declarations.append(declaration)
+            return declaration
         ir = _parse_authored(
             fn_inner,
             dialect="hir",
@@ -396,6 +499,18 @@ def prim_func(fn=None, *, target=None):
     resolved_target = target
 
     def _wrap(fn_inner):
+        module_context = _enclosing_declaration()
+        if module_context is not None and resolved_target is None:
+            declaration = _DeferredFunction(
+                module_context,
+                fn_inner,
+                "tir",
+                FunctionRole.ROOT,
+                fn_inner.__name__,
+                _capture_function_closure(fn_inner),
+            )
+            module_context.declarations.append(declaration)
+            return declaration
         ir = _parse_authored(
             fn_inner,
             dialect="tir",

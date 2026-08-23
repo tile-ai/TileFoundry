@@ -56,93 +56,6 @@ def enclosing_declaration(frame: FrameType | None) -> _Entry | None:
     return None
 
 
-def _retarget_module_calls(owner: str, functions, attached: dict) -> None:
-    """Rebuild each marked call against the child attached under its binding.
-
-    Runs before ``Module`` construction seals the functions. The record is
-    repointed at the attached child before the rebuild reads it, because
-    attaching may have copied the Module the class body named. A binding the
-    class body does not attach is refused: there is no child to rebuild against,
-    and collecting it would leave the call pointing outside the tree being built.
-    """
-    from tilefoundry.ir.core import (  # noqa: PLC0415 — avoid import cycle
-        Expr,
-        FunctionScope,
-        TypeInferContext,
-        get_metadata,
-    )
-    from tilefoundry.ir.core.expr import (  # noqa: PLC0415 — avoid import cycle
-        Call,
-    )
-    from tilefoundry.ir.core.module import _ModuleCallee  # noqa: PLC0415
-    from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: PLC0415
-    from tilefoundry.ir.hir.function import elaborate  # noqa: PLC0415
-    from tilefoundry.ir.visitor import ExprWalker  # noqa: PLC0415
-
-    unattached: list[str] = []
-
-    class _RetargetVisitor(ExprWalker[None]):
-        def visit(self, expr):
-            if expr is None or not isinstance(expr, Expr):
-                return None
-            return super().visit(expr)
-
-        def visit_Call(self, expr: Call) -> None:
-            record = get_metadata(expr, _ModuleCallee)
-            if isinstance(expr.target, HirFunction) and record is None:
-                self.visit(expr.target)
-            elif isinstance(expr.target, HirFunction) and record.binding not in attached:
-                unattached.append(record.binding)
-            elif isinstance(expr.target, HirFunction):
-                child = attached[record.binding]
-                entry = child.entry_function()
-                object.__setattr__(
-                    expr,
-                    "metadata",
-                    tuple(
-                        _ModuleCallee(record.binding, child)
-                        if isinstance(m, _ModuleCallee)
-                        else m
-                        for m in expr.metadata
-                    ),
-                )
-                object.__setattr__(
-                    expr,
-                    "target",
-                    elaborate(
-                        entry,
-                        tuple(a.type for a in expr.args),
-                        TypeInferContext(scope=FunctionScope(child, entry)),
-                        call=expr,
-                    ),
-                )
-                object.__setattr__(
-                    expr,
-                    "metadata",
-                    tuple(m for m in expr.metadata if not isinstance(m, _ModuleCallee)),
-                )
-            self.visit_operands(expr)
-
-        def visit_Function(self, fn) -> None:
-            self.visit_operands(fn)
-            for variant in fn.variants:
-                self.visit(variant)
-            for converter in fn.converters:
-                if isinstance(converter, tuple):
-                    self.visit(converter[-1])
-
-    visitor = _RetargetVisitor()
-    for fn in functions:
-        visitor.visit(fn)
-    if unattached:
-        raise ValueError(
-            f"@module {owner!r}: call(s) to Module(s) {sorted(set(unattached))} that "
-            f"no class-body binding attaches; it binds {sorted(attached)}. A Module "
-            f"call is rebuilt against the child attached under the binding it names, "
-            f"so a name nothing binds has no child to call"
-        )
-
-
 def _validate(topologies) -> tuple:
     from tilefoundry.ir.types.shard.mesh import Topology  # noqa: PLC0415
 
@@ -278,7 +191,6 @@ def module(
                 f"{mod_dupes} (a class-body alias of a nested @module is not "
                 f"allowed; one name maps to one child module)"
             )
-        _retarget_module_calls(cls_inner.__name__, functions, attached)
         if entry is not None and entry not in names:
             raise ValueError(
                 f"@module {cls_inner.__name__!r}: entry {entry!r} names no "

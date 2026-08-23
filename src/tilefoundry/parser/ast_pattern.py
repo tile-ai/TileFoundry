@@ -15,79 +15,60 @@ import operator
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from functools import lru_cache
 from types import FrameType, SimpleNamespace
 from typing import Any, ClassVar, Generic, Protocol, TypeVar
 from typing import Literal as TypingLiteral
 
-from tilefoundry.ir.core import VerifyError
+from tilefoundry.ir.core import Call, Constant, ExecutionDomainMetadata, Expr, Var, VerifyError
+from tilefoundry.ir.core.expr import Tuple as IrTuple
+from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
+from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.op_schema import OpSchema
+from tilefoundry.ir.hir.function import Function, elaborate
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir.hir.math.unary import Unary
+from tilefoundry.ir.hir.sharding.local import Local
+from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.hir.specialize import DISPLAY_NAME
+from tilefoundry.ir.hir.tensor.arange import Arange
+from tilefoundry.ir.hir.tensor.reshape import Reshape
+from tilefoundry.ir.hir.tensor.slice import Slice, slice_size
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
+from tilefoundry.ir.tir.prim_function import PrimFunction
+from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, MeshScope, Return, Sequential
+from tilefoundry.ir.types import DType, TensorType, TupleType, UnitType
+from tilefoundry.ir.types.dim import (
+    DimAdd,
+    DimFloorDiv,
+    DimMod,
+    DimMul,
+    DimSub,
+    DimVar,
+    dim_expr,
+    simplify_dim,
+)
+from tilefoundry.ir.types.dim_isl import normalize_dim
+from tilefoundry.ir.types.shard import (
+    Broadcast,
+    Layout,
+    Mesh,
+    ShardLayout,
+    Split,
+    c_order_strides,
+    composed,
+)
+from tilefoundry.ir.types.shard.layout import LayoutBase
+from tilefoundry.ir.types.storage import StorageKind, resolve_storage
+from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 T = TypeVar("T")
 _RETURN_TYPE = "<return_type>"
 _TYPE_INFER_CONTEXT = "<type_infer_context>"
 
 
-@lru_cache(maxsize=1)
-def _runtime() -> SimpleNamespace:
-    """Load the real IR supplied by the integration environment."""
-
-    try:
-        from tilefoundry.ir.core import Call, Constant, ExecutionDomainMetadata, Expr, Var
-        from tilefoundry.ir.core.expr import Tuple as IrTuple
-        from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
-        from tilefoundry.ir.core.module import Module
-        from tilefoundry.ir.core.op_schema import OpSchema
-        from tilefoundry.ir.hir.function import Function, elaborate
-        from tilefoundry.ir.hir.grid_region import GridRegionExpr
-        from tilefoundry.ir.hir.math.binary import Binary
-        from tilefoundry.ir.hir.math.unary import Unary
-        from tilefoundry.ir.hir.sharding.local import Local
-        from tilefoundry.ir.hir.sharding.reshard import Reshard
-        from tilefoundry.ir.hir.specialize import DISPLAY_NAME
-        from tilefoundry.ir.hir.tensor.arange import Arange
-        from tilefoundry.ir.hir.tensor.reshape import Reshape
-        from tilefoundry.ir.hir.tensor.slice import Slice, slice_size
-        from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-        from tilefoundry.ir.tir.prim_function import PrimFunction
-        from tilefoundry.ir.tir.stmts import (
-            Evaluate,
-            LetStmt,
-            MeshScope,
-            Return,
-            Sequential,
-        )
-        from tilefoundry.ir.types import DType, TensorType, TupleType, UnitType
-        from tilefoundry.ir.types.dim import (
-            DimAdd,
-            DimFloorDiv,
-            DimMod,
-            DimMul,
-            DimSub,
-            DimVar,
-            dim_expr,
-            simplify_dim,
-        )
-        from tilefoundry.ir.types.dim_isl import normalize_dim
-        from tilefoundry.ir.types.shard import (
-            Broadcast,
-            Layout,
-            Mesh,
-            ShardLayout,
-            Split,
-            c_order_strides,
-            composed,
-        )
-        from tilefoundry.ir.types.shard.layout import LayoutBase
-        from tilefoundry.ir.types.storage import StorageKind, resolve_storage
-        from tilefoundry.visitor_registry.contexts import TypeInferContext
-        from tilefoundry.visitor_registry.visitors import TypeInferVisitor
-    except ImportError as error:
-        raise RuntimeError(
-            "the parser prototype needs the TileFoundry runtime on sys.path; "
-            "place this prototype before the TileFoundry src directory"
-        ) from error
-
-    return SimpleNamespace(
+runtime = SimpleNamespace(
         Call=Call,
         Broadcast=Broadcast,
         Binary=Binary,
@@ -127,6 +108,7 @@ def _runtime() -> SimpleNamespace:
         TensorType=TensorType,
         TupleType=TupleType,
         TypeInferContext=TypeInferContext,
+        FunctionScope=FunctionScope,
         TypeInferVisitor=TypeInferVisitor,
         TupleGetItem=TupleGetItem,
         Unary=Unary,
@@ -773,6 +755,7 @@ class ModuleBuildContext:
     owned: dict[int, FunctionRole] = field(default_factory=dict)
     variant_keys: dict[int, set[object]] = field(default_factory=dict)
     converter_keys: dict[int, set[str]] = field(default_factory=dict)
+    declarations: list[object] = field(default_factory=list)
     _consumed: bool = False
     FUNCTION_RULES: ClassVar[tuple[object, ...]] = (
         ModuleFunctionValidationRule(),
@@ -816,7 +799,6 @@ class ModuleBuildContext:
         self.FUNCTION_RULES[0].apply(function, context=context, module=self)
 
     def _validate_function(self, function: object, context: FuncParserContext) -> None:
-        runtime = _runtime()
         role = context.role
         binding = context.binding_name or getattr(function, "name", "<anonymous>")
         if role is FunctionRole.ROOT:
@@ -911,11 +893,10 @@ class ModuleBuildContext:
             )
         self._consumed = True
         consume_module_context(self)
-        runtime = _runtime()
         functions: list[object] = []
         modules: list[object] = []
+        module_bindings: dict[str, object] = {}
         methods: dict[str, object] = {}
-        attached: dict[str, object] = {}
         for name, value in vars(cls).items():
             if name == "__call__":
                 raise TypeError(
@@ -927,17 +908,21 @@ class ModuleBuildContext:
             if isinstance(value, runtime.Module):
                 child = value if value.name == name else value.renamed(name)
                 modules.append(child)
-                attached[name] = child
+                module_bindings[name] = child
             elif (
                 isinstance(value, (tuple, list))
                 and value
                 and all(isinstance(item, runtime.Module) for item in value)
             ):
                 modules.extend(value)
+                for child in value:
+                    module_bindings[child.name] = child
             elif isinstance(value, (runtime.Function, runtime.PrimFunction)):
                 if id(value) in self.owned:
                     continue
                 functions.append(value)
+            elif getattr(value, "_tilefoundry_deferred", False):
+                continue
             elif callable(value):
                 methods[name] = value
             else:
@@ -955,6 +940,13 @@ class ModuleBuildContext:
                     f"@module {cls.__name__!r}: registered {role.value} {binding!r} "
                     "was overwritten or aliased"
                 )
+        for name, child in module_bindings.items():
+            self.module_scope.define(name, child)
+        for declaration in self.declarations:
+            parsed = declaration.parse()
+            if declaration.role is FunctionRole.ROOT:
+                functions.append(parsed)
+
         names = [getattr(fn, "name", None) for fn in functions]
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
@@ -971,13 +963,7 @@ class ModuleBuildContext:
             raise ValueError(
                 f"@module {cls.__name__!r}: entry {self.entry!r} names no collected function (have {names})"
             )
-        try:
-            from tilefoundry.module import _retarget_module_calls
-        except ImportError:
-            _retarget_module_calls = None
-        if _retarget_module_calls is not None:
-            _retarget_module_calls(cls.__name__, functions, attached)
-        return runtime.Module(
+        result = runtime.Module(
             name=cls.__name__,
             functions=tuple(functions),
             entry=self.entry,
@@ -986,6 +972,18 @@ class ModuleBuildContext:
             topologies=self.topologies,
             methods=methods,
         )
+        from tilefoundry.ir.hir.verify import verify_function  # noqa: PLC0415
+        from tilefoundry.ir.tir.verify import verify_prim_function  # noqa: PLC0415
+
+        prim_functions = tuple(
+            function for function in functions if isinstance(function, runtime.PrimFunction)
+        )
+        for function in functions:
+            if isinstance(function, runtime.Function):
+                verify_function(function, module=result)
+            elif isinstance(function, runtime.PrimFunction):
+                verify_prim_function(function, module_fns=prim_functions)
+        return result
 
 
 _MODULE_CONTEXTS: list[ModuleBuildContext] = []
@@ -1058,7 +1056,14 @@ class MatchContext:
     @classmethod
     def from_function(cls, function: FuncParserContext) -> MatchContext:
         scope = LexicalScope()
-        scope.define(_TYPE_INFER_CONTEXT, _runtime().TypeInferContext())
+        scope.define(
+            _TYPE_INFER_CONTEXT,
+            runtime.TypeInferContext(
+                scope=runtime.FunctionScope(function.module, function)
+                if function.module is not None
+                else None
+            ),
+        )
         return cls(
             function=function,
             module=None,
@@ -1085,7 +1090,7 @@ class MatchContext:
         switching_function = function is not None and function is not self.function
         if switching_function:
             scope = LexicalScope()
-            scope.define(_TYPE_INFER_CONTEXT, _runtime().TypeInferContext())
+            scope.define(_TYPE_INFER_CONTEXT, runtime.TypeInferContext())
         else:
             scope = self.lexical_scope.fork() if isolated_scope else self.lexical_scope
         if expected_type is None and role == "return_value":
@@ -1304,7 +1309,6 @@ class CanonicalDTypeRule:
     STATEMENT: ClassVar[str] = "A dtype must resolve to a canonical DType."
 
     def apply(self, value, *, match, context):
-        runtime = _runtime()
         if not isinstance(value, runtime.DType):
             raise ParseError.from_node(
                 match.node, context, "dtype did not construct DType"
@@ -1322,7 +1326,6 @@ class LayoutShapeRule:
     STATEMENT: ClassVar[str] = "A layout must have a valid non-boolean shape."
 
     def apply(self, value, *, match, context):
-        runtime = _runtime()
         if value is not None and not isinstance(value, runtime.LayoutBase):
             raise ParseError.from_node(
                 match.node, context, "layout did not construct LayoutBase"
@@ -1351,7 +1354,7 @@ class StorageValueRule:
     STATEMENT: ClassVar[str] = "Storage must resolve to a StorageKind."
 
     def apply(self, value, *, match, context):
-        if not isinstance(value, _runtime().StorageKind):
+        if not isinstance(value, runtime.StorageKind):
             raise ParseError.from_node(
                 match.node, context, "storage did not construct StorageKind"
             )
@@ -1365,7 +1368,6 @@ class TensorLayoutStorageRule:
     )
 
     def apply(self, value, *, match, context):
-        runtime = _runtime()
         if not isinstance(value, runtime.TensorType):
             raise ParseError.from_node(
                 match.node, context, "tensor did not construct TensorType"
@@ -1412,7 +1414,6 @@ class ShapeDimRule:
     )
 
     def apply(self, value, *, match, context):
-        runtime = _runtime()
         if isinstance(value, bool) or not isinstance(
             value, (int, runtime.DimVar, runtime.Expr)
         ):
@@ -1471,7 +1472,6 @@ __all__ = [
 
 
 def _constant(value):
-    runtime = _runtime()
     if isinstance(value, bool):
         dtype = runtime.DType.bool
     elif isinstance(value, int):
@@ -1487,7 +1487,6 @@ def _constant(value):
 
 
 def _infer_call(operation, args, context):
-    runtime = _runtime()
     placeholder_type = getattr(operation, "type", None)
     if placeholder_type is None and args:
         placeholder_type = args[0].type
@@ -1509,7 +1508,6 @@ def _infer_call(operation, args, context):
 
 
 def _slice_size(begin, end, stride, context, node):
-    runtime = _runtime()
     try:
         value = runtime.normalize_dim(
             runtime.slice_size(

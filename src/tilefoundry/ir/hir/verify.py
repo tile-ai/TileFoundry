@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tilefoundry.ir.core import Expr, TypeInferContext, VerifyError
+from tilefoundry.ir.core import Expr, FunctionScope, TypeInferContext, VerifyError
 from tilefoundry.ir.core.expr import Call, Var
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.tir.stmt import Stmt
@@ -12,7 +12,7 @@ from tilefoundry.ir.visitor import ExprVisitor
 from .function import Function, canonical_specialization_signature
 
 
-def verify_function(fn: Function) -> None:
+def verify_function(fn: Function, *, module=None) -> None:
     """Verify HIR parameters, symbolic dimensions, body, and variants."""
     for p in fn.params:
         if not isinstance(p, Var):
@@ -24,7 +24,7 @@ def verify_function(fn: Function) -> None:
                 f"hir Function {fn.name!r}: a function with variants must have "
                 f"no body (a dispatch prototype's body is None / `pass`)"
             )
-        _verify_variants(fn)
+        _verify_variants(fn, module=module)
         return
     if fn.body is None:
         return
@@ -34,10 +34,11 @@ def verify_function(fn: Function) -> None:
         )
     _reject_stmt_nodes(fn.body)
 
-    TypeInferContext().type_of(fn.body)
+    scope = FunctionScope(module, fn) if module is not None else None
+    TypeInferContext(scope=scope).type_of(fn.body)
 
 
-def _verify_variants(base: Function) -> None:
+def _verify_variants(base: Function, *, module=None) -> None:
     """Verify a dispatch prototype's variants and their envelope partition."""
     base_param_types = tuple(p.type for p in base.params)
     sigs: dict[str, Function] = {}
@@ -69,7 +70,7 @@ def _verify_variants(base: Function) -> None:
                 f"hir Function {base.name!r}: duplicate variant canonical signature {sig!r}"
             )
         sigs[sig] = v
-        verify_function(v)
+        verify_function(v, module=module)
     _verify_partition(base)
 
 

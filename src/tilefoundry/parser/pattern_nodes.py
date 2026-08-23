@@ -29,7 +29,6 @@ from tilefoundry.ir.core import (
     get_metadata,
     replace_metadata,
 )
-from tilefoundry.ir.core.module import _ModuleCallee
 from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
@@ -76,8 +75,8 @@ from .ast_pattern import (
     _constant,
     _infer_call,
     _resolve_reference,
-    _runtime,
     _slice_size,
+    runtime,
 )
 
 
@@ -278,11 +277,10 @@ class DTypePattern(ElementPattern):
     def construct(match, children, context):
         if match.branch_id == "dtype_literal":
             try:
-                return _runtime().DType.from_name(match.node.value)
+                return runtime.DType.from_name(match.node.value)
             except ValueError as error:
                 raise ParseError.from_node(match.node, context, str(error)) from error
         elif match.branch_id == "dtype_reference":
-            runtime = _runtime()
             if isinstance(match.node, ast.Name) and match.node.id in runtime.DType._members():
                 return runtime.DType.from_name(match.node.id)
             value = _resolve_reference(match.node, context)
@@ -349,7 +347,6 @@ class ExplicitLayoutPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        runtime = _runtime()
         shape_or_layout = children["shape"]
         strides = children["strides"]
         if isinstance(shape_or_layout, runtime.ShardLayout):
@@ -405,7 +402,6 @@ class PlainLayoutPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        runtime = _runtime()
         shape = tuple(children.values())
         layout = runtime.Layout(
             shape=shape,
@@ -461,7 +457,7 @@ class MeshAxisPattern(ElementPattern):
                 mesh = _resolve_reference(node.value, context)
             except ParseError:
                 mesh = None
-        if not isinstance(mesh, _runtime().Mesh):
+        if not isinstance(mesh, runtime.Mesh):
             raise ParseError.from_node(node, context, f"{binding!r} is not an active Mesh")
         if axis_name is None:
             if len(mesh.layout.shape) != 1:
@@ -590,7 +586,6 @@ class PlacedLayoutPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        runtime = _runtime()
         rank = match.captures["rank"]
         shape = tuple(children[f"extent_{axis}"] for axis in range(rank))
         base = runtime.Layout(
@@ -680,7 +675,7 @@ class LayoutPattern(ElementPattern):
         if match.branch_id == "none":
             return None
         elif match.branch_id == "layout_reference":
-            return context.resolve_static(match.node, _runtime().LayoutBase)
+            return context.resolve_static(match.node, runtime.LayoutBase)
         elif match.branch_id == "identity":
             return children["value"]
         raise RuntimeError(f"no constructor branch for {match.branch_id!r}")
@@ -713,7 +708,6 @@ class StoragePattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        runtime = _runtime()
         if isinstance(match.node, ast.Name) and match.node.id in {
             str(k) for k in runtime.StorageKind
         }:
@@ -773,7 +767,6 @@ class TensorOptionalSlotPattern(ElementPattern):
         if isinstance(node, (ast.Tuple, ast.Call)):
             return "layout"
         if isinstance(node, (ast.Name, ast.Attribute)):
-            runtime = _runtime()
             try:
                 value = _resolve_reference(node, context)
             except ParseError:
@@ -905,7 +898,6 @@ class TensorPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        runtime = _runtime()
         shape_or_layout = children["shape_or_layout"]
         if isinstance(shape_or_layout, runtime.LayoutBase):
             shape = shape_or_layout.shape
@@ -957,7 +949,6 @@ class ScalarTypePattern(ElementPattern):
     @staticmethod
     def construct(match, children, context):
         value = _resolve_reference(match.node, context)
-        runtime = _runtime()
         if not isinstance(value, (runtime.TensorType, runtime.TupleType, runtime.UnitType)):
             raise ParseError.from_node(match.node, context, "annotation did not resolve to IR Type")
         return value
@@ -1255,7 +1246,6 @@ class SignaturePattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        runtime = _runtime()
         names = match.captures["names"]
         constness = match.captures["constness"]
         params = tuple(
@@ -1722,7 +1712,7 @@ class NamePattern(ElementPattern):
             value = context.function.closure.get(name)
         if isinstance(value, slice):
             value = value.start
-        if isinstance(value, _runtime().Expr):
+        if isinstance(value, runtime.Expr):
             return value
         if isinstance(value, (bool, int, float)):
             return _constant(value)
@@ -1776,7 +1766,6 @@ class TupleExpressionPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        runtime = _runtime()
         elements = tuple(children.values())
         return runtime.IrTuple(
             type=runtime.TupleType(fields=tuple(item.type for item in elements)),
@@ -1791,7 +1780,6 @@ class CallBindingRule:
     STATEMENT: ClassVar[str] = "A call must bind its arguments into a Call tuple."
 
     def apply(self, value, *, match, context):
-        runtime = _runtime()
         if not isinstance(value, runtime.Call):
             raise ParseError.from_node(match.node, context, "call did not construct Call")
         if not isinstance(value.args, tuple):
@@ -1807,7 +1795,6 @@ class CallBindingRule:
 def _types_compatible(actual: object, expected: object) -> bool:
     if actual == expected:
         return True
-    runtime = _runtime()
     if isinstance(actual, runtime.TensorType) and isinstance(expected, runtime.TensorType):
         try:
             actual_shape = tuple(runtime.normalize_dim(dim) for dim in actual.shape)
@@ -1828,7 +1815,6 @@ class CallTypeInferenceRule:
     STATEMENT: ClassVar[str] = "A call's result type must be inferred from its binding."
 
     def apply(self, value, *, match, context):
-        runtime = _runtime()
         if not isinstance(value, runtime.Call):
             return value
         infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
@@ -1884,7 +1870,6 @@ class CallPattern(ElementPattern):
 
     @staticmethod
     def _pattern_for_param(param: object, node: ast.AST) -> AstPattern[Any]:
-        runtime = _runtime()
         annotation = param.annotation
         if annotation is runtime.TensorType and isinstance(node, ast.Subscript):
             return TensorPattern()
@@ -1928,7 +1913,7 @@ class CallPattern(ElementPattern):
                     CallPattern._pattern_for_param(param, argument),
                     argument,
                     "call_attribute",
-                    "allocation" if param.annotation is _runtime().TensorType else param.name,
+                    "allocation" if param.annotation is runtime.TensorType else param.name,
                 )
             )
         for keyword in node.keywords:
@@ -1944,7 +1929,7 @@ class CallPattern(ElementPattern):
                     CallPattern._pattern_for_param(param, keyword.value),
                     keyword.value,
                     "call_attribute",
-                    "allocation" if param.annotation is _runtime().TensorType else param.name,
+                    "allocation" if param.annotation is runtime.TensorType else param.name,
                 )
             )
         if not variadic and len(node.args) < len(inputs):
@@ -1954,7 +1939,6 @@ class CallPattern(ElementPattern):
     @staticmethod
     def _bind(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
         assert isinstance(node, ast.Call)
-        runtime = _runtime()
         module_owner = None
         try:
             callee = _resolve_reference(node.func, context)
@@ -2011,7 +1995,6 @@ class CallPattern(ElementPattern):
     @staticmethod
     def construct(match, children, context):
         if match.branch_id == "operation_call":
-            runtime = _runtime()
             schema = match.captures["schema"]
             inputs = tuple(value for name, value in children.items() if name.startswith("input_"))
             attrs = {
@@ -2040,7 +2023,6 @@ class CallPattern(ElementPattern):
                 placeholder_type = runtime.TensorType.scalar(runtime.DType.f32)
             return runtime.Call(type=placeholder_type, target=operation, args=inputs)
         elif match.branch_id == "function_call":
-            runtime = _runtime()
             callee = match.captures["callee"]
             args = tuple(children.values())
             module_owner = match.captures.get("module_owner")
@@ -2050,19 +2032,10 @@ class CallPattern(ElementPattern):
                     context,
                     "a Module call is only valid inside a @module class body",
                 )
-            metadata = ()
-            if module_owner is not None:
-                metadata = (
-                    _ModuleCallee(
-                        match.captures.get("module_binding") or "<module>",
-                        module_owner,
-                    ),
-                )
             placeholder = runtime.Call(
                 type=callee.return_type,
                 target=callee,
                 args=args,
-                metadata=metadata,
             )
             infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
             if not isinstance(infer_context, runtime.TypeInferContext):
@@ -2186,7 +2159,6 @@ class BinaryExpressionPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        runtime = _runtime()
         return runtime.Call(
             type=children["left"].type,
             target=runtime.Binary(kind=runtime.BinaryKind[match.captures["kind"]]),
@@ -2229,7 +2201,6 @@ class UnaryExpressionPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        runtime = _runtime()
         operand = children["operand"]
         return runtime.Call(
             type=operand.type,
@@ -2264,11 +2235,11 @@ class SliceEndpointBinaryPattern(ElementPattern):
                 CapturePattern(
                     "dimension_operator",
                     lambda node, context: {
-                        ast.Add: _runtime().DimAdd,
-                        ast.Sub: _runtime().DimSub,
-                        ast.Mult: _runtime().DimMul,
-                        ast.FloorDiv: _runtime().DimFloorDiv,
-                        ast.Mod: _runtime().DimMod,
+                        ast.Add: runtime.DimAdd,
+                        ast.Sub: runtime.DimSub,
+                        ast.Mult: runtime.DimMul,
+                        ast.FloorDiv: runtime.DimFloorDiv,
+                        ast.Mod: runtime.DimMod,
                     }[type(node.op)],
                 ),
                 FieldPattern(
@@ -2291,14 +2262,14 @@ class SliceEndpointBinaryPattern(ElementPattern):
         if (
             isinstance(left, slice)
             and type(match.node.op) in {ast.Add, ast.Sub}
-            and isinstance(right, (int, _runtime().Expr))
+            and isinstance(right, (int, runtime.Expr))
         ):
             offset = right
             if type(match.node.op) is ast.Sub:
-                offset = _runtime().simplify_dim(_runtime().DimMul, (-1, offset))
+                offset = runtime.simplify_dim(runtime.DimMul, (-1, offset))
             try:
-                start = _runtime().simplify_dim(_runtime().DimAdd, (left.start, offset))
-                stop = _runtime().simplify_dim(_runtime().DimAdd, (left.stop, offset))
+                start = runtime.simplify_dim(runtime.DimAdd, (left.start, offset))
+                stop = runtime.simplify_dim(runtime.DimAdd, (left.stop, offset))
             except (TypeError, ValueError, ZeroDivisionError) as error:
                 raise ParseError.from_node(match.node, context, str(error)) from error
             return slice(start, stop, left.step)
@@ -2309,7 +2280,7 @@ class SliceEndpointBinaryPattern(ElementPattern):
         try:
             if numeric:
                 return match.captures["operator"](left, right)
-            return _runtime().simplify_dim(match.captures["dimension_operator"], (left, right))
+            return runtime.simplify_dim(match.captures["dimension_operator"], (left, right))
         except (TypeError, ValueError, ZeroDivisionError) as error:
             raise ParseError.from_node(match.node, context, str(error)) from error
 
@@ -2462,7 +2433,6 @@ class SubscriptExpressionPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        runtime = _runtime()
         value = children["value"]
         index = children["index"]
         if isinstance(value.type, runtime.TupleType):
@@ -2542,7 +2512,6 @@ class MeshCoordinatePattern(ElementPattern):
         if context.function is None:
             return None
         mesh = context.lexical_scope.lookup(node.value.id)
-        runtime = _runtime()
         if not isinstance(mesh, runtime.Mesh):
             return None
         axis = next(
@@ -2564,7 +2533,6 @@ class MeshCoordinatePattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        runtime = _runtime()
         if context.function is None:
             raise ParseError.from_node(match.node, context, "mesh coordinate lacks context")
         mesh = match.captures["mesh"]
@@ -2632,7 +2600,7 @@ class ExpressionPattern(ElementPattern):
     @staticmethod
     def construct(match, children, context):
         value = _resolve_reference(match.node, context)
-        if isinstance(value, _runtime().Expr):
+        if isinstance(value, runtime.Expr):
             return value
         if isinstance(value, (bool, int, float)):
             return _constant(value)
@@ -2779,7 +2747,7 @@ class MeshContextPattern(ElementPattern):
                 )
             names = children.get("names", ())
             try:
-                mesh = _runtime().Mesh(
+                mesh = runtime.Mesh(
                     topologies=topologies,
                     layout=children["layout"],
                     names=names,
@@ -2795,7 +2763,7 @@ class MeshContextPattern(ElementPattern):
             if context.function is None:
                 raise ParseError.from_node(match.node, context, "Mesh requires function context")
             mesh = children["value"]
-            if not isinstance(mesh, _runtime().Mesh):
+            if not isinstance(mesh, runtime.Mesh):
                 raise ParseError.from_node(match.node, context, "with context is not Mesh")
             binding = context.values.get("mesh_binding")
             if isinstance(binding, str):
@@ -2881,7 +2849,6 @@ class WithPattern(ElementPattern):
         if context.function is None or not context.function.state.mesh_stack:
             raise ParseError.from_node(match.node, context, "Mesh stack is unbalanced")
         mesh = context.function.state.mesh_stack.pop()
-        runtime = _runtime()
         if context.function.dialect == "hir":
             return children["body"]
         binding = runtime.Var(
@@ -2938,7 +2905,7 @@ class LaunchPattern(ElementPattern):
     @staticmethod
     def construct(match, children, context):
         callee = children["callee"]
-        if isinstance(callee, _runtime().Module):
+        if isinstance(callee, runtime.Module):
             callee = callee.entry_function()
         options = {
             name: children[name]
@@ -3143,7 +3110,6 @@ class LoopHeaderPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        runtime = _runtime()
         if context.function is None or context.function.dialect != "hir":
             raise ParseError.from_node(match.node, context, "loops require HIR context")
         values = dict(match.captures["defaults"])
@@ -3228,7 +3194,7 @@ class LoopBodyPattern(ElementPattern):
         if not children:
             raise ParseError.from_node(match.node, context, "loop body cannot be empty")
         value = tuple(children.values())[-1]
-        if not isinstance(value, _runtime().Expr):
+        if not isinstance(value, runtime.Expr):
             raise ParseError.from_node(match.node, context, "loop body must yield an Expr")
         return value
 
@@ -3259,7 +3225,6 @@ class ForPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        runtime = _runtime()
         frame = children["header"]
         body = children["body"]
         yield_values = tuple(context.lexical_scope.lookup(name) for name in frame.carry_names)
@@ -3333,7 +3298,6 @@ class TupleAssignmentPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        runtime = _runtime()
         value = children["value"]
         names = match.captures["names"]
         if not isinstance(value.type, runtime.TupleType):
@@ -3469,7 +3433,6 @@ class StatementPattern(ElementPattern):
     @staticmethod
     def construct(match, children, context):
         if match.branch_id == "assignment":
-            runtime = _runtime()
             value = children.get("value")
             annotation = children.get("annotation")
             if value is None:
@@ -3512,7 +3475,7 @@ class StatementPattern(ElementPattern):
             if context.function.dialect == "tir":
                 if "value" in children:
                     raise ParseError.from_node(match.node, context, "prim_func return must be bare")
-                return _runtime().Return()
+                return runtime.Return()
             if "value" not in children:
                 raise ParseError.from_node(match.node, context, "func return must carry a value")
             return children["value"]
@@ -3522,7 +3485,6 @@ class StatementPattern(ElementPattern):
                 raise ParseError.from_node(
                     match.node, context, "HIR does not allow expression statements"
                 )
-            runtime = _runtime()
             if isinstance(value, runtime.Evaluate):
                 return value
             if not isinstance(value, runtime.Call) or not isinstance(value.type, runtime.UnitType):
@@ -3588,7 +3550,6 @@ class BlockPattern(ElementPattern):
                 return None
             raise ParseError.from_node(match.node, context, "HIR body must end with return")
 
-        runtime = _runtime()
 
         def fold(index: int) -> list[object]:
             output: list[object] = []
@@ -3625,7 +3586,6 @@ class FunctionReturnRule:
     STATEMENT: ClassVar[str] = "A HIR function body's inferred type must match its return type."
 
     def apply(self, value, *, match, context):
-        runtime = _runtime()
         if isinstance(value, runtime.Function) and value.body is not None:
             infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
             if not isinstance(infer_context, runtime.TypeInferContext):
@@ -3647,7 +3607,6 @@ class FunctionDialectRule:
     )
 
     def apply(self, value, *, match, context):
-        runtime = _runtime()
         kind = context.function.function_kind
         if context.function.dialect == "hir" and kind == "prim_func":
             raise ParseError.from_node(match.node, context, "prim_func requires tir dialect")
@@ -3676,7 +3635,6 @@ class FunctionRoleValidationRule:
         node: ast.AST,
         match_context: MatchContext,
     ) -> None:
-        runtime = _runtime()
         if function_context.role is FunctionRole.ROOT:
             return
         base = function_context.base
@@ -3790,7 +3748,6 @@ class FunctionPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        runtime = _runtime()
         if context.function is None:
             raise ParseError.from_node(match.node, context, "function lacks context")
         params = children["signature"]

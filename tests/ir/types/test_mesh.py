@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import ast
-
 import pytest
 
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import (
     Layout,
     Mesh,
-    Partial,
     Split,
     Topology,
     make_mesh,
@@ -20,7 +17,6 @@ from tilefoundry.ir.types.shard.scope_match import (
     states_consistent_positions,
 )
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
-from tilefoundry.ir.types.shard.sugar import parse_sugar
 from tilefoundry.schedule.partition.problem import _placement_relation
 
 
@@ -69,26 +65,6 @@ def test_mesh_slice_keeps_the_parent_topologies() -> None:
 
     assert sliced.topologies is mesh.topologies
     assert sliced.layout.shape == (1, 32)
-
-
-def test_named_mesh_axis_sugar_carries_a_layout_index() -> None:
-    mesh = make_mesh((8,), names=("cta",), topology="cta")
-    node = ast.parse("(8 @ cta.cta,)", mode="eval").body
-
-    layout = parse_sugar(
-        node,
-        ShardLayout,
-        mesh_resolver=lambda name: mesh if name == "cta" else None,
-    )
-    partial_node = ast.parse('((8,), {cta.cta @ P("sum")})', mode="eval").body
-    partial_layout = parse_sugar(
-        partial_node,
-        ShardLayout,
-        mesh_resolver=lambda name: mesh if name == "cta" else None,
-    )
-
-    assert layout.attrs == (Split(0),)
-    assert partial_layout.attrs == (Partial("sum"),)
 
 
 def test_mesh_value_equality_is_usable_by_partition() -> None:

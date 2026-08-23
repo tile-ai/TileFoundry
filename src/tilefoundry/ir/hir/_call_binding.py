@@ -10,7 +10,6 @@ record and the ownership rule stay here, behind one result.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from tilefoundry.visitor_registry.contexts import FunctionScope
 
@@ -37,27 +36,16 @@ class CallBinding:
     from_reading: bool
 
 
-_authoring_reader: Any = None
-
-
-def set_authoring_reader(reader) -> None:
-    """Install the reader for records written while a class body is authored.
-
-    Called once by the parser that writes them. Without it nothing is authored,
-    so ownership is the only answer -- which is correct for a tree already built.
-    """
-    global _authoring_reader
-    _authoring_reader = reader
-
-
-def _authored_owner(call):
-    return None if _authoring_reader is None else _authoring_reader(call)
-
-
 def _owned_child(ctx, callee):
     """The child of the scope's function's owner that owns *callee*."""
     scope = getattr(ctx, "scope", None)
     if scope is None or scope.module is None:
+        return None
+    module_scope = getattr(scope.module, "module_scope", None)
+    if module_scope is not None:
+        for _name, child in module_scope.items():
+            if getattr(child, "owns", lambda *_args, **_kwargs: False)(callee, derived=True):
+                return child
         return None
     from tilefoundry.ir.core.module import (  # noqa: PLC0415 — avoid import cycle
         child_module_of,
@@ -73,11 +61,7 @@ def binding_for(callee, call, ctx) -> CallBinding:
     binds every declared parameter, so a short argument list is refused rather
     than reinterpreted.
     """
-    owner = None
-    if call is not None:
-        owner = _authored_owner(call)
-    if owner is None:
-        owner = _owned_child(ctx, callee)
+    owner = _owned_child(ctx, callee)
     if owner is not None:
         return CallBinding(
             bound_params(callee, from_reading=True),
