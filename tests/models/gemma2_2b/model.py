@@ -225,7 +225,7 @@ class Gemma2_2B_DecoderLayer:
         # normalisation instead. Written out per group because the two are
         # differently shaped and a @func binds its parameter shapes exactly.
         q_e = tf.reshape(q_s, new_shape=(1, S, config.num_attention_heads, 1, config.head_dim))
-        softcap = tf.cast(ATTN_SOFTCAP, dtype="bf16")
+        softcap = tf.full_like(q_e, value=ATTN_SOFTCAP)
         z_ctx = (
             tf.reduce(q_e * k_ctx, axes=(-1,), keepdim=True, kind="sum") / softcap
         )
@@ -326,7 +326,7 @@ class Gemma2_2B:
         row = tf.reshape(
             tf.index_select(w_embed, token_ids, dim=0), new_shape=(1, S, config.hidden_size)
         )
-        return row * tf.cast(EMBED_SCALE, dtype=_DT)
+        return row * tf.full_like(row, value=EMBED_SCALE)
 
     @func
     def final_rms_norm(
@@ -344,7 +344,7 @@ class Gemma2_2B:
         # Soft-capped as `Gemma2ForCausalLM.forward` caps it, at
         # `final_logit_softcapping` rather than attention's cap.
         logits = tf.matmul(tf.reshape(hidden, new_shape=(1, config.hidden_size)), w_head)
-        softcap = tf.cast(LOGIT_SOFTCAP, dtype=_DT)
+        softcap = tf.full_like(logits, value=LOGIT_SOFTCAP)
         z = logits / softcap
         return tf.tanh(z) * softcap
 
