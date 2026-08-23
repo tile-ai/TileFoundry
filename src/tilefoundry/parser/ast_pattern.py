@@ -60,7 +60,7 @@ from tilefoundry.ir.types.shard import (
 )
 from tilefoundry.ir.types.shard.layout import LayoutBase
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
-from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.contexts import CallFeed, FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 T = TypeVar("T")
@@ -688,6 +688,44 @@ class FuncParserContext:
 
 
 @dataclass(frozen=True)
+class ParserCallFeedProvider:
+    """Build call feeds from the authored module scope during parsing."""
+
+    module_scope: object | None
+
+    def _child_for(self, callee: object):
+        if self.module_scope is None:
+            return None
+        for _name, child in self.module_scope.items():
+            if getattr(child, "owns", lambda *_args, **_kwargs: False)(
+                callee, derived=True
+            ):
+                return child
+        return None
+
+    def build_call_feed(self, callee: object, supplied: tuple[object, ...]) -> CallFeed:
+        child = self._child_for(callee)
+        params = tuple(p for p in callee.params if not (child is not None and p.is_const))
+        if len(supplied) != len(params):
+            kind = "activation(s)" if child is not None else "parameter(s)"
+            raise VerifyError(
+                f"hir Function call {callee.name!r}: arity mismatch — "
+                f"callee declares {len(params)} {kind}, call passed {len(supplied)}"
+            )
+        given = iter(supplied)
+        return CallFeed(
+            {
+                id(param): param.type if child is not None and param.is_const else next(given)
+                for param in callee.params
+            }
+        )
+
+    def scope_for(self, callee: object) -> FunctionScope | None:
+        child = self._child_for(callee)
+        return None if child is None else FunctionScope(child, callee)
+
+
+@dataclass(frozen=True)
 class ModuleFunctionValidationRule:
     STATEMENT: ClassVar[str] = (
         "A module function must satisfy its root, variant, or converter role before mutation."
@@ -1056,13 +1094,14 @@ class MatchContext:
     @classmethod
     def from_function(cls, function: FuncParserContext) -> MatchContext:
         scope = LexicalScope()
+        provider = (
+            ParserCallFeedProvider(function.module_scope)
+            if function.module_scope is not None
+            else None
+        )
         scope.define(
             _TYPE_INFER_CONTEXT,
-            runtime.TypeInferContext(
-                scope=runtime.FunctionScope(function.module, function)
-                if function.module is not None
-                else None
-            ),
+            runtime.TypeInferContext(call_feed_provider=provider),
         )
         return cls(
             function=function,
@@ -1090,7 +1129,15 @@ class MatchContext:
         switching_function = function is not None and function is not self.function
         if switching_function:
             scope = LexicalScope()
-            scope.define(_TYPE_INFER_CONTEXT, runtime.TypeInferContext())
+            provider = (
+                ParserCallFeedProvider(function.module_scope)
+                if function is not None and function.module_scope is not None
+                else None
+            )
+            scope.define(
+                _TYPE_INFER_CONTEXT,
+                runtime.TypeInferContext(call_feed_provider=provider),
+            )
         else:
             scope = self.lexical_scope.fork() if isolated_scope else self.lexical_scope
         if expected_type is None and role == "return_value":

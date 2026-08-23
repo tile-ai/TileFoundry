@@ -177,6 +177,20 @@ class FunctionScope:
 
 
 @dataclass
+class CallFeed(Generic[T]):
+    """Values supplied to one callee, keyed by formal parameter identity."""
+
+    by_param: Mapping[int, T]
+
+    def value_for(self, param: Param) -> T: ...
+
+
+class CallFeedProvider(Protocol[T]):
+    def build_call_feed(self, callee: Function, supplied: tuple[T, ...]) -> CallFeed[T]: ...
+    def scope_for(self, callee: Function) -> FunctionScope | None: ...
+
+
+@dataclass
 class TypeInferContext:
     """Walk-local type cache, mesh scope, and elaboration cache.
 
@@ -192,8 +206,12 @@ class TypeInferContext:
     cache: dict[int, Type] = field(default_factory=dict)
     mesh_scope: tuple = ()
     elaboration_cache: dict[tuple, Any] = field(default_factory=dict)
+    call_feed_provider: CallFeedProvider[Type] | None = None
+    feed: CallFeed[Type] | None = None
 
     def type_of(self, expr: Expr) -> Type: ...
+    def build_call_feed(self, callee: Function, supplied: tuple[Type, ...]) -> CallFeed[Type]: ...
+    def scope_for(self, callee: Function) -> FunctionScope | None: ...
     def error(self, node: Expr | Stmt, msg: str) -> NoReturn: ...
 ```
 
@@ -208,10 +226,11 @@ nothing of that kind rather than guessing.
   - `scope` MUST be the only context state describing where a walk is reading,
     and the pair MUST be reachable from the package root together, since one is
     how the other is constructed.
-  - A walk-visible query answering a question about one construct — which Module
-    a particular kind of callee belongs to, how a particular call binds its
-    arguments ([hir §1.1](./hir.md#11-function)) — MUST NOT be added to the
-    context; such a question is resolved by whoever asks it, from `scope`.
+  - A `CallFeed` MUST contain only the formal parameter identity to value mapping;
+    it MUST NOT carry a Module, scope, reading, or parser metadata.
+  - `CallFeedProvider` is context-owned: Parser, Type Inference, and function-level
+    Evaluator provide their own value type and ownership rules. HIR consumes
+    `TypeInferContext.build_call_feed()` and does not own a resolver.
   - `type_of` is a walk-local cache only — it holds no dispatch rule of its
     own. A cache miss delegates to `TypeInferVisitor(self).visit(expr)`
     (below), whose `visit_Call` is what consults

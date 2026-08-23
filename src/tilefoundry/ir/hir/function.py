@@ -110,7 +110,6 @@ class Function(Expr):
             conv.seal()
 
 
-from tilefoundry.ir.hir._call_binding import binding_for  # noqa: E402
 from tilefoundry.ir.visitor import ExprMutator  # noqa: E402
 
 
@@ -179,48 +178,49 @@ def elaborate(
     arg_types: tuple[Type, ...],
     ctx: TypeInferContext | None = None,
     call: Call | None = None,
+    *,
+    feed=None,
 ) -> "Function":
     """Construct a concrete callee for one call site's argument types.
 
     Dispatch prototypes and already-equal bindings return unchanged. Other
     templates rebuild per distinct type tuple and reuse the construction
     session's elaboration cache. ``call`` anchors binding errors when present,
-    and is what says how the call binds: one whose callee's constants come from
-    a Module reading binds the non-constant parameters alone.
+    and is what says how the call binds: the context supplies a complete
+    ``CallFeed`` for the callee's formal parameters.
 
     See [hir §1.1](docs/spec/hir.md#11-function).
     """
     if ctx is None:
         ctx = TypeInferContext()
-    binding = binding_for(callee, call, ctx)
-    expected = len(binding.params)
-    got = len(arg_types)
-    if got != expected:
-        kind = "activation(s)" if binding.from_reading else "parameter(s)"
-        ctx.error(
-            call if call is not None else callee,
-            f"hir Function call {callee.name!r}: arity mismatch — "
-            f"callee declares {expected} {kind}, call passed {got}",
-        )
-    given = iter(enumerate(arg_types))
+    feed = feed or ctx.build_call_feed(callee, arg_types)
+    supplied_params = (
+        callee.params
+        if len(arg_types) == len(callee.params)
+        else tuple(param for param in callee.params if not param.is_const)
+    )
+    supplied = iter(enumerate(arg_types))
     bound_types = []
+    supplied_ids = {id(param) for param in supplied_params}
     for param in callee.params:
-        if binding.from_reading and param.is_const:
-            bound_types.append(param.type)
+        if id(param) not in supplied_ids:
+            bound_types.append(feed.value_for(param))
             continue
-        index, arg_ty = next(given)
+        index, arg_ty = next(supplied)
         bound_types.append(_bind_param_type(ctx, callee, index, param, arg_ty, call))
     if callee.variants or callee.body is None:
         return callee
     if all(bt == p.type for bt, p in zip(bound_types, callee.params)):
         return callee
 
-    cache_key = (id(callee), arg_types, binding.from_reading)
+    cache_key = (id(callee), arg_types)
     cached = ctx.elaboration_cache.get(cache_key)
     if cached is not None:
         return cached
 
-    instance = _elaborate_from_bound_types(callee, bound_types, ctx, scope=binding.scope)
+    instance = _elaborate_from_bound_types(
+        callee, bound_types, ctx, scope=ctx.scope_for(callee)
+    )
     ctx.elaboration_cache[cache_key] = instance
     return instance
 
@@ -536,14 +536,13 @@ def _typeinfer_hir_function_call(call: Call, ctx) -> Type:
     """
     callee: Function = call.target  # type: ignore[assignment]
     arg_types = tuple(ctx.type_of(a) for a in call.args)
-    binding = binding_for(callee, call, ctx)
-    instance = elaborate(callee, arg_types, ctx, call=call)
+    feed = ctx.build_call_feed(callee, arg_types)
+    instance = elaborate(callee, arg_types, ctx, call=call, feed=feed)
     if instance.body is None:
         return instance.return_type
-    inner = binding.scope
-    body_ctx = TypeInferContext(
-        scope=None if inner is None else dataclasses.replace(inner, function=instance)
-    )
+    body_ctx = ctx.child(callee, feed)
+    if body_ctx.scope is not None:
+        body_ctx.scope = dataclasses.replace(body_ctx.scope, function=instance)
     return body_ctx.type_of(instance.body)
 
 

@@ -8,7 +8,7 @@ from typing import Any
 
 import torch
 
-from tilefoundry.evaluator.context import EvalContext
+from tilefoundry.evaluator.context import EvalContext, FunctionEvalContext
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.evaluator.registry import eval_registry
 from tilefoundry.evaluator.value import (
@@ -24,6 +24,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.visitor import ExprVisitor
+from tilefoundry.visitor_registry.contexts import CallFeed
 
 
 def _default_device() -> str:
@@ -56,21 +57,21 @@ def _bind_dim_vars(params, values) -> dict[str, int]:
     return binding
 
 
-def child_reading(reading, callee: Function):
-    """The child reading a call to *callee* runs against, else ``None``.
+def child_module_instance(loaded_module, callee: Function):
+    """The child module instance a call to *callee* runs against, else ``None``.
 
     ``None`` is a same-owner call, which binds every declared parameter. A
     collected call carries no binding record, so which reading supplies the
     constants is answered by which child owns the callee.
     """
-    if reading is None or reading.module.owns(callee, derived=True):
+    if loaded_module is None or loaded_module.module.owns(callee, derived=True):
         return None
     matches = tuple(
-        child for child in reading.modules if child.module.owns(callee, derived=True)
+        child for child in loaded_module.modules if child.module.owns(callee, derived=True)
     )
     if len(matches) > 1:
         raise EvalError(
-            f"evaluator: {reading.name!r} holds {len(matches)} readings owning "
+            f"evaluator: {loaded_module.name!r} holds {len(matches)} child modules owning "
             f"{callee.name!r}; one call reaches one child"
         )
     return matches[0] if matches else None
@@ -83,12 +84,14 @@ class Evaluator(ExprVisitor):
         self, env: dict[int, Value], device: str,
         dim_env: dict[str, int] | None = None,
         reading=None,
+        function_context: FunctionEvalContext | None = None,
     ) -> None:
         super().__init__()
         self.env = env
         self.device = device
         self.dim_env = dim_env or {}
-        self.reading = reading
+        self.function_context = function_context
+        self.reading = reading if function_context is None else function_context.loaded_module
     def visit_Var(self, var: Var) -> Value:
         try:
             return self.env[id(var)]
@@ -126,7 +129,7 @@ class Evaluator(ExprVisitor):
         )
 
     def _call_function(self, callee: Function, arg_exprs) -> Value:
-        child = child_reading(self.reading, callee)
+        child = child_module_instance(self.reading, callee)
         supplied = [p for p in callee.params if not (child is not None and p.is_const)]
         if len(arg_exprs) != len(supplied):
             kind = "activation(s)" if child is not None else "args"
@@ -142,10 +145,20 @@ class Evaluator(ExprVisitor):
             for param in callee.params
         ]
         target = _select_variant(callee, args) if callee.variants else callee
-        sub_env = {id(param): arg for param, arg in zip(target.params, args)}
-        sub_dim_env = _bind_dim_vars(target.params, args)
+        feed = CallFeed({id(param): arg for param, arg in zip(target.params, args)})
+        function_context = FunctionEvalContext(
+            feed=feed,
+            loaded_module=child if child is not None else self.reading,
+            device=self.device,
+            dim_bindings=_bind_dim_vars(target.params, args),
+        )
+        sub_env = dict(feed.by_param)
         return Evaluator(
-            sub_env, self.device, sub_dim_env, child if child is not None else self.reading
+            sub_env,
+            self.device,
+            function_context.dim_bindings,
+            function_context.loaded_module,
+            function_context=function_context,
         ).visit(target.body)
 
     def _resolve_loop_field(self, dim, what: str) -> int:
@@ -217,17 +230,17 @@ class Evaluator(ExprVisitor):
         return carried[0] if len(carried) == 1 else TupleValue(tuple(carried))
 
 
-def _child_constant(reading, callee: Function, param) -> TensorValue:
+def _child_constant(loaded_module, callee: Function, param) -> TensorValue:
     """*param*'s constant, read from the child *callee* belongs to.
 
     Wrapped without a device argument: placement is settled before execution
     and this must not be where a weight quietly moves.
     """
     try:
-        value = reading.constants[param.name]
+        value = loaded_module.constants[param.name]
     except KeyError:
         raise EvalError(
-            f"evaluator: {reading.name!r} has no binding for {param.name!r} of "
+            f"evaluator: {loaded_module.name!r} has no binding for {param.name!r} of "
             f"{callee.name!r}; a child call takes its ConstTensor parameters "
             f"from that child's own resources"
         ) from None

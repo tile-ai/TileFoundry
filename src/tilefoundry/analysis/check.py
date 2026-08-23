@@ -15,9 +15,8 @@ from tilefoundry.ir.core import (
     Var,
     get_metadata,
 )
-from tilefoundry.ir.core.module import Module, owning_module, subtree
+from tilefoundry.ir.core.module import Module, child_module_of, owning_module, subtree
 from tilefoundry.ir.core.pattern import DimVarRangePat
-from tilefoundry.ir.hir._call_binding import binding_for
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.specialize import (
@@ -589,19 +588,9 @@ def _module_paths(module: Module) -> dict[int, str]:
 
 
 def _call_reading(module: Module, caller: Function, call: Call) -> Module | None:
-    binding = binding_for(
-        call.target,
-        call,
-        TypeInferContext(scope=FunctionScope(module, caller)),
-    )
-    if not binding.from_reading:
-        return None
-    owner = owning_module(module, call.target)
+    owner = child_module_of(module, caller, call.target)
     if owner is None:
-        raise AnalysisError(
-            f"Function call {call.target.name!r} has no unique owner in Module "
-            f"{module.name!r}"
-        )
+        return None
     return owner
 
 

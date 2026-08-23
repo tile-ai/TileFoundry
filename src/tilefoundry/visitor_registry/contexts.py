@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, NoReturn, Union
+from typing import Any, Generic, NoReturn, Protocol, TypeVar, Union
 
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.expr import Call, Expr
@@ -26,6 +26,29 @@ from tilefoundry.ir.core.stmt import Stmt
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.ir.types.tensor_type import DType, TensorType, Type
 from tilefoundry.ir.types.utils import local_type_of
+
+T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class CallFeed(Generic[T]):
+    """Values supplied to one callee, keyed by formal parameter identity."""
+
+    by_param: Mapping[int, T]
+
+    def value_for(self, param: object) -> T:
+        try:
+            return self.by_param[id(param)]
+        except KeyError:
+            raise KeyError(f"no call-feed value for parameter {getattr(param, 'name', param)!r}") from None
+
+
+class CallFeedProvider(Protocol[T]):
+    """Context-owned call binding and callee-scope construction."""
+
+    def build_call_feed(self, callee: object, supplied: tuple[T, ...]) -> CallFeed[T]: ...
+
+    def scope_for(self, callee: object) -> FunctionScope | None: ...
 
 
 def _constant_type(value: object) -> TensorType:
@@ -70,6 +93,54 @@ class TypeInferContext:
     cache: dict[int, Type] = field(default_factory=dict)
     mesh_scope: tuple = ()
     elaboration_cache: dict[tuple, Any] = field(default_factory=dict)
+    call_feed_provider: CallFeedProvider[Type] | None = None
+    feed: CallFeed[Type] | None = None
+
+    def build_call_feed(self, callee: object, supplied: tuple[Type, ...]) -> CallFeed[Type]:
+        """Build the type values visible to *callee* in this walk."""
+        if self.call_feed_provider is not None:
+            return self.call_feed_provider.build_call_feed(callee, supplied)
+
+        child = self._child_module(callee)
+        params = tuple(p for p in callee.params if not (child is not None and p.is_const))
+        if len(supplied) != len(params):
+            kind = "activation(s)" if child is not None else "parameter(s)"
+            raise VerifyError(
+                f"hir Function call {callee.name!r}: arity mismatch — "
+                f"callee declares {len(params)} {kind}, call passed {len(supplied)}"
+            )
+        values = iter(supplied)
+        return CallFeed(
+            {
+                id(param): param.type if child is not None and param.is_const else next(values)
+                for param in callee.params
+            }
+        )
+
+    def scope_for(self, callee: object) -> FunctionScope | None:
+        """Return the runtime scope in which *callee*'s body is read."""
+        if self.call_feed_provider is not None:
+            return self.call_feed_provider.scope_for(callee)
+        if self.scope is None:
+            return None
+        child = self._child_module(callee)
+        return FunctionScope(child, callee) if child is not None else FunctionScope(self.scope.module, callee)
+
+    def child(self, callee: object, feed: CallFeed[Type]) -> "TypeInferContext":
+        """Create the recursive context while retaining this provider."""
+        return TypeInferContext(
+            scope=self.scope_for(callee),
+            mesh_scope=self.mesh_scope,
+            call_feed_provider=self.call_feed_provider,
+            feed=feed,
+        )
+
+    def _child_module(self, callee: object):
+        if self.scope is None or self.scope.module is None:
+            return None
+        from tilefoundry.ir.core.module import child_module_of  # noqa: PLC0415
+
+        return child_module_of(self.scope.module, self.scope.function, callee)
 
     def type_of(self, expr: Expr) -> Type:
         key = id(expr)
@@ -214,6 +285,8 @@ class Cost:
 
 
 __all__ = [
+    "CallFeed",
+    "CallFeedProvider",
     "FunctionScope",
     "TypeInferContext",
     "VerifyContext",

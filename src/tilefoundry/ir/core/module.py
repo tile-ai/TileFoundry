@@ -665,10 +665,7 @@ class LoadedModule:
         is what lets a nested dispatch be resolved the way execution resolves it.
         """
         from tilefoundry.evaluator.interpreter import (  # noqa: PLC0415 -- IR→evaluator
-            child_reading,
-        )
-        from tilefoundry.ir.hir._call_binding import (  # noqa: PLC0415 -- cycle
-            bound_params,
+            child_module_instance,
         )
 
         found: list[tuple[str, LoadedModule, object]] = []
@@ -682,8 +679,12 @@ class LoadedModule:
             found.append((path, reading, function))
             for call in _calls_in(function):
                 declared = call.target
-                child = child_reading(reading, declared)
-                supplied = bound_params(declared, from_reading=child is not None)
+                child = child_module_instance(reading, declared)
+                supplied = tuple(
+                    param
+                    for param in declared.params
+                    if child is None or not param.is_const
+                )
                 inner = _extended_dims(
                     supplied, tuple(arg.type for arg in call.args), extents
                 )
