@@ -102,7 +102,7 @@ def test_the_open_dimensions_are_analysed_at_zero(tf, shipped_source, case, size
 
 @pytest.mark.parametrize(("case", "planned"), FIRST_PLAN)
 def test_the_command_reports_a_real_model_as_json(tf, shipped_source, case, planned) -> None:
-    done = contract.analysed(
+    report = contract.analysed(
         tf,
         shipped_source(MODEL),
         case,
@@ -112,7 +112,7 @@ def test_the_command_reports_a_real_model_as_json(tf, shipped_source, case, plan
         json_output=True,
     )
 
-    assert json.loads(done.stdout)
+    assert json.loads(report)
 
 
 @pytest.mark.parametrize("ctx_len", [0, 24])

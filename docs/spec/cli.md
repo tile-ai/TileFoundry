@@ -192,10 +192,6 @@ bounds the caller stated.
     program nobody selected, and the failure is only actionable if the reader can
     see where the coverage stops.
   - Text and `--json` MUST carry the same facts.
-  - `analyze` MUST require a `PATH` whether or not an analysis flag was
-    supplied. Its typed HIR, text report, or JSON report MUST be written to that
-    path, and successful execution MUST write none of the report to stdout.
-
 ## Tutorial
 
 `tutorial` teaches the workflow: what to do, in what order, and at what
@@ -320,12 +316,12 @@ whole; a reader who asked what a rule says is not asking for every rule.
 
 ## Analyze
 
-`analyze` first runs deterministic type inference and then prints complete type
+`analyze` first runs deterministic type inference and then writes complete type
 comments, regardless of analysis flags. It never performs candidate search,
 layout enumeration, or automatic resharding.
 
 Each flag names one root analysis. With no analysis flag, `analyze` requests no
-family: it type-checks the selection and prints its complete inferred HIR. The
+family: it type-checks the selection and writes its complete inferred HIR. The
 selected Module's resolved Target determines the hardware specification for an
 explicit analysis; there is no ordinary `--target` option.
 
@@ -338,10 +334,13 @@ explicit analysis; there is no ordinary `--target` option.
   - A selection MUST resolve to a Module. A bare Function MUST be rejected
     naming the reason: it declares neither the Target its numbers are measured
     against nor the topology hierarchy they divide over.
-  - `--json` MUST print the report as JSON instead of text. It MUST be refused as
-    an argument-combination error when no analysis flag was supplied, naming that
-    a report needs a requested root and printing the `analyze` usage. Both
-    formats MUST carry the same conclusions
+  - `analyze` MUST require a `PATH` whether or not an analysis flag was supplied.
+    Its typed HIR, text report, or JSON report MUST be written to that path, and
+    successful execution MUST write none of the report to stdout.
+  - `--json` MUST write the report as JSON to the required `PATH` instead of text.
+    It MUST be refused as an argument-combination error when no analysis flag was
+    supplied, naming that a report needs a requested root and printing the
+    `analyze` usage. Both formats MUST carry the same conclusions
     ([analysis §2](./analysis.md#2-authored-hir-metrics)).
   - `--operands` MUST add each operand's share of a call's traffic to that call's
     annotation, and MUST NOT change the JSON report, which carries that split
@@ -362,7 +361,7 @@ explicit analysis; there is no ordinary `--target` option.
     several extents together are a `check` request. It MUST be passed through as the
     operation's `dims` ([analysis §2.2](./analysis.md#22-analysis-families));
     the CLI MUST NOT specialise the selection itself, because then what it
-    printed would be about a program the operation never saw.
+    wrote would be about a program the operation never saw.
   - A `--dim` argument that is not `NAME=EXTENT`, or whose extent is not an
     integer, MUST be rejected naming which argument and why.
   - Repeating `--dim` states another dimension. One dimension stated twice MUST
@@ -393,9 +392,10 @@ explicit analysis; there is no ordinary `--target` option.
     measurements reported.
   - The report's `target` field MUST be the concrete Target value's `identity`,
     so two products served by one Target class remain distinguishable.
-  - On success with at least one requested root, text output begins with the
-    `#`-headed report followed by annotated HIR. With no analysis flag, output is
-    the typed HIR alone, with no report header and no analysis Metadata comment.
+  - On success with at least one requested root, the `PATH` file begins with the
+    `#`-headed report followed by annotated HIR. With no analysis flag, the `PATH`
+    file contains typed HIR alone, with no report header and no analysis Metadata
+    comment.
     On inference, verification, or analysis failure, stdout MUST be empty and
     stderr MUST report the source location, binding where available, and reason.
 

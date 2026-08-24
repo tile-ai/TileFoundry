@@ -57,12 +57,14 @@ def dim_args(dims: Mapping[str, int] | None) -> list[str]:
 
 def _run_with_report(tf, arguments: Sequence[object], *, suffix: str):
     """Run a command whose report lives outside the installed command's stdout."""
-    with tempfile.NamedTemporaryFile(suffix=suffix) as report:
-        done = tf(*arguments, report.name)
+    with tempfile.NamedTemporaryFile(suffix=suffix) as report_file:
+        done = tf(*arguments, report_file.name)
+        report_text = ""
         if done.returncode == 0:
-            report.seek(0)
-            done.stdout = report.read().decode()
-        return done
+            assert done.stdout == ""
+            report_file.seek(0)
+            report_text = report_file.read().decode()
+        return done, report_text
 
 
 def analysed(
@@ -84,9 +86,11 @@ def analysed(
     ]
     if json_output:
         arguments.append("--json")
-    done = _run_with_report(tf, arguments, suffix=".json" if json_output else ".py")
+    done, report_text = _run_with_report(
+        tf, arguments, suffix=".json" if json_output else ".py"
+    )
     assert done.returncode == 0, done.stderr
-    return done
+    return report_text
 
 
 def reported(
@@ -98,7 +102,7 @@ def reported(
     dims: Mapping[str, int] | None = None,
 ) -> dict:
     """The JSON report several families write about one function."""
-    done = _run_with_report(
+    done, report_text = _run_with_report(
         tf,
         [
             "analyze",
@@ -110,7 +114,7 @@ def reported(
         suffix=".json",
     )
     assert done.returncode == 0, done.stderr
-    return json.loads(done.stdout)
+    return json.loads(report_text)
 
 
 def _compute_cost_evidence(report: dict) -> str | None:
@@ -211,7 +215,7 @@ def performance_refused(
     selected: FunctionCase,
 ) -> None:
     """One unplaced shipped-model function must identify the domain it lacks."""
-    rejected = _run_with_report(
+    rejected, _report_text = _run_with_report(
         tf,
         [
             "analyze",
@@ -229,7 +233,7 @@ def performance_refused(
 def scheduled(tf, source: Path, case: ModelCase, planned: FunctionCase, *, topology: str = ""):
     """One ``schedule`` command at a level the source has to declare itself."""
     level = topology or planned.topology
-    done = _run_with_report(
+    done, _report_text = _run_with_report(
         tf,
         [
             "schedule",
