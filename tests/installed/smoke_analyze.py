@@ -72,6 +72,7 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf, tmp_path)
     assert done.returncode == 0, done.stderr
     assert done.stdout == ""
     payload = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    source_lines = payload["source"].splitlines()
 
     as_text = tf(
         "analyze",
@@ -91,6 +92,11 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf, tmp_path)
     assert payload["requested"] == payload["executed"] == families
     assert set(payload["function_records"]) == {*families, "traffic"}
     assert len(payload["calls"]) == 7
+    for row in payload["calls"]:
+        name, line_text = row["value"].rsplit(":", 1)
+        line = int(line_text)
+        assert 1 <= line <= len(source_lines)
+        assert f"{name} =" in source_lines[line - 1]
     assert all(
         set(row) - {"performance"} == {"value", "compute-cost", "roofline", "traffic"}
         for row in payload["calls"]

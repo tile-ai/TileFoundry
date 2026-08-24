@@ -339,6 +339,7 @@ explicit analysis; there is no ordinary `--target` option.
     Its typed HIR, text report, or JSON report MUST be written to that path, and
     successful execution MUST write none of the report to stdout.
   - `--json` MUST write the report as JSON to the required `PATH` instead of text.
+    Its `source` field MUST carry the annotated HIR rendered alongside that report.
     It MUST be refused as an argument-combination error when no analysis flag was
     supplied, naming that a report needs a requested root and printing the
     `analyze` usage. Both formats MUST carry the same conclusions
