@@ -133,13 +133,20 @@ class _ProcessExprVisitor(ExprVisitor[tuple[int, ...]]):
             self.owner._expr_values[key] = refs
             self.owner._record_requirement(refs, expr)
             return refs
+        output_types = tensor_leaves(expr.type)
+        if output_types and all(
+            type.storage is StorageKind.UMAT for _path, type in output_types
+        ):
+            self.owner._expr_values[key] = ()
+            self.owner._record_requirement((), expr)
+            return ()
         site_id = self.owner._next_site
         self.owner._next_site += 1
         output_refs = tuple(
             self.owner._new_value(
                 expr, type, path, self.function_path, producer_site_id=site_id
             )
-            for path, type in tensor_leaves(expr.type)
+            for path, type in output_types
         )
         self.owner.sites.append(
             OperationSite(site_id, expr, self.function_path, arg_refs, output_refs)
