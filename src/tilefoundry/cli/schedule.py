@@ -10,7 +10,6 @@ from typing import Mapping
 from tilefoundry.cli.source import entry_function, load_authored_ir
 from tilefoundry.schedule import ScheduleOptions, schedule
 from tilefoundry.schedule.partition import PartitionSchedulePlan
-from tilefoundry.schedule.pipeline import PipelineSchedulePlan
 
 
 def guidance() -> str:
@@ -66,15 +65,13 @@ def run_schedule(
         options = ScheduleOptions(stop_at_first_solution=first_plan)
         if solver_timeout is not None:
             options = replace(options, timeout_seconds=solver_timeout)
-        if solver_workers is not None:
+    if solver_workers is not None:
             options = replace(options, workers=solver_workers)
     result = schedule(ir, function, topology=topology, dims=dims, options=options)
     if isinstance(result.plan, PartitionSchedulePlan):
         report = result.plan.to_json()
-    elif isinstance(result.plan, PipelineSchedulePlan):
-        report = result.plan.to_json() if as_json else result.plan.render()
     else:
-        raise TypeError(f"schedule: unsupported plan type {type(result.plan).__name__}")
+        report = result.plan.to_json() if as_json else result.plan.render()
     Path(out_path).write_text(report + "\n", encoding="utf-8")
     return 0
 

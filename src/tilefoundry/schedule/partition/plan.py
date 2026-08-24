@@ -130,19 +130,6 @@ def _type_json(type: Type) -> object:
     }
 
 
-def _describe_type(type: Type) -> str:
-    """One short human-readable form of a selected type."""
-    if not isinstance(type, TensorType):
-        return type.__class__.__name__
-    shape = "x".join(str(dim) for dim in type.shape)
-    text = f"{shape}:{type.dtype.name}:{type.storage.name.lower()}"
-    if isinstance(type.layout, ShardLayout):
-        attrs = ",".join(attr.__class__.__name__ for attr in type.layout.attrs)
-        mesh = "x".join(str(dim) for dim in type.layout.mesh.layout.shape)
-        text += f" {type.layout.mesh.topologies[0].name}[{mesh}]:{attrs}"
-    return text
-
-
 @dataclass(frozen=True)
 class PartitionSchedulePlan(SchedulePlan):
     """The placement one partition solve committed to, and its proof."""
