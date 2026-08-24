@@ -6,15 +6,13 @@ import argparse
 import sys
 from typing import Sequence
 
-from tilefoundry.analysis import AnalysisError, ExtractError
+from tilefoundry.analysis import AnalysisError
 from tilefoundry.cli.analyze import ANALYSES, EVIDENCE, run_authored_analysis
 from tilefoundry.cli.analyze import guidance as analyze_guidance
 from tilefoundry.cli.check import add_arguments as add_check_arguments
 from tilefoundry.cli.check import guidance as check_guidance
 from tilefoundry.cli.check import run_check
 from tilefoundry.cli.models import run_models
-from tilefoundry.cli.schedule import guidance as schedule_guidance
-from tilefoundry.cli.schedule import run_schedule
 from tilefoundry.cli.source import load_authored_ir, one_extent_per_dim, parse_dims
 from tilefoundry.cli.spec import read_spec, run_spec, spec_path
 from tilefoundry.cli.target import load_registrations, registry_path
@@ -25,7 +23,6 @@ from tilefoundry.cli.target import run_remove as run_target_remove
 from tilefoundry.cli.target import run_show as run_target_show
 from tilefoundry.cli.tutorial import PAGES, run_tutorial
 from tilefoundry.ir.core import VerifyError
-from tilefoundry.schedule import ScheduleError
 
 _ANALYSES = ANALYSES
 
@@ -40,7 +37,6 @@ _COMMANDS = {
 
 
     "analyze": "report what a program costs: flops, traffic, bounds, timing",
-    "schedule": "propose a plan for one topology level: placement and timing",
     "target": "list, show, add, or remove compilation targets",
 }
 
@@ -216,52 +212,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     analyze.set_defaults(_command_parser=analyze)
 
-    schedule = commands.add_parser(
-        "schedule",
-        help=_COMMANDS["schedule"],
-        epilog=schedule_guidance(),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    _add_source_argument(schedule)
-    schedule.add_argument(
-        "out", metavar="PATH", help="write the plan here; stdout carries none of it"
-    )
-    schedule.add_argument(
-        "--topology",
-        required=True,
-        metavar="LEVEL",
-        help="declared topology level to schedule (for example cta)",
-    )
-    schedule.add_argument(
-        "--dim",
-        action="append",
-        metavar="NAME=EXTENT",
-        help="bind one dimension the model left open, for example ctx_len=1024",
-    )
-    schedule.add_argument("--json", action="store_true", help="print the selected plan as JSON")
-    schedule.add_argument(
-        "--solver-timeout",
-        type=float,
-        metavar="SECONDS",
-        help="how long the solver may search before it reports no answer",
-    )
-    schedule.add_argument(
-        "--solver-workers",
-        type=int,
-        metavar="COUNT",
-        help=(
-            "how many search workers the solver may use; the default lets it "
-            "size itself to the machine, which oversubscribes when several "
-            "schedules run at once"
-        ),
-    )
-    schedule.add_argument(
-        "--first-plan",
-        action="store_true",
-        help="stop at the first plan that satisfies the constraints instead of "
-        "searching the whole budget for the best one",
-    )
-
     target = commands.add_parser("target", help=_COMMANDS["target"])
     target_commands = target.add_subparsers(dest="target_command", parser_class=_Parser)
     target_commands.add_parser("list", help=_TARGET_COMMANDS["list"])
@@ -343,28 +293,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         except Exception as error:
             print(f"tilefoundry: error: {error}", file=sys.stderr)
             return 1
-    if args.command == "schedule":
-        try:
-            return run_schedule(
-                args.source,
-                args.topology,
-                args.out,
-                as_json=args.json,
-                dims=one_extent_per_dim(parse_dims(args.dim)),
-                solver_timeout=args.solver_timeout,
-                solver_workers=args.solver_workers,
-                first_plan=args.first_plan,
-            )
-        except (
-            ExtractError,
-            ScheduleError,
-            OSError,
-            TypeError,
-            ValueError,
-        ) as error:
-            print(f"tilefoundry: error: {error}", file=sys.stderr)
-            return 1
-
     try:
         return run_authored_analysis(
             args.source,

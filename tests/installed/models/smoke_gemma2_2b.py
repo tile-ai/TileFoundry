@@ -15,9 +15,6 @@ CASES = contract.model_cases(MODEL)
 ANALYSED = [
     pytest.param(case, selected, id=selected.id) for case in CASES for selected in case.analyze
 ]
-PLANNED = [
-    pytest.param(case, planned, id=planned.id) for case in CASES for planned in case.schedule
-]
 SIZED = [pytest.param(case, sized, id=sized.id) for case in CASES for sized in case.sized]
 
 
@@ -30,11 +27,6 @@ def test_every_selected_function_analyses(tf, shipped_source, case, selected) ->
 
 def test_unplaced_model_refuses_performance(tf, shipped_source) -> None:
     contract.performance_refused(tf, shipped_source(MODEL), CASES[0], CASES[0].analyze[0])
-
-
-@pytest.mark.parametrize(("case", "planned"), PLANNED)
-def test_every_selected_function_plans(tf, shipped_source, case, planned) -> None:
-    contract.scheduled(tf, shipped_source(MODEL), case, planned)
 
 
 @pytest.mark.parametrize(("case", "sized"), SIZED)

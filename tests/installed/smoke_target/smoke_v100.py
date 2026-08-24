@@ -1,4 +1,4 @@
-"""External CUDA documents can analyse and schedule a copied shipped model."""
+"""External CUDA documents can analyse a copied shipped model."""
 
 from __future__ import annotations
 
@@ -87,15 +87,3 @@ def test_external_v100_documents_analyse_a_copied_installed_model(
         "trips": 1,
         "stride_ns": 0,
     }
-
-    scheduled = tf(
-        "schedule",
-        f"{model}:Qwen3_1_7B.layer0.mlp",
-        "--topology",
-        "thread",
-        str(tmp_path / "schedule.py"),
-        "--solver-timeout=60",
-        "--solver-workers=4",
-        "--first-plan",
-    )
-    assert scheduled.returncode == 0, scheduled.stderr

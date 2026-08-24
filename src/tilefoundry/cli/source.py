@@ -325,21 +325,10 @@ def load_authored_ir(source: str) -> Module:
     return select_ir(namespace, selector)
 
 
-def entry_function(ir: Module | Function) -> Function:
-    """Resolve the HIR Function a command runs its pipeline over.
-
-    The same Module -> entry_function() convention as `selected_target`.
-    """
-    function = ir.entry_function() if isinstance(ir, Module) else ir
-    if not isinstance(function, Function):
-        raise TypeError(f"schedule requires a HIR Function entry, got {type(function).__name__}")
-    return function
-
-
 def selected_target(ir: Module):
     """The Target the selection declares.
 
-    Schedule and Analyze read hardware facts off it, so an undeclared Target is
+    Analyze reads hardware facts off it, so an undeclared Target is
     an authoring error rather than a cue to pick one: the selection must name
     the device it was written for.
     """
@@ -382,7 +371,7 @@ def parse_dims(stated: Sequence[str] | None) -> dict[str, tuple[int, ...]] | Non
 def one_extent_per_dim(
     dims: Mapping[str, tuple[int, ...]] | None,
 ) -> dict[str, int] | None:
-    """The one-extent mapping Analyze and Schedule give their operations."""
+    """The one-extent mapping Analyze gives its operation."""
     if dims is None:
         return None
     chosen: dict[str, int] = {}
@@ -403,7 +392,6 @@ def suggested_extents(lo: int, hi: int) -> tuple[int, ...]:
 
 
 __all__ = [
-    "entry_function",
     "load_authored_ir",
     "load_namespace",
     "one_extent_per_dim",

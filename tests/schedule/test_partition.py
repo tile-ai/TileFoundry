@@ -448,19 +448,12 @@ def test_verification_needs_no_solver(solved) -> None:
     assert calls == []
 
 
-def test_partition_plan_renders_the_same_decision_as_text_and_json(solved) -> None:
-    """One decision, two renderings, and the type each value was placed in stated exactly.
-
-    One decision, two renderings, and the type each value was placed in stated
-    exactly -- a serialization that dropped the selected type would describe a
-    placement without saying what is placed there.
-    """
+def test_partition_plan_json_preserves_the_decision(solved) -> None:
+    """The library plan still exposes its deterministic machine representation."""
     _, _, plan = solved
 
     assert plan.to_json() == plan.to_json()
-    assert plan.render() == plan.render()
     data = json.loads(plan.to_json())
-    text = plan.render()
 
     assert data["topology"] == plan.topology == "cta"
     assert data["extent"] == plan.extent
@@ -470,14 +463,6 @@ def test_partition_plan_renders_the_same_decision_as_text_and_json(solved) -> No
     assert {item["id"] for item in data["operations"]} == {
         operation.id for operation in plan.operations
     }
-    for item in data["values"]:
-        assert item["id"] in text
-        assert item["type"]["dtype"] in text
-    for item in data["operations"]:
-        assert item["id"] in text
-        if item["interval"] is not None:
-            assert f"[{item['interval']['start_ns']}, " in text
-
     by_id = {item["id"]: item for item in data["values"]}
     for value in plan.values:
         stated = by_id[value.id]["type"]

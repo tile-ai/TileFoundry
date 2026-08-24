@@ -33,7 +33,7 @@ hierarchy it inherits from the owners it was reached through.
 A selector MAY name a top-level binding that is a bare `Function` — a source
 whose `@func` declares no execution context binds one. Every verb here reads
 hardware facts, so such a selection MUST be rejected naming the Module that
-would declare its context, rather than analysed or scheduled against a default
+would declare its context, rather than analysed against a default
 ([target §6](./target.md#6-target-ownership-and-compile-resolution)).
 
 The file in `SOURCE` is any readable Python file. Nothing privileges the model
@@ -245,7 +245,7 @@ that runs before it can be read is a reference that decides what it describes.
     Module that declares none MUST NOT be listed as one. Declaring the machine is
     what makes a Module answerable on its own; a component or layer template
     reached through the root that owns it would otherwise be offered as a selector
-    that Analyze and Schedule cannot answer.
+    that Analyze cannot answer.
   - A run of sibling Modules MAY be written once as the range it covers, and only
     when the run is adjacent, identically shaped down its whole subtree, named from
     one stem, and numbered consecutively. Such an entry MUST name every Module it
@@ -374,7 +374,7 @@ explicit analysis; there is no ordinary `--target` option.
     its declared `[lo, hi)` interval, and concrete extents inside that interval
     the caller can use: inferring its concrete program requires an extent, and a
     range is not one. The bare form MUST apply stated dimensions before running
-    the public program check used by Analyze and Schedule, followed by the same
+    the public program check used by Analyze, followed by the same
     authored-analysis readiness validation as Analyze; this is an internal CLI
     path, not a public typecheck operation. It MUST reject an unsupported declared
     topology level or an extent over that level's target limit, even though no
@@ -399,80 +399,6 @@ explicit analysis; there is no ordinary `--target` option.
     comment.
     On inference, verification, or analysis failure, stdout MUST be empty and
     stderr MUST report the source location, binding where available, and reason.
-
-## Schedule
-
-`schedule` makes one public Schedule call
-([schedule §1](./schedule.md#1-the-public-schedule-operation)) and writes the
-Plan that call produced. It composes nothing itself: which algorithm runs, what
-it decides, and how the decision reads are owned by the algorithm registered for
-the selected Module's target at the requested level.
-
-The target is not a flag. It comes from the selected Module's resolved Target
-([core-ir §1](./core-ir.md#1-module)): a kernel is authored against one target.
-A selection that is a bare Function, or a Module whose owner chain declares no
-Target, MUST be rejected -- `schedule` does not resolve an omission to a default
-([target §6](./target.md#6-target-ownership-and-compile-resolution)).
-
-- constraints:
-  - `--topology` MUST be required and MUST name one level the selected Module
-    declares. A level the Module does not declare, or one the target has no
-    algorithm for, MUST be reported as that.
-  - The command MUST call the public operation once and MUST NOT compose the
-    algorithm's stages itself, so what it prints cannot drift from what the
-    operation decided.
-  - `--dim NAME=EXTENT` MUST behave as it does for `analyze`, passed through as
-    the operation's `dims` ([schedule §1](./schedule.md#1-the-public-schedule-operation)).
-  - `--solver-timeout SECONDS` and `--solver-workers COUNT` MUST state the search
-    budget the operation is given, and either omitted MUST leave that part of the
-    budget at the operation's own default. A solver that sizes itself to the
-    machine is the right default for one schedule and the wrong one for several at
-    once, so the caller running several MUST be able to say so; a budget that
-    cannot be stated is a configuration nobody can reproduce.
-  - `--first-plan` MUST ask for the first plan that satisfies the constraints
-    rather than the best one within the budget, and MUST NOT lift the time limit:
-    a search that has found nothing yet stays bounded by it. Omitted, the search
-    MUST run as the operation's default does. The distinction is the caller's
-    because a search that cannot prove its objective optimal spends its whole
-    budget improving, so a caller who needs a plan and not the best plan otherwise
-    pays the full budget for an answer it already had.
-  - A search that ends without an answer MUST be reported as the search ending
-    without one, and MUST NOT be reported as the selection having no schedule.
-  - `schedule` MUST require a `PATH`. A partition plan MUST write its `to_json()`
-    representation for either flag state while it has no human rendering. Every
-    other `SchedulePlan` subtype MUST write its `render()` representation by
-    default and its `to_json()` representation under `--json`. The command MUST
-    write none of the plan to stdout and MUST NOT impose a shape across
-    algorithms, because two algorithms deciding different things have nothing
-    to share a format for.
-  - On any failure stdout MUST be empty and stderr MUST carry one
-    `tilefoundry: error:` line naming the cause.
-
-Scheduling this CUDA kernel at the level its Module divides over:
-
-```python
-# example
-@func(
-    target=CudaTarget("nvidia.h200_sxm"),
-    topologies=(Topology("cta", 4),),
-)
-def blocked_matmul(
-    x: Tensor[(64, 128), "bf16"],
-    w: Tensor[(128, 64), "bf16"],
-) -> Tensor[(64, 64), "bf16"]:
-    return matmul(x, w)
-```
-
-```text
-# example
-$ tilefoundry schedule model.py:blocked_matmul plan.txt --topology cta
-partition cta on nvidia.h200_sxm (OPTIMAL, makespan 35ns)
-  MatMul x4 [0, 35)
-```
-
-The same Module scheduled at a level it also declares answers with that level's
-own algorithm and that algorithm's own Plan, which reads differently because it
-decided different things.
 
 ## Target
 

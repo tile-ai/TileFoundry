@@ -28,9 +28,6 @@ LOGICAL_FAMILIES = ("compute-cost", "memory", "roofline")
 FAMILIES = (*LOGICAL_FAMILIES, "performance")
 
 
-SOLVER = ("--solver-timeout=60", "--solver-workers=4", "--first-plan")
-
-
 def model_cases(model: str) -> tuple[ModelCase, ...]:
     """Every case the named model states, in the order it states them.
 
@@ -228,25 +225,6 @@ def performance_refused(
     assert rejected.returncode == 1, rejected.stdout + rejected.stderr
     assert "performance:" in rejected.stderr
     assert "has no" in rejected.stderr and "execution domain" in rejected.stderr
-
-
-def scheduled(tf, source: Path, case: ModelCase, planned: FunctionCase, *, topology: str = ""):
-    """One ``schedule`` command at a level the source has to declare itself."""
-    level = topology or planned.topology
-    done, _report_text = _run_with_report(
-        tf,
-        [
-            "schedule",
-            static(source, case, planned.selector),
-            "--topology",
-            level,
-            *dim_args(planned.dims),
-            *SOLVER,
-        ],
-        suffix=".py",
-    )
-    assert done.returncode == 0, done.stderr
-    return done
 
 
 def lifetimes(

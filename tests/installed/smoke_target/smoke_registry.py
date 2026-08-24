@@ -75,23 +75,6 @@ def test_added_documents_and_provider_drive_installed_commands(
     npu_report = json.loads((tmp_path / "npu.json").read_text(encoding="utf-8"))
     assert npu_report["target"] == "vendor.npu"
     assert npu_report["executed"] == ["compute-cost", "memory", "roofline"]
-    scheduled = tf(
-        "--registry",
-        registry,
-        "schedule",
-        f"{npu_model}:model",
-        "--topology",
-        "core",
-        str(tmp_path / "schedule.json"),
-        "--json",
-    )
-    assert scheduled.returncode == 0, scheduled.stderr
-    assert scheduled.stdout == ""
-    assert json.loads((tmp_path / "schedule.json").read_text(encoding="utf-8")) == {
-        "topology": "core",
-        "extent": 1,
-    }
-
     cuda_model = _registered_model(
         tmp_path / "cuda_model.py",
         target='CudaTarget("vendor.v100_sxm2_32gb")',

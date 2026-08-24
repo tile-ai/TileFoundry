@@ -1,4 +1,4 @@
-"""A document-free Target provider drives standard analysis and its scheduler."""
+"""A document-free Target provider drives standard analysis."""
 
 from __future__ import annotations
 
@@ -27,12 +27,10 @@ def _vendor_npu_model(cmine: Path, tmp_path: Path) -> Path:
     return model
 
 
-def test_document_free_target_analyses_and_selects_its_scheduler(
-    tf, cmine, tmp_path, monkeypatch
+def test_document_free_target_analyzes_with_its_declared_target(
+    tf, cmine, tmp_path
 ) -> None:
     model = _vendor_npu_model(cmine, tmp_path)
-    scheduler_calls = tmp_path / "scheduler_calls.txt"
-    monkeypatch.setenv("TF_VENDOR_NPU_SCHEDULER_CALLS", str(scheduler_calls))
     analyzed = tf(
         "analyze",
         f"{model}:CMine.root",
@@ -53,19 +51,3 @@ def test_document_free_target_analyses_and_selects_its_scheduler(
     assert rejected.returncode == 1
     assert "performance:" in rejected.stderr
     assert "has no core execution domain" in rejected.stderr
-
-    scheduled = tf(
-        "schedule",
-        f"{model}:CMine.root",
-        "--topology",
-        "core",
-        str(tmp_path / "schedule.json"),
-        "--json",
-    )
-    assert scheduled.returncode == 0, scheduled.stderr
-    assert scheduled.stdout == ""
-    assert json.loads((tmp_path / "schedule.json").read_text(encoding="utf-8")) == {
-        "topology": "core",
-        "extent": 1,
-    }
-    assert scheduler_calls.read_text(encoding="utf-8") == "core\n"

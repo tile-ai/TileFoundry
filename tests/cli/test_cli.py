@@ -107,28 +107,6 @@ def test_parse_dims_rejects_one_dimension_stated_twice() -> None:
         cli.parse_dims(["ctx_len=8", "ctx_len=8"])
 
 
-def test_schedule_rejects_several_extents_per_dimension(capsys) -> None:
-    with pytest.raises(SystemExit) as stopped:
-        cli.main(["schedule", "missing.py", "--topology", "cta"])
-    assert stopped.value.code == 2
-    missing_path = capsys.readouterr().err
-    assert "the following arguments are required: PATH" in missing_path
-
-    argv = [
-        "schedule",
-        "missing.py",
-        "report.py",
-        "--topology",
-        "cta",
-        "--dim",
-        "ctx_len=0,1",
-    ]
-    assert cli.main(argv) == 1
-    refused = capsys.readouterr().err
-    assert "ctx_len takes one EXTENT at a time" in refused
-    assert "asking several EXTENTs together is for check" in refused
-
-
 _NEIGHBOURS = """from tilefoundry import func, module
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.target import CudaTarget
@@ -469,23 +447,6 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
     )
     assert unplaced_npu.returncode == 1
     assert "has no core execution domain" in unplaced_npu.stderr
-    scheduled_npu = _run_cli(
-        registry,
-        tmp_path,
-        "schedule",
-        f"{npu_model}:model",
-        "--topology",
-        "core",
-        str(tmp_path / "schedule.json"),
-        "--json",
-    )
-    assert scheduled_npu.returncode == 0, scheduled_npu.stderr
-    assert scheduled_npu.stdout == ""
-    assert json.loads((tmp_path / "schedule.json").read_text(encoding="utf-8")) == {
-        "topology": "core",
-        "extent": 1,
-    }
-
     cuda_model = _write_registered_model(
         tmp_path / "cuda_model.py",
         target='CudaTarget("vendor.v100_sxm2_32gb")',
