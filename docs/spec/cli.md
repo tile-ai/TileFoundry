@@ -192,6 +192,7 @@ bounds the caller stated.
     program nobody selected, and the failure is only actionable if the reader can
     see where the coverage stops.
   - Text and `--json` MUST carry the same facts.
+
 ## Tutorial
 
 `tutorial` teaches the workflow: what to do, in what order, and at what
