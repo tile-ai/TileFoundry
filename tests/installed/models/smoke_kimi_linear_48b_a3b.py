@@ -1,8 +1,9 @@
 """Kimi-Linear-48B-A3B, as the installation ships it, asked through the commands.
 
 Three Modules of kernels are reached from one root, so this model states three
-cases where most state one, and its selectors are dotted paths through them. It
-ships no ``hf_alias.py``: it is not loaded from a raw published checkpoint.
+schedule cases where most state one, and its selectors are dotted paths through
+the tree. It ships no ``hf_alias.py``: it is not loaded from a raw published
+checkpoint.
 """
 
 from __future__ import annotations

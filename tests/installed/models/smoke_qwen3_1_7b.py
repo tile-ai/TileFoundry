@@ -23,7 +23,7 @@ CASES = contract.model_cases(MODEL)
 ANALYSED = [
     pytest.param(case, selected, id=selected.id) for case in CASES for selected in case.analyze
 ]
-FIRST_PLAN = [pytest.param(case, case.schedule[0], id=case.id) for case in CASES]
+JSON_CASES = [pytest.param(case, case.schedule[0], id=case.id) for case in CASES]
 SIZED = [pytest.param(case, sized, id=sized.id) for case in CASES for sized in case.sized]
 
 
@@ -75,15 +75,15 @@ def test_the_open_dimensions_are_analysed_at_zero(tf, shipped_source, case, size
     assert all(nonzero[binding] > 0 for binding in ZERO_SIZED)
 
 
-@pytest.mark.parametrize(("case", "planned"), FIRST_PLAN)
-def test_the_command_reports_a_real_model_as_json(tf, shipped_source, case, planned) -> None:
+@pytest.mark.parametrize(("case", "selected"), JSON_CASES)
+def test_the_command_reports_a_real_model_as_json(tf, shipped_source, case, selected) -> None:
     report = contract.analysed(
         tf,
         shipped_source(MODEL),
         case,
-        planned.selector,
+        selected.selector,
         "compute-cost",
-        planned.dims,
+        selected.dims,
         json_output=True,
     )
 
