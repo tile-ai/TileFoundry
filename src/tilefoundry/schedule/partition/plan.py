@@ -385,46 +385,6 @@ class PartitionSchedulePlan(SchedulePlan):
                     "program's own inputs"
                 )
 
-    def _rows(self) -> tuple[tuple[str, ...], ...]:
-        """The decided rows both renderings are built from, in one order."""
-        rows: list[tuple[str, ...]] = []
-        for operation in self.operations:
-            when = (
-                f"[{operation.interval.start_ns}, {operation.interval.end_ns})ns"
-                if operation.interval is not None
-                else "untimed"
-            )
-            where = (
-                f"positions [{operation.positions.start}, "
-                f"{operation.positions.end})"
-                if operation.positions is not None
-                else "no positions"
-            )
-            kind = operation.operation + (
-                " (synthesized)" if operation.synthesized else ""
-            )
-            rows.append(
-                (
-                    operation.id,
-                    kind,
-                    where,
-                    when,
-                    "in " + (" ".join(operation.input_ids) or "-"),
-                    "out " + (" ".join(operation.output_ids) or "-"),
-                )
-            )
-        for value in self.values:
-            rows.append(
-                (
-                    value.id,
-                    _describe_type(value.type),
-                    f"positions [{value.positions.start}, {value.positions.end})",
-                    "from " + (value.producer_id or "-"),
-                    "to " + (" ".join(value.consumer_ids) or "-"),
-                )
-            )
-        return tuple(rows)
-
     def to_json(self) -> str:
         """Render the whole decision as sorted-key JSON."""
         payload = {
@@ -465,17 +425,6 @@ class PartitionSchedulePlan(SchedulePlan):
             ],
         }
         return json.dumps(payload, sort_keys=True)
-
-    def render(self) -> str:
-        """Render the same decision as one line per operation and value."""
-        lines = [
-            f"partition {self.topology} x{self.extent} on {self.target.device_id} "
-            f"({self.proof.status}, makespan {self.proof.objective_ns}ns, bound "
-            f"{self.proof.best_bound_ns}ns)"
-        ]
-        lines.extend("  " + " | ".join(row) for row in self._rows())
-        lines.append("  roots: " + (" ".join(self.root_results) or "-"))
-        return "\n".join(lines)
 
 
 def _overlap(left_start: int, left_end: int, right_start: int, right_end: int) -> bool:

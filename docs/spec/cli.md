@@ -438,11 +438,13 @@ Target, MUST be rejected -- `schedule` does not resolve an omission to a default
     pays the full budget for an answer it already had.
   - A search that ends without an answer MUST be reported as the search ending
     without one, and MUST NOT be reported as the selection having no schedule.
-  - `schedule` MUST require a `PATH`. Its output MUST be the Plan's own
-    rendering written to that path: its `render()` by default, its `to_json()`
-    under `--json`. The command MUST write none of the plan to stdout and MUST
-    NOT impose a shape across algorithms, because two algorithms deciding
-    different things have nothing to share a format for.
+  - `schedule` MUST require a `PATH`. A partition plan MUST write its `to_json()`
+    representation for either flag state while it has no human rendering. A
+    pipeline plan MUST write its `render()` representation by default and its
+    `to_json()` representation under `--json`. The command MUST write none of
+    the plan to stdout and MUST NOT impose a shape across algorithms, because
+    two algorithms deciding different things have nothing to share a format
+    for.
   - On any failure stdout MUST be empty and stderr MUST carry one
     `tilefoundry: error:` line naming the cause.
 

@@ -472,8 +472,8 @@ class PartitionSchedulePlan(SchedulePlan):
     cannot reach by following producers; and a bound above the stated objective.
     It MUST do all of that without rebuilding candidates and without invoking a
     solver.
-  - JSON and text rendering MUST be deterministic and MUST state the same
-    placements, operations, intervals, and proof.
+  - JSON rendering MUST be deterministic and MUST state the placements,
+    operations, intervals, and proof.
   - A solver variable or solver-native value MUST NOT appear in the exported plan.
   - The plan MUST NOT carry a rewritten program, and producing it MUST NOT rewrite
     one: a partition decides where work and its tensors go, and applying that
