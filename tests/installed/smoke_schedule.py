@@ -7,38 +7,71 @@ import json
 _CTA_SOLVER = ("--first-plan", "--solver-workers=2")
 
 
-def test_schedule_answers_at_each_level_the_target_schedules(tf, cmine) -> None:
-    partition = tf("schedule", f"{cmine}:CMine.root", "--topology", "cta", *_CTA_SOLVER)
+def test_schedule_answers_at_each_level_the_target_schedules(tf, cmine, tmp_path) -> None:
+    partition = tf(
+        "schedule",
+        f"{cmine}:CMine.root",
+        str(tmp_path / "partition.py"),
+        "--topology",
+        "cta",
+        *_CTA_SOLVER,
+    )
     assert partition.returncode == 0, partition.stderr
-    assert "nvidia.h200_sxm" in partition.stdout
+    assert partition.stdout == ""
+    assert "nvidia.h200_sxm" in (tmp_path / "partition.py").read_text(encoding="utf-8")
 
-    pipeline = tf("schedule", f"{cmine}:CMine.root", "--topology", "thread")
+    pipeline = tf(
+        "schedule",
+        f"{cmine}:CMine.root",
+        str(tmp_path / "pipeline.py"),
+        "--topology",
+        "thread",
+    )
     assert pipeline.returncode == 0, pipeline.stderr
-    assert "pipeline schedule" in pipeline.stdout
+    assert pipeline.stdout == ""
+    assert "pipeline schedule" in (tmp_path / "pipeline.py").read_text(encoding="utf-8")
 
 
-def test_schedule_json_names_the_machine_it_solved_against(tf, cmine) -> None:
-    done = tf("schedule", f"{cmine}:CMine.root", "--topology", "thread", "--json")
+def test_schedule_json_names_the_machine_it_solved_against(tf, cmine, tmp_path) -> None:
+    done = tf(
+        "schedule",
+        f"{cmine}:CMine.root",
+        str(tmp_path / "report.json"),
+        "--topology",
+        "thread",
+        "--json",
+    )
     assert done.returncode == 0, done.stderr
-    payload = json.loads(done.stdout)
+    assert done.stdout == ""
+    payload = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     assert payload["target"]["architecture_id"] == "nvidia.sm90"
     assert payload["target"]["device_id"] == "nvidia.h200_sxm"
     scheduled = {item["id"]: item["instruction"] for item in payload["statements"]}
     assert scheduled["MM"] == "SM80_16x8x16_F32BF16BF16F32_TN"
 
 
-def test_schedule_selects_a_nested_function(tf, cmine) -> None:
-    done = tf("schedule", f"{cmine}:CMine.child.inner", "--topology", "thread", "--json")
+def test_schedule_selects_a_nested_function(tf, cmine, tmp_path) -> None:
+    done = tf(
+        "schedule",
+        f"{cmine}:CMine.child.inner",
+        str(tmp_path / "nested.json"),
+        "--topology",
+        "thread",
+        "--json",
+    )
     assert done.returncode == 0, done.stderr
     assert done.stderr == ""
-    payload = json.loads(done.stdout)
+    assert done.stdout == ""
+    payload = json.loads((tmp_path / "nested.json").read_text(encoding="utf-8"))
     assert payload["target"]["architecture_id"] == "nvidia.sm90"
     assert any(item["id"] == "MM" for item in payload["statements"])
 
 
-def test_partition_resolves_derived_execution_geometry(tf, derived_prefill) -> None:
+def test_partition_resolves_derived_execution_geometry(tf, derived_prefill, tmp_path) -> None:
     source = f"{derived_prefill}:DerivedPrefill.prefill"
-    unbound = tf("schedule", source, "--topology", "cta", *_CTA_SOLVER)
+    unbound = tf(
+        "schedule", source, str(tmp_path / "unbound.py"), "--topology", "cta", *_CTA_SOLVER
+    )
     assert unbound.returncode == 1
     assert "symbolic" in unbound.stderr
     assert "bind every dimension before analysis or scheduling" in unbound.stderr
@@ -46,6 +79,7 @@ def test_partition_resolves_derived_execution_geometry(tf, derived_prefill) -> N
     bound = tf(
         "schedule",
         source,
+        str(tmp_path / "bound.json"),
         "--topology",
         "cta",
         "--dim",
@@ -56,7 +90,8 @@ def test_partition_resolves_derived_execution_geometry(tf, derived_prefill) -> N
         *_CTA_SOLVER,
     )
     assert bound.returncode == 0, bound.stderr
-    payload = json.loads(bound.stdout)
+    assert bound.stdout == ""
+    payload = json.loads((tmp_path / "bound.json").read_text(encoding="utf-8"))
     assert payload["extent"] == 3
 
 
@@ -68,22 +103,29 @@ def test_a_module_without_an_entry_names_its_functions_and_the_rule(tf, tmp_path
         ),
         encoding="utf-8",
     )
-    done = tf("schedule", f"{entryless}:CMine", "--topology", "cta")
+    done = tf(
+        "schedule",
+        f"{entryless}:CMine",
+        str(tmp_path / "entryless_report.py"),
+        "--topology",
+        "cta",
+    )
     assert done.returncode == 1
     assert "declares no entry, so it has no default step. It declares root" in done.stderr
     assert "The rule: tilefoundry spec core-ir default-step" in done.stderr
 
 
-def test_a_level_the_target_does_not_schedule_is_refused(tf, cmine) -> None:
-    done = tf("schedule", f"{cmine}:CMine.root", "--topology", "warp")
+def test_a_level_the_target_does_not_schedule_is_refused(tf, cmine, tmp_path) -> None:
+    done = tf("schedule", f"{cmine}:CMine.root", str(tmp_path / "warp.py"), "--topology", "warp")
     assert done.returncode == 1
     assert "warp" in done.stderr
 
 
-def test_the_solver_flags_are_accepted_by_the_installed_command(tf, cmine) -> None:
+def test_the_solver_flags_are_accepted_by_the_installed_command(tf, cmine, tmp_path) -> None:
     done = tf(
         "schedule",
         f"{cmine}:CMine.root",
+        str(tmp_path / "solver.py"),
         "--topology",
         "cta",
         "--first-plan",
@@ -93,4 +135,5 @@ def test_the_solver_flags_are_accepted_by_the_installed_command(tf, cmine) -> No
         "2",
     )
     assert done.returncode == 0, done.stderr
-    assert "nvidia.h200_sxm" in done.stdout
+    assert done.stdout == ""
+    assert "nvidia.h200_sxm" in (tmp_path / "solver.py").read_text(encoding="utf-8")

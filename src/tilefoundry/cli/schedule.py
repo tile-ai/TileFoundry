@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import sys
 import textwrap
 from dataclasses import replace
+from pathlib import Path
 from typing import Mapping
 
 from tilefoundry.cli.source import entry_function, load_authored_ir
@@ -43,6 +43,7 @@ def guidance() -> str:
 def run_schedule(
     source: str,
     topology: str,
+    out_path: str,
     *,
     as_json: bool = False,
     dims: Mapping[str, int] | None = None,
@@ -66,7 +67,8 @@ def run_schedule(
         if solver_workers is not None:
             options = replace(options, workers=solver_workers)
     result = schedule(ir, function, topology=topology, dims=dims, options=options)
-    sys.stdout.write((result.plan.to_json() if as_json else result.plan.render()) + "\n")
+    report = result.plan.to_json() if as_json else result.plan.render()
+    Path(out_path).write_text(report + "\n", encoding="utf-8")
     return 0
 
 

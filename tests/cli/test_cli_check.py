@@ -189,8 +189,9 @@ def test_a_zero_reference_is_reported_rather_than_divided_by(routing, capsys) ->
     assert "e+12" not in reported
 
 
-def test_the_json_report_carries_the_same_facts_as_the_text(routing, capsys) -> None:
+def test_the_json_report_carries_the_same_facts_as_the_text(routing, capsys, tmp_path) -> None:
     """Including `ref_norm` and each predicate's own bound and value."""
+    report_path = tmp_path / "report.json"
     assert (
         cli.main(
             _routing_argv(
@@ -207,11 +208,13 @@ def test_the_json_report_carries_the_same_facts_as_the_text(routing, capsys) -> 
                 "--fn",
                 "equal",
                 "--json",
+                str(report_path),
             )
         )
         == 0
     )
-    reported = json.loads(capsys.readouterr().out)
+    assert capsys.readouterr().out == ""
+    reported = json.loads(report_path.read_text(encoding="utf-8"))
 
     assert reported["passed"] is True
     outputs = reported["runs"][0]["outputs"]
@@ -352,7 +355,9 @@ def test_without_a_reference_only_a_one_sided_predicate_is_admitted(capsys) -> N
     assert "nan 0 inf 0" in reported
 
 
-def test_a_dimension_left_as_a_range_is_reported_with_what_it_was_pinned_to(capsys) -> None:
+def test_a_dimension_left_as_a_range_is_reported_with_what_it_was_pinned_to(
+    capsys, tmp_path
+) -> None:
     """The pin is a decision this run made, so it is said out loud, in both forms."""
     assert (
         cli.main(
@@ -387,15 +392,17 @@ def test_a_dimension_left_as_a_range_is_reported_with_what_it_was_pinned_to(caps
                 "--fn",
                 "nan_inf",
                 "--json",
+                str(tmp_path / "pinned.json"),
             ]
         )
         == 0
     )
-    pinned = json.loads(capsys.readouterr().out)["runs"][0]["pinned"]
+    assert capsys.readouterr().out == ""
+    pinned = json.loads((tmp_path / "pinned.json").read_text(encoding="utf-8"))["runs"][0]["pinned"]
     assert {entry["dim"]: entry["pinned"] for entry in pinned} == {"ctx_len": 0}
 
 
-def test_several_extents_check_the_dispatch_and_name_the_implementation(capsys) -> None:
+def test_several_extents_check_the_dispatch_and_name_the_implementation(capsys, tmp_path) -> None:
     """Four lengths across the boundary reach both implementations, each named.
 
     The label is what a person reads and the canonical signature is what anything
@@ -415,11 +422,13 @@ def test_several_extents_check_the_dispatch_and_name_the_implementation(capsys) 
                 "--fn",
                 "nan_inf",
                 "--json",
+                str(tmp_path / "dispatch.json"),
             ]
         )
         == 0
     )
-    runs = json.loads(capsys.readouterr().out)["runs"]
+    assert capsys.readouterr().out == ""
+    runs = json.loads((tmp_path / "dispatch.json").read_text(encoding="utf-8"))["runs"]
 
     assert [run["dims"]["ctx_len"] for run in runs] == [0, 64, 4096, 32768]
     assert [run["variant"]["display_name"] for run in runs] == [
@@ -519,7 +528,9 @@ def test_a_passing_check_carries_no_verification_ranking(routing, capsys) -> Non
     assert "FAIL says the candidate and reference differ" not in reported
 
 
-def test_a_random_input_fail_against_a_reference_states_its_limits(routing, capsys) -> None:
+def test_a_random_input_fail_against_a_reference_states_its_limits(
+    routing, capsys, tmp_path
+) -> None:
     """A failed random-input comparison qualifies both limits through the CLI."""
     argv = [
         "check",
@@ -554,8 +565,10 @@ def test_a_random_input_fail_against_a_reference_states_its_limits(routing, caps
     assert "Establishing accuracy needs an independent high-precision" in reported
     assert "reference, which check does not run" in reported
 
-    assert cli.main([*argv, "--json"]) == 1
-    warnings = json.loads(capsys.readouterr().out)["warnings"]
+    report_path = tmp_path / "warnings.json"
+    assert cli.main([*argv, "--json", str(report_path)]) == 1
+    assert capsys.readouterr().out == ""
+    warnings = json.loads(report_path.read_text(encoding="utf-8"))["warnings"]
     assert warnings == [
         "--inputs random makes each activation independently. A target that relies on "
         "semantic relationships between activations can differ at ulp scale without either "

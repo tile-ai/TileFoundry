@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import sys
 import textwrap
+from pathlib import Path
 from typing import Mapping
 
 from tilefoundry.analysis import analyze, check_program
@@ -91,6 +91,7 @@ def guidance() -> str:
 def run_authored_analysis(
     source: str,
     analyses: tuple[str, ...],
+    out_path: str,
     *,
     topology: str | None = None,
     as_json: bool = False,
@@ -131,18 +132,18 @@ def run_authored_analysis(
         expanded = check_program(checked_module, checked)
         validate_authored(reachable_functions(checked))
         annotated = as_script(expanded, options=PythonPrintOptions(show_types=True))
-        sys.stdout.write(annotated)
+        Path(out_path).write_text(annotated, encoding="utf-8")
         return 0
 
     result = analyze(module, function, analysis=analyses, level=topology, dims=dims)
     rendered = render_analysis(result, operands=operands)
     if as_json:
-        sys.stdout.write(f"{render_json(rendered.data)}\n")
+        Path(out_path).write_text(f"{render_json(rendered.data)}\n", encoding="utf-8")
         return 0
 
-
-
-    sys.stdout.write(f"{render_text(rendered)}\n\n{rendered.annotated}")
+    Path(out_path).write_text(
+        f"{render_text(rendered)}\n\n{rendered.annotated}", encoding="utf-8"
+    )
     return 0
 
 

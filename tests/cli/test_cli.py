@@ -108,7 +108,21 @@ def test_parse_dims_rejects_one_dimension_stated_twice() -> None:
 
 
 def test_schedule_rejects_several_extents_per_dimension(capsys) -> None:
-    argv = ["schedule", "missing.py", "--topology", "cta", "--dim", "ctx_len=0,1"]
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["schedule", "missing.py", "--topology", "cta"])
+    assert stopped.value.code == 2
+    missing_path = capsys.readouterr().err
+    assert "the following arguments are required: PATH" in missing_path
+
+    argv = [
+        "schedule",
+        "missing.py",
+        "report.py",
+        "--topology",
+        "cta",
+        "--dim",
+        "ctx_len=0,1",
+    ]
     assert cli.main(argv) == 1
     refused = capsys.readouterr().err
     assert "ctx_len takes one EXTENT at a time" in refused
@@ -152,12 +166,19 @@ def test_naming_one_root_does_not_ask_about_the_rest_of_its_file(tmp_path, capsy
     source = tmp_path / "neighbours.py"
     source.write_text(_NEIGHBOURS, encoding="utf-8")
 
-    assert cli.main(["analyze", f"{source}:Sound", "--compute-cost", "--json"]) == 0
-    report = json.loads(capsys.readouterr().out)
+    report_path = tmp_path / "sound.json"
+    assert (
+        cli.main(
+            ["analyze", f"{source}:Sound", str(report_path), "--compute-cost", "--json"]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == ""
+    report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["module"] == "Sound"
     assert report["totals"]["flops"]
 
-    assert cli.main(["analyze", str(source), "--compute-cost", "--json"]) == 1
+    assert cli.main(["analyze", str(source), str(tmp_path / "bad.json"), "--compute-cost", "--json"]) == 1
     assert "nope" in capsys.readouterr().err
 
 
@@ -175,9 +196,9 @@ def test_analyze_help_explains_topology_effects_and_assumptions(capsys) -> None:
     assert "is an observation, not a bound" in help_text
 
 
-def test_analyze_json_without_a_requested_root_is_a_usage_error(capsys) -> None:
+def test_analyze_json_without_a_requested_root_is_a_usage_error(capsys, tmp_path) -> None:
     with pytest.raises(SystemExit) as stopped:
-        cli.main(["analyze", "missing.py", "--json"])
+        cli.main(["analyze", "missing.py", str(tmp_path / "report.json"), "--json"])
 
     assert stopped.value.code == 2
     refused = capsys.readouterr()
@@ -249,8 +270,21 @@ def test_analysis_reports_distinguish_cuda_products(tmp_path, capsys) -> None:
             "    return tf.add(source, source)\n",
             encoding="utf-8",
         )
-        assert cli.main(["analyze", f"{source}:model", "--compute-cost", "--json"]) == 0
-        report = json.loads(capsys.readouterr().out)
+        report_path = tmp_path / f"{device.rsplit('.', 1)[1]}.json"
+        assert (
+            cli.main(
+                [
+                    "analyze",
+                    f"{source}:model",
+                    str(report_path),
+                    "--compute-cost",
+                    "--json",
+                ]
+            )
+            == 0
+        )
+        assert capsys.readouterr().out == ""
+        report = json.loads(report_path.read_text(encoding="utf-8"))
         reports[device] = report["target"]
 
     assert reports == {
@@ -419,15 +453,18 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
         "--compute-cost",
         "--memory",
         "--roofline",
+        str(tmp_path / "npu.json"),
         "--json",
     )
     assert analyzed_npu.returncode == 0, analyzed_npu.stderr
-    assert json.loads(analyzed_npu.stdout)["target"] == "vendor.npu"
+    assert analyzed_npu.stdout == ""
+    assert json.loads((tmp_path / "npu.json").read_text(encoding="utf-8"))["target"] == "vendor.npu"
     unplaced_npu = _run_cli(
         registry,
         tmp_path,
         "analyze",
         f"{npu_model}:model",
+        str(tmp_path / "unplaced.py"),
         "--performance",
     )
     assert unplaced_npu.returncode == 1
@@ -439,10 +476,15 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
         f"{npu_model}:model",
         "--topology",
         "core",
+        str(tmp_path / "schedule.json"),
         "--json",
     )
     assert scheduled_npu.returncode == 0, scheduled_npu.stderr
-    assert json.loads(scheduled_npu.stdout) == {"topology": "core", "extent": 1}
+    assert scheduled_npu.stdout == ""
+    assert json.loads((tmp_path / "schedule.json").read_text(encoding="utf-8")) == {
+        "topology": "core",
+        "extent": 1,
+    }
 
     cuda_model = _write_registered_model(
         tmp_path / "cuda_model.py",
@@ -455,10 +497,12 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
         "analyze",
         f"{cuda_model}:model",
         "--compute-cost",
+        str(tmp_path / "cuda.json"),
         "--json",
     )
     assert analyzed_cuda.returncode == 0, analyzed_cuda.stderr
-    assert json.loads(analyzed_cuda.stdout)["target"] == "vendor.v100_sxm2_32gb"
+    assert analyzed_cuda.stdout == ""
+    assert json.loads((tmp_path / "cuda.json").read_text(encoding="utf-8"))["target"] == "vendor.v100_sxm2_32gb"
 
     removed_module = _run_cli(registry, tmp_path, "target", "remove", "vendor.npu")
     assert removed_module.returncode == 0, removed_module.stderr
@@ -616,11 +660,13 @@ def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
         "analyze",
         f"{good_model}:model",
         "--compute-cost",
+        str(tmp_path / "repaired.json"),
         "--json",
     )
     assert analyzed.returncode == 0
     assert "document 'vendor.bad_sm70' content changed" in analyzed.stderr
-    assert json.loads(analyzed.stdout)["target"] == "vendor.v100_sxm2_32gb"
+    assert analyzed.stdout == ""
+    assert json.loads((tmp_path / "repaired.json").read_text(encoding="utf-8"))["target"] == "vendor.v100_sxm2_32gb"
 
     repaired = _run_cli(
         registry, tmp_path, "target", "add", "--document", str(bad_architecture)
@@ -636,32 +682,44 @@ def test_analyze_binds_an_extent_on_a_root_that_reaches_a_child(tmp_path, capsys
     source = tmp_path / "composed.py"
     source.write_text(composed_leaf_source("n_cli"), encoding="utf-8")
 
-    assert cli.main(["analyze", f"{source}:Composed.root", "--dim", "n_cli=4"]) == 0
-    expanded = capsys.readouterr().out
+    report_path = tmp_path / "composed_report.py"
+    assert cli.main(["analyze", f"{source}:Composed.root", str(report_path), "--dim", "n_cli=4"]) == 0
+    assert capsys.readouterr().out == ""
+    expanded = report_path.read_text(encoding="utf-8")
     assert "def root(" in expanded
     assert "leaf_w: ConstTensor" in expanded
     assert "leaf(" not in expanded
 
 
-def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(capsys) -> None:
+def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) -> None:
     source = Path(__file__).parents[1] / "fixtures" / "placed" / "moe_mega_kernel.py"
     selector = f"{source}:MoEMegaKernel"
     flags = ["--compute-cost", "--memory", "--roofline", "--performance"]
 
-    assert cli.main(["analyze", selector, *flags, "--json"]) == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert cli.main(["analyze", selector, *flags]) == 0
-    first = capsys.readouterr().out
-    assert cli.main(["analyze", selector, *flags]) == 0
-    second = capsys.readouterr().out
+    json_path = tmp_path / "report.json"
+    first_path = tmp_path / "first.py"
+    second_path = tmp_path / "second.py"
+    operands_path = tmp_path / "operands.py"
+    operands_json_path = tmp_path / "operands.json"
+    assert cli.main(["analyze", selector, str(json_path), *flags, "--json"]) == 0
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    assert cli.main(["analyze", selector, str(first_path), *flags]) == 0
+    first = first_path.read_text(encoding="utf-8")
+    assert cli.main(["analyze", selector, str(second_path), *flags]) == 0
+    second = second_path.read_text(encoding="utf-8")
     assert first == second
 
-    assert cli.main(["analyze", selector, *flags, "--operands"]) == 0
-    asked = capsys.readouterr().out
+    assert cli.main(["analyze", selector, str(operands_path), *flags, "--operands"]) == 0
+    asked = operands_path.read_text(encoding="utf-8")
     assert "operands=" not in first
     assert "operands=0:r30720/w0,result:r0/w30720" in asked
-    assert cli.main(["analyze", selector, *flags, "--operands", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out) == payload
+    assert (
+        cli.main(
+            ["analyze", selector, str(operands_json_path), *flags, "--operands", "--json"]
+        )
+        == 0
+    )
+    assert json.loads(operands_json_path.read_text(encoding="utf-8")) == payload
 
     header, annotated = first.split("\n\n", 1)
     lines = annotated.splitlines()

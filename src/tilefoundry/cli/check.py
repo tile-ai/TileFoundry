@@ -85,7 +85,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--dim", action="append", metavar="NAME=V[,V...]", help="bind a dimension; several values check dispatch"
     )
-    parser.add_argument("--json", action="store_true", help="machine-readable report")
+    parser.add_argument(
+        "--json", metavar="PATH", help="write the machine-readable report to PATH"
+    )
 
 
 def guidance() -> str:
@@ -797,7 +799,9 @@ def run_check(arguments: argparse.Namespace) -> int:
         }
         if warnings:
             payload["warnings"] = warnings
-        sys.stdout.write(json.dumps(payload, indent=2, sort_keys=False) + "\n")
+        Path(arguments.json).write_text(
+            json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8"
+        )
     else:
         sys.stdout.write(_render(target, runs, warnings))
     return 0 if all(run["passed"] for run in runs) else 1

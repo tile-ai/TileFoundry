@@ -36,18 +36,20 @@ def test_document_free_target_analyses_and_selects_its_scheduler(
     analyzed = tf(
         "analyze",
         f"{model}:CMine.root",
+        str(tmp_path / "report.json"),
         "--compute-cost",
         "--memory",
         "--roofline",
         "--json",
     )
     assert analyzed.returncode == 0, analyzed.stderr
-    report = json.loads(analyzed.stdout)
+    assert analyzed.stdout == ""
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     assert report["target"] == "vendor.npu"
     assert report["executed"] == ["compute-cost", "memory", "roofline"]
     assert report["function_records"]["roofline"]["ideal_ns"] > 0
 
-    rejected = tf("analyze", f"{model}:CMine.root", "--performance")
+    rejected = tf("analyze", f"{model}:CMine.root", str(tmp_path / "rejected.py"), "--performance")
     assert rejected.returncode == 1
     assert "performance:" in rejected.stderr
     assert "has no core execution domain" in rejected.stderr
@@ -57,8 +59,13 @@ def test_document_free_target_analyses_and_selects_its_scheduler(
         f"{model}:CMine.root",
         "--topology",
         "core",
+        str(tmp_path / "schedule.json"),
         "--json",
     )
     assert scheduled.returncode == 0, scheduled.stderr
-    assert json.loads(scheduled.stdout) == {"topology": "core", "extent": 1}
+    assert scheduled.stdout == ""
+    assert json.loads((tmp_path / "schedule.json").read_text(encoding="utf-8")) == {
+        "topology": "core",
+        "extent": 1,
+    }
     assert scheduler_calls.read_text(encoding="utf-8") == "core\n"

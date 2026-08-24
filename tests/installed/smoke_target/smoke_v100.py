@@ -46,6 +46,7 @@ def test_external_v100_documents_analyse_a_copied_installed_model(
     done = tf(
         "analyze",
         f"{model}:Qwen3_1_7B.layer0.placed_mlp",
+        str(tmp_path / "report.json"),
         "--compute-cost",
         "--memory",
         "--roofline",
@@ -53,7 +54,8 @@ def test_external_v100_documents_analyse_a_copied_installed_model(
         "--json",
     )
     assert done.returncode == 0, done.stderr
-    report = json.loads(done.stdout)
+    assert done.stdout == ""
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
 
     assert report["target"] == "vendor.v100_sxm2_32gb"
     assert report["executed"] == ["compute-cost", "memory", "roofline", "performance"]
@@ -91,6 +93,7 @@ def test_external_v100_documents_analyse_a_copied_installed_model(
         f"{model}:Qwen3_1_7B.layer0.mlp",
         "--topology",
         "thread",
+        str(tmp_path / "schedule.py"),
         "--solver-timeout=60",
         "--solver-workers=4",
         "--first-plan",

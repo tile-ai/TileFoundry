@@ -170,6 +170,9 @@ bounds the caller stated.
     not which side is closer to truth. A reference MAY carry its own rounding, and
     establishing accuracy needs an independent high-precision reference that
     `check` does not run.
+  - `--json PATH` MUST write the machine-readable report to `PATH` and MUST NOT
+    write any byte of that report to stdout. Without `--json`, the human report
+    MUST remain on stdout.
   - Reaching one leaf MUST read only that leaf Module's own weights. A comparison
     of one kernel MUST NOT materialise a whole model. A Module is the unit that
     loads, so what a run binds is everything the selected Module declares, not the
@@ -189,6 +192,9 @@ bounds the caller stated.
     program nobody selected, and the failure is only actionable if the reader can
     see where the coverage stops.
   - Text and `--json` MUST carry the same facts.
+  - `analyze` MUST require a `PATH` whether or not an analysis flag was
+    supplied. Its typed HIR, text report, or JSON report MUST be written to that
+    path, and successful execution MUST write none of the report to stdout.
 
 ## Tutorial
 
@@ -396,7 +402,7 @@ explicit analysis; there is no ordinary `--target` option.
 ## Schedule
 
 `schedule` makes one public Schedule call
-([schedule §1](./schedule.md#1-the-public-schedule-operation)) and prints the
+([schedule §1](./schedule.md#1-the-public-schedule-operation)) and writes the
 Plan that call produced. It composes nothing itself: which algorithm runs, what
 it decides, and how the decision reads are owned by the algorithm registered for
 the selected Module's target at the requested level.
@@ -431,10 +437,11 @@ Target, MUST be rejected -- `schedule` does not resolve an omission to a default
     pays the full budget for an answer it already had.
   - A search that ends without an answer MUST be reported as the search ending
     without one, and MUST NOT be reported as the selection having no schedule.
-  - Output MUST be the Plan's own rendering: its `render()` by default, its
-    `to_json()` under `--json`. The command MUST NOT impose a shape across
-    algorithms, because two algorithms deciding different things have nothing to
-    share a format for.
+  - `schedule` MUST require a `PATH`. Its output MUST be the Plan's own
+    rendering written to that path: its `render()` by default, its `to_json()`
+    under `--json`. The command MUST write none of the plan to stdout and MUST
+    NOT impose a shape across algorithms, because two algorithms deciding
+    different things have nothing to share a format for.
   - On any failure stdout MUST be empty and stderr MUST carry one
     `tilefoundry: error:` line naming the cause.
 
@@ -455,7 +462,7 @@ def blocked_matmul(
 
 ```text
 # example
-$ tilefoundry schedule model.py:blocked_matmul --topology cta
+$ tilefoundry schedule model.py:blocked_matmul plan.txt --topology cta
 partition cta on nvidia.h200_sxm (OPTIMAL, makespan 35ns)
   MatMul x4 [0, 35)
 ```

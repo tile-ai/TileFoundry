@@ -55,6 +55,16 @@ def dim_args(dims: Mapping[str, int] | None) -> list[str]:
     return [f"--dim={name}={extent}" for name, extent in (dims or {}).items()]
 
 
+def _run_with_report(tf, arguments: Sequence[object], *, suffix: str):
+    """Run a command whose report lives outside the installed command's stdout."""
+    with tempfile.NamedTemporaryFile(suffix=suffix) as report:
+        done = tf(*arguments, report.name)
+        if done.returncode == 0:
+            report.seek(0)
+            done.stdout = report.read().decode()
+        return done
+
+
 def analysed(
     tf,
     source: Path,
@@ -66,13 +76,15 @@ def analysed(
     json_output: bool = False,
 ):
     """One ``analyze`` command for one family, held to succeeding."""
-    done = tf(
+    arguments = [
         "analyze",
         static(source, case, selector),
         f"--{family}",
-        *(("--json",) if json_output else ()),
         *dim_args(dims),
-    )
+    ]
+    if json_output:
+        arguments.append("--json")
+    done = _run_with_report(tf, arguments, suffix=".json" if json_output else ".py")
     assert done.returncode == 0, done.stderr
     return done
 
@@ -86,12 +98,16 @@ def reported(
     dims: Mapping[str, int] | None = None,
 ) -> dict:
     """The JSON report several families write about one function."""
-    done = tf(
-        "analyze",
-        static(source, case, selector),
-        *(f"--{family}" for family in families),
-        "--json",
-        *dim_args(dims),
+    done = _run_with_report(
+        tf,
+        [
+            "analyze",
+            static(source, case, selector),
+            *(f"--{family}" for family in families),
+            *dim_args(dims),
+            "--json",
+        ],
+        suffix=".json",
     )
     assert done.returncode == 0, done.stderr
     return json.loads(done.stdout)
@@ -195,11 +211,15 @@ def performance_refused(
     selected: FunctionCase,
 ) -> None:
     """One unplaced shipped-model function must identify the domain it lacks."""
-    rejected = tf(
-        "analyze",
-        static(source, case, selected.selector),
-        "--performance",
-        *dim_args(selected.dims),
+    rejected = _run_with_report(
+        tf,
+        [
+            "analyze",
+            static(source, case, selected.selector),
+            "--performance",
+            *dim_args(selected.dims),
+        ],
+        suffix=".py",
     )
     assert rejected.returncode == 1, rejected.stdout + rejected.stderr
     assert "performance:" in rejected.stderr
@@ -209,13 +229,17 @@ def performance_refused(
 def scheduled(tf, source: Path, case: ModelCase, planned: FunctionCase, *, topology: str = ""):
     """One ``schedule`` command at a level the source has to declare itself."""
     level = topology or planned.topology
-    done = tf(
-        "schedule",
-        static(source, case, planned.selector),
-        "--topology",
-        level,
-        *dim_args(planned.dims),
-        *SOLVER,
+    done = _run_with_report(
+        tf,
+        [
+            "schedule",
+            static(source, case, planned.selector),
+            "--topology",
+            level,
+            *dim_args(planned.dims),
+            *SOLVER,
+        ],
+        suffix=".py",
     )
     assert done.returncode == 0, done.stderr
     return done

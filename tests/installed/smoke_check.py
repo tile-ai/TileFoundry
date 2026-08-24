@@ -330,10 +330,11 @@ def test_a_runtime_module_that_names_no_authored_module_is_refused(
         assert refused in done.stderr
 
 
-def test_check_reports_the_same_verdict_as_json(tf, mine) -> None:
-    done = tf("check", f"{mine}:MineTwin.main", *_ARGS, "--json")
+def test_check_reports_the_same_verdict_as_json(tf, mine, tmp_path) -> None:
+    done = tf("check", f"{mine}:MineTwin.main", *_ARGS, "--json", str(tmp_path / "report.json"))
     assert done.returncode == 0, done.stderr
-    payload = json.loads(done.stdout)
+    assert done.stdout == ""
+    payload = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     assert payload["passed"] is True
     assert payload["target"].endswith("runtime_model.py:MineTwin.main")
     assert payload["runs"][0]["inputs"] == {

@@ -184,6 +184,9 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_source_argument(analyze)
+    analyze.add_argument(
+        "out", metavar="PATH", help="write the report here; stdout carries none of it"
+    )
     for analysis in _ANALYSES:
         analyze.add_argument(f"--{analysis}", action="store_true", help=EVIDENCE[analysis])
     analyze.add_argument(
@@ -220,6 +223,9 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_source_argument(schedule)
+    schedule.add_argument(
+        "out", metavar="PATH", help="write the plan here; stdout carries none of it"
+    )
     schedule.add_argument(
         "--topology",
         required=True,
@@ -342,6 +348,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_schedule(
                 args.source,
                 args.topology,
+                args.out,
                 as_json=args.json,
                 dims=one_extent_per_dim(parse_dims(args.dim)),
                 solver_timeout=args.solver_timeout,
@@ -362,6 +369,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_authored_analysis(
             args.source,
             analyses,
+            args.out,
             topology=args.topology,
             as_json=args.json,
             operands=args.operands,

@@ -64,13 +64,15 @@ def test_added_documents_and_provider_drive_installed_commands(
         registry,
         "analyze",
         f"{npu_model}:model",
+        str(tmp_path / "npu.json"),
         "--compute-cost",
         "--memory",
         "--roofline",
         "--json",
     )
     assert analyzed_npu.returncode == 0, analyzed_npu.stderr
-    npu_report = json.loads(analyzed_npu.stdout)
+    assert analyzed_npu.stdout == ""
+    npu_report = json.loads((tmp_path / "npu.json").read_text(encoding="utf-8"))
     assert npu_report["target"] == "vendor.npu"
     assert npu_report["executed"] == ["compute-cost", "memory", "roofline"]
     scheduled = tf(
@@ -80,10 +82,15 @@ def test_added_documents_and_provider_drive_installed_commands(
         f"{npu_model}:model",
         "--topology",
         "core",
+        str(tmp_path / "schedule.json"),
         "--json",
     )
     assert scheduled.returncode == 0, scheduled.stderr
-    assert json.loads(scheduled.stdout) == {"topology": "core", "extent": 1}
+    assert scheduled.stdout == ""
+    assert json.loads((tmp_path / "schedule.json").read_text(encoding="utf-8")) == {
+        "topology": "core",
+        "extent": 1,
+    }
 
     cuda_model = _registered_model(
         tmp_path / "cuda_model.py",
@@ -95,11 +102,13 @@ def test_added_documents_and_provider_drive_installed_commands(
         registry,
         "analyze",
         f"{cuda_model}:model",
+        str(tmp_path / "cuda.json"),
         "--compute-cost",
         "--json",
     )
     assert analyzed_cuda.returncode == 0, analyzed_cuda.stderr
-    assert json.loads(analyzed_cuda.stdout)["target"] == "vendor.v100_sxm2_32gb"
+    assert analyzed_cuda.stdout == ""
+    assert json.loads((tmp_path / "cuda.json").read_text(encoding="utf-8"))["target"] == "vendor.v100_sxm2_32gb"
 
     removed = tf("--registry", registry, "target", "remove", "vendor.npu")
     assert removed.returncode == 0, removed.stderr

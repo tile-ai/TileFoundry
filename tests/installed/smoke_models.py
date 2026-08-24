@@ -72,14 +72,25 @@ def test_models_source_names_the_shipped_directory_and_its_files(
     copied = tmp_path / "mine"
     shutil.copytree(source, copied)
     static = f"{copied / 'model.py'}:Qwen3_1_7B.layer0.mlp"
-    analysed = tf("analyze", static, "--compute-cost", "--memory")
+    analysed = tf(
+        "analyze", static, str(tmp_path / "analysed.py"), "--compute-cost", "--memory"
+    )
     assert analysed.returncode == 0, analysed.stderr
-    assert "target=nvidia.h200_sxm" in analysed.stdout
-    assert "# compute-cost flops=bf16:" in analysed.stdout
-    assert "traffic=gmem:r" in analysed.stdout
+    assert analysed.stdout == ""
+    report = (tmp_path / "analysed.py").read_text(encoding="utf-8")
+    assert "target=nvidia.h200_sxm" in report
+    assert "# compute-cost flops=bf16:" in report
+    assert "traffic=gmem:r" in report
 
     targetless = f"{copied / 'model.py'}:Qwen3_1_7B_DecoderLayer"
-    rejected = tf("analyze", targetless, "--compute-cost", "--dim", "ctx_len=128")
+    rejected = tf(
+        "analyze",
+        targetless,
+        str(tmp_path / "targetless.py"),
+        "--compute-cost",
+        "--dim",
+        "ctx_len=128",
+    )
     assert rejected.returncode == 1
     assert "no target is declared" in rejected.stderr
 
