@@ -136,7 +136,7 @@ def run_authored_analysis(
         return 0
 
     result = analyze(module, function, analysis=analyses, level=topology, dims=dims)
-    rendered = render_analysis(result, operands=operands)
+    rendered = render_analysis(result, operands=operands and not as_json)
     if as_json:
         Path(out_path).write_text(
             f"{render_json({**rendered.data, 'source': rendered.annotated})}\n",
