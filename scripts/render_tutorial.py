@@ -6,6 +6,8 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -42,6 +44,27 @@ def _materialize_source(notebook: dict[str, Any], path: Path) -> None:
     path.write_text("\n\n".join(parts).rstrip() + "\n", encoding="utf-8")
 
 
+def _is_shell_cell(cell: dict[str, Any]) -> bool:
+    source = _text(cell["source"])
+    return source.startswith("%%bash\n") or _tutorial_metadata(cell).get("cell_type") == "bash"
+
+
+def _run_shell_cell(source: str, source_path: Path) -> subprocess.CompletedProcess[str]:
+    lines = source.splitlines()
+    if not lines or lines[0].strip() != "%%bash":
+        raise RuntimeError("bash tutorial cells must start with %%bash")
+    environment = os.environ.copy()
+    environment["TUTORIAL_SOURCE"] = str(source_path)
+    return subprocess.run(
+        ["bash", "-c", "\n".join(lines[1:])],
+        cwd=source_path.parent,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def _execute(notebook: dict[str, Any], source_path: Path) -> None:
     """Execute cells in one namespace and replace every stored output."""
     namespace: dict[str, Any] = {
@@ -64,37 +87,52 @@ def _execute(notebook: dict[str, Any], source_path: Path) -> None:
         cell["outputs"] = []
         if _tutorial_metadata(cell).get("source"):
             continue
-        stdout = io.StringIO()
-        stderr = io.StringIO()
-        try:
-            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                exec(
-                    compile(
-                        _text(cell["source"]),
-                        f"{NOTEBOOK}:cell-{index}",
-                        "exec",
-                    ),
-                    namespace,
+        cell_source = _text(cell["source"])
+        if _is_shell_cell(cell):
+            completed = _run_shell_cell(cell_source, source_path)
+            stdout = completed.stdout
+            stderr = completed.stderr
+            if completed.returncode:
+                detail = "\n".join(part for part in (stdout, stderr) if part).strip()
+                raise RuntimeError(
+                    f"cell {index} failed with exit code {completed.returncode}: {detail}"
                 )
-        except Exception as error:
-            detail = stderr.getvalue().strip()
-            if detail:
-                raise RuntimeError(f"cell {index} failed: {detail}") from error
-            raise RuntimeError(f"cell {index} failed: {error}") from error
-        if stdout.getvalue():
+        else:
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(
+                    stderr_buffer
+                ):
+                    exec(
+                        compile(
+                            cell_source,
+                            f"{NOTEBOOK}:cell-{index}",
+                            "exec",
+                        ),
+                        namespace,
+                    )
+            except Exception as error:
+                detail = stderr_buffer.getvalue().strip()
+                if detail:
+                    raise RuntimeError(f"cell {index} failed: {detail}") from error
+                raise RuntimeError(f"cell {index} failed: {error}") from error
+            stdout = stdout_buffer.getvalue()
+            stderr = stderr_buffer.getvalue()
+        if stdout:
             cell["outputs"].append(
                 {
                     "name": "stdout",
                     "output_type": "stream",
-                    "text": stdout.getvalue(),
+                    "text": stdout,
                 }
             )
-        if stderr.getvalue():
+        if stderr:
             cell["outputs"].append(
                 {
                     "name": "stderr",
                     "output_type": "stream",
-                    "text": stderr.getvalue(),
+                    "text": stderr,
                 }
             )
 
@@ -121,7 +159,7 @@ def _render_output(cell: dict[str, Any]) -> list[str]:
 
 
 def render_markdown(notebook: dict[str, Any]) -> str:
-    """Render Markdown cells, visible Python cells, and refreshed outputs."""
+    """Render Markdown cells, visible code cells, and refreshed outputs."""
     rendered: list[str] = []
     for cell in notebook["cells"]:
         if cell["cell_type"] == "markdown":
@@ -129,7 +167,13 @@ def render_markdown(notebook: dict[str, Any]) -> str:
             continue
         metadata = _tutorial_metadata(cell)
         if not metadata.get("hide_input"):
-            rendered.append(_fenced(_text(cell["source"]), "python"))
+            source = _text(cell["source"])
+            if _is_shell_cell(cell):
+                source = "\n".join(source.splitlines()[1:])
+                language = "bash"
+            else:
+                language = "python"
+            rendered.append(_fenced(source, language))
         rendered.extend(_render_output(cell))
     return "\n\n".join(part for part in rendered if part).rstrip() + "\n"
 

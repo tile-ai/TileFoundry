@@ -28,9 +28,10 @@ The six programs are Python cells in this notebook:
 | 4 | `Stage4_WeightPrepared` | stage projection weights by output slice |
 | 5 | `Stage5_CachePrepared` | stream cache blocks through smem |
 
-All report output cells below are produced by running the same `tilefoundry analyze` CLI
-shown in the neighboring command cells. The reports are static analysis results; no CUDA
-kernel is launched.
+Every displayed analysis output belongs to the visible `%%bash` cell immediately above it.
+Those cells run the same `tilefoundry analyze` CLI a reader can run after extracting
+`attn_layer.py`, then load the report or JSON file and print the displayed result. The
+reports are static analysis results; no CUDA kernel is launched.
 
 ## Executable cells
 
@@ -164,15 +165,27 @@ class Stage0_Naive:
 gqa_decode = Stage0_Naive.entry_function()
 ```
 
-Run one point like this:
+Run one point like this. The cell runs the CLI, loads the report file it just wrote,
+and prints its header plus selected annotated calls:
 
 ```bash
+set -euo pipefail
+mkdir -p tutorial-reports
 tilefoundry analyze attn_layer.py:Stage0_Naive \
-  /tmp/tilefoundry-tutorial-gqa/stage0-128.txt \
+  tutorial-reports/stage0-128.txt \
   --compute-cost --memory --roofline --operands --dim ctx_len=128
-```
+python - <<'PY'
+from pathlib import Path
 
-The report header is:
+report = Path("tutorial-reports/stage0-128.txt").read_text(encoding="utf-8")
+header, separator, annotated = report.partition("\n\n")
+print(header.rstrip())
+print()
+for needle in ("matmul(hidden, w_q)", "cache_update(k_cache", "matmul(v33, w_o)"):
+    line = next(line for line in annotated.splitlines() if needle in line)
+    print(line.rstrip())
+PY
+```
 
 ```text
 # analysis target=nvidia.h200_sxm module=Stage0_Naive function=gqa_decode topology=cta
@@ -181,34 +194,56 @@ The report header is:
 # traffic traffic=gmem:r2225620/w806592@r2225620/w806592
 # peak-footprint=gmem:1675788
 # roofline ideal-ns=632 bound-by=memory
-```
 
-The first number before `@` is global work or traffic. The number after `@` is the
-per-CTA projection. With no authored split they are equal. The report also annotates
-direct calls. These lines are from the same generated report:
-
-```text
     v0 = matmul(hidden, w_q)  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072@131072; traffic traffic=gmem:r131584/w512@r131584/w512 operands=0:r512/w0,1:r131072/w0,result:r0/w512; roofline ideal-ns=28 bound-by=memory
     v11 = cache_update(k_cache, cur_pos, write_len, v10)  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost; traffic traffic=gmem:r136/w128@r136/w128 operands=0:r0/w0,1:r4/w0,2:r4/w0,3:r128/w0,result:r0/w128; roofline ideal-ns=1 bound-by=memory
     v34 = matmul(v33, w_o)  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072@131072; traffic traffic=gmem:r131584/w512@r131584/w512 operands=0:r512/w0,1:r131072/w0,result:r0/w512; roofline ideal-ns=28 bound-by=memory
 ```
 
+The first number before `@` is global work or traffic. The number after `@` is the
+per-CTA projection. With no authored split they are equal. The annotated lines printed by
+the previous cell come from the same report file, so the call-level operands and roofline
+numbers stay tied to the command that produced them.
+
 `w_q` and `w_o` are each `256 * 256 * 2 = 131072` bytes. `w_k` and `w_v` are each `256 * 64 * 2 = 32768` bytes, so the four projection weights total `327680` bytes. That fixed amount is separate from the cache scan.
 
 ## 1. Sweep the open dimension
 
-The same command, with a different report path, produces the table:
+The same command, with a different report path, produces the table. The cell runs all six
+CLI calls, loads each fresh report, and prints the selected fields as Markdown:
 
 ```bash
-mkdir -p /tmp/tilefoundry-tutorial-gqa
+set -euo pipefail
+mkdir -p tutorial-reports
 for ctx in 128 512 1024 2048 4096 8192; do
   tilefoundry analyze attn_layer.py:Stage0_Naive \
-    /tmp/tilefoundry-tutorial-gqa/stage0-$ctx.txt \
+    tutorial-reports/stage0-$ctx.txt \
     --compute-cost --memory --roofline --operands --dim ctx_len=$ctx
 done
-```
+python - <<'PY'
+import re
+from pathlib import Path
 
-The report fields are:
+def metrics(ctx_len):
+    report = Path(f"tutorial-reports/stage0-{ctx_len}.txt").read_text(encoding="utf-8")
+    lines = report.splitlines()
+    compute = next(line for line in lines if line.startswith("# compute-cost "))
+    traffic = next(line for line in lines if line.startswith("# traffic "))
+    peak = next(line for line in lines if line.startswith("# peak-footprint="))
+    roofline = next(line for line in lines if line.startswith("# roofline "))
+    f32 = re.search(r"f32:([^ ]+)", compute).group(1)
+    traffic_value = traffic.removeprefix("# traffic traffic=")
+    gmem_peak = re.search(r"gmem:([^,]+)", peak).group(1)
+    ideal, bound = re.search(r"ideal-ns=([^ ]+) bound-by=([^ ]+)", roofline).groups()
+    return f32, traffic_value, gmem_peak, ideal, bound
+
+print("| `ctx_len` | f32 flops `global@CTA` | traffic `global@CTA` | peak gmem bytes | ideal ns | bound |")
+print("|---:|---:|---|---:|---:|---|")
+for ctx_len in (128, 512, 1024, 2048, 4096, 8192):
+    f32, traffic, peak, ideal, bound = metrics(ctx_len)
+    print(f"| {ctx_len} | `{f32}` | `{traffic}` | {peak} | {ideal} | {bound} |")
+PY
+```
 
 | `ctx_len` | f32 flops `global@CTA` | traffic `global@CTA` | peak gmem bytes | ideal ns | bound |
 |---:|---:|---|---:|---:|---|
@@ -357,12 +392,16 @@ class Stage1_Specialized:
 gqa_decode_specialized = Stage1_Specialized.entry_function()
 ```
 
-The valid boundary report starts with:
+The valid boundary report is produced by the next cell, which runs the CLI and prints
+the report header from the file it wrote:
 
 ```bash
+set -euo pipefail
+mkdir -p tutorial-reports
 tilefoundry analyze attn_layer.py:Stage2_Sharded \
-  /tmp/tilefoundry-tutorial-gqa/stage2-1816.txt \
+  tutorial-reports/stage2-1816.txt \
   --compute-cost --memory --roofline --dim ctx_len=1816
+sed -n '1,/^$/p' tutorial-reports/stage2-1816.txt
 ```
 
 ```text
@@ -376,12 +415,22 @@ tilefoundry analyze attn_layer.py:Stage2_Sharded \
 # roofline ideal-ns=1935 bound-by=memory
 ```
 
-A larger context crosses the stated capacity. The generator captured this refusal at `ctx_len=1820`:
+A larger context crosses the stated capacity. The next cell runs the same CLI at
+`ctx_len=1820`, preserves its non-zero refusal, and prints the actual error output:
 
 ```bash
+set -euo pipefail
+mkdir -p tutorial-reports
+set +e
 tilefoundry analyze attn_layer.py:Stage2_Sharded \
-  /tmp/tilefoundry-tutorial-gqa/stage2-1820.txt \
-  --compute-cost --memory --roofline --dim ctx_len=1820
+  tutorial-reports/stage2-1820.txt \
+  --compute-cost --memory --roofline --dim ctx_len=1820 2>&1
+status=$?
+set -e
+if [ "$status" -eq 0 ]; then
+  echo "expected Stage2_Sharded to refuse ctx_len=1820" >&2
+  exit 1
+fi
 ```
 
 ```text
@@ -458,12 +507,17 @@ class Stage2_Sharded:
 gqa_decode_sharded = Stage2_Sharded.entry_function()
 ```
 
-Baseline at `ctx_len=128`:
+Baseline at `ctx_len=128`. The next cell reruns the CLI and prints the selected report
+lines from its output file:
 
 ```bash
+set -euo pipefail
+mkdir -p tutorial-reports
 tilefoundry analyze attn_layer.py:Stage0_Naive \
-  /tmp/tilefoundry-tutorial-gqa/stage0-128.txt \
+  tutorial-reports/stage0-128-summary.txt \
   --compute-cost --memory --roofline --dim ctx_len=128
+grep -E '^# (compute-cost |traffic |peak-footprint=|roofline )' \
+  tutorial-reports/stage0-128-summary.txt
 ```
 
 ```text
@@ -473,12 +527,17 @@ tilefoundry analyze attn_layer.py:Stage0_Naive \
 # roofline ideal-ns=632 bound-by=memory
 ```
 
-Head-sharded at `ctx_len=128`:
+Head-sharded at `ctx_len=128`. The next cell reruns the CLI and prints the selected
+report lines from its output file:
 
 ```bash
+set -euo pipefail
+mkdir -p tutorial-reports
 tilefoundry analyze attn_layer.py:Stage2_Sharded \
-  /tmp/tilefoundry-tutorial-gqa/stage2-128.txt \
+  tutorial-reports/stage2-128-summary.txt \
   --compute-cost --memory --roofline --dim ctx_len=128
+grep -E '^# (compute-cost |traffic |peak-footprint=|roofline )' \
+  tutorial-reports/stage2-128-summary.txt
 ```
 
 ```text
@@ -608,9 +667,20 @@ gqa_decode_fused = Stage3_Fused.entry_function()
 ```
 
 ```bash
+set -euo pipefail
+mkdir -p tutorial-reports
 tilefoundry analyze attn_layer.py:Stage3_Fused \
-  /tmp/tilefoundry-tutorial-gqa/stage3-4096.txt \
+  tutorial-reports/stage3-4096.txt \
   --compute-cost --memory --roofline --operands --dim ctx_len=4096
+python - <<'PY'
+from pathlib import Path
+
+report = Path("tutorial-reports/stage3-4096.txt").read_text(encoding="utf-8")
+header, separator, annotated = report.partition("\n\n")
+print(header.rstrip())
+print()
+print(next(line.rstrip() for line in annotated.splitlines() if "cache_update(k_cache" in line))
+PY
 ```
 
 ```text
@@ -624,8 +694,6 @@ tilefoundry analyze attn_layer.py:Stage3_Fused \
 
         v17 = cache_update(k_cache, cur_pos, write_len, v16)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; traffic traffic=gmem:r136/w128@r136/w128 operands=0:r0/w0,1:r4/w0,2:r4/w0,3:r128/w0,result:r0/w128; roofline ideal-ns=1 bound-by=memory
 ```
-
-At `ctx_len=4096`, gmem read is `gmem:r3476916/w4196992@r2558940/w4196544,rmem:r656/w104@r656/w80,smem:r5839296/w5662784@r682464/w672676` and the report's ideal bound is `1599 ns`; the f32 per-CTA work is `3239808@200592` and the gmem peak is `5046796` bytes. These are authored-model bounds, not measured kernel times.
 
 The embedded `Stage3_Fused` program is the split-K example for this page.
 
@@ -726,6 +794,31 @@ class Stage4_WeightPrepared:
 gqa_decode_weight_prepared = Stage4_WeightPrepared.entry_function()
 ```
 
+```bash
+set -euo pipefail
+mkdir -p tutorial-reports
+tilefoundry analyze attn_layer.py:Stage4_WeightPrepared \
+  tutorial-reports/stage4-4096.txt \
+  --compute-cost --memory --roofline --operands --dim ctx_len=4096
+python - <<'PY'
+from pathlib import Path
+
+report = Path("tutorial-reports/stage4-4096.txt").read_text(encoding="utf-8")
+header, separator, annotated = report.partition("\n\n")
+print(header.rstrip())
+lines = annotated.splitlines()
+for needle in ("reshard(w_q", "reshard(w_o"):
+    start = next(index for index, line in enumerate(lines) if needle in line)
+    end = start
+    while end + 1 < len(lines):
+        end += 1
+        if end > start and "  # " in lines[end]:
+            break
+    print()
+    print("\n".join(line.rstrip() for line in lines[start : end + 1]))
+PY
+```
+
 ```text
 # analysis target=nvidia.h200_sxm module=Stage4_WeightPrepared function=gqa_decode topology=cta
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
@@ -740,20 +833,13 @@ gqa_decode_weight_prepared = Stage4_WeightPrepared.entry_function()
             attrs=(S(2),),
             mesh=cta,
         ), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ cta.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; traffic traffic=gmem:r131072/w0@r16384/w0,smem:r0/w131072@r0/w16384 operands=0:r131072/w0,result:r0/w131072; roofline ideal-ns=28 bound-by=memory
+
     v42 = reshard(w_o, layout=ShardLayout(
             layout=Layout((1, 256, 8, 32), None),
             attrs=(S(2),),
             mesh=cta,
         ), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ cta.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; traffic traffic=gmem:r131072/w0@r16384/w0,smem:r0/w131072@r0/w16384 operands=0:r131072/w0,result:r0/w131072; roofline ideal-ns=28 bound-by=memory
 ```
-
-```bash
-tilefoundry analyze attn_layer.py:Stage4_WeightPrepared \
-  /tmp/tilefoundry-tutorial-gqa/stage4-4096.txt \
-  --compute-cost --memory --roofline --operands --dim ctx_len=4096
-```
-
-The generated header reports f32 `6390528@6390528`, traffic `gmem:r28254676/w25566912@r27967956/w25565792,smem:r331008/w329984@r43168/w42144`, peak gmem `10945036` bytes, and ideal bound `11213 ns`. This is kernel staging. Runtime `Module.load` and a weight converter are a different contract; the workflow explanation is in [migrate](migrate.md).
 
 ## 6. Stream the KV cache
 
@@ -873,9 +959,21 @@ gqa_decode_cache_prepared = Stage5_CachePrepared.entry_function()
 ```
 
 ```bash
+set -euo pipefail
+mkdir -p tutorial-reports
 tilefoundry analyze attn_layer.py:Stage5_CachePrepared \
-  /tmp/tilefoundry-tutorial-gqa/stage5-4096.txt \
+  tutorial-reports/stage5-4096.txt \
   --compute-cost --memory --roofline --operands --dim ctx_len=4096
+python - <<'PY'
+from pathlib import Path
+
+report = Path("tutorial-reports/stage5-4096.txt").read_text(encoding="utf-8")
+header, separator, annotated = report.partition("\n\n")
+print(header.rstrip())
+print()
+for needle in ("slice(k_cache", "cache_update(k_cache"):
+    print(next(line.rstrip() for line in annotated.splitlines() if needle in line))
+PY
 ```
 
 ```text
@@ -890,8 +988,6 @@ tilefoundry analyze attn_layer.py:Stage5_CachePrepared \
         v16 = slice(k_cache, (0, v15, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost; traffic traffic=rmem:r32/w0@r32/w0 operands=0:r0/w0,1:r32/w0,result:r0/w0; roofline
     v42 = cache_update(k_cache, cur_pos, write_len, v41)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; traffic traffic=gmem:r136/w128@r136/w128 operands=0:r0/w0,1:r4/w0,2:r4/w0,3:r128/w0,result:r0/w128; roofline ideal-ns=1 bound-by=memory
 ```
-
-The generated report gives f32 `6410280@801285`, traffic `gmem:r7672476/w4198272@r4001116/w4197824,rmem:r2560/w0@r2560/w0,smem:r21788704/w21486432@r2723588/w2685804`, peak gmem `2949772` bytes, and ideal bound `2474 ns`. The distinction is:
 
 ```text
 weight staging: static tensor -> one output slice -> reusable for the step
@@ -926,15 +1022,63 @@ The command surface used by this page is:
 --json          write the same report data as JSON
 ```
 
-For example, the JSON form writes to a path just like the text form:
+For example, the JSON form writes to a path just like the text form. The next cell runs the
+CLI with `--json`, loads the JSON report, and prints a stable summary from its parsed data.
 
 ```bash
+set -euo pipefail
+mkdir -p tutorial-reports
 tilefoundry analyze attn_layer.py:Stage0_Naive \
-  /tmp/tilefoundry-tutorial-gqa/stage0-128.json \
+  tutorial-reports/stage0-128.json \
   --compute-cost --memory --roofline --dim ctx_len=128 --json
+python - <<'PY'
+import json
+from pathlib import Path
+
+report = json.loads(Path("tutorial-reports/stage0-128.json").read_text(encoding="utf-8"))
+summary = {
+    "target": report["target"],
+    "module": report["module"],
+    "function": report["function"],
+    "topology": report["topology"],
+    "requested": report["requested"],
+    "executed": report["executed"],
+    "totals": report["totals"],
+}
+print(json.dumps(summary, indent=2, sort_keys=True))
+PY
 ```
 
-Two items are intentionally limitations rather than invented coverage:
+```text
+{
+  "executed": [
+    "compute-cost",
+    "memory",
+    "roofline"
+  ],
+  "function": "gqa_decode",
+  "module": "Stage0_Naive",
+  "requested": [
+    "compute-cost",
+    "memory",
+    "roofline"
+  ],
+  "target": "nvidia.h200_sxm",
+  "topology": "cta",
+  "totals": {
+    "flops": {
+      "bf16": 328896,
+      "f32": 200448
+    },
+    "traffic": {
+      "gmem": {
+        "read": 2225620,
+        "write": 806592
+      }
+    }
+  }
+}
+```
 
 - The split-K tutorial programs use explicit log-sum-exp state. There is no authored `Partial` value in this ladder.
 - `analyze` reports authored static bounds. It does not replace `check`, a GPU run, cache invalidation, or a benchmark protocol.
