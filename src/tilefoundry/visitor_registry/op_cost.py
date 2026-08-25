@@ -9,8 +9,6 @@ algorithms read the one registry they fill.
 
 from __future__ import annotations
 
-import math
-
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16, Wgmma_SM90_64x128x16
@@ -115,21 +113,20 @@ def _serviced(call: Call, ctx: CostContext, kind: str) -> Cost:
 
 @register_cost_evaluator(MatMul)
 def _matmul(call: Call, ctx: CostContext) -> Cost:
-    """One multiply and one add per multiply-accumulate, over every batch.
+    """One multiply and one add per multiply-accumulate, over every element.
 
-    The batch comes from the output rather than from the left operand. Either side
-    may be the one that is broadcast: a block of a weight matrix multiplied by one
-    token has its batch on the right, and reading the left gave a batch of one --
-    the whole block loop's arithmetic charged as a single tile's. The output's batch
-    is what the call produced, and every batch of it was computed.
+    The work is the result's element count times the contraction, which counts
+    every batch the call produced without reading a batch extent at all. Read as
+    ``batch * m * n`` it is wrong in the recursive-local window: sharding moves
+    an axis, and a sharded last axis puts the extra one where ``m`` is counted
+    twice. Either side may be the broadcast one, and the element count does not
+    care which.
     """
     lhs, rhs = _input_types(call, ctx)
     output = _output_type(call, ctx)
     if not all(isinstance(type, TensorType) for type in (lhs, rhs, output)):
         raise ValueError("MatMul cost requires tensor inputs and output")
-    m, k, n = lhs.shape[-2], lhs.shape[-1], rhs.shape[-1]
-    batch = math.prod(output.shape[:-2])
-    flops = 2 * batch * m * k * n
+    flops = 2 * numel(output) * lhs.shape[-1]
     return Cost({lhs.dtype: flops}, _traffic((lhs, rhs), output))
 
 

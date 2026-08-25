@@ -158,6 +158,83 @@ def test_roofline_uses_exact_integer_ceiling_above_float_precision() -> None:
     assert bound.ideal_ns == 1_492_537_313_434
 
 
+_SPLIT_GRID = 128
+_SPLIT_HIDDEN = 2048
+_SPLIT_OUT = 12288
+_SPLIT_PER = _SPLIT_OUT // _SPLIT_GRID
+_SPLIT_BLOCK = 128
+
+
+@module(entry="last_axis", target=_H200, topologies=(Topology("cta", _SPLIT_GRID),))
+class _SplitLastAxis:
+    """The weight's N on the mesh, so the result's last axis is the split one."""
+
+    @func
+    def last_axis(
+        x: Tensor[(1, _SPLIT_BLOCK, _SPLIT_HIDDEN), "bf16"],
+        w: ConstTensor[(_SPLIT_HIDDEN, _SPLIT_OUT), "bf16"],
+    ) -> Tensor[(1, _SPLIT_BLOCK, _SPLIT_OUT), "bf16"]:
+        with Mesh(("cta",), layout=(_SPLIT_GRID,), names=("unit",)) as mesh:
+            rows = tf.reshard(
+                x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem"
+            )
+            strip = tf.reshard(
+                w[0:_SPLIT_BLOCK, :], (_SPLIT_BLOCK, _SPLIT_OUT @ mesh.unit), "smem"
+            )
+            return tf.matmul(rows, strip)
+
+
+@module(entry="strip_major", target=_H200, topologies=(Topology("cta", _SPLIT_GRID),))
+class _SplitStripMajor:
+    """The same gemm with the split axis leading, inside the matmul's batch."""
+
+    @func
+    def strip_major(
+        x: Tensor[(1, _SPLIT_BLOCK, _SPLIT_HIDDEN), "bf16"],
+        w: ConstTensor[(_SPLIT_GRID, _SPLIT_HIDDEN, _SPLIT_PER), "bf16"],
+    ) -> Tensor[(_SPLIT_GRID, _SPLIT_BLOCK, _SPLIT_PER), "bf16"]:
+        with Mesh(("cta",), layout=(_SPLIT_GRID,), names=("unit",)) as mesh:
+            rows = tf.reshard(
+                x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem"
+            )
+            strip = tf.reshard(
+                w[:, 0:_SPLIT_BLOCK, :],
+                (_SPLIT_GRID @ mesh.unit, _SPLIT_BLOCK, _SPLIT_PER),
+                "smem",
+            )
+            return tf.matmul(rows, strip)
+
+
+def test_a_matmul_counts_its_rows_once_whichever_axis_the_mesh_split() -> None:
+    """One gemm, two layouts of the weight, one per-unit answer.
+
+    Split the result's last axis and the axis sharding adds lands where a batch
+    is read from, so counting ``batch * m * n`` charges the rows twice and never
+    divides by the grid. Counting the result's elements does not care where the
+    axis went, and the two spellings agree on the work and the predicted time.
+    """
+    per_layout = {}
+    for owner, name in ((_SplitLastAxis, "last_axis"), (_SplitStripMajor, "strip_major")):
+        function = next(item for item in owner.functions if item.name == name)
+        report = analyze(owner, function, analysis="performance")
+        product = next(
+            expr
+            for expr in postorder(report.function.body)
+            if isinstance(expr, Call) and type(expr.target).__name__ == "MatMul"
+        )
+        cost = get_metadata(product, ComputeCostMetadata)
+        summary = get_metadata(report.function, PerformanceSummaryMetadata)
+        per_layout[name] = (
+            dict(cost.flops)["bf16"],
+            dict(cost.flops_per_unit)["bf16"],
+            summary.timeline.end_ns,
+        )
+
+    for name, (whole, unit, _predicted) in per_layout.items():
+        assert whole == unit * _SPLIT_GRID, f"{name} did not divide by the grid"
+    assert per_layout["last_axis"] == per_layout["strip_major"]
+
+
 _BLOCK_GRID = 128
 _BLOCK_STRIPS = 16
 _BLOCK_WIDTH = 128
