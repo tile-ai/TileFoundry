@@ -1887,13 +1887,24 @@ class CallPattern(ElementPattern):
 
     @staticmethod
     def _schema_children(node: ast.Call, schema: object) -> tuple[AstChild, ...] | None:
+        """Bind a call's arguments to one op schema's inputs and attributes.
+
+        A variadic op takes its inputs one per argument, and also accepts them
+        as one sequence -- ``tf.concat([a, b], axis=1)`` is how torch, numpy,
+        jax and tvm all spell the same call, so it is the first thing an author
+        writes. No tensor is ever a list literal, so unwrapping one is
+        unambiguous.
+        """
         params = tuple(schema.signature)
         inputs = [param for param in params if param.kind == "input"]
         attrs = [param for param in params if param.kind == "attribute"]
         variadic = bool(getattr(schema.op_class, "is_variadic", False))
+        positional = list(node.args)
+        if variadic and len(positional) == 1 and isinstance(positional[0], (ast.List, ast.Tuple)):
+            positional = list(positional[0].elts)
         children: list[AstChild] = []
         bound_attrs: set[str] = set()
-        for index, argument in enumerate(node.args):
+        for index, argument in enumerate(positional):
             if variadic or index < len(inputs):
                 name = inputs[0].name if variadic else inputs[index].name
                 children.append(
@@ -1936,7 +1947,7 @@ class CallPattern(ElementPattern):
                     "allocation" if param.annotation is runtime.TensorType else param.name,
                 )
             )
-        if not variadic and len(node.args) < len(inputs):
+        if not variadic and len(positional) < len(inputs):
             return None
         return tuple(children)
 
@@ -3857,7 +3868,21 @@ class FunctionPattern(ElementPattern):
 
 
 def _module_from_body(body: object) -> ast.Module:
+    """Wrap a statement list as a Module, dropping a leading docstring.
+
+    A bare string constant is a no-op statement carrying no work, so it has no
+    statement pattern and matching one failed with a message about the matcher
+    pointing at a string literal -- for a ``@func`` documenting itself the way
+    every other Python function may.
+    """
     assert isinstance(body, list)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]
     return ast.Module(body=body, type_ignores=[])
 
 
