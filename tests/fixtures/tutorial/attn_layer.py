@@ -773,9 +773,85 @@ def _authoring_source() -> str:
     return "\n".join(source.splitlines()[:end]).rstrip()
 
 
-def _materialize_command(source: str) -> str:
-    """Make the embedded authored program available to the CLI examples."""
-    return f"cat > attn_layer.py <<'PY'\n{source}\nPY"
+def _source_cells(source: str) -> tuple[tuple[str, str, bool], ...]:
+    """Split the authored program into percent-format code and Markdown cells."""
+    marker = re.compile(r"^# %%(?: \[markdown\])?$")
+    cells: list[tuple[str, str, bool]] = []
+    kind = "code"
+    lines: list[str] = []
+    has_marker = False
+
+    def flush() -> None:
+        if any(line.strip() for line in lines):
+            cells.append((kind, "\n".join(lines).strip(), has_marker))
+
+    for line in source.splitlines():
+        if marker.fullmatch(line):
+            flush()
+            kind = "markdown" if line.endswith("[markdown]") else "code"
+            lines = []
+            has_marker = True
+        else:
+            lines.append(line)
+    flush()
+    return tuple(cells)
+
+
+def _markdown_cell(text: str) -> str:
+    """Turn percent-format comment lines into the Markdown cell they describe."""
+    lines = []
+    for line in text.splitlines():
+        if line == "#":
+            lines.append("")
+        elif line.startswith("# "):
+            lines.append(line[2:])
+        elif line.startswith("#"):
+            lines.append(line[1:])
+        else:
+            lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _render_code_cell(text: str, has_marker: bool) -> str:
+    """Render one authored code cell without adding a second source copy."""
+    prefix = "# %%\n" if has_marker else ""
+    return f"{prefix}{text}".rstrip()
+
+
+def _stage_code_cell(cells: tuple[tuple[str, str, bool], ...], stage: str) -> str:
+    """Find the code cell immediately following a Stage Markdown cell."""
+    for index, (kind, text, _has_marker) in enumerate(cells):
+        if kind != "markdown" or not _markdown_cell(text).startswith(stage):
+            continue
+        for next_kind, next_text, next_has_marker in cells[index + 1 :]:
+            if next_kind == "code":
+                return _render_code_cell(next_text, next_has_marker)
+    raise RuntimeError(f"source has no code cell for {stage!r}")
+
+
+def _setup_code_cells(cells: tuple[tuple[str, str, bool], ...]) -> tuple[str, ...]:
+    """Return code cells before the first Stage Markdown cell."""
+    setup: list[str] = []
+    for kind, text, has_marker in cells:
+        if kind == "markdown":
+            break
+        if kind == "code":
+            setup.append(_render_code_cell(text, has_marker))
+    return tuple(setup)
+
+
+def _extract_python_cells_command() -> str:
+    """Extract the one-copy Python cells from the installed Markdown page."""
+    return "\n".join(
+        (
+            "awk '",
+            "  /^```python$/ { in_python=1; next }",
+            "  in_python && /^```$/ { in_python=0; next }",
+            "  in_python { print }",
+            "' authoring.md > attn_layer.py",
+            "chmod +x attn_layer.py",
+        )
+    )
 
 
 def _summary_metrics(report: str) -> tuple[str, str, str, str, str]:
@@ -795,6 +871,14 @@ def _summary_metrics(report: str) -> tuple[str, str, str, str, str]:
 def render_markdown() -> str:
     """Execute the tutorial evidence cells and return the complete Markdown page."""
     authoring_source = _authoring_source()
+    source_cells = _source_cells(authoring_source)
+    setup_code_cells = _setup_code_cells(source_cells)
+    stage0_code = _stage_code_cell(source_cells, "## Stage 0:")
+    stage1_code = _stage_code_cell(source_cells, "## Stage 1:")
+    stage2_code = _stage_code_cell(source_cells, "## Stage 2:")
+    stage3_code = _stage_code_cell(source_cells, "## Stage 3:")
+    stage4_code = _stage_code_cell(source_cells, "## Stage 4:")
+    stage5_code = _stage_code_cell(source_cells, "## Stage 5:")
     sweep_contexts = (128, 512, 1024, 2048, 4096, 8192)
     sweep_rows: list[str] = []
     sweep_reports: dict[int, str] = {}
@@ -867,18 +951,20 @@ def render_markdown() -> str:
         "All reports below are produced by the same `analyze()` API used by the CLI.",
         "The reports are static analysis results; no CUDA kernel is launched.",
         "",
-        "## Embedded source",
+        "## Executable cells",
         "",
-        "The original Python authoring source is embedded here so this installed page is self-contained.",
-        "The source uses percent-format cells: `# %%` for code and `# %% [markdown]` for headings.",
-        "Run it as ordinary Python or execute its cells in a notebook-aware editor.",
-        "Save this block as `attn_layer.py` before running the commands below.",
+        "This is an ipynb-style rendering of the executable tutorial source.",
+        "The source uses percent-format cells: `# %%` for Python and `# %% [markdown]` for headings.",
+        "Each Python cell is embedded as one fenced code block at the point where the tutorial uses it.",
+        "The page does not repeat the complete source in a second heredoc.",
         "",
-        _fenced(authoring_source, "python"),
+        "To run this installed page, extract its Python cells into one executable file:",
         "",
-        "Materialize the embedded program before running the analysis commands:",
+        _fenced(_extract_python_cells_command(), "bash"),
         "",
-        _fenced(_materialize_command(authoring_source), "bash"),
+        "### Setup cell",
+        "",
+        *(_fenced(cell, "python") for cell in setup_code_cells),
         "",
         "## 0. Start with the complete shape",
         "",
@@ -895,6 +981,8 @@ def render_markdown() -> str:
         "The entry includes q/k/v projection, RoPE, one cache append, an attention scan,",
         "and the output projection. The weights are `ConstTensor` parameters. The starting",
         "point has no explicit mesh and no storage transition.",
+        "",
+        _fenced(stage0_code, "python"),
         "",
         "Run one point like this:",
         "",
@@ -970,6 +1058,8 @@ def render_markdown() -> str:
         "The Stage1 body is deliberately the unsplit baseline, so the dispatch contract can be "
         "read independently from the later implementations.",
         "",
+        _fenced(stage1_code, "python"),
+        "",
         "The valid boundary report starts with:",
         "",
         _fenced(_command("Stage2_Sharded", "stage2-1816.txt", SPECIALIZE_T), "bash"),
@@ -992,6 +1082,8 @@ def render_markdown() -> str:
         "",
         f"The next change is {_stage_label('Stage2_Sharded')}: one `cta.head` owns one query head. "
         "The same-size comparison isolates placement from context growth.",
+        "",
+        _fenced(stage2_code, "python"),
         "",
         "Baseline at `ctx_len=128`:",
         "",
@@ -1020,6 +1112,8 @@ def render_markdown() -> str:
         "disjoint cache blocks. Each worker keeps online `(m, l, acc)` state, then the worker axis "
         "is combined with an explicit log-sum-exp merge.",
         "",
+        _fenced(stage3_code, "python"),
+        "",
         _fenced(_command("Stage3_Fused", "stage3-4096.txt", 4096, operands=True), "bash"),
         "",
         stage3_report,
@@ -1037,6 +1131,8 @@ def render_markdown() -> str:
         f"{_stage_label('Stage4_WeightPrepared')} moves each projection weight's output slice to smem "
         "before the matmul. The q and o weight lines show the per-CTA read:",
         "",
+        _fenced(stage4_code, "python"),
+        "",
         stage4_report,
         "",
         _fenced(_command("Stage4_WeightPrepared", "stage4-4096.txt", 4096, operands=True), "bash"),
@@ -1052,6 +1148,8 @@ def render_markdown() -> str:
         "form and changes only the cache scan. `BLOCK=128` rows move through smem while `(m, l, acc)` "
         "stays resident. The updated cache is read at `cur_pos` once, so append and scan are separate "
         "traffic events.",
+        "",
+        _fenced(stage5_code, "python"),
         "",
         _fenced(_command("Stage5_CachePrepared", "stage5-4096.txt", 4096, operands=True), "bash"),
         "",

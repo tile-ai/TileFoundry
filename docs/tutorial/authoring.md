@@ -31,12 +31,25 @@ The six programs are in one executable file:
 All reports below are produced by the same `analyze()` API used by the CLI.
 The reports are static analysis results; no CUDA kernel is launched.
 
-## Embedded source
+## Executable cells
 
-The original Python authoring source is embedded here so this installed page is self-contained.
-The source uses percent-format cells: `# %%` for code and `# %% [markdown]` for headings.
-Run it as ordinary Python or execute its cells in a notebook-aware editor.
-Save this block as `attn_layer.py` before running the commands below.
+This is an ipynb-style rendering of the executable tutorial source.
+The source uses percent-format cells: `# %%` for Python and `# %% [markdown]` for headings.
+Each Python cell is embedded as one fenced code block at the point where the tutorial uses it.
+The page does not repeat the complete source in a second heredoc.
+
+To run this installed page, extract its Python cells into one executable file:
+
+```bash
+awk '
+  /^```python$/ { in_python=1; next }
+  in_python && /^```$/ { in_python=0; next }
+  in_python { print }
+' authoring.md > attn_layer.py
+chmod +x attn_layer.py
+```
+
+### Setup cell
 
 ```python
 #!/usr/bin/env python3
@@ -46,607 +59,8 @@ The six Modules keep one public shape and change one placement decision at a
 time.  The dimensions are intentionally small, but the query/KV ratio matches
 the GQA shape used by the published Qwen attention model.
 """
-
-# %%
-from __future__ import annotations
-
-import ast
-import math
-import re
-import sys
-from pathlib import Path
-
-from tilefoundry import func, module
-from tilefoundry.analysis import analyze as run_analysis
-from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, Mesh, Tensor, tf
-from tilefoundry.dsl.tf import *  # noqa: F401, F403 - bare tile() in the fused body
-from tilefoundry.inspection.analysis_report import render_analysis, render_text
-from tilefoundry.ir.types.shard import Topology
-from tilefoundry.target import CudaTarget
-
-HIDDEN = 256
-QUERY_HEADS = 8
-KV_HEADS = 2
-HEAD_DIM = 32
-KV_DIM = KV_HEADS * HEAD_DIM
-GQA_GROUP = QUERY_HEADS // KV_HEADS
-ROPE_CONTEXT = 8192
-CTX = DimVar("ctx_len", 1, ROPE_CONTEXT + 1)
-SCALE = 1.0 / math.sqrt(HEAD_DIM)
-WORKERS = 4
-BLOCK = 128
-
-_H200 = CudaTarget("nvidia.h200_sxm")
-_CTA = Topology("cta", 132)
-
-# %% [markdown]
-# ## Stage 0: naive decode attention
-# %%
-
-@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
-class Stage0_Naive:
-    """One unsplit CTA reads the complete attention sublayer."""
-
-    @func
-    def gqa_decode(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        q = tf.reshape(tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM))
-        k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
-        k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
-        v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
-
-        k_heads = tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2)
-        v_heads = tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2)
-        k_heads = tf.transpose(k_heads, perm=(0, 2, 1, 3))
-        v_heads = tf.transpose(v_heads, perm=(0, 2, 1, 3))
-        q_f32 = tf.cast(q_rope, dtype="f32")
-        k_f32 = tf.cast(k_heads, dtype="f32")
-        v_f32 = tf.cast(v_heads, dtype="f32")
-        scaled_q = q_f32 * tf.full_like(q_f32, value=SCALE)
-        q_e = tf.reshape(scaled_q, new_shape=(1, 1, QUERY_HEADS, 1, HEAD_DIM))
-        k_e = tf.reshape(k_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM))
-        v_e = tf.reshape(v_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM))
-        scores = tf.reduce(q_e * k_e, axes=(-1,), keepdim=True, kind="sum")
-        peak = tf.reduce(scores, axes=(-2,), keepdim=True, kind="max")
-        weights = tf.exp(scores - peak)
-        normalizer = tf.reduce(weights, axes=(-2,), keepdim=False, kind="sum")
-        weighted = tf.reduce(weights * v_e, axes=(-2,), keepdim=False, kind="sum")
-        attended = weighted / normalizer
-        attended_bf16 = tf.cast(attended, dtype="bf16")
-        return tf.matmul(tf.reshape(attended_bf16, new_shape=(1, 1, HIDDEN)), w_o)
-
-
-gqa_decode = Stage0_Naive.entry_function()
-
-
-# %% [markdown]
-# ## Stage 1: specialize the context range
-# %%
-
-SMEM_BUDGET = 232448
-CACHE_BYTES_PER_CONTEXT_PER_CTA = 2 * HEAD_DIM * 2
-SPECIALIZE_T = SMEM_BUDGET // CACHE_BYTES_PER_CONTEXT_PER_CTA
-
-
-@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
-class Stage1_Specialized:
-    """Dispatch the same unsplit kernel at the measured context boundary."""
-
-    @func
-    def _decode_core(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        q = tf.reshape(tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM))
-        k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
-        k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
-        v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
-        k_heads = tf.transpose(
-            tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2), perm=(0, 2, 1, 3)
-        )
-        v_heads = tf.transpose(
-            tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2), perm=(0, 2, 1, 3)
-        )
-        q_f32 = tf.cast(q_rope, dtype="f32")
-        k_f32 = tf.cast(k_heads, dtype="f32")
-        v_f32 = tf.cast(v_heads, dtype="f32")
-        scaled_q = q_f32 * tf.full_like(q_f32, value=SCALE)
-        q_e = tf.reshape(scaled_q, new_shape=(1, 1, QUERY_HEADS, 1, HEAD_DIM))
-        k_e = tf.reshape(k_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM))
-        v_e = tf.reshape(v_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM))
-        scores = tf.reduce(q_e * k_e, axes=(-1,), keepdim=True, kind="sum")
-        peak = tf.reduce(scores, axes=(-2,), keepdim=True, kind="max")
-        weights = tf.exp(scores - peak)
-        normalizer = tf.reduce(weights, axes=(-2,), keepdim=False, kind="sum")
-        weighted = tf.reduce(weights * v_e, axes=(-2,), keepdim=False, kind="sum")
-        attended = tf.cast(weighted / normalizer, dtype="bf16")
-        return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
-
-    @func
-    def gqa_decode(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        pass
-
-    @gqa_decode.specialize(DimVarRangePat("ctx_len", 1, SPECIALIZE_T))
-    def short_context(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        return _decode_core(
-            hidden, w_q, w_k, w_v, w_o, k_cache, v_cache,
-            cur_pos, write_len, pos_ids, cos_cache, sin_cache,
-        )
-
-    @gqa_decode.specialize(DimVarRangePat("ctx_len", SPECIALIZE_T, ROPE_CONTEXT + 1))
-    def long_context(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        return _decode_core(
-            hidden, w_q, w_k, w_v, w_o, k_cache, v_cache,
-            cur_pos, write_len, pos_ids, cos_cache, sin_cache,
-        )
-
-
-gqa_decode_specialized = Stage1_Specialized.entry_function()
-
-
-# %% [markdown]
-# ## Stage 2: shard query heads
-# %%
-
-@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
-class Stage2_Sharded:
-    """Give each CTA one query-head slice while keeping the cache whole."""
-
-    @func
-    def gqa_decode(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        with Mesh(("cta",), layout=(QUERY_HEADS,), names=("head",)) as cta:
-            q = tf.reshape(
-                tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
-            )
-            k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-            v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-            q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
-            k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
-            v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
-            q_sh = tf.reshard(
-                q_rope, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
-            )
-            k_heads = tf.transpose(
-                tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2), perm=(0, 2, 1, 3)
-            )
-            v_heads = tf.transpose(
-                tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2), perm=(0, 2, 1, 3)
-            )
-            k_sh = tf.reshard(
-                k_heads, (1, QUERY_HEADS @ cta.head, CTX, HEAD_DIM), "smem"
-            )
-            v_sh = tf.reshard(
-                v_heads, (1, QUERY_HEADS @ cta.head, CTX, HEAD_DIM), "smem"
-            )
-            queries = tf.transpose(tf.cast(q_sh, dtype="f32"), perm=(0, 2, 1, 3))
-            keys = tf.transpose(tf.cast(k_sh, dtype="f32"), perm=(0, 1, 3, 2))
-            values = tf.transpose(tf.cast(v_sh, dtype="f32"), perm=(0, 1, 2, 3))
-            scaled_q = queries * tf.full_like(queries, value=SCALE)
-            scores = tf.matmul(scaled_q, keys)
-            peak = tf.reduce(scores, axes=(-1,), keepdim=True, kind="max")
-            weights = tf.exp(scores - peak)
-            normalizer = tf.reduce(weights, axes=(-1,), keepdim=True, kind="sum")
-            weighted = tf.matmul(weights, values)
-            attended = tf.transpose(
-                tf.cast(weighted / normalizer, dtype="bf16"), perm=(0, 2, 1, 3)
-            )
-            attended = tf.reshard(attended, (1, 1, QUERY_HEADS, HEAD_DIM), "gmem")
-            return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
-
-
-gqa_decode_sharded = Stage2_Sharded.entry_function()
-
-
-# %% [markdown]
-# ## Stage 3: split the cache scan
-# %%
-
-@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
-class Stage3_Fused:
-    """Split the cache scan across workers and combine online-softmax partials."""
-
-    @func
-    def gqa_decode(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        q = tf.reshape(
-            tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
-        )
-        k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
-        k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
-        v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
-        k_heads = tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2)
-        v_heads = tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2)
-
-        with Mesh(
-            ("cta",), layout=(QUERY_HEADS, WORKERS), names=("head", "worker")
-        ) as cta:
-            qh = tf.reshard(
-                q_rope, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
-            )
-            queries = tf.transpose(tf.cast(qh, dtype="f32"), perm=(0, 2, 1, 3))
-            scaled = queries * tf.full_like(queries, value=SCALE)
-            m_slots = tf.zeros(
-                Tensor[
-                    (WORKERS @ cta.worker, QUERY_HEADS @ cta.head, 1, 1),
-                    "f32",
-                    "smem",
-                ]
-            )
-            acc_slots = tf.zeros(
-                Tensor[
-                    (WORKERS @ cta.worker, QUERY_HEADS @ cta.head, 1, HEAD_DIM),
-                    "f32",
-                    "smem",
-                ]
-            )
-            m = tf.full_like(m_slots, value=-1e30)
-            l = tf.full_like(m_slots, value=0.0)
-            acc = tf.full_like(acc_slots, value=0.0)
-
-            for start in tile(CTX, BLOCK * WORKERS):
-                base = start + cta.worker * BLOCK
-                kb = tf.reshard(
-                    k_heads[:, base : base + BLOCK, :, :],
-                    (1, BLOCK, QUERY_HEADS @ cta.head, HEAD_DIM),
-                    "smem",
-                )
-                vb = tf.reshard(
-                    v_heads[:, base : base + BLOCK, :, :],
-                    (1, BLOCK, QUERY_HEADS @ cta.head, HEAD_DIM),
-                    "smem",
-                )
-                keys = tf.transpose(tf.cast(kb, dtype="f32"), perm=(0, 2, 3, 1))
-                values = tf.transpose(tf.cast(vb, dtype="f32"), perm=(0, 2, 1, 3))
-                scores = tf.matmul(scaled, keys)
-                block_m = tf.reduce(scores, axes=(-1,), keepdim=True, kind="max")
-                next_m = tf.max(m, block_m)
-                correction = tf.exp(m - next_m)
-                weights = tf.exp(scores - next_m)
-                l = l * correction + tf.reduce(
-                    weights, axes=(-1,), keepdim=True, kind="sum"
-                )
-                acc = acc * correction + tf.matmul(weights, values)
-                m = next_m
-
-            all_m = tf.reshard(
-                m, (WORKERS, QUERY_HEADS @ cta.head, 1, 1), "smem"
-            )
-            all_l = tf.reshard(
-                l, (WORKERS, QUERY_HEADS @ cta.head, 1, 1), "smem"
-            )
-            all_acc = tf.reshard(
-                acc, (WORKERS, QUERY_HEADS @ cta.head, 1, HEAD_DIM), "smem"
-            )
-            global_m = tf.reduce(all_m, axes=(0,), keepdim=False, kind="max")
-            weights = tf.exp(all_m - global_m)
-            global_l = tf.reduce(weights * all_l, axes=(0,), keepdim=False, kind="sum")
-            global_acc = tf.reduce(
-                weights * all_acc, axes=(0,), keepdim=False, kind="sum"
-            )
-            attended = tf.cast(global_acc / global_l, dtype="bf16")
-            attended = tf.reshape(
-                attended, new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
-            )
-            attended = tf.reshard(
-                attended, (1, 1, QUERY_HEADS, HEAD_DIM), "gmem"
-            )
-            return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
-
-
-gqa_decode_fused = Stage3_Fused.entry_function()
-
-
-# %% [markdown]
-# ## Stage 4: stage projection weights
-# %%
-
-@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
-class Stage4_WeightPrepared:
-    """Stage projection weights by output slice before the attention scan."""
-
-    @func
-    def gqa_decode(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        with Mesh(("cta",), layout=(QUERY_HEADS,), names=("head",)) as cta:
-            wq_local = tf.reshard(
-                w_q, (1, HIDDEN, HIDDEN @ cta.head), "smem"
-            )
-            wk_local = tf.reshard(
-                w_k, (1, HIDDEN, KV_DIM @ cta.head), "smem"
-            )
-            wv_local = tf.reshard(
-                w_v, (1, HIDDEN, KV_DIM @ cta.head), "smem"
-            )
-            hidden_local = tf.reshard(hidden, (1, 1, HIDDEN), "smem")
-            q_projected = tf.matmul(hidden_local, wq_local)
-            k_projected = tf.matmul(hidden_local, wk_local)
-            v_projected = tf.matmul(hidden_local, wv_local)
-            q_projected = tf.reshard(q_projected, (1, 1, HIDDEN), "gmem")
-            k_projected = tf.reshard(k_projected, (1, 1, KV_DIM), "gmem")
-            v_projected = tf.reshard(v_projected, (1, 1, KV_DIM), "gmem")
-            q = tf.reshape(
-                q_projected, new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
-            )
-            k = tf.reshape(k_projected, new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-            v = tf.reshape(v_projected, new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-            q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
-            k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
-            v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
-            k_heads = tf.transpose(
-                tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2),
-                perm=(0, 2, 1, 3),
-            )
-            v_heads = tf.transpose(
-                tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2),
-                perm=(0, 2, 1, 3),
-            )
-            q_f32 = tf.cast(q_rope, dtype="f32")
-            k_f32 = tf.cast(k_heads, dtype="f32")
-            v_f32 = tf.cast(v_heads, dtype="f32")
-            scaled_q = q_f32 * tf.full_like(q_f32, value=SCALE)
-            q_e = tf.reshape(
-                scaled_q, new_shape=(1, 1, QUERY_HEADS, 1, HEAD_DIM)
-            )
-            k_e = tf.reshape(
-                k_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM)
-            )
-            v_e = tf.reshape(
-                v_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM)
-            )
-            scores = tf.reduce(q_e * k_e, axes=(-1,), keepdim=True, kind="sum")
-            peak = tf.reduce(scores, axes=(-2,), keepdim=True, kind="max")
-            weights = tf.exp(scores - peak)
-            normalizer = tf.reduce(weights, axes=(-2,), keepdim=False, kind="sum")
-            weighted = tf.reduce(weights * v_e, axes=(-2,), keepdim=False, kind="sum")
-            attended = tf.cast(weighted / normalizer, dtype="bf16")
-            w_o_local = tf.reshard(
-                w_o, (1, HIDDEN, HIDDEN @ cta.head), "smem"
-            )
-            attended_local = tf.reshard(
-                tf.reshape(attended, new_shape=(1, 1, HIDDEN)),
-                (1, 1, HIDDEN),
-                "smem",
-            )
-            output_local = tf.matmul(
-                attended_local, w_o_local
-            )
-            return tf.reshard(output_local, (1, 1, HIDDEN), "gmem")
-
-
-gqa_decode_weight_prepared = Stage4_WeightPrepared.entry_function()
-
-
-# %% [markdown]
-# ## Stage 5: stage the KV cache
-# %%
-
-@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
-class Stage5_CachePrepared:
-    """Stream cache blocks through smem while an online state stays resident."""
-
-    @func
-    def gqa_decode(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        q = tf.reshape(
-            tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
-        )
-        k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
-        k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
-        v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
-
-        with Mesh(("cta",), layout=(QUERY_HEADS,), names=("head",)) as cta:
-            qh = tf.reshard(
-                q_rope, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
-            )
-            queries = tf.transpose(tf.cast(qh, dtype="f32"), perm=(0, 2, 1, 3))
-            scaled = queries * tf.full_like(queries, value=SCALE)
-            template = tf.reduce(queries, axes=(-1,), keepdim=True, kind="sum")
-            m = tf.full_like(template, value=-1e30)
-            l = tf.full_like(template, value=0.0)
-            acc = tf.full_like(queries, value=0.0)
-
-            for start in tile(CTX, BLOCK):
-                base = start + 0
-                kb = tf.reshard(
-                    tf.repeat_interleave(
-                        k_cache[:, base : base + BLOCK, :, :],
-                        repeats=GQA_GROUP,
-                        axis=2,
-                    ),
-                    (1, BLOCK, QUERY_HEADS @ cta.head, HEAD_DIM),
-                    "smem",
-                )
-                vb = tf.reshard(
-                    tf.repeat_interleave(
-                        v_cache[:, base : base + BLOCK, :, :],
-                        repeats=GQA_GROUP,
-                        axis=2,
-                    ),
-                    (1, BLOCK, QUERY_HEADS @ cta.head, HEAD_DIM),
-                    "smem",
-                )
-                keys = tf.transpose(tf.cast(kb, dtype="f32"), perm=(0, 2, 3, 1))
-                values = tf.transpose(tf.cast(vb, dtype="f32"), perm=(0, 2, 1, 3))
-                scores = tf.matmul(scaled, keys)
-                block_m = tf.reduce(scores, axes=(-1,), keepdim=True, kind="max")
-                next_m = tf.max(m, block_m)
-                correction = tf.exp(m - next_m)
-                weights = tf.exp(scores - next_m)
-                l = l * correction + tf.reduce(
-                    weights, axes=(-1,), keepdim=True, kind="sum"
-                )
-                acc = acc * correction + tf.matmul(weights, values)
-                m = next_m
-
-            k_current = tf.repeat_interleave(
-                tf.index_select(k_all, cur_pos, dim=1), repeats=GQA_GROUP, axis=2
-            )
-            v_current = tf.repeat_interleave(
-                tf.index_select(v_all, cur_pos, dim=1), repeats=GQA_GROUP, axis=2
-            )
-            k_current = tf.reshard(
-                k_current, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
-            )
-            v_current = tf.reshard(
-                v_current, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
-            )
-            current_keys = tf.transpose(
-                tf.cast(k_current, dtype="f32"), perm=(0, 2, 3, 1)
-            )
-            current_values = tf.transpose(
-                tf.cast(v_current, dtype="f32"), perm=(0, 2, 1, 3)
-            )
-            current_scores = tf.matmul(scaled, current_keys)
-            current_m = tf.max(m, current_scores)
-            current_correction = tf.exp(m - current_m)
-            current_weights = tf.exp(current_scores - current_m)
-            l = l * current_correction + current_weights
-            acc = acc * current_correction + tf.matmul(
-                current_weights, current_values
-            )
-
-            attended = tf.transpose(
-                tf.cast(acc / l, dtype="bf16"), perm=(0, 2, 1, 3)
-            )
-            attended = tf.reshard(
-                attended, (1, 1, QUERY_HEADS, HEAD_DIM), "gmem"
-            )
-            return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
-
-
-gqa_decode_cache_prepared = Stage5_CachePrepared.entry_function()
 ```
-
-Materialize the embedded program before running the analysis commands:
-
-```bash
-cat > attn_layer.py <<'PY'
-#!/usr/bin/env python3
-"""A small GQA decode attention ladder for the authoring tutorial.
-
-The six Modules keep one public shape and change one placement decision at a
-time.  The dimensions are intentionally small, but the query/KV ratio matches
-the GQA shape used by the published Qwen attention model.
-"""
-
+```python
 # %%
 from __future__ import annotations
 
@@ -678,562 +92,6 @@ BLOCK = 128
 
 _H200 = CudaTarget("nvidia.h200_sxm")
 _CTA = Topology("cta", 132)
-
-# %% [markdown]
-# ## Stage 0: naive decode attention
-# %%
-
-@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
-class Stage0_Naive:
-    """One unsplit CTA reads the complete attention sublayer."""
-
-    @func
-    def gqa_decode(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        q = tf.reshape(tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM))
-        k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
-        k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
-        v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
-
-        k_heads = tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2)
-        v_heads = tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2)
-        k_heads = tf.transpose(k_heads, perm=(0, 2, 1, 3))
-        v_heads = tf.transpose(v_heads, perm=(0, 2, 1, 3))
-        q_f32 = tf.cast(q_rope, dtype="f32")
-        k_f32 = tf.cast(k_heads, dtype="f32")
-        v_f32 = tf.cast(v_heads, dtype="f32")
-        scaled_q = q_f32 * tf.full_like(q_f32, value=SCALE)
-        q_e = tf.reshape(scaled_q, new_shape=(1, 1, QUERY_HEADS, 1, HEAD_DIM))
-        k_e = tf.reshape(k_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM))
-        v_e = tf.reshape(v_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM))
-        scores = tf.reduce(q_e * k_e, axes=(-1,), keepdim=True, kind="sum")
-        peak = tf.reduce(scores, axes=(-2,), keepdim=True, kind="max")
-        weights = tf.exp(scores - peak)
-        normalizer = tf.reduce(weights, axes=(-2,), keepdim=False, kind="sum")
-        weighted = tf.reduce(weights * v_e, axes=(-2,), keepdim=False, kind="sum")
-        attended = weighted / normalizer
-        attended_bf16 = tf.cast(attended, dtype="bf16")
-        return tf.matmul(tf.reshape(attended_bf16, new_shape=(1, 1, HIDDEN)), w_o)
-
-
-gqa_decode = Stage0_Naive.entry_function()
-
-
-# %% [markdown]
-# ## Stage 1: specialize the context range
-# %%
-
-SMEM_BUDGET = 232448
-CACHE_BYTES_PER_CONTEXT_PER_CTA = 2 * HEAD_DIM * 2
-SPECIALIZE_T = SMEM_BUDGET // CACHE_BYTES_PER_CONTEXT_PER_CTA
-
-
-@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
-class Stage1_Specialized:
-    """Dispatch the same unsplit kernel at the measured context boundary."""
-
-    @func
-    def _decode_core(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        q = tf.reshape(tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM))
-        k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
-        k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
-        v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
-        k_heads = tf.transpose(
-            tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2), perm=(0, 2, 1, 3)
-        )
-        v_heads = tf.transpose(
-            tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2), perm=(0, 2, 1, 3)
-        )
-        q_f32 = tf.cast(q_rope, dtype="f32")
-        k_f32 = tf.cast(k_heads, dtype="f32")
-        v_f32 = tf.cast(v_heads, dtype="f32")
-        scaled_q = q_f32 * tf.full_like(q_f32, value=SCALE)
-        q_e = tf.reshape(scaled_q, new_shape=(1, 1, QUERY_HEADS, 1, HEAD_DIM))
-        k_e = tf.reshape(k_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM))
-        v_e = tf.reshape(v_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM))
-        scores = tf.reduce(q_e * k_e, axes=(-1,), keepdim=True, kind="sum")
-        peak = tf.reduce(scores, axes=(-2,), keepdim=True, kind="max")
-        weights = tf.exp(scores - peak)
-        normalizer = tf.reduce(weights, axes=(-2,), keepdim=False, kind="sum")
-        weighted = tf.reduce(weights * v_e, axes=(-2,), keepdim=False, kind="sum")
-        attended = tf.cast(weighted / normalizer, dtype="bf16")
-        return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
-
-    @func
-    def gqa_decode(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        pass
-
-    @gqa_decode.specialize(DimVarRangePat("ctx_len", 1, SPECIALIZE_T))
-    def short_context(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        return _decode_core(
-            hidden, w_q, w_k, w_v, w_o, k_cache, v_cache,
-            cur_pos, write_len, pos_ids, cos_cache, sin_cache,
-        )
-
-    @gqa_decode.specialize(DimVarRangePat("ctx_len", SPECIALIZE_T, ROPE_CONTEXT + 1))
-    def long_context(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        return _decode_core(
-            hidden, w_q, w_k, w_v, w_o, k_cache, v_cache,
-            cur_pos, write_len, pos_ids, cos_cache, sin_cache,
-        )
-
-
-gqa_decode_specialized = Stage1_Specialized.entry_function()
-
-
-# %% [markdown]
-# ## Stage 2: shard query heads
-# %%
-
-@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
-class Stage2_Sharded:
-    """Give each CTA one query-head slice while keeping the cache whole."""
-
-    @func
-    def gqa_decode(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        with Mesh(("cta",), layout=(QUERY_HEADS,), names=("head",)) as cta:
-            q = tf.reshape(
-                tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
-            )
-            k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-            v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-            q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
-            k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
-            v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
-            q_sh = tf.reshard(
-                q_rope, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
-            )
-            k_heads = tf.transpose(
-                tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2), perm=(0, 2, 1, 3)
-            )
-            v_heads = tf.transpose(
-                tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2), perm=(0, 2, 1, 3)
-            )
-            k_sh = tf.reshard(
-                k_heads, (1, QUERY_HEADS @ cta.head, CTX, HEAD_DIM), "smem"
-            )
-            v_sh = tf.reshard(
-                v_heads, (1, QUERY_HEADS @ cta.head, CTX, HEAD_DIM), "smem"
-            )
-            queries = tf.transpose(tf.cast(q_sh, dtype="f32"), perm=(0, 2, 1, 3))
-            keys = tf.transpose(tf.cast(k_sh, dtype="f32"), perm=(0, 1, 3, 2))
-            values = tf.transpose(tf.cast(v_sh, dtype="f32"), perm=(0, 1, 2, 3))
-            scaled_q = queries * tf.full_like(queries, value=SCALE)
-            scores = tf.matmul(scaled_q, keys)
-            peak = tf.reduce(scores, axes=(-1,), keepdim=True, kind="max")
-            weights = tf.exp(scores - peak)
-            normalizer = tf.reduce(weights, axes=(-1,), keepdim=True, kind="sum")
-            weighted = tf.matmul(weights, values)
-            attended = tf.transpose(
-                tf.cast(weighted / normalizer, dtype="bf16"), perm=(0, 2, 1, 3)
-            )
-            attended = tf.reshard(attended, (1, 1, QUERY_HEADS, HEAD_DIM), "gmem")
-            return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
-
-
-gqa_decode_sharded = Stage2_Sharded.entry_function()
-
-
-# %% [markdown]
-# ## Stage 3: split the cache scan
-# %%
-
-@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
-class Stage3_Fused:
-    """Split the cache scan across workers and combine online-softmax partials."""
-
-    @func
-    def gqa_decode(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        q = tf.reshape(
-            tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
-        )
-        k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
-        k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
-        v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
-        k_heads = tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2)
-        v_heads = tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2)
-
-        with Mesh(
-            ("cta",), layout=(QUERY_HEADS, WORKERS), names=("head", "worker")
-        ) as cta:
-            qh = tf.reshard(
-                q_rope, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
-            )
-            queries = tf.transpose(tf.cast(qh, dtype="f32"), perm=(0, 2, 1, 3))
-            scaled = queries * tf.full_like(queries, value=SCALE)
-            m_slots = tf.zeros(
-                Tensor[
-                    (WORKERS @ cta.worker, QUERY_HEADS @ cta.head, 1, 1),
-                    "f32",
-                    "smem",
-                ]
-            )
-            acc_slots = tf.zeros(
-                Tensor[
-                    (WORKERS @ cta.worker, QUERY_HEADS @ cta.head, 1, HEAD_DIM),
-                    "f32",
-                    "smem",
-                ]
-            )
-            m = tf.full_like(m_slots, value=-1e30)
-            l = tf.full_like(m_slots, value=0.0)
-            acc = tf.full_like(acc_slots, value=0.0)
-
-            for start in tile(CTX, BLOCK * WORKERS):
-                base = start + cta.worker * BLOCK
-                kb = tf.reshard(
-                    k_heads[:, base : base + BLOCK, :, :],
-                    (1, BLOCK, QUERY_HEADS @ cta.head, HEAD_DIM),
-                    "smem",
-                )
-                vb = tf.reshard(
-                    v_heads[:, base : base + BLOCK, :, :],
-                    (1, BLOCK, QUERY_HEADS @ cta.head, HEAD_DIM),
-                    "smem",
-                )
-                keys = tf.transpose(tf.cast(kb, dtype="f32"), perm=(0, 2, 3, 1))
-                values = tf.transpose(tf.cast(vb, dtype="f32"), perm=(0, 2, 1, 3))
-                scores = tf.matmul(scaled, keys)
-                block_m = tf.reduce(scores, axes=(-1,), keepdim=True, kind="max")
-                next_m = tf.max(m, block_m)
-                correction = tf.exp(m - next_m)
-                weights = tf.exp(scores - next_m)
-                l = l * correction + tf.reduce(
-                    weights, axes=(-1,), keepdim=True, kind="sum"
-                )
-                acc = acc * correction + tf.matmul(weights, values)
-                m = next_m
-
-            all_m = tf.reshard(
-                m, (WORKERS, QUERY_HEADS @ cta.head, 1, 1), "smem"
-            )
-            all_l = tf.reshard(
-                l, (WORKERS, QUERY_HEADS @ cta.head, 1, 1), "smem"
-            )
-            all_acc = tf.reshard(
-                acc, (WORKERS, QUERY_HEADS @ cta.head, 1, HEAD_DIM), "smem"
-            )
-            global_m = tf.reduce(all_m, axes=(0,), keepdim=False, kind="max")
-            weights = tf.exp(all_m - global_m)
-            global_l = tf.reduce(weights * all_l, axes=(0,), keepdim=False, kind="sum")
-            global_acc = tf.reduce(
-                weights * all_acc, axes=(0,), keepdim=False, kind="sum"
-            )
-            attended = tf.cast(global_acc / global_l, dtype="bf16")
-            attended = tf.reshape(
-                attended, new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
-            )
-            attended = tf.reshard(
-                attended, (1, 1, QUERY_HEADS, HEAD_DIM), "gmem"
-            )
-            return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
-
-
-gqa_decode_fused = Stage3_Fused.entry_function()
-
-
-# %% [markdown]
-# ## Stage 4: stage projection weights
-# %%
-
-@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
-class Stage4_WeightPrepared:
-    """Stage projection weights by output slice before the attention scan."""
-
-    @func
-    def gqa_decode(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        with Mesh(("cta",), layout=(QUERY_HEADS,), names=("head",)) as cta:
-            wq_local = tf.reshard(
-                w_q, (1, HIDDEN, HIDDEN @ cta.head), "smem"
-            )
-            wk_local = tf.reshard(
-                w_k, (1, HIDDEN, KV_DIM @ cta.head), "smem"
-            )
-            wv_local = tf.reshard(
-                w_v, (1, HIDDEN, KV_DIM @ cta.head), "smem"
-            )
-            hidden_local = tf.reshard(hidden, (1, 1, HIDDEN), "smem")
-            q_projected = tf.matmul(hidden_local, wq_local)
-            k_projected = tf.matmul(hidden_local, wk_local)
-            v_projected = tf.matmul(hidden_local, wv_local)
-            q_projected = tf.reshard(q_projected, (1, 1, HIDDEN), "gmem")
-            k_projected = tf.reshard(k_projected, (1, 1, KV_DIM), "gmem")
-            v_projected = tf.reshard(v_projected, (1, 1, KV_DIM), "gmem")
-            q = tf.reshape(
-                q_projected, new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
-            )
-            k = tf.reshape(k_projected, new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-            v = tf.reshape(v_projected, new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-            q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
-            k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
-            v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
-            k_heads = tf.transpose(
-                tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2),
-                perm=(0, 2, 1, 3),
-            )
-            v_heads = tf.transpose(
-                tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2),
-                perm=(0, 2, 1, 3),
-            )
-            q_f32 = tf.cast(q_rope, dtype="f32")
-            k_f32 = tf.cast(k_heads, dtype="f32")
-            v_f32 = tf.cast(v_heads, dtype="f32")
-            scaled_q = q_f32 * tf.full_like(q_f32, value=SCALE)
-            q_e = tf.reshape(
-                scaled_q, new_shape=(1, 1, QUERY_HEADS, 1, HEAD_DIM)
-            )
-            k_e = tf.reshape(
-                k_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM)
-            )
-            v_e = tf.reshape(
-                v_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM)
-            )
-            scores = tf.reduce(q_e * k_e, axes=(-1,), keepdim=True, kind="sum")
-            peak = tf.reduce(scores, axes=(-2,), keepdim=True, kind="max")
-            weights = tf.exp(scores - peak)
-            normalizer = tf.reduce(weights, axes=(-2,), keepdim=False, kind="sum")
-            weighted = tf.reduce(weights * v_e, axes=(-2,), keepdim=False, kind="sum")
-            attended = tf.cast(weighted / normalizer, dtype="bf16")
-            w_o_local = tf.reshard(
-                w_o, (1, HIDDEN, HIDDEN @ cta.head), "smem"
-            )
-            attended_local = tf.reshard(
-                tf.reshape(attended, new_shape=(1, 1, HIDDEN)),
-                (1, 1, HIDDEN),
-                "smem",
-            )
-            output_local = tf.matmul(
-                attended_local, w_o_local
-            )
-            return tf.reshard(output_local, (1, 1, HIDDEN), "gmem")
-
-
-gqa_decode_weight_prepared = Stage4_WeightPrepared.entry_function()
-
-
-# %% [markdown]
-# ## Stage 5: stage the KV cache
-# %%
-
-@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
-class Stage5_CachePrepared:
-    """Stream cache blocks through smem while an online state stays resident."""
-
-    @func
-    def gqa_decode(
-        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
-        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
-        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
-        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
-        cur_pos: Tensor[(1,), "i32"],
-        write_len: Tensor[(1,), "i32"],
-        pos_ids: Tensor[(1,), "i32"],
-        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
-    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
-        q = tf.reshape(
-            tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
-        )
-        k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
-        q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
-        k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
-        v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
-
-        with Mesh(("cta",), layout=(QUERY_HEADS,), names=("head",)) as cta:
-            qh = tf.reshard(
-                q_rope, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
-            )
-            queries = tf.transpose(tf.cast(qh, dtype="f32"), perm=(0, 2, 1, 3))
-            scaled = queries * tf.full_like(queries, value=SCALE)
-            template = tf.reduce(queries, axes=(-1,), keepdim=True, kind="sum")
-            m = tf.full_like(template, value=-1e30)
-            l = tf.full_like(template, value=0.0)
-            acc = tf.full_like(queries, value=0.0)
-
-            for start in tile(CTX, BLOCK):
-                base = start + 0
-                kb = tf.reshard(
-                    tf.repeat_interleave(
-                        k_cache[:, base : base + BLOCK, :, :],
-                        repeats=GQA_GROUP,
-                        axis=2,
-                    ),
-                    (1, BLOCK, QUERY_HEADS @ cta.head, HEAD_DIM),
-                    "smem",
-                )
-                vb = tf.reshard(
-                    tf.repeat_interleave(
-                        v_cache[:, base : base + BLOCK, :, :],
-                        repeats=GQA_GROUP,
-                        axis=2,
-                    ),
-                    (1, BLOCK, QUERY_HEADS @ cta.head, HEAD_DIM),
-                    "smem",
-                )
-                keys = tf.transpose(tf.cast(kb, dtype="f32"), perm=(0, 2, 3, 1))
-                values = tf.transpose(tf.cast(vb, dtype="f32"), perm=(0, 2, 1, 3))
-                scores = tf.matmul(scaled, keys)
-                block_m = tf.reduce(scores, axes=(-1,), keepdim=True, kind="max")
-                next_m = tf.max(m, block_m)
-                correction = tf.exp(m - next_m)
-                weights = tf.exp(scores - next_m)
-                l = l * correction + tf.reduce(
-                    weights, axes=(-1,), keepdim=True, kind="sum"
-                )
-                acc = acc * correction + tf.matmul(weights, values)
-                m = next_m
-
-            k_current = tf.repeat_interleave(
-                tf.index_select(k_all, cur_pos, dim=1), repeats=GQA_GROUP, axis=2
-            )
-            v_current = tf.repeat_interleave(
-                tf.index_select(v_all, cur_pos, dim=1), repeats=GQA_GROUP, axis=2
-            )
-            k_current = tf.reshard(
-                k_current, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
-            )
-            v_current = tf.reshard(
-                v_current, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
-            )
-            current_keys = tf.transpose(
-                tf.cast(k_current, dtype="f32"), perm=(0, 2, 3, 1)
-            )
-            current_values = tf.transpose(
-                tf.cast(v_current, dtype="f32"), perm=(0, 2, 1, 3)
-            )
-            current_scores = tf.matmul(scaled, current_keys)
-            current_m = tf.max(m, current_scores)
-            current_correction = tf.exp(m - current_m)
-            current_weights = tf.exp(current_scores - current_m)
-            l = l * current_correction + current_weights
-            acc = acc * current_correction + tf.matmul(
-                current_weights, current_values
-            )
-
-            attended = tf.transpose(
-                tf.cast(acc / l, dtype="bf16"), perm=(0, 2, 1, 3)
-            )
-            attended = tf.reshard(
-                attended, (1, 1, QUERY_HEADS, HEAD_DIM), "gmem"
-            )
-            return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
-
-
-gqa_decode_cache_prepared = Stage5_CachePrepared.entry_function()
-PY
 ```
 
 ## 0. Start with the complete shape
@@ -1251,6 +109,58 @@ The small teaching shape keeps the published GQA ratio:
 The entry includes q/k/v projection, RoPE, one cache append, an attention scan,
 and the output projection. The weights are `ConstTensor` parameters. The starting
 point has no explicit mesh and no storage transition.
+
+```python
+# %%
+@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
+class Stage0_Naive:
+    """One unsplit CTA reads the complete attention sublayer."""
+
+    @func
+    def gqa_decode(
+        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
+        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        cur_pos: Tensor[(1,), "i32"],
+        write_len: Tensor[(1,), "i32"],
+        pos_ids: Tensor[(1,), "i32"],
+        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
+        q = tf.reshape(tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM))
+        k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
+        v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
+        q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
+        k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
+        v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
+
+        k_heads = tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2)
+        v_heads = tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2)
+        k_heads = tf.transpose(k_heads, perm=(0, 2, 1, 3))
+        v_heads = tf.transpose(v_heads, perm=(0, 2, 1, 3))
+        q_f32 = tf.cast(q_rope, dtype="f32")
+        k_f32 = tf.cast(k_heads, dtype="f32")
+        v_f32 = tf.cast(v_heads, dtype="f32")
+        scaled_q = q_f32 * tf.full_like(q_f32, value=SCALE)
+        q_e = tf.reshape(scaled_q, new_shape=(1, 1, QUERY_HEADS, 1, HEAD_DIM))
+        k_e = tf.reshape(k_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM))
+        v_e = tf.reshape(v_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM))
+        scores = tf.reduce(q_e * k_e, axes=(-1,), keepdim=True, kind="sum")
+        peak = tf.reduce(scores, axes=(-2,), keepdim=True, kind="max")
+        weights = tf.exp(scores - peak)
+        normalizer = tf.reduce(weights, axes=(-2,), keepdim=False, kind="sum")
+        weighted = tf.reduce(weights * v_e, axes=(-2,), keepdim=False, kind="sum")
+        attended = weighted / normalizer
+        attended_bf16 = tf.cast(attended, dtype="bf16")
+        return tf.matmul(tf.reshape(attended_bf16, new_shape=(1, 1, HIDDEN)), w_o)
+
+
+gqa_decode = Stage0_Naive.entry_function()
+```
 
 Run one point like this:
 
@@ -1331,6 +241,120 @@ T = floor(232448 B / 128 B)
 
 `Stage1_Specialized` expresses the dispatch as two half-open `DimVarRangePat` variants: `[1, 1816)` and `[1816, 8193)`. The Stage1 body is deliberately the unsplit baseline, so the dispatch contract can be read independently from the later implementations.
 
+```python
+# %%
+SMEM_BUDGET = 232448
+CACHE_BYTES_PER_CONTEXT_PER_CTA = 2 * HEAD_DIM * 2
+SPECIALIZE_T = SMEM_BUDGET // CACHE_BYTES_PER_CONTEXT_PER_CTA
+
+
+@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
+class Stage1_Specialized:
+    """Dispatch the same unsplit kernel at the measured context boundary."""
+
+    @func
+    def _decode_core(
+        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
+        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        cur_pos: Tensor[(1,), "i32"],
+        write_len: Tensor[(1,), "i32"],
+        pos_ids: Tensor[(1,), "i32"],
+        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
+        q = tf.reshape(tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM))
+        k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
+        v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
+        q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
+        k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
+        v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
+        k_heads = tf.transpose(
+            tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2), perm=(0, 2, 1, 3)
+        )
+        v_heads = tf.transpose(
+            tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2), perm=(0, 2, 1, 3)
+        )
+        q_f32 = tf.cast(q_rope, dtype="f32")
+        k_f32 = tf.cast(k_heads, dtype="f32")
+        v_f32 = tf.cast(v_heads, dtype="f32")
+        scaled_q = q_f32 * tf.full_like(q_f32, value=SCALE)
+        q_e = tf.reshape(scaled_q, new_shape=(1, 1, QUERY_HEADS, 1, HEAD_DIM))
+        k_e = tf.reshape(k_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM))
+        v_e = tf.reshape(v_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM))
+        scores = tf.reduce(q_e * k_e, axes=(-1,), keepdim=True, kind="sum")
+        peak = tf.reduce(scores, axes=(-2,), keepdim=True, kind="max")
+        weights = tf.exp(scores - peak)
+        normalizer = tf.reduce(weights, axes=(-2,), keepdim=False, kind="sum")
+        weighted = tf.reduce(weights * v_e, axes=(-2,), keepdim=False, kind="sum")
+        attended = tf.cast(weighted / normalizer, dtype="bf16")
+        return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
+
+    @func
+    def gqa_decode(
+        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
+        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        cur_pos: Tensor[(1,), "i32"],
+        write_len: Tensor[(1,), "i32"],
+        pos_ids: Tensor[(1,), "i32"],
+        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
+        pass
+
+    @gqa_decode.specialize(DimVarRangePat("ctx_len", 1, SPECIALIZE_T))
+    def short_context(
+        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
+        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        cur_pos: Tensor[(1,), "i32"],
+        write_len: Tensor[(1,), "i32"],
+        pos_ids: Tensor[(1,), "i32"],
+        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
+        return _decode_core(
+            hidden, w_q, w_k, w_v, w_o, k_cache, v_cache,
+            cur_pos, write_len, pos_ids, cos_cache, sin_cache,
+        )
+
+    @gqa_decode.specialize(DimVarRangePat("ctx_len", SPECIALIZE_T, ROPE_CONTEXT + 1))
+    def long_context(
+        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
+        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        cur_pos: Tensor[(1,), "i32"],
+        write_len: Tensor[(1,), "i32"],
+        pos_ids: Tensor[(1,), "i32"],
+        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
+        return _decode_core(
+            hidden, w_q, w_k, w_v, w_o, k_cache, v_cache,
+            cur_pos, write_len, pos_ids, cos_cache, sin_cache,
+        )
+
+
+gqa_decode_specialized = Stage1_Specialized.entry_function()
+```
+
 The valid boundary report starts with:
 
 ```bash
@@ -1367,6 +391,70 @@ The formula chooses the dispatch boundary. It is not a benchmark-tuned magic num
 ## 3. Split the query heads
 
 The next change is `Stage2_Sharded`: one `cta.head` owns one query head. The same-size comparison isolates placement from context growth.
+
+```python
+# %%
+@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
+class Stage2_Sharded:
+    """Give each CTA one query-head slice while keeping the cache whole."""
+
+    @func
+    def gqa_decode(
+        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
+        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        cur_pos: Tensor[(1,), "i32"],
+        write_len: Tensor[(1,), "i32"],
+        pos_ids: Tensor[(1,), "i32"],
+        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
+        with Mesh(("cta",), layout=(QUERY_HEADS,), names=("head",)) as cta:
+            q = tf.reshape(
+                tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
+            )
+            k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
+            v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
+            q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
+            k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
+            v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
+            q_sh = tf.reshard(
+                q_rope, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
+            )
+            k_heads = tf.transpose(
+                tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2), perm=(0, 2, 1, 3)
+            )
+            v_heads = tf.transpose(
+                tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2), perm=(0, 2, 1, 3)
+            )
+            k_sh = tf.reshard(
+                k_heads, (1, QUERY_HEADS @ cta.head, CTX, HEAD_DIM), "smem"
+            )
+            v_sh = tf.reshard(
+                v_heads, (1, QUERY_HEADS @ cta.head, CTX, HEAD_DIM), "smem"
+            )
+            queries = tf.transpose(tf.cast(q_sh, dtype="f32"), perm=(0, 2, 1, 3))
+            keys = tf.transpose(tf.cast(k_sh, dtype="f32"), perm=(0, 1, 3, 2))
+            values = tf.transpose(tf.cast(v_sh, dtype="f32"), perm=(0, 1, 2, 3))
+            scaled_q = queries * tf.full_like(queries, value=SCALE)
+            scores = tf.matmul(scaled_q, keys)
+            peak = tf.reduce(scores, axes=(-1,), keepdim=True, kind="max")
+            weights = tf.exp(scores - peak)
+            normalizer = tf.reduce(weights, axes=(-1,), keepdim=True, kind="sum")
+            weighted = tf.matmul(weights, values)
+            attended = tf.transpose(
+                tf.cast(weighted / normalizer, dtype="bf16"), perm=(0, 2, 1, 3)
+            )
+            attended = tf.reshard(attended, (1, 1, QUERY_HEADS, HEAD_DIM), "gmem")
+            return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
+
+
+gqa_decode_sharded = Stage2_Sharded.entry_function()
+```
 
 Baseline at `ctx_len=128`:
 
@@ -1406,6 +494,117 @@ the authored storage choices change the traffic seen by the roofline calculation
 
 At long context, the full-cache form is the wrong residency choice. `Stage3_Fused` uses a two-dimensional CTA mesh. The head axis owns query heads and the worker axis owns disjoint cache blocks. Each worker keeps online `(m, l, acc)` state, then the worker axis is combined with an explicit log-sum-exp merge.
 
+```python
+# %%
+@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
+class Stage3_Fused:
+    """Split the cache scan across workers and combine online-softmax partials."""
+
+    @func
+    def gqa_decode(
+        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
+        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        cur_pos: Tensor[(1,), "i32"],
+        write_len: Tensor[(1,), "i32"],
+        pos_ids: Tensor[(1,), "i32"],
+        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
+        q = tf.reshape(
+            tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
+        )
+        k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
+        v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
+        q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
+        k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
+        v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
+        k_heads = tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2)
+        v_heads = tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2)
+
+        with Mesh(
+            ("cta",), layout=(QUERY_HEADS, WORKERS), names=("head", "worker")
+        ) as cta:
+            qh = tf.reshard(
+                q_rope, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
+            )
+            queries = tf.transpose(tf.cast(qh, dtype="f32"), perm=(0, 2, 1, 3))
+            scaled = queries * tf.full_like(queries, value=SCALE)
+            m_slots = tf.zeros(
+                Tensor[
+                    (WORKERS @ cta.worker, QUERY_HEADS @ cta.head, 1, 1),
+                    "f32",
+                    "smem",
+                ]
+            )
+            acc_slots = tf.zeros(
+                Tensor[
+                    (WORKERS @ cta.worker, QUERY_HEADS @ cta.head, 1, HEAD_DIM),
+                    "f32",
+                    "smem",
+                ]
+            )
+            m = tf.full_like(m_slots, value=-1e30)
+            l = tf.full_like(m_slots, value=0.0)
+            acc = tf.full_like(acc_slots, value=0.0)
+
+            for start in tile(CTX, BLOCK * WORKERS):
+                base = start + cta.worker * BLOCK
+                kb = tf.reshard(
+                    k_heads[:, base : base + BLOCK, :, :],
+                    (1, BLOCK, QUERY_HEADS @ cta.head, HEAD_DIM),
+                    "smem",
+                )
+                vb = tf.reshard(
+                    v_heads[:, base : base + BLOCK, :, :],
+                    (1, BLOCK, QUERY_HEADS @ cta.head, HEAD_DIM),
+                    "smem",
+                )
+                keys = tf.transpose(tf.cast(kb, dtype="f32"), perm=(0, 2, 3, 1))
+                values = tf.transpose(tf.cast(vb, dtype="f32"), perm=(0, 2, 1, 3))
+                scores = tf.matmul(scaled, keys)
+                block_m = tf.reduce(scores, axes=(-1,), keepdim=True, kind="max")
+                next_m = tf.max(m, block_m)
+                correction = tf.exp(m - next_m)
+                weights = tf.exp(scores - next_m)
+                l = l * correction + tf.reduce(
+                    weights, axes=(-1,), keepdim=True, kind="sum"
+                )
+                acc = acc * correction + tf.matmul(weights, values)
+                m = next_m
+
+            all_m = tf.reshard(
+                m, (WORKERS, QUERY_HEADS @ cta.head, 1, 1), "smem"
+            )
+            all_l = tf.reshard(
+                l, (WORKERS, QUERY_HEADS @ cta.head, 1, 1), "smem"
+            )
+            all_acc = tf.reshard(
+                acc, (WORKERS, QUERY_HEADS @ cta.head, 1, HEAD_DIM), "smem"
+            )
+            global_m = tf.reduce(all_m, axes=(0,), keepdim=False, kind="max")
+            weights = tf.exp(all_m - global_m)
+            global_l = tf.reduce(weights * all_l, axes=(0,), keepdim=False, kind="sum")
+            global_acc = tf.reduce(
+                weights * all_acc, axes=(0,), keepdim=False, kind="sum"
+            )
+            attended = tf.cast(global_acc / global_l, dtype="bf16")
+            attended = tf.reshape(
+                attended, new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
+            )
+            attended = tf.reshard(
+                attended, (1, 1, QUERY_HEADS, HEAD_DIM), "gmem"
+            )
+            return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
+
+
+gqa_decode_fused = Stage3_Fused.entry_function()
+```
+
 ```bash
 tilefoundry analyze attn_layer.py:Stage3_Fused \
   /tmp/tilefoundry-tutorial-gqa/stage3-4096.txt \
@@ -1433,6 +632,96 @@ algorithm and a `Partial` shard attribute are related ideas, not interchangeable
 ## 5. Stage projection weights
 
 `Stage4_WeightPrepared` moves each projection weight's output slice to smem before the matmul. The q and o weight lines show the per-CTA read:
+
+```python
+# %%
+@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
+class Stage4_WeightPrepared:
+    """Stage projection weights by output slice before the attention scan."""
+
+    @func
+    def gqa_decode(
+        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
+        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        cur_pos: Tensor[(1,), "i32"],
+        write_len: Tensor[(1,), "i32"],
+        pos_ids: Tensor[(1,), "i32"],
+        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
+        with Mesh(("cta",), layout=(QUERY_HEADS,), names=("head",)) as cta:
+            wq_local = tf.reshard(
+                w_q, (1, HIDDEN, HIDDEN @ cta.head), "smem"
+            )
+            wk_local = tf.reshard(
+                w_k, (1, HIDDEN, KV_DIM @ cta.head), "smem"
+            )
+            wv_local = tf.reshard(
+                w_v, (1, HIDDEN, KV_DIM @ cta.head), "smem"
+            )
+            hidden_local = tf.reshard(hidden, (1, 1, HIDDEN), "smem")
+            q_projected = tf.matmul(hidden_local, wq_local)
+            k_projected = tf.matmul(hidden_local, wk_local)
+            v_projected = tf.matmul(hidden_local, wv_local)
+            q_projected = tf.reshard(q_projected, (1, 1, HIDDEN), "gmem")
+            k_projected = tf.reshard(k_projected, (1, 1, KV_DIM), "gmem")
+            v_projected = tf.reshard(v_projected, (1, 1, KV_DIM), "gmem")
+            q = tf.reshape(
+                q_projected, new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
+            )
+            k = tf.reshape(k_projected, new_shape=(1, 1, KV_HEADS, HEAD_DIM))
+            v = tf.reshape(v_projected, new_shape=(1, 1, KV_HEADS, HEAD_DIM))
+            q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
+            k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
+            v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
+            k_heads = tf.transpose(
+                tf.repeat_interleave(k_all, repeats=GQA_GROUP, axis=2),
+                perm=(0, 2, 1, 3),
+            )
+            v_heads = tf.transpose(
+                tf.repeat_interleave(v_all, repeats=GQA_GROUP, axis=2),
+                perm=(0, 2, 1, 3),
+            )
+            q_f32 = tf.cast(q_rope, dtype="f32")
+            k_f32 = tf.cast(k_heads, dtype="f32")
+            v_f32 = tf.cast(v_heads, dtype="f32")
+            scaled_q = q_f32 * tf.full_like(q_f32, value=SCALE)
+            q_e = tf.reshape(
+                scaled_q, new_shape=(1, 1, QUERY_HEADS, 1, HEAD_DIM)
+            )
+            k_e = tf.reshape(
+                k_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM)
+            )
+            v_e = tf.reshape(
+                v_f32, new_shape=(1, 1, QUERY_HEADS, CTX, HEAD_DIM)
+            )
+            scores = tf.reduce(q_e * k_e, axes=(-1,), keepdim=True, kind="sum")
+            peak = tf.reduce(scores, axes=(-2,), keepdim=True, kind="max")
+            weights = tf.exp(scores - peak)
+            normalizer = tf.reduce(weights, axes=(-2,), keepdim=False, kind="sum")
+            weighted = tf.reduce(weights * v_e, axes=(-2,), keepdim=False, kind="sum")
+            attended = tf.cast(weighted / normalizer, dtype="bf16")
+            w_o_local = tf.reshard(
+                w_o, (1, HIDDEN, HIDDEN @ cta.head), "smem"
+            )
+            attended_local = tf.reshard(
+                tf.reshape(attended, new_shape=(1, 1, HIDDEN)),
+                (1, 1, HIDDEN),
+                "smem",
+            )
+            output_local = tf.matmul(
+                attended_local, w_o_local
+            )
+            return tf.reshard(output_local, (1, 1, HIDDEN), "gmem")
+
+
+gqa_decode_weight_prepared = Stage4_WeightPrepared.entry_function()
+```
 
 ```text
 # analysis target=nvidia.h200_sxm module=Stage4_WeightPrepared function=gqa_decode topology=cta
@@ -1466,6 +755,119 @@ The generated header reports f32 `6390528@6390528`, traffic `gmem:r28254676/w255
 ## 6. Stream the KV cache
 
 `Stage5_CachePrepared` leaves the static projection weights in their ordinary form and changes only the cache scan. `BLOCK=128` rows move through smem while `(m, l, acc)` stays resident. The updated cache is read at `cur_pos` once, so append and scan are separate traffic events.
+
+```python
+# %%
+@module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
+class Stage5_CachePrepared:
+    """Stream cache blocks through smem while an online state stays resident."""
+
+    @func
+    def gqa_decode(
+        hidden: Tensor[(1, 1, HIDDEN), "bf16"],
+        w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        w_k: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_v: ConstTensor[(1, HIDDEN, KV_DIM), "bf16"],
+        w_o: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
+        k_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        v_cache: Tensor[(1, CTX, KV_HEADS, HEAD_DIM), "bf16"],
+        cur_pos: Tensor[(1,), "i32"],
+        write_len: Tensor[(1,), "i32"],
+        pos_ids: Tensor[(1,), "i32"],
+        cos_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+        sin_cache: Tensor[(ROPE_CONTEXT, HEAD_DIM), "bf16"],
+    ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
+        q = tf.reshape(
+            tf.matmul(hidden, w_q), new_shape=(1, 1, QUERY_HEADS, HEAD_DIM)
+        )
+        k = tf.reshape(tf.matmul(hidden, w_k), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
+        v = tf.reshape(tf.matmul(hidden, w_v), new_shape=(1, 1, KV_HEADS, HEAD_DIM))
+        q_rope, k_rope = tf.rope(q, k, cos_cache, sin_cache, pos_ids)
+        k_all = tf.cache_update(k_cache, cur_pos, write_len, k_rope)
+        v_all = tf.cache_update(v_cache, cur_pos, write_len, v)
+
+        with Mesh(("cta",), layout=(QUERY_HEADS,), names=("head",)) as cta:
+            qh = tf.reshard(
+                q_rope, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
+            )
+            queries = tf.transpose(tf.cast(qh, dtype="f32"), perm=(0, 2, 1, 3))
+            scaled = queries * tf.full_like(queries, value=SCALE)
+            template = tf.reduce(queries, axes=(-1,), keepdim=True, kind="sum")
+            m = tf.full_like(template, value=-1e30)
+            l = tf.full_like(template, value=0.0)
+            acc = tf.full_like(queries, value=0.0)
+
+            for start in tile(CTX, BLOCK):
+                base = start + 0
+                kb = tf.reshard(
+                    tf.repeat_interleave(
+                        k_cache[:, base : base + BLOCK, :, :],
+                        repeats=GQA_GROUP,
+                        axis=2,
+                    ),
+                    (1, BLOCK, QUERY_HEADS @ cta.head, HEAD_DIM),
+                    "smem",
+                )
+                vb = tf.reshard(
+                    tf.repeat_interleave(
+                        v_cache[:, base : base + BLOCK, :, :],
+                        repeats=GQA_GROUP,
+                        axis=2,
+                    ),
+                    (1, BLOCK, QUERY_HEADS @ cta.head, HEAD_DIM),
+                    "smem",
+                )
+                keys = tf.transpose(tf.cast(kb, dtype="f32"), perm=(0, 2, 3, 1))
+                values = tf.transpose(tf.cast(vb, dtype="f32"), perm=(0, 2, 1, 3))
+                scores = tf.matmul(scaled, keys)
+                block_m = tf.reduce(scores, axes=(-1,), keepdim=True, kind="max")
+                next_m = tf.max(m, block_m)
+                correction = tf.exp(m - next_m)
+                weights = tf.exp(scores - next_m)
+                l = l * correction + tf.reduce(
+                    weights, axes=(-1,), keepdim=True, kind="sum"
+                )
+                acc = acc * correction + tf.matmul(weights, values)
+                m = next_m
+
+            k_current = tf.repeat_interleave(
+                tf.index_select(k_all, cur_pos, dim=1), repeats=GQA_GROUP, axis=2
+            )
+            v_current = tf.repeat_interleave(
+                tf.index_select(v_all, cur_pos, dim=1), repeats=GQA_GROUP, axis=2
+            )
+            k_current = tf.reshard(
+                k_current, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
+            )
+            v_current = tf.reshard(
+                v_current, (1, 1, QUERY_HEADS @ cta.head, HEAD_DIM), "smem"
+            )
+            current_keys = tf.transpose(
+                tf.cast(k_current, dtype="f32"), perm=(0, 2, 3, 1)
+            )
+            current_values = tf.transpose(
+                tf.cast(v_current, dtype="f32"), perm=(0, 2, 1, 3)
+            )
+            current_scores = tf.matmul(scaled, current_keys)
+            current_m = tf.max(m, current_scores)
+            current_correction = tf.exp(m - current_m)
+            current_weights = tf.exp(current_scores - current_m)
+            l = l * current_correction + current_weights
+            acc = acc * current_correction + tf.matmul(
+                current_weights, current_values
+            )
+
+            attended = tf.transpose(
+                tf.cast(acc / l, dtype="bf16"), perm=(0, 2, 1, 3)
+            )
+            attended = tf.reshard(
+                attended, (1, 1, QUERY_HEADS, HEAD_DIM), "gmem"
+            )
+            return tf.matmul(tf.reshape(attended, new_shape=(1, 1, HIDDEN)), w_o)
+
+
+gqa_decode_cache_prepared = Stage5_CachePrepared.entry_function()
+```
 
 ```bash
 tilefoundry analyze attn_layer.py:Stage5_CachePrepared \
