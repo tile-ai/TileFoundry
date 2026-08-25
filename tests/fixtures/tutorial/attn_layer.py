@@ -773,6 +773,11 @@ def _authoring_source() -> str:
     return "\n".join(source.splitlines()[:end]).rstrip()
 
 
+def _materialize_command(source: str) -> str:
+    """Make the embedded authored program available to the CLI examples."""
+    return f"cat > attn_layer.py <<'PY'\n{source}\nPY"
+
+
 def _summary_metrics(report: str) -> tuple[str, str, str, str, str]:
     compute = _summary_line(report, "# compute-cost ")
     traffic = _summary_line(report, "# traffic ")
@@ -789,6 +794,7 @@ def _summary_metrics(report: str) -> tuple[str, str, str, str, str]:
 
 def render_markdown() -> str:
     """Execute the tutorial evidence cells and return the complete Markdown page."""
+    authoring_source = _authoring_source()
     sweep_contexts = (128, 512, 1024, 2048, 4096, 8192)
     sweep_rows: list[str] = []
     sweep_reports: dict[int, str] = {}
@@ -868,7 +874,11 @@ def render_markdown() -> str:
         "Run it as ordinary Python or execute its cells in a notebook-aware editor.",
         "Save this block as `attn_layer.py` before running the commands below.",
         "",
-        _fenced(_authoring_source(), "python"),
+        _fenced(authoring_source, "python"),
+        "",
+        "Materialize the embedded program before running the analysis commands:",
+        "",
+        _fenced(_materialize_command(authoring_source), "bash"),
         "",
         "## 0. Start with the complete shape",
         "",
