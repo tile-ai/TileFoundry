@@ -36,7 +36,7 @@ displayed result. The reports are static analysis results; no CUDA kernel is lau
 ## Executable cells
 
 This is an ipynb-style rendering of the executable tutorial source.
-The source uses percent-format cells: `# %%` for Python and `# %% [markdown]` for headings.
+Notebook cell boundaries separate the executable Python blocks from the prose.
 Each Python cell is embedded as one fenced code block at the point where the tutorial uses it.
 The page does not repeat the complete source in a second heredoc.
 
@@ -69,7 +69,6 @@ the GQA shape used by the published Qwen attention model.
 <!-- tilefoundry-source -->
 
 ```python
-# %%
 from __future__ import annotations
 
 import ast
@@ -121,7 +120,6 @@ point has no explicit mesh and no storage transition.
 <!-- tilefoundry-source -->
 
 ```python
-# %%
 @module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
 class Stage0_Naive:
     """One unsplit CTA reads the complete attention sublayer."""
@@ -292,7 +290,6 @@ T = floor(232448 B / 128 B)
 <!-- tilefoundry-source -->
 
 ```python
-# %%
 SMEM_BUDGET = 232448
 CACHE_BYTES_PER_CONTEXT_PER_CTA = 2 * HEAD_DIM * 2
 SPECIALIZE_T = SMEM_BUDGET // CACHE_BYTES_PER_CONTEXT_PER_CTA
@@ -473,7 +470,6 @@ The next change is `Stage2_Sharded`: one `cta.head` owns one query head. The sam
 <!-- tilefoundry-source -->
 
 ```python
-# %%
 @module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
 class Stage2_Sharded:
     """Give each CTA one query-head slice while keeping the cache whole."""
@@ -601,7 +597,6 @@ At long context, the full-cache form is the wrong residency choice. `Stage3_Fuse
 <!-- tilefoundry-source -->
 
 ```python
-# %%
 @module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
 class Stage3_Fused:
     """Split the cache scan across workers and combine online-softmax partials."""
@@ -753,7 +748,6 @@ algorithm and a `Partial` shard attribute are related ideas, not interchangeable
 <!-- tilefoundry-source -->
 
 ```python
-# %%
 @module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
 class Stage4_WeightPrepared:
     """Stage projection weights by output slice before the attention scan."""
@@ -897,7 +891,6 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 <!-- tilefoundry-source -->
 
 ```python
-# %%
 @module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
 class Stage5_CachePrepared:
     """Stream cache blocks through smem while an online state stays resident."""

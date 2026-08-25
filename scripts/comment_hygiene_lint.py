@@ -22,7 +22,6 @@ MAX_PROSE_LINES = 8
 MAX_COLUMNS = 100
 EXEMPT_PREFIXES = ("tests/models/", "examples/")
 DIRECTIVE_PREFIXES = ("ruff:", "noqa", "type:", "pragma:", "mypy:", "fmt:", "isort:")
-CELL_MARKER = re.compile(r"%%(?:\s+\[markdown\])?\s*$")
 PYTHON_SUFFIXES = frozenset({".py"})
 C_SUFFIXES = frozenset({".h", ".hpp", ".cuh", ".cu", ".cpp", ".cc"})
 GOOGLE_SECTION = re.compile(
@@ -74,7 +73,7 @@ def comment_tokens(text: str) -> list[tokenize.TokenInfo]:
 def is_directive(token: tokenize.TokenInfo) -> bool:
     """Whether a hash token addresses a tool rather than a reader."""
     body = token.string.lstrip("#").strip()
-    return CELL_MARKER.fullmatch(body) is not None or body.startswith(DIRECTIVE_PREFIXES) or (
+    return body.startswith(DIRECTIVE_PREFIXES) or (
         token.start[0] == 1 and token.start[1] == 0 and token.string.startswith("#!")
     )
 
@@ -135,17 +134,11 @@ def narration_findings(text: str) -> list[tuple[int, str]]:
 
 def placement_findings(text: str) -> list[tuple[int, str]]:
     """Python comments that are neither tool directives nor a shebang."""
-    found = []
-    markdown_cell = False
-    for token in comment_tokens(text):
-        body = token.string.lstrip("#").strip()
-        if CELL_MARKER.fullmatch(body) is not None:
-            markdown_cell = "[markdown]" in body
-            continue
-        if markdown_cell or is_directive(token):
-            continue
-        found.append((token.start[0], "explanation outside a docstring"))
-    return found
+    return [
+        (token.start[0], "explanation outside a docstring")
+        for token in comment_tokens(text)
+        if not is_directive(token)
+    ]
 
 
 def docstring_findings(text: str) -> list[tuple[int, str]]:

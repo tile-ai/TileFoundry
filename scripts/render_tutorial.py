@@ -35,12 +35,7 @@ def _source_cells(notebook: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _materialize_source(notebook: dict[str, Any], path: Path) -> None:
     """Join visible source cells into the .py file used by analyze."""
-    parts: list[str] = []
-    for index, cell in enumerate(_source_cells(notebook)):
-        source = _text(cell["source"]).rstrip()
-        if index and not source.lstrip().startswith("# %%"):
-            parts.append("# %%\n")
-        parts.append(source)
+    parts = [_text(cell["source"]).rstrip() for cell in _source_cells(notebook)]
     path.write_text("\n\n".join(parts).rstrip() + "\n", encoding="utf-8")
 
 
