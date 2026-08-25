@@ -9,7 +9,7 @@ from pathlib import Path
 from tilefoundry.cli import data
 from tilefoundry.cli.models import render_source_directory, source_summary
 
-PAGES: tuple[str, ...] = ("index", "migrate", "optimize")
+PAGES: tuple[str, ...] = ("index", "migrate", "optimize", "authoring")
 
 _FIXTURE = re.compile(r"^\{\{fixture:\s*(?P<model>[\w./-]+):(?P<identity>[\w.]+)\s*\}\}$")
 

@@ -34,3 +34,9 @@ source.write_text(composed_leaf_source("n_cli"), encoding="utf-8")
 
 The model catalog `tilefoundry models` reads. The integration and installed
 suites run them.
+
+## `tutorial/` - authoring tutorial programs
+
+Small, analyzable programs whose source is the example for a tutorial page.
+They are not model fixtures or GPU runtime regression cases; the page links to
+their declarations and records the static `analyze` reports beside the prose.
