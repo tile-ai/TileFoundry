@@ -101,8 +101,10 @@ def _execute(notebook: dict[str, Any], source_path: Path) -> None:
             stdout_buffer = io.StringIO()
             stderr_buffer = io.StringIO()
             try:
-                with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(
-                    stderr_buffer
+                with (
+                    contextlib.chdir(source_path.parent),
+                    contextlib.redirect_stdout(stdout_buffer),
+                    contextlib.redirect_stderr(stderr_buffer),
                 ):
                     exec(
                         compile(
@@ -173,6 +175,8 @@ def render_markdown(notebook: dict[str, Any]) -> str:
                 language = "bash"
             else:
                 language = "python"
+            if metadata.get("source"):
+                rendered.append("<!-- tilefoundry-source -->")
             rendered.append(_fenced(source, language))
         rendered.extend(_render_output(cell))
     return "\n\n".join(part for part in rendered if part).rstrip() + "\n"

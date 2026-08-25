@@ -28,10 +28,10 @@ The six programs are Python cells in this notebook:
 | 4 | `Stage4_WeightPrepared` | stage projection weights by output slice |
 | 5 | `Stage5_CachePrepared` | stream cache blocks through smem |
 
-Every displayed analysis output belongs to the visible `%%bash` cell immediately above it.
-Those cells run the same `tilefoundry analyze` CLI a reader can run after extracting
-`attn_layer.py`, then load the report or JSON file and print the displayed result. The
-reports are static analysis results; no CUDA kernel is launched.
+Every displayed analysis output belongs to the visible Python cell immediately above it.
+The preceding `%%bash` cell runs the same `tilefoundry analyze` CLI a reader can run after
+extracting `attn_layer.py`; the Python cell loads the report or JSON file and prints the
+displayed result. The reports are static analysis results; no CUDA kernel is launched.
 
 ## Executable cells
 
@@ -44,14 +44,17 @@ To run this installed page, extract its Python cells into one executable file:
 
 ```bash
 awk '
-  /^```python$/ { in_python=1; next }
-  in_python && /^```$/ { in_python=0; next }
+  /^<!-- tilefoundry-source -->$/ { source_block=1; next }
+  source_block && /^```python$/ { in_python=1; next }
+  in_python && /^```$/ { in_python=0; source_block=0; next }
   in_python { print }
 ' authoring.md > attn_layer.py
 chmod +x attn_layer.py
 ```
 
 ### Setup cell
+
+<!-- tilefoundry-source -->
 
 ```python
 #!/usr/bin/env python3
@@ -62,6 +65,8 @@ time.  The dimensions are intentionally small, but the query/KV ratio matches
 the GQA shape used by the published Qwen attention model.
 """
 ```
+
+<!-- tilefoundry-source -->
 
 ```python
 # %%
@@ -112,6 +117,8 @@ The small teaching shape keeps the published GQA ratio:
 The entry includes q/k/v projection, RoPE, one cache append, an attention scan,
 and the output projection. The weights are `ConstTensor` parameters. The starting
 point has no explicit mesh and no storage transition.
+
+<!-- tilefoundry-source -->
 
 ```python
 # %%
@@ -165,8 +172,8 @@ class Stage0_Naive:
 gqa_decode = Stage0_Naive.entry_function()
 ```
 
-Run one point like this. The cell runs the CLI, loads the report file it just wrote,
-and prints its header plus selected annotated calls:
+Run one point like this. The Bash cell writes the report; the following Python cell
+loads it and prints its header plus selected annotated calls:
 
 ```bash
 set -euo pipefail
@@ -174,7 +181,9 @@ mkdir -p tutorial-reports
 tilefoundry analyze attn_layer.py:Stage0_Naive \
   tutorial-reports/stage0-128.txt \
   --compute-cost --memory --roofline --operands --dim ctx_len=128
-python - <<'PY'
+```
+
+```python
 from pathlib import Path
 
 report = Path("tutorial-reports/stage0-128.txt").read_text(encoding="utf-8")
@@ -184,7 +193,6 @@ print()
 for needle in ("matmul(hidden, w_q)", "cache_update(k_cache", "matmul(v33, w_o)"):
     line = next(line for line in annotated.splitlines() if needle in line)
     print(line.rstrip())
-PY
 ```
 
 ```text
@@ -209,8 +217,8 @@ numbers stay tied to the command that produced them.
 
 ## 1. Sweep the open dimension
 
-The same command, with a different report path, produces the table. The cell runs all six
-CLI calls, loads each fresh report, and prints the selected fields as Markdown:
+The same command, with a different report path, produces the table. The Bash cell runs all six
+CLI calls; the following Python cell loads each fresh report and prints the selected fields as Markdown:
 
 ```bash
 set -euo pipefail
@@ -220,9 +228,12 @@ for ctx in 128 512 1024 2048 4096 8192; do
     tutorial-reports/stage0-$ctx.txt \
     --compute-cost --memory --roofline --operands --dim ctx_len=$ctx
 done
-python - <<'PY'
+```
+
+```python
 import re
 from pathlib import Path
+
 
 def metrics(ctx_len):
     report = Path(f"tutorial-reports/stage0-{ctx_len}.txt").read_text(encoding="utf-8")
@@ -237,12 +248,12 @@ def metrics(ctx_len):
     ideal, bound = re.search(r"ideal-ns=([^ ]+) bound-by=([^ ]+)", roofline).groups()
     return f32, traffic_value, gmem_peak, ideal, bound
 
+
 print("| `ctx_len` | f32 flops `global@CTA` | traffic `global@CTA` | peak gmem bytes | ideal ns | bound |")
 print("|---:|---:|---|---:|---:|---|")
 for ctx_len in (128, 512, 1024, 2048, 4096, 8192):
     f32, traffic, peak, ideal, bound = metrics(ctx_len)
     print(f"| {ctx_len} | `{f32}` | `{traffic}` | {peak} | {ideal} | {bound} |")
-PY
 ```
 
 | `ctx_len` | f32 flops `global@CTA` | traffic `global@CTA` | peak gmem bytes | ideal ns | bound |
@@ -277,6 +288,8 @@ T = floor(232448 B / 128 B)
 ```
 
 `Stage1_Specialized` expresses the dispatch as two half-open `DimVarRangePat` variants: `[1, 1816)` and `[1816, 8193)`. The Stage1 body is deliberately the unsplit baseline, so the dispatch contract can be read independently from the later implementations.
+
+<!-- tilefoundry-source -->
 
 ```python
 # %%
@@ -392,8 +405,8 @@ class Stage1_Specialized:
 gqa_decode_specialized = Stage1_Specialized.entry_function()
 ```
 
-The valid boundary report is produced by the next cell, which runs the CLI and prints
-the report header from the file it wrote:
+The Bash cell writes the valid boundary report. The following Python cell loads the file
+and prints its report header:
 
 ```bash
 set -euo pipefail
@@ -401,7 +414,13 @@ mkdir -p tutorial-reports
 tilefoundry analyze attn_layer.py:Stage2_Sharded \
   tutorial-reports/stage2-1816.txt \
   --compute-cost --memory --roofline --dim ctx_len=1816
-sed -n '1,/^$/p' tutorial-reports/stage2-1816.txt
+```
+
+```python
+from pathlib import Path
+
+report = Path("tutorial-reports/stage2-1816.txt").read_text(encoding="utf-8")
+print(report.partition("\n\n")[0].rstrip())
 ```
 
 ```text
@@ -415,8 +434,8 @@ sed -n '1,/^$/p' tutorial-reports/stage2-1816.txt
 # roofline ideal-ns=1935 bound-by=memory
 ```
 
-A larger context crosses the stated capacity. The next cell runs the same CLI at
-`ctx_len=1820`, preserves its non-zero refusal, and prints the actual error output:
+A larger context crosses the stated capacity. The Bash cell preserves the non-zero
+CLI refusal in a file; the following Python cell loads and prints the actual error output:
 
 ```bash
 set -euo pipefail
@@ -424,13 +443,21 @@ mkdir -p tutorial-reports
 set +e
 tilefoundry analyze attn_layer.py:Stage2_Sharded \
   tutorial-reports/stage2-1820.txt \
-  --compute-cost --memory --roofline --dim ctx_len=1820 2>&1
+  --compute-cost --memory --roofline --dim ctx_len=1820 \
+  2> tutorial-reports/stage2-1820.err
 status=$?
 set -e
 if [ "$status" -eq 0 ]; then
   echo "expected Stage2_Sharded to refuse ctx_len=1820" >&2
   exit 1
 fi
+```
+
+```python
+from pathlib import Path
+
+error = Path("tutorial-reports/stage2-1820.err").read_text(encoding="utf-8")
+print(error.rstrip())
 ```
 
 ```text
@@ -442,6 +469,8 @@ The formula chooses the dispatch boundary. It is not a benchmark-tuned magic num
 ## 3. Split the query heads
 
 The next change is `Stage2_Sharded`: one `cta.head` owns one query head. The same-size comparison isolates placement from context growth.
+
+<!-- tilefoundry-source -->
 
 ```python
 # %%
@@ -507,8 +536,8 @@ class Stage2_Sharded:
 gqa_decode_sharded = Stage2_Sharded.entry_function()
 ```
 
-Baseline at `ctx_len=128`. The next cell reruns the CLI and prints the selected report
-lines from its output file:
+Baseline at `ctx_len=128`. The Bash cell reruns the CLI; the following Python cell loads
+the output file and prints the selected report lines:
 
 ```bash
 set -euo pipefail
@@ -516,8 +545,15 @@ mkdir -p tutorial-reports
 tilefoundry analyze attn_layer.py:Stage0_Naive \
   tutorial-reports/stage0-128-summary.txt \
   --compute-cost --memory --roofline --dim ctx_len=128
-grep -E '^# (compute-cost |traffic |peak-footprint=|roofline )' \
-  tutorial-reports/stage0-128-summary.txt
+```
+
+```python
+from pathlib import Path
+
+report = Path("tutorial-reports/stage0-128-summary.txt").read_text(encoding="utf-8")
+for line in report.splitlines():
+    if line.startswith(("# compute-cost ", "# traffic ", "# peak-footprint=", "# roofline ")):
+        print(line)
 ```
 
 ```text
@@ -527,8 +563,8 @@ grep -E '^# (compute-cost |traffic |peak-footprint=|roofline )' \
 # roofline ideal-ns=632 bound-by=memory
 ```
 
-Head-sharded at `ctx_len=128`. The next cell reruns the CLI and prints the selected
-report lines from its output file:
+Head-sharded at `ctx_len=128`. The Bash cell reruns the CLI; the following Python cell
+loads the output file and prints the selected report lines:
 
 ```bash
 set -euo pipefail
@@ -536,8 +572,15 @@ mkdir -p tutorial-reports
 tilefoundry analyze attn_layer.py:Stage2_Sharded \
   tutorial-reports/stage2-128-summary.txt \
   --compute-cost --memory --roofline --dim ctx_len=128
-grep -E '^# (compute-cost |traffic |peak-footprint=|roofline )' \
-  tutorial-reports/stage2-128-summary.txt
+```
+
+```python
+from pathlib import Path
+
+report = Path("tutorial-reports/stage2-128-summary.txt").read_text(encoding="utf-8")
+for line in report.splitlines():
+    if line.startswith(("# compute-cost ", "# traffic ", "# peak-footprint=", "# roofline ")):
+        print(line)
 ```
 
 ```text
@@ -554,6 +597,8 @@ the authored storage choices change the traffic seen by the roofline calculation
 ## 4. Keep the scan state on chip
 
 At long context, the full-cache form is the wrong residency choice. `Stage3_Fused` uses a two-dimensional CTA mesh. The head axis owns query heads and the worker axis owns disjoint cache blocks. Each worker keeps online `(m, l, acc)` state, then the worker axis is combined with an explicit log-sum-exp merge.
+
+<!-- tilefoundry-source -->
 
 ```python
 # %%
@@ -672,7 +717,9 @@ mkdir -p tutorial-reports
 tilefoundry analyze attn_layer.py:Stage3_Fused \
   tutorial-reports/stage3-4096.txt \
   --compute-cost --memory --roofline --operands --dim ctx_len=4096
-python - <<'PY'
+```
+
+```python
 from pathlib import Path
 
 report = Path("tutorial-reports/stage3-4096.txt").read_text(encoding="utf-8")
@@ -680,7 +727,6 @@ header, separator, annotated = report.partition("\n\n")
 print(header.rstrip())
 print()
 print(next(line.rstrip() for line in annotated.splitlines() if "cache_update(k_cache" in line))
-PY
 ```
 
 ```text
@@ -703,6 +749,8 @@ algorithm and a `Partial` shard attribute are related ideas, not interchangeable
 ## 5. Stage projection weights
 
 `Stage4_WeightPrepared` moves each projection weight's output slice to smem before the matmul. The q and o weight lines show the per-CTA read:
+
+<!-- tilefoundry-source -->
 
 ```python
 # %%
@@ -800,7 +848,9 @@ mkdir -p tutorial-reports
 tilefoundry analyze attn_layer.py:Stage4_WeightPrepared \
   tutorial-reports/stage4-4096.txt \
   --compute-cost --memory --roofline --operands --dim ctx_len=4096
-python - <<'PY'
+```
+
+```python
 from pathlib import Path
 
 report = Path("tutorial-reports/stage4-4096.txt").read_text(encoding="utf-8")
@@ -816,7 +866,6 @@ for needle in ("reshard(w_q", "reshard(w_o"):
             break
     print()
     print("\n".join(line.rstrip() for line in lines[start : end + 1]))
-PY
 ```
 
 ```text
@@ -844,6 +893,8 @@ PY
 ## 6. Stream the KV cache
 
 `Stage5_CachePrepared` leaves the static projection weights in their ordinary form and changes only the cache scan. `BLOCK=128` rows move through smem while `(m, l, acc)` stays resident. The updated cache is read at `cur_pos` once, so append and scan are separate traffic events.
+
+<!-- tilefoundry-source -->
 
 ```python
 # %%
@@ -964,7 +1015,9 @@ mkdir -p tutorial-reports
 tilefoundry analyze attn_layer.py:Stage5_CachePrepared \
   tutorial-reports/stage5-4096.txt \
   --compute-cost --memory --roofline --operands --dim ctx_len=4096
-python - <<'PY'
+```
+
+```python
 from pathlib import Path
 
 report = Path("tutorial-reports/stage5-4096.txt").read_text(encoding="utf-8")
@@ -973,7 +1026,6 @@ print(header.rstrip())
 print()
 for needle in ("slice(k_cache", "cache_update(k_cache"):
     print(next(line.rstrip() for line in annotated.splitlines() if needle in line))
-PY
 ```
 
 ```text
@@ -1022,8 +1074,8 @@ The command surface used by this page is:
 --json          write the same report data as JSON
 ```
 
-For example, the JSON form writes to a path just like the text form. The next cell runs the
-CLI with `--json`, loads the JSON report, and prints a stable summary from its parsed data.
+For example, the JSON form writes to a path just like the text form. The Bash cell runs the
+CLI with `--json`; the following Python cell loads the JSON report and prints a stable summary.
 
 ```bash
 set -euo pipefail
@@ -1031,7 +1083,9 @@ mkdir -p tutorial-reports
 tilefoundry analyze attn_layer.py:Stage0_Naive \
   tutorial-reports/stage0-128.json \
   --compute-cost --memory --roofline --dim ctx_len=128 --json
-python - <<'PY'
+```
+
+```python
 import json
 from pathlib import Path
 
@@ -1046,7 +1100,6 @@ summary = {
     "totals": report["totals"],
 }
 print(json.dumps(summary, indent=2, sort_keys=True))
-PY
 ```
 
 ```text
