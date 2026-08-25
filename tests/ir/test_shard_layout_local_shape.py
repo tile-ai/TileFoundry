@@ -11,7 +11,11 @@ from __future__ import annotations
 
 import pytest
 
+from tilefoundry.ir.core.expr import Call
+from tilefoundry.ir.core.kinds import BinaryKind
+from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.shape_helpers import i64_const, static_dim_value
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.mesh import Mesh, Topology
 from tilefoundry.ir.types.shard.shard_layout import (
@@ -105,3 +109,41 @@ def test_unresolved_symbolic_split_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="divisibility.*bind symbolic dimensions"):
         shard_layout_local_shape(layout, require_static=False)
+
+
+def test_an_extent_written_as_arithmetic_over_constants_is_static() -> None:
+    """``A + B`` is an extent, not an open dimension.
+
+    A body-local name for a constant expression is an IR ``Binary`` and stays
+    one, so 4096 + 4096 was not 8192 to this projection and the program was
+    refused for a dimension nothing had left open.
+    """
+    half = i64_const(4096)
+    whole = Call(type=half.type, target=Binary(kind=BinaryKind.ADD), args=(half, half))
+    assert static_dim_value(whole) == 8192
+
+    layout = ShardLayout(
+        layout=Layout(shape=(whole,), strides=(1,)),
+        attrs=(Split(0),),
+        mesh=Mesh(
+            topologies=(Topology("cta", 128),),
+            layout=Layout(shape=(128,), strides=(1,)),
+            names=("unit",),
+        ),
+    )
+    assert shard_layout_local_shape(layout) == (64,)
+
+
+def test_an_undecidable_extent_is_named_the_way_it_was_written() -> None:
+    """The refusal has to be findable in the reader's own program.
+
+    ``repr`` of an IR expression is a node dump, so an author who left one
+    dimension open got a paragraph of internals and no name.
+    """
+    layout = _symbolic_layout(_N, _M, split=True)
+
+    with pytest.raises(ValueError) as raised:
+        shard_layout_local_shape(layout, require_static=False)
+    message = str(raised.value)
+    assert "TensorType" not in message
+    assert _N.name in message or _M.name in message
