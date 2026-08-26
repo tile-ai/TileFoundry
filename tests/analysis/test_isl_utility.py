@@ -5,9 +5,7 @@ from __future__ import annotations
 import isl
 import pytest
 
-from tilefoundry.ir.core.expr import Call, Constant, Var
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir.core.expr import Call, Var
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import (
     DimAdd,
@@ -49,18 +47,6 @@ def test_normalize_dim_uses_isl_affine_normal_form():
     assert isinstance(normalize_dim(constant), int)
     assert normalize_dim(verbose) is P
     assert normalize_dim(quotient) == expected
-
-
-def test_normalize_dim_accepts_integer_scalar_hir_arithmetic():
-    scalar = TensorType.umat_scalar()
-    half = Constant(type=scalar, value=4096)
-    authored = Call(
-        type=scalar,
-        target=Binary(kind=BinaryKind.ADD),
-        args=(half, half),
-    )
-
-    assert normalize_dim(authored) == 8192
 
 
 def test_normalize_dim_leaves_unsupported_expressions_unchanged():

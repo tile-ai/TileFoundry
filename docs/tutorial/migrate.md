@@ -25,6 +25,9 @@ forest, and `--source` names the directory and lists its files.
   `@<func>.converter` — [runtime §1.1.2](../spec/runtime.md#112-weight-converter-and-prepare--forward).
 - Dimensions come from the published config. `head_dim` is a published field, not
   `hidden ÷ num_heads`; for this model those differ.
+- Variadic tensor operations take one explicit sequence. Write
+  `tf.concat([left, right], axis=-1)` or `tf.stack((left, right), axis=0)`, rather
+  than passing tensors as separate positional arguments.
 
 ## The five access faces
 

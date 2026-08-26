@@ -140,13 +140,33 @@ def _collect_module_rule_rows() -> tuple[RuleRow, ...]:
     return tuple(rows)
 
 
+def _merge_rule_rows(rows: tuple[RuleRow, ...]) -> tuple[RuleRow, ...]:
+    """Render one row per owning element and rule, retaining every situation."""
+    situations: dict[tuple[str, str, str, str], set[str]] = {}
+    for row in rows:
+        key = (row.owner, row.rule, row.statement, row.source)
+        situations.setdefault(key, set()).add(row.situation)
+    return tuple(
+        sorted(
+            RuleRow(
+                owner=owner,
+                situation=", ".join(sorted(rule_situations)),
+                rule=rule,
+                statement=statement,
+                source=source,
+            )
+            for (owner, rule, statement, source), rule_situations in situations.items()
+        )
+    )
+
+
 def _escape_cell(value: str) -> str:
     return value.replace("|", "\\|").replace("\n", " ")
 
 
 def render_spec_content() -> str:
     root = FunctionPattern()
-    rows = (*_collect_rule_rows(root), *_collect_module_rule_rows())
+    rows = _merge_rule_rows((*_collect_rule_rows(root), *_collect_module_rule_rows()))
     lines = [
         "# Parser Grammar and Constraints",
         "",

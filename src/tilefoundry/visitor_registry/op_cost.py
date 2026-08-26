@@ -9,6 +9,8 @@ algorithms read the one registry they fill.
 
 from __future__ import annotations
 
+import math
+
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.hir.cuda.nn.mma import Mma_SM80_16x8x16, Wgmma_SM90_64x128x16
@@ -113,20 +115,15 @@ def _serviced(call: Call, ctx: CostContext, kind: str) -> Cost:
 
 @register_cost_evaluator(MatMul)
 def _matmul(call: Call, ctx: CostContext) -> Cost:
-    """One multiply and one add per multiply-accumulate, over every element.
-
-    The work is the result's element count times the contraction, which counts
-    every batch the call produced without reading a batch extent at all. Read as
-    ``batch * m * n`` it is wrong in the recursive-local window: sharding moves
-    an axis, and a sharded last axis puts the extra one where ``m`` is counted
-    twice. Either side may be the broadcast one, and the element count does not
-    care which.
-    """
+    """One multiply and one add per multiply-accumulate: 2 * batch * m * k * n."""
     lhs, rhs = _input_types(call, ctx)
     output = _output_type(call, ctx)
     if not all(isinstance(type, TensorType) for type in (lhs, rhs, output)):
         raise ValueError("MatMul cost requires tensor inputs and output")
-    flops = 2 * numel(output) * lhs.shape[-1]
+    batch = math.prod(output.shape[:-2])
+    m, n = output.shape[-2:]
+    k = lhs.shape[-1]
+    flops = 2 * batch * m * k * n
     return Cost({lhs.dtype: flops}, _traffic((lhs, rhs), output))
 
 
