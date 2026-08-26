@@ -117,28 +117,20 @@ class RenderVisitor:
         if isinstance(pattern, RepeatPattern):
             return _repeated(self.visit(pattern.pattern), pattern.minimum, comma)
         if isinstance(pattern, SequencePattern):
-            return _separated(
-                tuple(self.visit(item) for item in pattern.patterns), comma
-            )
+            return _separated(tuple(self.visit(item) for item in pattern.patterns), comma)
         if isinstance(pattern, ChoicePattern):
             return _choice(*(self._list_pattern(item) for item in pattern.patterns))
         return self.visit(pattern)
 
     @staticmethod
     def _fields(pattern: AstNodePattern) -> dict[str, object]:
-        return {
-            part.name: part.pattern
-            for part in pattern.parts
-            if isinstance(part, FieldPattern)
-        }
+        return {part.name: part.pattern for part in pattern.parts if isinstance(part, FieldPattern)}
 
     def _field(self, fields: dict[str, object], name: str, fallback: str) -> _Expr:
         pattern = fields.get(name)
         return _text(fallback) if pattern is None else self.visit(pattern)
 
-    def _optional_field(
-        self, fields: dict[str, object], name: str, fallback: str
-    ) -> _Expr:
+    def _optional_field(self, fields: dict[str, object], name: str, fallback: str) -> _Expr:
         pattern = fields.get(name)
         if isinstance(pattern, OptionalPattern):
             pattern = pattern.pattern
@@ -151,9 +143,7 @@ class RenderVisitor:
         fields = self._fields(pattern)
 
         if node_type is ast.Constant:
-            predicates = [
-                part for part in pattern.parts if isinstance(part, PredicatePattern)
-            ]
+            predicates = [part for part in pattern.parts if isinstance(part, PredicatePattern)]
             if predicates:
                 return self.visit(predicates[-1])
             value = fields.get("value")
@@ -199,9 +189,7 @@ class RenderVisitor:
                 structural = [
                     part
                     for part in pattern.parts
-                    if not isinstance(
-                        part, (CapturePattern, FieldPattern, PredicatePattern)
-                    )
+                    if not isinstance(part, (CapturePattern, FieldPattern, PredicatePattern))
                 ]
                 if structural:
                     return self.visit(structural[-1])
@@ -355,9 +343,7 @@ class RenderVisitor:
         if node_type is ast.Module:
             body = fields.get("body", SequencePattern())
             if isinstance(body, RepeatPattern):
-                return _repeated(
-                    self.visit(body.pattern), body.minimum, _text("newline")
-                )
+                return _repeated(self.visit(body.pattern), body.minimum, _text("newline"))
             return self._list_pattern(body)
         if node_type is ast.FunctionDef:
             returns = self._optional_field(fields, "returns", "return-type")
@@ -403,9 +389,7 @@ class RenderVisitor:
             ]
             if structural:
                 return self.visit(structural[-1])
-            predicates = [
-                part for part in pattern.parts if isinstance(part, PredicatePattern)
-            ]
+            predicates = [part for part in pattern.parts if isinstance(part, PredicatePattern)]
             if predicates:
                 return self.visit(predicates[-1])
             return _text("expression" if node_type is ast.expr else "statement")
@@ -434,10 +418,7 @@ class RenderVisitor:
                     str: "string-literal",
                 }
                 return _choice(
-                    *(
-                        _text(names.get(item, f"{item.__name__}-literal"))
-                        for item in types
-                    )
+                    *(_text(names.get(item, f"{item.__name__}-literal")) for item in types)
                 )
             if pattern.value is dataclasses.MISSING:
                 return _text("literal")
@@ -445,9 +426,7 @@ class RenderVisitor:
         if isinstance(pattern, ReferencePattern):
             return _text("primary")
         if isinstance(pattern, SequencePattern):
-            return _separated(
-                tuple(self.visit(item) for item in pattern.patterns), _terminal(",")
-            )
+            return _separated(tuple(self.visit(item) for item in pattern.patterns), _terminal(","))
         if isinstance(pattern, ChoicePattern):
             return _choice(*(self.visit(item) for item in pattern.patterns))
         if isinstance(pattern, ConditionPattern):
@@ -455,9 +434,7 @@ class RenderVisitor:
         if isinstance(pattern, OptionalPattern):
             return _optional(self.visit(pattern.pattern))
         if isinstance(pattern, RepeatPattern):
-            return _repeated(
-                self.visit(pattern.pattern), pattern.minimum, _terminal(",")
-            )
+            return _repeated(self.visit(pattern.pattern), pattern.minimum, _terminal(","))
         if isinstance(pattern, (ChildPattern, BranchPattern, BindPattern, LazyPattern)):
             return self.visit(pattern.pattern)
         if isinstance(pattern, PredicatePattern):

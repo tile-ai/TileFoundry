@@ -1326,6 +1326,24 @@ class ParseError(VerifyError):
         return cls(node=node, context=context, detail=detail)
 
 
+def _unclaimed_detail(node: ast.AST) -> str | None:
+    """Describe a node no pattern would take, when its shape says enough.
+
+    This is the only place where "no alternative is left" is a fact rather than
+    a position in one choice, so it is the only place a description may be
+    derived from the node instead of stated by a pattern.
+    """
+    if not isinstance(node, ast.Call):
+        return None
+    try:
+        callee = ast.unparse(node.func)
+    except (TypeError, ValueError):
+        callee = type(node.func).__name__
+    keywords = [keyword.arg or "**" for keyword in node.keywords]
+    stated = f"keywords {keywords!r}" if keywords else "no keywords"
+    return f"unsupported call {callee!r} ({len(node.args)} positional, {stated})"
+
+
 def parse_node(pattern: AstPattern[T], node: ast.AST, context: MatchContext) -> T:
     """Select, recursively construct, and apply rules for one local pattern."""
 
@@ -1333,7 +1351,7 @@ def parse_node(pattern: AstPattern[T], node: ast.AST, context: MatchContext) -> 
     if isinstance(matched, MatchFailure):
         raise ParseError.from_node(node, context, matched.render())
     if matched is None:
-        raise ParseError.from_node(node, context)
+        raise ParseError.from_node(node, context, _unclaimed_detail(node))
     active_context = matched.construct_context or context
     children: dict[str, object] = {}
     for child in matched.children:

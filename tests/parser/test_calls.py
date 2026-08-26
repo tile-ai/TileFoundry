@@ -7,7 +7,7 @@ from typing import get_args, get_origin
 
 import pytest
 
-from tilefoundry import func, module
+from tilefoundry import func, module, prim_func
 from tilefoundry.dsl import Mesh, Tensor, tf
 from tilefoundry.ir.core import Call, Constant, Tuple, VerifyError
 from tilefoundry.ir.core.pattern import Tensor as TensorPattern
@@ -20,7 +20,7 @@ from tilefoundry.ir.hir.tensor.stack import Stack
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.parser import ParseError
-from tilefoundry.target import CudaTarget
+from tilefoundry.target import CpuTarget, CudaTarget
 
 
 def test_matmul_layout_literals_are_parser_checked() -> None:
@@ -328,17 +328,25 @@ def test_a_refused_call_reports_one_reason_rather_than_every_alternative() -> No
     assert message.count("matmul takes 2 inputs, got 1") == 1
 
 
-def test_an_unresolved_callee_outside_the_op_namespace_stays_silent() -> None:
-    """A pattern that has not claimed a node contributes no reason to the report.
+def test_a_call_nobody_claims_is_named_without_taking_a_turn() -> None:
+    """Position is the whole claim for the report of last resort.
 
-    ``tf.no_such_op`` resolves through the op namespace, so the call pattern owns
-    it and names the failure. A bare name belongs to another alternative, so the
-    call pattern must say nothing rather than refuse on its behalf.
+    The report runs only after every alternative has declined, so it names any
+    callee — inside the op namespace or not — while a call another pattern owns
+    never reaches it. ``launch(...)`` is such a call and stays parseable.
     """
-    with pytest.raises(ParseError) as raised:
+    with pytest.raises(ParseError, match=re.escape("unsupported call 'no_such_helper'")):
 
         @func
         def refused(a: Tensor[(2, 4), "bf16"]) -> Tensor[(2, 4), "bf16"]:
             return no_such_helper(a)  # noqa: F821
 
-    assert "unsupported call" not in str(raised.value)
+    @func(topologies=(Topology("cta", 2),))
+    def device(a: Tensor[(2, 4), "f32"]) -> Tensor[(2, 4), "f32"]:
+        return tf.mul(a, a)
+
+    @prim_func(target=CpuTarget())
+    def host(a: Tensor[(2, 4), "f32"], out: Tensor[(2, 4), "f32"]):
+        launch(device, a, out, grid=(2, 1, 1), block=(1, 1, 1))  # noqa: F821
+
+    assert host.body is not None

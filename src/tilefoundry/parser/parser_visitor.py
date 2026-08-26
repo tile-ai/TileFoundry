@@ -24,9 +24,7 @@ class FuncParserVisitor:
         self.root_pattern = FunctionPattern()
 
     def visit(self, node: ast.AST) -> Any:
-        return parse_node(
-            self.root_pattern, node, MatchContext.from_function(self.context)
-        )
+        return parse_node(self.root_pattern, node, MatchContext.from_function(self.context))
 
     def visit_function(self, node: ast.FunctionDef) -> Any:
         return self.visit(node)

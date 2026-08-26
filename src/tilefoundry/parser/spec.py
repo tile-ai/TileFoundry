@@ -129,10 +129,7 @@ def _collect_rule_rows(root: ElementPattern[Any]) -> tuple[RuleRow, ...]:
 
 
 def _collect_module_rule_rows() -> tuple[RuleRow, ...]:
-    rows = [
-        _row("module", "module_function", rule)
-        for rule in ModuleBuildContext.FUNCTION_RULES
-    ]
+    rows = [_row("module", "module_function", rule) for rule in ModuleBuildContext.FUNCTION_RULES]
     rows.extend(
         _row("module", "module_finalization", rule)
         for rule in ModuleBuildContext.FINALIZATION_RULES

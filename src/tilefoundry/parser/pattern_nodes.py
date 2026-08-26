@@ -2125,38 +2125,6 @@ class CallVariadicInputFormRule:
         return value
 
 
-_OP_NAMESPACE = "tilefoundry.dsl.tf"
-
-
-def _claims_op_namespace(func: ast.expr, context: MatchContext) -> bool:
-    """Whether a callee is spelled inside the authored op namespace.
-
-    ``tf.<name>`` commits the call to this pattern: no other alternative accepts
-    an attribute of that module, so a callee it cannot resolve is the author's
-    mistake rather than another pattern's turn. A bare name (``launch``) or a
-    foreign namespace (``T.cuda.…``) commits nothing.
-    """
-    if not isinstance(func, ast.Attribute):
-        return False
-    try:
-        owner = _resolve_reference(func.value, context)
-    except ParseError:
-        return False
-    name = getattr(owner, "__name__", "")
-    return name == _OP_NAMESPACE or name.startswith(f"{_OP_NAMESPACE}.")
-
-
-def _unresolved_callee_detail(node: ast.Call) -> str:
-    """Name the callee a call could not resolve to an authored Op or Function."""
-    try:
-        callee = ast.unparse(node.func)
-    except (TypeError, ValueError):
-        callee = type(node.func).__name__
-    keywords = [keyword.arg or "**" for keyword in node.keywords]
-    stated = f"keywords {keywords!r}" if keywords else "no keywords"
-    return f"unsupported call {callee!r} ({len(node.args)} positional, {stated})"
-
-
 class CallPattern(ElementPattern):
     element_name = "op_call"
     syntax = LazyPattern(
@@ -2314,8 +2282,6 @@ class CallPattern(ElementPattern):
         try:
             callee = _resolve_reference(node.func, context)
         except ParseError:
-            if _claims_op_namespace(node.func, context):
-                return PatternFailure("op_call", node.func, _unresolved_callee_detail(node))
             return None
         if isinstance(callee, runtime.Module):
             module_owner = callee
@@ -2357,8 +2323,6 @@ class CallPattern(ElementPattern):
             callee if isinstance(callee, runtime.OpSchema) else getattr(callee, "_op_schema", None)
         )
         if not isinstance(schema, runtime.OpSchema):
-            if _claims_op_namespace(node.func, context):
-                return PatternFailure("op_call", node.func, _unresolved_callee_detail(node))
             return None
         children = CallPattern._schema_children(node, schema, context)
         if children is None or isinstance(children, MatchFailure):

@@ -265,13 +265,17 @@ flowchart TD
 
 A pattern MUST establish that a node is its own before it refuses with a reason. That claim is
 what makes the reason trustworthy: it says no remaining alternative can accept this node, so
-the refusal is the author's mistake and not another pattern's turn. A callee resolving through
-the authored op namespace to an op schema is such a claim — no other alternative accepts an
-attribute of that module — and a wrong argument count after it is an error. A callee that does
-not resolve is not a claim: `launch(...)` is a bare name another alternative owns, so the
-pattern returns `None` and says nothing. Reasons are never reconstructed from the AST after
-the fact; an inspection outside the refusing pattern cannot see which step it failed at, and
-becomes a second, divergent copy of that knowledge.
+the refusal is the author's mistake and not another pattern's turn. A callee resolving to an op
+schema is such a claim, and a wrong argument count after it is an error. A callee that does not
+resolve is not a claim: it may be a bare name or a foreign namespace that another alternative
+owns, so the pattern returns `None` and says nothing. Reasons are never reconstructed from the
+AST after the fact; an inspection outside the refusing pattern cannot see which step it failed
+at, and becomes a second, divergent copy of that knowledge.
+
+Being last in one choice is not a claim either, because that choice may itself be an
+alternative in another. `parse_node` is the single place where no alternative remains, so it
+is the only place that MAY describe a node from its shape rather than from a pattern's
+statement, and it does so only when the shape says something worth reading.
 
 `None` and a `MatchFailure` differ only for a choice; every other combinator returns either one
 unchanged, so a refusal keeps the identity and the wording of the pattern that produced it all
