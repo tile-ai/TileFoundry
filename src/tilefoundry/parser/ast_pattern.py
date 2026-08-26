@@ -34,7 +34,7 @@ from tilefoundry.ir.core.expr import Tuple as IrTuple
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.op_schema import OpSchema
-from tilefoundry.ir.hir.function import Function, elaborate
+from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
@@ -207,7 +207,6 @@ runtime = SimpleNamespace(
     canonical_shard_layout=canonical_shard_layout,
     composed=composed,
     dim_expr=dim_expr,
-    elaborate=elaborate,
     normalize_dim=normalize_dim,
     slice_size=slice_size,
     simplify_dim=simplify_dim,

@@ -9,7 +9,8 @@ from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.tensor_type import TupleType
 from tilefoundry.ir.visitor import ExprVisitor
 
-from .function import Function, canonical_specialization_signature
+from .function import Function
+from .specialize import canonical_specialization_signature
 
 
 def verify_function(fn: Function, *, module=None) -> None:

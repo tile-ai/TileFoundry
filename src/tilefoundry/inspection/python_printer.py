@@ -35,12 +35,16 @@ from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.hir.function import canonical_specialization_signature
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.hir.specialize import dim_vars_reached, display_name, origin_of
+from tilefoundry.ir.hir.specialize import (
+    canonical_specialization_signature,
+    dim_vars_reached,
+    display_name,
+    origin_of,
+)
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice, window_base
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem

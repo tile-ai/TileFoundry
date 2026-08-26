@@ -2335,13 +2335,7 @@ class CallPattern(ElementPattern):
                 target=callee,
                 args=args,
             )
-            infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
-            if not isinstance(infer_context, runtime.TypeInferContext):
-                infer_context = runtime.TypeInferContext()
-            instance = runtime.elaborate(
-                callee, tuple(arg.type for arg in args), infer_context, placeholder
-            )
-            return dataclasses.replace(placeholder, target=instance)
+            return placeholder
         raise RuntimeError(f"no constructor branch for {match.branch_id!r}")
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (

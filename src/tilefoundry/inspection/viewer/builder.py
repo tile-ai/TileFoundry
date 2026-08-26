@@ -54,9 +54,7 @@ def _renderable_functions(root) -> list[tuple[str, "HirFunction"]]:
     from tilefoundry.ir.hir.function import (  # noqa: PLC0415
         Function as _HirFunction,
     )
-    from tilefoundry.ir.hir.function import (  # noqa: PLC0415
-        canonical_specialization_signature,
-    )
+    from tilefoundry.ir.hir.specialize import canonical_specialization_signature  # noqa: PLC0415
 
     funcs = root.functions if isinstance(root, Module) else [root]
     out: list[tuple[str, _HirFunction]] = []

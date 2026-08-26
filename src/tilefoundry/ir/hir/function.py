@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from tilefoundry.ir.core import Expr, Op, Var
 from tilefoundry.ir.core.expr import Call, Constant
-from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
+from tilefoundry.ir.core.pattern import Pattern
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types import TensorType, Type, callable_type_for
 from tilefoundry.ir.types.dim import is_dim_expr
@@ -111,24 +111,6 @@ class Function(Expr):
 
 
 from tilefoundry.ir.visitor import ExprMutator  # noqa: E402
-
-
-def canonical_specialization_signature(
-    specializations: tuple[Pattern, ...],
-) -> str:
-    """Deterministic identity string for a Function's specialization tuple.
-
-    Same-name Functions are distinguished by this signature. For v0 the
-    only allowed pattern is ``DimVarRangePat``, so the signature is
-    ``"<dim_var>$<lo>_<hi>"`` joined by ``;`` in declared order.
-    """
-    parts: list[str] = []
-    for pat in specializations:
-        if isinstance(pat, DimVarRangePat):
-            parts.append(f"{pat.dim_var}${pat.lo}_{pat.hi}")
-        else:
-            parts.append(repr(pat))
-    return ";".join(parts)
 
 
 def _scope_for(ctx: TypeInferContext, callee: "Function") -> "FunctionScope | None":
@@ -526,8 +508,8 @@ def _substitute_op_dims(target: object, dims: "Mapping[str, int]") -> object:
 
 
 @register_typeinfer(Function)
-def _typeinfer_hir_function_call(call: Call, ctx) -> Type:
-    """Derive a function call's type by elaborating its callee.
+def infer_function_call_type(call: Call, ctx) -> Type:
+    """Derive a function call's type from its callee under the call feed.
 
     The type is re-derived from the elaborated body's type rather than a stale
     ``return_type`` field. Dispatch prototypes retain their declared type.
@@ -548,6 +530,7 @@ def _typeinfer_hir_function_call(call: Call, ctx) -> Type:
 
 __all__ = [
     "Function",
-    "canonical_specialization_signature",
-    "elaborate",
+    "infer_function_call_type",
 ]
+
+rebuild_at = _elaborate_from_bound_types

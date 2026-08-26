@@ -15,8 +15,9 @@ import torch
 from tilefoundry.cli.source import load_namespace, parse_dims, select_ir, suggested_extents
 from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.function import Function, canonical_specialization_signature
+from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import (
+    canonical_specialization_signature,
     dim_vars_reached,
     display_name,
     specialize_concretely,

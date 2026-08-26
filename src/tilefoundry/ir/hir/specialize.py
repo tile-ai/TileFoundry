@@ -14,7 +14,7 @@ import dataclasses
 from collections.abc import Mapping
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
-from tilefoundry.ir.core.pattern import DimVarRangePat
+from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types.substitute import (
     dim_vars_by_name,
@@ -24,7 +24,20 @@ from tilefoundry.ir.types.substitute import (
 from tilefoundry.ir.visitor import ExprVisitor, ExprWalker
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
-from .function import Function, _elaborate_from_bound_types
+from .function import Function, rebuild_at
+
+
+def canonical_specialization_signature(
+    specializations: tuple[Pattern, ...],
+) -> str:
+    """Deterministic identity string for a Function's specialization tuple."""
+    parts: list[str] = []
+    for pat in specializations:
+        if isinstance(pat, DimVarRangePat):
+            parts.append(f"{pat.dim_var}${pat.lo}_{pat.hi}")
+        else:
+            parts.append(repr(pat))
+    return ";".join(parts)
 
 
 class SpecializationError(ValueError):
@@ -177,7 +190,7 @@ def specialize_function(
     if not set(dims) & set(residual_dims(chosen)):
         return chosen
     bound = tuple(substitute_dims(param.type, dims) for param in chosen.params)
-    return _elaborate_from_bound_types(
+    return rebuild_at(
         chosen, bound, ctx if ctx is not None else TypeInferContext(), dims=dims
     )
 
