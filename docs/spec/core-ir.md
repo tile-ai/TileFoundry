@@ -394,10 +394,10 @@ class Call(Expr):
     invocation is `Evaluate(op, args)`.
   - A `Call` MUST NOT appear as a top-level Stmt directly.
   - Normally, `len(args)` MUST equal the number of `kind="input"` ParamDefs on
-    `target`. A sole input annotated `VariadicList` consumes all `args`.
-  - Each ordinary argument MUST satisfy its corresponding input ParamDef's
-    pattern / typeinfer rule. Every variadic argument MUST satisfy the sole
-    `VariadicList` input's element pattern / typeinfer rule.
+    `target`. A sole input annotated `Tuple[T]` describes a variadic sequence,
+    and every flattened argument corresponds to that ParamDef.
+  - Each argument MUST satisfy its corresponding input ParamDef's pattern /
+    typeinfer rule.
 
 ### 2.2 `Var` / `Constant` / `Tuple`
 
@@ -494,15 +494,10 @@ class ParamDef:
     pattern: Pattern | None = None
     optional: bool = False
     default: Any = MISSING
-
-class VariadicList:
-    """Mark one explicit authored sequence that flattens into Call.args."""
 ```
 
 - constraints:
   - a single Op parameter descriptor; the order of input-kind ParamDefs fixes `Call.args` position.
-  - `VariadicList` is valid only as the annotation of an Op's sole input
-    ParamDef; that ParamDef's `pattern` applies to every flattened argument.
 
 Example:
 
@@ -572,10 +567,9 @@ def _add() -> Op:
 
 #### Input position and form
 
-The order of `kind="input"` ParamDefs determines `Call.args` position:
-`call.args[i]` corresponds to the `i`-th input ParamDef from `op.params()`.
-For a sole `VariadicList` input, every `call.args[i]` corresponds to that same
-ParamDef in authored sequence order.
+The order of `kind="input"` ParamDefs determines `Call.args`
+position: `call.args[i]` corresponds to the `i`-th input ParamDef
+from `op.params()`.
 
 An Op is **value-form** when its `Call` produces an observable
 result the IR consumes — `Call.type` is then `TensorType` or

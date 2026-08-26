@@ -40,10 +40,6 @@ MISSING: _MissingType = _MissingType()
 _ParamKind = Literal["input", "attribute"]
 
 
-class VariadicList:
-    """Parser-surface marker for one explicit sequence of variadic inputs."""
-
-
 @dataclass
 class ParamDef:
     """Class-body descriptor for an Op parameter.
@@ -66,8 +62,6 @@ class ParamDef:
 
         if self.kind not in ("input", "attribute"):
             raise ValueError(f"ParamDef.kind must be 'input' or 'attribute', got {self.kind!r}")
-        if self.annotation is VariadicList and self.kind != "input":
-            raise ValueError("VariadicList can annotate only an input ParamDef")
 
     def __set_name__(self, owner: type, name: str) -> None:
 
@@ -113,4 +107,4 @@ def collect_param_defs(cls: type) -> tuple["ParamDef", ...]:
     return tuple(seen[name] for name in order)
 
 
-__all__ = ["ParamDef", "VariadicList", "MISSING", "_MissingType", "collect_param_defs"]
+__all__ = ["ParamDef", "MISSING", "_MissingType", "collect_param_defs"]

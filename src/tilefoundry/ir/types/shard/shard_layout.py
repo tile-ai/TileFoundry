@@ -160,12 +160,7 @@ def shard_layout_local_shape(
             k = attr.axis
             if not (0 <= k < len(local)):
                 continue
-            from ..shape_helpers import static_dim_value  # noqa: PLC0415
-
             mesh_ext = mesh_shape[mesh_axis_idx]
-            here = static_dim_value(local[k])
-            if here is not None:
-                local[k] = here
             if isinstance(mesh_ext, int) and isinstance(local[k], int):
                 if mesh_ext != 0:
                     local[k] //= mesh_ext
@@ -173,46 +168,21 @@ def shard_layout_local_shape(
                 local[k] = 1
             else:
                 raise ValueError(
-                    f"shard_layout_local_shape: layout dim {k} "
-                    f"({_render_dim(local[k])}) and mesh axis {mesh_axis_idx} "
-                    f"extent {_render_dim(mesh_ext)} do not have a decidable "
-                    "divisibility relation; bind symbolic dimensions before "
-                    "local projection"
+                    f"shard_layout_local_shape: layout dim {k} ({local[k]!r}) "
+                    f"and mesh axis {mesh_axis_idx} extent {mesh_ext!r} do not "
+                    "have a decidable divisibility relation; bind symbolic "
+                    "dimensions before local projection"
                 )
 
     if require_static:
         for i, d in enumerate(local):
             if not isinstance(d, int):
                 raise ValueError(
-                    f"shard_layout_local_shape: per-shard dim {i} "
-                    f"({_render_dim(d)}) is not static after sharding; bind "
-                    "symbolic dimensions before local projection"
+                    f"shard_layout_local_shape: per-shard dim {i} ({d!r}) is not "
+                    "static after sharding; bind symbolic dimensions before local "
+                    "projection"
                 )
     return tuple(local)
-
-
-def _render_dim(dim) -> str:
-    """Name a dim the way it was written, not the way it is stored.
-
-    ``repr`` of an IR expression is a node dump, and a reader cannot find their
-    own program in it.
-    """
-    from ..shape_helpers import static_dim_value  # noqa: PLC0415
-
-    if isinstance(dim, int):
-        return str(dim)
-    static = static_dim_value(dim)
-    if static is not None:
-        return str(static)
-    name = getattr(dim, "name", None)
-    if isinstance(name, str):
-        return name
-    kind = getattr(getattr(dim, "target", None), "kind", None)
-    label = getattr(kind, "name", None)
-    if label is not None:
-        parts = " ".join(_render_dim(arg) for arg in getattr(dim, "args", ()))
-        return f"{label.lower()}({parts})"
-    return type(dim).__name__
 
 
 def layout_axis_to_tensor_axis(layout_shape: tuple, tensor_shape: tuple) -> list[int]:

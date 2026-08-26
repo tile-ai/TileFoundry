@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.core.param_def import ParamDef, VariadicList
-from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.core.param_def import ParamDef
 
 
 def test_paramdef_rejects_an_unknown_kind_and_keeps_required_independent() -> None:
@@ -31,15 +30,3 @@ def test_paramdef_rejects_an_unknown_kind_and_keeps_required_independent() -> No
 
     omittable = ParamDef(kind="attribute", default=0)
     assert not omittable.is_required and omittable.has_default
-
-
-def test_variadic_list_marks_exactly_one_input_parameter() -> None:
-    with pytest.raises(ValueError, match="only an input"):
-        ParamDef(kind="attribute", annotation=VariadicList)
-
-    with pytest.raises(ValueError, match="sole input ParamDef"):
-
-        @register_op(dialect="tf", category="test", name="bad_variadic")
-        class BadVariadic:
-            inputs = ParamDef(kind="input", annotation=VariadicList)
-            other = ParamDef(kind="input")

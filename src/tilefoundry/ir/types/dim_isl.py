@@ -5,6 +5,7 @@ from __future__ import annotations
 import isl
 
 from tilefoundry.ir.core.expr import Call, Constant, Var
+from tilefoundry.ir.core.kinds import BinaryKind
 
 from .dim import (
     _DIM_OP_TYPES,
@@ -17,7 +18,18 @@ from .dim import (
     DimSub,
     DimVar,
 )
+from .dtype import IntegerDType
 from .tensor_type import TensorType
+
+_INTEGER_BINARY_DIM_OP = {
+    BinaryKind.ADD: DimAdd,
+    BinaryKind.SUB: DimSub,
+    BinaryKind.MUL: DimMul,
+    BinaryKind.FLOOR_DIV: DimFloorDiv,
+    BinaryKind.MOD: DimMod,
+    BinaryKind.MIN: DimMin,
+    BinaryKind.MAX: DimMax,
+}
 
 
 def _is_const(node) -> bool:
@@ -92,7 +104,16 @@ def _range_expr_visitor_type():
             def visit_Call(self, dim: Call) -> str:
                 op = type(dim.target)
                 if op not in _DIM_OP_TYPES:
-                    return _bind_param(dim, self.params, self.param_map, self.identities)
+                    kind = getattr(dim.target, "kind", None)
+                    if not (
+                        isinstance(dim.type, TensorType)
+                        and dim.type.shape == ()
+                        and isinstance(dim.type.dtype, IntegerDType)
+                        and isinstance(kind, BinaryKind)
+                        and kind in _INTEGER_BINARY_DIM_OP
+                    ):
+                        return _bind_param(dim, self.params, self.param_map, self.identities)
+                    op = _INTEGER_BINARY_DIM_OP[kind]
                 a, b = dim.args
                 if op is DimMul and not (_is_const(a) or _is_const(b)):
                     name = _bind_param(dim, self.params, self.param_map, self.identities)

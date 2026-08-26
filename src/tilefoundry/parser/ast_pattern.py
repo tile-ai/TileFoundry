@@ -1596,6 +1596,7 @@ class ShapeDimRule:
     )
 
     def apply(self, value, *, match, context):
+        value = runtime.normalize_dim(value)
         if isinstance(value, bool) or not isinstance(
             value, (int, runtime.DimVar, runtime.Expr)
         ):

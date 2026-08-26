@@ -4,8 +4,11 @@ The Parser accepts authored Python functions and produces HIR or TIR through one
 
 ## 1. Public API
 
-`@module` executes its Python class body and finalizes the collected Functions, child Modules,
-and ordinary methods. `@func` produces an HIR Function; `@prim_func` produces a TIR PrimFunction.
+`@module` executes its Python class body and finalizes the collected Function declarations,
+child Modules, and ordinary methods. Module authoring is two-phase: class execution records
+Function, specialization, and converter declarations; finalization attaches all child Modules
+and puts them in parser scope before parsing Functions in source order. `@func` produces an HIR
+Function; `@prim_func` produces a TIR PrimFunction.
 `specialize` and `converter` register variants and weight converters on an existing HIR Function.
 
 ```python
@@ -97,11 +100,13 @@ type-annotation       ::= tensor
                           | scalar-type
 signature             ::= (name ':' type-annotation (',' name ':' type-annotation)*)?
 return-type           ::= type-annotation
+loop-iterator         ::= 'tile'
+                          | 'range'
 loop-carry-statement  ::= expression '=' expression
                           | 'for' name 'in' expression ':' loop-carry
                           | statement
 loop-carry            ::= (loop-carry-statement (newline loop-carry-statement)*)?
-loop-header           ::= 'for' identifier 'in' identifier '(' (expression | name '=' expression)
+loop-header           ::= 'for' identifier 'in' loop-iterator '(' (expression | name '=' expression)
                           (',' (expression | name '=' expression))* ')' ':' loop-carry
 loop-body             ::= (statement (newline statement)*)?
 for                   ::= 'for' name 'in' expression ':' loop-body
@@ -160,11 +165,6 @@ statement             ::= for
                           | 'pass'
 block                 ::= (statement (newline statement)*)?
 function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' block
-variadic-inputs       ::= '[' (runtime-expression (',' runtime-expression)*)? ']'
-                          | '(' (runtime-expression (',' runtime-expression)*)? ')'
-                          | listcomp
-                          | generatorexp
-                          | expression
 ```
 <!-- parser-grammar:end -->
 
@@ -182,9 +182,6 @@ variadic-inputs       ::= '[' (runtime-expression (',' runtime-expression)*)? ']
 | binary_expression | subscript_index | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
 | binary_expression | subscript_index | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
 | binary_expression | subscript_index | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
-| binary_expression | variadic_input | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
-| binary_expression | variadic_input | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
-| binary_expression | variadic_input | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
 | dim_expr | dim_expr | ShapeDimRule | A shape dimension must be an integer, DimVar, or expression. | src/tilefoundry/parser/ast_pattern.py |
 | dim_expr | layout_extent | ShapeDimRule | A shape dimension must be an integer, DimVar, or expression. | src/tilefoundry/parser/ast_pattern.py |
 | dim_expr | layout_shape | ShapeDimRule | A shape dimension must be an integer, DimVar, or expression. | src/tilefoundry/parser/ast_pattern.py |
@@ -202,21 +199,18 @@ variadic-inputs       ::= '[' (runtime-expression (',' runtime-expression)*)? ']
 | index_slice | subscript_index | TileWindowSliceBoundRule | A tile window cannot be used as a slice bound. | src/tilefoundry/parser/pattern_nodes.py |
 | layout | tensor_optional_slot | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
 | layout | tensor_optional_slot | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
-| module | module_finalization | ModuleFinalizationRule | A module declaration must contain valid unique members and a resolvable entry. | src/tilefoundry/parser/ast_pattern.py |
-| module | module_function | ModuleFunctionRegistrationRule | A validated module function must be recorded in declaration order. | src/tilefoundry/parser/ast_pattern.py |
-| module | module_function | ModuleFunctionValidationRule | A module function must satisfy its root, variant, or converter role before mutation. | src/tilefoundry/parser/ast_pattern.py |
 | op_call | expression | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
 | op_call | expression | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
 | op_call | expression | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
+| op_call | expression | CallVariadicInputFormRule | A variadic call must use one explicit list, tuple, or supported static list comprehension. | src/tilefoundry/parser/pattern_nodes.py |
 | op_call | slice_endpoint | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
 | op_call | slice_endpoint | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
 | op_call | slice_endpoint | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
+| op_call | slice_endpoint | CallVariadicInputFormRule | A variadic call must use one explicit list, tuple, or supported static list comprehension. | src/tilefoundry/parser/pattern_nodes.py |
 | op_call | subscript_index | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
 | op_call | subscript_index | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
 | op_call | subscript_index | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
-| op_call | variadic_input | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
-| op_call | variadic_input | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
-| op_call | variadic_input | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
+| op_call | subscript_index | CallVariadicInputFormRule | A variadic call must use one explicit list, tuple, or supported static list comprehension. | src/tilefoundry/parser/pattern_nodes.py |
 | placed_layout | layout_shape | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
 | placed_layout | layout_shape | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
 | placed_layout | tensor_optional_slot | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
@@ -239,8 +233,6 @@ variadic-inputs       ::= '[' (runtime-expression (',' runtime-expression)*)? ']
 | tensor | subscript_index | TensorPositionRule | A tensor type's storage must be legal for its dialect and position. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | type_annotation | TensorLayoutStorageRule | A tensor type must contain compatible layout and storage values. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | type_annotation | TensorPositionRule | A tensor type's storage must be legal for its dialect and position. | src/tilefoundry/parser/ast_pattern.py |
-| tensor | variadic_input | TensorLayoutStorageRule | A tensor type must contain compatible layout and storage values. | src/tilefoundry/parser/ast_pattern.py |
-| tensor | variadic_input | TensorPositionRule | A tensor type's storage must be legal for its dialect and position. | src/tilefoundry/parser/ast_pattern.py |
 | unary_expression | expression | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
 | unary_expression | expression | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
 | unary_expression | expression | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
@@ -250,11 +242,9 @@ variadic-inputs       ::= '[' (runtime-expression (',' runtime-expression)*)? ']
 | unary_expression | subscript_index | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
 | unary_expression | subscript_index | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
 | unary_expression | subscript_index | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
-| unary_expression | variadic_input | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
-| unary_expression | variadic_input | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
-| unary_expression | variadic_input | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
-| variadic_inputs | variadic_inputs | VariadicInputFormRule | Variadic inputs must use one explicit list, tuple, or supported static list comprehension. | src/tilefoundry/parser/pattern_nodes.py |
-
+| module | module_function | ModuleFunctionValidationRule | A module function must satisfy its root, variant, or converter role before mutation. | src/tilefoundry/parser/ast_pattern.py |
+| module | module_function | ModuleFunctionRegistrationRule | A validated module function must be recorded in declaration order. | src/tilefoundry/parser/ast_pattern.py |
+| module | module_finalization | ModuleFinalizationRule | A module declaration must contain valid unique members and a resolvable entry. | src/tilefoundry/parser/ast_pattern.py |
 <!-- parser-constraints:end -->
 
 ## 3. Implementation Overview
@@ -265,7 +255,7 @@ variadic-inputs       ::= '[' (runtime-expression (',' runtime-expression)*)? ']
 | Executable Pattern Graph | Composes concrete AST elements into the Function root pattern. |
 | Match and Construction | Matches recursively into `AstMatch`, then constructs owner values on return. |
 | Ordered Rules | Validates and normalizes each owner value after construction. |
-| Module Build | Lets Python execute the class body, records Functions, and finalizes the Module. |
+| Module Build | Lets Python execute the class body, collects declarations, resolves child Modules first, then parses Functions in source order and finalizes the Module. |
 | Pattern Visitor | Traverses the same graph to render this section's generated grammar and constraints. |
 
 ```mermaid
@@ -288,7 +278,11 @@ flowchart TD
     TREE --> BACKWARD["construct children, then apply Rules"]
     BACKWARD --> FUNCTION["HIR Function / TIR PrimFunction"]
     FUNCTION --> MODULE{"Module authoring context?"}
-    MODULE -->|yes| FINALIZE["registration / finalization"]
+    MODULE -->|yes| FINALIZE["defer declaration"]
+    FINALIZE --> CHILDREN["attach child Modules and bind module scope"]
+    CHILDREN --> ORDERED["parse roots in source order; then variants/converters"]
+    ORDERED --> BUILT["construct final Module and verify"]
+    BUILT --> RETURN
     MODULE -->|no| RETURN["return standalone result"]
 ```
 

@@ -866,7 +866,7 @@ class Stack(Op):
         axis: attribute; inserted result axis.
     """
 
-    inputs: VariadicList
+    inputs: Tuple[Tensor]
     axis: int
 ```
 

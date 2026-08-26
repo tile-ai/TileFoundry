@@ -29,43 +29,7 @@ def static_dim_value(dim):
         return None
     if isinstance(dim, Constant) and isinstance(dim.value, int) and not isinstance(dim.value, bool):
         return int(dim.value)
-    return _folded_dim_value(dim)
-
-
-_DIM_FOLD = {
-    "ADD": lambda a, b: a + b,
-    "SUB": lambda a, b: a - b,
-    "MUL": lambda a, b: a * b,
-    "FLOOR_DIV": lambda a, b: a // b,
-    "MOD": lambda a, b: a % b,
-    "MIN": min,
-    "MAX": max,
-}
-
-
-def _folded_dim_value(dim):
-    """The value of an integer expression over static operands, else ``None``.
-
-    A body-local name for a constant expression is an IR ``Binary`` and stays
-    one, so ``4096 + 4096`` was not 8192 to anything asking whether a dim is
-    static, while the same arithmetic at module level never reaches the IR. The
-    node is recognised by shape rather than by class -- a two-argument call whose
-    target names one of the kinds above -- because importing the op class here
-    reaches back into ``ir.hir`` while ``ir.types`` is still loading. ``DIV`` is
-    not one of the kinds: an extent is an integer and a true division is not.
-    """
-    args = getattr(dim, "args", None)
-    kind = getattr(getattr(dim, "target", None), "kind", None)
-    name = getattr(kind, "name", None)
-    fold = _DIM_FOLD.get(name) if isinstance(name, str) else None
-    if fold is None or not isinstance(args, tuple) or len(args) != 2:
-        return None
-    left, right = (static_dim_value(arg) for arg in args)
-    if left is None or right is None:
-        return None
-    if name in ("FLOOR_DIV", "MOD") and right == 0:
-        return None
-    return int(fold(left, right))
+    return None
 
 
 def i64_const(value: int) -> "Constant":

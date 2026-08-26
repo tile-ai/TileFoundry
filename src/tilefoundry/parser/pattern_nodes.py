@@ -12,7 +12,7 @@ import enum
 import operator
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, ClassVar, get_args, get_origin
 
 from tilefoundry.ir.constraints import (
     ConstraintProvenance,
@@ -29,7 +29,6 @@ from tilefoundry.ir.core import (
     get_metadata,
     replace_metadata,
 )
-from tilefoundry.ir.core.param_def import VariadicList
 from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
@@ -1856,29 +1855,6 @@ class VariadicInputs:
         object.__setattr__(self, "items", items)
 
 
-@dataclass(frozen=True)
-class VariadicInputFormRule:
-    STATEMENT: ClassVar[str] = (
-        "Variadic inputs must use one explicit list, tuple, or supported static "
-        "list comprehension."
-    )
-
-    def apply(self, value, *, match, context):
-        if match.branch_id == "generator_expression":
-            raise ParseError.from_node(
-                match.node,
-                context,
-                "variadic inputs do not support generator expressions; use a list comprehension",
-            )
-        if match.branch_id == "unsupported":
-            raise ParseError.from_node(
-                match.node,
-                context,
-                "variadic inputs require an explicit list, tuple, or supported list comprehension",
-            )
-        return value
-
-
 class VariadicInputsPattern(ElementPattern):
     element_name = "variadic_inputs"
     syntax = LazyPattern(
@@ -2032,7 +2008,51 @@ class VariadicInputsPattern(ElementPattern):
     def construct(match, children, context):
         return VariadicInputs(tuple(children.values()))
 
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = (VariadicInputFormRule(),)
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+
+def _variadic_item_annotation(param: object) -> object | None:
+    if getattr(param, "kind", None) != "input":
+        return None
+    annotation = getattr(param, "annotation", None)
+    if get_origin(annotation) is not tuple:
+        return None
+    args = get_args(annotation)
+    if len(args) == 1:
+        return args[0]
+    if len(args) == 2 and args[1] is Ellipsis:
+        return args[0]
+    return None
+
+
+@dataclass(frozen=True)
+class CallVariadicInputFormRule:
+    STATEMENT: ClassVar[str] = (
+        "A variadic call must use one explicit list, tuple, or supported static "
+        "list comprehension."
+    )
+
+    def apply(self, value, *, match, context):
+        schema = match.captures.get("schema")
+        if not isinstance(schema, runtime.OpSchema):
+            return value
+        inputs = tuple(param for param in schema.signature if param.kind == "input")
+        if len(inputs) != 1 or _variadic_item_annotation(inputs[0]) is None:
+            return value
+        argument = match.node.args[0]
+        if isinstance(argument, ast.GeneratorExp):
+            raise ParseError.from_node(
+                argument,
+                context,
+                "variadic inputs do not support generator expressions; use a list comprehension",
+            )
+        if not isinstance(argument, (ast.List, ast.Tuple, ast.ListComp)):
+            raise ParseError.from_node(
+                argument,
+                context,
+                "variadic inputs require an explicit list, tuple, or supported list comprehension",
+            )
+        return value
 
 
 class CallPattern(ElementPattern):
@@ -2067,7 +2087,7 @@ class CallPattern(ElementPattern):
     @staticmethod
     def _pattern_for_param(param: object, node: ast.AST) -> AstPattern[Any]:
         annotation = param.annotation
-        if annotation is VariadicList:
+        if _variadic_item_annotation(param) is not None:
             return VariadicInputsPattern()
         if annotation is runtime.TensorType and isinstance(node, ast.Subscript):
             return TensorPattern()
@@ -2085,14 +2105,17 @@ class CallPattern(ElementPattern):
     ) -> tuple[AstChild, ...] | None:
         """Bind a call's arguments to one op schema's inputs and attributes.
 
-        A VariadicList input consumes exactly one explicit sequence and flattens
+        A ``Tuple[T]`` input consumes exactly one explicit sequence and flattens
         its elements into ``Call.args``. Attributes remain keyword-only, so the
         sequence boundary cannot be confused with an attribute position.
         """
         params = tuple(schema.signature)
         inputs = [param for param in params if param.kind == "input"]
         attrs = [param for param in params if param.kind == "attribute"]
-        variadic = len(inputs) == 1 and inputs[0].annotation is VariadicList
+        variadic = (
+            len(inputs) == 1
+            and _variadic_item_annotation(inputs[0]) is not None
+        )
         positional = list(node.args)
         children: list[AstChild] = []
         bound_attrs: set[str] = set()
@@ -2276,6 +2299,7 @@ class CallPattern(ElementPattern):
         raise RuntimeError(f"no constructor branch for {match.branch_id!r}")
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
+        CallVariadicInputFormRule(),
         CallBindingRule(),
         CallTypeInferenceRule(),
         CallExpectedTypeRule(),
@@ -3267,6 +3291,36 @@ class LoopCarryPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
+class LoopIteratorPattern(ElementPattern):
+    element_name = "loop_iterator"
+    syntax = LazyPattern(
+        lambda: ChoicePattern(
+            BranchPattern(
+                "tile",
+                AstNodePattern(
+                    ast.Name,
+                    FieldPattern("id", LiteralPattern("tile")),
+                ),
+                pattern_id="loop.iterator.tile",
+            ),
+            BranchPattern(
+                "range",
+                AstNodePattern(
+                    ast.Name,
+                    FieldPattern("id", LiteralPattern("range")),
+                ),
+                pattern_id="loop.iterator.range",
+            ),
+        )
+    )
+
+    @staticmethod
+    def construct(match, children, context):
+        return match.branch_id
+
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+
 class LoopHeaderPattern(ElementPattern):
     element_name = "loop_header"
     syntax = LazyPattern(
@@ -3280,7 +3334,7 @@ class LoopHeaderPattern(ElementPattern):
                         ast.Call,
                         FieldPattern(
                             "func",
-                            AstNodePattern(ast.Name),
+                            LoopIteratorPattern(),
                         ),
                         FieldPattern("keywords", RepeatPattern(AstNodePattern(ast.keyword))),
                         FieldPattern("args", RepeatPattern(AstNodePattern(ast.expr), minimum=1)),
@@ -3310,12 +3364,6 @@ class LoopHeaderPattern(ElementPattern):
         assert isinstance(node.iter.func, ast.Name)
         kind = node.iter.func.id
         count = len(node.iter.args)
-        if kind not in {"tile", "range"}:
-            return PatternFailure(
-                "loop_header",
-                node.iter.func,
-                "loop iterator must be tile(...) or range(...)",
-            )
         if node.iter.keywords:
             return PatternFailure(
                 "loop_header",
@@ -4175,7 +4223,7 @@ __all__ = [
     "TupleExpressionPattern",
     "TypeAnnotationPattern",
     "UnaryExpressionPattern",
-    "VariadicInputFormRule",
+    "CallVariadicInputFormRule",
     "VariadicInputs",
     "VariadicInputsPattern",
     "WithPattern",

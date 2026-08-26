@@ -223,27 +223,13 @@ def _schedule(
     for expr in values:
         if id(expr) in hosts:
             direct.setdefault(hosts[id(expr)], []).append(expr)
-    held: dict[_Chain, set[int]] = {
-        scope: {id(expr) for expr in exprs} for scope, exprs in direct.items()
-    }
 
     def representative(producer: int, scope: _Chain) -> int | None:
-        """Which occurrence *of this scope* stands for a producer, if any.
-
-        A producer hosted in this scope is its own representative, and one
-        hosted below it is represented by the node one level down that holds
-        it. Anything else -- a producer hosted shallower, or in a chain that
-        does not nest under this scope at all -- has no representative here,
-        and needs none: it ended before this scope's origin, which is what the
-        scope is laid out from. Returning an id this scope does not schedule is
-        what used to happen, and the caller then failed to find it.
-        """
         host = hosts[producer]
         if host == scope:
             return producer
         if len(host) > len(scope) and host[: len(scope)] == scope:
-            candidate = host[len(scope)]
-            return candidate if candidate in held.get(scope, ()) else None
+            return host[len(scope)]
         return None
 
     def held_under(scope: _Chain) -> Placement:
@@ -291,11 +277,7 @@ def _schedule(
                     occurrence.predecessors.add(resolved)
 
             ready = max(
-                (
-                    occurrences[key].end_ns
-                    for key in occurrence.predecessors
-                    if key in occurrences
-                ),
+                (occurrences[key].end_ns for key in occurrence.predecessors),
                 default=origin_ns,
             )
             if not isinstance(expr, Call):

@@ -12,13 +12,13 @@ from __future__ import annotations
 import argparse
 import enum
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, get_args, get_origin
 
 import tilefoundry.ir  # noqa: F401  (populates schema registry as a side effect)
 from tilefoundry.ir.core.expr import Expr
 from tilefoundry.ir.core.op_registry import _schemas_by_dialect_name
 from tilefoundry.ir.core.op_schema import OpSchema
-from tilefoundry.ir.core.param_def import MISSING, ParamDef, VariadicList
+from tilefoundry.ir.core.param_def import MISSING, ParamDef
 from tilefoundry.ir.types import DType
 
 _BUILTIN_TYPE_NAMES: frozenset[str] = frozenset(
@@ -42,7 +42,8 @@ _BUILTIN_TYPE_NAMES: frozenset[str] = frozenset(
 
 def _expr_type_for_input(pd: ParamDef) -> str:
     """Input ParamDefs always carry Expr operands at the DSL surface."""
-    base = "Sequence[Expr]" if pd.annotation is VariadicList else "Expr"
+    args = get_args(pd.annotation) if get_origin(pd.annotation) is tuple else ()
+    base = "Sequence[Expr]" if len(args) == 1 or args[-1:] == (Ellipsis,) else "Expr"
     if pd.optional:
         base = f"{base} | None"
     return base

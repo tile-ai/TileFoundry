@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from typing import get_args, get_origin
+
 import pytest
 
 from tilefoundry import func
 from tilefoundry.dsl import Tensor, tf
 from tilefoundry.ir.core import Call, Constant, Tuple, VerifyError
-from tilefoundry.ir.core.param_def import VariadicList
+from tilefoundry.ir.core.pattern import Tensor as TensorPattern
 from tilefoundry.ir.hir.tensor.concat import Concat
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
@@ -16,8 +18,9 @@ from tilefoundry.parser import ParseError
 
 
 def test_variadic_list_and_tuple_literals_flatten_to_call_args() -> None:
-    assert Concat.inputs.annotation is VariadicList
-    assert Stack.inputs.annotation is VariadicList
+    for annotation in (Concat.inputs.annotation, Stack.inputs.annotation):
+        assert get_origin(annotation) is tuple
+        assert get_args(annotation) == (TensorPattern,)
 
     @func
     def from_list(
