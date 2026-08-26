@@ -1,8 +1,9 @@
-"""The gate every analysis runs behind.
+"""The shared authored-program gate for analysis and scheduling.
 
 An analysis reads inferred types and assumes the authored program holds
 together. Both conditions are established once per public call rather than
-per algorithm, so no family can be the one that forgot.
+per algorithm, so no family can be the one that forgot. The same gate is used
+by scheduling before it makes placement decisions.
 """
 
 from __future__ import annotations
