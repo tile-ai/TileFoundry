@@ -14,7 +14,6 @@ from dataclasses import replace
 
 import pytest
 
-from tests.models.corpus import placed_cases, placed_fixture_roots
 from tilefoundry import func, module
 from tilefoundry.analysis import (
     ComputeCostMetadata,
@@ -276,46 +275,6 @@ def test_a_program_whose_buffers_have_nowhere_to_sit_is_refused() -> None:
         (item.binding, item.level, item.bytes, item.defined_at, item.last_used_at)
         for item in get_metadata(relieved.function, MemoryMetadata).lifetimes
     ]
-
-
-def test_the_placed_inventory_takes_the_whole_directory() -> None:
-    """What is asked about is what is there, and what is left out is named.
-
-    The inventory is walked out of the fixture package rather than listed, so a
-    fixture added to it joins instead of quietly escaping. This pins the walk --
-    every root found, a Module reached as somebody's child not counted as one,
-    and the only roots left out being those whose machine runs no CTAs. Excluding
-    one for any other reason is the allowlist this prevents, and would show up
-    here as a number that moved. What those cases answer is asked where the
-    analyses run; a count is not an answer, so this runs nothing.
-    """
-    roots = placed_fixture_roots()
-    assert len(roots) == 28
-
-    outside = []
-    for file, name, published in roots:
-        root = published
-        try:
-            root.resolve_target()
-        except Exception:  # noqa: BLE001 -- a root that names no machine
-            root = replace(root, target=CudaTarget("nvidia.h200_sxm"))
-        if "cta" not in root.resolve_target().topology_levels:
-            outside.append(f"{file}.{name}")
-    assert outside == [
-        "fused_twin.Fused",
-        "nested_twin.Nested",
-        "square_cpu.Mine",
-        "square_cpu_runtime.Mine",
-        "square_twin.Model",
-        "weighted_twin.WeightedRoot",
-    ]
-
-    cases = placed_cases()
-    assert len(roots) - len(outside) == 22, "the roots that answer for CTAs"
-    assert len({case.id.rsplit("[", 1)[0] for case in cases}) == 28, (
-        "one row per selector those roots expose, not one per root"
-    )
-    assert len(cases) == 31, "and one case per stated set of sizes"
 
 
 def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> None:

@@ -6,16 +6,20 @@ from typing import get_args, get_origin
 
 import pytest
 
-from tilefoundry import func
-from tilefoundry.dsl import Tensor, tf
+from tilefoundry import func, module
+from tilefoundry.dsl import Mesh, Tensor, tf
 from tilefoundry.ir.core import Call, Constant, Tuple, VerifyError
 from tilefoundry.ir.core.pattern import Tensor as TensorPattern
 from tilefoundry.ir.hir.nn.matmul import MatMul
+from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.concat import Concat
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.stack import Stack
+from tilefoundry.ir.types import DType
+from tilefoundry.ir.types.shard import Topology
 from tilefoundry.parser import ParseError
+from tilefoundry.target import CudaTarget
 
 
 def test_matmul_layout_literals_are_parser_checked() -> None:
@@ -205,3 +209,83 @@ def test_unsupported_list_comprehension_shapes_are_named(program: str, message: 
             @func
             def rejected(x: Tensor[(1, 4), "f32"]) -> Tensor[(1, 4), "f32"]:
                 return tf.concat([x for index in range(x)], axis=0)
+
+
+def test_a_python_float_operand_adopts_the_tensor_dtype() -> None:
+    @func
+    def add_literal(x: Tensor[(8,), "bf16"]) -> Tensor[(8,), "bf16"]:
+        return x + 1.0
+
+    assert isinstance(add_literal.body, Call)
+    constant = next(arg for arg in add_literal.body.args if isinstance(arg, Constant))
+    assert constant.type.dtype is DType.bf16
+
+
+def test_a_negated_python_float_stays_weak() -> None:
+    @func
+    def scale(x: Tensor[(8,), "bf16"]) -> Tensor[(8,), "bf16"]:
+        return x * -0.5
+
+    assert isinstance(scale.body, Call)
+    constant = next(arg for arg in scale.body.args if isinstance(arg, Constant))
+    assert (constant.type.dtype, constant.value) == (DType.bf16, -0.5)
+
+
+def test_a_python_integer_operand_is_not_adopted() -> None:
+    with pytest.raises(VerifyError, match="dtype mismatch \\(bf16 vs i64\\)"):
+
+        @func
+        def add_integer(x: Tensor[(8,), "bf16"]) -> Tensor[(8,), "bf16"]:
+            return x + 1
+
+
+def test_two_tensor_operands_are_never_promoted() -> None:
+    with pytest.raises(VerifyError, match="dtype mismatch \\(bf16 vs f32\\)"):
+
+        @func
+        def mixed(x: Tensor[(8,), "bf16"]) -> Tensor[(8,), "f32"]:
+            return x + tf.cast(x, "f32")
+
+
+def test_the_at_operator_builds_a_matmul() -> None:
+    @func
+    def infix(a: Tensor[(2, 4), "bf16"], b: Tensor[(4, 3), "bf16"]) -> Tensor[(2, 3), "bf16"]:
+        return a @ b
+
+    @func
+    def spelled(a: Tensor[(2, 4), "bf16"], b: Tensor[(4, 3), "bf16"]) -> Tensor[(2, 3), "bf16"]:
+        return tf.matmul(a, b)
+
+    assert isinstance(infix.body, Call)
+    assert isinstance(infix.body.target, MatMul)
+    assert infix.body.type == spelled.body.type
+
+
+def test_an_unresolved_callee_is_named() -> None:
+    with pytest.raises(VerifyError, match="unsupported call 'tf.no_such_op'"):
+
+        @func
+        def missing(x: Tensor[(8,), "bf16"]) -> Tensor[(8,), "bf16"]:
+            return tf.no_such_op(x, x)
+
+
+def test_placement_at_and_matmul_at_coexist_in_one_function() -> None:
+    """The two spellings of ``@`` are told apart by position, not by shape."""
+
+    @module(
+        entry="placed_matmul",
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 2),),
+    )
+    class PlacedMatMul:
+        @func
+        def placed_matmul(x: Tensor[(2, 4), "bf16"], b: Tensor[(4, 3), "bf16"]):
+            with Mesh(("cta",), (2,), ("tile",)) as mesh:
+                x_local = tf.reshard(x, (2 @ mesh.tile, 4), "rmem")
+                b_local = tf.reshard(b, (4, 3), "rmem")
+                return x_local @ b_local
+
+    body = PlacedMatMul.entry_function().body
+    assert isinstance(body, Call)
+    assert isinstance(body.target, MatMul)
+    assert any(isinstance(argument.target, Reshard) for argument in body.args)

@@ -13,7 +13,7 @@ import torch
 
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Constant, Op
+from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
@@ -128,31 +128,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     lhs_ty = ctx.type_of(call.args[0])
     rhs_ty = ctx.type_of(call.args[1])
     if lhs_ty.dtype != rhs_ty.dtype:
-        number = next(
-            (
-                arg
-                for arg in call.args
-                if isinstance(arg, Constant)
-                and isinstance(arg.value, (bool, int, float))
-            ),
-            None,
-        )
-        if isinstance(getattr(number, "value", None), int) and not isinstance(
-            number.value, bool
-        ):
-            number_dtype = ctx.type_of(number).dtype.name
-            advice = (
-                f" A Python integer you wrote has dtype {number_dtype}; write 1.0 "
-                f"to let a Python float adopt the other operand's float dtype, "
-                f"or tf.cast one side explicitly."
-            )
-        else:
-            advice = " Use tf.cast one side explicitly."
         ctx.error(
             call,
             f"Binary {op.kind.name}: dtype mismatch "
-            f"({lhs_ty.dtype.name} vs {rhs_ty.dtype.name}); tensor "
-            f"operands are never promoted for you.{advice} "
+            f"({lhs_ty.dtype.name} vs {rhs_ty.dtype.name}); tensor operands are "
+            f"never promoted. A Python float adopts the other operand's float "
+            f"dtype; a Python integer does not. "
             f"See `tilefoundry spec dsl binary`",
         )
     if op.kind in _LOGICAL_KINDS and lhs_ty.dtype != DType.bool:

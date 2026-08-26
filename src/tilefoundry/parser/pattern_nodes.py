@@ -2114,6 +2114,17 @@ class CallVariadicInputFormRule:
         return value
 
 
+def _unresolved_callee_detail(node: ast.Call) -> str:
+    """Name the callee a call could not resolve to an authored Op or Function."""
+    try:
+        callee = ast.unparse(node.func)
+    except (TypeError, ValueError):
+        callee = type(node.func).__name__
+    keywords = [keyword.arg or "**" for keyword in node.keywords]
+    stated = f"keywords {keywords!r}" if keywords else "no keywords"
+    return f"unsupported call {callee!r} ({len(node.args)} positional, {stated})"
+
+
 class CallPattern(ElementPattern):
     element_name = "op_call"
     syntax = LazyPattern(
@@ -2244,13 +2255,15 @@ class CallPattern(ElementPattern):
         return tuple(children)
 
     @staticmethod
-    def _bind(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
+    def _bind(
+        node: object, context: MatchContext, matched: AstMatch[Any]
+    ) -> AstMatch[Any] | PatternFailure | None:
         assert isinstance(node, ast.Call)
         module_owner = None
         try:
             callee = _resolve_reference(node.func, context)
         except ParseError:
-            return None
+            return PatternFailure("op_call", node.func, _unresolved_callee_detail(node))
         if isinstance(callee, runtime.Module):
             module_owner = callee
             if node.keywords:
@@ -2287,7 +2300,7 @@ class CallPattern(ElementPattern):
             callee if isinstance(callee, runtime.OpSchema) else getattr(callee, "_op_schema", None)
         )
         if not isinstance(schema, runtime.OpSchema):
-            return None
+            return PatternFailure("op_call", node.func, _unresolved_callee_detail(node))
         children = CallPattern._schema_children(node, schema, context)
         if children is None:
             return None
@@ -2401,6 +2414,13 @@ def _expression_operator_pattern(operator_type: type[ast.AST]) -> ChoicePattern:
     )
 
 
+_CALL_RESULT_RULES: tuple[AstRule[Any], ...] = (
+    CallBindingRule(),
+    CallTypeInferenceRule(),
+    CallExpectedTypeRule(),
+)
+
+
 class MatMulExpressionPattern(ElementPattern):
     element_name = "matmul_expression"
     syntax = LazyPattern(
@@ -2435,12 +2455,7 @@ class MatMulExpressionPattern(ElementPattern):
             args=args,
         )
 
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = (
-        WeakScalarDTypeRule(),
-        CallBindingRule(),
-        CallTypeInferenceRule(),
-        CallExpectedTypeRule(),
-    )
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = _CALL_RESULT_RULES
 
 
 class BinaryExpressionPattern(ElementPattern):

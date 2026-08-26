@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
+from tests._source import import_dsl
 from tilefoundry import func
 from tilefoundry.dsl import Mesh, Tensor, Topology
 from tilefoundry.inspection import as_script
@@ -28,3 +31,33 @@ def test_a_nested_block_does_not_gain_function_docstring_semantics() -> None:
             with Mesh(("cta",), layout=(1,), names=("unit",)) as _mesh:
                 """A string in a with body remains an ordinary statement."""
                 return x
+
+
+@pytest.mark.parametrize(
+    ("iterator", "expected"),
+    (
+        ("tile(10)", "tile(extent) is not supported; use range(extent)"),
+        ("tile(1, 2, 3)", "tile() takes 2 arguments (extent, step), got 3"),
+        ("range(1, 2, 3, 4)", "range() takes 1 to 3 arguments, got 4"),
+        ("steps(1, 2)", "loop iterator must be tile(...) or range(...)"),
+    ),
+)
+def test_a_loop_iterator_states_why_its_arity_is_invalid(
+    iterator: str, expected: str
+) -> None:
+    """The shape-exact syntax must not reduce these to a bare match failure.
+
+    Encoding each iterator's arity is what lets the generated grammar show the
+    accepted forms, so the reason is stated before the shape rejects.
+    """
+    source = f'''@func
+def looping(x: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
+    out = tf.add(seed, seed)
+    for row in {iterator}:
+        out = tf.add(x[row, :], seed)
+    return out
+'''
+    with pytest.raises(ParseError, match=re.escape(expected)):
+        import_dsl(
+            'from tilefoundry import func\nfrom tilefoundry.dsl import Tensor, tf\n\n' + source
+        )
