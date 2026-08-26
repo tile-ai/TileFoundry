@@ -167,7 +167,7 @@ def derive_output_shard_layout(
 ### 3.3 Output storage and mesh/layout compatibility
 
 - constraints:
-  - A symmetric multi-input op (`Binary`, `MatMul`, `Concat`, `Stack`, `Mma`)
+  - A symmetric multi-input op (`Binary`, `MatMul`, `Concat`, `Stack`)
     resolves output storage by anchoring on the concrete residency among its
     operands ([types §2](./types.md#2-tensortype)); the rule is independent of
     operand order.

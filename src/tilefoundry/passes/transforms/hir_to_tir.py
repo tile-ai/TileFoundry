@@ -14,12 +14,6 @@ from typing import Union
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, locate_dim_var
-from tilefoundry.ir.hir.cuda.nn.mma import (
-    Mma_SM80_16x8x16 as HirMmaSM80_16x8x16,
-)
-from tilefoundry.ir.hir.cuda.nn.mma import (
-    Wgmma_SM90_64x128x16 as HirWgmma_SM90,
-)
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
@@ -1014,16 +1008,6 @@ def _lower_reshard(ctx: "_Lowerer", target, expr) -> Var:
 
 
 
-
-
-@register_hir_lowering(HirMmaSM80_16x8x16)
-@register_hir_lowering(HirWgmma_SM90)
-def _lower_mma(ctx: "_Lowerer", target, expr) -> Var:
-    name = type(target).__name__
-    raise ValueError(
-        f"HirToTirPass: {name} HIR compile route is unsupported; use the "
-        "independent handwritten TIR MMA atom/runtime surface"
-    )
 
 
 @register_hir_lowering(HirReLU)

@@ -251,6 +251,17 @@ class RenderVisitor:
                 )
             return self._list_pattern(values)
         if node_type is ast.Call:
+            args = fields.get("args")
+            keywords = fields.get("keywords")
+            if not isinstance(args, RepeatPattern) or not isinstance(keywords, RepeatPattern):
+                arguments = _concat(
+                    self._list_pattern(args) if args is not None else None,
+                    self._list_pattern(keywords) if keywords is not None else None,
+                )
+                return _concat(
+                    self._field(fields, "func", "callee"),
+                    _delimited("(", arguments, ")"),
+                )
             argument_patterns: list[_Expr] = []
             minimum = 0
             for name in ("args", "keywords"):
@@ -368,6 +379,14 @@ class RenderVisitor:
             ast.FloorDiv: "//",
             ast.Mod: "%",
             ast.Pow: "**",
+            ast.Eq: "==",
+            ast.NotEq: "!=",
+            ast.Lt: "<",
+            ast.LtE: "<=",
+            ast.Gt: ">",
+            ast.GtE: ">=",
+            ast.And: "and",
+            ast.Or: "or",
             ast.UAdd: "+",
             ast.USub: "-",
             ast.Not: "not",

@@ -256,9 +256,9 @@ no return-tensor form. After this pass, `PassManager` reruns HIR
 Per-op lowering is **registry-dispatched**, not a hand-written `isinstance`
 chain ([§4](#4-transform-pass-idiom)): each HIR op registers its lowering handler keyed by op class
 (`register_hir_lowering(OpClass)`), and the pass looks the handler up by
-`type(call.target)`. A target-owned op (e.g. the CUDA `Mma`) registers its own
-lowering, so the pass core depends on the registry contract, not on importing
-target-specific op classes.
+`type(call.target)`. An op with a lowering-specific contract (e.g. HIR
+`Reshard`) registers its own lowering, so the pass core depends on the registry
+contract, not on importing target-specific op classes.
 
 A handler is a free function `handler(ctx, target, expr) -> Var`, where
 `ctx` is the lowering context and `target` is the dispatched `Op`
@@ -308,19 +308,6 @@ TIR shape based on whether `storage` is provided:
   `Evaluate(Copy, (TensorView(x, layout), dst))` — allocate
   a plain tensor (no `ShardLayout`) and copy from the shard view
   into the plain storage.
-
-#### CUDA HIR MMA refusal
-
-`HirToTirPass` MUST reject both `Mma_SM80_16x8x16` and
-`Wgmma_SM90_64x128x16` by their concrete HIR Op name before lowering either
-operand or emitting allocations, copies, fills, or `TirMma`. Their logical HIR
-value/type/cost models are available to evaluation and Analyze only; there is
-no HIR compile route.
-
-The independent handwritten `T.cuda.mma` atom and CUDA runtime surface remains
-available and is specified by [tir §2.3](./tir.md#23-tir-ops). This pass MUST
-NOT translate HIR fragments into that surface, modify its atom layouts, or rely
-on CUDA codegen's legacy `atom=None` fallback.
 
 #### Dispatch lowering
 

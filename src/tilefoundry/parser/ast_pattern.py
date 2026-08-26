@@ -108,11 +108,61 @@ def _pattern_label(pattern: object) -> str:
     return type(pattern).__name__
 
 
+def _runtime_expression_detail(node: object) -> str:
+    if isinstance(node, ast.Call):
+        try:
+            callee = ast.unparse(node.func)
+        except (TypeError, ValueError):
+            callee = type(node.func).__name__
+        positional = f"{len(node.args)} positional"
+        keywords = [keyword.arg or "**" for keyword in node.keywords]
+        keyword_detail = f"keywords {keywords!r}" if keywords else "no keywords"
+        return f"unsupported call {callee!r} ({positional}, {keyword_detail})"
+    if isinstance(node, ast.Constant):
+        return f"unsupported {type(node.value).__name__} literal"
+    if isinstance(node, ast.BinOp):
+        return f"unsupported binary operator {type(node.op).__name__}"
+    if isinstance(node, ast.UnaryOp):
+        return f"unsupported unary operator {type(node.op).__name__}"
+    if isinstance(node, ast.Compare):
+        operators = ", ".join(type(operator).__name__ for operator in node.ops)
+        return f"unsupported comparison operator sequence [{operators}]"
+    node_type = type(node).__name__
+    if isinstance(node, ast.AST):
+        try:
+            rendered = " ".join(ast.unparse(node).split())
+        except (TypeError, ValueError):
+            rendered = ""
+        if rendered:
+            if len(rendered) > 80:
+                rendered = rendered[:77] + "..."
+            return f"unsupported {node_type} syntax {rendered!r}"
+    return f"unsupported {node_type} syntax"
+
+
+def _nested_runtime_expression_detail(failure: PatternFailure) -> str | None:
+    for cause in failure.causes:
+        detail = _nested_runtime_expression_detail(cause)
+        if detail is not None:
+            return detail
+    if (
+        failure.pattern_id == "runtime_expression"
+        and failure.detail != "nested pattern failed"
+    ):
+        return failure.detail
+    return None
+
+
 def _wrap_failure(pattern: object, node: object, failure: PatternFailure) -> PatternFailure:
+    label = _pattern_label(pattern)
     return PatternFailure(
-        pattern_id=_pattern_label(pattern),
+        pattern_id=label,
         node=node,
-        detail="nested pattern failed",
+        detail=(
+            _nested_runtime_expression_detail(failure) or _runtime_expression_detail(node)
+            if label == "runtime_expression"
+            else "nested pattern failed"
+        ),
         causes=(failure,),
     )
 
@@ -1661,7 +1711,7 @@ def _constant(value):
     elif isinstance(value, int):
         dtype = runtime.DType.i64
     elif isinstance(value, float):
-        dtype = runtime.DType.f32
+        return runtime.Constant(type=None, value=value)
     else:
         raise TypeError(type(value).__name__)
     return runtime.Constant(

@@ -290,7 +290,7 @@ def test_the_placed_inventory_takes_the_whole_directory() -> None:
     analyses run; a count is not an answer, so this runs nothing.
     """
     roots = placed_fixture_roots()
-    assert len(roots) == 29
+    assert len(roots) == 28
 
     outside = []
     for file, name, published in roots:
@@ -311,11 +311,11 @@ def test_the_placed_inventory_takes_the_whole_directory() -> None:
     ]
 
     cases = placed_cases()
-    assert len(roots) - len(outside) == 23, "the roots that answer for CTAs"
-    assert len({case.id.rsplit("[", 1)[0] for case in cases}) == 29, (
+    assert len(roots) - len(outside) == 22, "the roots that answer for CTAs"
+    assert len({case.id.rsplit("[", 1)[0] for case in cases}) == 28, (
         "one row per selector those roots expose, not one per root"
     )
-    assert len(cases) == 32, "and one case per stated set of sizes"
+    assert len(cases) == 31, "and one case per stated set of sizes"
 
 
 def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> None:

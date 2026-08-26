@@ -147,11 +147,12 @@ compilation target nests as `ir/{dialect}/{target}/{category}/<name>.py`;
 target-neutral abstractions stay at `ir/{dialect}/{category}/`. For
 example the whole MMA surface is target-owned — the `Mma` op, the
 `MmaOpSpec` / `MmaAtom` descriptors, the CUDA SM80 instruction spec, and its
-fragment layouts all live under `ir/tir/cuda/nn/` (`mma.py` + `mma_atom.py`),
-and the HIR per-shape `Mma_SM80_*` / `Wgmma_SM90_*` ops under
-`ir/hir/cuda/nn/mma.py` — because an MMA instruction fixes a concrete hardware
-op. (`codegen/` and `runtime/` are **target-first** instead — their primary
-axis is the target — so each tree is organized by its own primary axis.)
+fragment layouts all live under `ir/tir/cuda/nn/` (`mma.py` + `mma_atom.py`).
+The backend-bound construction stays in TIR: HIR is the checking reference
+side, and carrying the instruction name in that reference would make two GPU
+targets require different HIR references. (`codegen/` and `runtime/` are
+**target-first** instead — their primary axis is the target — so each tree is
+organized by its own primary axis.)
 
 **Rule 2 — one (node, target) codegen = one file.** Each handler
 lives at `codegen/<target>/tir/<category>/<name>.py`. Stmt emitters,

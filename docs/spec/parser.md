@@ -132,9 +132,11 @@ subscript-index       ::= '(' ((index-slice | index-endpoint) (',' (index-slice 
                           | index-slice
                           | index-endpoint
 subscript-expression  ::= runtime-expression '[' subscript-index ']'
-binary-expression     ::= runtime-expression binary-op runtime-expression
-                          | runtime-expression comparison-op runtime-expression
-                          | runtime-expression boolean-op runtime-expression
+matmul-expression     ::= runtime-expression '@' runtime-expression
+binary-expression     ::= runtime-expression ('+' | '-' | '*' | '/' | '//' | '%') runtime-expression
+                          | runtime-expression ('==' | '!=' | '<' | '<=' | '>' | '>=')
+                            runtime-expression
+                          | runtime-expression ('and' | 'or') runtime-expression
 unary-expression      ::= unary-op runtime-expression
 name                  ::= identifier
 constant              ::= boolean-literal
@@ -144,6 +146,7 @@ tuple-expression      ::= '(' (runtime-expression (',' runtime-expression)*)? ')
 runtime-expression    ::= op-call
                           | launch
                           | subscript-expression
+                          | matmul-expression
                           | binary-expression
                           | unary-expression
                           | mesh-coordinate
@@ -176,6 +179,7 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | binary_expression | expression, slice_endpoint, subscript_index | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
 | binary_expression | expression, slice_endpoint, subscript_index | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
 | binary_expression | expression, slice_endpoint, subscript_index | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
+| binary_expression | expression, slice_endpoint, subscript_index | WeakScalarDTypeRule | A Python float Binary operand adopts a typed floating-point peer's dtype before type inference; Python integers remain i64. | src/tilefoundry/parser/pattern_nodes.py |
 | dim_expr | dim_expr, layout_extent, layout_shape, tensor_dim_expr, tensor_optional_slot, tensor_shape | ShapeDimRule | A shape dimension must be an integer, DimVar, or expression. | src/tilefoundry/parser/ast_pattern.py |
 | dtype | tensor_dtype | CanonicalDTypeRule | A dtype must resolve to a canonical DType. | src/tilefoundry/parser/ast_pattern.py |
 | explicit_layout | tensor_optional_slot | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
@@ -188,6 +192,10 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | index_slice | subscript_index | TileWindowSliceBoundRule | A tile window cannot be used as a slice bound. | src/tilefoundry/parser/pattern_nodes.py |
 | layout | tensor_optional_slot | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
 | layout | tensor_optional_slot | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
+| matmul_expression | expression, slice_endpoint, subscript_index | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
+| matmul_expression | expression, slice_endpoint, subscript_index | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
+| matmul_expression | expression, slice_endpoint, subscript_index | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
+| matmul_expression | expression, slice_endpoint, subscript_index | WeakScalarDTypeRule | A Python float Binary operand adopts a typed floating-point peer's dtype before type inference; Python integers remain i64. | src/tilefoundry/parser/pattern_nodes.py |
 | module | module_finalization | ModuleFinalizationRule | A module declaration must contain valid unique members and a resolvable entry. | src/tilefoundry/parser/ast_pattern.py |
 | module | module_function | ModuleFunctionRegistrationRule | A validated module function must be recorded in declaration order. | src/tilefoundry/parser/ast_pattern.py |
 | module | module_function | ModuleFunctionValidationRule | A module function must satisfy its root, variant, or converter role before mutation. | src/tilefoundry/parser/ast_pattern.py |
@@ -195,6 +203,7 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | op_call | expression, slice_endpoint, subscript_index | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
 | op_call | expression, slice_endpoint, subscript_index | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
 | op_call | expression, slice_endpoint, subscript_index | CallVariadicInputFormRule | A variadic call must use one explicit list, tuple, or supported static list comprehension. | src/tilefoundry/parser/pattern_nodes.py |
+| op_call | expression, slice_endpoint, subscript_index | WeakScalarDTypeRule | A Python float Binary operand adopts a typed floating-point peer's dtype before type inference; Python integers remain i64. | src/tilefoundry/parser/pattern_nodes.py |
 | placed_layout | layout_shape, tensor_optional_slot, tensor_shape | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
 | placed_layout | layout_shape, tensor_optional_slot, tensor_shape | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
 | plain_layout | tensor_optional_slot | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
@@ -203,9 +212,9 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | storage | tensor_optional_slot | StorageValueRule | Storage must resolve to a StorageKind. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | annotation, expression, slice_endpoint, subscript_index, type_annotation | TensorLayoutStorageRule | A tensor type must contain compatible layout and storage values. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | annotation, expression, slice_endpoint, subscript_index, type_annotation | TensorPositionRule | A tensor type's storage must be legal for its dialect and position. | src/tilefoundry/parser/ast_pattern.py |
-| unary_expression | expression, slice_endpoint, subscript_index | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
 | unary_expression | expression, slice_endpoint, subscript_index | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
 | unary_expression | expression, slice_endpoint, subscript_index | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
+| unary_expression | expression, slice_endpoint, subscript_index | WeakUnaryBindingRule | A unary expression must bind a Call tuple, except that negating a weak Python float preserves a weak Constant. | src/tilefoundry/parser/pattern_nodes.py |
 <!-- parser-constraints:end -->
 
 ## 3. Implementation Overview
