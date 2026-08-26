@@ -6,7 +6,7 @@ import torch
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
+from tilefoundry.ir.core.param_def import ParamDef, VariadicList
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
@@ -38,9 +38,7 @@ from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_lay
 class Stack(Op):
     """Variadic input op. See Concat for encoding rationale."""
 
-    is_variadic: ClassVar[bool] = True
-
-    inputs = ParamDef(kind="input", pattern=Tensor)
+    inputs = ParamDef(kind="input", annotation=VariadicList, pattern=Tensor)
     axis = ParamDef(kind="attribute", annotation=int)
 
 

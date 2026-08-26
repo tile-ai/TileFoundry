@@ -258,8 +258,8 @@ class MiniCPM3_4B_DecoderLayer:
         k_rope_b = tf.repeat_interleave(k_rope_e, repeats=_H, axis=2)
 
         # Step 6: reassemble nope + rope, each back in its original slot.
-        query = tf.concat(q_nope, q_rope_e, axis=-1)
-        k_new = tf.concat(k_nope, k_rope_b, axis=-1)
+        query = tf.concat([q_nope, q_rope_e], axis=-1)
+        k_new = tf.concat([k_nope, k_rope_b], axis=-1)
 
         # Step 7: attend the cache and the token itself, then project out.
         q_s = query * scale

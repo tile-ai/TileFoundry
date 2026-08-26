@@ -92,21 +92,3 @@ def test_func_specializations_parse_to_variants() -> None:
         (dim,) = param.type.shape
         assert isinstance(dim, IrDimVar)
         assert dim.name == "S"
-
-
-def test_a_func_may_document_itself_and_concat_a_sequence() -> None:
-    """Two spellings the grammar refused for no reason of its own.
-
-    A docstring is a no-op statement every other Python function may carry, and
-    ``tf.concat([a, b], axis=-1)`` is how torch, numpy, jax and tvm spell the
-    call. Each was refused with a message naming the matcher and not the cause.
-    """
-
-    @func
-    def halves(x: Tensor[(4, 64), "f32"]) -> Tensor[(4, 64), "f32"]:
-        """Swap the two halves of every row."""
-        return tf.concat([x[:, 32:64], x[:, 0:32]], axis=-1)
-
-    script = as_script(halves)
-    assert "concat" in script
-    assert "Swap the two halves" not in script

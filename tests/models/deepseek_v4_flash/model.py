@@ -279,9 +279,9 @@ def _submodules(config: DSV4Config):
             kv_o1 = tf.cast(kv_o1_f32, dtype="bf16")
             kv_o0 = tf.reshape(kv_o0, new_shape=(1, 1, 1, config.rope_half, 1))
             kv_o1 = tf.reshape(kv_o1, new_shape=(1, 1, 1, config.rope_half, 1))
-            kv_interleaved = tf.concat(kv_o0, kv_o1, axis=-1)
+            kv_interleaved = tf.concat([kv_o0, kv_o1], axis=-1)
             kv_rope_out = tf.reshape(kv_interleaved, new_shape=(1, 1, 1, config.rope_dim))
-            return tf.concat(kv_nope_q, kv_rope_out, axis=-1)
+            return tf.concat([kv_nope_q, kv_rope_out], axis=-1)
 
         @mla_kv_update.converter("w_kv")
         def _(
@@ -336,9 +336,9 @@ def _submodules(config: DSV4Config):
             q_o1 = tf.cast(q_o1_f32, dtype="bf16")
             q_o0 = tf.reshape(q_o0, new_shape=(1, 1, config.n_heads, config.rope_half, 1))
             q_o1 = tf.reshape(q_o1, new_shape=(1, 1, config.n_heads, config.rope_half, 1))
-            q_interleaved = tf.concat(q_o0, q_o1, axis=-1)
+            q_interleaved = tf.concat([q_o0, q_o1], axis=-1)
             q_rope_out = tf.reshape(q_interleaved, new_shape=(1, 1, config.n_heads, config.rope_dim))
-            q_final = tf.concat(q_nope, q_rope_out, axis=-1)
+            q_final = tf.concat([q_nope, q_rope_out], axis=-1)
 
             # MQA repeat_interleave to n_heads, for the cache and the new token
             # alike; the KV latent serves as both K and V (no separate V projection).
@@ -395,11 +395,11 @@ def _submodules(config: DSV4Config):
             ctx_o1 = tf.cast(ctx_o1_f32, dtype="bf16")
             ctx_o0 = tf.reshape(ctx_o0, new_shape=(1, 1, config.n_heads, config.rope_half, 1))
             ctx_o1 = tf.reshape(ctx_o1, new_shape=(1, 1, config.n_heads, config.rope_half, 1))
-            ctx_interleaved = tf.concat(ctx_o0, ctx_o1, axis=-1)
+            ctx_interleaved = tf.concat([ctx_o0, ctx_o1], axis=-1)
             ctx_rope_out = tf.reshape(
                 ctx_interleaved, new_shape=(1, 1, config.n_heads, config.rope_dim),
             )
-            ctx_final = tf.concat(ctx_nope, ctx_rope_out, axis=-1)
+            ctx_final = tf.concat([ctx_nope, ctx_rope_out], axis=-1)
             o_flat = tf.reshape(ctx_final, new_shape=(1, 1, config.q_proj))
 
             # Grouped low-rank O projection: o_flat's last axis is a contiguous

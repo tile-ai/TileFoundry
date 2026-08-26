@@ -13,7 +13,7 @@ from typing import Any, Callable, overload
 
 from tilefoundry.ir.core.op_registry import _VALID_DIALECTS, _register_schema
 from tilefoundry.ir.core.op_schema import OpSchema
-from tilefoundry.ir.core.param_def import ParamDef, collect_param_defs
+from tilefoundry.ir.core.param_def import ParamDef, VariadicList, collect_param_defs
 
 
 def _derive_dialect_and_category(module: str) -> tuple[str | None, str | None]:
@@ -88,6 +88,12 @@ def _build_schema(
     """Build an OpSchema for ``cls`` (no registration side-effect)."""
     final_dialect, final_category, final_name = _validate_args(cls, dialect, category, name)
     signature = collect_param_defs(cls)
+    inputs = tuple(param for param in signature if param.kind == "input")
+    variadic = tuple(param for param in inputs if param.annotation is VariadicList)
+    if variadic and (len(inputs) != 1 or len(variadic) != 1):
+        raise ValueError(
+            f"@register_op({cls.__name__}): VariadicList must annotate the sole input ParamDef"
+        )
     return OpSchema(
         name=final_name,
         dialect=final_dialect,

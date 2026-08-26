@@ -474,11 +474,15 @@ class RenderVisitor:
             break_on_hyphens=False,
         ) or [prefix.rstrip()]
 
-    def render(self, root: ElementPattern[Any]) -> str:
+    def render(
+        self, root: ElementPattern[Any], extra_roots: tuple[ElementPattern[Any], ...] = ()
+    ) -> str:
         root_name = root.element_name
         if not root_name:
             raise TypeError(f"{type(root).__name__} has no explicit element_name")
         self._element(root)
+        for extra_root in extra_roots:
+            self._element(extra_root)
         width = max(len(name) for name, _ in self._productions)
         lines = [
             f"; root: {_grammar_name(root_name)}",
@@ -492,12 +496,16 @@ class RenderVisitor:
         return "\n".join(lines)
 
 
-def render_grammar(root: ElementPattern[Any] | None = None) -> str:
+def render_grammar(
+    root: ElementPattern[Any] | None = None,
+    *,
+    extra_roots: tuple[ElementPattern[Any], ...] = (),
+) -> str:
     if root is None:
         from .pattern_nodes import FunctionPattern
 
         root = FunctionPattern()
-    return RenderVisitor().render(root)
+    return RenderVisitor().render(root, extra_roots)
 
 
 __all__ = ["RenderVisitor", "render_grammar"]

@@ -342,8 +342,8 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             k_rot_h = tf.repeat_interleave(k_rot, repeats=_H, axis=2)
             q_rot_r, _kr = tf.rope(q_rot, q_rot, cos_cache, sin_cache, pos_ids)
 
-            q_full = tf.concat(q_pass, q_rot_r, axis=-1)
-            k_new = tf.concat(k_nope, k_rot_h, axis=-1)
+            q_full = tf.concat([q_pass, q_rot_r], axis=-1)
+            k_new = tf.concat([k_nope, k_rot_h], axis=-1)
 
             # Online softmax over two differently shaped score groups: the cache and
             # the token itself. No mask -- one query at the end of the context may
@@ -404,7 +404,7 @@ def build_kimi_linear_48b_a3b(config: KimiLinearConfig):
             # the convolution is a weighted sum over the window's time axis rather
             # than a sliding op. Returns the activation and the window to store next,
             # which is this window with its oldest position dropped.
-            window = tf.concat(conv_state, x, axis=1)
+            window = tf.concat([conv_state, x], axis=1)
             acc = tf.reduce(
                 window
                 * tf.reshape(

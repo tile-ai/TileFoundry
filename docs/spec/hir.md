@@ -660,13 +660,18 @@ their input when it states one. An input with `layout=None` produces a view with
 
 ##### Concat
 
-`Concat(inputs..., axis=a)` materializes a rank-preserving tensor by joining
+`Concat([inputs...], axis=a)` materializes a rank-preserving tensor by joining
 each input segment along `a`. All inputs MUST have one common rank and dtype,
 and every non-concatenated dimension MUST match. Negative `axis` values resolve
 against that rank. The output's concatenated extent is the sum of the input
 extents; every input access map is defined only on its segment and subtracts
 the preceding segments' extent from that axis, while the output map is the
 identity.
+
+The authored `inputs` value MUST be one explicit list, tuple, or supported
+static list comprehension. Its Tensor elements flatten into `Call.args` in
+source order; direct positional tensors and implicit iterable expansion are not
+part of this surface.
 
 Type inference derives fresh output ownership from those access maps. A
 `Split` on a non-concatenated axis MAY propagate when shared ownership
@@ -859,15 +864,15 @@ class Stack(Op):
     Attributes:
         inputs: input; variadic tensors to stack.
         axis: attribute; inserted result axis.
-        is_variadic: attribute; Whether the input parameter consumes all args.
     """
 
-    inputs: Tensor
+    inputs: VariadicList
     axis: int
-    is_variadic: ClassVar[bool] = True
 ```
 
 - constraints:
+  - The authored `inputs` value MUST be one explicit list, tuple, or supported
+    static list comprehension. Its Tensor elements flatten into `Call.args`.
   - At least one input is required; every input MUST have the same shape and
     dtype. `axis` MUST resolve in `[-rank-1, rank]`.
   - The operation materializes one distinct result. The inserted axis is local

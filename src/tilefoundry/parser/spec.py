@@ -30,7 +30,7 @@ from .ast_pattern import (
     SequencePattern,
 )
 from .grammar_render import render_grammar
-from .pattern_nodes import FunctionPattern
+from .pattern_nodes import FunctionPattern, VariadicInputsPattern
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
@@ -122,9 +122,11 @@ class _RuleVisitor:
         return tuple(sorted(self._rows))
 
 
-def _collect_rule_rows(root: ElementPattern[Any]) -> tuple[RuleRow, ...]:
+def _collect_rule_rows(
+    root: ElementPattern[Any], situation: str = "function"
+) -> tuple[RuleRow, ...]:
     visitor = _RuleVisitor()
-    visitor.visit(root, "function")
+    visitor.visit(root, situation)
     return visitor.rows()
 
 
@@ -146,12 +148,21 @@ def _escape_cell(value: str) -> str:
 
 def render_spec_content() -> str:
     root = FunctionPattern()
-    rows = (*_collect_rule_rows(root), *_collect_module_rule_rows())
+    variadic_inputs = VariadicInputsPattern()
+    rows = tuple(
+        sorted(
+            {
+                *_collect_rule_rows(root),
+                *_collect_rule_rows(variadic_inputs, "variadic_inputs"),
+                *_collect_module_rule_rows(),
+            }
+        )
+    )
     lines = [
         "# Parser Grammar and Constraints",
         "",
         "```ebnf",
-        render_grammar(root),
+        render_grammar(root, extra_roots=(variadic_inputs,)),
         "```",
         "",
         "| Owner | Situation | Rule | Statement | Source |",

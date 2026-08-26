@@ -1237,6 +1237,7 @@ class MatchContext:
         binding_name: str | None = None,
         expected_type: object | None = None,
         values: Mapping[str, object] | None = None,
+        lexical_bindings: Mapping[str, object] | None = None,
         isolated_scope: bool = False,
         function: FuncParserContext | None = None,
         module: ModuleBuildContext | None = None,
@@ -1258,6 +1259,9 @@ class MatchContext:
             )
         else:
             scope = self.lexical_scope.fork() if isolated_scope else self.lexical_scope
+        if lexical_bindings:
+            for name, value in lexical_bindings.items():
+                scope.define(name, value)
         if expected_type is None and role == "return_value":
             expected_type = scope.lookup(_RETURN_TYPE)
         return MatchContext(
@@ -1312,6 +1316,7 @@ class AstChild:
     isolated_scope: bool = False
     function_context: FuncParserContext | None = None
     module_context: ModuleBuildContext | None = None
+    lexical_bindings: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1396,6 +1401,7 @@ def parse_node(pattern: AstPattern[T], node: ast.AST, context: MatchContext) -> 
             binding_name=binding_name,
             expected_type=child.expected_type,
             values=child.values,
+            lexical_bindings=child.lexical_bindings,
             isolated_scope=child.isolated_scope,
             function=child.function_context,
             module=child.module_context,

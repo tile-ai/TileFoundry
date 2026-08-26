@@ -138,9 +138,10 @@ short bullet list — keep it that way.
 
 ### DSL / HIR authoring
 
-- No docstring in an `@func` body (parser rejects bare expressions).
+- A leading `@func` docstring is accepted; strings in nested blocks remain bare expressions.
 - Use `tf.<op>` attribute path; do not alias individual ops.
-- Variadic ops take positional inputs; attributes go by keyword.
+- Variadic ops take one explicit list, tuple, or supported static list comprehension;
+  attributes go by keyword.
 - Every `@func` parameter MUST reach the return through real ops;
   dead `_ = expr` assignments do not count.
 

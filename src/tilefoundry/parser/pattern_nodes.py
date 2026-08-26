@@ -29,6 +29,7 @@ from tilefoundry.ir.core import (
     get_metadata,
     replace_metadata,
 )
+from tilefoundry.ir.core.param_def import VariadicList
 from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
@@ -78,6 +79,7 @@ from .ast_pattern import (
     _resolve_reference,
     _slice_size,
     attach_authored_metadata,
+    parse_node,
     runtime,
 )
 
@@ -1843,6 +1845,196 @@ class CallExpectedTypeRule:
         return value
 
 
+@dataclass(frozen=True)
+class VariadicInputs:
+    items: tuple[runtime.Expr, ...]
+
+    def __init__(self, values):
+        items = tuple(values)
+        if not all(isinstance(value, runtime.Expr) for value in items):
+            raise TypeError("variadic inputs must contain Expr values")
+        object.__setattr__(self, "items", items)
+
+
+@dataclass(frozen=True)
+class VariadicInputFormRule:
+    STATEMENT: ClassVar[str] = (
+        "Variadic inputs must use one explicit list, tuple, or supported static "
+        "list comprehension."
+    )
+
+    def apply(self, value, *, match, context):
+        if match.branch_id == "generator_expression":
+            raise ParseError.from_node(
+                match.node,
+                context,
+                "variadic inputs do not support generator expressions; use a list comprehension",
+            )
+        if match.branch_id == "unsupported":
+            raise ParseError.from_node(
+                match.node,
+                context,
+                "variadic inputs require an explicit list, tuple, or supported list comprehension",
+            )
+        return value
+
+
+class VariadicInputsPattern(ElementPattern):
+    element_name = "variadic_inputs"
+    syntax = LazyPattern(
+        lambda: ChoicePattern(
+            BranchPattern(
+                "list",
+                BindPattern(
+                    AstNodePattern(
+                        ast.List,
+                        FieldPattern(
+                            "elts",
+                            RepeatPattern(
+                                ChildPattern(
+                                    "input_{index}",
+                                    ExpressionPattern(),
+                                    "variadic_input",
+                                    "input",
+                                )
+                            ),
+                        ),
+                    ),
+                    VariadicInputsPattern._bind_sequence,
+                ),
+                pattern_id="call.variadic.list",
+            ),
+            BranchPattern(
+                "tuple",
+                BindPattern(
+                    AstNodePattern(
+                        ast.Tuple,
+                        FieldPattern(
+                            "elts",
+                            RepeatPattern(
+                                ChildPattern(
+                                    "input_{index}",
+                                    ExpressionPattern(),
+                                    "variadic_input",
+                                    "input",
+                                )
+                            ),
+                        ),
+                    ),
+                    VariadicInputsPattern._bind_sequence,
+                ),
+                pattern_id="call.variadic.tuple",
+            ),
+            BindPattern(
+                AstNodePattern(ast.ListComp),
+                VariadicInputsPattern._bind_comprehension,
+            ),
+            BranchPattern(
+                "generator_expression",
+                AstNodePattern(ast.GeneratorExp),
+                pattern_id="call.variadic.generator_expression",
+            ),
+            BranchPattern(
+                "unsupported",
+                AstNodePattern(ast.expr),
+                pattern_id="call.variadic.unsupported",
+            ),
+        )
+    )
+
+    @staticmethod
+    def _bind_sequence(
+        node: object, context: MatchContext, matched: AstMatch[Any]
+    ) -> AstMatch[Any]:
+        assert isinstance(node, (ast.List, ast.Tuple))
+        if any(isinstance(element, ast.Starred) for element in node.elts):
+            raise ParseError.from_node(
+                node,
+                context,
+                "variadic input sequences do not support starred expansion",
+            )
+        return matched
+
+    @staticmethod
+    def _bind_comprehension(
+        node: object, context: MatchContext, matched: AstMatch[Any]
+    ) -> AstMatch[Any]:
+        assert isinstance(node, ast.ListComp)
+        if len(node.generators) != 1:
+            raise ParseError.from_node(
+                node,
+                context,
+                "variadic list comprehension supports exactly one generator",
+            )
+        generator = node.generators[0]
+        if not isinstance(generator.target, ast.Name):
+            raise ParseError.from_node(
+                generator.target,
+                context,
+                "variadic list comprehension requires a simple Name target",
+            )
+        if generator.ifs or generator.is_async:
+            raise ParseError.from_node(
+                generator,
+                context,
+                "variadic list comprehension does not support filters or async generators",
+            )
+        iterator = generator.iter
+        if not (
+            isinstance(iterator, ast.Call)
+            and isinstance(iterator.func, ast.Name)
+            and iterator.func.id == "range"
+            and not iterator.keywords
+            and 1 <= len(iterator.args) <= 3
+        ):
+            raise ParseError.from_node(
+                iterator,
+                context,
+                "variadic list comprehension requires range with 1 to 3 static integer arguments",
+            )
+        values = []
+        for argument in iterator.args:
+            try:
+                value = parse_node(StaticValuePattern(), argument, context)
+            except ParseError as error:
+                raise ParseError.from_node(
+                    argument,
+                    context,
+                    "variadic list comprehension range arguments must be static integers",
+                ) from error
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ParseError.from_node(
+                    argument,
+                    context,
+                    "variadic list comprehension range arguments must be static integers",
+                )
+            values.append(value)
+        children = tuple(
+            AstChild(
+                f"input_{index}",
+                ExpressionPattern(),
+                node.elt,
+                "variadic_input",
+                "input",
+                lexical_bindings={generator.target.id: value},
+                isolated_scope=True,
+            )
+            for index, value in enumerate(range(*values))
+        )
+        return dataclasses.replace(
+            matched,
+            pattern_id="call.variadic.list_comp",
+            branch_id="list_comp",
+            children=children,
+        )
+
+    @staticmethod
+    def construct(match, children, context):
+        return VariadicInputs(tuple(children.values()))
+
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = (VariadicInputFormRule(),)
+
+
 class CallPattern(ElementPattern):
     element_name = "op_call"
     syntax = LazyPattern(
@@ -1875,6 +2067,8 @@ class CallPattern(ElementPattern):
     @staticmethod
     def _pattern_for_param(param: object, node: ast.AST) -> AstPattern[Any]:
         annotation = param.annotation
+        if annotation is VariadicList:
+            return VariadicInputsPattern()
         if annotation is runtime.TensorType and isinstance(node, ast.Subscript):
             return TensorPattern()
         if annotation is runtime.DType:
@@ -1886,27 +2080,43 @@ class CallPattern(ElementPattern):
         return StaticValuePattern()
 
     @staticmethod
-    def _schema_children(node: ast.Call, schema: object) -> tuple[AstChild, ...] | None:
+    def _schema_children(
+        node: ast.Call, schema: object, context: MatchContext
+    ) -> tuple[AstChild, ...] | None:
         """Bind a call's arguments to one op schema's inputs and attributes.
 
-        A variadic op takes its inputs one per argument, and also accepts them
-        as one sequence -- ``tf.concat([a, b], axis=1)`` is how torch, numpy,
-        jax and tvm all spell the same call, so it is the first thing an author
-        writes. No tensor is ever a list literal, so unwrapping one is
-        unambiguous.
+        A VariadicList input consumes exactly one explicit sequence and flattens
+        its elements into ``Call.args``. Attributes remain keyword-only, so the
+        sequence boundary cannot be confused with an attribute position.
         """
         params = tuple(schema.signature)
         inputs = [param for param in params if param.kind == "input"]
         attrs = [param for param in params if param.kind == "attribute"]
-        variadic = bool(getattr(schema.op_class, "is_variadic", False))
+        variadic = len(inputs) == 1 and inputs[0].annotation is VariadicList
         positional = list(node.args)
-        if variadic and len(positional) == 1 and isinstance(positional[0], (ast.List, ast.Tuple)):
-            positional = list(positional[0].elts)
         children: list[AstChild] = []
         bound_attrs: set[str] = set()
+        if variadic:
+            if len(positional) != 1:
+                raise ParseError.from_node(
+                    node,
+                    context,
+                    "variadic operations require exactly one list, tuple, or "
+                    "supported list-comprehension input sequence",
+                )
+            children.append(
+                AstChild(
+                    "variadic_inputs",
+                    CallPattern._pattern_for_param(inputs[0], positional[0]),
+                    positional[0],
+                    "variadic_inputs",
+                    "inputs",
+                )
+            )
+            positional = []
         for index, argument in enumerate(positional):
-            if variadic or index < len(inputs):
-                name = inputs[0].name if variadic else inputs[index].name
+            if index < len(inputs):
+                name = inputs[index].name
                 children.append(
                     AstChild(
                         f"input_{index}",
@@ -1996,7 +2206,7 @@ class CallPattern(ElementPattern):
         )
         if not isinstance(schema, runtime.OpSchema):
             return None
-        children = CallPattern._schema_children(node, schema)
+        children = CallPattern._schema_children(node, schema, context)
         if children is None:
             return None
         return dataclasses.replace(
@@ -2011,7 +2221,11 @@ class CallPattern(ElementPattern):
     def construct(match, children, context):
         if match.branch_id == "operation_call":
             schema = match.captures["schema"]
-            inputs = tuple(value for name, value in children.items() if name.startswith("input_"))
+            variadic_inputs = children.get("variadic_inputs")
+            if isinstance(variadic_inputs, VariadicInputs):
+                inputs = variadic_inputs.items
+            else:
+                inputs = tuple(value for name, value in children.items() if name.startswith("input_"))
             attrs = {
                 name.removeprefix("attr_"): value
                 for name, value in children.items()
@@ -2844,7 +3058,7 @@ class WithPattern(ElementPattern):
                         BlockPattern(),
                         "block",
                         "with_body",
-                        transform=_module_from_body,
+                        transform=_body_as_ast_module,
                     ),
                 ),
             ),
@@ -2875,7 +3089,7 @@ class WithPattern(ElementPattern):
                 AstChild(
                     "body",
                     BlockPattern(),
-                    _module_from_body(node.body),
+                    _body_as_ast_module(node.body),
                     "block",
                     "with_body",
                 ),
@@ -2988,7 +3202,7 @@ class LoopCarryStatementPattern(ElementPattern):
                             "nested",
                             LoopCarryPattern(),
                             "loop_carry",
-                            transform=_module_from_body,
+                            transform=_body_as_ast_module,
                         ),
                     ),
                 ),
@@ -3078,7 +3292,7 @@ class LoopHeaderPattern(ElementPattern):
                         "carry",
                         LoopCarryPattern(),
                         "loop_carry",
-                        transform=_module_from_body,
+                        transform=_body_as_ast_module,
                     ),
                 ),
             ),
@@ -3136,7 +3350,7 @@ class LoopHeaderPattern(ElementPattern):
             AstChild(
                 "carry",
                 LoopCarryPattern(),
-                _module_from_body(node.body),
+                _body_as_ast_module(node.body),
                 "loop_carry",
             )
         ]
@@ -3271,7 +3485,7 @@ class ForPattern(ElementPattern):
                         "body",
                         LoopBodyPattern(),
                         "loop_body",
-                        transform=_module_from_body,
+                        transform=_body_as_ast_module,
                     ),
                 ),
             ),
@@ -3776,7 +3990,7 @@ class FunctionPattern(ElementPattern):
                         BlockPattern(),
                         "block",
                         "body",
-                        transform=_module_from_body,
+                        transform=lambda body: _body_as_ast_module(body, strip_docstring=True),
                     ),
                 ),
             ),
@@ -3890,17 +4104,12 @@ class FunctionPattern(ElementPattern):
     )
 
 
-def _module_from_body(body: object) -> ast.Module:
-    """Wrap a statement list as a Module, dropping a leading docstring.
-
-    A bare string constant is a no-op statement carrying no work, so it has no
-    statement pattern and matching one failed with a message about the matcher
-    pointing at a string literal -- for a ``@func`` documenting itself the way
-    every other Python function may.
-    """
+def _body_as_ast_module(body: object, *, strip_docstring: bool = False) -> ast.Module:
+    """Wrap a statement list as an AST Module with explicit docstring policy."""
     assert isinstance(body, list)
     if (
-        body
+        strip_docstring
+        and body
         and isinstance(body[0], ast.Expr)
         and isinstance(body[0].value, ast.Constant)
         and isinstance(body[0].value.value, str)
@@ -3966,5 +4175,8 @@ __all__ = [
     "TupleExpressionPattern",
     "TypeAnnotationPattern",
     "UnaryExpressionPattern",
+    "VariadicInputFormRule",
+    "VariadicInputs",
+    "VariadicInputsPattern",
     "WithPattern",
 ]

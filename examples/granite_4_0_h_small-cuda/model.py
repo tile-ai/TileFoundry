@@ -161,7 +161,7 @@ class GraniteMamba:
         # closes on this token, so the whole convolution is one multiply
         # against the kernel and one reduction over it. Channels do not mix --
         # that is what depthwise means here, and why no matmul appears.
-        window = tf.concat(conv_state, entry, axis=2)
+        window = tf.concat([conv_state, entry], axis=2)
         weighted = window * tf.reshape(conv_w, new_shape=(1, _CONVD, _KRN))
         summed = tf.reduce(weighted, axes=(-1,), keepdim=False, kind="sum")
         return tf.silu(summed + tf.reshape(conv_b, new_shape=(1, _CONVD)))
