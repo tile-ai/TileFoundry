@@ -6,9 +6,8 @@ import re
 
 import pytest
 
-from tests._source import import_dsl
 from tilefoundry import func
-from tilefoundry.dsl import Mesh, Tensor, Topology
+from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.inspection import as_script
 from tilefoundry.parser import ParseError
 from tilefoundry.target import CudaTarget
@@ -42,22 +41,45 @@ def test_a_nested_block_does_not_gain_function_docstring_semantics() -> None:
         ("steps(1, 2)", "loop iterator must be tile(...) or range(...)"),
     ),
 )
-def test_a_loop_iterator_states_why_its_arity_is_invalid(
-    iterator: str, expected: str
-) -> None:
+def test_a_loop_iterator_states_why_its_arity_is_invalid(iterator: str, expected: str) -> None:
     """The shape-exact syntax must not reduce these to a bare match failure.
 
     Encoding each iterator's arity is what lets the generated grammar show the
     accepted forms, so the reason is stated before the shape rejects.
     """
-    source = f'''@func
-def looping(x: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
-    out = tf.add(seed, seed)
-    for row in {iterator}:
-        out = tf.add(x[row, :], seed)
-    return out
-'''
     with pytest.raises(ParseError, match=re.escape(expected)):
-        import_dsl(
-            'from tilefoundry import func\nfrom tilefoundry.dsl import Tensor, tf\n\n' + source
-        )
+        if iterator == "tile(10)":
+
+            @func
+            def looping(x: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
+                out = tf.add(seed, seed)
+                for row in tile(10):  # noqa: F821
+                    out = tf.add(x[row, :], seed)
+                return out
+
+        elif iterator == "tile(1, 2, 3)":
+
+            @func
+            def looping(x: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
+                out = tf.add(seed, seed)
+                for row in tile(1, 2, 3):  # noqa: F821
+                    out = tf.add(x[row, :], seed)
+                return out
+
+        elif iterator == "range(1, 2, 3, 4)":
+
+            @func
+            def looping(x: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
+                out = tf.add(seed, seed)
+                for row in range(1, 2, 3, 4):
+                    out = tf.add(x[row, :], seed)
+                return out
+
+        else:
+
+            @func
+            def looping(x: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
+                out = tf.add(seed, seed)
+                for row in steps(1, 2):  # noqa: F821
+                    out = tf.add(x[row, :], seed)
+                return out
