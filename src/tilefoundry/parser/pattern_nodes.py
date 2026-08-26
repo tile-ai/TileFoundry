@@ -2354,6 +2354,15 @@ class IndexSlicePattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
+        for name in ("lower", "upper", "step"):
+            if isinstance(children.get(name), slice):
+                raise ParseError.from_node(
+                    getattr(match.node, name),
+                    context,
+                    "a tile loop variable is already a window and cannot be "
+                    "used as a slice bound; use x[:, t, :] or bind "
+                    "base = t + 0 before slicing",
+                )
         return slice(children.get("lower"), children.get("upper"), children.get("step"))
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
