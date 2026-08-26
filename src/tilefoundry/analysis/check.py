@@ -1,4 +1,9 @@
-"""The shared authored-program gate for analysis and scheduling."""
+"""The gate every analysis runs behind.
+
+An analysis reads inferred types and assumes the authored program holds
+together. Both conditions are established once per public call rather than
+per algorithm, so no family can be the one that forgot.
+"""
 
 from __future__ import annotations
 
@@ -903,7 +908,12 @@ def check_program(
 def infer_authored_types(
     functions: Iterable[Function], module: Module | None
 ) -> None:
-    """Re-derive every authored value type in place."""
+    """Re-derive every authored value type in place.
+
+    Callees are inferred before their callers, so a call site reads a return
+    type that has already been recomputed rather than the one it was authored
+    with.
+    """
     for fn in reversed(tuple(functions)):
         ctx = TypeInferContext(scope=FunctionScope(module, fn))
         for expr in collect_exprs(fn.body):
@@ -917,6 +927,12 @@ def infer_authored_types(
 
 
 def _unresolved_local_layout(type_: Type) -> bool:
+    """Whether *type_* places data in local storage without saying how.
+
+    A shaped value in registers or shared memory is distributed across the
+    threads of its level. Without a layout there is no such distribution, so
+    every per-thread number measured from it would be invented.
+    """
     return any(
         tensor.storage in {StorageKind.RMEM, StorageKind.SMEM}
         and tensor.shape
@@ -935,7 +951,12 @@ def _reject_schedule_constraint(expr: Expr) -> None:
 
 
 def validate_authored(functions: Iterable[Function]) -> None:
-    """Reject an authored program no analysis can measure."""
+    """Reject an authored program no analysis can measure.
+
+    A schedule constraint means the author deferred a decision to the schedule
+    stage, so there is no single program to measure yet; an unresolved local
+    layout means distribution inference stopped short of one.
+    """
     for fn in functions:
         for expr in (*fn.params, *collect_exprs(fn.body)):
             _reject_schedule_constraint(expr)
@@ -956,7 +977,13 @@ def validate_authored(functions: Iterable[Function]) -> None:
 
 
 def validate_call_context(module: Module, functions: Iterable[Function]) -> None:
-    """Reject a reached call whose two ends do not share one context."""
+    """Reject a reached call whose two ends do not share one execution context.
+
+    Checked over what the selected query reaches, not at construction: an
+    attached child no call reaches has no edge to validate. Inheritance is the
+    canonical spelling, so a child declaring the caller's hierarchy explicitly
+    passes and any other value is a different context, not a nested launch.
+    """
     for caller in functions:
         caller_owner = owning_module(module, caller)
         for callee in called_functions(caller):
