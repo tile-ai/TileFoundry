@@ -738,13 +738,16 @@ def _record_movement(
 
 
 def analyze_memory(
-    module: Module,
     function: Function,
-    target: Target,
-    level: str | None = None,
-    options: object | None = None,
+    context,
 ) -> None:
     """Attach one memory record to every Function reachable from *function*."""
+    module, target, level, options = (
+        context.module,
+        context.target,
+        context.level,
+        context.options,
+    )
     facts = target.get_facts(MemoryHierarchyFacts)
     settings = options if isinstance(options, MemoryOptions) else MemoryOptions()
     topologies = module.effective_topologies()

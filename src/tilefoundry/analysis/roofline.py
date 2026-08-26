@@ -9,10 +9,8 @@ different count of the same flops.
 from __future__ import annotations
 
 from tilefoundry.ir.core import Call, get_metadata
-from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType
-from tilefoundry.target import Target
 
 from .errors import AnalysisError
 from .facts import ThroughputFacts
@@ -118,13 +116,11 @@ def _cost_bound(
 
 
 def analyze_roofline(
-    module: Module,
     function: Function,
-    target: Target,
-    level: str | None = None,
-    options: object | None = None,
+    context,
 ) -> None:
     """Attach a bound to every Call, and one to every Function, reachable here."""
+    target = context.target
     facts = target.get_facts(ThroughputFacts)
     for fn in reachable_functions(function):
         for expr in collect_exprs(fn.body):

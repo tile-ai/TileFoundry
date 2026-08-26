@@ -39,7 +39,7 @@ def test_analyze_orders_the_union_of_target_selected_dependency_roots_once() -> 
     def service(selector: str, requires: tuple[str, ...] = ()) -> Analyzer:
         return Analyzer(
             selector,
-            lambda _module, function, *_args: ran.append((selector, id(function))),
+            lambda function, _context: ran.append((selector, id(function))),
             requires=requires,
         )
 
@@ -75,7 +75,7 @@ def test_analyze_reports_missing_root_and_missing_dependency_from_the_target() -
         (
             Analyzer(
                 "needs-facts",
-                lambda _module, _function, target, _level, _options: target.get_facts(
+                lambda _function, context: context.target.get_facts(
                     type("MissingFacts", (), {})
                 ),
             ),

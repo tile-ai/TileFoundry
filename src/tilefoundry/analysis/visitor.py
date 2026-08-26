@@ -40,11 +40,14 @@ class AnalyzeContext:
 
 @dataclass(frozen=True)
 class IterationDomain:
-    """The authored bounds of one loop."""
+    """The loop domain reference available before poly extraction.
 
-    start: object
-    extent: object
-    step: object
+    M1 builds the structural memo before a ``TileGraph`` exists, so this field
+    retains the authored loop as the domain reference rather than copying its
+    bounds. A later projection may replace it with the extracted poly domain.
+    """
+
+    loop: GridRegionExpr
 
 
 @dataclass(frozen=True)
@@ -54,9 +57,14 @@ class TripCount:
     value: int | None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class ScopeMemo:
-    """One lexical Function or loop scope in the normalized graph."""
+    """One lexical Function or loop scope in the normalized graph.
+
+    Scope equality and hashing are identity-based. Parent/child links form a
+    cycle, so structural equality would recurse and would not describe lexical
+    ownership semantics.
+    """
 
     owner: Function | GridRegionExpr
     parent: "ScopeMemo | None"
@@ -135,7 +143,12 @@ class _ScopeBuilder:
 
 
 class StructuralMemoVisitor(ExprVisitor[None]):
-    """Collect definition order, def-use edges, and lexical scope ownership."""
+    """Collect facts from a normalized ``check_program`` graph.
+
+    The normalized graph contains no nested Function expression nodes; calls to
+    reachable callees are represented by their call arguments and are handled
+    by the enclosing graph's ownership rules.
+    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -219,9 +232,7 @@ class StructuralMemoVisitor(ExprVisitor[None]):
         self._record(expr, (*init_args, expr.body, *expr.yield_values))
 
     def visit_Function(self, expr):
-        if expr is self._root_scope.owner:
-            return self.visit_function_body(expr)
-        return None
+        raise TypeError("StructuralMemoVisitor expects a normalized Function graph without nested Function nodes")
 
     def visit_Var(self, expr):
         self._record(expr, ())
@@ -248,7 +259,7 @@ class StructuralMemoVisitor(ExprVisitor[None]):
         trip_count = None
         if isinstance(builder.owner, GridRegionExpr):
             loop = builder.owner
-            domain = IterationDomain(loop.start, loop.extent, loop.step)
+            domain = IterationDomain(loop)
             trip_count = TripCount(loop_trip_count(loop))
         scope = ScopeMemo(builder.owner, parent, (), domain, trip_count)
         self._frozen_scopes[id(builder.owner)] = scope

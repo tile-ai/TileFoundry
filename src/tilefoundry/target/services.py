@@ -9,7 +9,7 @@ from typing import Protocol, runtime_checkable
 from tilefoundry.ir.core import IRMetadata
 
 AnalysisCallable = Callable[
-    ["Module", "Function", "Target", str | None, object | None], None
+    ["Function", "AnalyzeContext"], None
 ]
 
 

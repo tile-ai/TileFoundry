@@ -1413,8 +1413,16 @@ def analyze(
 ### 3.1 Target-selected Analyzers
 
 ```python
+class AnalyzeContext:
+    module: Module
+    target: Target
+    level: str | None
+    options: object | None
+    structural_memo: StructuralMemo
+
+
 AnalysisCallable = Callable[
-    [Module, Function, Target, str | None, object | None], None
+    [Function, AnalyzeContext], None
 ]
 
 class Analyzer:
@@ -1452,9 +1460,10 @@ class Target:
 ```
 
 - constraints:
-  - `AnalysisCallable` MUST receive the Module, Function, exact Target, resolved
-    topology level, and caller options in that order. The level MAY be `None`
-    only when the Module declares no topology; options MAY be `None`.
+  - `AnalysisCallable` MUST receive the normalized Function graph and one
+    `AnalyzeContext` carrying the exact Module, Target, resolved topology level,
+    caller options, and shared structural memo. The level MAY be `None` only
+    when the Module declares no topology; options MAY be `None`.
   - Analyze MUST obtain every root and dependency from the same exact Target
     instance through `get_analyzer`.
   - A Target subclass MUST inherit its base Analyzers through normal Python

@@ -10,10 +10,8 @@ against a target's rates.
 from __future__ import annotations
 
 from tilefoundry.ir.core import Call, VerifyError
-from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType
-from tilefoundry.target import Target
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
@@ -170,13 +168,11 @@ def _accumulate(
 
 
 def analyze_compute_cost(
-    module: Module,
     function: Function,
-    target: Target,
-    level: str | None = None,
-    options: object | None = None,
+    context,
 ) -> None:
     """Attach one-trip work per Call and multiplicity-aware totals per Function."""
+    module, level = context.module, context.level
     topologies = module.effective_topologies()
     for fn in reachable_functions(function):
         scope = FunctionScope(module, fn)

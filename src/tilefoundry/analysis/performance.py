@@ -15,11 +15,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from tilefoundry.ir.core import Call, Expr, get_metadata
-from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.target import Target
 
 from .check import Placement, _call_placements
 from .compute_cost import _local_duration_ns
@@ -338,11 +336,8 @@ def _records(
 
 
 def analyze_performance(
-    module: Module,
     function: Function,
-    target: Target,
-    level: str | None = None,
-    options: object | None = None,
+    context,
 ) -> None:
     """Place every reachable Function's occurrences on a local timeline.
 
@@ -350,6 +345,7 @@ def analyze_performance(
     ``memory``, which this family depends on: a time reported here is a time for
     a program whose values have somewhere to sit.
     """
+    module, target = context.module, context.target
     placement_facts = target.get_facts(ParallelCapacityFacts)
     throughput = target.get_facts(ThroughputFacts)
     services = target.get_facts(PerformanceServiceFacts)

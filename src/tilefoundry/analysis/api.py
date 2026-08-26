@@ -17,6 +17,7 @@ from tilefoundry.analysis.check import _resolve_program_geometry, check_program,
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.report import render_json, report_data
+from tilefoundry.analysis.visitor import AnalyzeContext
 from tilefoundry.analysis.walk import reachable_functions, values_of
 from tilefoundry.dump import DumpFlags, dump
 from tilefoundry.ir.core import IRMetadata
@@ -152,13 +153,14 @@ def analyze(
     function = check_program(module, function, level=level, analyzers=closure)
     functions = reachable_functions(function)
     validate_authored(functions)
+    context = AnalyzeContext.create(module, function, target, level, options)
 
     order: list[type[IRMetadata]] = []
     written_records: set[tuple[int, type]] = set()
     for algorithm in closure:
         before = _metadata_snapshot(functions)
         try:
-            algorithm.run(module, function, target, level, options)
+            algorithm.run(function, context)
         except UnsupportedCapabilityError as error:
             raise AnalysisError(f"{algorithm.selector}: {error}") from None
         after = _metadata_snapshot(functions)
