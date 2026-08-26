@@ -194,24 +194,34 @@ def test_unsupported_list_comprehension_shapes_are_named(program: str, message: 
                 return tf.concat([x for index in range(x)], axis=0)
 
 
-def test_a_python_float_operand_adopts_the_tensor_dtype() -> None:
+def test_a_python_float_literal_is_f32_like_any_other() -> None:
+    """A literal carries the dtype it is written with; nothing adapts it."""
+
     @func
-    def add_literal(x: Tensor[(8,), "bf16"]) -> Tensor[(8,), "bf16"]:
+    def add_literal(x: Tensor[(8,), "f32"]) -> Tensor[(8,), "f32"]:
         return x + 1.0
 
     assert isinstance(add_literal.body, Call)
     constant = next(arg for arg in add_literal.body.args if isinstance(arg, Constant))
-    assert constant.type.dtype is DType.bf16
+    assert constant.type.dtype is DType.f32
 
 
-def test_a_negated_python_float_stays_weak() -> None:
+def test_a_mismatched_literal_is_rejected_and_names_the_cast() -> None:
+    """The remedy is the one the author writes, not one the parser guesses."""
+    with pytest.raises(VerifyError, match=re.escape("tf.cast(<operand>, dtype='bf16')")):
+
+        @func
+        def add_literal(x: Tensor[(8,), "bf16"]) -> Tensor[(8,), "bf16"]:
+            return x + 1.0
+
+
+def test_an_explicit_cast_gives_a_literal_the_operand_dtype() -> None:
     @func
     def scale(x: Tensor[(8,), "bf16"]) -> Tensor[(8,), "bf16"]:
-        return x * -0.5
+        return x * tf.cast(-0.5, dtype="bf16")
 
     assert isinstance(scale.body, Call)
-    constant = next(arg for arg in scale.body.args if isinstance(arg, Constant))
-    assert (constant.type.dtype, constant.value) == (DType.bf16, -0.5)
+    assert scale.body.type.dtype is DType.bf16
 
 
 def test_a_python_integer_operand_is_not_adopted() -> None:

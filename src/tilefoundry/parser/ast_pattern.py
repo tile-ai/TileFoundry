@@ -1602,7 +1602,7 @@ def _constant(value):
     elif isinstance(value, int):
         dtype = runtime.DType.i64
     elif isinstance(value, float):
-        return runtime.Constant(type=None, value=value)
+        dtype = runtime.DType.f32
     else:
         raise TypeError(type(value).__name__)
     return runtime.Constant(

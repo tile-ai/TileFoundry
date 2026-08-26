@@ -31,7 +31,7 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.tir.launch import launch_call
-from tilefoundry.ir.types import FloatDType, TensorType
+from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Broadcast, Layout, Partial, Split
 
@@ -1792,51 +1792,6 @@ class TupleExpressionPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
-def _is_weak_float(value: object) -> bool:
-    return (
-        isinstance(value, runtime.Constant)
-        and value.type is None
-        and isinstance(value.value, float)
-    )
-
-
-def _materialize_weak_float(value: object, dtype: object) -> object:
-    if not _is_weak_float(value):
-        return value
-    return dataclasses.replace(
-        value,
-        type=runtime.TensorType.scalar(dtype, storage=runtime.StorageKind.UMAT),
-    )
-
-
-def _resolve_weak_float_args(target: object, args: tuple[object, ...]) -> tuple[object, ...]:
-    resolved = list(args)
-    if isinstance(target, runtime.Binary) and len(resolved) == 2:
-        for index, value in enumerate(resolved):
-            if not _is_weak_float(value):
-                continue
-            peer_type = getattr(resolved[1 - index], "type", None)
-            if isinstance(peer_type, runtime.TensorType) and isinstance(
-                peer_type.dtype, FloatDType
-            ):
-                resolved[index] = _materialize_weak_float(value, peer_type.dtype)
-    return tuple(_materialize_weak_float(value, runtime.DType.f32) for value in resolved)
-
-
-@dataclass(frozen=True)
-class WeakScalarDTypeRule:
-    STATEMENT: ClassVar[str] = (
-        "A Python float Binary operand adopts a typed floating-point peer's dtype "
-        "before type inference; Python integers remain i64."
-    )
-
-    def apply(self, value, *, match, context):
-        if not isinstance(value, runtime.Call):
-            return value
-        args = _resolve_weak_float_args(value.target, value.args)
-        return value if args == value.args else dataclasses.replace(value, args=args)
-
-
 @dataclass(frozen=True)
 class CallBindingRule:
     STATEMENT: ClassVar[str] = "A call must bind its arguments into a Call tuple."
@@ -1852,19 +1807,6 @@ class CallBindingRule:
                 ExecutionDomainMetadata(tuple(context.function.state.mesh_stack)),
             )
         return value
-
-
-@dataclass(frozen=True)
-class WeakUnaryBindingRule:
-    STATEMENT: ClassVar[str] = (
-        "A unary expression must bind a Call tuple, except that negating a weak "
-        "Python float preserves a weak Constant."
-    )
-
-    def apply(self, value, *, match, context):
-        if _is_weak_float(value):
-            return value
-        return CallBindingRule().apply(value, match=match, context=context)
 
 
 def _types_compatible(actual: object, expected: object) -> bool:
@@ -2380,7 +2322,7 @@ class CallPattern(ElementPattern):
             return runtime.Call(type=placeholder_type, target=operation, args=inputs)
         elif match.branch_id == "function_call":
             callee = match.captures["callee"]
-            args = _resolve_weak_float_args(callee, tuple(children.values()))
+            args = tuple(children.values())
             module_owner = match.captures.get("module_owner")
             if module_owner is not None and context.function.module is None:
                 raise ParseError.from_node(
@@ -2403,7 +2345,6 @@ class CallPattern(ElementPattern):
         raise RuntimeError(f"no constructor branch for {match.branch_id!r}")
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
-        WeakScalarDTypeRule(),
         CallVariadicInputFormRule(),
         CallBindingRule(),
         CallTypeInferenceRule(),
@@ -2572,7 +2513,6 @@ class BinaryExpressionPattern(ElementPattern):
         )
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
-        WeakScalarDTypeRule(),
         CallBindingRule(),
         CallTypeInferenceRule(),
         CallExpectedTypeRule(),
@@ -2609,10 +2549,7 @@ class UnaryExpressionPattern(ElementPattern):
     @staticmethod
     def construct(match, children, context):
         operand = children["operand"]
-        if match.captures["kind"] == "NEG" and _is_weak_float(operand):
-            return dataclasses.replace(operand, value=-operand.value)
         target = runtime.Unary(kind=runtime.UnaryKind[match.captures["kind"]])
-        (operand,) = _resolve_weak_float_args(target, (operand,))
         return runtime.Call(
             type=operand.type,
             target=target,
@@ -2620,7 +2557,7 @@ class UnaryExpressionPattern(ElementPattern):
         )
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
-        WeakUnaryBindingRule(),
+        CallBindingRule(),
         CallTypeInferenceRule(),
         CallExpectedTypeRule(),
     )

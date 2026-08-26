@@ -176,10 +176,9 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 <!-- parser-constraints:start -->
 | Owner | Situation | Rule | Statement | Source |
 | --- | --- | --- | --- | --- |
-| binary_expression, matmul_expression, op_call | expression, slice_endpoint, subscript_index | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
+| binary_expression, matmul_expression, op_call, unary_expression | expression, slice_endpoint, subscript_index | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
 | binary_expression, matmul_expression, op_call, unary_expression | expression, slice_endpoint, subscript_index | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
 | binary_expression, matmul_expression, op_call, unary_expression | expression, slice_endpoint, subscript_index | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
-| binary_expression, op_call | expression, slice_endpoint, subscript_index | WeakScalarDTypeRule | A Python float Binary operand adopts a typed floating-point peer's dtype before type inference; Python integers remain i64. | src/tilefoundry/parser/pattern_nodes.py |
 | dim_expr | dim_expr, layout_extent, layout_shape, tensor_dim_expr, tensor_optional_slot, tensor_shape | ShapeDimRule | A shape dimension must be an integer, DimVar, or expression. | src/tilefoundry/parser/ast_pattern.py |
 | dtype | tensor_dtype | CanonicalDTypeRule | A dtype must resolve to a canonical DType. | src/tilefoundry/parser/ast_pattern.py |
 | explicit_layout, layout, placed_layout, plain_layout | layout_shape, tensor_optional_slot, tensor_shape | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
@@ -198,7 +197,6 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | storage | tensor_optional_slot | StorageValueRule | Storage must resolve to a StorageKind. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | annotation, expression, slice_endpoint, subscript_index, type_annotation | TensorLayoutStorageRule | A tensor type must contain compatible layout and storage values. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | annotation, expression, slice_endpoint, subscript_index, type_annotation | TensorPositionRule | A tensor type's storage must be legal for its dialect and position. | src/tilefoundry/parser/ast_pattern.py |
-| unary_expression | expression, slice_endpoint, subscript_index | WeakUnaryBindingRule | A unary expression must bind a Call tuple, except that negating a weak Python float preserves a weak Constant. | src/tilefoundry/parser/pattern_nodes.py |
 <!-- parser-constraints:end -->
 
 ## 3. Implementation Overview

@@ -507,9 +507,10 @@ class Binary(Op):
 - constraints:
   - Values follow torch pointwise semantics; dtypes do not promote. Both operands
     MUST already carry the same `dtype`, and typeinfer MUST reject a mismatch. A
-    Python float scalar is given the other operand's float dtype by the authoring
-    surface, before it is an operand at all ([parser §2.1](./parser.md#21-syntax)); a Python
-    integer is not.
+    Python literal is an ordinary operand of the dtype it is written with — `f32`
+    for a float, `i64` for an integer — and the authoring surface MUST NOT adapt
+    it to its peer. The rejection MUST name `Cast` as the remedy, so the dtype a
+    value carries is the one the author wrote.
   - The elementwise `min` / `max` kinds are also surfaced as `minimum` / `maximum`.
   - Equal plain layouts, or one plain layout paired with `layout=None`, pass
     through only when that layout describes the broadcast result. Otherwise two
