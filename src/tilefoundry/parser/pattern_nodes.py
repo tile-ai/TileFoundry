@@ -2326,6 +2326,29 @@ class IndexEndpointPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
+@dataclass(frozen=True)
+class TileWindowSliceBoundRule:
+    STATEMENT: ClassVar[str] = (
+        "A tile window cannot be used as a slice bound."
+    )
+
+    def apply(self, value, *, match, context):
+        for authored_name, value_name in (
+            ("lower", "start"),
+            ("upper", "stop"),
+            ("step", "step"),
+        ):
+            if isinstance(getattr(value, value_name), slice):
+                raise ParseError.from_node(
+                    getattr(match.node, authored_name),
+                    context,
+                    "a tile loop variable is already a window and cannot be "
+                    "used as a slice bound; use x[:, t, :] or bind "
+                    "base = t + 0 before slicing",
+                )
+        return value
+
+
 class IndexSlicePattern(ElementPattern):
     element_name = "index_slice"
     syntax = LazyPattern(
@@ -2354,18 +2377,9 @@ class IndexSlicePattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        for name in ("lower", "upper", "step"):
-            if isinstance(children.get(name), slice):
-                raise ParseError.from_node(
-                    getattr(match.node, name),
-                    context,
-                    "a tile loop variable is already a window and cannot be "
-                    "used as a slice bound; use x[:, t, :] or bind "
-                    "base = t + 0 before slicing",
-                )
         return slice(children.get("lower"), children.get("upper"), children.get("step"))
 
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = (TileWindowSliceBoundRule(),)
 
 
 class SubscriptIndexPattern(ElementPattern):

@@ -4,11 +4,8 @@ The Parser accepts authored Python functions and produces HIR or TIR through one
 
 ## 1. Public API
 
-`@module` executes its Python class body and finalizes the collected Function declarations,
-child Modules, and ordinary methods. Module authoring is two-phase: class execution records
-Function, specialization, and converter declarations; finalization attaches all child Modules
-and puts them in parser scope before parsing Functions in source order. `@func` produces an HIR
-Function; `@prim_func` produces a TIR PrimFunction.
+`@module` executes its Python class body and finalizes the collected Functions, child Modules,
+and ordinary methods. `@func` produces an HIR Function; `@prim_func` produces a TIR PrimFunction.
 `specialize` and `converter` register variants and weight converters on an existing HIR Function.
 
 ```python
@@ -104,8 +101,8 @@ loop-carry-statement  ::= expression '=' expression
                           | 'for' name 'in' expression ':' loop-carry
                           | statement
 loop-carry            ::= (loop-carry-statement (newline loop-carry-statement)*)?
-loop-header           ::= 'for' identifier 'in' ('tile' | 'range') '(' expression (',' expression)*
-                          ')' ':' loop-carry
+loop-header           ::= 'for' identifier 'in' identifier '(' (expression | name '=' expression)
+                          (',' (expression | name '=' expression))* ')' ':' loop-carry
 loop-body             ::= (statement (newline statement)*)?
 for                   ::= 'for' name 'in' expression ':' loop-body
 mesh-context          ::= ('Mesh' | primary '.' identifier) '(' (expression | ('layout' | 'names')
@@ -194,6 +191,7 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | function | function | FunctionReturnRule | A HIR function body's inferred type must match its return type. | src/tilefoundry/parser/pattern_nodes.py |
 | function | function | FunctionRoleValidationRule | A root, variant, or converter must satisfy its role before registration. | src/tilefoundry/parser/pattern_nodes.py |
 | function | function | FunctionSignatureRule | A function must construct an ordered parameter tuple. | src/tilefoundry/parser/pattern_nodes.py |
+| index_slice | subscript_index | TileWindowSliceBoundRule | A tile window cannot be used as a slice bound. | src/tilefoundry/parser/pattern_nodes.py |
 | layout | tensor_optional_slot | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
 | layout | tensor_optional_slot | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
 | op_call | expression | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
@@ -250,7 +248,7 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | Executable Pattern Graph | Composes concrete AST elements into the Function root pattern. |
 | Match and Construction | Matches recursively into `AstMatch`, then constructs owner values on return. |
 | Ordered Rules | Validates and normalizes each owner value after construction. |
-| Module Build | Lets Python execute the class body, collects declarations, resolves child Modules first, then parses Functions in source order and finalizes the Module. |
+| Module Build | Lets Python execute the class body, records Functions, and finalizes the Module. |
 | Pattern Visitor | Traverses the same graph to render this section's generated grammar and constraints. |
 
 ```mermaid
@@ -273,11 +271,7 @@ flowchart TD
     TREE --> BACKWARD["construct children, then apply Rules"]
     BACKWARD --> FUNCTION["HIR Function / TIR PrimFunction"]
     FUNCTION --> MODULE{"Module authoring context?"}
-    MODULE -->|yes| FINALIZE["defer declaration"]
-    FINALIZE --> CHILDREN["attach child Modules and bind module scope"]
-    CHILDREN --> ORDERED["parse roots in source order; then variants/converters"]
-    ORDERED --> BUILT["construct final Module and verify"]
-    BUILT --> RETURN
+    MODULE -->|yes| FINALIZE["registration / finalization"]
     MODULE -->|no| RETURN["return standalone result"]
 ```
 
