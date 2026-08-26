@@ -3417,16 +3417,42 @@ class LoopIteratorPattern(ElementPattern):
             BranchPattern(
                 "tile",
                 AstNodePattern(
-                    ast.Name,
-                    FieldPattern("id", LiteralPattern("tile")),
+                    ast.Call,
+                    FieldPattern(
+                        "func",
+                        AstNodePattern(ast.Name, FieldPattern("id", LiteralPattern("tile"))),
+                    ),
+                    FieldPattern("keywords", SequencePattern()),
+                    FieldPattern(
+                        "args",
+                        SequencePattern(AstNodePattern(ast.expr), AstNodePattern(ast.expr)),
+                    ),
                 ),
                 pattern_id="loop.iterator.tile",
             ),
             BranchPattern(
                 "range",
                 AstNodePattern(
-                    ast.Name,
-                    FieldPattern("id", LiteralPattern("range")),
+                    ast.Call,
+                    FieldPattern(
+                        "func",
+                        AstNodePattern(ast.Name, FieldPattern("id", LiteralPattern("range"))),
+                    ),
+                    FieldPattern("keywords", SequencePattern()),
+                    FieldPattern(
+                        "args",
+                        ChoicePattern(
+                            SequencePattern(AstNodePattern(ast.expr)),
+                            SequencePattern(
+                                AstNodePattern(ast.expr), AstNodePattern(ast.expr)
+                            ),
+                            SequencePattern(
+                                AstNodePattern(ast.expr),
+                                AstNodePattern(ast.expr),
+                                AstNodePattern(ast.expr),
+                            ),
+                        ),
+                    ),
                 ),
                 pattern_id="loop.iterator.range",
             ),
@@ -3447,18 +3473,7 @@ class LoopHeaderPattern(ElementPattern):
             AstNodePattern(
                 ast.For,
                 FieldPattern("target", AstNodePattern(ast.Name)),
-                FieldPattern(
-                    "iter",
-                    AstNodePattern(
-                        ast.Call,
-                        FieldPattern(
-                            "func",
-                            LoopIteratorPattern(),
-                        ),
-                        FieldPattern("keywords", RepeatPattern(AstNodePattern(ast.keyword))),
-                        FieldPattern("args", RepeatPattern(AstNodePattern(ast.expr), minimum=1)),
-                    ),
-                ),
+                FieldPattern("iter", LoopIteratorPattern()),
                 FieldPattern(
                     "body",
                     ChildPattern(
@@ -3472,6 +3487,42 @@ class LoopHeaderPattern(ElementPattern):
             LoopHeaderPattern._bind,
         )
     )
+
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
+        """Name the invalid iterator before the shape-exact syntax rejects it.
+
+        The syntax encodes each iterator's arity so the generated grammar shows
+        what the parser accepts. A shape mismatch alone would report only that
+        the pattern did not match, so the specific reason is stated here first.
+        """
+        if (
+            isinstance(node, ast.For)
+            and isinstance(node.iter, ast.Call)
+            and isinstance(node.iter.func, ast.Name)
+        ):
+            kind = node.iter.func.id
+            count = len(node.iter.args)
+            if kind not in {"tile", "range"}:
+                return PatternFailure(
+                    "loop_header",
+                    node.iter.func,
+                    "loop iterator must be tile(...) or range(...)",
+                )
+            if node.iter.keywords:
+                return PatternFailure(
+                    "loop_header",
+                    node.iter,
+                    "tile()/range() does not accept keyword args (positional-only at the IR level)",
+                )
+            if (kind == "tile" and count != 2) or (kind == "range" and count not in {1, 2, 3}):
+                if kind == "tile" and count == 1:
+                    detail = "tile(extent) is not supported; use range(extent)"
+                elif kind == "tile":
+                    detail = f"tile() takes 2 arguments (extent, step), got {count}"
+                else:
+                    detail = f"range() takes 1 to 3 arguments, got {count}"
+                return PatternFailure("loop_header", node.iter, detail)
+        return super().match(node, context)
 
     @staticmethod
     def _bind(

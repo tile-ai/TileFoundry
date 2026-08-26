@@ -100,14 +100,14 @@ type-annotation       ::= tensor
                           | scalar-type
 signature             ::= (name ':' type-annotation (',' name ':' type-annotation)*)?
 return-type           ::= type-annotation
-loop-iterator         ::= 'tile'
-                          | 'range'
+loop-iterator         ::= 'tile' '(' expression ',' expression ')'
+                          | 'range' '(' (expression | expression ',' expression | expression ','
+                            expression ',' expression) ')'
 loop-carry-statement  ::= expression '=' expression
                           | 'for' name 'in' expression ':' loop-carry
                           | statement
 loop-carry            ::= (loop-carry-statement (newline loop-carry-statement)*)?
-loop-header           ::= 'for' identifier 'in' loop-iterator '(' (expression | name '=' expression)
-                          (',' (expression | name '=' expression))* ')' ':' loop-carry
+loop-header           ::= 'for' identifier 'in' loop-iterator ':' loop-carry
 loop-body             ::= (statement (newline statement)*)?
 for                   ::= 'for' name 'in' expression ':' loop-body
 mesh-context          ::= ('Mesh' | primary '.' identifier) '(' (expression | ('layout' | 'names')
