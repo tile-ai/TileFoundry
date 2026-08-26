@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 
+from tilefoundry.ir.constraints import ScheduleConstraintMetadata
 from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
@@ -26,6 +27,7 @@ from tilefoundry.ir.hir.specialize import (
     is_concrete,
     specialize_concretely,
 )
+from tilefoundry.ir.hir.tensor.reshape import is_induction_var_singleton_reshape
 from tilefoundry.ir.types import Type, callable_type_for
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import (
@@ -44,6 +46,7 @@ from tilefoundry.ir.types.shard.layout_algebra import (
     project,
     size,
 )
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.substitute import (
     DimSubstitutionError,
     dim_vars_by_name,
@@ -67,8 +70,13 @@ from .metadata import (
     TrafficMetadata,
 )
 from .movement import call_traffic
-from .preflight import infer_authored_types, validate_call_context
-from .walk import collect_exprs, describe, reachable_functions, tensor_types
+from .walk import (
+    called_functions,
+    collect_exprs,
+    describe,
+    reachable_functions,
+    tensor_types,
+)
 
 _INLINE_NODES = 10_000
 _DERIVED_METADATA = {
@@ -892,4 +900,90 @@ def check_program(
     return derived
 
 
-__all__ = ["AnalysisCheckContext", "PerformanceInputChecker", "check_program"]
+def infer_authored_types(
+    functions: Iterable[Function], module: Module | None
+) -> None:
+    """Re-derive every authored value type in place."""
+    for fn in reversed(tuple(functions)):
+        ctx = TypeInferContext(scope=FunctionScope(module, fn))
+        for expr in collect_exprs(fn.body):
+            computed = TypeInferVisitor(ctx).visit(expr)
+            if computed != expr.type:
+                object.__setattr__(expr, "type", computed)
+            ctx.cache[id(expr)] = computed
+        if fn.body is not None and fn.return_type != fn.body.type:
+            object.__setattr__(fn, "return_type", fn.body.type)
+            object.__setattr__(fn, "type", callable_type_for(fn.params, fn.body.type))
+
+
+def _unresolved_local_layout(type_: Type) -> bool:
+    return any(
+        tensor.storage in {StorageKind.RMEM, StorageKind.SMEM}
+        and tensor.shape
+        and tensor.layout is None
+        for tensor in tensor_types(type_)
+    )
+
+
+def _reject_schedule_constraint(expr: Expr) -> None:
+    if get_metadata(expr, ScheduleConstraintMetadata) is None:
+        return
+    raise AnalysisError(
+        f"{describe(expr)}: authored analysis does not accept where(...); "
+        "write a concrete layout/storage with Tensor annotations or reshard"
+    )
+
+
+def validate_authored(functions: Iterable[Function]) -> None:
+    """Reject an authored program no analysis can measure."""
+    for fn in functions:
+        for expr in (*fn.params, *collect_exprs(fn.body)):
+            _reject_schedule_constraint(expr)
+            if (
+                isinstance(expr, Call)
+                and _unresolved_local_layout(expr.type)
+                and not is_induction_var_singleton_reshape(expr)
+            ):
+                raise AnalysisError(
+                    f"{describe(expr)}: distribution inference stopped with an "
+                    "unresolved layout"
+                )
+        if fn.body is not None and _unresolved_local_layout(fn.body.type):
+            raise AnalysisError(
+                f"function {fn.name!r} result: distribution inference stopped "
+                "with an unresolved layout"
+            )
+
+
+def validate_call_context(module: Module, functions: Iterable[Function]) -> None:
+    """Reject a reached call whose two ends do not share one context."""
+    for caller in functions:
+        caller_owner = owning_module(module, caller)
+        for callee in called_functions(caller):
+            callee_owner = owning_module(module, callee)
+            if callee_owner is caller_owner:
+                continue
+            if not any(child is callee_owner for child in caller_owner.modules):
+                raise AnalysisError(
+                    f"{caller.name!r} calls {callee.name!r} of module "
+                    f"{callee_owner.name!r}, which is not a child of "
+                    f"{caller_owner.name!r}; a call reaches a child of its own module"
+                )
+            if callee_owner.effective_topologies() != caller_owner.effective_topologies():
+                raise AnalysisError(
+                    f"{caller_owner.name!r} calls {callee_owner.name!r}, which "
+                    f"resolves a different topology hierarchy "
+                    f"{callee_owner.effective_topologies()} against "
+                    f"{caller_owner.effective_topologies()}; one kernel invocation "
+                    "runs one hierarchy -- declare none on the child and inherit"
+                )
+
+
+__all__ = [
+    "AnalysisCheckContext",
+    "PerformanceInputChecker",
+    "check_program",
+    "infer_authored_types",
+    "validate_authored",
+    "validate_call_context",
+]

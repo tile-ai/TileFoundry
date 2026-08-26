@@ -13,9 +13,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from tilefoundry.analysis.check import _resolve_program_geometry, check_program
+from tilefoundry.analysis.check import _resolve_program_geometry, check_program, validate_authored
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.preflight import validate_authored
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.analysis.walk import reachable_functions, values_of

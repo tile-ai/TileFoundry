@@ -11,7 +11,7 @@ from dataclasses import replace
 
 import pytest
 
-from tilefoundry.analysis.preflight import validate_authored
+from tilefoundry.analysis.check import validate_authored
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.ir.core import Call, Constant, Tuple, TypeInferContext, Var
 from tilefoundry.ir.core.kinds import BinaryKind

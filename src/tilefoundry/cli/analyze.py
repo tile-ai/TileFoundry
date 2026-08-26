@@ -7,8 +7,11 @@ from pathlib import Path
 from typing import Mapping
 
 from tilefoundry.analysis import analyze, check_program
-from tilefoundry.analysis.check import _program_dim_vars, _resolve_program_geometry
-from tilefoundry.analysis.preflight import validate_authored
+from tilefoundry.analysis.check import (
+    _program_dim_vars,
+    _resolve_program_geometry,
+    validate_authored,
+)
 from tilefoundry.analysis.walk import reachable_functions
 from tilefoundry.cli.source import load_authored_ir, suggested_extents
 from tilefoundry.inspection import PythonPrintOptions, as_script

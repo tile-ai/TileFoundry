@@ -45,7 +45,7 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
             PerformanceMetadata,
             PerformanceSummaryMetadata,
         )
-        from tilefoundry.analysis.timeline import analyze_performance  # noqa: PLC0415
+        from tilefoundry.analysis.performance import analyze_performance  # noqa: PLC0415
 
         return Analyzer(
             "performance",
