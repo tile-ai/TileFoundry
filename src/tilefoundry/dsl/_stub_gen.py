@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import enum
 from pathlib import Path
-from typing import Iterable, get_args, get_origin
+from typing import Iterable, Literal, get_args, get_origin
 
 import tilefoundry.ir  # noqa: F401  (populates schema registry as a side effect)
 from tilefoundry.ir.core.expr import Expr
@@ -25,6 +25,8 @@ _BUILTIN_TYPE_NAMES: frozenset[str] = frozenset(
     {
         "Any",
         "Expr",
+        "Literal",
+        "Sequence",
         "object",
         "int",
         "float",
@@ -74,6 +76,11 @@ def _annotation_type(pd: ParamDef) -> tuple[str, str]:
         if pd.optional:
             base = f"{base} | None"
         return base, name
+    if get_origin(ann) is Literal:
+        base = f"Literal[{', '.join(repr(value) for value in get_args(ann))}]"
+        if pd.optional:
+            base = f"{base} | None"
+        return base, ""
     name = getattr(ann, "__name__", None)
     if name is None:
         return "Any", ""

@@ -10,11 +10,38 @@ from tilefoundry import func
 from tilefoundry.dsl import Tensor, tf
 from tilefoundry.ir.core import Call, Constant, Tuple, VerifyError
 from tilefoundry.ir.core.pattern import Tensor as TensorPattern
+from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.tensor.concat import Concat
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.stack import Stack
 from tilefoundry.parser import ParseError
+
+
+def test_matmul_layout_literals_are_parser_checked() -> None:
+    assert get_args(MatMul.a_layout.annotation) == ("MK", "KM")
+    assert get_args(MatMul.b_layout.annotation) == ("NK", "KN")
+
+    @func
+    def default_layout(
+        a: Tensor[(2, 3), "f32"], b: Tensor[(3, 4), "f32"]
+    ) -> Tensor[(2, 4), "f32"]:
+        return tf.matmul(a, b)
+
+    assert isinstance(default_layout.body, Call)
+    assert isinstance(default_layout.body.target, MatMul)
+    assert (default_layout.body.target.a_layout, default_layout.body.target.b_layout) == (
+        "MK",
+        "KN",
+    )
+
+    with pytest.raises(ParseError, match="b_layout must be one of 'NK', 'KN'"):
+
+        @func
+        def invalid_layout(
+            a: Tensor[(2, 3), "f32"], b: Tensor[(3, 4), "f32"]
+        ) -> Tensor[(2, 4), "f32"]:
+            return tf.matmul(a, b, b_layout="bad")
 
 
 def test_variadic_list_and_tuple_literals_flatten_to_call_args() -> None:

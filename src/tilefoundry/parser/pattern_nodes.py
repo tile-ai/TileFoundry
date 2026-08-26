@@ -12,7 +12,7 @@ import enum
 import operator
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar, get_args, get_origin
+from typing import Any, ClassVar, Literal, get_args, get_origin
 
 from tilefoundry.ir.constraints import (
     ConstraintProvenance,
@@ -2257,6 +2257,13 @@ class CallPattern(ElementPattern):
             for name, value in tuple(attrs.items()):
                 parameter = next((item for item in schema.signature if item.name == name), None)
                 annotation = None if parameter is None else parameter.annotation
+                if get_origin(annotation) is Literal and value not in get_args(annotation):
+                    choices = ", ".join(repr(choice) for choice in get_args(annotation))
+                    raise ParseError.from_node(
+                        match.node,
+                        context,
+                        f"{name} must be one of {choices}, got {value!r}",
+                    )
                 if (
                     isinstance(annotation, type)
                     and issubclass(annotation, enum.Enum)

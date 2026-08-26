@@ -1269,6 +1269,12 @@ Consensus torch.nn.functional ops.
     is `Broadcast` / replicated. On each mesh axis, one `Partial(sum)` is
     therefore allowed; a double-Partial input or a non-`sum` reduction is
     rejected.
+  - `MatMul.a_layout` is `"MK"` (the default) or `"KM"`; `MatMul.b_layout` is
+    `"KN"` (the default) or `"NK"`. These literals state the physical order of
+    each operand's final two axes. The access relation maps them to logical
+    `(M, K)` and `(K, N)` before deriving the output, contraction ownership, and
+    `Partial(sum)` state. Its cost is `2 * numel(local_output) * local_K`, where
+    `local_K` is reconstructed from that same logical-axis mapping.
   - `Conv2D` requires rank-4 NCHW input and OIHW weight, a rank-1 bias, and one
     common operand dtype. `stride` and `dilation` are positive length-2 tuples,
     `padding` is a non-negative length-2 tuple, and `groups` is positive. Input

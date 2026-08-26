@@ -12,7 +12,7 @@ import math
 from dataclasses import dataclass
 
 from tilefoundry.ir.core import Call
-from tilefoundry.ir.hir.nn.matmul import MatMul
+from tilefoundry.ir.hir.nn.matmul import MatMul, matmul_axes
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.schedule.facts import AtomFact
 from tilefoundry.target import Target
@@ -202,8 +202,9 @@ def candidate_atoms(op: Call, target: Target | None = None) -> list[AtomFact]:
         )
 
     lhs_type, rhs_type = op.args[0].type, op.args[1].type
-    m, k = lhs_type.shape[-2], lhs_type.shape[-1]
-    n = rhs_type.shape[-1]
+    a_m, a_k, b_n, _b_k = matmul_axes(op.target)
+    m, k = lhs_type.shape[a_m], lhs_type.shape[a_k]
+    n = rhs_type.shape[b_n]
     if not _static_positive(m, n, k) or not _operands_layout_ok(lhs_type, rhs_type):
         return []
 
