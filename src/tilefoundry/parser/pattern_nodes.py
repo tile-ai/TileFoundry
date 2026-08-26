@@ -62,6 +62,7 @@ from .ast_pattern import (
     LiteralPattern,
     LoopFrame,
     MatchContext,
+    MatchFailure,
     OptionalPattern,
     ParseError,
     PatternFailure,
@@ -1402,10 +1403,14 @@ class StaticDictPattern(ElementPattern):
     )
 
     @staticmethod
-    def _bind(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
+    def _bind(
+        node: object, context: MatchContext, matched: AstMatch[Any]
+    ) -> AstMatch[Any] | MatchFailure | None:
         assert isinstance(node, ast.Dict)
         if any(key is None for key in node.keys):
-            return None
+            return PatternFailure(
+                "static_dict", node, "`**` unpacking is not a static dictionary form"
+            )
         children: list[AstChild] = []
         for index, (key, value) in enumerate(zip(node.keys, node.values)):
             assert key is not None
@@ -1553,11 +1558,18 @@ class StaticCallPattern(ElementPattern):
     )
 
     @staticmethod
-    def _bind(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
+    def _bind(
+        node: object, context: MatchContext, matched: AstMatch[Any]
+    ) -> AstMatch[Any] | MatchFailure | None:
         assert isinstance(node, ast.Call)
         keyword_names = [keyword.arg for keyword in node.keywords]
         if len(set(keyword_names)) != len(keyword_names):
-            return None
+            repeated = sorted(
+                {name for name in keyword_names if name and keyword_names.count(name) > 1}
+            )
+            return PatternFailure(
+                "static_call", node, f"keyword given more than once: {', '.join(repeated)}"
+            )
         children = [AstChild("callee", StaticValuePattern(), node.func, "static_callee")]
         children.extend(
             AstChild(
@@ -2087,8 +2099,7 @@ def _variadic_item_annotation(param: object) -> object | None:
 @dataclass(frozen=True)
 class CallVariadicInputFormRule:
     STATEMENT: ClassVar[str] = (
-        "A variadic call must use one explicit list, tuple, or supported static "
-        "list comprehension."
+        "A variadic call must use one explicit list, tuple, or supported static list comprehension."
     )
 
     def apply(self, value, *, match, context):
@@ -2112,6 +2123,27 @@ class CallVariadicInputFormRule:
                 "variadic inputs require an explicit list, tuple, or supported list comprehension",
             )
         return value
+
+
+_OP_NAMESPACE = "tilefoundry.dsl.tf"
+
+
+def _claims_op_namespace(func: ast.expr, context: MatchContext) -> bool:
+    """Whether a callee is spelled inside the authored op namespace.
+
+    ``tf.<name>`` commits the call to this pattern: no other alternative accepts
+    an attribute of that module, so a callee it cannot resolve is the author's
+    mistake rather than another pattern's turn. A bare name (``launch``) or a
+    foreign namespace (``T.cuda.…``) commits nothing.
+    """
+    if not isinstance(func, ast.Attribute):
+        return False
+    try:
+        owner = _resolve_reference(func.value, context)
+    except ParseError:
+        return False
+    name = getattr(owner, "__name__", "")
+    return name == _OP_NAMESPACE or name.startswith(f"{_OP_NAMESPACE}.")
 
 
 def _unresolved_callee_detail(node: ast.Call) -> str:
@@ -2172,7 +2204,7 @@ class CallPattern(ElementPattern):
     @staticmethod
     def _schema_children(
         node: ast.Call, schema: object, context: MatchContext
-    ) -> tuple[AstChild, ...] | None:
+    ) -> tuple[AstChild, ...] | MatchFailure | None:
         """Bind a call's arguments to one op schema's inputs and attributes.
 
         A ``Tuple[T]`` input consumes exactly one explicit sequence and flattens
@@ -2182,10 +2214,7 @@ class CallPattern(ElementPattern):
         params = tuple(schema.signature)
         inputs = [param for param in params if param.kind == "input"]
         attrs = [param for param in params if param.kind == "attribute"]
-        variadic = (
-            len(inputs) == 1
-            and _variadic_item_annotation(inputs[0]) is not None
-        )
+        variadic = len(inputs) == 1 and _variadic_item_annotation(inputs[0]) is not None
         positional = list(node.args)
         children: list[AstChild] = []
         bound_attrs: set[str] = set()
@@ -2222,7 +2251,12 @@ class CallPattern(ElementPattern):
                 continue
             attr_index = index - len(inputs)
             if attr_index >= len(attrs):
-                return None
+                return PatternFailure(
+                    "op_call",
+                    node,
+                    f"{schema.name} takes at most {len(inputs) + len(attrs)} positional "
+                    f"arguments, got {len(node.args)}",
+                )
             param = attrs[attr_index]
             bound_attrs.add(param.name)
             children.append(
@@ -2235,11 +2269,24 @@ class CallPattern(ElementPattern):
                 )
             )
         for keyword in node.keywords:
-            if keyword.arg is None or keyword.arg in bound_attrs:
-                return None
+            if keyword.arg is None:
+                return PatternFailure(
+                    "op_call", node, "`**` unpacking is not an authored call form"
+                )
+            if keyword.arg in bound_attrs:
+                return PatternFailure(
+                    "op_call",
+                    node,
+                    f"attribute {keyword.arg!r} is already bound by a positional argument",
+                )
             param = next((item for item in attrs if item.name == keyword.arg), None)
             if param is None:
-                return None
+                known = ", ".join(item.name for item in attrs) or "none"
+                return PatternFailure(
+                    "op_call",
+                    node,
+                    f"{schema.name} has no attribute {keyword.arg!r}; its attributes are: {known}",
+                )
             bound_attrs.add(param.name)
             children.append(
                 AstChild(
@@ -2251,30 +2298,40 @@ class CallPattern(ElementPattern):
                 )
             )
         if not variadic and len(positional) < len(inputs):
-            return None
+            return PatternFailure(
+                "op_call",
+                node,
+                f"{schema.name} takes {len(inputs)} inputs, got {len(positional)}",
+            )
         return tuple(children)
 
     @staticmethod
     def _bind(
         node: object, context: MatchContext, matched: AstMatch[Any]
-    ) -> AstMatch[Any] | PatternFailure | None:
+    ) -> AstMatch[Any] | MatchFailure | None:
         assert isinstance(node, ast.Call)
         module_owner = None
         try:
             callee = _resolve_reference(node.func, context)
         except ParseError:
-            return PatternFailure("op_call", node.func, _unresolved_callee_detail(node))
+            if _claims_op_namespace(node.func, context):
+                return PatternFailure("op_call", node.func, _unresolved_callee_detail(node))
+            return None
         if isinstance(callee, runtime.Module):
             module_owner = callee
             if node.keywords:
-                return None
+                return PatternFailure(
+                    "op_call", node, "a module call takes positional arguments only"
+                )
             try:
                 callee = callee.entry_function()
-            except ValueError:
-                return None
+            except ValueError as error:
+                return PatternFailure("op_call", node.func, str(error))
         if isinstance(callee, runtime.Function):
             if node.keywords:
-                return None
+                return PatternFailure(
+                    "op_call", node, "a function call takes positional arguments only"
+                )
             return dataclasses.replace(
                 matched,
                 pattern_id="call.function",
@@ -2300,10 +2357,12 @@ class CallPattern(ElementPattern):
             callee if isinstance(callee, runtime.OpSchema) else getattr(callee, "_op_schema", None)
         )
         if not isinstance(schema, runtime.OpSchema):
-            return PatternFailure("op_call", node.func, _unresolved_callee_detail(node))
-        children = CallPattern._schema_children(node, schema, context)
-        if children is None:
+            if _claims_op_namespace(node.func, context):
+                return PatternFailure("op_call", node.func, _unresolved_callee_detail(node))
             return None
+        children = CallPattern._schema_children(node, schema, context)
+        if children is None or isinstance(children, MatchFailure):
+            return children
         return dataclasses.replace(
             matched,
             pattern_id="call.operation",
@@ -2320,7 +2379,9 @@ class CallPattern(ElementPattern):
             if isinstance(variadic_inputs, VariadicInputs):
                 inputs = variadic_inputs.items
             else:
-                inputs = tuple(value for name, value in children.items() if name.startswith("input_"))
+                inputs = tuple(
+                    value for name, value in children.items() if name.startswith("input_")
+                )
             attrs = {
                 name.removeprefix("attr_"): value
                 for name, value in children.items()
@@ -2699,9 +2760,7 @@ class IndexEndpointPattern(ElementPattern):
 
 @dataclass(frozen=True)
 class TileWindowSliceBoundRule:
-    STATEMENT: ClassVar[str] = (
-        "A tile window cannot be used as a slice bound."
-    )
+    STATEMENT: ClassVar[str] = "A tile window cannot be used as a slice bound."
 
     def apply(self, value, *, match, context):
         for authored_name, value_name in (
@@ -2915,7 +2974,9 @@ class MeshCoordinatePattern(ElementPattern):
     )
 
     @staticmethod
-    def _bind(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
+    def _bind(
+        node: object, context: MatchContext, matched: AstMatch[Any]
+    ) -> AstMatch[Any] | MatchFailure | None:
         assert isinstance(node, ast.Attribute)
         assert isinstance(node.value, ast.Name)
         if context.function is None:
@@ -2932,7 +2993,12 @@ class MeshCoordinatePattern(ElementPattern):
             if candidate < len(mesh.layout.shape):
                 axis = candidate
         if axis is None:
-            return None
+            named = ", ".join(mesh.names)
+            return PatternFailure(
+                "mesh_coordinate",
+                node,
+                f"mesh {node.value.id!r} has no axis {node.attr!r}; its axes are: {named}",
+            )
         return dataclasses.replace(
             matched,
             pattern_id="expression.mesh_coordinate",
@@ -3081,7 +3147,9 @@ class MeshContextPattern(ElementPattern):
     )
 
     @staticmethod
-    def _bind(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
+    def _bind(
+        node: object, context: MatchContext, matched: AstMatch[Any]
+    ) -> AstMatch[Any] | MatchFailure | None:
         assert isinstance(node, ast.Call)
         if not node.args or not isinstance(node.args[0], ast.Tuple):
             return None
@@ -3091,14 +3159,25 @@ class MeshContextPattern(ElementPattern):
         names_node = keywords.get("names")
         if positional:
             if layout_node is not None:
-                return None
+                return PatternFailure(
+                    "mesh", node, "`layout` is already bound by a positional argument"
+                )
             layout_node = positional.pop(0)
         if positional:
             if names_node is not None:
-                return None
+                return PatternFailure(
+                    "mesh", node, "`names` is already bound by a positional argument"
+                )
             names_node = positional.pop(0)
-        if positional or layout_node is None:
-            return None
+        if positional:
+            return PatternFailure(
+                "mesh",
+                node,
+                f"a mesh takes topologies, layout, and names; got "
+                f"{len(node.args)} positional arguments",
+            )
+        if layout_node is None:
+            return PatternFailure("mesh", node, "a mesh requires a `layout`")
         children = [
             AstChild(
                 "topology_names",
@@ -3282,14 +3361,28 @@ class LaunchPattern(ElementPattern):
         if not isinstance(node.func, ast.Name) or node.func.id != "launch":
             return None
         if not node.args:
-            return None
+            return PatternFailure("launch", node, "launch(...) requires a callee")
         keywords = {keyword.arg: keyword.value for keyword in node.keywords}
         if any(name is None for name in keywords):
-            return None
-        if "grid" not in keywords or "block" not in keywords:
-            return None
-        if set(keywords) - {"grid", "block", "cluster", "dynamic_smem", "stream", "attrs"}:
-            return None
+            return PatternFailure("launch", node, "`**` unpacking is not an authored launch form")
+        missing = [name for name in ("grid", "block") if name not in keywords]
+        if missing:
+            return PatternFailure("launch", node, f"launch(...) requires {' and '.join(missing)}")
+        unknown = set(keywords) - {
+            "grid",
+            "block",
+            "cluster",
+            "dynamic_smem",
+            "stream",
+            "attrs",
+        }
+        if unknown:
+            return PatternFailure(
+                "launch",
+                node,
+                f"launch(...) has no option {sorted(unknown)!r}; it takes grid, block, "
+                f"cluster, dynamic_smem, stream, attrs",
+            )
         children = [
             AstChild("callee", StaticValuePattern(), node.args[0], "launch_callee"),
             *(
@@ -3458,9 +3551,7 @@ class LoopIteratorPattern(ElementPattern):
                         "args",
                         ChoicePattern(
                             SequencePattern(AstNodePattern(ast.expr)),
-                            SequencePattern(
-                                AstNodePattern(ast.expr), AstNodePattern(ast.expr)
-                            ),
+                            SequencePattern(AstNodePattern(ast.expr), AstNodePattern(ast.expr)),
                             SequencePattern(
                                 AstNodePattern(ast.expr),
                                 AstNodePattern(ast.expr),
@@ -3503,7 +3594,7 @@ class LoopHeaderPattern(ElementPattern):
         )
     )
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         """Name the invalid iterator before the shape-exact syntax rejects it.
 
         The syntax encodes each iterator's arity so the generated grammar shows
@@ -3542,7 +3633,7 @@ class LoopHeaderPattern(ElementPattern):
     @staticmethod
     def _bind(
         node: object, context: MatchContext, matched: AstMatch[Any]
-    ) -> AstMatch[Any] | PatternFailure | None:
+    ) -> AstMatch[Any] | MatchFailure | None:
         assert isinstance(node, ast.For)
         assert isinstance(node.target, ast.Name)
         assert isinstance(node.iter, ast.Call)
@@ -3811,7 +3902,11 @@ class TupleAssignmentPattern(ElementPattern):
             raise ParseError.from_node(
                 match.node, context, "tuple assignment arity does not match TupleType"
             )
-        schema = getattr(type(value.target), "_op_schema", None) if isinstance(value, runtime.Call) else None
+        schema = (
+            getattr(type(value.target), "_op_schema", None)
+            if isinstance(value, runtime.Call)
+            else None
+        )
         parent_name = getattr(schema, "name", None) or ", ".join(names)
         value = replace_metadata(value, BindingMetadata(parent_name))
         for index, name in enumerate(names):
@@ -4052,7 +4147,6 @@ class BlockPattern(ElementPattern):
             if context.role == "with_body":
                 return None
             raise ParseError.from_node(match.node, context, "HIR body must end with return")
-
 
         def fold(index: int) -> list[object]:
             output: list[object] = []

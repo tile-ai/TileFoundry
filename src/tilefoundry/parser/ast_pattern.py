@@ -79,63 +79,56 @@ _RETURN_TYPE = "<return_type>"
 _TYPE_INFER_CONTEXT = "<type_infer_context>"
 
 
+class MatchFailure:
+    """A refusal travelling back up the pattern graph.
+
+    ``match`` has three outcomes: an ``AstMatch``, ``None`` when the pattern did
+    not recognize the shape it was given, and a ``MatchFailure`` when a pattern
+    claimed the node and then refused it. Only the third carries a reason, and
+    only a pattern that has established the node is its own may produce one.
+    """
+
+    node: object
+
+    def render(self, indent: int = 0) -> str:
+        raise NotImplementedError
+
+
 @dataclass(frozen=True)
-class PatternFailure:
-    """A recognized pattern whose nested validation failed."""
+class PatternFailure(MatchFailure):
+    """A pattern that claimed this node, refused it, and said why."""
 
     pattern_id: str
     node: object
     detail: str
-    causes: tuple["PatternFailure", ...] = ()
 
     def render(self, indent: int = 0) -> str:
-        lines = [f"{'  ' * indent}{self.pattern_id}: {self.detail}"]
-        for cause in self.causes:
-            lines.append(cause.render(indent + 1))
-        return "\n".join(lines)
+        return f"{'  ' * indent}{self.pattern_id}: {self.detail}"
 
 
-def _pattern_label(pattern: object) -> str:
-    label = getattr(pattern, "element_name", None)
-    if isinstance(label, str) and label:
-        return label
-    pattern_id = getattr(pattern, "pattern_id", None)
-    if isinstance(pattern_id, str) and pattern_id:
-        return pattern_id
-    node_type = getattr(pattern, "node_type", None)
-    if isinstance(node_type, type):
-        return node_type.__name__
-    return type(pattern).__name__
+@dataclass(frozen=True)
+class ChoiceFailure(MatchFailure):
+    """Every refusal a choice was handed by the alternatives that claimed the node.
 
-
-def _located_detail(failure: PatternFailure) -> str | None:
-    """The innermost reason a pattern stated for itself, if one did.
-
-    A choice reports only that nothing matched, so the reason has to come from
-    whichever branch already knew it. Branches that state nothing keep the
-    generic wording rather than having a reason guessed for them here.
+    An alternative that did not recognize the node contributes nothing, so a sole
+    claimant is the whole report and this wrapper renders as that claimant.
+    Several claimants mean their claims overlap, which the report states rather
+    than resolving on its own.
     """
-    for cause in failure.causes:
-        detail = _located_detail(cause)
-        if detail is not None:
-            return detail
-    if failure.detail and failure.detail not in {"nested pattern failed", "no choice matched"}:
-        return failure.detail
-    return None
+
+    node: object
+    causes: tuple[MatchFailure, ...]
+
+    def render(self, indent: int = 0) -> str:
+        if len(self.causes) == 1:
+            return self.causes[0].render(indent)
+        head = f"{'  ' * indent}choice: no alternative matched"
+        return "\n".join([head, *(cause.render(indent + 1) for cause in self.causes)])
 
 
-def _wrap_failure(pattern: object, node: object, failure: PatternFailure) -> PatternFailure:
-    label = _pattern_label(pattern)
-    return PatternFailure(
-        pattern_id=label,
-        node=node,
-        detail=(
-            _located_detail(failure) or "nested pattern failed"
-            if label == "runtime_expression"
-            else "nested pattern failed"
-        ),
-        causes=(failure,),
-    )
+def is_matched(result: object) -> bool:
+    """Whether matching succeeded. Anything else travels back up unchanged."""
+    return isinstance(result, AstMatch)
 
 
 def attach_authored_metadata(value: object, node: ast.AST, context: "MatchContext") -> object:
@@ -163,63 +156,63 @@ def attach_authored_metadata(value: object, node: ast.AST, context: "MatchContex
 
 
 runtime = SimpleNamespace(
-        Call=Call,
-        Broadcast=Broadcast,
-        Binary=Binary,
-        BinaryKind=BinaryKind,
-        Constant=Constant,
-        DType=DType,
-        DimAdd=DimAdd,
-        DimFloorDiv=DimFloorDiv,
-        DimMod=DimMod,
-        DimMul=DimMul,
-        DimSub=DimSub,
-        DimVar=DimVar,
-        Evaluate=Evaluate,
-        Expr=Expr,
-        ExecutionDomainMetadata=ExecutionDomainMetadata,
-        Function=Function,
-        GridRegionExpr=GridRegionExpr,
-        Arange=Arange,
-        IrTuple=IrTuple,
-        Layout=Layout,
-        LayoutBase=LayoutBase,
-        Local=Local,
-        LetStmt=LetStmt,
-        MeshScope=MeshScope,
-        Mesh=Mesh,
-        Module=Module,
-        OpSchema=OpSchema,
-        PrimFunction=PrimFunction,
-        Reshard=Reshard,
-        Reshape=Reshape,
-        Return=Return,
-        Sequential=Sequential,
-        ShardLayout=ShardLayout,
-        Slice=Slice,
-        Split=Split,
-        StorageKind=StorageKind,
-        TensorType=TensorType,
-        TupleType=TupleType,
-        TypeInferContext=TypeInferContext,
-        FunctionScope=FunctionScope,
-        TypeInferVisitor=TypeInferVisitor,
-        TupleGetItem=TupleGetItem,
-        Unary=Unary,
-        UnaryKind=UnaryKind,
-        UnitType=UnitType,
-        Var=Var,
-        DISPLAY_NAME=DISPLAY_NAME,
-        c_order_strides=c_order_strides,
-        canonical_shard_layout=canonical_shard_layout,
-        composed=composed,
-        dim_expr=dim_expr,
-        elaborate=elaborate,
-        normalize_dim=normalize_dim,
-        slice_size=slice_size,
-        simplify_dim=simplify_dim,
-        resolve_storage=resolve_storage,
-    )
+    Call=Call,
+    Broadcast=Broadcast,
+    Binary=Binary,
+    BinaryKind=BinaryKind,
+    Constant=Constant,
+    DType=DType,
+    DimAdd=DimAdd,
+    DimFloorDiv=DimFloorDiv,
+    DimMod=DimMod,
+    DimMul=DimMul,
+    DimSub=DimSub,
+    DimVar=DimVar,
+    Evaluate=Evaluate,
+    Expr=Expr,
+    ExecutionDomainMetadata=ExecutionDomainMetadata,
+    Function=Function,
+    GridRegionExpr=GridRegionExpr,
+    Arange=Arange,
+    IrTuple=IrTuple,
+    Layout=Layout,
+    LayoutBase=LayoutBase,
+    Local=Local,
+    LetStmt=LetStmt,
+    MeshScope=MeshScope,
+    Mesh=Mesh,
+    Module=Module,
+    OpSchema=OpSchema,
+    PrimFunction=PrimFunction,
+    Reshard=Reshard,
+    Reshape=Reshape,
+    Return=Return,
+    Sequential=Sequential,
+    ShardLayout=ShardLayout,
+    Slice=Slice,
+    Split=Split,
+    StorageKind=StorageKind,
+    TensorType=TensorType,
+    TupleType=TupleType,
+    TypeInferContext=TypeInferContext,
+    FunctionScope=FunctionScope,
+    TypeInferVisitor=TypeInferVisitor,
+    TupleGetItem=TupleGetItem,
+    Unary=Unary,
+    UnaryKind=UnaryKind,
+    UnitType=UnitType,
+    Var=Var,
+    DISPLAY_NAME=DISPLAY_NAME,
+    c_order_strides=c_order_strides,
+    canonical_shard_layout=canonical_shard_layout,
+    composed=composed,
+    dim_expr=dim_expr,
+    elaborate=elaborate,
+    normalize_dim=normalize_dim,
+    slice_size=slice_size,
+    simplify_dim=simplify_dim,
+    resolve_storage=resolve_storage,
+)
 
 
 class AstRule(Protocol[T]):
@@ -239,9 +232,7 @@ class AstPattern(Protocol[T]):
 
     def accept(self, visitor: PatternVisitor[Any]) -> Any: ...
 
-    def match(
-        self, node: object, context: MatchContext
-    ) -> AstMatch[T] | PatternFailure | None: ...
+    def match(self, node: object, context: MatchContext) -> AstMatch[T] | MatchFailure | None: ...
 
 
 class PatternVisitor(Protocol[T]):
@@ -317,10 +308,8 @@ class ElementPattern(CombinatorPattern, Generic[T]):
         if syntax is None:
             raise TypeError(f"{type(self).__name__} has no executable syntax")
         matched = syntax.match(node, context)
-        if isinstance(matched, PatternFailure):
-            return _wrap_failure(self, node, matched)
-        if matched is None:
-            return None
+        if not is_matched(matched):
+            return matched
         if isinstance(matched.pattern, ElementPattern):
             return matched
         return AstMatch(
@@ -347,9 +336,7 @@ class LazyPattern(CombinatorPattern):
             self._resolved = self.factory()
         return self._resolved
 
-    def match(
-        self, node: object, context: MatchContext
-    ) -> AstMatch[Any] | PatternFailure | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         matched = self.pattern.match(node, context)
         return matched
 
@@ -359,16 +346,14 @@ class AstNodePattern(CombinatorPattern):
         self.node_type = node_type
         self.parts = tuple(parts)
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         if not isinstance(node, self.node_type):
             return None
         matches: list[AstMatch[Any]] = []
         for part in self.parts:
             matched = part.match(node, context)
-            if isinstance(matched, PatternFailure):
-                return _wrap_failure(self, node, matched)
-            if matched is None:
-                return None
+            if not is_matched(matched):
+                return matched
             matches.append(matched)
         return self._merge(
             self,
@@ -384,15 +369,13 @@ class FieldPattern(CombinatorPattern):
         self.name = name
         self.pattern = pattern
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         if not hasattr(node, self.name):
             return None
         value = getattr(node, self.name)
         matched = self.pattern.match(value, context)
-        if isinstance(matched, PatternFailure):
-            return _wrap_failure(self, node, matched)
-        if matched is None:
-            return None
+        if not is_matched(matched):
+            return matched
         return AstMatch(
             self,
             matched.pattern_id,
@@ -414,7 +397,7 @@ class LiteralPattern(CombinatorPattern):
         self.value = value
         self.value_type = value_type
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         raw = node.value if isinstance(node, ast.Constant) else node
         if self.value is not dataclasses.MISSING and raw != self.value:
             return None
@@ -424,13 +407,11 @@ class LiteralPattern(CombinatorPattern):
 
 
 class ReferencePattern(CombinatorPattern):
-    def __init__(
-        self, *, resolve: bool = False, expected: type | tuple[type, ...] | None = None
-    ):
+    def __init__(self, *, resolve: bool = False, expected: type | tuple[type, ...] | None = None):
         self.resolve = resolve
         self.expected = expected
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         if not isinstance(node, (ast.Name, ast.Attribute)):
             return None
         captures: dict[str, object] = {}
@@ -449,16 +430,14 @@ class SequencePattern(CombinatorPattern):
     def __init__(self, *patterns: AstPattern[Any]):
         self.patterns = tuple(patterns)
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         if not isinstance(node, (tuple, list)) or len(node) != len(self.patterns):
             return None
         matches: list[AstMatch[Any]] = []
         for value, pattern in zip(node, self.patterns):
             matched = pattern.match(value, context)
-            if isinstance(matched, PatternFailure):
-                return _wrap_failure(self, node, matched)
-            if matched is None:
-                return None
+            if not is_matched(matched):
+                return matched
             matches.append(matched)
         return self._merge(
             self,
@@ -473,30 +452,21 @@ class ChoicePattern(CombinatorPattern):
     def __init__(self, *patterns: AstPattern[Any]):
         self.patterns = tuple(patterns)
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
-        failures: list[PatternFailure] = []
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
+        """Take the first alternative that matches, keeping what the others refused.
+
+        An alternative returning ``None`` did not recognize the node and has no
+        opinion, so nothing is recorded for it; only an alternative that claimed
+        the node and then refused contributes to the report.
+        """
+        failures: list[MatchFailure] = []
         for pattern in self.patterns:
             matched = pattern.match(node, context)
-            if isinstance(matched, PatternFailure):
-                failures.append(matched)
-                continue
-            if matched is not None:
+            if is_matched(matched):
                 return matched
-            failures.append(
-                PatternFailure(
-                    pattern_id=_pattern_label(pattern),
-                    node=node,
-                    detail="pattern did not match",
-                )
-            )
-        if failures:
-            return PatternFailure(
-                pattern_id="choice",
-                node=node,
-                detail="no choice matched",
-                causes=tuple(failures),
-            )
-        return None
+            if isinstance(matched, MatchFailure):
+                failures.append(matched)
+        return ChoiceFailure(node, tuple(failures)) if failures else None
 
 
 class ConditionPattern(CombinatorPattern):
@@ -512,7 +482,7 @@ class ConditionPattern(CombinatorPattern):
         self.test = test
         self.pattern = pattern
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         if not self.test(node, context):
             return None
         return self.pattern.match(node, context)
@@ -522,14 +492,12 @@ class OptionalPattern(CombinatorPattern):
     def __init__(self, pattern: AstPattern[Any]):
         self.pattern = pattern
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         if node is None:
             return AstMatch(self, "optional", node, {}, "optional")
         matched = self.pattern.match(node, context)
-        if isinstance(matched, PatternFailure):
-            return _wrap_failure(self, node, matched)
-        if matched is None:
-            return None
+        if not is_matched(matched):
+            return matched
         return AstMatch(
             self,
             matched.pattern_id,
@@ -550,22 +518,18 @@ class RepeatPattern(CombinatorPattern):
     def _index_child(child: AstChild, index: int) -> AstChild:
         return dataclasses.replace(child, name=child.name.format(index=index))
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         if not isinstance(node, (tuple, list)) or len(node) < self.minimum:
             return None
         matches: list[AstMatch[Any]] = []
         for index, value in enumerate(node):
             matched = self.pattern.match(value, context)
-            if isinstance(matched, PatternFailure):
-                return _wrap_failure(self, node, matched)
-            if matched is None:
-                return None
+            if not is_matched(matched):
+                return matched
             matches.append(
                 dataclasses.replace(
                     matched,
-                    children=tuple(
-                        self._index_child(child, index) for child in matched.children
-                    ),
+                    children=tuple(self._index_child(child, index) for child in matched.children),
                 )
             )
         return self._merge(
@@ -582,7 +546,7 @@ class PredicatePattern(CombinatorPattern):
         self.label = label
         self.predicate = predicate
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         if not self.predicate(node, context):
             return None
         return AstMatch(self, "predicate", node, {}, "predicate")
@@ -593,7 +557,7 @@ class CapturePattern(CombinatorPattern):
         self.name = name
         self.extractor = extractor
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         try:
             value = self.extractor(node, context)
         except (AttributeError, KeyError, TypeError, ValueError):
@@ -633,13 +597,11 @@ class ChildPattern(CombinatorPattern):
             self._pattern = pattern
         return pattern
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         value = self.transform(node) if self.transform is not None else node
         if not isinstance(value, ast.AST):
             return None
-        values = (
-            self.values(value, context) if callable(self.values) else self.values or {}
-        )
+        values = self.values(value, context) if callable(self.values) else self.values or {}
         expected_type = (
             self.expected_type(value, context)
             if callable(self.expected_type)
@@ -659,21 +621,15 @@ class ChildPattern(CombinatorPattern):
 
 
 class BranchPattern(CombinatorPattern):
-    def __init__(
-        self, branch_id: str, pattern: AstPattern[Any], *, pattern_id: str | None = None
-    ):
+    def __init__(self, branch_id: str, pattern: AstPattern[Any], *, pattern_id: str | None = None):
         self.branch_id = branch_id
         self.pattern = pattern
         self.pattern_id = pattern_id or branch_id
 
-    def match(
-        self, node: object, context: MatchContext
-    ) -> AstMatch[Any] | PatternFailure | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         matched = self.pattern.match(node, context)
-        if isinstance(matched, PatternFailure):
-            return _wrap_failure(self, node, matched)
-        if matched is None:
-            return None
+        if not is_matched(matched):
+            return matched
         return AstMatch(
             self,
             self.pattern_id,
@@ -691,17 +647,17 @@ class BindPattern(CombinatorPattern):
     def __init__(
         self,
         pattern: AstPattern[Any],
-        binder: Callable[[object, MatchContext, AstMatch[Any]], AstMatch[Any] | None],
+        binder: Callable[
+            [object, MatchContext, AstMatch[Any]], AstMatch[Any] | MatchFailure | None
+        ],
     ):
         self.pattern = pattern
         self.binder = binder
 
-    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | PatternFailure | None:
+    def match(self, node: object, context: MatchContext) -> AstMatch[Any] | MatchFailure | None:
         matched = self.pattern.match(node, context)
-        if isinstance(matched, PatternFailure):
-            return _wrap_failure(self, node, matched)
-        if matched is None:
-            return None
+        if not is_matched(matched):
+            return matched
         bound = self.binder(node, context, matched)
         return bound
 
@@ -794,9 +750,7 @@ class FuncParserContext:
             role = self.function_kind
         if isinstance(role, str) and role not in {item.value for item in FunctionRole}:
             role = (
-                FunctionRole.ROOT
-                if role in {"func", "prim_func", "kernel"}
-                else FunctionRole(role)
+                FunctionRole.ROOT if role in {"func", "prim_func", "kernel"} else FunctionRole(role)
             )
         if role is not self.role:
             object.__setattr__(self, "role", role)
@@ -813,11 +767,7 @@ class FuncParserContext:
 
     @property
     def specializations(self) -> tuple[object, ...]:
-        return (
-            ()
-            if self.role is not FunctionRole.VARIANT or self.key is None
-            else (self.key,)
-        )
+        return () if self.role is not FunctionRole.VARIANT or self.key is None else (self.key,)
 
     @property
     def converter(self) -> object | None:
@@ -834,9 +784,7 @@ class ParserCallFeedProvider:
         if self.module_scope is None:
             return None
         for _name, child in self.module_scope.items():
-            if getattr(child, "owns", lambda *_args, **_kwargs: False)(
-                callee, derived=True
-            ):
+            if getattr(child, "owns", lambda *_args, **_kwargs: False)(callee, derived=True):
                 return child
         return None
 
@@ -881,9 +829,7 @@ class ModuleFunctionValidationRule:
 
 @dataclass(frozen=True)
 class ModuleFunctionRegistrationRule:
-    STATEMENT: ClassVar[str] = (
-        "A validated module function must be recorded in declaration order."
-    )
+    STATEMENT: ClassVar[str] = "A validated module function must be recorded in declaration order."
 
     def apply(
         self,
@@ -988,13 +934,9 @@ class ModuleBuildContext:
                 for root in self.roots
             ):
                 raise ValueError(
-                    self._binding_error(
-                        role, getattr(function, "name", binding), self.owner_name
-                    )
+                    self._binding_error(role, getattr(function, "name", binding), self.owner_name)
                 )
-            expected = (
-                runtime.PrimFunction if context.dialect == "tir" else runtime.Function
-            )
+            expected = runtime.PrimFunction if context.dialect == "tir" else runtime.Function
             if not isinstance(function, expected):
                 raise TypeError(
                     f"root {binding!r} constructed {type(function).__name__}, expected {expected.__name__}"
@@ -1004,13 +946,9 @@ class ModuleBuildContext:
         if base is None or not isinstance(base, runtime.Function):
             raise ValueError(f"{role.value} {binding!r}: base is not a HIR Function")
         if getattr(base, "_sealed", False):
-            raise RuntimeError(
-                f"base {base.name!r}: cannot register {role.value} after seal"
-            )
+            raise RuntimeError(f"base {base.name!r}: cannot register {role.value} after seal")
         if binding == "_" and role is FunctionRole.VARIANT:
-            raise ValueError(
-                f"base {base.name!r}: a variant binding may not be named '_'"
-            )
+            raise ValueError(f"base {base.name!r}: a variant binding may not be named '_'")
         if binding in self.bindings and role is not FunctionRole.CONVERTER:
             raise ValueError(self._binding_error(role, binding, self.owner_name))
         if role is FunctionRole.VARIANT:
@@ -1019,9 +957,7 @@ class ModuleBuildContext:
             keys = self.variant_keys.setdefault(id(base), set())
             key = context.key
             if key in keys:
-                raise ValueError(
-                    f"base {base.name!r}: duplicate specialization key {key!r}"
-                )
+                raise ValueError(f"base {base.name!r}: duplicate specialization key {key!r}")
             return
         if getattr(function, "body", None) is None:
             raise ValueError(f"base {base.name!r}: a converter must have a real body")
@@ -1307,13 +1243,9 @@ class MatchContext:
             )
         return value
 
-    def resolve_static(
-        self, node: ast.AST, expected: type[T] | tuple[type[Any], ...]
-    ) -> T:
+    def resolve_static(self, node: ast.AST, expected: type[T] | tuple[type[Any], ...]) -> T:
         if not isinstance(node, (ast.Name, ast.Attribute)):
-            raise ParseError.from_node(
-                node, self, "static references use Name or Attribute"
-            )
+            raise ParseError.from_node(node, self, "static references use Name or Attribute")
         value = _resolve_reference(node, self)
         if not isinstance(value, expected):
             raise ParseError.from_node(
@@ -1353,9 +1285,7 @@ class AstMatch(Generic[T]):
     def construct(self, children: Mapping[str, object], context: MatchContext) -> T:
         pattern_constructor = getattr(self.pattern, "construct", None)
         if not callable(pattern_constructor):
-            raise TypeError(
-                f"Pattern {type(self.pattern).__name__} has no construct method"
-            )
+            raise TypeError(f"Pattern {type(self.pattern).__name__} has no construct method")
         value = pattern_constructor(self, children, context)
         for rule in self.pattern.RULES:
             value = rule.apply(value, match=self, context=context)
@@ -1400,7 +1330,7 @@ def parse_node(pattern: AstPattern[T], node: ast.AST, context: MatchContext) -> 
     """Select, recursively construct, and apply rules for one local pattern."""
 
     matched = pattern.match(node, context)
-    if isinstance(matched, PatternFailure):
+    if isinstance(matched, MatchFailure):
         raise ParseError.from_node(node, context, matched.render())
     if matched is None:
         raise ParseError.from_node(node, context)
@@ -1513,14 +1443,10 @@ class CanonicalDTypeRule:
 
     def apply(self, value, *, match, context):
         if not isinstance(value, runtime.DType):
-            raise ParseError.from_node(
-                match.node, context, "dtype did not construct DType"
-            )
+            raise ParseError.from_node(match.node, context, "dtype did not construct DType")
         canonical = runtime.DType._members().get(value.name)
         if canonical is not value:
-            raise ParseError.from_node(
-                match.node, context, f"non-canonical dtype {value.name!r}"
-            )
+            raise ParseError.from_node(match.node, context, f"non-canonical dtype {value.name!r}")
         return value
 
 
@@ -1530,13 +1456,9 @@ class LayoutShapeRule:
 
     def apply(self, value, *, match, context):
         if value is not None and not isinstance(value, runtime.LayoutBase):
-            raise ParseError.from_node(
-                match.node, context, "layout did not construct LayoutBase"
-            )
+            raise ParseError.from_node(match.node, context, "layout did not construct LayoutBase")
         if value is not None and not isinstance(value.shape, tuple):
-            raise ParseError.from_node(
-                match.node, context, "layout shape is not a tuple"
-            )
+            raise ParseError.from_node(match.node, context, "layout shape is not a tuple")
         return value
 
 
@@ -1546,9 +1468,7 @@ class LayoutPositionRule:
 
     def apply(self, value, *, match, context):
         if context.role in {"storage", "dtype", "shape"}:
-            raise ParseError.from_node(
-                match.node, context, "layout used in a non-layout role"
-            )
+            raise ParseError.from_node(match.node, context, "layout used in a non-layout role")
         return value
 
 
@@ -1558,47 +1478,31 @@ class StorageValueRule:
 
     def apply(self, value, *, match, context):
         if not isinstance(value, runtime.StorageKind):
-            raise ParseError.from_node(
-                match.node, context, "storage did not construct StorageKind"
-            )
+            raise ParseError.from_node(match.node, context, "storage did not construct StorageKind")
         return value
 
 
 @dataclass(frozen=True)
 class TensorLayoutStorageRule:
-    STATEMENT: ClassVar[str] = (
-        "A tensor type must contain compatible layout and storage values."
-    )
+    STATEMENT: ClassVar[str] = "A tensor type must contain compatible layout and storage values."
 
     def apply(self, value, *, match, context):
         if not isinstance(value, runtime.TensorType):
-            raise ParseError.from_node(
-                match.node, context, "tensor did not construct TensorType"
-            )
+            raise ParseError.from_node(match.node, context, "tensor did not construct TensorType")
         if not isinstance(value.storage, runtime.StorageKind):
-            raise ParseError.from_node(
-                match.node, context, "tensor storage is not StorageKind"
-            )
-        if value.layout is not None and not isinstance(
-            value.layout, runtime.LayoutBase
-        ):
-            raise ParseError.from_node(
-                match.node, context, "tensor layout is not LayoutBase"
-            )
+            raise ParseError.from_node(match.node, context, "tensor storage is not StorageKind")
+        if value.layout is not None and not isinstance(value.layout, runtime.LayoutBase):
+            raise ParseError.from_node(match.node, context, "tensor layout is not LayoutBase")
         return value
 
 
 @dataclass(frozen=True)
 class TensorPositionRule:
-    STATEMENT: ClassVar[str] = (
-        "A tensor type's storage must be legal for its dialect and position."
-    )
+    STATEMENT: ClassVar[str] = "A tensor type's storage must be legal for its dialect and position."
 
     def apply(self, value, *, match, context):
         if context.role == "storage":
-            raise ParseError.from_node(
-                match.node, context, "TensorType used in a storage role"
-            )
+            raise ParseError.from_node(match.node, context, "TensorType used in a storage role")
         allowed = context.values.get("allowed_storage")
         if allowed is not None and value.storage not in allowed:
             rendered = tuple(str(item) for item in allowed)
@@ -1612,15 +1516,11 @@ class TensorPositionRule:
 
 @dataclass(frozen=True)
 class ShapeDimRule:
-    STATEMENT: ClassVar[str] = (
-        "A shape dimension must be an integer, DimVar, or expression."
-    )
+    STATEMENT: ClassVar[str] = "A shape dimension must be an integer, DimVar, or expression."
 
     def apply(self, value, *, match, context):
         value = runtime.normalize_dim(value)
-        if isinstance(value, bool) or not isinstance(
-            value, (int, runtime.DimVar, runtime.Expr)
-        ):
+        if isinstance(value, bool) or not isinstance(value, (int, runtime.DimVar, runtime.Expr)):
             raise ParseError.from_node(
                 match.node,
                 context,
@@ -1653,7 +1553,9 @@ __all__ = [
     "FunctionRole",
     "LayoutPattern",
     "LexicalScope",
+    "ChoiceFailure",
     "MatchContext",
+    "MatchFailure",
     "ModuleBuildContext",
     "NamePattern",
     "ParseError",
@@ -1699,9 +1601,7 @@ def _infer_call(operation, args, context):
         placeholder_type = runtime.TensorType.scalar(runtime.DType.f32)
     metadata = ()
     if context.function is not None and context.function.state.mesh_stack:
-        metadata = (
-            runtime.ExecutionDomainMetadata(tuple(context.function.state.mesh_stack)),
-        )
+        metadata = (runtime.ExecutionDomainMetadata(tuple(context.function.state.mesh_stack)),)
     placeholder = runtime.Call(
         type=placeholder_type, target=operation, args=tuple(args), metadata=metadata
     )

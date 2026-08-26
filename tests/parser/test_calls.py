@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import get_args, get_origin
 
 import pytest
@@ -27,9 +28,7 @@ def test_matmul_layout_literals_are_parser_checked() -> None:
     assert get_args(MatMul.b_layout.annotation) == ("NK", "KN")
 
     @func
-    def default_layout(
-        a: Tensor[(2, 3), "f32"], b: Tensor[(3, 4), "f32"]
-    ) -> Tensor[(2, 4), "f32"]:
+    def default_layout(a: Tensor[(2, 3), "f32"], b: Tensor[(3, 4), "f32"]) -> Tensor[(2, 4), "f32"]:
         return tf.matmul(a, b)
 
     assert isinstance(default_layout.body, Call)
@@ -54,15 +53,11 @@ def test_variadic_list_and_tuple_literals_flatten_to_call_args() -> None:
         assert get_args(annotation) == (TensorPattern,)
 
     @func
-    def from_list(
-        a: Tensor[(1, 4), "f32"], b: Tensor[(1, 4), "f32"]
-    ) -> Tensor[(2, 4), "f32"]:
+    def from_list(a: Tensor[(1, 4), "f32"], b: Tensor[(1, 4), "f32"]) -> Tensor[(2, 4), "f32"]:
         return tf.concat([a, b], axis=0)
 
     @func
-    def from_tuple(
-        a: Tensor[(1, 4), "f32"], b: Tensor[(1, 4), "f32"]
-    ) -> Tensor[(2, 4), "f32"]:
+    def from_tuple(a: Tensor[(1, 4), "f32"], b: Tensor[(1, 4), "f32"]) -> Tensor[(2, 4), "f32"]:
         return tf.concat((a, b), axis=0)
 
     for function in (from_list, from_tuple):
@@ -73,9 +68,7 @@ def test_variadic_list_and_tuple_literals_flatten_to_call_args() -> None:
 
 def test_stack_uses_the_same_variadic_list_contract() -> None:
     @func
-    def stack_rows(
-        a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]
-    ) -> Tensor[(2, 4), "f32"]:
+    def stack_rows(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
         return tf.stack([a, b], axis=0)
 
     assert isinstance(stack_rows.body, Call)
@@ -116,9 +109,7 @@ def test_variadic_direct_positional_inputs_are_rejected() -> None:
     with pytest.raises(ParseError, match="require exactly one list, tuple"):
 
         @func
-        def direct(
-            a: Tensor[(1, 4), "f32"], b: Tensor[(1, 4), "f32"]
-        ) -> Tensor[(2, 4), "f32"]:
+        def direct(a: Tensor[(1, 4), "f32"], b: Tensor[(1, 4), "f32"]) -> Tensor[(2, 4), "f32"]:
             return tf.concat(a, b, axis=0)
 
     with pytest.raises(ParseError, match="require exactly one list, tuple"):
@@ -140,17 +131,13 @@ def test_variadic_generator_and_starred_inputs_name_the_unsupported_form() -> No
     with pytest.raises(ParseError, match="do not support starred expansion"):
 
         @func
-        def starred(
-            a: Tensor[(1, 4), "f32"], b: Tensor[(1, 4), "f32"]
-        ) -> Tensor[(2, 4), "f32"]:
+        def starred(a: Tensor[(1, 4), "f32"], b: Tensor[(1, 4), "f32"]) -> Tensor[(2, 4), "f32"]:
             return tf.concat([a, *[b]], axis=0)
 
     with pytest.raises(ParseError, match="require an explicit list, tuple"):
 
         @func
-        def expanded(
-            a: Tensor[(1, 4), "f32"], b: Tensor[(1, 4), "f32"]
-        ) -> Tensor[(2, 4), "f32"]:
+        def expanded(a: Tensor[(1, 4), "f32"], b: Tensor[(1, 4), "f32"]) -> Tensor[(2, 4), "f32"]:
             parts = (a, b)
             return tf.concat(*parts, axis=0)
 
@@ -159,9 +146,7 @@ def test_variadic_sequence_names_are_not_implicitly_expanded() -> None:
     with pytest.raises(ParseError, match="require an explicit list, tuple"):
 
         @func
-        def named(
-            a: Tensor[(1, 4), "f32"], b: Tensor[(1, 4), "f32"]
-        ) -> Tensor[(2, 4), "f32"]:
+        def named(a: Tensor[(1, 4), "f32"], b: Tensor[(1, 4), "f32"]) -> Tensor[(2, 4), "f32"]:
             parts = (a, b)
             return tf.concat(parts, axis=0)
 
@@ -182,9 +167,7 @@ def test_unsupported_list_comprehension_shapes_are_named(program: str, message: 
 
             @func
             def rejected(x: Tensor[(1, 4), "f32"]) -> Tensor[(2, 4), "f32"]:
-                return tf.concat(
-                    [x for first in range(1) for second in range(2)], axis=0
-                )
+                return tf.concat([x for first in range(1) for second in range(2)], axis=0)
 
         elif program == "target":
 
@@ -289,3 +272,73 @@ def test_placement_at_and_matmul_at_coexist_in_one_function() -> None:
     assert isinstance(body, Call)
     assert isinstance(body.target, MatMul)
     assert any(isinstance(argument.target, Reshard) for argument in body.args)
+
+
+@pytest.mark.parametrize(
+    ("program", "message"),
+    [
+        (
+            "misspelled",
+            "matmul has no attribute 'a_layoutt'; its attributes are: a_layout, b_layout",
+        ),
+        ("few", "matmul takes 2 inputs, got 1"),
+        ("many", "matmul takes at most 4 positional arguments, got 5"),
+        ("twice", "attribute 'a_layout' is already bound by a positional argument"),
+    ],
+)
+def test_a_refused_call_states_what_was_wrong_with_it(program: str, message: str) -> None:
+    """A call the parser recognized and refused names its own reason, not a shape mismatch."""
+    with pytest.raises(ParseError, match=re.escape(message)):
+        if program == "misspelled":
+
+            @func
+            def refused(a: Tensor[(2, 4), "bf16"], b: Tensor[(4, 3), "bf16"]):
+                return tf.matmul(a, b, a_layoutt="MK")
+
+        elif program == "few":
+
+            @func
+            def refused(a: Tensor[(2, 4), "bf16"], b: Tensor[(4, 3), "bf16"]):
+                return tf.matmul(a)
+
+        elif program == "many":
+
+            @func
+            def refused(a: Tensor[(2, 4), "bf16"], b: Tensor[(4, 3), "bf16"]):
+                return tf.matmul(a, b, "MK", "KN", "KN")
+
+        else:
+
+            @func
+            def refused(a: Tensor[(2, 4), "bf16"], b: Tensor[(4, 3), "bf16"]):
+                return tf.matmul(a, b, "MK", a_layout="MK")
+
+
+def test_a_refused_call_reports_one_reason_rather_than_every_alternative() -> None:
+    """A choice drops the alternatives that stated nothing instead of listing them."""
+    with pytest.raises(ParseError) as raised:
+
+        @func
+        def refused(a: Tensor[(2, 4), "bf16"], b: Tensor[(4, 3), "bf16"]):
+            return tf.matmul(a)
+
+    message = str(raised.value)
+    assert "pattern did not match" not in message
+    assert "no alternative matched" not in message
+    assert message.count("matmul takes 2 inputs, got 1") == 1
+
+
+def test_an_unresolved_callee_outside_the_op_namespace_stays_silent() -> None:
+    """A pattern that has not claimed a node contributes no reason to the report.
+
+    ``tf.no_such_op`` resolves through the op namespace, so the call pattern owns
+    it and names the failure. A bare name belongs to another alternative, so the
+    call pattern must say nothing rather than refuse on its behalf.
+    """
+    with pytest.raises(ParseError) as raised:
+
+        @func
+        def refused(a: Tensor[(2, 4), "bf16"]) -> Tensor[(2, 4), "bf16"]:
+            return no_such_helper(a)  # noqa: F821
+
+    assert "unsupported call" not in str(raised.value)

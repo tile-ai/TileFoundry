@@ -226,6 +226,7 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | Ordered Rules | Validates and normalizes each owner value after construction. |
 | Module Build | Lets Python execute the class body, collects declarations, resolves child Modules first, then parses Functions in source order and finalizes the Module. |
 | Pattern Visitor | Traverses the same graph to render this section's generated grammar and constraints. |
+| Refusal | Carries the reason from the pattern that claimed a node and then refused it, so a report names a cause rather than the absence of a match. |
 
 ```mermaid
 classDiagram
@@ -235,6 +236,11 @@ classDiagram
     Element o-- AstPattern
     Element o-- AstRule
     AstPattern --> AstMatch
+    AstPattern --> MatchFailure
+    MatchFailure <|.. PatternFailure
+    MatchFailure <|.. ChoiceFailure
+    ChoiceFailure o-- MatchFailure : causes
+    ParseError <.. MatchFailure
     PatternVisitor ..> AstPattern
     ParserAPI ..> ModuleBuild
 ```
@@ -254,6 +260,41 @@ flowchart TD
     BUILT --> RETURN
     MODULE -->|no| RETURN["return standalone result"]
 ```
+
+```mermaid
+flowchart TD
+    TRY["alternative.match(node)"] --> OUT{"outcome"}
+    OUT -->|"AstMatch"| WIN["choice accepts it; pending refusals are discarded"]
+    OUT -->|"MatchFailure"| CLAIM["claimed the node and refused: reason recorded"]
+    OUT -->|"None"| PASS["did not recognize the node: nothing recorded"]
+    PASS --> NEXT["try the next alternative"]
+    CLAIM --> NEXT
+    NEXT --> DONE{"any refusal recorded?"}
+    DONE -->|no| SILENT["return None: no alternative recognized this node"]
+    DONE -->|yes| COLLECT["ChoiceFailure over the claimants"]
+    COLLECT --> UP["travels up unchanged; combinators add no wrapping"]
+    UP --> RENDER["render(): a sole claimant is the whole report"]
+    RENDER --> RAISE["ParseError with source location"]
+    SILENT --> RAISE
+```
+
+A pattern MUST establish that a node is its own before it refuses with a reason. That claim is
+what makes the reason trustworthy: it says no remaining alternative can accept this node, so
+the refusal is the author's mistake and not another pattern's turn. A callee resolving through
+the authored op namespace to an op schema is such a claim — no other alternative accepts an
+attribute of that module — and a wrong argument count after it is an error. A callee that does
+not resolve is not a claim: `launch(...)` is a bare name another alternative owns, so the
+pattern returns `None` and says nothing. Reasons are never reconstructed from the AST after
+the fact; an inspection outside the refusing pattern cannot see which step it failed at, and
+becomes a second, divergent copy of that knowledge.
+
+`None` and a `MatchFailure` differ only for a choice; every other combinator returns either one
+unchanged, so a refusal keeps the identity and the wording of the pattern that produced it all
+the way to `parse_node`. Nothing is wrapped, filtered, or re-described on the way up. A
+`ChoiceFailure` records only the alternatives that claimed the node, which is normally one, and
+it renders as that sole claimant. Two claimants mean two patterns claim overlapping shapes; the
+report states both rather than choosing between them, because the ambiguity is in the grammar
+and not in the report.
 
 Pattern combinators serve both runtime matching and Spec traversal. `AstMatch` separates syntax
 matching from object construction, while each Rule reads the recursive context after its owner
