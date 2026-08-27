@@ -11,7 +11,7 @@ import functools
 import types
 from dataclasses import dataclass, field
 from dataclasses import replace as _replace
-from typing import Mapping, Union
+from typing import Literal, Mapping, Union
 
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -71,27 +71,42 @@ def child_module_of(root: "Module", caller: object, callee: object) -> "Module |
     return called if any(child is called for child in owner.modules) else None
 
 
-def _calls_in(function) -> tuple:
-    """Every ``Call`` on a Function that the body of *function* makes.
-
-    Its own body and nothing else: a variant this dispatch did not select is
-    not running, and a converter runs offline rather than here.
-    """
+def calls_in_expr(
+    expr, *, order: Literal["preorder", "postorder"] = "preorder"
+) -> tuple:
+    """Every HIR Function ``Call`` reachable from *expr* in *order*."""
     from tilefoundry.ir.core.expr import Call  # noqa: PLC0415 -- cycle
     from tilefoundry.ir.visitor import ExprWalker  # noqa: PLC0415
 
-    found: list[Call] = []
+    if order not in ("preorder", "postorder"):
+        raise ValueError(f"call order must be 'preorder' or 'postorder', got {order!r}")
+    before: list[Call] = []
+    after: list[Call] = []
 
     class _CallVisitor(ExprWalker[None]):
-        def visit_Call(self, expr: Call) -> None:
-            if isinstance(expr.target, HirFunction):
-                found.append(expr)
-            self.visit_operands(expr)
+        def visit_Call(self, call: Call) -> None:
+            is_function_call = isinstance(call.target, HirFunction)
+            if is_function_call:
+                before.append(call)
+            self.visit_operands(call)
+            if is_function_call:
+                after.append(call)
 
+    if expr is not None:
+        _CallVisitor().visit(expr)
+    return tuple(before if order == "preorder" else after)
+
+
+def calls_in(
+    function, *, order: Literal["preorder", "postorder"] = "preorder"
+) -> tuple:
+    """Every HIR Function ``Call`` made by *function*'s selected body.
+
+    A variant this dispatch did not select is not running, and a converter runs
+    offline rather than here.
+    """
     body = getattr(function, "body", None)
-    if body is not None:
-        _CallVisitor().visit(body)
-    return tuple(found)
+    return calls_in_expr(body, order=order)
 
 
 def _extended_dims(params, arg_types, dims: dict) -> dict:
@@ -678,7 +693,7 @@ class LoadedModule:
                 return
             seen.add(key)
             found.append((path, reading, function))
-            for call in _calls_in(function):
+            for call in calls_in(function):
                 declared = call.target
                 child = child_module_instance(reading, declared)
                 supplied = tuple(
@@ -877,6 +892,8 @@ __all__ = [
     "LoadedModule",
     "Module",
     "ModuleFunction",
+    "calls_in",
+    "calls_in_expr",
     "function_selectors",
     "select",
 ]

@@ -16,7 +16,7 @@ from tilefoundry.ir.core import (
     binding_name,
     get_metadata,
 )
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, calls_in
 from tilefoundry.ir.core.module import owning_module as _owning_module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -204,9 +204,8 @@ def reachable_functions(root: Function) -> tuple[Function, ...]:
             return
         seen.add(id(fn))
         result.append(fn)
-        for expr in postorder(fn.body):
-            if isinstance(expr, Call) and isinstance(expr.target, Function):
-                visit(expr.target)
+        for call in calls_in(fn, order="postorder"):
+            visit(call.target)
 
     visit(root)
     return tuple(result)
@@ -214,11 +213,7 @@ def reachable_functions(root: Function) -> tuple[Function, ...]:
 
 def called_functions(fn: Function) -> tuple[Function, ...]:
     """Every Function *fn* calls directly, in the order its body reaches them."""
-    found: list[Function] = []
-    for expr in postorder(fn.body):
-        if isinstance(expr, Call) and isinstance(expr.target, Function):
-            found.append(expr.target)
-    return tuple(found)
+    return tuple(call.target for call in calls_in(fn, order="postorder"))
 
 
 def owning_module(root: Module, fn: Function) -> Module:

@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from typing import Union
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, calls_in_expr
 from tilefoundry.ir.core.pattern import DimVarRangePat, locate_dim_var
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -1836,25 +1836,9 @@ def _derive_meshes_from_body(expr) -> tuple[Mesh | None, Mesh | None]:
     return deriver.cta_mesh, deriver.thread_mesh
 
 
-class _CalleeCollector(ExprWalker[None]):
-    """Collect the set of HIR function names called anywhere in an Expr."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.found: set[str] = set()
-
-    def visit_Call(self, call: Call) -> None:
-        tgt = call.target
-        if isinstance(tgt, HirFunction):
-            self.found.add(tgt.name)
-        self.visit_operands(call)
-
-
 def _collect_hir_callee_names(expr) -> set[str]:
     """Return the set of HIR function names called anywhere in ``expr``."""
-    collector = _CalleeCollector()
-    collector.visit(expr)
-    return collector.found
+    return {call.target.name for call in calls_in_expr(expr)}
 
 
 def _topo_order_dispatch_groups(
