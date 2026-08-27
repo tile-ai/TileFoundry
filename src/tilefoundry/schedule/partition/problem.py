@@ -41,7 +41,7 @@ from tilefoundry.ir.types.shard import (
     try_c_order_strides,
 )
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.visitor import ExprMutator
+from tilefoundry.ir.visitor import ExprCloner
 from tilefoundry.visitor_registry.contexts import (
     Cost,
     CostContext,
@@ -358,18 +358,18 @@ class _Closer:
                 )
 
     def _retag(self, expr: Expr, types: "itertools.chain | object") -> Expr:
-        class _RetagMutator(ExprMutator):
+        class _RetagMutator(ExprCloner):
             def __init__(self, type_iter) -> None:
                 super().__init__()
                 self.type_iter = type_iter
 
-            def visit_Tuple(self, value: Tuple) -> Expr:
-                new_elements = tuple(self.visit(element) for element in value.elements)
+            def visit_Tuple(self, value: Tuple, ctx=None) -> Expr:
+                new_elements = tuple(self.visit(element, ctx) for element in value.elements)
                 if new_elements == value.elements:
                     return value
                 return replace(value, elements=new_elements)
 
-            def default_visit(self, value: Expr) -> Expr:
+            def default_visit(self, value: Expr, ctx=None) -> Expr:
                 if isinstance(value.type, TensorType):
                     try:
                         type = next(self.type_iter)  # type: ignore[call-overload]
@@ -535,7 +535,7 @@ class _Closer:
             scope = FunctionScope(self.program.module, self.program.root)
             ctx = TypeInferContext(scope=scope)
             try:
-                output_type = TypeInferVisitor(ctx).visit(candidate_call)
+                output_type = TypeInferVisitor().visit(candidate_call, ctx)
             except (TypeError, ValueError, NotImplementedError, VerifyError, IndexError):
                 continue
             output_leaves = tensor_leaves(output_type)
@@ -557,7 +557,7 @@ class _Closer:
                     level=self.topology.name,
                     topologies=self.program.module.effective_topologies(),
                 )
-                cost = CostEvaluator(cost_ctx).visit_Call(candidate_call)
+                cost = CostEvaluator().visit_Call(candidate_call, cost_ctx)
                 mesh, count = self._active_mesh_for_outputs(output_types)
             except KeyError:
                 continue
@@ -638,7 +638,7 @@ class _Closer:
                         topologies=self.program.module.effective_topologies(),
                     )
                     try:
-                        cost = CostEvaluator(cost_ctx).visit_Call(call)
+                        cost = CostEvaluator().visit_Call(call, cost_ctx)
                     except (TypeError, ValueError) as exc:
                         raise PartitionProblemError(
                             f"cost evaluation for synthesized Reshard at "

@@ -210,7 +210,7 @@ class _AllocTensorRejectingVisitor(ExprVisitor[None]):
         super().__init__()
         self.at_letstmt_value = at_letstmt_value
 
-    def visit_Call(self, expr: Call) -> None:
+    def visit_Call(self, expr: Call, ctx=None) -> None:
         if isinstance(expr.target, AllocTensorOp):
             if not self.at_letstmt_value:
                 raise VerifyError(
@@ -218,12 +218,12 @@ class _AllocTensorRejectingVisitor(ExprVisitor[None]):
                     f"as a direct LetStmt.value; found nested inside another Expr"
                 )
             self.at_letstmt_value = False
-            self.visit_operands(expr)
+            self.visit_operands(expr, ctx)
             return
         self.at_letstmt_value = False
-        self.visit_operands(expr)
+        self.visit_operands(expr, ctx)
 
-    def default_visit(self, expr) -> None:
+    def default_visit(self, expr, ctx=None) -> None:
         return None
 
 
@@ -409,14 +409,14 @@ class _LaunchExtentVisitor(ExprVisitor[None]):
         self.extent_params = extent_params
         self.ref_name = ref_name
 
-    def visit_Constant(self, extent: Constant) -> None:
+    def visit_Constant(self, extent: Constant, ctx=None) -> None:
         if isinstance(extent.value, bool) or not isinstance(extent.value, int):
             raise VerifyError(
                 f"Launch of {self.ref_name!r}: grid/block extent Constant must be an "
                 f"int, got {extent.value!r}"
             )
 
-    def visit_ShapeOf(self, extent: ShapeOf) -> None:
+    def visit_ShapeOf(self, extent: ShapeOf, ctx=None) -> None:
         param = self.extent_params.get(id(extent.param))
         if param is None:
             raise VerifyError(
@@ -432,13 +432,13 @@ class _LaunchExtentVisitor(ExprVisitor[None]):
                 f"(rank {rank})"
             )
 
-    def visit_Call(self, extent: Call) -> None:
+    def visit_Call(self, extent: Call, ctx=None) -> None:
         if not (isinstance(extent.target, _LAUNCH_EXTENT_OPS)):
-            self.default_visit(extent)
+            self.default_visit(extent, ctx)
             return
-        self.visit_operands(extent)
+        self.visit_operands(extent, ctx)
 
-    def default_visit(self, extent) -> None:
+    def default_visit(self, extent, ctx=None) -> None:
         raise VerifyError(
             f"Launch of {self.ref_name!r}: grid/block extent must be an integer "
             f"Constant, ShapeOf, or dim-arithmetic Call, got {type(extent).__name__}"

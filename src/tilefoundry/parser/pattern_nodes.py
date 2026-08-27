@@ -1838,7 +1838,7 @@ class CallTypeInferenceRule:
         infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
         if not isinstance(infer_context, runtime.TypeInferContext):
             infer_context = runtime.TypeInferContext()
-        computed = runtime.TypeInferVisitor(infer_context).visit(value)
+        computed = runtime.TypeInferVisitor().visit(value, infer_context)
         value.type = computed
         return value
 
@@ -4083,7 +4083,7 @@ class FunctionReturnRule:
             infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
             if not isinstance(infer_context, runtime.TypeInferContext):
                 infer_context = runtime.TypeInferContext()
-            body_type = runtime.TypeInferVisitor(infer_context).visit(value.body)
+            body_type = runtime.TypeInferVisitor().visit(value.body, infer_context)
             if not _types_compatible(body_type, value.return_type):
                 raise ParseError.from_node(
                     match.node,

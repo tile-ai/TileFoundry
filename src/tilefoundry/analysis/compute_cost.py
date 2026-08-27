@@ -22,8 +22,8 @@ from .facts import PerformanceServiceFacts, ThroughputFacts
 from .metadata import ComputeCostMetadata
 from .walk import (
     attach,
+    collect_exprs,
     enclosing_trips,
-    postorder,
     reachable_functions,
 )
 
@@ -130,15 +130,17 @@ def _flops(flops: dict) -> tuple[tuple[str, int], ...]:
     return tuple(sorted((dtype.name, value) for dtype, value in flops.items()))
 
 
-def _call_cost_record(expr: Call, whole: CostEvaluator, local: CostEvaluator) -> ComputeCostMetadata:
+def _call_cost_record(
+    expr: Call, whole: CostContext, local: CostContext
+) -> ComputeCostMetadata:
     """Measure the work one Call asks for, without attaching the record.
 
     Work only: what an occurrence moves is the memory family's answer, asked of
     the same registered evaluator. One declaration, two readers.
     """
     try:
-        whole_cost = whole.visit(expr)
-        local_cost = local.visit(expr)
+        whole_cost = CostEvaluator().visit(expr, whole)
+        local_cost = CostEvaluator().visit(expr, local)
     except (ValueError, VerifyError) as error:
         raise AnalysisError(str(error)) from None
     return ComputeCostMetadata(
@@ -178,16 +180,14 @@ def analyze_compute_cost(
     topologies = module.effective_topologies()
     for fn in reachable_functions(function):
         scope = FunctionScope(module, fn)
-        whole = CostEvaluator(CostContext(scope=scope))
-        local = CostEvaluator(
-            CostContext(scope=scope, level=level, topologies=topologies)
-        )
+        whole = CostContext(scope=scope)
+        local = CostContext(scope=scope, level=level, topologies=topologies)
         flops: dict[str, int] = {}
         flops_per_unit: dict[str, int] = {}
         service: dict[str, int] = {}
         service_per_unit: dict[str, int] = {}
         trips = enclosing_trips(fn.body)
-        for expr in postorder(fn.body):
+        for expr in collect_exprs(fn.body):
             if not isinstance(expr, Call):
                 continue
             record = _call_cost_record(expr, whole, local)

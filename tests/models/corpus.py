@@ -401,7 +401,7 @@ def states_execution_domain(
 ) -> bool:
     """Whether *function*, once concrete, runs anything inside a Mesh of *level*."""
     from tilefoundry.analysis.check import _resolve_program_geometry
-    from tilefoundry.analysis.walk import postorder
+    from tilefoundry.analysis.walk import collect_exprs
     from tilefoundry.ir.core import Call, get_metadata
     from tilefoundry.ir.core.metadata import ExecutionDomainMetadata
     from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
@@ -413,7 +413,7 @@ def states_execution_domain(
         (get_metadata(item, ExecutionDomainMetadata) or ExecutionDomainMetadata())
         .at(level)
         is not None
-        for item in postorder(concrete.body)
+        for item in collect_exprs(concrete.body)
         if isinstance(item, Call)
     )
 

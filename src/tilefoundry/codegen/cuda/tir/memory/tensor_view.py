@@ -199,35 +199,31 @@ _COORD_OPERATORS = {DimAdd: "+", DimSub: "-", DimMul: "*"}
 
 
 class _CoordinateVisitor(ExprVisitor[str]):
-    def __init__(self, ctx: CodegenContext) -> None:
-        super().__init__()
-        self.ctx = ctx
-
-    def visit_Constant(self, expr: Constant) -> str:
+    def visit_Constant(self, expr: Constant, ctx: CodegenContext) -> str:
         return str(int(expr.value))
 
-    def visit_Call(self, expr: Call) -> str:
+    def visit_Call(self, expr: Call, ctx: CodegenContext) -> str:
         operator = _COORD_OPERATORS.get(type(expr.target))
         if operator is not None:
-            lhs, rhs = (self.visit(arg) for arg in expr.args)
+            lhs, rhs = (self.visit(arg, ctx) for arg in expr.args)
             return f"({lhs} {operator} {rhs})"
-        return self._leaf(expr)
+        return self._leaf(expr, ctx)
 
-    def _leaf(self, expr) -> str:
-        name = self.ctx.name_for(expr)
+    def _leaf(self, expr, ctx: CodegenContext) -> str:
+        name = ctx.name_for(expr)
         shape = getattr(getattr(expr, "type", None), "shape", ()) or ()
         dims = tuple(getattr(d, "value", d) for d in shape)
         if dims == ():
             return name
         if dims == (1,):
-            return f"{name}_tensor(0)" if self.ctx.is_kernel_param(expr) else f"{name}(0)"
+            return f"{name}_tensor(0)" if ctx.is_kernel_param(expr) else f"{name}(0)"
         raise NotImplementedError(
             f"local_tile coordinate from a rank-{len(dims)} offset {dims} "
             "is not supported"
         )
 
-    def default_visit(self, expr) -> str:
-        return self._leaf(expr)
+    def default_visit(self, expr, ctx: CodegenContext) -> str:
+        return self._leaf(expr, ctx)
 
 
 def _coord_ref(index_var, ctx: CodegenContext) -> str:
@@ -239,7 +235,7 @@ def _coord_ref(index_var, ctx: CodegenContext) -> str:
     placement after an ordinal is converted to an element start, and an addition
     moves a window's base by a compile-time offset. Other forms fail closed.
     """
-    return _CoordinateVisitor(ctx).visit(index_var)
+    return _CoordinateVisitor().visit(index_var, ctx)
 
 
 @register_codegen_cuda(TensorView)

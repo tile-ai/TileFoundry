@@ -140,7 +140,7 @@ class _SignatureDimVisitor(ExprVisitor[None]):
         super().__init__()
         self.bounds = bounds
 
-    def visit_DimVar(self, entry: DimVar) -> None:
+    def visit_DimVar(self, entry: DimVar, ctx=None) -> None:
         prior = self.bounds.get(entry.name)
         if prior is None:
             self.bounds[entry.name] = (entry.lo, entry.hi)
@@ -151,11 +151,11 @@ class _SignatureDimVisitor(ExprVisitor[None]):
                 f"[{entry.lo}, {entry.hi})"
             )
 
-    def visit_Call(self, entry: Call) -> None:
+    def visit_Call(self, entry: Call, ctx=None) -> None:
         for arg in entry.args:
-            self.visit(arg)
+            self.visit(arg, ctx)
 
-    def default_visit(self, entry) -> None:
+    def default_visit(self, entry, ctx=None) -> None:
         return None
 
 
@@ -213,15 +213,15 @@ def _verify_signature_dim_vars(fn: Function) -> None:
 
 
 class _StmtRejectingVisitor(ExprVisitor[None]):
-    def visit_Call(self, expr: Call) -> None:
+    def visit_Call(self, expr: Call, ctx=None) -> None:
         for arg in expr.args:
             if isinstance(arg, Stmt):
                 raise VerifyError(
                     f"hir body contains a Stmt node {type(arg).__name__}; hir is expr-only"
                 )
-            self.visit(arg)
+            self.visit(arg, ctx)
 
-    def default_visit(self, expr) -> None:
+    def default_visit(self, expr, ctx=None) -> None:
         if isinstance(expr, Stmt):
             raise VerifyError(
                 f"hir body contains a Stmt node {type(expr).__name__}; hir is expr-only"

@@ -107,7 +107,7 @@ def test_visitors_fail_closed_when_unregistered() -> None:
     with pytest.raises(RuntimeError, match="no @register_codegen_cuda for Op _UnknownOp"):
         CodegenVisitor(_Ctx(), codegen_cuda_registry, backend="cuda").emit_expr(call)
     with pytest.raises(VerifyError, match="no cost evaluator registered for _UnknownOp"):
-        CostEvaluator(CostContext()).visit_Call(call)
+        CostEvaluator().visit_Call(call, CostContext())
 
 
 def test_where_a_walk_reads_is_one_pair_and_nothing_else() -> None:

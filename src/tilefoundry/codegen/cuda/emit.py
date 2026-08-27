@@ -138,29 +138,29 @@ def _derive_launch_config(
         def _record(self, expr) -> None:
             _harvest_from_layout(getattr(getattr(expr, "type", None), "layout", None))
 
-        def visit_Call(self, expr: Call) -> None:
+        def visit_Call(self, expr: Call, ctx=None) -> None:
             self._record(expr)
-            self.visit_operands(expr)
+            self.visit_operands(expr, ctx)
 
-        def visit_Tuple(self, expr: Tuple) -> None:
-            self._record(expr)
-
-        def visit_GridRegionExpr(self, expr: GridRegionExpr) -> None:
+        def visit_Tuple(self, expr: Tuple, ctx=None) -> None:
             self._record(expr)
 
-        def visit_Var(self, expr: Var) -> None:
+        def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx=None) -> None:
             self._record(expr)
 
-        def visit_Constant(self, expr: Constant) -> None:
+        def visit_Var(self, expr: Var, ctx=None) -> None:
             self._record(expr)
 
-        def visit_SymbolRef(self, expr: SymbolRef) -> None:
+        def visit_Constant(self, expr: Constant, ctx=None) -> None:
             self._record(expr)
 
-        def visit_ShapeOf(self, expr: ShapeOf) -> None:
+        def visit_SymbolRef(self, expr: SymbolRef, ctx=None) -> None:
             self._record(expr)
 
-        def default_visit(self, expr) -> None:
+        def visit_ShapeOf(self, expr: ShapeOf, ctx=None) -> None:
+            self._record(expr)
+
+        def default_visit(self, expr, ctx=None) -> None:
             self._record(expr)
 
     def walk(stmt) -> None:

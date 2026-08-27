@@ -166,7 +166,7 @@ def _reference(x: torch.Tensor, group: int) -> tuple[torch.Tensor, torch.Tensor]
 def _quant_function(shape, group: int) -> tuple[Function, TupleType]:
     x = Var(type=make_tensor_type(shape, DType.f32), name="x")
     call = Call(type=x.type, target=Quant(group=group), args=(x,))
-    result_type = TypeInferVisitor(TypeInferContext()).visit(call)
+    result_type = TypeInferVisitor().visit(call, TypeInferContext())
     call = replace(call, type=result_type)
     return (
         Function.build(

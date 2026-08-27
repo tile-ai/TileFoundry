@@ -31,7 +31,7 @@ def run_cost_case(case: CostCase) -> None:
     args = tuple(Var(type=type_, name=f"x{i}") for i, type_ in enumerate(case.inputs))
     placeholder = case.inputs[0] if case.inputs else TensorType.umat_scalar()
     call = Call(type=placeholder, target=case.op, args=args)
-    result_type = TypeInferVisitor(TypeInferContext()).visit(call)
+    result_type = TypeInferVisitor().visit(call, TypeInferContext())
     call = replace(call, type=result_type)
     selected_types = {id(arg): type_ for arg, type_ in zip(args, case.inputs)}
     ctx = CostContext(
@@ -41,7 +41,7 @@ def run_cost_case(case: CostCase) -> None:
         topologies=case.topologies,
     )
 
-    cost = CostEvaluator(ctx).visit_Call(call)
+    cost = CostEvaluator().visit_Call(call, ctx)
 
     assert cost.flops == case.flops
     assert cost.service == case.service

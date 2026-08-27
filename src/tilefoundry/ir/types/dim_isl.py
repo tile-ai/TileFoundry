@@ -92,16 +92,16 @@ def _range_expr_visitor_type():
                 self.param_map = param_map
                 self.identities = identities
 
-            def visit_Constant(self, dim: Constant) -> str:
+            def visit_Constant(self, dim: Constant, ctx=None) -> str:
                 return str(int(dim.value))
 
-            def visit_DimVar(self, dim: DimVar) -> str:
+            def visit_DimVar(self, dim: DimVar, ctx=None) -> str:
                 return _bind_param(dim, self.params, self.param_map, self.identities)
 
-            def visit_Var(self, dim: Var) -> str:
+            def visit_Var(self, dim: Var, ctx=None) -> str:
                 return _bind_param(dim, self.params, self.param_map, self.identities)
 
-            def visit_Call(self, dim: Call) -> str:
+            def visit_Call(self, dim: Call, ctx=None) -> str:
                 op = type(dim.target)
                 if op not in _DIM_OP_TYPES:
                     kind = getattr(dim.target, "kind", None)
@@ -124,8 +124,8 @@ def _range_expr_visitor_type():
                     raise NotImplementedError(
                         f"{op.__name__} by a symbolic divisor has no isl representation"
                     )
-                sa = self.visit(a)
-                sb = self.visit(b)
+                sa = self.visit(a, ctx)
+                sb = self.visit(b, ctx)
                 if op is DimAdd:
                     return f"({sa} + {sb})"
                 if op is DimSub:
@@ -142,7 +142,7 @@ def _range_expr_visitor_type():
                     return f"min({sa}, {sb})"
                 raise AssertionError(f"unhandled dim op {op.__name__}")
 
-            def default_visit(self, value) -> str:
+            def default_visit(self, value, ctx=None) -> str:
                 if isinstance(value, bool):
                     raise TypeError("ShapeDim must not be bool")
                 if isinstance(value, int):
@@ -161,19 +161,19 @@ def _dim_range_visitor_type():
         from tilefoundry.ir.visitor import ExprVisitor  # noqa: PLC0415
 
         class _DimRangeVisitor(ExprVisitor[tuple[int, int]]):
-            def visit_Constant(self, value: Constant) -> tuple[int, int]:
+            def visit_Constant(self, value: Constant, ctx=None) -> tuple[int, int]:
                 number = int(value.value)
                 return number, number + 1
 
-            def visit_DimVar(self, value: DimVar) -> tuple[int, int]:
+            def visit_DimVar(self, value: DimVar, ctx=None) -> tuple[int, int]:
                 return value.lo, value.hi
 
-            def visit_Call(self, value: Call) -> tuple[int, int]:
+            def visit_Call(self, value: Call, ctx=None) -> tuple[int, int]:
                 if type(value.target) is DimMul:
                     a, b = value.args
                     if not (_is_const(a) or _is_const(b)):
-                        alo, ahi = self.visit(a)
-                        blo, bhi = self.visit(b)
+                        alo, ahi = self.visit(a, ctx)
+                        blo, bhi = self.visit(b, ctx)
                         corners = (
                             alo * blo,
                             alo * (bhi - 1),
@@ -194,7 +194,7 @@ def _dim_range_visitor_type():
                     pw_aff = pw_aff.intersect_params(isl.set(prefix + f"{{ : {bounds} }}"))
                 return int(pw_aff.min_val().num_si()), int(pw_aff.max_val().num_si()) + 1
 
-            def default_visit(self, value) -> tuple[int, int]:
+            def default_visit(self, value, ctx=None) -> tuple[int, int]:
                 if isinstance(value, bool):
                     raise TypeError("ShapeDim must not be bool")
                 if isinstance(value, int):

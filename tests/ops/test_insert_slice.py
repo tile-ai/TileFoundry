@@ -58,7 +58,7 @@ def _infer_insert(dst_ty, upd_ty, offsets_expr):
         target=InsertSlice(),
         args=(Var(type=dst_ty, name="dst"), Var(type=upd_ty, name="upd"), offsets_expr),
     )
-    return TypeInferVisitor(TypeInferContext()).visit(call)
+    return TypeInferVisitor().visit(call, TypeInferContext())
 
 
 _DSL_PRELUDE = (
@@ -224,11 +224,11 @@ def test_insert_slice_rankn_costs_literal_and_runtime_offset_leaves() -> None:
             offsets,
         ),
     )
-    result_type = TypeInferVisitor(TypeInferContext()).visit(call)
+    result_type = TypeInferVisitor().visit(call, TypeInferContext())
     ctx = CostContext(selected_output_type=result_type)
 
     assert ctx.local_type_of(offsets) == TupleType(fields=(_SI64, _SI32, _SI64))
-    assert CostEvaluator(ctx).visit_Call(call).traffic == (
+    assert CostEvaluator().visit_Call(call, ctx).traffic == (
         TrafficBytes(),
         TrafficBytes(read=1 * 2 * 3 * 4),
         TrafficBytes(read=8 + 4 + 8),

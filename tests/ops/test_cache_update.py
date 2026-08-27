@@ -23,7 +23,7 @@ from tests.ops.typeinfer_utils import (
 from tilefoundry import func, module
 from tilefoundry.analysis import ComputeCostMetadata, TrafficMetadata
 from tilefoundry.analysis.api import analyze
-from tilefoundry.analysis.walk import postorder
+from tilefoundry.analysis.walk import collect_exprs
 from tilefoundry.dsl import Mesh, Tensor, tf
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
@@ -112,7 +112,7 @@ def _run(cur_pos, s):
 
     params = tuple(Var(type=tensor_type_of(t), name=f"x{i}") for i, t in enumerate(inputs))
     call = Call(type=params[0].type, target=CacheUpdate(), args=params)
-    result_type = TypeInferVisitor(TypeInferContext()).visit(call)
+    result_type = TypeInferVisitor().visit(call, TypeInferContext())
     call = replace(call, type=result_type)
     fn = Function.build(name="cu", params=params, body=call, return_type=result_type)
     return evaluate(fn, *inputs, device="cpu")
@@ -197,7 +197,7 @@ def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
     entry = _KVCacheAppend.entry_function()
     update = next(
         expr
-        for expr in postorder(entry.body)
+        for expr in collect_exprs(entry.body)
         if isinstance(expr, Call) and isinstance(expr.target, CacheUpdate)
     )
     selected_types = {id(arg): arg.type for arg in update.args}
@@ -211,8 +211,8 @@ def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
         topologies=(_CTA,),
     )
     assert cta_ctx.local_type_of(update.args[3]).shape == (1, 4, 4, 8)
-    assert CostEvaluator(program_ctx).visit_Call(update).traffic == _GLOBAL_TRAFFIC
-    assert CostEvaluator(cta_ctx).visit_Call(update).traffic == (
+    assert CostEvaluator().visit_Call(update, program_ctx).traffic == _GLOBAL_TRAFFIC
+    assert CostEvaluator().visit_Call(update, cta_ctx).traffic == (
         TrafficBytes(),
         TrafficBytes(read=4),
         TrafficBytes(read=4),
@@ -223,7 +223,7 @@ def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
     result = analyze(_KVCacheAppend, entry, analysis=("compute-cost", "memory"), level="cta")
     analysed_update = next(
         expr
-        for expr in postorder(result.function.body)
+        for expr in collect_exprs(result.function.body)
         if isinstance(expr, Call) and isinstance(expr.target, CacheUpdate)
     )
     record = get_metadata(analysed_update, ComputeCostMetadata)

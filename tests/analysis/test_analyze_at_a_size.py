@@ -34,7 +34,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.compute_cost import _local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.walk import describe, enclosing_trips, postorder
+from tilefoundry.analysis.walk import collect_exprs, describe, enclosing_trips
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.metadata import ExecutionDomainMetadata
 from tilefoundry.ir.hir.function import Function
@@ -100,7 +100,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
     services = module_target.get_facts(PerformanceServiceFacts)
     repeats = enclosing_trips(fn.body)
     timed = 0
-    for expr in postorder(fn.body):
+    for expr in collect_exprs(fn.body):
         if not isinstance(expr, Call) or isinstance(expr.target, Function):
             continue
         cost = get_metadata(expr, ComputeCostMetadata)
@@ -133,7 +133,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
         ), describe(expr)
     assert bool(timed) is bool(predicted_ns)
     _every_number_counts_something(result)
-    for expr in postorder(fn.body):
+    for expr in collect_exprs(fn.body):
         if not isinstance(expr, GridRegionExpr):
             continue
         assert get_metadata(expr, PerformanceMetadata) is None, describe(expr)
@@ -179,7 +179,7 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
     added into a total that still looks plausible.
     """
     fn = result.function
-    for expr in (fn, *postorder(fn.body)):
+    for expr in (fn, *collect_exprs(fn.body)):
         for record, rows in (
             (ComputeCostMetadata, ("flops", "flops_per_unit", "service", "service_per_unit")),
             (TrafficMetadata, ()),
@@ -212,7 +212,7 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
                 assert held.ideal_ns >= 0 and held.compute_ns >= 0 and held.memory_ns >= 0
             if record is PerformanceMetadata:
                 assert 0 <= held.timeline.start_ns <= held.timeline.end_ns
-    for expr in postorder(fn.body):
+    for expr in collect_exprs(fn.body):
         record = get_metadata(expr, LoopFootprintMetadata)
         if record is None:
             continue
@@ -237,7 +237,7 @@ def test_every_concrete_program_answers_for_where_it_runs(case: ConcreteCase) ->
     assert set(result.executed) == set(FAMILIES)
     undomained = [
         describe(call)
-        for call in postorder(result.function.body)
+        for call in collect_exprs(result.function.body)
         if isinstance(call, Call)
         and not isinstance(call.target, Function)
         and (get_metadata(call, ExecutionDomainMetadata) or ExecutionDomainMetadata())

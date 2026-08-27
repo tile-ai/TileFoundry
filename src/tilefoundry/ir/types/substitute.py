@@ -35,12 +35,12 @@ def _dim_collector_type():
                 super().__init__()
                 self.found = found
 
-            def visit_DimVar(self, expr: DimVar) -> None:
+            def visit_DimVar(self, expr: DimVar, ctx=None) -> None:
                 self.found[expr.name] = expr
 
-            def visit_Call(self, expr: Call) -> None:
+            def visit_Call(self, expr: Call, ctx=None) -> None:
                 if isinstance(expr.target, _DIM_OP_TYPES):
-                    self.visit_operands(expr)
+                    self.visit_operands(expr, ctx)
 
         _DIM_COLLECTOR_TYPE = _DimCollector
     return _DIM_COLLECTOR_TYPE
@@ -49,30 +49,30 @@ def _dim_collector_type():
 def _shape_dim_mutator_type():
     global _SHAPE_DIM_MUTATOR_TYPE
     if _SHAPE_DIM_MUTATOR_TYPE is None:
-        from tilefoundry.ir.visitor import ExprMutator  # noqa: PLC0415
+        from tilefoundry.ir.visitor import ExprCloner  # noqa: PLC0415
 
-        class _ShapeDimMutator(ExprMutator):
+        class _ShapeDimMutator(ExprCloner):
             def __init__(self, bindings) -> None:
                 super().__init__()
                 self.bindings = bindings
 
-            def visit(self, value):
+            def visit(self, value, ctx=None):
                 if isinstance(value, bool):
                     raise DimSubstitutionError(f"{value!r} is not a shape entry")
-                return super().visit(value)
+                return super().visit(value, ctx)
 
-            def visit_DimVar(self, value):
+            def visit_DimVar(self, value, ctx=None):
                 if value.name not in self.bindings:
                     return value
                 return _checked(value, self.bindings[value.name])
 
-            def visit_Constant(self, value):
+            def visit_Constant(self, value, ctx=None):
                 return value
 
-            def visit_Call(self, value):
+            def visit_Call(self, value, ctx=None):
                 if not isinstance(value.target, _DIM_OP_TYPES):
                     return value
-                args = tuple(self.visit(arg) for arg in value.args)
+                args = tuple(self.visit(arg, ctx) for arg in value.args)
                 if args == value.args:
                     return value
                 folded = normalize_dim(simplify_dim(type(value.target), args))
@@ -80,7 +80,7 @@ def _shape_dim_mutator_type():
                     return int(folded.value)
                 return folded
 
-            def default_visit(self, value):
+            def default_visit(self, value, ctx=None):
                 return value
 
         _SHAPE_DIM_MUTATOR_TYPE = _ShapeDimMutator

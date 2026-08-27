@@ -44,30 +44,30 @@ class _DimResolver(ExprVisitor[int]):
         super().__init__()
         self.bindings = bindings
 
-    def visit_Constant(self, dim: Constant) -> int:
+    def visit_Constant(self, dim: Constant, ctx=None) -> int:
         value = dim.value
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"resolve_dim: non-integer Constant value {value!r}")
         return value
 
-    def visit_DimVar(self, dim: DimVar) -> int:
+    def visit_DimVar(self, dim: DimVar, ctx=None) -> int:
         try:
             return self.bindings[dim.name]
         except KeyError:
             raise ValueError(f"resolve_dim: unbound DimVar {dim.name!r}") from None
 
-    def visit_Call(self, dim: Call) -> int:
+    def visit_Call(self, dim: Call, ctx=None) -> int:
         op_cls = type(dim.target)
         fold = _FOLDERS.get(op_cls)
         if fold is None:
             raise ValueError(f"resolve_dim: non-dim Call target {op_cls.__name__}")
-        a = self.visit(dim.args[0])
-        b = self.visit(dim.args[1])
+        a = self.visit(dim.args[0], ctx)
+        b = self.visit(dim.args[1], ctx)
         if op_cls in (DimFloorDiv, DimMod) and b == 0:
             raise ValueError("resolve_dim: division/modulo by zero")
         return int(fold(a, b))
 
-    def default_visit(self, dim) -> int:
+    def default_visit(self, dim, ctx=None) -> int:
         raise ValueError(f"resolve_dim: unrecognised Dim {type(dim).__name__}")
 
 

@@ -75,14 +75,14 @@ def hir_function_to_dot(fn: HirFunction) -> str:
         def _emit_leaf(self, expr, label_lines, fill) -> None:
             _emit_node(_id(expr), label_lines, fill=fill)
 
-        def visit_Var(self, expr: Var) -> None:
+        def visit_Var(self, expr: Var, ctx=None) -> None:
             self._emit_leaf(
                 expr,
                 [f"Var: {expr.name}", *_type_lines(expr.type, mesh_map)],
                 VAR_FILL,
             )
 
-        def visit_Constant(self, expr: Constant) -> None:
+        def visit_Constant(self, expr: Constant, ctx=None) -> None:
             value = f"{expr.value:.6g}" if isinstance(expr.value, float) else str(expr.value)
             self._emit_leaf(
                 expr,
@@ -90,7 +90,7 @@ def hir_function_to_dot(fn: HirFunction) -> str:
                 CONST_FILL,
             )
 
-        def visit_Call(self, expr: Call) -> None:
+        def visit_Call(self, expr: Call, ctx=None) -> None:
             nid = _id(expr)
             target = expr.target
             if isinstance(target, Reshard):
@@ -98,7 +98,7 @@ def hir_function_to_dot(fn: HirFunction) -> str:
                 header = f"{name}\\nReshard" if name else "Reshard"
                 _emit_node(nid, [header, *_type_lines(expr.type, mesh_map)], fill=SHARDING_FILL)
                 for arg in expr.args:
-                    self.visit(arg)
+                    self.visit(arg, ctx)
                     _emit_edge(_id(arg), nid)
                 return
 
@@ -107,20 +107,20 @@ def hir_function_to_dot(fn: HirFunction) -> str:
             header = f"{name}\\n{op_label}" if name else op_label
             _emit_node(nid, [header, *_type_lines(expr.type, mesh_map)], fill=CALL_FILL)
             for i, arg in enumerate(expr.args):
-                self.visit(arg)
+                self.visit(arg, ctx)
                 edge_label = f"arg[{i}]" if len(expr.args) > 1 else ""
                 _emit_edge(_id(arg), nid, edge_label)
 
-        def visit_Tuple(self, expr) -> None:
+        def visit_Tuple(self, expr, ctx=None) -> None:
             self._emit_leaf(expr, [type(expr).__name__], "#ffffff")
 
-        def visit_GridRegionExpr(self, expr) -> None:
+        def visit_GridRegionExpr(self, expr, ctx=None) -> None:
             self._emit_leaf(expr, [type(expr).__name__], "#ffffff")
 
-        def visit_ShapeOf(self, expr) -> None:
+        def visit_ShapeOf(self, expr, ctx=None) -> None:
             _emit_node(_id(expr), ["ShapeOf"], fill="#ffffff")
 
-        def default_visit(self, expr) -> None:
+        def default_visit(self, expr, ctx=None) -> None:
             _emit_node(_id(expr), [type(expr).__name__], fill="#ffffff")
 
     walker = _DotWalker()

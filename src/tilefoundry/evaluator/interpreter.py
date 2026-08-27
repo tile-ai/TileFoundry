@@ -80,29 +80,27 @@ def child_module_instance(loaded_module, callee: Function):
 class EvaluatorVisitor(ExprVisitor):
     """``ExprVisitor[Value]`` evaluated with one memo per execution scope."""
 
-    def __init__(self, ctx: FunctionEvalContext, *, memo=None) -> None:
-        super().__init__(ctx, memo=memo)
-        self.device = ctx.device
-        self.dim_env = ctx.dim_bindings or {}
-        self.function_context = ctx
-        self.reading = ctx.loaded_module
+    def __init__(self, *, memo=None) -> None:
+        super().__init__(memo=memo)
 
-    def visit_leaf_Var(self, var: Var, _operands) -> Value:
+    def visit_leaf_Var(self, var: Var, _operands, ctx: FunctionEvalContext) -> Value:
         raise EvalError(f"evaluator: unbound variable {var.name!r}")
 
-    def visit_leaf_Constant(self, const: Constant, _operands) -> TensorValue:
+    def visit_leaf_Constant(
+        self, const: Constant, _operands, ctx: FunctionEvalContext
+    ) -> TensorValue:
         data = torch.as_tensor(
-            const.value, dtype=to_torch_dtype(const.type.dtype), device=self.device
+            const.value, dtype=to_torch_dtype(const.type.dtype), device=ctx.device
         )
         return TensorValue(data=data, type=const.type)
 
-    def visit_leaf_Tuple(self, tup: Tuple, operands) -> TupleValue:
+    def visit_leaf_Tuple(self, tup: Tuple, operands, ctx: FunctionEvalContext) -> TupleValue:
         return TupleValue(operands)
 
-    def visit_leaf_Call(self, call: Call, args) -> Value:
+    def visit_leaf_Call(self, call: Call, args, ctx: FunctionEvalContext) -> Value:
         target = call.target
         if isinstance(target, Function):
-            return self._call_function(target, args)
+            return self._call_function(target, args, ctx)
         handler = eval_registry.lookup(type(target))
         if handler is None:
             raise EvalError(
@@ -114,13 +112,15 @@ class EvaluatorVisitor(ExprVisitor):
                 op=target,
                 args=args,
                 result_type=call.type,
-                device=self.device,
-                dim_bindings=self.dim_env,
+                device=ctx.device,
+                dim_bindings=ctx.dim_bindings or {},
             )
         )
 
-    def _call_function(self, callee: Function, arg_values) -> Value:
-        child = child_module_instance(self.reading, callee)
+    def _call_function(
+        self, callee: Function, arg_values, ctx: FunctionEvalContext
+    ) -> Value:
+        child = child_module_instance(ctx.loaded_module, callee)
         supplied = [p for p in callee.params if not (child is not None and p.is_const)]
         if len(arg_values) != len(supplied):
             kind = "activation(s)" if child is not None else "args"
@@ -143,14 +143,14 @@ class EvaluatorVisitor(ExprVisitor):
                     f"{param.name!r} expects {param.annotation!r}, got {value.type!r}"
                 )
         function_context = FunctionEvalContext(
-            loaded_module=child if child is not None else self.reading,
-            device=self.device,
+            loaded_module=child if child is not None else ctx.loaded_module,
+            device=ctx.device,
             dim_bindings=_bind_dim_vars(target.params, args),
         )
         memo = {id(param): (param, arg) for param, arg in zip(target.params, args)}
-        return EvaluatorVisitor(function_context, memo=memo).visit(target.body)
+        return EvaluatorVisitor(memo=memo).visit(target.body, function_context)
 
-    def _resolve_loop_field(self, dim, what: str) -> int:
+    def _resolve_loop_field(self, dim, what: str, ctx: FunctionEvalContext) -> int:
         """Resolve loop field.
 
         Resolve a ``GridRegionExpr`` ``extent`` / ``step`` ``ShapeDim`` to a
@@ -161,19 +161,19 @@ class EvaluatorVisitor(ExprVisitor):
         if isinstance(dim, int):
             return dim
         try:
-            return resolve_dim(dim, self.dim_env)
+            return resolve_dim(dim, ctx.dim_bindings or {})
         except ValueError as exc:
             raise EvalError(f"evaluator: GridRegion {what}: {exc}") from None
 
-    def visit_operands_GridRegionExpr(self, region: GridRegionExpr):
-        return tuple(self.visit(init) for init in region.init_args)
-
-    def visit_leaf_GridRegionExpr(self, region: GridRegionExpr, init_values) -> Value:
+    def visit_GridRegionExpr(
+        self, region: GridRegionExpr, ctx: FunctionEvalContext
+    ) -> Value:
+        init_values = tuple(self.visit(init, ctx) for init in region.init_args)
         iv = region.induction_var
         iv_dtype = to_torch_dtype(iv.type.dtype)
-        start = self._resolve_loop_field(region.start, "start")
-        extent = self._resolve_loop_field(region.extent, "extent")
-        step = self._resolve_loop_field(region.step, "step")
+        start = self._resolve_loop_field(region.start, "start", ctx)
+        extent = self._resolve_loop_field(region.extent, "extent", ctx)
+        step = self._resolve_loop_field(region.step, "step", ctx)
         if start < 0:
             raise EvalError(
                 f"evaluator: GridRegion start must be non-negative, got {start}"
@@ -194,7 +194,7 @@ class EvaluatorVisitor(ExprVisitor):
                 id(iv): (
                     iv,
                     TensorValue(
-                    data=torch.as_tensor(i, dtype=iv_dtype, device=self.device),
+                    data=torch.as_tensor(i, dtype=iv_dtype, device=ctx.device),
                     type=iv.type,
                 ),
                 ),
@@ -207,10 +207,7 @@ class EvaluatorVisitor(ExprVisitor):
 
             last = None
             for i in indices:
-                last = EvaluatorVisitor(
-                    FunctionEvalContext(self.reading, self.device, self.dim_env),
-                    memo=iter_memo(i, ()),
-                ).visit(region.body)
+                last = EvaluatorVisitor(memo=iter_memo(i, ())).visit(region.body, ctx)
             if last is None:
                 raise EvalError(
                     "evaluator: GridRegionExpr has an empty iteration domain"
@@ -219,11 +216,8 @@ class EvaluatorVisitor(ExprVisitor):
 
         carried = list(init_values)
         for i in indices:
-            sub = EvaluatorVisitor(
-                FunctionEvalContext(self.reading, self.device, self.dim_env),
-                memo=iter_memo(i, carried),
-            )
-            carried = [sub.visit(y) for y in region.yield_values]
+            sub = EvaluatorVisitor(memo=iter_memo(i, carried))
+            carried = [sub.visit(y, ctx) for y in region.yield_values]
         return carried[0] if len(carried) == 1 else TupleValue(tuple(carried))
 
 
@@ -316,7 +310,9 @@ def _run_bound(fn: Function, args, *, device: str | None = None, reading=None):
     memo = {id(param): (param, value) for param, value in zip(target.params, values)}
     dim_env = _bind_dim_vars(target.params, values)
     return _unwrap(
-        EvaluatorVisitor(FunctionEvalContext(reading, device, dim_env), memo=memo).visit(target.body)
+        EvaluatorVisitor(memo=memo).visit(
+            target.body, FunctionEvalContext(reading, device, dim_env)
+        )
     )
 
 
@@ -351,11 +347,15 @@ def evaluate(fn_or_call, *inputs, backend: str = "torch", device: str | None = N
         target = _select_variant(fn, values) if fn.variants else fn
         memo = {id(param): (param, value) for param, value in zip(target.params, values)}
         dim_env = _bind_dim_vars(target.params, values)
-        result = EvaluatorVisitor(FunctionEvalContext(None, device, dim_env), memo=memo).visit(target.body)
+        result = EvaluatorVisitor(memo=memo).visit(
+            target.body, FunctionEvalContext(None, device, dim_env)
+        )
     elif isinstance(fn_or_call, Call):
         if inputs:
             raise EvalError("evaluator: a Call entry takes no positional inputs")
-        result = EvaluatorVisitor(FunctionEvalContext(None, device), memo={}).visit(fn_or_call)
+        result = EvaluatorVisitor(memo={}).visit(
+            fn_or_call, FunctionEvalContext(None, device)
+        )
     else:
         raise EvalError(
             f"evaluator: expected a Function or Call, got {type(fn_or_call).__name__}"

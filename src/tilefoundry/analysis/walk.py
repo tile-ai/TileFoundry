@@ -8,11 +8,9 @@ from __future__ import annotations
 
 from tilefoundry.ir.core import (
     Call,
-    Constant,
     Expr,
     IRMetadata,
     SourceSpanMetadata,
-    Tuple,
     binding_name,
     get_metadata,
 )
@@ -25,7 +23,7 @@ from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
 from tilefoundry.ir.types.shard import Mesh, shard_layout_of
 from tilefoundry.ir.types.shard.layout_algebra import size
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.visitor import ExprWalker, _expr_children
+from tilefoundry.ir.visitor import _expr_children, collect_exprs
 
 from .errors import AnalysisError
 
@@ -48,7 +46,7 @@ def enclosing_trips(root: Expr | None) -> dict[int, int]:
     if root is None:
         return {}
     trips: dict[int, int] = {}
-    for loop in postorder(root):
+    for loop in collect_exprs(root):
         if not isinstance(loop, GridRegionExpr):
             continue
         count = loop_trip_count(loop)
@@ -70,7 +68,7 @@ def loop_repeated_values(loop: GridRegionExpr) -> set[int]:
     seeds = {id(loop.induction_var), *(id(carried) for carried in loop.carried_args)}
     repeated: set[int] = set()
     for root in (loop.body, *loop.yield_values):
-        for expr in postorder(root):
+        for expr in collect_exprs(root):
             if id(expr) in seeds or any(
                 id(child) in repeated or id(child) in seeds for child in children(expr)
             ):
@@ -87,7 +85,7 @@ def loop_scopes(
     only by ``Call`` and ``GridRegionExpr`` identities; calls map to their
     innermost repeated loop, while loops map to their parent loop.
     """
-    values = postorder(fn.body)
+    values = collect_exprs(fn.body)
     loops = [expr for expr in values if isinstance(expr, GridRegionExpr)]
     repeated = {id(loop): loop_repeated_values(loop) for loop in loops}
 
@@ -133,61 +131,13 @@ def loop_trip_count(loop: GridRegionExpr) -> int:
     return -(-(extent - start) // step)
 
 
-def postorder(root: Expr | None) -> tuple[Expr, ...]:
-    """Every value reachable from *root*, operands before their consumer.
-
-    The body is an SSA DAG rather than a tree, so a value shared by two
-    consumers is visited once. That is what makes this order usable as a
-    definition order: a value appears exactly where it is defined.
-    """
-    if root is None:
-        return ()
-    result: list[Expr] = []
-
-    class _Postorder(ExprWalker[None]):
-        def _record(self, expr: Expr) -> None:
-            result.append(expr)
-
-        def visit_Call(self, expr: Call) -> None:
-            self.visit_operands(expr)
-            self._record(expr)
-
-        def visit_Var(self, expr: Var) -> None:
-            self._record(expr)
-
-        def visit_Constant(self, expr: Constant) -> None:
-            self._record(expr)
-
-        def visit_Tuple(self, expr: Tuple) -> None:
-            self.visit_operands(expr)
-            self._record(expr)
-
-        def visit_GridRegionExpr(self, expr: GridRegionExpr) -> None:
-            self.visit_operands(expr)
-            self._record(expr)
-
-        def visit_Function(self, expr: Function) -> None:
-            self.visit_operands(expr)
-            self._record(expr)
-
-        def visit_SymbolRef(self, expr) -> None:
-            self._record(expr)
-
-        def visit_ShapeOf(self, expr) -> None:
-            self._record(expr)
-
-    if root is not None:
-        _Postorder().visit(root)
-    return tuple(result)
-
-
 def values_of(fn: Function) -> tuple[Expr, ...]:
     """Every expression an analysis may annotate on *fn*.
 
     The Function object itself is included, because a whole-function record has
     nowhere else to live: it is not a property of any single value in the body.
     """
-    return (fn, *fn.params, *postorder(fn.body))
+    return (fn, *fn.params, *collect_exprs(fn.body))
 
 
 def reachable_functions(root: Function) -> tuple[Function, ...]:
@@ -377,7 +327,7 @@ __all__ = [
     "loop_repeated_values",
     "loop_trip_count",
     "owning_module",
-    "postorder",
+    "collect_exprs",
     "reachable_functions",
     "tensor_types",
     "topology_extent",

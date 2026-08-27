@@ -57,13 +57,13 @@ class _ProcessExprVisitor(ExprVisitor[tuple[int, ...]]):
     def _key(self, expr: Expr) -> tuple[tuple[int, ...], int]:
         return self.function_path, id(expr)
 
-    def visit(self, expr: Expr) -> tuple[int, ...]:
+    def visit(self, expr: Expr, ctx=None) -> tuple[int, ...]:
         cached = self.owner._expr_values.get(self._key(expr))
         if cached is not None:
             return cached
-        return super().visit(expr)
+        return super().visit(expr, ctx)
 
-    def visit_Var(self, expr: Var) -> tuple[int, ...]:
+    def visit_Var(self, expr: Var, ctx=None) -> tuple[int, ...]:
         key = self._key(expr)
         refs = self.env.get(id(expr))
         if refs is None:
@@ -71,18 +71,18 @@ class _ProcessExprVisitor(ExprVisitor[tuple[int, ...]]):
         self.owner._expr_values[key] = refs
         return refs
 
-    def visit_Constant(self, expr: Constant) -> tuple[int, ...]:
+    def visit_Constant(self, expr: Constant, ctx=None) -> tuple[int, ...]:
         self.owner._expr_values[self._key(expr)] = ()
         return ()
 
-    def visit_Tuple(self, expr: Tuple) -> tuple[int, ...]:
-        refs = tuple(ref for element in expr.elements for ref in self.visit(element))
+    def visit_Tuple(self, expr: Tuple, ctx=None) -> tuple[int, ...]:
+        refs = tuple(ref for element in expr.elements for ref in self.visit(element, ctx))
         key = self._key(expr)
         self.owner._expr_values[key] = refs
         self.owner._record_requirement(refs, expr)
         return refs
 
-    def visit_GridRegionExpr(self, expr: GridRegionExpr) -> tuple[int, ...]:
+    def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx=None) -> tuple[int, ...]:
         refs = self.owner._process_region(
             expr, self.function, self.function_path, self.env
         )
@@ -91,9 +91,9 @@ class _ProcessExprVisitor(ExprVisitor[tuple[int, ...]]):
         self.owner._record_requirement(refs, expr)
         return refs
 
-    def visit_Call(self, expr: Call) -> tuple[int, ...]:
+    def visit_Call(self, expr: Call, ctx=None) -> tuple[int, ...]:
         key = self._key(expr)
-        arg_refs = tuple(self.visit(arg) for arg in expr.args)
+        arg_refs = tuple(self.visit(arg, ctx) for arg in expr.args)
         target = expr.target
         if isinstance(target, Function):
             call_path = self.function_path + (len(self.owner.function_instances),)
@@ -165,7 +165,7 @@ class _ProcessExprVisitor(ExprVisitor[tuple[int, ...]]):
         self.owner._record_requirement(output_refs, expr)
         return output_refs
 
-    def default_visit(self, expr: Expr) -> tuple[int, ...]:
+    def default_visit(self, expr: Expr, ctx=None) -> tuple[int, ...]:
         self.owner._expr_values[self._key(expr)] = ()
         return ()
 
@@ -325,10 +325,10 @@ class _Extractor:
         owner = self
 
         class _ExtentVisitor(ExprWalker[None]):
-            def visit(self, expr):
+            def visit(self, expr, ctx=None):
                 if expr is not None and not isinstance(expr, Function):
                     self._record_expr(expr)
-                return super().visit(expr)
+                return super().visit(expr, ctx)
 
             def _record_expr(self, expr: Expr) -> None:
                 visit_type(expr.type)
@@ -347,39 +347,39 @@ class _Extractor:
                         for dim in constraint.mesh.layout.shape:
                             record(dim)
 
-            def visit_function(self, function: Function) -> None:
+            def visit_function(self, function: Function, ctx=None) -> None:
                 if id(function) in seen_functions:
                     return
                 seen_functions.add(id(function))
                 for param in function.params:
-                    self.visit(param)
+                    self.visit(param, ctx)
                 if function.body is not None:
-                    self.visit(function.body)
+                    self.visit(function.body, ctx)
 
-            def visit_Call(self, expr: Call) -> None:
+            def visit_Call(self, expr: Call, ctx=None) -> None:
                 if isinstance(expr.target, Function):
-                    self.visit_function(expr.target)
-                self.visit_operands(expr)
+                    self.visit_function(expr.target, ctx)
+                self.visit_operands(expr, ctx)
 
-            def visit_Tuple(self, expr: Tuple) -> None:
-                self.visit_operands(expr)
+            def visit_Tuple(self, expr: Tuple, ctx=None) -> None:
+                self.visit_operands(expr, ctx)
 
-            def visit_GridRegionExpr(self, expr: GridRegionExpr) -> None:
-                self.visit_operands(expr)
+            def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx=None) -> None:
+                self.visit_operands(expr, ctx)
 
-            def visit_Function(self, expr: Function) -> None:
-                self.visit_function(expr)
+            def visit_Function(self, expr: Function, ctx=None) -> None:
+                self.visit_function(expr, ctx)
 
-            def visit_Var(self, expr: Var) -> None:
+            def visit_Var(self, expr: Var, ctx=None) -> None:
                 return None
 
-            def visit_Constant(self, expr: Constant) -> None:
+            def visit_Constant(self, expr: Constant, ctx=None) -> None:
                 return None
 
-            def visit_SymbolRef(self, expr: SymbolRef) -> None:
+            def visit_SymbolRef(self, expr: SymbolRef, ctx=None) -> None:
                 return None
 
-            def visit_ShapeOf(self, expr: Expr) -> None:
+            def visit_ShapeOf(self, expr: Expr, ctx=None) -> None:
                 return None
 
         _ExtentVisitor().visit_function(self.root)

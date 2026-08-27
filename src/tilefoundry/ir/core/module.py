@@ -84,11 +84,11 @@ def calls_in_expr(
     after: list[Call] = []
 
     class _CallVisitor(ExprWalker[None]):
-        def visit_Call(self, call: Call) -> None:
+        def visit_Call(self, call: Call, ctx=None) -> None:
             is_function_call = isinstance(call.target, HirFunction)
             if is_function_call:
                 before.append(call)
-            self.visit_operands(call)
+            self.visit_operands(call, ctx)
             if is_function_call:
                 after.append(call)
 

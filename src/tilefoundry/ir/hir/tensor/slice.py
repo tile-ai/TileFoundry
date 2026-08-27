@@ -253,26 +253,26 @@ def _constant_int(expr: Expr) -> int | None:
 
 
 class _WindowBaseVisitor(ExprVisitor[tuple[Expr | None, int]]):
-    def visit_Constant(self, expr: Constant) -> tuple[Expr | None, int]:
+    def visit_Constant(self, expr: Constant, ctx=None) -> tuple[Expr | None, int]:
         value = _constant_int(expr)
         return (None, value) if value is not None else (expr, 0)
 
-    def visit_Call(self, expr: Call) -> tuple[Expr | None, int]:
+    def visit_Call(self, expr: Call, ctx=None) -> tuple[Expr | None, int]:
         if not isinstance(expr.target, (DimAdd, DimSub)):
             return expr, 0
         sign = 1 if isinstance(expr.target, DimAdd) else -1
         left, right = expr.args
         right_offset = _constant_int(right)
         if right_offset is not None:
-            base, offset = self.visit(left)
+            base, offset = self.visit(left, ctx)
             return base, offset + sign * right_offset
         left_offset = _constant_int(left)
         if left_offset is not None and sign == 1:
-            base, offset = self.visit(right)
+            base, offset = self.visit(right, ctx)
             return base, offset + left_offset
         return expr, 0
 
-    def default_visit(self, expr) -> tuple[Expr | None, int]:
+    def default_visit(self, expr, ctx=None) -> tuple[Expr | None, int]:
         return expr, 0
 
 

@@ -17,7 +17,7 @@ from tests.fixtures.placed.derived_prefill import DerivedPrefill
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tilefoundry import func, module
-from tilefoundry.analysis.walk import postorder
+from tilefoundry.analysis.walk import collect_exprs
 from tilefoundry.dsl import (  # noqa: F401
     ConstTensor,
     DimVar,
@@ -72,7 +72,7 @@ def test_prefill_decode_specializations_survive_the_round_trip() -> None:
         for variant in variants:
             targets = {
                 type(expr.target)
-                for expr in postorder(variant.body)
+                for expr in collect_exprs(variant.body)
                 if isinstance(expr, Call)
             }
             assert Arange in targets
@@ -90,7 +90,7 @@ def test_flash_split_k_decode_survives_the_round_trip() -> None:
         assert roundtripped.topologies == FlashSplitKDecode.topologies
         slices = [
             expr
-            for expr in postorder(roundtripped.entry_function().body)
+            for expr in collect_exprs(roundtripped.entry_function().body)
             if isinstance(expr, Call) and isinstance(expr.target, Slice)
         ]
         assert len(slices) == 2

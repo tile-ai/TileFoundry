@@ -20,7 +20,7 @@ from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContex
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 from .errors import AnalysisError
-from .walk import called_functions, describe, owning_module, postorder, tensor_types
+from .walk import called_functions, collect_exprs, describe, owning_module, tensor_types
 
 
 def infer_authored_types(
@@ -35,7 +35,7 @@ def infer_authored_types(
     for fn in reversed(tuple(functions)):
         ctx = TypeInferContext(scope=FunctionScope(module, fn))
         if fn.body is not None:
-            TypeInferVisitor(ctx, owns_body=True).visit(fn.body)
+            TypeInferVisitor(owns_body=True).visit(fn.body, ctx)
         if fn.body is not None and fn.return_type != fn.body.type:
             fn.return_type = fn.body.type
             fn.type = callable_type_for(fn.params, fn.body.type)
@@ -73,7 +73,7 @@ def validate_authored(functions: Iterable[Function]) -> None:
     layout means distribution inference stopped short of one.
     """
     for fn in functions:
-        for expr in (*fn.params, *postorder(fn.body)):
+        for expr in (*fn.params, *collect_exprs(fn.body)):
             _reject_schedule_constraint(expr)
             if (
                 isinstance(expr, Call)

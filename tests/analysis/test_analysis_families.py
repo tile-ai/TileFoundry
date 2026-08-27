@@ -30,7 +30,7 @@ from tilefoundry.analysis.compute_cost import (
     _local_duration_ns,
 )
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.walk import postorder
+from tilefoundry.analysis.walk import collect_exprs
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
 from tilefoundry.ir.core import (
     Call,
@@ -141,7 +141,7 @@ class _SharedTile:
 
 
 def _calls(function) -> tuple[Call, ...]:
-    return tuple(expr for expr in postorder(function.body) if isinstance(expr, Call))
+    return tuple(expr for expr in collect_exprs(function.body) if isinstance(expr, Call))
 
 
 def test_roofline_uses_exact_integer_ceiling_above_float_precision() -> None:
@@ -218,7 +218,7 @@ def test_a_matmul_counts_its_rows_once_whichever_axis_the_mesh_split() -> None:
         report = analyze(owner, function, analysis="performance")
         product = next(
             expr
-            for expr in postorder(report.function.body)
+            for expr in collect_exprs(report.function.body)
             if isinstance(expr, Call) and type(expr.target).__name__ == "MatMul"
         )
         cost = get_metadata(product, ComputeCostMetadata)

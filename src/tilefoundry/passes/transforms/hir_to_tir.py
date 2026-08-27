@@ -98,7 +98,7 @@ class _InductionSliceVisitor(ExprVisitor[bool]):
         super().__init__()
         self.induction_var = induction_var
 
-    def visit_Call(self, expr: Call) -> bool:
+    def visit_Call(self, expr: Call, ctx=None) -> bool:
         if isinstance(expr.target, HirSlice):
             starts = expr.args[1]
             if isinstance(starts, Tuple) and any(
@@ -107,33 +107,33 @@ class _InductionSliceVisitor(ExprVisitor[bool]):
                 return True
         target = expr.target
         return any(
-            self.visit(child)
+            self.visit(child, ctx)
             for child in ((*target,) if isinstance(target, HirFunction) else ())
             + expr.args
         )
 
-    def visit_Function(self, expr: HirFunction) -> bool:
+    def visit_Function(self, expr: HirFunction, ctx=None) -> bool:
         children = () if expr.body is None else (expr.body,)
         children += expr.variants
         children += tuple(converter for _, converter in expr.converters)
-        return any(self.visit(child) for child in children)
+        return any(self.visit(child, ctx) for child in children)
 
-    def visit_Tuple(self, expr: Tuple) -> bool:
-        return any(self.visit(element) for element in expr.elements)
+    def visit_Tuple(self, expr: Tuple, ctx=None) -> bool:
+        return any(self.visit(element, ctx) for element in expr.elements)
 
-    def visit_GridRegionExpr(self, expr: GridRegionExpr) -> bool:
+    def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx=None) -> bool:
         return any(
-            self.visit(value)
+            self.visit(value, ctx)
             for value in (*expr.init_args, expr.body, *expr.yield_values, *expr.carried_args)
         )
 
-    def visit_Var(self, expr: Var) -> bool:
+    def visit_Var(self, expr: Var, ctx=None) -> bool:
         return False
 
-    def visit_Constant(self, expr: Constant) -> bool:
+    def visit_Constant(self, expr: Constant, ctx=None) -> bool:
         return False
 
-    def default_visit(self, expr) -> bool:
+    def default_visit(self, expr, ctx=None) -> bool:
         return False
 
 
@@ -664,37 +664,39 @@ class _Lowerer:
                 self.owner = owner
                 self.depth = _depth
 
-            def _recurse(self, value):
+            def _recurse(self, value, ctx=None):
                 self.depth += 1
                 try:
-                    return self.visit(value)
+                    return self.visit(value, ctx)
                 finally:
                     self.depth -= 1
 
-            def dispatch_visit(self, value):
+            def dispatch_visit(self, value, ctx):
                 if self.depth > 64:
                     return None
-                return ExprFunctor.dispatch_visit(self, value)
+                return ExprFunctor.dispatch_visit(self, value, ctx)
 
-            def visit_Var(self, value: Var) -> Var | None:
+            def visit_Var(self, value: Var, ctx=None) -> Var | None:
                 initial = self.owner._carry_init.get(id(value))
                 if initial is not None:
-                    return self._recurse(initial)
+                    return self._recurse(initial, ctx)
                 return value if self.owner._cache.get(id(value)) is value else None
 
-            def visit_GridRegionExpr(self, value: GridRegionExpr) -> Var | None:
+            def visit_GridRegionExpr(
+                self, value: GridRegionExpr, ctx=None
+            ) -> Var | None:
                 for initial in value.init_args:
-                    result = self._recurse(initial)
+                    result = self._recurse(initial, ctx)
                     if result is not None:
                         return result
                 return None
 
-            def visit_Call(self, value: Call) -> Var | None:
+            def visit_Call(self, value: Call, ctx=None) -> Var | None:
                 if isinstance(value.target, Reshard):
-                    return self._recurse(value.args[0])
+                    return self._recurse(value.args[0], ctx)
                 return None
 
-            def default_visit(self, value) -> Var | None:
+            def default_visit(self, value, ctx=None) -> Var | None:
                 return None
 
         return _AliasVisitor(self).visit(expr) if expr is not None else None
@@ -1253,16 +1255,16 @@ def _insert_slice_coord(ctx: "_Lowerer", off_expr):
 
 
 class _CoordinateArithmeticVisitor(ExprVisitor[bool]):
-    def visit_Constant(self, expr: Constant) -> bool:
+    def visit_Constant(self, expr: Constant, ctx=None) -> bool:
         return True
 
-    def visit_Var(self, expr: Var) -> bool:
+    def visit_Var(self, expr: Var, ctx=None) -> bool:
         return True
 
-    def visit_Call(self, expr: Call) -> bool:
-        return is_dim_op_call(expr) and all(self.visit(arg) for arg in expr.args)
+    def visit_Call(self, expr: Call, ctx=None) -> bool:
+        return is_dim_op_call(expr) and all(self.visit(arg, ctx) for arg in expr.args)
 
-    def default_visit(self, expr) -> bool:
+    def default_visit(self, expr, ctx=None) -> bool:
         return False
 
 
@@ -1799,14 +1801,14 @@ class _MeshDeriver(ExprWalker[None]):
         self.cta_mesh: Mesh | None = None
         self.thread_mesh: Mesh | None = None
 
-    def visit(self, expr):
+    def visit(self, expr, ctx=None):
 
 
         if self.cta_mesh is not None and self.thread_mesh is not None:
             return
-        super().visit(expr)
+        super().visit(expr, ctx)
 
-    def visit_Call(self, call: Call) -> None:
+    def visit_Call(self, call: Call, ctx=None) -> None:
         ty = call.type
         sl = getattr(ty, "layout", None)
         if isinstance(sl, ShardLayout):
@@ -1822,7 +1824,7 @@ class _MeshDeriver(ExprWalker[None]):
 
 
                 self.thread_mesh = m
-        self.visit_operands(call)
+        self.visit_operands(call, ctx)
 
 
 def _derive_meshes_from_body(expr) -> tuple[Mesh | None, Mesh | None]:

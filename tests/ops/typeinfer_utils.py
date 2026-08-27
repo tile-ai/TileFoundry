@@ -61,7 +61,7 @@ def make_call(op, input_types) -> Call:
 
 def infer_call(op, *input_types):
     """Run ``op`` applied to ``input_types`` through the TypeInfer visitor."""
-    return TypeInferVisitor(TypeInferContext()).visit(make_call(op, input_types))
+    return TypeInferVisitor().visit(make_call(op, input_types), TypeInferContext())
 
 
 @dataclass(frozen=True)

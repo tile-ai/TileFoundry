@@ -52,9 +52,9 @@ _LAUNCH_EXTENT_MUTATOR_TYPE = None
 def _launch_extent_mutator_type():
     global _LAUNCH_EXTENT_MUTATOR_TYPE
     if _LAUNCH_EXTENT_MUTATOR_TYPE is None:
-        from tilefoundry.ir.visitor import ExprMutator  # noqa: PLC0415
+        from tilefoundry.ir.visitor import ExprCloner  # noqa: PLC0415
 
-        class _LaunchExtentMutator(ExprMutator):
+        class _LaunchExtentMutator(ExprCloner):
             def __init__(self, dimvar_src, dim_ops, i32, shape_of) -> None:
                 super().__init__()
                 self.dimvar_src = dimvar_src
@@ -62,10 +62,10 @@ def _launch_extent_mutator_type():
                 self.i32 = i32
                 self.shape_of = shape_of
 
-            def visit_Constant(self, dim):
+            def visit_Constant(self, dim, ctx=None):
                 return dim
 
-            def visit_DimVar(self, dim):
+            def visit_DimVar(self, dim, ctx=None):
                 src = self.dimvar_src.get(id(dim))
                 if src is None:
                     raise ValueError(
@@ -76,16 +76,16 @@ def _launch_extent_mutator_type():
                 arg, axis = src
                 return self.shape_of(type=self.i32, param=arg, axis=axis)
 
-            def visit_Call(self, dim):
+            def visit_Call(self, dim, ctx=None):
                 if not isinstance(dim.target, self.dim_ops):
                     raise ValueError(
                         f"launch_call: unsupported launch extent {type(dim).__name__}"
                     )
                 from dataclasses import replace  # noqa: PLC0415
 
-                return replace(dim, args=tuple(self.visit(arg) for arg in dim.args))
+                return replace(dim, args=tuple(self.visit(arg, ctx) for arg in dim.args))
 
-            def default_visit(self, dim):
+            def default_visit(self, dim, ctx=None):
                 raise ValueError(
                     f"launch_call: unsupported launch extent {type(dim).__name__}"
                 )

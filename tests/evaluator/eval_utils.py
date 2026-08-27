@@ -79,7 +79,7 @@ def run_eval_case(case: EvalCase) -> None:
     )
     placeholder = params[0].type if params else TensorType.umat_scalar()
     call = Call(type=placeholder, target=case.op, args=params)
-    result_type = TypeInferVisitor(TypeInferContext()).visit(call)
+    result_type = TypeInferVisitor().visit(call, TypeInferContext())
     call = replace(call, type=result_type)
     from tilefoundry.ir.hir.function import Function  # noqa: PLC0415 — avoid IR import cycle
 

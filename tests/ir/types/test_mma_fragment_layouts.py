@@ -83,7 +83,7 @@ def _assert_reshard_typeinfer_ok(
 
     call = Call(type=src_ty, target=op, args=(src,))
     ctx = TypeInferContext()
-    out_ty = TypeInferVisitor(ctx).visit(call)
+    out_ty = TypeInferVisitor().visit(call, ctx)
     assert isinstance(out_ty, TensorType), f"expected TensorType, got {out_ty}"
     assert out_ty.layout is dst_layout, "output layout must reference the rank-5 ShardLayout"
 

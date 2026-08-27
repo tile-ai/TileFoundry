@@ -1237,8 +1237,8 @@ class AnalysisCheckContext:
     function: "Function"
     target: "Target"
     level: str | None
-    whole: CostEvaluator
-    local: CostEvaluator
+    whole: CostContext
+    local: CostContext
 
 ```
 

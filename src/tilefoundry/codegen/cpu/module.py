@@ -78,7 +78,7 @@ _DIM_BINOP_CXX = {
 
 
 class _HostIntExprVisitor(ExprVisitor[str]):
-    def visit_Constant(self, expr: Constant) -> str:
+    def visit_Constant(self, expr: Constant, ctx=None) -> str:
         value = static_dim_value(expr)
         if value is None:
             raise ValueError(
@@ -87,19 +87,19 @@ class _HostIntExprVisitor(ExprVisitor[str]):
             )
         return str(value)
 
-    def visit_ShapeOf(self, expr: ShapeOf) -> str:
+    def visit_ShapeOf(self, expr: ShapeOf, ctx=None) -> str:
         return f"{expr.param.name}.shape()[{expr.axis}]"
 
-    def visit_Call(self, expr: Call) -> str:
+    def visit_Call(self, expr: Call, ctx=None) -> str:
         target = expr.target
         sym = next((s for op, s in _DIM_BINOP_CXX.items() if isinstance(target, op)), None)
         if sym is not None:
             a, b = expr.args
-            return f"({self.visit(a)} {sym} {self.visit(b)})"
+            return f"({self.visit(a, ctx)} {sym} {self.visit(b, ctx)})"
         if isinstance(target, (DimMin, DimMax)):
             a, b = expr.args
-            ca = self.visit(a)
-            cb = self.visit(b)
+            ca = self.visit(a, ctx)
+            cb = self.visit(b, ctx)
             cmp = "<" if isinstance(target, DimMin) else ">"
             return f"(({ca}) {cmp} ({cb}) ? ({ca}) : ({cb}))"
         raise ValueError(
@@ -107,7 +107,7 @@ class _HostIntExprVisitor(ExprVisitor[str]):
             f"{type(target).__name__}"
         )
 
-    def default_visit(self, expr) -> str:
+    def default_visit(self, expr, ctx=None) -> str:
         raise ValueError(
             f"emit_host_module: unsupported launch-extent node "
             f"{type(expr).__name__}"

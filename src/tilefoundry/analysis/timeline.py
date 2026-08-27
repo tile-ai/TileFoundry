@@ -40,10 +40,10 @@ from .metadata import (
 from .walk import (
     attach,
     children,
+    collect_exprs,
     describe,
     loop_repeated_values,
     loop_trip_count,
-    postorder,
     reachable_functions,
 )
 
@@ -93,7 +93,7 @@ def _durations(
 ) -> dict[int, int]:
     """Return one CTA-local duration for every primitive occurrence."""
     result: dict[int, int] = {}
-    for expr in postorder(fn.body):
+    for expr in collect_exprs(fn.body):
         if not isinstance(expr, Call):
             continue
         cost = get_metadata(expr, ComputeCostMetadata)
@@ -137,7 +137,7 @@ def _variance_chains(fn: Function) -> tuple[dict[int, _Chain], dict[int, GridReg
     as a chain. A loop that repeats a value's neighbours but not the value is
     simply not on that chain.
     """
-    values = postorder(fn.body)
+    values = collect_exprs(fn.body)
     order = {id(expr): index for index, expr in enumerate(values)}
     loops = {id(expr): expr for expr in values if isinstance(expr, GridRegionExpr)}
     repeated = {key: loop_repeated_values(loop) for key, loop in loops.items()}
@@ -161,7 +161,7 @@ def _placement_plan(
     it still owes below as a count, and so stands for exactly the repetition the
     cost families charged.
     """
-    values = postorder(fn.body)
+    values = collect_exprs(fn.body)
     order = {id(expr): index for index, expr in enumerate(values)}
     chains, loops = _variance_chains(fn)
     nodes: dict[_Chain, GridRegionExpr | None] = {(): None}
@@ -210,7 +210,7 @@ def _schedule(
     A loop body is laid out against its own origin and then moved to where the
     loop starts, which makes a body interval the first of its ``trips``.
     """
-    values = postorder(fn.body)
+    values = collect_exprs(fn.body)
     source_index = {id(expr): index for index, expr in enumerate(values)}
     hosts, replays, _bodies = _placement_plan(fn)
     schedulable = set(hosts)
@@ -377,7 +377,7 @@ def analyze_performance(
         durations = _durations(fn, throughput, services, placement_facts.topology)
         root = _schedule(fn, durations, placements)
         records = _records(root)
-        for expr in postorder(fn.body):
+        for expr in collect_exprs(fn.body):
             record = records.get(id(expr))
             if record is not None:
                 attach(expr, record)

@@ -15,7 +15,7 @@ import gc
 
 import pytest
 
-from tilefoundry.analysis.walk import postorder
+from tilefoundry.analysis.walk import collect_exprs
 from tilefoundry.ir.core import Call, Constant, Expr, Op, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -39,8 +39,8 @@ from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.mesh import Topology
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import (
+    ExprCloner,
     ExprFunctor,
-    ExprMutator,
     ExprVisitor,
     StmtExprMutator,
     StmtMutator,
@@ -85,41 +85,41 @@ def _eval_call(op: Op, *args: Expr) -> Evaluate:
 def test_expr_visitor_dispatches_by_class_name_and_shares_unchanged_branches() -> None:
     """``visit_<ClassName>`` dispatch, in child order.
 
-    ``visit_<ClassName>`` dispatch, in child order; a plain ExprMutator is the
+    ``visit_<ClassName>`` dispatch, in child order; a plain ExprCloner is the
     identity; and replacing one Var rebuilds its containing Call while sharing the
     siblings that were not touched.
     """
     visits = []
 
     class V(ExprVisitor[None]):
-        def visit_Var(self, var):
+        def visit_Var(self, var, ctx):
             visits.append(("Var", var.name))
 
-        def visit_Constant(self, c):
+        def visit_Constant(self, c, ctx):
             visits.append(("Constant", c.value))
 
-        def visit_Call(self, call):
+        def visit_Call(self, call, ctx):
             visits.append(("Call", type(call.target).__name__))
-            self.visit_operands(call)
+            self.visit_operands(call, ctx)
 
     tree = _call(_OpA(), _var("x"), _const(1.0))
     V().visit(tree)
     assert visits == [("Call", "_OpA"), ("Var", "x"), ("Constant", 1.0)]
-    assert ExprMutator().visit(tree) is tree
+    assert ExprCloner().visit(tree) is tree
 
 
-def test_expr_mutator_does_not_share_rewrite_results() -> None:
+def test_expr_cloner_shares_rewrite_results_for_shared_inputs() -> None:
     shared = _var("shared")
     tree = _call(_OpA(), shared, shared)
 
-    class FreshVars(ExprMutator):
-        def visit_Var(self, var: Var) -> Var:
+    class FreshVars(ExprCloner):
+        def visit_Var(self, var: Var, ctx) -> Var:
             return _var(var.name)
 
     rewritten = FreshVars().visit(tree)
     assert rewritten.args[0] is not shared
     assert rewritten.args[1] is not shared
-    assert rewritten.args[0] is not rewritten.args[1]
+    assert rewritten.args[0] is rewritten.args[1]
 
 
 def test_expr_visitor_memo_visits_shared_dag_once_and_returns_same_result() -> None:
@@ -135,13 +135,16 @@ def test_expr_visitor_memo_visits_shared_dag_once_and_returns_same_result() -> N
             name = type(expr).__name__
             self.counts[name] = self.counts.get(name, 0) + 1
 
-        def visit_Var(self, var: Var) -> str:
+        def visit_Var(self, var: Var, ctx) -> str:
             self._count(var)
             return var.name
 
-        def visit_Call(self, call: Call) -> tuple[str, tuple[object, ...]]:
+        def visit_Call(self, call: Call, ctx) -> tuple[str, tuple[object, ...]]:
             self._count(call)
-            return (type(call.target).__name__, tuple(self.visit(arg) for arg in call.args))
+            return (
+                type(call.target).__name__,
+                tuple(self.visit(arg, ctx) for arg in call.args),
+            )
 
     class CountingFunctor(ExprFunctor[object]):
         def __init__(self) -> None:
@@ -152,13 +155,16 @@ def test_expr_visitor_memo_visits_shared_dag_once_and_returns_same_result() -> N
             name = type(expr).__name__
             self.counts[name] = self.counts.get(name, 0) + 1
 
-        def visit_Var(self, var: Var) -> str:
+        def visit_Var(self, var: Var, ctx) -> str:
             self._count(var)
             return var.name
 
-        def visit_Call(self, call: Call) -> tuple[str, tuple[object, ...]]:
+        def visit_Call(self, call: Call, ctx) -> tuple[str, tuple[object, ...]]:
             self._count(call)
-            return (type(call.target).__name__, tuple(self.visit(arg) for arg in call.args))
+            return (
+                type(call.target).__name__,
+                tuple(self.visit(arg, ctx) for arg in call.args),
+            )
 
     visitor = CountingVisitor()
     functor = CountingFunctor()
@@ -174,7 +180,7 @@ def test_collected_postorder_visits_each_shared_expression_once() -> None:
     shared = _call(_OpA(), _var("shared"))
     root = _call(_OpB(), shared, shared)
 
-    ordered = postorder(root)
+    ordered = collect_exprs(root)
 
     assert [type(expr).__name__ for expr in ordered] == ["Var", "Call", "Call"]
     assert ordered[1] is shared
@@ -187,7 +193,7 @@ def test_expr_visitor_pins_memo_expr_and_uses_explicit_function_root() -> None:
     marker = object()
 
     class V(ExprVisitor[object]):
-        def visit_Var(self, var: Var) -> object:
+        def visit_Var(self, var: Var, ctx) -> object:
             return marker
 
     visitor = V()
@@ -225,8 +231,8 @@ def test_expr_functor_requires_explicit_handler_for_unknown_expr() -> None:
     sub = _call(_OpA(), x, y)
     top = _call(_OpB(), sub, _const(2.0))
 
-    class OnlyReplaceY(ExprMutator):
-        def visit_Var(self, var):
+    class OnlyReplaceY(ExprCloner):
+        def visit_Var(self, var, ctx):
             return _var("y2") if var.name == "y" else var
 
     out = OnlyReplaceY().visit(top)
@@ -236,11 +242,11 @@ def test_expr_functor_requires_explicit_handler_for_unknown_expr() -> None:
     assert out.args[1] is top.args[1]
 
 
-def test_expr_mutator_skips_grid_region_binding_vars() -> None:
-    """Binding-site Vars are not exposed to a generic ExprMutator.
+def test_expr_cloner_skips_grid_region_binding_vars() -> None:
+    """Binding-site Vars are not exposed to a generic ExprCloner.
 
     Binding-site Vars (``induction_var`` / ``carried_args``) are not
-    exposed to a generic ExprMutator (would otherwise be type-illegal).
+    exposed to a generic ExprCloner (would otherwise be type-illegal).
     """
     ind = _var("i", _i32())
     carried = (_var("a"), _var("b"))
@@ -258,8 +264,8 @@ def test_expr_mutator_skips_grid_region_binding_vars() -> None:
 
     replaced: list[str] = []
 
-    class ToConst(ExprMutator):
-        def visit_Var(self, var):
+    class ToConst(ExprCloner):
+        def visit_Var(self, var, ctx):
             replaced.append(var.name)
             return _const(0.0)
 
@@ -375,7 +381,7 @@ def test_stmt_expr_mutator_rewrites_expr_fields_tuples_and_symbolref_leaf() -> N
     s = _simple_for_body()
 
     class RewriteConst(StmtExprMutator):
-        def visit_Constant(self, c):
+        def visit_Constant(self, c, ctx):
             return Constant(type=c.type, value=32) if c.value == 16 else c
 
     out = RewriteConst().visit_stmt(s)
@@ -390,7 +396,7 @@ def test_stmt_expr_mutator_rewrites_expr_fields_tuples_and_symbolref_leaf() -> N
     assert StmtExprMutator().visit_stmt(call_stmt) is call_stmt
 
     class ReplaceB(StmtExprMutator):
-        def visit_Var(self, var):
+        def visit_Var(self, var, ctx):
             return _var("b2") if var.name == "b" else var
 
     out = ReplaceB().visit_stmt(call_stmt)

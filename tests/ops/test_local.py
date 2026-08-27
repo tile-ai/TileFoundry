@@ -5,7 +5,7 @@ from __future__ import annotations
 from tilefoundry import func, module
 from tilefoundry.analysis import ComputeCostMetadata, TrafficMetadata
 from tilefoundry.analysis.api import analyze
-from tilefoundry.analysis.walk import postorder
+from tilefoundry.analysis.walk import collect_exprs
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.sharding.local import Local
@@ -31,7 +31,7 @@ def test_local_analyzes_as_a_zero_traffic_topology_view() -> None:
     entry = _LocalProgram.entry_function()
     local = next(
         expr
-        for expr in postorder(entry.body)
+        for expr in collect_exprs(entry.body)
         if isinstance(expr, Call) and isinstance(expr.target, Local)
     )
     assert local.type.shape == (2,)
@@ -41,7 +41,7 @@ def test_local_analyzes_as_a_zero_traffic_topology_view() -> None:
         result = analyze(_LocalProgram, entry, analysis=("compute-cost", "memory"), level=level)
         analysed_local = next(
             expr
-            for expr in postorder(result.function.body)
+            for expr in collect_exprs(result.function.body)
             if isinstance(expr, Call) and isinstance(expr.target, Local)
         )
         record = get_metadata(analysed_local, ComputeCostMetadata)

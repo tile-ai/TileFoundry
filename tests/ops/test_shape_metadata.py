@@ -7,7 +7,7 @@ import torch
 
 from tests.ops.cost_utils import CostCase, run_cost_case
 from tilefoundry import func
-from tilefoundry.analysis.walk import postorder
+from tilefoundry.analysis.walk import collect_exprs
 from tilefoundry.dsl import DimVar, Tensor, tf
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call
@@ -46,7 +46,7 @@ def test_shape_metadata_uses_runtime_shape_and_host_types() -> None:
 
     torch.testing.assert_close(actual_shape, torch.tensor([3, 4], dtype=torch.int64))
     torch.testing.assert_close(actual_rank, torch.tensor(2, dtype=torch.int64))
-    calls = [expr for expr in postorder(_shape_metadata.body) if isinstance(expr, Call)]
+    calls = [expr for expr in collect_exprs(_shape_metadata.body) if isinstance(expr, Call)]
     metadata_calls = [
         call
         for call in calls

@@ -115,7 +115,7 @@ def test_broadcast_formal_accepts_reshaped_runtime_slice():
     callee = Function.build(name="consume", params=(w,), body=w, return_type=formal)
     call = Call(type=formal, target=callee, args=(reshaped,))
 
-    assert TypeInferVisitor(TypeInferContext()).visit(call) == formal
+    assert TypeInferVisitor().visit(call, TypeInferContext()) == formal
 
 
 def test_symbolic_arithmetic_signature_matches_inferred_argument():
@@ -134,7 +134,7 @@ def test_symbolic_arithmetic_signature_matches_inferred_argument():
     expected_dim = simplify_dim(DimMul, (2, seq))
 
     assert stage.params[0].type.shape == (expected_dim, 8)
-    assert TypeInferVisitor(TypeInferContext()).visit(call) == stage.return_type
+    assert TypeInferVisitor().visit(call, TypeInferContext()) == stage.return_type
 
 
 def test_plain_formal_rejects_shape_or_dtype_mismatch():
@@ -158,7 +158,7 @@ def test_function_call_preserves_partial_in_tuple_return():
     arg = Var(type=partial, name="arg")
     call = Call(type=return_type, target=callee, args=(arg,))
 
-    result = TypeInferVisitor(TypeInferContext()).visit(call)
+    result = TypeInferVisitor().visit(call, TypeInferContext())
 
     assert result == TupleType(fields=(partial, partial))
     assert result.fields[0].layout.mesh == mesh_ab
@@ -176,4 +176,4 @@ def test_bind_error_reports_call_site_binding():
         metadata=(BindingMetadata("y"),),
     )
     with pytest.raises(VerifyError, match="at y"):
-        TypeInferVisitor(TypeInferContext()).visit(call)
+        TypeInferVisitor().visit(call, TypeInferContext())

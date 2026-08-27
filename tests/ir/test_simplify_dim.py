@@ -179,7 +179,9 @@ def test_typeinfer_canonicalizes_equivalent_symbolic_shapes() -> None:
         shape=(seq, 128), dtype=DType.f32, layout=layout(seq), storage="gmem"
     )
 
-    inferred = TypeInferVisitor(TypeInferContext()).visit(Var(type=verbose_type, name="verbose"))
+    inferred = TypeInferVisitor().visit(
+        Var(type=verbose_type, name="verbose"), TypeInferContext()
+    )
 
     assert inferred == direct_type
     assert inferred.shape[0] is seq
@@ -195,7 +197,10 @@ def test_static_typeinfer_does_not_enter_dim_canonicalization(
 
     monkeypatch.setattr(dim_substitute, "normalize_dim", fail_if_called)
 
-    assert TypeInferVisitor(TypeInferContext()).visit(Var(type=static, name="static")) is static
+    assert (
+        TypeInferVisitor().visit(Var(type=static, name="static"), TypeInferContext())
+        is static
+    )
 
 
 def test_a_fully_static_dim_has_one_canonical_int_representation() -> None:
@@ -229,12 +234,13 @@ def test_a_fully_static_dim_has_one_canonical_int_representation() -> None:
         type=TupleType(fields=(TensorType.scalar(DType.i64),) * 4),
         elements=(_i64(0), _i64(0), _i64(0), _i64(0)),
     )
-    sliced = TypeInferVisitor(TypeInferContext()).visit(
+    sliced = TypeInferVisitor().visit(
         Call(
             type=TensorType.scalar(DType.bf16),
             target=Slice(sizes=(1, 4, 32, 128), strides=(1, 1, 1, 1)),
             args=(x, starts),
-        )
+        ),
+        TypeInferContext(),
     )
     for dim in sliced.shape:
         assert isinstance(dim, int) and not isinstance(dim, bool), (
@@ -275,7 +281,7 @@ def test_unary_propagates_dim_var_in_shape() -> None:
     in_ty = TensorType(shape=(s, 8), dtype=DType.f32, layout=None, storage="gmem")
     x = Var(type=in_ty, name="x")
     call = Call(type=in_ty, target=Unary(kind=UnaryKind.NEG), args=(x,))
-    out_ty = TypeInferVisitor(TypeInferContext()).visit(call)
+    out_ty = TypeInferVisitor().visit(call, TypeInferContext())
     assert out_ty.shape == (s, 8)
 
     assert out_ty.shape[0] is s

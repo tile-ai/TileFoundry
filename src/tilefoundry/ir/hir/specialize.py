@@ -24,7 +24,7 @@ from tilefoundry.ir.types.substitute import (
     substitute_shape_dim,
 )
 from tilefoundry.ir.types.tensor_type import TensorType, Type
-from tilefoundry.ir.visitor import ExprMutator, ExprVisitor, ExprWalker
+from tilefoundry.ir.visitor import ExprCloner, ExprVisitor, ExprWalker
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
@@ -221,28 +221,28 @@ def _rebuild_at(
     scope = None if ctx.scope is None else dataclasses.replace(ctx.scope, function=chosen)
     body_ctx = dataclasses.replace(ctx, scope=scope)
 
-    class _Rebuilder(ExprMutator):
+    class _Rebuilder(ExprCloner):
         def __init__(self) -> None:
             super().__init__()
             self._memo: dict[int, tuple[Expr, Expr]] = {}
-            self._type_visitor = TypeInferVisitor(body_ctx)
+            self._type_visitor = TypeInferVisitor()
 
-        def visit(self, expr: Expr) -> Expr:
+        def visit(self, expr: Expr, ctx=None) -> Expr:
             hit = self._memo.get(id(expr))
             if hit is not None:
                 return hit[1]
-            rebuilt = super().visit(expr)
+            rebuilt = super().visit(expr, ctx)
             self._memo[id(expr)] = (expr, rebuilt)
             return rebuilt
 
-        def visit_Var(self, var: Var) -> Expr:
+        def visit_Var(self, var: Var, ctx=None) -> Expr:
             return subst.get(id(var), var)
 
-        def visit_Constant(self, const: Constant) -> Expr:
+        def visit_Constant(self, const: Constant, ctx=None) -> Expr:
             return const
 
-        def visit_Call(self, call: Call) -> Expr:
-            new_args = tuple(self.visit(arg) for arg in call.args)
+        def visit_Call(self, call: Call, ctx=None) -> Expr:
+            new_args = tuple(self.visit(arg, ctx) for arg in call.args)
             new_target = call.target
             if isinstance(new_target, Function):
                 new_target = _specialize_callee(new_target, dims, body_ctx, call)
@@ -262,8 +262,8 @@ def _rebuild_at(
             )
             return self._retyped(rebuilt)
 
-        def visit_GridRegionExpr(self, grid: GridRegionExpr) -> Expr:
-            new_inits = tuple(self.visit(arg) for arg in grid.init_args)
+        def visit_GridRegionExpr(self, grid: GridRegionExpr, ctx=None) -> Expr:
+            new_inits = tuple(self.visit(arg, ctx) for arg in grid.init_args)
             new_phis = tuple(
                 old_phi
                 if new_init.type == old_phi.type
@@ -273,8 +273,8 @@ def _rebuild_at(
             for old_phi, new_phi in zip(grid.carried_args, new_phis):
                 if new_phi is not old_phi:
                     subst[id(old_phi)] = new_phi
-            new_body = self.visit(grid.body)
-            new_yields = tuple(self.visit(value) for value in grid.yield_values)
+            new_body = self.visit(grid.body, ctx)
+            new_yields = tuple(self.visit(value, ctx) for value in grid.yield_values)
             bounds = (grid.extent, grid.step, grid.start)
             new_bounds = tuple(substitute_shape_dim(bound, dims) for bound in bounds)
             if (
@@ -297,12 +297,14 @@ def _rebuild_at(
             )
             return self._retyped(rebuilt)
 
-        def default_visit(self, expr: Expr) -> Expr:
-            rebuilt = super().default_visit(expr)
+        def default_visit(self, expr: Expr, ctx=None) -> Expr:
+            rebuilt = super().default_visit(expr, ctx)
             return rebuilt if rebuilt is expr else self._retyped(rebuilt)
 
         def _retyped(self, rebuilt: Expr) -> Expr:
-            return dataclasses.replace(rebuilt, type=self._type_visitor.visit(rebuilt))
+            return dataclasses.replace(
+                rebuilt, type=self._type_visitor.visit(rebuilt, body_ctx)
+            )
 
     new_body = _Rebuilder().visit(chosen.body)
     derived = Function.build(
@@ -483,7 +485,7 @@ class _DimVarCollector(ExprWalker[None]):
         for bound in ("extent", "step", "start"):
             _collect_entries(getattr(expr, bound, None), self.found)
 
-    def _visit_children(self, expr: Expr) -> None:
+    def _visit_children(self, expr: Expr, ctx=None) -> None:
         for child in (
             getattr(expr, "args", ())
             + getattr(expr, "elements", ())
@@ -491,12 +493,12 @@ class _DimVarCollector(ExprWalker[None]):
             + getattr(expr, "yield_values", ())
             + getattr(expr, "carried_args", ())
         ):
-            self.visit(child)
+            self.visit(child, ctx)
         body = getattr(expr, "body", None)
         if body is not None:
-            self.visit(body)
+            self.visit(body, ctx)
 
-    def visit_function(self, fn: Function) -> None:
+    def visit_function(self, fn: Function, ctx=None) -> None:
         if id(fn) in self.seen_functions:
             return
         self.seen_functions.add(id(fn))
@@ -504,38 +506,38 @@ class _DimVarCollector(ExprWalker[None]):
             self.found.update(dim_vars_by_name(param.type))
         self.found.update(dim_vars_by_name(fn.return_type))
         for variant in fn.variants:
-            self.visit_function(variant)
+            self.visit_function(variant, ctx)
         if fn.body is not None:
-            self.visit(fn.body)
+            self.visit(fn.body, ctx)
 
-    def visit_Call(self, expr: Call) -> None:
+    def visit_Call(self, expr: Call, ctx=None) -> None:
         self._collect_expr(expr)
         self._collect_target(expr)
         self._collect_bounds(expr)
-        self._visit_children(expr)
+        self._visit_children(expr, ctx)
 
-    def visit_Tuple(self, expr: Tuple) -> None:
+    def visit_Tuple(self, expr: Tuple, ctx=None) -> None:
         self._collect_expr(expr)
-        self._visit_children(expr)
+        self._visit_children(expr, ctx)
 
-    def visit_GridRegionExpr(self, expr: GridRegionExpr) -> None:
+    def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx=None) -> None:
         self._collect_expr(expr)
         self._collect_bounds(expr)
-        self._visit_children(expr)
+        self._visit_children(expr, ctx)
 
-    def visit_Function(self, expr: Function) -> None:
-        self.visit_function(expr)
+    def visit_Function(self, expr: Function, ctx=None) -> None:
+        self.visit_function(expr, ctx)
 
-    def visit_Var(self, expr: Var) -> None:
+    def visit_Var(self, expr: Var, ctx=None) -> None:
         self._collect_expr(expr)
 
-    def visit_Constant(self, expr: Constant) -> None:
+    def visit_Constant(self, expr: Constant, ctx=None) -> None:
         self._collect_expr(expr)
 
-    def visit_SymbolRef(self, expr: Expr) -> None:
+    def visit_SymbolRef(self, expr: Expr, ctx=None) -> None:
         self._collect_expr(expr)
 
-    def visit_ShapeOf(self, expr: Expr) -> None:
+    def visit_ShapeOf(self, expr: Expr, ctx=None) -> None:
         self._collect_expr(expr)
 
 
@@ -569,16 +571,16 @@ class _SymbolicDimVisitor(ExprVisitor[bool]):
                 return True
         return False
 
-    def _target_has_symbolic(self, target) -> bool:
+    def _target_has_symbolic(self, target, ctx=None) -> bool:
         if isinstance(target, Function):
-            return self.visit_function(target)
+            return self.visit_function(target, ctx)
         return any(
             attribute.kind == "attribute"
             and has_symbolic_dims(getattr(target, attribute.name, None))
             for attribute in getattr(type(target), "params", lambda: ())()
         )
 
-    def _children_have_symbolic(self, expr: Expr) -> bool:
+    def _children_have_symbolic(self, expr: Expr, ctx=None) -> bool:
         children = (
             getattr(expr, "args", ())
             + getattr(expr, "elements", ())
@@ -587,11 +589,11 @@ class _SymbolicDimVisitor(ExprVisitor[bool]):
             + getattr(expr, "carried_args", ())
         )
         body = getattr(expr, "body", None)
-        return any(self.visit(child) for child in children) or (
-            body is not None and self.visit(body)
+        return any(self.visit(child, ctx) for child in children) or (
+            body is not None and self.visit(body, ctx)
         )
 
-    def visit_function(self, fn: Function) -> bool:
+    def visit_function(self, fn: Function, ctx=None) -> bool:
         if id(fn) in self.seen_functions:
             return False
         self.seen_functions.add(id(fn))
@@ -599,36 +601,36 @@ class _SymbolicDimVisitor(ExprVisitor[bool]):
             return True
         if has_symbolic_dims(fn.return_type):
             return True
-        if any(self.visit_function(variant) for variant in fn.variants):
+        if any(self.visit_function(variant, ctx) for variant in fn.variants):
             return True
-        return fn.body is not None and self.visit(fn.body)
+        return fn.body is not None and self.visit(fn.body, ctx)
 
-    def visit_Call(self, expr: Call) -> bool:
+    def visit_Call(self, expr: Call, ctx=None) -> bool:
         return (
             self._expr_has_symbolic(expr)
-            or self._target_has_symbolic(expr.target)
-            or self._children_have_symbolic(expr)
+            or self._target_has_symbolic(expr.target, ctx)
+            or self._children_have_symbolic(expr, ctx)
         )
 
-    def visit_Tuple(self, expr: Tuple) -> bool:
-        return self._expr_has_symbolic(expr) or self._children_have_symbolic(expr)
+    def visit_Tuple(self, expr: Tuple, ctx=None) -> bool:
+        return self._expr_has_symbolic(expr) or self._children_have_symbolic(expr, ctx)
 
-    def visit_GridRegionExpr(self, expr: GridRegionExpr) -> bool:
-        return self._expr_has_symbolic(expr) or self._children_have_symbolic(expr)
+    def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx=None) -> bool:
+        return self._expr_has_symbolic(expr) or self._children_have_symbolic(expr, ctx)
 
-    def visit_Function(self, expr: Function) -> bool:
-        return self.visit_function(expr)
+    def visit_Function(self, expr: Function, ctx=None) -> bool:
+        return self.visit_function(expr, ctx)
 
-    def visit_Var(self, expr: Var) -> bool:
+    def visit_Var(self, expr: Var, ctx=None) -> bool:
         return self._expr_has_symbolic(expr)
 
-    def visit_Constant(self, expr: Constant) -> bool:
+    def visit_Constant(self, expr: Constant, ctx=None) -> bool:
         return self._expr_has_symbolic(expr)
 
-    def visit_SymbolRef(self, expr: Expr) -> bool:
+    def visit_SymbolRef(self, expr: Expr, ctx=None) -> bool:
         return self._expr_has_symbolic(expr)
 
-    def visit_ShapeOf(self, expr: Expr) -> bool:
+    def visit_ShapeOf(self, expr: Expr, ctx=None) -> bool:
         return self._expr_has_symbolic(expr)
 
 

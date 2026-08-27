@@ -176,18 +176,18 @@ def _dim_expr_visitor_type():
         from ..visitor import ExprVisitor  # noqa: PLC0415
 
         class _DimExprVisitor(ExprVisitor[bool]):
-            def visit_DimVar(self, value: DimVar) -> bool:
+            def visit_DimVar(self, value: DimVar, ctx=None) -> bool:
                 return True
 
-            def visit_Constant(self, value: Constant) -> bool:
+            def visit_Constant(self, value: Constant, ctx=None) -> bool:
                 return isinstance(value.value, int) and not isinstance(value.value, bool)
 
-            def visit_Call(self, value: Call) -> bool:
+            def visit_Call(self, value: Call, ctx=None) -> bool:
                 return isinstance(value.target, _DIM_OP_TYPES) and all(
-                    self.visit(arg) for arg in value.args
+                    self.visit(arg, ctx) for arg in value.args
                 )
 
-            def default_visit(self, value) -> bool:
+            def default_visit(self, value, ctx=None) -> bool:
                 return False
 
         _DIM_EXPR_VISITOR_TYPE = _DimExprVisitor

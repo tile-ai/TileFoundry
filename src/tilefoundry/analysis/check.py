@@ -50,10 +50,10 @@ from tilefoundry.ir.types.substitute import (
     substitute_shape_dim,
     substitute_topology_dims,
 )
-from tilefoundry.ir.visitor import ExprMutator
+from tilefoundry.ir.visitor import ExprCloner
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TypeInferContext
-from tilefoundry.visitor_registry.visitors import CostEvaluator, TypeInferVisitor
+from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 from .compute_cost import _call_cost_record, _is_structural_occurrence
 from .errors import AnalysisError
@@ -68,7 +68,7 @@ from .metadata import (
 )
 from .movement import call_traffic
 from .preflight import infer_authored_types, validate_call_context
-from .walk import describe, postorder, reachable_functions, tensor_types
+from .walk import collect_exprs, describe, reachable_functions, tensor_types
 
 _INLINE_NODES = 10_000
 _DERIVED_METADATA = {
@@ -298,16 +298,14 @@ def _call_placements(
     selected = module.resolve_topology(level)
     timed = _timed_level(module.resolve_target())
     scope = FunctionScope(module, function)
-    whole = CostEvaluator(CostContext(scope=scope))
-    local = CostEvaluator(
-        CostContext(
-            scope=scope,
-            level=level,
-            topologies=module.effective_topologies(),
-        )
+    whole = CostContext(scope=scope)
+    local = CostContext(
+        scope=scope,
+        level=level,
+        topologies=module.effective_topologies(),
     )
     result: dict[int, Placement] = {}
-    for expr in postorder(function.body):
+    for expr in collect_exprs(function.body):
         if not isinstance(expr, Call) or isinstance(expr.target, Function):
             continue
         try:
@@ -326,7 +324,7 @@ def _call_placements(
 class AnalysisCheckContext:
     """What every input check reads: the program, the machine, and the level.
 
-    The evaluators are bound to the derived Function the analyses will read, so
+    The cost contexts are bound to the derived Function the analyses will read, so
     a check answers about the same program they do. Costing here is a question,
     not a record: nothing this context computes is attached.
     """
@@ -335,8 +333,8 @@ class AnalysisCheckContext:
     function: Function
     target: object
     level: str | None
-    whole: CostEvaluator
-    local: CostEvaluator
+    whole: CostContext
+    local: CostContext
 
     @property
     def selected_topology(self) -> Topology:
@@ -354,9 +352,9 @@ def analysis_check_context(
 ) -> AnalysisCheckContext:
     """Bind one context to the derived Function the analyses will read."""
     scope = FunctionScope(module, function)
-    whole = CostEvaluator(CostContext(scope=scope))
-    local = CostEvaluator(
-        CostContext(scope=scope, level=level, topologies=module.effective_topologies())
+    whole = CostContext(scope=scope)
+    local = CostContext(
+        scope=scope, level=level, topologies=module.effective_topologies()
     )
     return AnalysisCheckContext(
         module=module,
@@ -600,7 +598,7 @@ def _resource_parameters(
     paths = _module_paths(module)
     needed: dict[_ResourceKey, Var] = {}
     for caller in reachable_functions(function):
-        for expr in postorder(caller.body):
+        for expr in collect_exprs(caller.body):
             if not isinstance(expr, Call) or not isinstance(expr.target, Function):
                 continue
             owner = _call_reading(module, caller, expr)
@@ -645,7 +643,7 @@ def _view_metadata(expr: Expr) -> tuple:
     )
 
 
-class _InlineMutator(ExprMutator):
+class _InlineMutator(ExprCloner):
     def __init__(self, owner, env, memo, function, path, active) -> None:
         super().__init__()
         self.owner = owner
@@ -665,34 +663,34 @@ class _InlineMutator(ExprMutator):
         self.memo[id(expr)] = rebuilt
         return rebuilt
 
-    def visit_Var(self, expr: Var) -> Expr:
+    def visit_Var(self, expr: Var, ctx=None) -> Expr:
         cached = self._cached(expr)
         if cached is not None:
             return cached
         return self._finish(expr, replace(expr, metadata=_view_metadata(expr)))
 
-    def visit_Constant(self, expr: Constant) -> Expr:
+    def visit_Constant(self, expr: Constant, ctx=None) -> Expr:
         cached = self._cached(expr)
         if cached is not None:
             return cached
         return self._finish(expr, replace(expr, metadata=_view_metadata(expr)))
 
-    def visit_Tuple(self, expr: Tuple) -> Expr:
+    def visit_Tuple(self, expr: Tuple, ctx=None) -> Expr:
         cached = self._cached(expr)
         if cached is not None:
             return cached
         rebuilt = replace(
             expr,
-            elements=tuple(self.visit(item) for item in expr.elements),
+            elements=tuple(self.visit(item, ctx) for item in expr.elements),
             metadata=_view_metadata(expr),
         )
         return self._finish(expr, rebuilt)
 
-    def visit_GridRegionExpr(self, grid: GridRegionExpr) -> GridRegionExpr:
+    def visit_GridRegionExpr(self, grid: GridRegionExpr, ctx=None) -> GridRegionExpr:
         cached = self._cached(grid)
         if cached is not None:
             return cached
-        init_args = tuple(self.visit(item) for item in grid.init_args)
+        init_args = tuple(self.visit(item, ctx) for item in grid.init_args)
         induction_var = replace(
             grid.induction_var, metadata=_view_metadata(grid.induction_var)
         )
@@ -712,8 +710,8 @@ class _InlineMutator(ExprMutator):
             self.path,
             self.active,
         )
-        body = inner.visit(grid.body)
-        yield_values = tuple(inner.visit(item) for item in grid.yield_values)
+        body = inner.visit(grid.body, ctx)
+        yield_values = tuple(inner.visit(item, ctx) for item in grid.yield_values)
         rebuilt = replace(
             grid,
             induction_var=induction_var,
@@ -725,7 +723,7 @@ class _InlineMutator(ExprMutator):
         )
         return self._finish(grid, rebuilt)
 
-    def visit_Call(self, expr: Call) -> Expr:
+    def visit_Call(self, expr: Call, ctx=None) -> Expr:
         cached = self._cached(expr)
         if cached is not None:
             return cached
@@ -734,7 +732,7 @@ class _InlineMutator(ExprMutator):
         if isinstance(target, Function):
             call_index = self.owner.function_call_counters[-1]
             self.owner.function_call_counters[-1] += 1
-        new_args = tuple(self.visit(arg) for arg in expr.args)
+        new_args = tuple(self.visit(arg, ctx) for arg in expr.args)
         if isinstance(target, Function):
             reading = _call_reading(self.owner.module, self.function, expr)
             supplied = iter(new_args)
@@ -756,7 +754,7 @@ class _InlineMutator(ExprMutator):
         metadata = (*_view_metadata(expr), BindingMetadata(self.owner._binding()))
         return self._finish(expr, replace(expr, args=new_args, metadata=metadata))
 
-    def default_visit(self, expr: Expr) -> Expr:
+    def default_visit(self, expr: Expr, ctx=None) -> Expr:
         raise AnalysisError(f"cannot inline unsupported HIR node {type(expr).__name__}")
 
 
@@ -847,7 +845,7 @@ def _inline_view(module: Module, function: Function, budget: int) -> Function:
         module, resources, paths, {param.name for param in view_params}
     )
     body = inliner.function_body(function, env, (function.name,), frozenset())
-    size = len(postorder(body))
+    size = len(collect_exprs(body))
     if size > budget:
         raise AnalysisError(
             f"inlining {function.name!r} produces {size} body nodes, exceeding "
@@ -909,16 +907,16 @@ def check_program(
     infer_authored_types(functions, module)
     validate_call_context(module, functions)
     derived = _inline_view(module, function, budget)
-    TypeInferVisitor(
-        TypeInferContext(scope=FunctionScope(module, derived)), owns_body=True
-    ).visit(derived.body)
+    TypeInferVisitor(owns_body=True).visit(
+        derived.body, TypeInferContext(scope=FunctionScope(module, derived))
+    )
     checkers = tuple(analyzer.input_checker for analyzer in analyzers)
     if not checkers:
         return derived
     ctx = analysis_check_context(module, derived, level)
     for checker in checkers:
         checker.check_target(ctx)
-    for expr in postorder(derived.body):
+    for expr in collect_exprs(derived.body):
         if not isinstance(expr, Call) or isinstance(expr.target, Function):
             continue
         for checker in checkers:

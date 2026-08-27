@@ -154,7 +154,7 @@ This stage layers two concerns on top of the same IR:
    the scheduling layer that decides, not here
    ([schedule](./schedule.md)).
 
-IR traversal / rewrite utilities (`ExprVisitor` / `ExprMutator` /
+IR traversal / rewrite utilities (`ExprVisitor` / `ExprCloner` /
 `StmtVisitor` / `StmtMutator` / mixed stmt-expr rewriters) are shared
 infrastructure used by both passes and codegen walkers; the framework
 contract lives in [visitor-mutator](./visitor-mutator.md).

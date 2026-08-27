@@ -38,7 +38,7 @@ from tilefoundry.visitor_registry.access_relation import (
     renaming_relation,
 )
 
-from .walk import children, postorder
+from .walk import children, collect_exprs
 
 
 @dataclass(frozen=True)
@@ -150,22 +150,22 @@ def _buffer_namer():
             seen[key] = candidate
             return candidate
 
-        def visit_Call(self, expr: Call) -> str:
+        def visit_Call(self, expr: Call, ctx=None) -> str:
             if isinstance(expr.target, TupleGetItem):
-                base = _NameVisitor("").visit(expr.args[0])
+                base = _NameVisitor("").visit(expr.args[0], ctx)
                 name = f"{base}_{expr.target.index}"
                 seen[id(expr)] = name
                 return name
             if isinstance(expr.target, (Reshape, IndexSelect, Slice)):
-                name = _NameVisitor("").visit(expr.args[0])
+                name = _NameVisitor("").visit(expr.args[0], ctx)
                 seen[id(expr)] = name
                 return name
             return self._assign(expr)
 
-        def visit_Var(self, expr: Var) -> str:
+        def visit_Var(self, expr: Var, ctx=None) -> str:
             return self._assign(expr, expr.name)
 
-        def default_visit(self, expr) -> str:
+        def default_visit(self, expr, ctx=None) -> str:
             return self._assign(expr)
 
     def name_for(expr, prefix: str = "") -> str:
@@ -732,7 +732,7 @@ def _initial_schedule(accesses: list[_StatementAccess]) -> "isl.union_map":
     """Build a total order that seeds flow analysis, not the final schedule.
 
     Coordinates are ``[*loop_dims, stage, *own_dims, 0-pad]``. Loop dimensions
-    precede the postorder stage so statements interleave per iteration and a
+    precede the collect_exprs stage so statements interleave per iteration and a
     read at ``i + 1`` observes a write at ``i``; placing stage first would lose
     loop-carried dependencies.
     """
@@ -871,35 +871,35 @@ def _loop_axes(root):
             super().__init__()
             self.level = 0
 
-        def _visit_at(self, expr, level: int) -> None:
+        def _visit_at(self, expr, level: int, ctx=None) -> None:
             previous = self.level
             self.level = level
             try:
-                self.visit(expr)
+                self.visit(expr, ctx)
             finally:
                 self.level = previous
 
-        def visit_Call(self, expr: Call) -> None:
+        def visit_Call(self, expr: Call, ctx=None) -> None:
             for arg in expr.args:
-                self._visit_at(arg, self.level)
+                self._visit_at(arg, self.level, ctx)
 
-        def visit_Tuple(self, expr: Tuple) -> None:
+        def visit_Tuple(self, expr: Tuple, ctx=None) -> None:
             for element in expr.elements:
-                self._visit_at(element, self.level)
+                self._visit_at(element, self.level, ctx)
 
-        def visit_GridRegionExpr(self, expr: GridRegionExpr) -> None:
+        def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx=None) -> None:
             axis_of[id(expr)] = expr
             depth[id(expr)] = self.level
             seed[id(expr.induction_var)] = (expr, None)
             for phi, init in zip(expr.carried_args, expr.init_args):
                 seed[id(phi)] = (expr, init)
             for init in expr.init_args:
-                self._visit_at(init, self.level)
-            self._visit_at(expr.body, self.level + 1)
+                self._visit_at(init, self.level, ctx)
+            self._visit_at(expr.body, self.level + 1, ctx)
             for value in expr.yield_values:
-                self._visit_at(value, self.level + 1)
+                self._visit_at(value, self.level + 1, ctx)
 
-        def default_visit(self, expr) -> None:
+        def default_visit(self, expr, ctx=None) -> None:
             return None
 
     _LoopAxisVisitor()._visit_at(root, 0)
@@ -924,7 +924,7 @@ def _loop_scopes(root) -> dict[int, tuple[GridRegionExpr, ...]]:
     by_id = {id(axis): axis for axis in axis_of.values()}
     variance: dict[int, frozenset] = {}
 
-    for e in postorder(root):
+    for e in collect_exprs(root):
         if isinstance(e, GridRegionExpr):
             own = set()
             for child in (*e.init_args, e.body, *e.yield_values):
@@ -953,7 +953,7 @@ def _walk_calls(
     site_counter: dict[str, int], table: dict[int, object],
     loops: tuple[GridRegionExpr, ...] = (), carries: list | None = None,
 ) -> list["_Gathered"]:
-    """Walk a body in postorder while penetrating nested function calls.
+    """Walk a body in collect_exprs while penetrating nested function calls.
 
     Bind resolved arguments, qualify the callee scope, splice its statements,
     and alias wrapper results to real producers. Reject recursion, prototypes,
@@ -961,7 +961,7 @@ def _walk_calls(
     wire final yields and record carried-value aliases rather than statements.
     """
     scope = _loop_scopes(body)
-    order = postorder(body)
+    order = collect_exprs(body)
     grid_yields: dict[int, tuple] = {}
 
     own_targets: list[object] = []

@@ -22,7 +22,7 @@ from .metadata import (
     TrafficBytes,
     TrafficMetadata,
 )
-from .walk import attach, describe, postorder, reachable_functions
+from .walk import attach, collect_exprs, describe, reachable_functions
 
 SELECTOR = "roofline"
 
@@ -127,7 +127,7 @@ def analyze_roofline(
     """Attach a bound to every Call, and one to every Function, reachable here."""
     facts = target.get_facts(ThroughputFacts)
     for fn in reachable_functions(function):
-        for expr in postorder(fn.body):
+        for expr in collect_exprs(fn.body):
             if not isinstance(expr, Call):
                 continue
             cost = get_metadata(expr, ComputeCostMetadata)

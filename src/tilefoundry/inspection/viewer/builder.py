@@ -227,19 +227,19 @@ def _op_attributes(
 
 
 class _DimSpanVisitor(ExprVisitor[list[Span]]):
-    def visit_DimVar(self, dim: DimVar) -> list[Span]:
+    def visit_DimVar(self, dim: DimVar, ctx=None) -> list[Span]:
         return [Span(text=dim.name, color=DIMVAR_COLOR, bold=True)]
 
-    def visit_Constant(self, dim: Constant) -> list[Span]:
+    def visit_Constant(self, dim: Constant, ctx=None) -> list[Span]:
         return [Span(text=str(dim.value))]
 
-    def visit_Call(self, dim: Call) -> list[Span]:
+    def visit_Call(self, dim: Call, ctx=None) -> list[Span]:
         target = dim.target
         for op_cls, sym in _DIM_INFIX_OPS.items():
             if isinstance(target, op_cls):
-                spans = list(self.visit(dim.args[0]))
+                spans = list(self.visit(dim.args[0], ctx))
                 spans.append(Span(text=f" {sym} "))
-                spans.extend(self.visit(dim.args[1]))
+                spans.extend(self.visit(dim.args[1], ctx))
                 return spans
         for op_cls, fname in _DIM_FUNC_OPS.items():
             if isinstance(target, op_cls):
@@ -247,12 +247,12 @@ class _DimSpanVisitor(ExprVisitor[list[Span]]):
                 for i, arg in enumerate(dim.args):
                     if i:
                         spans.append(Span(text=", "))
-                    spans.extend(self.visit(arg))
+                    spans.extend(self.visit(arg, ctx))
                 spans.append(Span(text=")"))
                 return spans
         return [Span(text=shape_entry_str(dim))]
 
-    def default_visit(self, dim) -> list[Span]:
+    def default_visit(self, dim, ctx=None) -> list[Span]:
         return [Span(text=shape_entry_str(dim))]
 
 

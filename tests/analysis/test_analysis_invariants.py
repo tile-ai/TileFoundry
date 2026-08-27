@@ -67,7 +67,6 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
 )
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes, TypeInferContext
-from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 B, S, H, D = 1, 5, 2, 3
 
@@ -264,7 +263,7 @@ def test_a_reached_leaf_is_charged_at_its_own_level_and_the_others_are_not() -> 
         )
 
     def measured():
-        return call_traffic(call, CostEvaluator(CostContext()), CostEvaluator(CostContext()))
+        return call_traffic(call, CostContext(), CostContext())
 
     both = measured()
     assert both.operands == (TrafficBytes(), TrafficBytes(read=12), TrafficBytes())

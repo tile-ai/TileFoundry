@@ -1603,7 +1603,7 @@ def _infer_call(operation, args, context):
     infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
     if not isinstance(infer_context, runtime.TypeInferContext):
         infer_context = runtime.TypeInferContext()
-    inferred = runtime.TypeInferVisitor(infer_context).visit(placeholder)
+    inferred = runtime.TypeInferVisitor().visit(placeholder, infer_context)
     return dataclasses.replace(placeholder, type=inferred)
 
 

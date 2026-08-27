@@ -20,7 +20,7 @@ from tilefoundry.analysis.metadata import (
     RooflineMetadata,
     TrafficMetadata,
 )
-from tilefoundry.analysis.walk import postorder, tensor_types
+from tilefoundry.analysis.walk import collect_exprs, tensor_types
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
@@ -250,7 +250,7 @@ def _call_records(
 ) -> list[dict[str, object]]:
     """Every selected record attached to a Call, in program order."""
     rows: list[dict[str, object]] = []
-    for expr in postorder(function.body):
+    for expr in collect_exprs(function.body):
         if not isinstance(expr, Call):
             continue
         records = _records_of(expr, selected)
@@ -284,7 +284,7 @@ def _loop_records(
         else {}
     )
     rows: list[dict[str, object]] = []
-    for expr in postorder(function.body):
+    for expr in collect_exprs(function.body):
         if not isinstance(expr, GridRegionExpr):
             continue
         records = _records_of(expr, selected)

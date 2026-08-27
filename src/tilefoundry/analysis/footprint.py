@@ -34,7 +34,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
-from .walk import loop_repeated_values, loop_trip_count, postorder
+from .walk import collect_exprs, loop_repeated_values, loop_trip_count
 
 
 class _Unavailable(Exception):
@@ -447,10 +447,10 @@ def _without_parameters(walked: "isl.set") -> "isl.set":
 def _labels(fn: Function) -> dict[int, str]:
     order: list[Expr] = [
         *fn.params,
-        *(expr for expr in postorder(fn.body) if isinstance(expr, (Call, Constant))),
+        *(expr for expr in collect_exprs(fn.body) if isinstance(expr, (Call, Constant))),
     ]
     seen = {id(expr) for expr in order}
-    order.extend(expr for expr in postorder(fn.body) if id(expr) not in seen)
+    order.extend(expr for expr in collect_exprs(fn.body) if id(expr) not in seen)
     taken: set[str] = set()
     labels: dict[int, str] = {}
     for position, expr in enumerate(order):
@@ -486,7 +486,7 @@ def _collect(
     dict[int, list[Call]],
 ]:
     """Collect each directly owned Call's accesses and unavailable relation scopes."""
-    values = postorder(fn.body)
+    values = collect_exprs(fn.body)
     loops = {id(expr): expr for expr in values if isinstance(expr, GridRegionExpr)}
     order = {id(expr): index for index, expr in enumerate(values)}
     repeated = {loop_id: loop_repeated_values(loop) for loop_id, loop in loops.items()}

@@ -168,9 +168,7 @@ def _movement(
     return levels, stated
 
 
-def call_traffic(
-    expr: Call, whole: CostEvaluator, local: CostEvaluator
-) -> TrafficMetadata:
+def call_traffic(expr: Call, whole: CostContext, local: CostContext) -> TrafficMetadata:
     """What one Call moves, whole and for one participant.
 
     The same registered evaluator the work half reads, projected onto its
@@ -181,17 +179,17 @@ def call_traffic(
     and an allocation does not correct either answer.
     """
     try:
-        whole_cost = whole.visit(expr)
-        local_cost = local.visit(expr)
+        whole_cost = CostEvaluator().visit(expr, whole)
+        local_cost = CostEvaluator().visit(expr, local)
     except (ValueError, VerifyError) as error:
         raise AnalysisError(str(error)) from None
     asked = []
-    for evaluator, cost in ((whole, whole_cost), (local, local_cost)):
+    for ctx, cost in ((whole, whole_cost), (local, local_cost)):
         types = (
-            *(evaluator.ctx.local_type_of(arg) for arg in expr.args),
-            evaluator.ctx.local_type_of(expr),
+            *(ctx.local_type_of(arg) for arg in expr.args),
+            ctx.local_type_of(expr),
         )
-        asked.append(_movement(expr, cost, evaluator.ctx, types))
+        asked.append(_movement(expr, cost, ctx, types))
     (whole_levels, operands), (unit_levels, _unit_operands) = asked
     return TrafficMetadata(
         whole=whole_levels, per_unit=unit_levels, operands=operands

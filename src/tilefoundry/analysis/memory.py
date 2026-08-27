@@ -33,7 +33,6 @@ from tilefoundry.ir.types.shard import Topology
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import Target, UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
-from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .check import Placement, _call_placements, _result_placement
 from .errors import AnalysisError
@@ -60,8 +59,8 @@ from .walk import (
     attach,
     bytes_by_storage,
     children,
+    collect_exprs,
     enclosing_trips,
-    postorder,
     reachable_functions,
 )
 
@@ -157,7 +156,7 @@ def definition_order(fn: Function) -> list[Expr]:
     """
     return [
         *fn.params,
-        *(expr for expr in postorder(fn.body) if isinstance(expr, (Call, Constant))),
+        *(expr for expr in collect_exprs(fn.body) if isinstance(expr, (Call, Constant))),
     ]
 
 
@@ -694,7 +693,7 @@ def _buffer_placements(
     except AnalysisError:
         resolved = {}
     topology = module.resolve_topology(selected)
-    for expr in (*fn.params, *postorder(fn.body)):
+    for expr in (*fn.params, *collect_exprs(fn.body)):
         if id(expr) in resolved:
             continue
         try:
@@ -718,14 +717,12 @@ def _record_movement(
     as its loops repeat them.
     """
     scope = FunctionScope(module, fn)
-    whole = CostEvaluator(CostContext(scope=scope))
-    local = CostEvaluator(
-        CostContext(scope=scope, level=level, topologies=topologies)
-    )
+    whole = CostContext(scope=scope)
+    local = CostContext(scope=scope, level=level, topologies=topologies)
     trips = enclosing_trips(fn.body)
     totals: dict[str, TrafficBytes] = {}
     shares: dict[str, TrafficBytes] = {}
-    for expr in postorder(fn.body) if fn.body is not None else ():
+    for expr in collect_exprs(fn.body) if fn.body is not None else ():
         if not isinstance(expr, Call):
             continue
         moved = call_traffic(expr, whole, local)
@@ -769,7 +766,7 @@ def analyze_memory(
                 persistent[item.level] = persistent.get(item.level, 0) + item.bytes
         loop_values = {
             id(expr): expr
-            for expr in postorder(fn.body)
+            for expr in collect_exprs(fn.body)
             if isinstance(expr, GridRegionExpr)
         }
         loop_records: list[tuple[GridRegionExpr, LoopFootprintMetadata]] = []

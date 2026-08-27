@@ -1,7 +1,7 @@
 # TileFoundry Spec — IR Visitor / Mutator
 
 The IR traversal / rewrite framework: `ExprFunctor[T]` /
-`ExprVisitor[T]` / `ExprWalker[T]` / `ExprMutator` / `StmtVisitor[T]` /
+`ExprVisitor[T]` / `ExprWalker[T]` / `ExprCloner` / `StmtVisitor[T]` /
 `StmtMutator` / `StmtExprMutator`.
 A shared compiler facility, owned by neither analysis nor any
 specific pass.
@@ -11,14 +11,16 @@ flowchart TB
     ExprFunctor["<b>ExprFunctor[T]</b><br/>dispatch only"]
     ExprVisitor["<b>ExprVisitor[T]</b><br/>read-only"]
     ExprWalker["<b>ExprWalker[T]</b><br/>common side-effect walk"]
-    ExprMutator["<b>ExprMutator</b><br/>identity-preserving rewrite"]
+    ExprCloner["<b>ExprCloner</b><br/>memoized identity-preserving clone"]
+    ExprCollector["<b>ExprCollector</b><br/>postorder collection"]
     StmtVisitor["<b>StmtVisitor[T]</b>"]
     StmtMutator["<b>StmtMutator</b>"]
     StmtExprMutator["<b>StmtExprMutator</b><br/>Stmt + embedded Expr rewrite"]
 
     ExprVisitor --> ExprFunctor
     ExprWalker --> ExprVisitor
-    ExprMutator --> ExprFunctor
+    ExprCloner --> ExprVisitor
+    ExprCollector --> ExprWalker
     StmtExprMutator --> StmtMutator
 ```
 
@@ -31,30 +33,34 @@ these classes; manual `isinstance` dispatch is not the convention.
 
 - **Visitor** — read-only traversal. Returns a user-defined `T`.
   Used for aggregation / collection / verification.
-- **Mutator** — recursive rewrite. Returns the same node kind
+- **Cloner** — recursive rewrite. Returns the same node kind
   (`Expr → Expr`, `Stmt → Stmt`). Used for lowering / simplification
   / structural rewrite.
 
 The base classes only define traversal scaffolding. Business logic
-is injected by overriding `visit_<ClassName>` in subclasses.
+is injected by overriding `visit_<ClassName>(node, ctx)` in Expr-family
+subclasses. The traversal context is passed through `visit`; it is not visitor
+construction state.
 
 ## 2. Dispatch convention
 
 `visit_<ClassName>` static dispatch (no `singledispatch`):
 
-- `visit_Call(self, call: Call) -> T` for `Call`,
-- `visit_Var(self, var: Var) -> T` for `Var`,
+- `visit_Call(self, call: Call, ctx) -> T` for `Call`,
+- `visit_Var(self, var: Var, ctx) -> T` for `Var`,
 - `visit_For(self, stmt: For) -> Stmt` for the `For` Stmt subclass,
 - `visit_Evaluate(self, stmt: Evaluate) -> Stmt` for `Evaluate`,
 - and so on.
 
-`visit(node)` looks up `visit_<type(node).__name__>` on the subclass and calls
-it, falling back to `default_visit(node)` when no such override exists.
+Expr-family `visit(node, ctx)` looks up `visit_<type(node).__name__>` on the
+subclass and calls it with the same context, falling back to
+`default_visit(node, ctx)` when no such override exists. Statement visitors
+retain their context-free `visit(stmt)` entry.
 
 - **Most-specific wins.** `Call` is a subclass of `Expr`, but with
   both `visit_Call` and `visit_Expr` defined, `visit_Call` wins —
   dispatch keys on the runtime class name.
-- **Fallback to `default_visit(node)`.** `ExprFunctor.default_visit` raises
+- **Fallback to `default_visit(node, ctx)`.** `ExprFunctor.default_visit` raises
   `NotImplementedError`; a visitor or mutator must explicitly implement a
   node's behavior or call its child traversal/rebuild helper.
 - **No Op-level dispatch lives here.** A `Call(target=Add)` is
@@ -68,12 +74,13 @@ side-effect collection, `set[Var]` for free-var analysis, etc.).
 
 ```python
 class ExprFunctor(Generic[T]):                     # dispatch only; no memo
-    def visit(self, expr: Expr) -> T: ...          # dispatch to visit_<Type> else default_visit
-    def default_visit(self, expr: Expr) -> T: ... # raises NotImplementedError
+    def visit(self, expr: Expr, ctx: Any = None) -> T: ...
+    def default_visit(self, expr: Expr, ctx: Any) -> T: ... # raises NotImplementedError
 
 class ExprVisitor(ExprFunctor[T]):                 # read-only Expr traversal; T is user-chosen
-    def dispatch_visit(self, expr: Expr) -> T: ...  # memoized single dispatch point
-    def visit_operands(self, expr: Expr) -> None: ... # visits _expr_children(expr)
+    def __init__(self, *, memo=None, visit_other_functions=False, root_function=None): ...
+    def dispatch_visit(self, expr: Expr, ctx: Any) -> T: ...
+    def visit_operands(self, expr: Expr, ctx: Any) -> tuple[T, ...]: ...
     def clear(self) -> None: ...                   # clears memo and root
 ```
 
@@ -84,6 +91,9 @@ class ExprVisitor(ExprFunctor[T]):                 # read-only Expr traversal; T
     `ir/visitor.py`, not the dataclass-field walker `child_exprs` in
     `ir/core/expr.py`. It visits value children only and excludes binding-site
     Vars, including `GridRegionExpr.carried_args` and Function parameters.
+  - `visit_operands` is the only operand hook. A node needing non-generic
+    traversal overrides its complete `visit_<Kind>(node, ctx)` method; there
+    are no per-kind `visit_operands_<Kind>` hooks.
   - `_expr_children` raises `AssertionError` for an unknown `Expr` subclass;
     it does not silently return an empty tuple.
   - The explicit `visit_function_body` entry supplies the root Function
@@ -104,6 +114,7 @@ table that grows whenever a new Expr subclass appears:
 | `Var` | `()` |
 | `Constant` | `()` |
 | `SymbolRef` | `()` |
+| `ShapeOf` | `()` |
 | `Tuple` | `elements` |
 | `Call` | `args` |
 | `GridRegionExpr` | `init_args`, `body`, `yield_values` (binding-site Vars are excluded) |
@@ -121,32 +132,37 @@ Example — collect every `Var`:
 class VarCollector(ExprVisitor[None]):
     def __init__(self) -> None:
         self.vars: set[Var] = set()
-    def visit_Var(self, var: Var) -> None:
+    def visit_Var(self, var: Var, ctx) -> None:
         self.vars.add(var)
 ```
 
-`ExprWalker[T]` is the shared side-effect traversal layer for the standard
-Expr shapes. It supplies no-op leaves for `Var`, `Constant`, `SymbolRef`, and
-`ShapeOf`, and operand traversal for `Tuple`, `GridRegionExpr`, and
-`hir.Function`. A side-effect pass inherits it and overrides only the node
-types where it collects or derives state; all of those defaults use the same
-memo and `_expr_children` contract.
+`ExprWalker[T]` is the shared side-effect traversal layer. It defines only
+`default_visit_leaf(expr, operands, ctx)`, returning no value. The
+`ExprVisitor` base recursively derives `operands` first, so every unoverridden
+node reaches that one leaf hook in operand-before-consumer order.
 
-## 4. `ExprMutator`
+`ExprCollector` is the standard postorder collector. `collect_exprs(root)`
+passes one list as its traversal context and returns the collected tuple. The
+identity memo means a shared value in the SSA DAG appears once. Function
+reachability relies on this operand-before-consumer ordering.
+
+## 4. `ExprCloner`
 
 Recursive Expr rewrite returning the same node kind. Core invariant:
 **when no child changed, return the original node** (identity
 preservation).
 
 ```python
-class ExprMutator(ExprFunctor[Expr]):                  # identity-preserving Expr rewrite
-    def visit(self, expr: Expr) -> Expr: ...          # dispatch to visit_<Type> else default_visit
-    def default_visit(self, expr: Expr) -> Expr: ...  # recurse/rebuild children; preserve identity
+class ExprCloner(ExprVisitor[Expr]):                   # memoized identity-preserving Expr rewrite
+    def default_visit(self, expr: Expr, ctx: Any) -> Expr: ...
 ```
 
 - constraints:
   - When no child changed, `default_visit` returns the original node (identity
     preservation).
+  - The identity memo and its strong-reference id pin come from `ExprVisitor`.
+    A shared input node is cloned at most once and every consumer receives the
+    same cloned result.
 
 `_rebuild_expr(expr, new_children)` constructs a new Expr of the
 same subclass while preserving non-child fields (`type`, `source`).
@@ -161,9 +177,9 @@ Identity preservation matters for three reasons:
    identity remain valid for unchanged nodes.
 
 An Expr visitor `visit_Call` override that needs recursive children MUST call
-`visit_operands(call)`. An Expr mutator override that needs the generic
-identity-preserving rebuild MUST call `default_visit(call)`; it may return the
-original node directly only after it has explicitly handled the children.
+`visit_operands(call, ctx)`. An Expr cloner override that needs the generic
+identity-preserving rebuild MUST call `default_visit(call, ctx)`; it may return
+the original node directly only after it has explicitly handled the children.
 
 ## 5. `StmtVisitor[T]` / `StmtMutator`
 
@@ -176,11 +192,11 @@ class StmtVisitor(Generic[T]):                     # read-only Stmt-tree travers
 
 class StmtMutator:                                    # identity-preserving Stmt rewrite
     def visit(self, stmt: Stmt) -> Stmt: ...          # dispatch to visit_<Type> else generic_visit
-    def generic_visit(self, stmt: Stmt) -> Stmt: ...  # recurse child Stmts; invariant identical to ExprMutator
+    def generic_visit(self, stmt: Stmt) -> Stmt: ...  # recurse child Stmts; invariant identical to ExprCloner
 ```
 
 - constraints:
-  - `StmtMutator`'s identity-preservation invariant is identical to `ExprMutator`.
+  - `StmtMutator`'s identity-preservation invariant is identical to `ExprCloner`.
   - `StmtVisitor` / `StmtMutator` do not descend into Expr fields embedded in
     Stmts; those are visited only through `StmtExprMutator` ([§6](#6-stmtexprmutator)).
 
@@ -215,7 +231,7 @@ fields embedded in Stmts. This is the most common combination
 ```python
 class StmtExprMutator(StmtMutator):                   # rewrite Stmts, and the Exprs embedded in their Expr-typed fields
     def visit_stmt(self, stmt: Stmt) -> Stmt: ...     # rewrite the Stmt tree via StmtMutator
-    def visit_expr(self, expr: Expr) -> Expr: ...     # rewrite embedded value Exprs; shares ExprMutator's rewrite helper
+    def visit_expr(self, expr: Expr, ctx: Any = None) -> Expr: ... # rewrite embedded value Exprs; shares ExprCloner's rewrite helper
     def generic_visit(self, stmt: Stmt) -> Stmt: ...  # StmtMutator recurse, then rewrite each Stmt's Expr fields
 ```
 
@@ -260,8 +276,9 @@ position, instead of `Evaluate(op, args)`, is malformed IR
 
 ## 8. Implementation location
 
-- Public exports: `ExprFunctor`, `ExprVisitor`, `ExprWalker`, `ExprMutator`, `StmtVisitor`,
-  `StmtMutator`, `StmtExprMutator`, `walk_prim_function`,
+- Public exports: `ExprFunctor`, `ExprVisitor`, `ExprWalker`, `ExprCollector`,
+  `collect_exprs`, `ExprCloner`, `StmtVisitor`, `StmtMutator`,
+  `StmtExprMutator`, `walk_prim_function`,
   `rewrite_prim_function`.
 - The four child-enumeration / rebuild tables
   (`_expr_children`, `_rebuild_expr`, `_stmt_children`,

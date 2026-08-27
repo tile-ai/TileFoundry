@@ -43,51 +43,61 @@ class TypeInferVisitor(ExprVisitor[Type]):
     stale ``expr.type``.
     """
 
-    def __init__(self, ctx: TypeInferContext, *, memo=None, owns_body: bool = True) -> None:
-        if memo is not None:
-            ctx = replace(ctx, memo=dict(memo))
-        super().__init__(ctx, memo=ctx.memo)
-        self._memo = ctx.memo
+    def __init__(self, *, memo=None, owns_body: bool = True) -> None:
+        super().__init__(memo=memo)
+        self._memo_supplied = memo is not None
         self._visit_depth = 0
         self._owns_body = owns_body
 
-    def visit(self, expr: Expr) -> Type:
+    def visit(self, expr: Expr, ctx: TypeInferContext) -> Type:
+        outermost = self._visit_depth == 0
+        if outermost:
+            if self._memo_supplied:
+                ctx = replace(ctx, memo=self._memo)
+            else:
+                self._memo = ctx.memo
         self._visit_depth += 1
         try:
-            result = canonicalize_dims(super().visit(expr))
+            result = canonicalize_dims(super().visit(expr, ctx))
             if self._owns_body:
                 expr.type = result
             return result
         finally:
             self._visit_depth -= 1
 
-    def visit_leaf_Var(self, var: Var, _operands) -> Type:
+    def visit_leaf_Var(self, var: Var, _operands, ctx: TypeInferContext) -> Type:
         return var.annotation
 
-    def visit_leaf_Constant(self, c: Constant, _operands) -> Type:
+    def visit_leaf_Constant(self, c: Constant, _operands, ctx: TypeInferContext) -> Type:
         declared = c.type
         if declared is not None:
             return declared
         return _constant_type(c.value)
 
-    def visit_leaf_Call(self, call: Call, arg_types) -> Type:
+    def visit_leaf_Call(self, call: Call, arg_types, ctx: TypeInferContext) -> Type:
         target = call.target
         if isinstance(target, Function):
-            return self._call_function(call, target, arg_types)
+            return self._call_function(call, target, arg_types, ctx)
         op_cls = type(target)
         fn = typeinfer_registry.lookup(op_cls)
         if fn is None:
-            self.ctx.error(call, f"no typeinfer registered for {op_cls.__name__}")
-        return fn(call, self.ctx)
+            ctx.error(call, f"no typeinfer registered for {op_cls.__name__}")
+        return fn(call, ctx)
 
-    def _call_function(self, call: Call, callee: Function, arg_types: tuple[Type, ...]) -> Type:
-        child = self.ctx.child_for(callee)
+    def _call_function(
+        self,
+        call: Call,
+        callee: Function,
+        arg_types: tuple[Type, ...],
+        ctx: TypeInferContext,
+    ) -> Type:
+        child = ctx.child_for(callee)
         supplied = tuple(
             param for param in callee.params if not (child is not None and param.is_const)
         )
         if len(arg_types) != len(supplied):
             kind = "activation(s)" if child is not None else "parameter(s)"
-            self.ctx.error(
+            ctx.error(
                 call,
                 f"hir Function call {callee.name!r}: arity mismatch — "
                 f"callee declares {len(supplied)} {kind}, call passed {len(arg_types)}",
@@ -115,7 +125,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
                         f"hir Function call {callee.name!r}: arg {index} type mismatch — "
                         f"callee param {param.name!r} expects {declared!r}, got {arg_type!r}"
                     )
-                self.ctx.error(call, message)
+                ctx.error(call, message)
             bound = arg_type if wildcard else declared
             memo[id(param)] = (param, bound)
 
@@ -123,16 +133,16 @@ class TypeInferVisitor(ExprVisitor[Type]):
             return callee.return_type
 
         key = (id(callee), arg_types)
-        cached = self.ctx.instantiated_memo.get(key)
+        cached = ctx.instantiated_memo.get(key)
         if cached is not None:
             return cached
-        result = TypeInferVisitor(
-            self.ctx.for_callee(callee), memo=memo, owns_body=False
-        ).visit(callee.body)
-        self.ctx.instantiated_memo[key] = result
+        result = TypeInferVisitor(memo=memo, owns_body=False).visit(
+            callee.body, ctx.for_callee(callee)
+        )
+        ctx.instantiated_memo[key] = result
         return result
 
-    def visit_leaf_Tuple(self, tup: Tuple, operands) -> Type:
+    def visit_leaf_Tuple(self, tup: Tuple, operands, ctx: TypeInferContext) -> Type:
         """Visit Tuple.
 
         Structural: the field types of the (possibly just-elaborated)
@@ -140,33 +150,27 @@ class TypeInferVisitor(ExprVisitor[Type]):
         """
         return TupleType(fields=operands)
 
-    def visit_operands_GridRegionExpr(self, grid: GridRegionExpr):
-        inits = tuple(self.visit(arg) for arg in grid.init_args)
+    def visit_GridRegionExpr(self, grid: GridRegionExpr, ctx: TypeInferContext) -> Type:
+        """Infer a loop after binding its induction and carried variables."""
+        inits = tuple(self.visit(arg, ctx) for arg in grid.init_args)
         memo = {
             **self._memo,
             id(grid.induction_var): (grid.induction_var, grid.induction_var.annotation),
             **{id(phi): (phi, type_) for phi, type_ in zip(grid.carried_args, inits)},
         }
-        return inits, TypeInferVisitor(self.ctx, memo=memo, owns_body=self._owns_body)
-
-    def visit_leaf_GridRegionExpr(self, grid: GridRegionExpr, operands) -> Type:
-        """Carry/body: a no-carry loop's value is its body.
-
-        A carrying loop's value is its ``carried_args`` phi variables' declared
-        types, matching the parser's node-construction rule.
-        See [hir §1.2](docs/spec/hir.md#12-gridregionexpr).
-        """
-        _inits, inner = operands
-        body_type = inner.visit(grid.body)
+        inner = TypeInferVisitor(memo=memo, owns_body=self._owns_body)
+        body_type = inner.visit(grid.body, ctx)
         for y in grid.yield_values:
-            inner.visit(y)
+            inner.visit(y, ctx)
         if not grid.carried_args:
             return body_type
         if len(grid.carried_args) == 1:
-            return inner.visit(grid.carried_args[0])
-        return TupleType(fields=tuple(inner.visit(phi) for phi in grid.carried_args))
+            return inner.visit(grid.carried_args[0], ctx)
+        return TupleType(fields=tuple(inner.visit(phi, ctx) for phi in grid.carried_args))
 
-    def visit_leaf_ShapeOf(self, shape_of: ShapeOf, _operands) -> Type:
+    def visit_leaf_ShapeOf(
+        self, shape_of: ShapeOf, _operands, ctx: TypeInferContext
+    ) -> Type:
         """A ``tir.ShapeOf`` always carries its own concrete (rank-0 i32) type at construction.
 
         A ``tir.ShapeOf`` always carries its own concrete (rank-0 i32)
@@ -174,8 +178,8 @@ class TypeInferVisitor(ExprVisitor[Type]):
         """
         return shape_of.type
 
-    def default_visit_leaf(self, expr: Expr, _operands) -> Type:
-        self.ctx.error(expr, f"no typeinfer rule for Expr subclass {type(expr).__name__}")
+    def default_visit_leaf(self, expr: Expr, _operands, ctx: TypeInferContext) -> Type:
+        ctx.error(expr, f"no typeinfer rule for Expr subclass {type(expr).__name__}")
 
 
 class VerifyVisitor(StmtVisitor[None]):
@@ -288,20 +292,18 @@ class CostEvaluator(ExprWalker[Cost]):
 
     def __init__(
         self,
-        ctx: CostContext,
         registry: AnalysisRegistry = cost_evaluator_registry,
     ) -> None:
         super().__init__()
-        self.ctx = ctx
         self.registry = registry
 
-    def visit_Call(self, call: Call) -> Cost:
+    def visit_Call(self, call: Call, ctx: CostContext) -> Cost:
         fn = self.registry.lookup(type(call.target))
         if fn is None:
-            self.ctx.error(
+            ctx.error(
                 call, f"no cost evaluator registered for {type(call.target).__name__}"
             )
-        return fn(call, self.ctx)
+        return fn(call, ctx)
 
 __all__ = [
     "TypeInferVisitor",
