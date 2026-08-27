@@ -34,7 +34,8 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
-from .walk import collect_exprs, loop_repeated_values, loop_trip_count
+from .visitor import StructuralMemo
+from .walk import collect_exprs, loop_trip_count
 
 
 class _Unavailable(Exception):
@@ -467,19 +468,23 @@ def _labels(fn: Function) -> dict[int, str]:
 def _enclosing_loops(
     call: Call,
     loops: dict[int, GridRegionExpr],
-    repeated: dict[int, set[int]],
+    structural_memo: StructuralMemo,
     order: dict[int, int],
 ) -> tuple[GridRegionExpr, ...]:
     return tuple(
         sorted(
-            (loop for loop_id, loop in loops.items() if id(call) in repeated[loop_id]),
+            (
+                loop
+                for loop in loops.values()
+                if structural_memo.scope(loop).is_variant(call)
+            ),
             key=lambda loop: -order[id(loop)],
         )
     )
 
 
 def _collect(
-    module: Module, fn: Function, *, narrow: bool = True
+    module: Module, fn: Function, structural_memo: StructuralMemo, *, narrow: bool = True
 ) -> tuple[
     dict[int, GridRegionExpr],
     dict[int, list[_Access]],
@@ -489,14 +494,13 @@ def _collect(
     values = collect_exprs(fn.body)
     loops = {id(expr): expr for expr in values if isinstance(expr, GridRegionExpr)}
     order = {id(expr): index for index, expr in enumerate(values)}
-    repeated = {loop_id: loop_repeated_values(loop) for loop_id, loop in loops.items()}
     labels = _labels(fn)
     scope = FunctionScope(module, fn)
     ctx = _RankPreserving(scope=scope) if narrow else TypeInferContext(scope=scope)
     accesses: dict[int, list[_Access]] = {key: [] for key in loops}
     unavailable: dict[int, list[Call]] = {key: [] for key in loops}
     for call in (expr for expr in values if isinstance(expr, Call)):
-        path = _enclosing_loops(call, loops, repeated, order)
+        path = _enclosing_loops(call, loops, structural_memo, order)
         if not path or isinstance(call.target, (Slice, Reshape, TupleGetItem)):
             continue
         scope = id(path[-1])
@@ -661,10 +665,14 @@ def _reading(
     return _LoopReading(tuple(buffers), complete)
 
 
-def loop_footprints(module: Module, fn: Function) -> dict[int, _LoopReading]:
+def loop_footprints(
+    module: Module, fn: Function, structural_memo: StructuralMemo
+) -> dict[int, _LoopReading]:
     """Return each authored loop's known reading or best available lower bound."""
-    loops, accesses, unavailable = _collect(module, fn)
-    _, device_accesses, device_unavailable = _collect(module, fn, narrow=False)
+    loops, accesses, unavailable = _collect(module, fn, structural_memo)
+    _, device_accesses, device_unavailable = _collect(
+        module, fn, structural_memo, narrow=False
+    )
 
     readings: dict[int, _LoopReading] = {}
     for loop_id, loop in loops.items():

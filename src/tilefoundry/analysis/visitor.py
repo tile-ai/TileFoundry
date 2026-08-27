@@ -77,16 +77,34 @@ class ScopeMemo:
         if not isinstance(self.owner, GridRegionExpr):
             return False
         seeds = (self.owner.induction_var, *self.owner.carried_args)
-        seen: set[int] = set()
+        roots = (self.owner.body, *self.owner.yield_values)
+        contained: set[int] = set()
+
+        def collect(expr: Expr) -> None:
+            key = id(expr)
+            if key in contained:
+                return
+            contained.add(key)
+            for operand in children(expr):
+                collect(operand)
+
+        for root in roots:
+            collect(root)
+        if id(value) not in contained:
+            return False
+
+        resolved: dict[int, bool] = {}
 
         def depends(expr: Expr) -> bool:
             key = id(expr)
-            if key in seen:
-                return False
-            seen.add(key)
+            if key in resolved:
+                return resolved[key]
             if any(expr is seed for seed in seeds):
+                resolved[key] = True
                 return True
-            return any(depends(operand) for operand in children(expr))
+            result = any(depends(operand) for operand in children(expr))
+            resolved[key] = result
+            return result
 
         return depends(value)
 
@@ -126,6 +144,13 @@ class StructuralMemo:
         """Return the lexical scope owning ``expr``."""
         return self.node(expr).parent_scope
 
+    def scope(self, owner: Function | GridRegionExpr) -> ScopeMemo:
+        """Return the scope introduced by ``owner``, matching by identity."""
+        found = self._scope_by_id.get(id(owner))
+        if found is None or found.owner is not owner:
+            raise KeyError(f"scope owner is not in this structural memo: {owner!r}")
+        return found
+
     def producers(self, expr: Expr) -> tuple[Expr, ...]:
         """Return direct operand definitions of ``expr``."""
         return self.node(expr).operands
@@ -133,6 +158,21 @@ class StructuralMemo:
     def users(self, expr: Expr) -> tuple[Expr, ...]:
         """Return expressions that directly consume ``expr``."""
         return self.node(expr).users
+
+    def definition_order(self, function: Function) -> tuple[Expr, ...]:
+        """Return ``function`` expressions once, operands before consumers."""
+        self.scope(function)
+        return tuple(item.expr for item in self.nodes)
+
+    def execution_count(self, expr: Expr) -> int:
+        """Return how often enclosing lexical loops recompute ``expr``."""
+        count = 1
+        scope: ScopeMemo | None = self.scope_of(expr)
+        while scope is not None:
+            if scope.trip_count is not None and scope.is_variant(expr):
+                count *= scope.trip_count.value or 1
+            scope = scope.parent
+        return count
 
 
 @dataclass

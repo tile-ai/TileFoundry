@@ -35,87 +35,6 @@ def children(expr: Expr) -> tuple[Expr, ...]:
     return _expr_children(expr)
 
 
-def enclosing_trips(root: Expr | None) -> dict[int, int]:
-    """Return production counts for values repeated by enclosing loops.
-
-    A value repeats only when it depends on a loop induction variable or carried
-    argument; invariant values reached by a body remain single computations.
-    Counts multiply through true nesting and are keyed by object identity for
-    the SSA DAG. Values absent from the returned map have a count of one.
-    """
-    if root is None:
-        return {}
-    trips: dict[int, int] = {}
-    for loop in collect_exprs(root):
-        if not isinstance(loop, GridRegionExpr):
-            continue
-        count = loop_trip_count(loop)
-        if count == 1:
-            continue
-        for expr_id in loop_repeated_values(loop):
-            trips[expr_id] = trips.get(expr_id, 1) * count
-    return trips
-
-
-def loop_repeated_values(loop: GridRegionExpr) -> set[int]:
-    """Return ids of values *loop* recomputes on every trip.
-
-    Values depending on the induction variable or a carried argument change each
-    trip; all others remain invariant. Walk the body and every yielded value in
-    definition order so dependencies are known before consumers and every carried
-    chain contributes its repeated work.
-    """
-    seeds = {id(loop.induction_var), *(id(carried) for carried in loop.carried_args)}
-    repeated: set[int] = set()
-    for root in (loop.body, *loop.yield_values):
-        for expr in collect_exprs(root):
-            if id(expr) in seeds or any(
-                id(child) in repeated or id(child) in seeds for child in children(expr)
-            ):
-                repeated.add(id(expr))
-    return repeated
-
-
-def loop_scopes(
-    fn: Function,
-) -> tuple[dict[int, int | None], dict[int, int | None]]:
-    """Return loop parents and the innermost scope of each schedulable expression.
-
-    ``parent`` is keyed by ``GridRegionExpr`` identity. ``scope_of`` is keyed
-    only by ``Call`` and ``GridRegionExpr`` identities; calls map to their
-    innermost repeated loop, while loops map to their parent loop.
-    """
-    values = collect_exprs(fn.body)
-    loops = [expr for expr in values if isinstance(expr, GridRegionExpr)]
-    repeated = {id(loop): loop_repeated_values(loop) for loop in loops}
-
-    def innermost(candidates: list[GridRegionExpr]) -> GridRegionExpr:
-        return next(
-            candidate
-            for candidate in candidates
-            if not any(
-                other is not candidate and id(other) in repeated[id(candidate)]
-                for other in candidates
-            )
-        )
-
-    parent: dict[int, int | None] = {}
-    for loop in loops:
-        candidates = [
-            owner for owner in loops if owner is not loop and id(loop) in repeated[id(owner)]
-        ]
-        parent[id(loop)] = id(innermost(candidates)) if candidates else None
-
-    scope_of: dict[int, int | None] = {}
-    for expr in values:
-        if isinstance(expr, Call):
-            candidates = [loop for loop in loops if id(expr) in repeated[id(loop)]]
-            scope_of[id(expr)] = id(innermost(candidates)) if candidates else None
-        elif isinstance(expr, GridRegionExpr):
-            scope_of[id(expr)] = parent[id(expr)]
-    return parent, scope_of
-
-
 def loop_trip_count(loop: GridRegionExpr) -> int:
     """How many times *loop* runs, or one when its bounds are not numbers.
 
@@ -328,11 +247,8 @@ __all__ = [
     "children",
     "describe",
     "detach",
-    "enclosing_trips",
     "entry_function",
     "execution_domain",
-    "loop_scopes",
-    "loop_repeated_values",
     "loop_trip_count",
     "owning_module",
     "collect_exprs",

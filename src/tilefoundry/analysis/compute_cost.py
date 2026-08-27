@@ -18,10 +18,9 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts, ThroughputFacts
 from .metadata import ComputeCostMetadata
+from .visitor import AnalyzeContext
 from .walk import (
     attach,
-    collect_exprs,
-    enclosing_trips,
     reachable_functions,
 )
 
@@ -169,7 +168,7 @@ def _accumulate(
 
 def analyze_compute_cost(
     function: Function,
-    context,
+    context: AnalyzeContext,
 ) -> None:
     """Attach one-trip work per Call and multiplicity-aware totals per Function."""
     module, level = context.module, context.level
@@ -182,8 +181,7 @@ def analyze_compute_cost(
         flops_per_unit: dict[str, int] = {}
         service: dict[str, int] = {}
         service_per_unit: dict[str, int] = {}
-        trips = enclosing_trips(fn.body)
-        for expr in collect_exprs(fn.body):
+        for expr in context.structural_memo.definition_order(fn):
             if not isinstance(expr, Call):
                 continue
             record = _call_cost_record(expr, whole, local)
@@ -194,7 +192,7 @@ def analyze_compute_cost(
                 service,
                 service_per_unit,
                 record,
-                trips.get(id(expr), 1),
+                context.structural_memo.execution_count(expr),
             )
         attach(
             fn,

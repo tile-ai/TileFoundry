@@ -55,12 +55,11 @@ from .metadata import (
     ValueLifetime,
 )
 from .movement import add_traffic, call_traffic
+from .visitor import AnalyzeContext, StructuralMemo
 from .walk import (
     attach,
     bytes_by_storage,
-    children,
     collect_exprs,
-    enclosing_trips,
     reachable_functions,
 )
 
@@ -148,24 +147,13 @@ def _unique_labels(order: list[Expr]) -> dict[int, str]:
     return labels
 
 
-def definition_order(fn: Function) -> list[Expr]:
-    """Every value of *fn* in the one order its lifetimes are indexed by.
-
-    Parameters come first: the function did not produce them, so they are
-    already resident when it is entered.
-    """
-    return [
-        *fn.params,
-        *(expr for expr in collect_exprs(fn.body) if isinstance(expr, (Call, Constant))),
-    ]
-
-
 def _residencies(
     fn: Function,
     *,
     facts: MemoryHierarchyFacts,
     topology_levels: tuple[str, ...],
     topologies: tuple[Topology, ...],
+    structural_memo: StructuralMemo,
 ) -> tuple[tuple[_Residency, ...], int]:
     """Every allocation resident in *fn*, with the length of its value order.
 
@@ -174,14 +162,21 @@ def _residencies(
     function cannot reclaim storage its caller owns, so every parameter stays
     resident past its last reader for the whole function.
     """
-    order = definition_order(fn)
+    order = [
+        *fn.params,
+        *(
+            expr
+            for expr in structural_memo.definition_order(fn)
+            if isinstance(expr, (Call, Constant))
+        ),
+    ]
     position = {id(expr): index for index, expr in enumerate(order)}
     last_use = dict(position)
-    for consumer in order:
-        for child in children(consumer):
-            if id(child) in last_use:
-                last_use[id(child)] = max(
-                    last_use[id(child)], position[id(consumer)]
+    for producer in order:
+        for consumer in structural_memo.users(producer):
+            if id(consumer) in position:
+                last_use[id(producer)] = max(
+                    last_use[id(producer)], position[id(consumer)]
                 )
     if fn.body is not None and id(fn.body) in last_use:
         last_use[id(fn.body)] = len(order) - 1
@@ -638,6 +633,7 @@ def _allocate(
     facts: MemoryHierarchyFacts,
     target: Target,
     options: MemoryOptions,
+    structural_memo: StructuralMemo,
 ) -> AllocationMetadata | None:
     """Show every buffer this function keeps live fits, and say what that took.
 
@@ -653,7 +649,14 @@ def _allocate(
     except (UnsupportedCapabilityError, ValueError):
         return None
     placements = _buffer_placements(module, fn, target, selected)
-    order = definition_order(fn)
+    order = [
+        *fn.params,
+        *(
+            expr
+            for expr in structural_memo.definition_order(fn)
+            if isinstance(expr, (Call, Constant))
+        ),
+    ]
     try:
         domains = _domains(fn, record, facts, placements, order, selected)
     except _NotProjectable:
@@ -708,6 +711,7 @@ def _record_movement(
     fn: Function,
     level: str | None,
     topologies: tuple[Topology, ...],
+    structural_memo: StructuralMemo,
 ) -> None:
     """Say what every occurrence moves, and whose bytes it moved them into.
 
@@ -719,15 +723,14 @@ def _record_movement(
     scope = FunctionScope(module, fn)
     whole = CostContext(scope=scope)
     local = CostContext(scope=scope, level=level, topologies=topologies)
-    trips = enclosing_trips(fn.body)
     totals: dict[str, TrafficBytes] = {}
     shares: dict[str, TrafficBytes] = {}
-    for expr in collect_exprs(fn.body) if fn.body is not None else ():
+    for expr in structural_memo.definition_order(fn):
         if not isinstance(expr, Call):
             continue
         moved = call_traffic(expr, whole, local)
         attach(expr, moved)
-        add_traffic(totals, shares, moved, trips.get(id(expr), 1))
+        add_traffic(totals, shares, moved, structural_memo.execution_count(expr))
     attach(
         fn,
         TrafficMetadata(
@@ -739,7 +742,7 @@ def _record_movement(
 
 def analyze_memory(
     function: Function,
-    context,
+    context: AnalyzeContext,
 ) -> None:
     """Attach one memory record to every Function reachable from *function*."""
     module, target, level, options = (
@@ -752,13 +755,14 @@ def analyze_memory(
     settings = options if isinstance(options, MemoryOptions) else MemoryOptions()
     topologies = module.effective_topologies()
     for fn in reachable_functions(function):
-        _record_movement(module, fn, level, topologies)
+        _record_movement(module, fn, level, topologies, context.structural_memo)
         try:
             residencies, length = _residencies(
                 fn,
                 facts=facts,
                 topology_levels=target.topology_levels,
                 topologies=topologies,
+                structural_memo=context.structural_memo,
             )
         except ValueError as error:
             raise AnalysisError(str(error)) from None
@@ -773,7 +777,9 @@ def analyze_memory(
             if isinstance(expr, GridRegionExpr)
         }
         loop_records: list[tuple[GridRegionExpr, LoopFootprintMetadata]] = []
-        for loop_id, reading in loop_footprints(module, fn).items():
+        for loop_id, reading in loop_footprints(
+            module, fn, context.structural_memo
+        ).items():
             valid = tuple(
                 item for item in reading.buffers if item.device_bytes >= item.bytes
             )
@@ -812,7 +818,18 @@ def analyze_memory(
         )
         attach(
             fn,
-            replace(record, allocation=_allocate(module, fn, record, facts, target, settings)),
+            replace(
+                record,
+                allocation=_allocate(
+                    module,
+                    fn,
+                    record,
+                    facts,
+                    target,
+                    settings,
+                    context.structural_memo,
+                ),
+            ),
         )
         for loop, footprint in loop_records:
             attach(loop, footprint)
@@ -823,5 +840,4 @@ __all__ = [
     "SELECTOR",
     "analyze_memory",
     "cache_pressure",
-    "definition_order",
 ]

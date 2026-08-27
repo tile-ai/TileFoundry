@@ -35,12 +35,11 @@ from .metadata import (
     TimelineMetadata,
     TrafficMetadata,
 )
+from .visitor import AnalyzeContext, StructuralMemo
 from .walk import (
     attach,
-    children,
     collect_exprs,
     describe,
-    loop_repeated_values,
     loop_trip_count,
     reachable_functions,
 )
@@ -112,11 +111,17 @@ def _durations(
     return result
 
 
-def _producer_ids(expr: Expr, schedulable: set[int]) -> set[int]:
+def _producer_ids(
+    expr: Expr, schedulable: set[int], structural_memo: StructuralMemo
+) -> set[int]:
     """Find the nearest schedulable producers beneath a value expression."""
     if id(expr) in schedulable:
         return {id(expr)}
-    return {producer for child in children(expr) for producer in _producer_ids(child, schedulable)}
+    return {
+        producer
+        for child in structural_memo.producers(expr)
+        for producer in _producer_ids(child, schedulable, structural_memo)
+    }
 
 
 
@@ -125,7 +130,9 @@ def _producer_ids(expr: Expr, schedulable: set[int]) -> set[int]:
 
 
 
-def _variance_chains(fn: Function) -> tuple[dict[int, _Chain], dict[int, GridRegionExpr]]:
+def _variance_chains(
+    fn: Function, structural_memo: StructuralMemo
+) -> tuple[dict[int, _Chain], dict[int, GridRegionExpr]]:
     """Which loops each schedulable value belongs to, from the outside in.
 
     A loop holds a value only when the value reads that loop's induction
@@ -138,18 +145,21 @@ def _variance_chains(fn: Function) -> tuple[dict[int, _Chain], dict[int, GridReg
     values = collect_exprs(fn.body)
     order = {id(expr): index for index, expr in enumerate(values)}
     loops = {id(expr): expr for expr in values if isinstance(expr, GridRegionExpr)}
-    repeated = {key: loop_repeated_values(loop) for key, loop in loops.items()}
     chains: dict[int, _Chain] = {}
     for expr in values:
         if not isinstance(expr, (Call, GridRegionExpr)):
             continue
-        owners = [key for key, marked in repeated.items() if id(expr) in marked]
+        owners = [
+            key
+            for key, loop in loops.items()
+            if structural_memo.scope(loop).is_variant(expr)
+        ]
         chains[id(expr)] = tuple(sorted(owners, key=lambda key: -order[key]))
     return chains, loops
 
 
 def _placement_plan(
-    fn: Function,
+    fn: Function, structural_memo: StructuralMemo,
 ) -> tuple[dict[int, _Chain], dict[int, int], dict[_Chain, GridRegionExpr]]:
     """Where each occurrence sits, and how many runs of it that one stands for.
 
@@ -161,7 +171,7 @@ def _placement_plan(
     """
     values = collect_exprs(fn.body)
     order = {id(expr): index for index, expr in enumerate(values)}
-    chains, loops = _variance_chains(fn)
+    chains, loops = _variance_chains(fn, structural_memo)
     nodes: dict[_Chain, GridRegionExpr | None] = {(): None}
 
     def host_of(chain: _Chain) -> _Chain:
@@ -196,6 +206,7 @@ def _schedule(
     fn: Function,
     durations: dict[int, int],
     placements: dict[int, Placement],
+    structural_memo: StructuralMemo,
 ) -> _Scope:
     """Lay every occurrence on one local timeline, in the order it was written.
 
@@ -210,13 +221,8 @@ def _schedule(
     """
     values = collect_exprs(fn.body)
     source_index = {id(expr): index for index, expr in enumerate(values)}
-    hosts, replays, _bodies = _placement_plan(fn)
+    hosts, replays, _bodies = _placement_plan(fn, structural_memo)
     schedulable = set(hosts)
-    users: dict[int, list[Expr]] = {}
-    for expr in values:
-        for child in children(expr):
-            users.setdefault(id(child), []).append(expr)
-
     direct: dict[_Chain, list[Call | GridRegionExpr]] = {}
     for expr in values:
         if id(expr) in hosts:
@@ -267,7 +273,9 @@ def _schedule(
 
             operands = expr.args if isinstance(expr, Call) else expr.init_args
             producers = {
-                producer for operand in operands for producer in _producer_ids(operand, schedulable)
+                producer
+                for operand in operands
+                for producer in _producer_ids(operand, schedulable, structural_memo)
             }
             for producer in producers:
                 resolved = representative(producer, scope)
@@ -337,7 +345,7 @@ def _records(
 
 def analyze_performance(
     function: Function,
-    context,
+    context: AnalyzeContext,
 ) -> None:
     """Place every reachable Function's occurrences on a local timeline.
 
@@ -371,7 +379,7 @@ def analyze_performance(
             )
         placements = _call_placements(module, fn, placement_facts.topology)
         durations = _durations(fn, throughput, services, placement_facts.topology)
-        root = _schedule(fn, durations, placements)
+        root = _schedule(fn, durations, placements, context.structural_memo)
         records = _records(root)
         for expr in collect_exprs(fn.body):
             record = records.get(id(expr))

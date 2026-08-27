@@ -34,7 +34,8 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.compute_cost import _local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.walk import collect_exprs, describe, enclosing_trips
+from tilefoundry.analysis.visitor import StructuralMemoVisitor
+from tilefoundry.analysis.walk import collect_exprs, describe
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.metadata import ExecutionDomainMetadata
 from tilefoundry.ir.hir.function import Function
@@ -98,7 +99,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
     module_target = result.module.resolve_target()
     throughput = module_target.get_facts(ThroughputFacts)
     services = module_target.get_facts(PerformanceServiceFacts)
-    repeats = enclosing_trips(fn.body)
+    structural_memo = StructuralMemoVisitor().build(fn)
     timed = 0
     for expr in collect_exprs(fn.body):
         if not isinstance(expr, Call) or isinstance(expr.target, Function):
@@ -123,7 +124,8 @@ def assert_performance_contract(result: AnalysisResult) -> None:
 
         span = record.timeline.end_ns - record.timeline.start_ns
         assert span % duration == 0, describe(expr)
-        runs, available = span // duration, repeats.get(id(expr), 1)
+        runs = span // duration
+        available = structural_memo.execution_count(expr)
         assert 1 <= runs <= available and available % runs == 0, describe(expr)
         trips, stride = record.timeline.trips, record.timeline.stride_ns
         assert 1 <= trips <= available and available % trips == 0, describe(expr)

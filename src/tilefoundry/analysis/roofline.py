@@ -20,7 +20,8 @@ from .metadata import (
     TrafficBytes,
     TrafficMetadata,
 )
-from .walk import attach, collect_exprs, describe, reachable_functions
+from .visitor import AnalyzeContext
+from .walk import attach, describe, reachable_functions
 
 SELECTOR = "roofline"
 
@@ -117,13 +118,13 @@ def _cost_bound(
 
 def analyze_roofline(
     function: Function,
-    context,
+    context: AnalyzeContext,
 ) -> None:
     """Attach a bound to every Call, and one to every Function, reachable here."""
     target = context.target
     facts = target.get_facts(ThroughputFacts)
     for fn in reachable_functions(function):
-        for expr in collect_exprs(fn.body):
+        for expr in context.structural_memo.definition_order(fn):
             if not isinstance(expr, Call):
                 continue
             cost = get_metadata(expr, ComputeCostMetadata)
