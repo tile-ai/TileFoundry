@@ -11,7 +11,6 @@ from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types import TensorType, Type, callable_type_for
 from tilefoundry.ir.types.dim import is_dim_expr
 from tilefoundry.ir.types.substitute import canonicalize_dims, substitute_shape_dim
-from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
 
@@ -200,14 +199,14 @@ def elaborate(
     if cached is not None:
         return cached
 
-    instance = _elaborate_from_bound_types(
+    instance = rebuild_at(
         callee, bound_types, ctx, scope=ctx.scope_for(callee)
     )
     ctx.elaboration_cache[cache_key] = instance
     return instance
 
 
-def _elaborate_from_bound_types(
+def rebuild_at(
     callee: "Function",
     bound_types: "list[Type] | tuple[Type, ...]",
     ctx: TypeInferContext,
@@ -411,7 +410,7 @@ def _specialize_callee(
     bound = tuple(substitute_dims(param.type, dims) for param in callee.params)
     if all(new is param.type for new, param in zip(bound, callee.params)):
         return callee
-    return _elaborate_from_bound_types(callee, bound, ctx, dims=dims)
+    return rebuild_at(callee, bound, ctx, dims=dims)
 
 
 def _substitute_authored_dims(
@@ -507,30 +506,4 @@ def _substitute_op_dims(target: object, dims: "Mapping[str, int]") -> object:
     return type(target)(**attributes)
 
 
-@register_typeinfer(Function)
-def infer_function_call_type(call: Call, ctx) -> Type:
-    """Derive a function call's type from its callee under the call feed.
-
-    The type is re-derived from the elaborated body's type rather than a stale
-    ``return_type`` field. Dispatch prototypes retain their declared type.
-
-    See [hir §1.1](docs/spec/hir.md#11-function).
-    """
-    callee: Function = call.target  # type: ignore[assignment]
-    arg_types = tuple(ctx.type_of(a) for a in call.args)
-    feed = ctx.build_call_feed(callee, arg_types)
-    instance = elaborate(callee, arg_types, ctx, call=call, feed=feed)
-    if instance.body is None:
-        return instance.return_type
-    body_ctx = ctx.child(callee, feed)
-    if body_ctx.scope is not None:
-        body_ctx.scope = dataclasses.replace(body_ctx.scope, function=instance)
-    return body_ctx.type_of(instance.body)
-
-
-__all__ = [
-    "Function",
-    "infer_function_call_type",
-]
-
-rebuild_at = _elaborate_from_bound_types
+__all__ = ["Function"]
