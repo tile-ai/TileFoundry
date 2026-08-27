@@ -193,7 +193,7 @@ def specialize_function(
     if not set(dims) & set(residual_dims(chosen)):
         return chosen
     bound = tuple(substitute_dims(param.type, dims) for param in chosen.params)
-    return _rebuild_at(
+    return instantiate_dimensions(
         chosen,
         bound,
         ctx if ctx is not None else TypeInferContext(),
@@ -201,7 +201,102 @@ def specialize_function(
     )
 
 
-def _rebuild_at(
+class DimensionInstantiator(ExprCloner):
+    """Clone a Function body with symbolic dimensions replaced by values.
+
+    DAG memoization and identity pinning come from ``ExprCloner``. The visit
+    context carries the substitutions and shared type-inference visitor for
+    this one instantiation.
+    """
+
+    def visit_Var(self, var: Var, ctx: InstantiateContext) -> Expr:
+        return ctx.subst.get(id(var), var)
+
+    def visit_Constant(self, const: Constant, ctx: InstantiateContext) -> Expr:
+        return const
+
+    def visit_Call(self, call: Call, ctx: InstantiateContext) -> Expr:
+        new_args = tuple(self.visit(arg, ctx) for arg in call.args)
+        new_target = call.target
+        if isinstance(new_target, Function):
+            new_target = _specialize_callee(
+                new_target, ctx.dims, ctx.type_ctx, call
+            )
+        new_target = _substitute_op_dims(new_target, ctx.dims)
+        new_metadata = _substitute_authored_dims(call.metadata, ctx.dims)
+        if (
+            all(new is old for new, old in zip(new_args, call.args))
+            and new_target is call.target
+            and new_metadata is call.metadata
+        ):
+            return call
+        rebuilt = dataclasses.replace(
+            call,
+            args=new_args,
+            target=new_target,
+            metadata=new_metadata,
+        )
+        return self._retyped(rebuilt, ctx)
+
+    def visit_GridRegionExpr(
+        self, grid: GridRegionExpr, ctx: InstantiateContext
+    ) -> Expr:
+        """Rebuild loop bindings and shape fields excluded by generic cloning."""
+        new_inits = tuple(self.visit(arg, ctx) for arg in grid.init_args)
+        new_phis = tuple(
+            old_phi
+            if new_init.type == old_phi.type
+            else Var(type=new_init.type, name=old_phi.name)
+            for old_phi, new_init in zip(grid.carried_args, new_inits)
+        )
+        for old_phi, new_phi in zip(grid.carried_args, new_phis):
+            if new_phi is not old_phi:
+                ctx.subst[id(old_phi)] = new_phi
+        new_body = self.visit(grid.body, ctx)
+        new_yields = tuple(self.visit(value, ctx) for value in grid.yield_values)
+        bounds = (grid.extent, grid.step, grid.start)
+        new_bounds = tuple(substitute_shape_dim(bound, ctx.dims) for bound in bounds)
+        if (
+            all(new is old for new, old in zip(new_inits, grid.init_args))
+            and all(new is old for new, old in zip(new_phis, grid.carried_args))
+            and new_body is grid.body
+            and all(new is old for new, old in zip(new_yields, grid.yield_values))
+            and new_bounds == bounds
+        ):
+            return grid
+        rebuilt = dataclasses.replace(
+            grid,
+            carried_args=new_phis,
+            init_args=new_inits,
+            body=new_body,
+            yield_values=new_yields,
+            extent=new_bounds[0],
+            step=new_bounds[1],
+            start=new_bounds[2],
+        )
+        return self._retyped(rebuilt, ctx)
+
+    def default_visit(self, expr: Expr, ctx: InstantiateContext) -> Expr:
+        rebuilt = super().default_visit(expr, ctx)
+        return rebuilt if rebuilt is expr else self._retyped(rebuilt, ctx)
+
+    def _retyped(self, rebuilt: Expr, ctx: InstantiateContext) -> Expr:
+        return dataclasses.replace(
+            rebuilt, type=ctx.type_visitor.visit(rebuilt, ctx.type_ctx)
+        )
+
+
+@dataclasses.dataclass
+class InstantiateContext:
+    """Mutable state shared by one dimension-instantiation traversal."""
+
+    subst: dict[int, Var]
+    dims: Mapping[str, int]
+    type_ctx: TypeInferContext
+    type_visitor: TypeInferVisitor
+
+
+def instantiate_dimensions(
     chosen: Function,
     bound_param_types: tuple[Type, ...],
     ctx: TypeInferContext,
@@ -209,104 +304,22 @@ def _rebuild_at(
 ) -> Function:
     """Rebuild *chosen* at concrete dimension bindings.
 
-    The mutator memo preserves SSA DAG identity. Its type visitor retains every
-    temporary expression it types, preventing CPython from reusing an id while
-    the rebuild is still in progress.
+    The cloner memo preserves SSA DAG identity while one shared type visitor
+    retypes every rebuilt node.
     """
     new_params = tuple(
         Var(type=type_, name=param.name, is_const=param.is_const)
         for type_, param in zip(bound_param_types, chosen.params)
     )
-    subst = {id(old): new for old, new in zip(chosen.params, new_params)}
     scope = None if ctx.scope is None else dataclasses.replace(ctx.scope, function=chosen)
     body_ctx = dataclasses.replace(ctx, scope=scope)
-
-    class _Rebuilder(ExprCloner):
-        def __init__(self) -> None:
-            super().__init__()
-            self._memo: dict[int, tuple[Expr, Expr]] = {}
-            self._type_visitor = TypeInferVisitor()
-
-        def visit(self, expr: Expr, ctx=None) -> Expr:
-            hit = self._memo.get(id(expr))
-            if hit is not None:
-                return hit[1]
-            rebuilt = super().visit(expr, ctx)
-            self._memo[id(expr)] = (expr, rebuilt)
-            return rebuilt
-
-        def visit_Var(self, var: Var, ctx=None) -> Expr:
-            return subst.get(id(var), var)
-
-        def visit_Constant(self, const: Constant, ctx=None) -> Expr:
-            return const
-
-        def visit_Call(self, call: Call, ctx=None) -> Expr:
-            new_args = tuple(self.visit(arg, ctx) for arg in call.args)
-            new_target = call.target
-            if isinstance(new_target, Function):
-                new_target = _specialize_callee(new_target, dims, body_ctx, call)
-            new_target = _substitute_op_dims(new_target, dims)
-            new_metadata = _substitute_authored_dims(call.metadata, dims)
-            if (
-                all(new is old for new, old in zip(new_args, call.args))
-                and new_target is call.target
-                and new_metadata is call.metadata
-            ):
-                return call
-            rebuilt = dataclasses.replace(
-                call,
-                args=new_args,
-                target=new_target,
-                metadata=new_metadata,
-            )
-            return self._retyped(rebuilt)
-
-        def visit_GridRegionExpr(self, grid: GridRegionExpr, ctx=None) -> Expr:
-            new_inits = tuple(self.visit(arg, ctx) for arg in grid.init_args)
-            new_phis = tuple(
-                old_phi
-                if new_init.type == old_phi.type
-                else Var(type=new_init.type, name=old_phi.name)
-                for old_phi, new_init in zip(grid.carried_args, new_inits)
-            )
-            for old_phi, new_phi in zip(grid.carried_args, new_phis):
-                if new_phi is not old_phi:
-                    subst[id(old_phi)] = new_phi
-            new_body = self.visit(grid.body, ctx)
-            new_yields = tuple(self.visit(value, ctx) for value in grid.yield_values)
-            bounds = (grid.extent, grid.step, grid.start)
-            new_bounds = tuple(substitute_shape_dim(bound, dims) for bound in bounds)
-            if (
-                all(new is old for new, old in zip(new_inits, grid.init_args))
-                and all(new is old for new, old in zip(new_phis, grid.carried_args))
-                and new_body is grid.body
-                and all(new is old for new, old in zip(new_yields, grid.yield_values))
-                and new_bounds == bounds
-            ):
-                return grid
-            rebuilt = dataclasses.replace(
-                grid,
-                carried_args=new_phis,
-                init_args=new_inits,
-                body=new_body,
-                yield_values=new_yields,
-                extent=new_bounds[0],
-                step=new_bounds[1],
-                start=new_bounds[2],
-            )
-            return self._retyped(rebuilt)
-
-        def default_visit(self, expr: Expr, ctx=None) -> Expr:
-            rebuilt = super().default_visit(expr, ctx)
-            return rebuilt if rebuilt is expr else self._retyped(rebuilt)
-
-        def _retyped(self, rebuilt: Expr) -> Expr:
-            return dataclasses.replace(
-                rebuilt, type=self._type_visitor.visit(rebuilt, body_ctx)
-            )
-
-    new_body = _Rebuilder().visit(chosen.body)
+    instantiate_ctx = InstantiateContext(
+        subst={id(old): new for old, new in zip(chosen.params, new_params)},
+        dims=dims,
+        type_ctx=body_ctx,
+        type_visitor=TypeInferVisitor(),
+    )
+    new_body = DimensionInstantiator().visit(chosen.body, instantiate_ctx)
     derived = Function.build(
         name=chosen.name,
         params=new_params,
@@ -335,7 +348,7 @@ def _specialize_callee(
     bound = tuple(substitute_dims(param.type, dims) for param in callee.params)
     if all(new is param.type for new, param in zip(bound, callee.params)):
         return callee
-    return _rebuild_at(callee, bound, ctx, dims)
+    return instantiate_dimensions(callee, bound, ctx, dims)
 
 
 def _substitute_authored_dims(
@@ -636,12 +649,15 @@ class _SymbolicDimVisitor(ExprVisitor[bool]):
 
 __all__ = [
     "BOUND_DIMS",
+    "DimensionInstantiator",
+    "InstantiateContext",
     "PROVENANCE",
     "SpecializationError",
     "bound_dims_of",
     "canonical_specialization_signature",
     "dim_vars_reached",
     "is_concrete",
+    "instantiate_dimensions",
     "origin_of",
     "residual_dims",
     "specialize_concretely",

@@ -644,52 +644,32 @@ def _view_metadata(expr: Expr) -> tuple:
 
 
 class _InlineMutator(ExprCloner):
-    def __init__(self, owner, env, memo, function, path, active) -> None:
+    def __init__(self, owner, function, path, active) -> None:
         super().__init__()
         self.owner = owner
-        self.env = env
-        self.memo = memo
         self.function = function
         self.path = path
         self.active = active
 
-    def _cached(self, expr):
-        bound = self.env.get(id(expr))
+    def visit_Var(self, expr: Var, ctx: Mapping[int, Expr]) -> Expr:
+        bound = ctx.get(id(expr))
         if bound is not None:
             return bound
-        return self.memo.get(id(expr))
+        return replace(expr, metadata=_view_metadata(expr))
 
-    def _finish(self, expr, rebuilt):
-        self.memo[id(expr)] = rebuilt
-        return rebuilt
+    def visit_Constant(self, expr: Constant, ctx: Mapping[int, Expr]) -> Expr:
+        return replace(expr, metadata=_view_metadata(expr))
 
-    def visit_Var(self, expr: Var, ctx=None) -> Expr:
-        cached = self._cached(expr)
-        if cached is not None:
-            return cached
-        return self._finish(expr, replace(expr, metadata=_view_metadata(expr)))
-
-    def visit_Constant(self, expr: Constant, ctx=None) -> Expr:
-        cached = self._cached(expr)
-        if cached is not None:
-            return cached
-        return self._finish(expr, replace(expr, metadata=_view_metadata(expr)))
-
-    def visit_Tuple(self, expr: Tuple, ctx=None) -> Expr:
-        cached = self._cached(expr)
-        if cached is not None:
-            return cached
-        rebuilt = replace(
+    def visit_Tuple(self, expr: Tuple, ctx: Mapping[int, Expr]) -> Expr:
+        return replace(
             expr,
             elements=tuple(self.visit(item, ctx) for item in expr.elements),
             metadata=_view_metadata(expr),
         )
-        return self._finish(expr, rebuilt)
 
-    def visit_GridRegionExpr(self, grid: GridRegionExpr, ctx=None) -> GridRegionExpr:
-        cached = self._cached(grid)
-        if cached is not None:
-            return cached
+    def visit_GridRegionExpr(
+        self, grid: GridRegionExpr, ctx: Mapping[int, Expr]
+    ) -> GridRegionExpr:
         init_args = tuple(self.visit(item, ctx) for item in grid.init_args)
         induction_var = replace(
             grid.induction_var, metadata=_view_metadata(grid.induction_var)
@@ -697,22 +677,14 @@ class _InlineMutator(ExprCloner):
         carried_args = tuple(
             replace(item, metadata=_view_metadata(item)) for item in grid.carried_args
         )
-        inner_env = dict(self.env)
+        inner_env = dict(ctx)
         inner_env[id(grid.induction_var)] = induction_var
         inner_env.update(
             (id(old), new) for old, new in zip(grid.carried_args, carried_args)
         )
-        inner = _InlineMutator(
-            self.owner,
-            inner_env,
-            self.memo,
-            self.function,
-            self.path,
-            self.active,
-        )
-        body = inner.visit(grid.body, ctx)
-        yield_values = tuple(inner.visit(item, ctx) for item in grid.yield_values)
-        rebuilt = replace(
+        body = self.visit(grid.body, inner_env)
+        yield_values = tuple(self.visit(item, inner_env) for item in grid.yield_values)
+        return replace(
             grid,
             induction_var=induction_var,
             carried_args=carried_args,
@@ -721,12 +693,8 @@ class _InlineMutator(ExprCloner):
             yield_values=yield_values,
             metadata=_view_metadata(grid),
         )
-        return self._finish(grid, rebuilt)
 
-    def visit_Call(self, expr: Call, ctx=None) -> Expr:
-        cached = self._cached(expr)
-        if cached is not None:
-            return cached
+    def visit_Call(self, expr: Call, ctx: Mapping[int, Expr]) -> Expr:
         target = expr.target
         call_index = None
         if isinstance(target, Function):
@@ -750,11 +718,11 @@ class _InlineMutator(ExprCloner):
                 (*self.path, target.name, str(call_index)),
                 self.active,
             )
-            return self._finish(expr, rebuilt)
+            return rebuilt
         metadata = (*_view_metadata(expr), BindingMetadata(self.owner._binding()))
-        return self._finish(expr, replace(expr, args=new_args, metadata=metadata))
+        return replace(expr, args=new_args, metadata=metadata)
 
-    def default_visit(self, expr: Expr, ctx=None) -> Expr:
+    def default_visit(self, expr: Expr, ctx: Mapping[int, Expr]) -> Expr:
         raise AnalysisError(f"cannot inline unsupported HIR node {type(expr).__name__}")
 
 
@@ -800,7 +768,6 @@ class _Inliner:
             return self.expr(
                 function.body,
                 env,
-                {},
                 function,
                 path,
                 active | {identity},
@@ -812,12 +779,11 @@ class _Inliner:
         self,
         expr: Expr,
         env: Mapping[int, Expr],
-        memo: dict[int, Expr],
         function: Function,
         path: tuple[str, ...],
         active: frozenset[int],
     ) -> Expr:
-        return _InlineMutator(self, env, memo, function, path, active).visit(expr)
+        return _InlineMutator(self, function, path, active).visit(expr, env)
 
 
 def _inline_view(module: Module, function: Function, budget: int) -> Function:
