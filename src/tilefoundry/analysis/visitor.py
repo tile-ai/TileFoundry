@@ -11,7 +11,7 @@ from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target import Target
 
-from .walk import children, loop_trip_count
+from .walk import children
 
 
 @dataclass
@@ -22,8 +22,6 @@ class AnalyzeContext:
     target: Target
     level: str | None
     options: object | None
-    structural_memo: "StructuralMemo"
-
     @classmethod
     def create(
         cls,
@@ -34,27 +32,7 @@ class AnalyzeContext:
         options: object | None = None,
     ) -> "AnalyzeContext":
         """Build a context and collect one structural memo for ``graph``."""
-        memo = StructuralMemoVisitor().build(graph)
-        return cls(module, target, level, options, memo)
-
-
-@dataclass(frozen=True)
-class IterationDomain:
-    """The loop domain reference available before poly extraction.
-
-    M1 builds the structural memo before a ``TileGraph`` exists, so this field
-    retains the authored loop as the domain reference rather than copying its
-    bounds. A later projection may replace it with the extracted poly domain.
-    """
-
-    loop: GridRegionExpr
-
-
-@dataclass(frozen=True)
-class TripCount:
-    """The statically known trip count, or ``None`` when symbolic."""
-
-    value: int | None
+        return cls(module, target, level, options)
 
 
 @dataclass(frozen=True, eq=False)
@@ -69,8 +47,6 @@ class ScopeMemo:
     owner: Function | GridRegionExpr
     parent: "ScopeMemo | None"
     children: tuple["ScopeMemo", ...]
-    domain: IterationDomain | None
-    trip_count: TripCount | None
 
     def is_variant(self, value: Expr) -> bool:
         """Whether ``value`` depends on this loop's induction or carry values."""
@@ -163,17 +139,6 @@ class StructuralMemo:
         """Return ``function`` expressions once, operands before consumers."""
         self.scope(function)
         return tuple(item.expr for item in self.nodes)
-
-    def execution_count(self, expr: Expr) -> int:
-        """Return how often enclosing lexical loops recompute ``expr``."""
-        count = 1
-        scope: ScopeMemo | None = self.scope_of(expr)
-        while scope is not None:
-            if scope.trip_count is not None and scope.is_variant(expr):
-                count *= scope.trip_count.value or 1
-            scope = scope.parent
-        return count
-
 
 @dataclass
 class _ScopeBuilder:
@@ -295,13 +260,7 @@ class StructuralMemoVisitor(ExprVisitor[None]):
     def _freeze_scope(
         self, builder: _ScopeBuilder, parent: ScopeMemo | None
     ) -> tuple[ScopeMemo, tuple[ScopeMemo, ...]]:
-        domain = None
-        trip_count = None
-        if isinstance(builder.owner, GridRegionExpr):
-            loop = builder.owner
-            domain = IterationDomain(loop)
-            trip_count = TripCount(loop_trip_count(loop))
-        scope = ScopeMemo(builder.owner, parent, (), domain, trip_count)
+        scope = ScopeMemo(builder.owner, parent, ())
         self._frozen_scopes[id(builder.owner)] = scope
         children_memo: list[ScopeMemo] = []
         all_scopes: list[ScopeMemo] = [scope]
@@ -316,9 +275,7 @@ class StructuralMemoVisitor(ExprVisitor[None]):
 __all__ = [
     "AnalyzeContext",
     "ExprMemo",
-    "IterationDomain",
     "ScopeMemo",
     "StructuralMemo",
     "StructuralMemoVisitor",
-    "TripCount",
 ]
