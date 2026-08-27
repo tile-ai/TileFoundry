@@ -787,6 +787,20 @@ class ParserChildModuleResolver:
                 return child
         return None
 
+
+@dataclass
+class ParserTypeInferContext(TypeInferContext):
+    """Type inference state with parser-local child-module resolution."""
+
+    child_resolver: ParserChildModuleResolver | None = None
+
+    def child_for(self, callee: object):
+        if self.child_resolver is not None:
+            child = self.child_resolver.child_for(callee)
+            if child is not None:
+                return child
+        return super().child_for(callee)
+
 @dataclass(frozen=True)
 class ModuleFunctionValidationRule:
     STATEMENT: ClassVar[str] = (
@@ -1152,7 +1166,7 @@ class MatchContext:
         )
         scope.define(
             _TYPE_INFER_CONTEXT,
-            runtime.TypeInferContext(child_resolver=provider),
+            ParserTypeInferContext(child_resolver=provider),
         )
         return cls(
             function=function,
@@ -1189,7 +1203,7 @@ class MatchContext:
             )
             scope.define(
                 _TYPE_INFER_CONTEXT,
-                runtime.TypeInferContext(child_resolver=provider),
+                ParserTypeInferContext(child_resolver=provider),
             )
         else:
             scope = self.lexical_scope.fork() if isolated_scope else self.lexical_scope

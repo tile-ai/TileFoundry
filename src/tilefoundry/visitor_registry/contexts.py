@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import NoReturn, Protocol, Union
+from typing import NoReturn, Union
 
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.expr import Call, Expr
@@ -24,20 +24,8 @@ from tilefoundry.ir.core.metadata import (
 )
 from tilefoundry.ir.core.stmt import Stmt
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.ir.types.tensor_type import DType, TensorType, Type
+from tilefoundry.ir.types.tensor_type import DType, Type
 from tilefoundry.ir.types.utils import local_type_of
-
-
-def _constant_type(value: object) -> TensorType:
-    if isinstance(value, bool):
-        dtype = DType.bool
-    elif isinstance(value, int):
-        dtype = DType.i64
-    elif isinstance(value, float):
-        dtype = DType.f32
-    else:
-        raise VerifyError(f"Constant: unsupported value type {type(value).__name__}")
-    return TensorType.umat_scalar(dtype)
 
 
 @dataclass(frozen=True)
@@ -54,12 +42,6 @@ class FunctionScope:
     function: Function
 
 
-class ChildModuleResolver(Protocol):
-    """Resolve the authored child module that owns a callee, if any."""
-
-    def child_for(self, callee: object) -> Module | None: ...
-
-
 @dataclass
 class TypeInferContext:
     """Track walk location and route type-inference queries.
@@ -72,7 +54,6 @@ class TypeInferContext:
 
     scope: FunctionScope | None = None
     mesh_scope: tuple = ()
-    child_resolver: ChildModuleResolver | None = None
     memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
     instantiated_memo: dict[tuple[int, tuple[Type, ...]], Type] = field(
         default_factory=dict, repr=False, compare=False
@@ -80,8 +61,6 @@ class TypeInferContext:
 
     def child_for(self, callee: object):
         """Return the direct child module that owns *callee*, if any."""
-        if self.child_resolver is not None:
-            return self.child_resolver.child_for(callee)
         if self.scope is None or self.scope.module is None:
             return None
         from tilefoundry.ir.core.module import child_module_of  # noqa: PLC0415

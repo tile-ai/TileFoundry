@@ -176,17 +176,12 @@ class FunctionScope:
     function: Function
 
 
-class ChildModuleResolver(Protocol):
-    def child_for(self, callee: Function) -> Module | None: ...
-
-
 @dataclass
 class TypeInferContext:
-    """Walk location and parser-owned child-module resolution state."""
+    """Walk location and type-inference memo state."""
 
     scope: FunctionScope | None = None
     mesh_scope: tuple = ()
-    child_resolver: ChildModuleResolver | None = None
     memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
     instantiated_memo: dict[tuple[int, tuple[Type, ...]], Type] = field(
         default_factory=dict, repr=False, compare=False
@@ -211,8 +206,6 @@ nothing of that kind rather than guessing.
   - `scope` MUST be the only context state describing where a walk is reading,
     and the pair MUST be reachable from the package root together, since one is
     how the other is constructed.
-  - `child_resolver` is parser-owned child-module resolution state before a
-    collected `Module` tree can answer `child_for(callee)` itself.
   - Crossing a Function boundary uses `dataclasses.replace` so a context
     subclass retains its analysis-specific state.
   - `memo` is the current scope's identity-pinned type table. Crossing a

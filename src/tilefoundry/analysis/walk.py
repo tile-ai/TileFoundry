@@ -14,7 +14,7 @@ from tilefoundry.ir.core import (
     binding_name,
     get_metadata,
 )
-from tilefoundry.ir.core.module import Module, calls_in
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.module import owning_module as _owning_module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -154,16 +154,24 @@ def reachable_functions(root: Function) -> tuple[Function, ...]:
             return
         seen.add(id(fn))
         result.append(fn)
-        for call in calls_in(fn, order="postorder"):
-            visit(call.target)
+        for callee in called_functions(fn):
+            visit(callee)
 
     visit(root)
     return tuple(result)
 
 
 def called_functions(fn: Function) -> tuple[Function, ...]:
-    """Every Function *fn* calls directly, in the order its body reaches them."""
-    return tuple(call.target for call in calls_in(fn, order="postorder"))
+    """Every Function *fn* calls directly, operands before their consumer.
+
+    ``reachable_functions`` depends on this postorder within each caller: its
+    reverse consumers accumulate callee results before assembling the caller.
+    """
+    return tuple(
+        expr.target
+        for expr in collect_exprs(fn.body)
+        if isinstance(expr, Call) and isinstance(expr.target, Function)
+    )
 
 
 def owning_module(root: Module, fn: Function) -> Module:

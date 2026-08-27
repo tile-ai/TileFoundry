@@ -91,15 +91,6 @@ invocation. Owning a `Function`, attaching a child `Module`, or declaring a
 Python-to-HIR entry and HIR-to-HIR device calls are governed by
 [hir §1.1](./hir.md#11-function).
 
-Call-edge discovery is shared by every consumer of a Function body:
-
-- `calls_in(function)` returns the HIR Function calls in the selected body;
-  variants not selected by that body and offline converters are not traversed.
-- `calls_in_expr(expr)` applies the same traversal to an expression root.
-- Both return each identity-reachable Call once. Their default order is
-  preorder; `order="postorder"` returns operands before their consumer so a
-  consumer preserving definition order does not need a second call walker.
-
 - `parse_module` (see [parser §2](./parser.md#2-syntax-and-rules)) returns a `Module`.
 - A bare `@func` / `@prim_func` becomes an implicit single-function
   `Module` whose `entry` is set to that function. A function that declares

@@ -23,7 +23,7 @@ from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type, UnitTy
 from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.ir.visitor import ExprVisitor, ExprWalker, StmtVisitor
 
-from .contexts import Cost, CostContext, TypeInferContext, VerifyContext, _constant_type
+from .contexts import Cost, CostContext, TypeInferContext, VerifyContext
 from .registries import (
     AnalysisRegistry,
     cost_evaluator_registry,
@@ -69,10 +69,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
         return var.annotation
 
     def visit_leaf_Constant(self, c: Constant, _operands, ctx: TypeInferContext) -> Type:
-        declared = c.type
-        if declared is not None:
-            return declared
-        return _constant_type(c.value)
+        return c.type
 
     def visit_leaf_Call(self, call: Call, arg_types, ctx: TypeInferContext) -> Type:
         target = call.target
