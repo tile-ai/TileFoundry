@@ -115,26 +115,24 @@ declares, but it MUST NOT create a level or change one's extent.
 `return_type`. The projection is fixed at construction and stays
 consistent across construction sites.
 
-**Call typing — feed-driven inference.** A `Call` keeps its authored
-`Function` template as `target`. Its result type is inferred by feeding the
-actual argument types to the callee's formal parameters and walking the
-callee body in a child context. This is type inference only: it does not
-rebuild a `Function`, mutate the target, or create a per-call instance.
+**Call typing — visitor-scoped inference.** A `Call` keeps its authored
+`Function` template as `target`. Its result type is inferred by seeding a new
+visitor memo with the actual argument types bound to the callee's formal
+parameters, then walking the callee body in a child context. This is type
+inference only: it does not rebuild a `Function`, mutate the target, or create
+a per-call instance.
 Caller-supplied layout (sharding) flowing into a layout-unconstrained
 parameter propagates through the body, including through a `Tuple` or
 `GridRegionExpr` return.
 
-How a `Call` binds is part of what it states: which declared parameters
-`Call.args` supply, and the scope
-([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)) the
-callee's body is read in. Argument types bind to the supplied parameters in
-order; a parameter the call does not supply keeps its declared type in the
-feed, which for a `ConstTensor` is already concrete — no value it stands for
-enters the IR, and what fills it comes from outside
+Argument types bind to supplied parameters in order. A `ConstTensor` parameter
+owned by a direct child module is omitted from `Call.args` and keeps its
+declared type in the callee visitor memo; no value it stands for enters the IR,
+and what fills it comes from outside
 ([runtime §1.1.2](./runtime.md#112-weight-converter-and-prepare--forward)). The
-binding MUST be stated by the call in the scope it is read in, never counted
-from how many arguments the call passes, and it is not a question the context
-answers.
+child-module resolver in the walk context
+([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)) decides
+whether this omission is available before collection.
 
 Omitting a parameter is valid only where, within that scope, the callee is
 uniquely owned by a direct child of the caller's owner
@@ -158,12 +156,12 @@ Argument ↔ parameter binding is:
 - A parameter that carries a `ShardLayout` is an explicit **contract**: the
   argument type MUST match it exactly.
 - Any other parameter requires exact type equality.
-- `DimVar` shapes keep envelope matching — elaboration does not
+- `DimVar` shapes keep envelope matching — inference does not
   monomorphize a dynamic shape into a concrete one (that is **Shape
-  dispatch and specializations** below, unaffected by elaboration).
+  dispatch and specializations** below, unaffected by call typing).
 
 The per-mesh-axis `Partial` state is part of the actual argument type. When a
-layout-unconstrained parameter binds to a sharded argument, elaboration MUST
+layout-unconstrained parameter binds to a sharded argument, inference MUST
 carry each `Partial(reduction)` at its original mesh-axis index through the
 body and into the concrete return type, including tuple fields. Only an
 explicit `Reshard` or allreduce may complete that state.
@@ -171,7 +169,7 @@ explicit `Reshard` or allreduce may complete that state.
 When the body cannot express a propagated sharding (e.g. a reshape
 whose layout factorization straddles a new axis), typeinfer fails at that
 op, not at the boundary. A dispatch-prototype callee
-(`variants != ()`, `body is None`) is not elaborated: the call's
+(`variants != ()`, `body is None`) is not walked: the call's
 result is the declared `return_type` and the `None` body is never inspected
 (variant selection is **Shape dispatch and specializations** below).
 
@@ -208,9 +206,9 @@ structured exception that carries loop-phi-shaped SSA is
 `GridRegionExpr` ([§1.2](#12-gridregionexpr)). Everything else is a
 pure Call DAG.
 
-**Function typing rules.** Enforced by the registered
-`@register_typeinfer(Function)` body via `ctx.error(...)`
-([visitor-registry §4](./visitor-registry.md#4-instance-1--typeinfer)):
+**Function typing rules.** `Function` is not an `Op` and is not registered in
+the Op typeinfer registry. `TypeInferVisitor` handles it directly as a
+`Call.target`; structural signature rules are enforced by the HIR verifier:
 
 - `Function.body` is a single Expr; Stmts MUST NOT appear.
 - `Function.params` entries MUST be `Var`s.
@@ -385,6 +383,13 @@ len(yield_values)`; all three are empty for a no-carry loop. The node
 is self-contained: the first-iteration value of each `carried_args`
 phi is its `init_args` entry, not a name looked up in the enclosing
 parser scope.
+
+Type inference first derives every `init_args` type in the enclosing visitor.
+It then opens a new visitor over the same context, seeded with the enclosing
+memo plus the induction variable's annotation and each `carried_args` phi bound
+to its matching init type. The body and yields are derived in that region
+visitor. A carry result is read from those phi bindings, never from the phi
+node's stamped `.type`.
 
 `GridRegionExpr.type` is `TensorType` (single carry) or `TupleType`
 (multi-carry); the value is the Expr itself, not a `Call`.
@@ -1601,10 +1606,8 @@ def is_concrete(fn: Function) -> bool:
   - `specialize_function` MUST reject an empty binding, an unknown dimension,
     or a selected implementation with no body. It MUST record the chosen
     implementation and sorted bindings on a rebuilt function so `origin_of`
-    and `bound_dims_of` can recover them. A rebuild that chose no extent — a
-    call site's elaboration — MUST record its origin and no bindings, so
-    `bound_dims_of` stays `None` and two call sites of one callee are not
-    reported as one program at one size.
+    and `bound_dims_of` can recover them. Function calls do not rebuild their
+    targets and therefore do not create provenance records.
   - `specialize_concretely` MUST require a non-empty string-to-integer mapping
     and MUST reject any residual dimension after specialization.
   - Provenance and bound-dimension records MUST NOT participate in structural

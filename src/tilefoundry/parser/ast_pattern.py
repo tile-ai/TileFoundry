@@ -774,23 +774,18 @@ class FuncParserContext:
 
 
 @dataclass(frozen=True)
-class ParserCallFeedProvider:
-    """Build call feeds from the authored module scope during parsing."""
+class ParserChildModuleResolver:
+    """Resolve callees owned by authored child modules during parsing."""
 
     module_scope: object | None
 
-    def _child_for(self, callee: object):
+    def child_for(self, callee: object):
         if self.module_scope is None:
             return None
         for _name, child in self.module_scope.items():
             if getattr(child, "owns", lambda *_args, **_kwargs: False)(callee, derived=True):
                 return child
         return None
-
-    def scope_for(self, callee: object) -> FunctionScope | None:
-        child = self._child_for(callee)
-        return None if child is None else FunctionScope(child, callee)
-
 
 @dataclass(frozen=True)
 class ModuleFunctionValidationRule:
@@ -1151,13 +1146,13 @@ class MatchContext:
     def from_function(cls, function: FuncParserContext) -> MatchContext:
         scope = LexicalScope()
         provider = (
-            ParserCallFeedProvider(function.module_scope)
+            ParserChildModuleResolver(function.module_scope)
             if function.module_scope is not None
             else None
         )
         scope.define(
             _TYPE_INFER_CONTEXT,
-            runtime.TypeInferContext(call_feed_provider=provider),
+            runtime.TypeInferContext(child_resolver=provider),
         )
         return cls(
             function=function,
@@ -1188,13 +1183,13 @@ class MatchContext:
         if switching_function:
             scope = LexicalScope()
             provider = (
-                ParserCallFeedProvider(function.module_scope)
+                ParserChildModuleResolver(function.module_scope)
                 if function is not None and function.module_scope is not None
                 else None
             )
             scope.define(
                 _TYPE_INFER_CONTEXT,
-                runtime.TypeInferContext(call_feed_provider=provider),
+                runtime.TypeInferContext(child_resolver=provider),
             )
         else:
             scope = self.lexical_scope.fork() if isolated_scope else self.lexical_scope

@@ -176,18 +176,24 @@ class FunctionScope:
     function: Function
 
 
+class ChildModuleResolver(Protocol):
+    def child_for(self, callee: Function) -> Module | None: ...
+
+
 @dataclass
 class TypeInferContext:
     """Walk location and parser-owned child-module resolution state."""
 
     scope: FunctionScope | None = None
     mesh_scope: tuple = ()
-    call_feed_provider: object | None = None
+    child_resolver: ChildModuleResolver | None = None
     _active_visitor: object | None = None
 
+    def child_for(self, callee: Function) -> Module | None: ...
     def type_of(self, expr: Expr) -> Type: ...
     def local_type_of(self, expr: Expr) -> Type: ...
     def scope_for(self, callee: Function) -> FunctionScope | None: ...
+    def for_callee(self, callee: Function) -> TypeInferContext: ...
     def error(self, node: Expr | Stmt, msg: str) -> NoReturn: ...
 ```
 
@@ -202,9 +208,10 @@ nothing of that kind rather than guessing.
   - `scope` MUST be the only context state describing where a walk is reading,
     and the pair MUST be reachable from the package root together, since one is
     how the other is constructed.
-  - `call_feed_provider` is parser-owned child-module resolution state. It is
-    retained until the type-inference rewrite replaces its feed API with
-    `child_for(callee)`.
+  - `child_resolver` is parser-owned child-module resolution state before a
+    collected `Module` tree can answer `child_for(callee)` itself.
+  - Crossing a Function boundary uses `dataclasses.replace` so a context
+    subclass retains its analysis-specific state.
   - Type memory belongs to the active visitor memo, not to this context.
 
 Registry + decorator:
@@ -228,38 +235,38 @@ Visitor:
 
 ```python
 class TypeInferVisitor(ExprVisitor[Type]):
-    def __init__(self, ctx: TypeInferContext): ...   # ctx carries the helpers
-    def visit_Var(self, var: Var): ...               # return the Var's type
-    def visit_Constant(self, c: Constant): ...       # the node's own declared type
-    def visit_Call(self, call: Call): ...            # typeinfer_registry.lookup(type(call.target))
-    def visit_Tuple(self, tup: Tuple): ...            # structural: TupleType over each element's type
-    def visit_GridRegionExpr(self, grid): ...         # carry/body — hir §1.2
-    def visit_ShapeOf(self, shape_of: ShapeOf) -> Type: ...
+    def __init__(self, ctx: TypeInferContext, *, memo=None): ...
+    def visit_leaf_Var(self, var: Var, operands): ...
+    def visit_leaf_Constant(self, c: Constant, operands): ...
+    def visit_leaf_Call(self, call: Call, arg_types): ...
+    def visit_leaf_Tuple(self, tup: Tuple, field_types): ...
+    def visit_operands_GridRegionExpr(self, grid): ...
+    def visit_leaf_GridRegionExpr(self, grid, operands): ...
+    def visit_leaf_ShapeOf(self, shape_of: ShapeOf, operands) -> Type: ...
 ```
 
 - constraints:
-  - one `visit_<Kind>` rule per `Expr` subclass reachable from a `hir.Function`
+  - one `visit_leaf_<Kind>` rule per `Expr` subclass reachable from a `hir.Function`
     body or a tir `Expr` field — there is no `isinstance` fallback. An `Expr`
-    subclass with no rule raises via `ctx.error` in `generic_visit` rather than
-    trusting a possibly-stale `Expr.type` field.
-  - `visit_Call` is the sole registry-dispatch point: it looks up
-    `typeinfer_registry.lookup(type(call.target))` and invokes the handler: an
-    unregistered `Op` call routes through `ctx.error`.
-  - `visit_Tuple` derives a structural `TupleType` from `ctx.type_of` of each
-    element — never the `Tuple` node's own stamped `.type`.
-  - `visit_ShapeOf` returns the node's declared rank-0 i32 type.
-  - `hir.Function` is itself a valid `Call.target` ([§4](#4-instance-1--typeinfer) above): its registered
-    typeinfer handler elaborates the callee under the call's actual argument
-    types ([hir §1.1](./hir.md#11-function)) rather than reading the target's
-    own `.type`.
+    subclass with no rule raises via `ctx.error` in `default_visit_leaf` rather
+    than trusting a possibly-stale `Expr.type` field.
+  - `visit_leaf_Call` branches on its target. An `Op` looks up
+    `typeinfer_registry.lookup(type(target))`; an unregistered Op routes through
+    `ctx.error`. A `Function` binds parameters into a new visitor memo and walks
+    its body in a replaced child context ([hir §1.1](./hir.md#11-function)).
+  - `visit_leaf_Tuple` derives a structural `TupleType` directly from its
+    already-derived operands, never the Tuple node's stamped `.type`.
+  - `visit_operands_GridRegionExpr` derives init values outside the region,
+    then seeds a new visitor with induction and phi bindings before body/yields
+    are visited ([hir §1.2](./hir.md#12-gridregionexpr)).
+  - `visit_leaf_ShapeOf` returns the node's declared rank-0 i32 type.
 
 Lifecycle: parser builds a `TypeInferContext` and runs eager
 typeinfer at parse time (see [parser](./parser.md)). A `Module`
 entering the pass pipeline already has every `Expr.type` filled.
 There is no "first TypeInferPass". When a transform changes the
-expression structure and needs to recompute types, it calls
-`typeinfer_registry.lookup(...)` directly (see
-[passes](./passes.md)).
+expression structure and needs to recompute types, it runs a
+`TypeInferVisitor` with the appropriate context (see [passes](./passes.md)).
 
 ### 4.1 Access relation service — `access_relation`
 

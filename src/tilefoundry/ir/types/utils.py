@@ -20,6 +20,22 @@ from .shard import (
 from .tensor_type import TensorType, TupleType, Type
 
 
+def types_compatible(declared: Type, actual: Type) -> bool:
+    """Return whether *actual* may bind a position declared as *declared*.
+
+    A layout-free tensor declaration is a wildcard for physical placement;
+    its logical shape and dtype must still match. Every other type is an exact
+    contract.
+    """
+    if (
+        isinstance(declared, TensorType)
+        and isinstance(actual, TensorType)
+        and declared.layout is None
+    ):
+        return actual.shape == declared.shape and actual.dtype == declared.dtype
+    return actual == declared
+
+
 def numel(type: Type) -> int:
     """Element count of ``type``, summed over a tuple's leaves.
 

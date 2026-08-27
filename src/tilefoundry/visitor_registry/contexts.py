@@ -11,8 +11,8 @@ imported indirectly (no cycle).
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-from typing import NoReturn, Union
+from dataclasses import dataclass, field, replace
+from typing import NoReturn, Protocol, Union
 
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.expr import Call, Expr
@@ -54,6 +54,12 @@ class FunctionScope:
     function: Function
 
 
+class ChildModuleResolver(Protocol):
+    """Resolve the authored child module that owns a callee, if any."""
+
+    def child_for(self, callee: object) -> Module | None: ...
+
+
 @dataclass
 class TypeInferContext:
     """Track walk location and route type-inference queries.
@@ -66,24 +72,30 @@ class TypeInferContext:
 
     scope: FunctionScope | None = None
     mesh_scope: tuple = ()
-    call_feed_provider: object | None = None
+    child_resolver: ChildModuleResolver | None = None
     _active_visitor: object | None = field(default=None, repr=False, compare=False)
 
-    def scope_for(self, callee: object) -> FunctionScope | None:
-        """Return the runtime scope in which *callee*'s body is read."""
-        if self.call_feed_provider is not None:
-            return self.call_feed_provider.scope_for(callee)
-        if self.scope is None:
-            return None
-        child = self._child_module(callee)
-        return FunctionScope(child, callee) if child is not None else FunctionScope(self.scope.module, callee)
-
-    def _child_module(self, callee: object):
+    def child_for(self, callee: object):
+        """Return the direct child module that owns *callee*, if any."""
+        if self.child_resolver is not None:
+            return self.child_resolver.child_for(callee)
         if self.scope is None or self.scope.module is None:
             return None
         from tilefoundry.ir.core.module import child_module_of  # noqa: PLC0415
 
         return child_module_of(self.scope.module, self.scope.function, callee)
+
+    def scope_for(self, callee: object) -> FunctionScope | None:
+        """Return the runtime scope in which *callee*'s body is read."""
+        if self.scope is None:
+            child = self.child_for(callee)
+            return None if child is None else FunctionScope(child, callee)
+        child = self.child_for(callee)
+        return FunctionScope(child or self.scope.module, callee)
+
+    def for_callee(self, callee: object) -> TypeInferContext:
+        """Move this context to *callee* while preserving its concrete class."""
+        return replace(self, scope=self.scope_for(callee), _active_visitor=None)
 
     def type_of(self, expr: Expr) -> Type:
         active = self._active_visitor

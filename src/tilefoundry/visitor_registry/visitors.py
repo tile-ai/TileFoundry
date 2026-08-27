@@ -11,12 +11,14 @@ extension point for sandbox tests or grouped dispatch.
 from __future__ import annotations
 
 from tilefoundry.ir.core.expr import Call, Constant, Expr, Tuple, Var
+from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope
 from tilefoundry.ir.types.substitute import canonicalize_dims
-from tilefoundry.ir.types.tensor_type import TupleType, Type, UnitType
+from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type, UnitType
+from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.ir.visitor import ExprVisitor, ExprWalker, StmtVisitor
 
 from .contexts import Cost, CostContext, TypeInferContext, VerifyContext, _constant_type
@@ -65,12 +67,58 @@ class TypeInferVisitor(ExprVisitor[Type]):
             return declared
         return _constant_type(c.value)
 
-    def visit_leaf_Call(self, call: Call, _operands) -> Type:
-        op_cls = type(call.target)
+    def visit_leaf_Call(self, call: Call, arg_types) -> Type:
+        target = call.target
+        if isinstance(target, Function):
+            return self._call_function(call, target, arg_types)
+        op_cls = type(target)
         fn = typeinfer_registry.lookup(op_cls)
         if fn is None:
             self.ctx.error(call, f"no typeinfer registered for {op_cls.__name__}")
         return fn(call, self.ctx)
+
+    def _call_function(self, call: Call, callee: Function, arg_types: tuple[Type, ...]) -> Type:
+        child = self.ctx.child_for(callee)
+        supplied = tuple(
+            param for param in callee.params if not (child is not None and param.is_const)
+        )
+        if len(arg_types) != len(supplied):
+            kind = "activation(s)" if child is not None else "parameter(s)"
+            self.ctx.error(
+                call,
+                f"hir Function call {callee.name!r}: arity mismatch — "
+                f"callee declares {len(supplied)} {kind}, call passed {len(arg_types)}",
+            )
+
+        given = iter(enumerate(arg_types))
+        memo = {}
+        for param in callee.params:
+            if child is not None and param.is_const:
+                memo[id(param)] = (param, param.annotation)
+                continue
+            index, arg_type = next(given)
+            declared = param.annotation
+            wildcard = isinstance(declared, TensorType) and declared.layout is None
+            if not types_compatible(declared, arg_type):
+                if wildcard and isinstance(arg_type, TensorType):
+                    message = (
+                        f"hir Function call {callee.name!r}: arg {index} shape/dtype "
+                        f"mismatch — callee param {param.name!r} expects logical "
+                        f"{declared.shape} {declared.dtype.name}, got "
+                        f"{arg_type.shape} {arg_type.dtype.name}"
+                    )
+                else:
+                    message = (
+                        f"hir Function call {callee.name!r}: arg {index} type mismatch — "
+                        f"callee param {param.name!r} expects {declared!r}, got {arg_type!r}"
+                    )
+                self.ctx.error(call, message)
+            bound = arg_type if wildcard else declared
+            memo[id(param)] = (param, bound)
+
+        if callee.body is None or callee.variants:
+            return callee.return_type
+        return TypeInferVisitor(self.ctx.for_callee(callee), memo=memo).visit(callee.body)
 
     def visit_leaf_Tuple(self, tup: Tuple, operands) -> Type:
         """Visit Tuple.
@@ -80,26 +128,31 @@ class TypeInferVisitor(ExprVisitor[Type]):
         """
         return TupleType(fields=operands)
 
-    def visit_operands(self, expr: Expr):
-        if isinstance(expr, GridRegionExpr):
-            return tuple(self.visit(arg) for arg in expr.init_args)
-        return super().visit_operands(expr)
+    def visit_operands_GridRegionExpr(self, grid: GridRegionExpr):
+        inits = tuple(self.visit(arg) for arg in grid.init_args)
+        memo = {
+            **self._memo,
+            id(grid.induction_var): (grid.induction_var, grid.induction_var.annotation),
+            **{id(phi): (phi, type_) for phi, type_ in zip(grid.carried_args, inits)},
+        }
+        return inits, TypeInferVisitor(self.ctx, memo=memo)
 
-    def visit_leaf_GridRegionExpr(self, grid: GridRegionExpr, _operands) -> Type:
+    def visit_leaf_GridRegionExpr(self, grid: GridRegionExpr, operands) -> Type:
         """Carry/body: a no-carry loop's value is its body.
 
         A carrying loop's value is its ``carried_args`` phi variables' declared
         types, matching the parser's node-construction rule.
         See [hir §1.2](docs/spec/hir.md#12-gridregionexpr).
         """
-        self.ctx.type_of(grid.body)
+        _inits, inner = operands
+        body_type = inner.visit(grid.body)
         for y in grid.yield_values:
-            self.ctx.type_of(y)
+            inner.visit(y)
         if not grid.carried_args:
-            return self.ctx.type_of(grid.body)
+            return body_type
         if len(grid.carried_args) == 1:
-            return grid.carried_args[0].type
-        return TupleType(fields=tuple(p.type for p in grid.carried_args))
+            return inner.visit(grid.carried_args[0])
+        return TupleType(fields=tuple(inner.visit(phi) for phi in grid.carried_args))
 
     def visit_leaf_ShapeOf(self, shape_of: ShapeOf, _operands) -> Type:
         """A ``tir.ShapeOf`` always carries its own concrete (rank-0 i32) type at construction.

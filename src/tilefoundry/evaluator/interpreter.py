@@ -80,32 +80,28 @@ class EvaluatorVisitor(ExprVisitor):
     """``ExprVisitor[Value]`` evaluated with one memo per execution scope."""
 
     def __init__(self, ctx: FunctionEvalContext, *, memo=None) -> None:
-        super().__init__()
-        self.env = dict(memo or {})
+        super().__init__(ctx, memo=memo)
         self.device = ctx.device
         self.dim_env = ctx.dim_bindings or {}
         self.function_context = ctx
         self.reading = ctx.loaded_module
-    def visit_Var(self, var: Var) -> Value:
-        try:
-            return self.env[id(var)]
-        except KeyError:
-            raise EvalError(f"evaluator: unbound variable {var.name!r}") from None
 
-    def visit_Constant(self, const: Constant) -> TensorValue:
+    def visit_leaf_Var(self, var: Var, _operands) -> Value:
+        raise EvalError(f"evaluator: unbound variable {var.name!r}")
+
+    def visit_leaf_Constant(self, const: Constant, _operands) -> TensorValue:
         data = torch.as_tensor(
             const.value, dtype=to_torch_dtype(const.type.dtype), device=self.device
         )
         return TensorValue(data=data, type=const.type)
 
-    def visit_Tuple(self, tup: Tuple) -> TupleValue:
-        return TupleValue(tuple(self.visit(e) for e in tup.elements))
+    def visit_leaf_Tuple(self, tup: Tuple, operands) -> TupleValue:
+        return TupleValue(operands)
 
-    def visit_Call(self, call: Call) -> Value:
+    def visit_leaf_Call(self, call: Call, args) -> Value:
         target = call.target
         if isinstance(target, Function):
-            return self._call_function(target, call.args)
-        args = tuple(self.visit(a) for a in call.args)
+            return self._call_function(target, args)
         handler = eval_registry.lookup(type(target))
         if handler is None:
             raise EvalError(
@@ -122,16 +118,16 @@ class EvaluatorVisitor(ExprVisitor):
             )
         )
 
-    def _call_function(self, callee: Function, arg_exprs) -> Value:
+    def _call_function(self, callee: Function, arg_values) -> Value:
         child = child_module_instance(self.reading, callee)
         supplied = [p for p in callee.params if not (child is not None and p.is_const)]
-        if len(arg_exprs) != len(supplied):
+        if len(arg_values) != len(supplied):
             kind = "activation(s)" if child is not None else "args"
             raise EvalError(
                 f"evaluator: call to {callee.name!r} expects "
-                f"{len(supplied)} {kind}, got {len(arg_exprs)}"
+                f"{len(supplied)} {kind}, got {len(arg_values)}"
             )
-        given = iter(self.visit(a) for a in arg_exprs)
+        given = iter(arg_values)
         args = [
             _child_constant(child, callee, param)
             if child is not None and param.is_const
@@ -144,8 +140,8 @@ class EvaluatorVisitor(ExprVisitor):
             device=self.device,
             dim_bindings=_bind_dim_vars(target.params, args),
         )
-        sub_env = {id(param): arg for param, arg in zip(target.params, args)}
-        return EvaluatorVisitor(function_context, memo=sub_env).visit(target.body)
+        memo = {id(param): (param, arg) for param, arg in zip(target.params, args)}
+        return EvaluatorVisitor(function_context, memo=memo).visit(target.body)
 
     def _resolve_loop_field(self, dim, what: str) -> int:
         """Resolve loop field.
@@ -162,7 +158,10 @@ class EvaluatorVisitor(ExprVisitor):
         except ValueError as exc:
             raise EvalError(f"evaluator: GridRegion {what}: {exc}") from None
 
-    def visit_GridRegionExpr(self, region: GridRegionExpr) -> Value:
+    def visit_operands_GridRegionExpr(self, region: GridRegionExpr):
+        return tuple(self.visit(init) for init in region.init_args)
+
+    def visit_leaf_GridRegionExpr(self, region: GridRegionExpr, init_values) -> Value:
         iv = region.induction_var
         iv_dtype = to_torch_dtype(iv.type.dtype)
         start = self._resolve_loop_field(region.start, "start")
@@ -182,17 +181,20 @@ class EvaluatorVisitor(ExprVisitor):
             )
         indices = range(start, extent, step)
 
-        def iter_env(i: int, carried) -> dict:
-            env = {
-                **self.env,
-                id(iv): TensorValue(
+        def iter_memo(i: int, carried) -> dict:
+            memo = {
+                **self._memo,
+                id(iv): (
+                    iv,
+                    TensorValue(
                     data=torch.as_tensor(i, dtype=iv_dtype, device=self.device),
                     type=iv.type,
                 ),
+                ),
             }
             for phi, value in zip(region.carried_args, carried):
-                env[id(phi)] = value
-            return env
+                memo[id(phi)] = (phi, value)
+            return memo
 
         if not region.carried_args:
 
@@ -200,7 +202,7 @@ class EvaluatorVisitor(ExprVisitor):
             for i in indices:
                 last = EvaluatorVisitor(
                     FunctionEvalContext(self.reading, self.device, self.dim_env),
-                    memo=iter_env(i, ()),
+                    memo=iter_memo(i, ()),
                 ).visit(region.body)
             if last is None:
                 raise EvalError(
@@ -208,11 +210,11 @@ class EvaluatorVisitor(ExprVisitor):
                 )
             return last
 
-        carried = [self.visit(init) for init in region.init_args]
+        carried = list(init_values)
         for i in indices:
             sub = EvaluatorVisitor(
                 FunctionEvalContext(self.reading, self.device, self.dim_env),
-                memo=iter_env(i, carried),
+                memo=iter_memo(i, carried),
             )
             carried = [sub.visit(y) for y in region.yield_values]
         return carried[0] if len(carried) == 1 else TupleValue(tuple(carried))
@@ -304,10 +306,10 @@ def _run_bound(fn: Function, args, *, device: str | None = None, reading=None):
     device = device or _default_device()
     values = _bound_values(fn, args)
     target = _select_variant(fn, values) if fn.variants else fn
-    env = {id(param): value for param, value in zip(target.params, values)}
+    memo = {id(param): (param, value) for param, value in zip(target.params, values)}
     dim_env = _bind_dim_vars(target.params, values)
     return _unwrap(
-        EvaluatorVisitor(FunctionEvalContext(reading, device, dim_env), memo=env).visit(target.body)
+        EvaluatorVisitor(FunctionEvalContext(reading, device, dim_env), memo=memo).visit(target.body)
     )
 
 
@@ -340,9 +342,9 @@ def evaluate(fn_or_call, *inputs, backend: str = "torch", device: str | None = N
 
 
         target = _select_variant(fn, values) if fn.variants else fn
-        env = {id(param): value for param, value in zip(target.params, values)}
+        memo = {id(param): (param, value) for param, value in zip(target.params, values)}
         dim_env = _bind_dim_vars(target.params, values)
-        result = EvaluatorVisitor(FunctionEvalContext(None, device, dim_env), memo=env).visit(target.body)
+        result = EvaluatorVisitor(FunctionEvalContext(None, device, dim_env), memo=memo).visit(target.body)
     elif isinstance(fn_or_call, Call):
         if inputs:
             raise EvalError("evaluator: a Call entry takes no positional inputs")

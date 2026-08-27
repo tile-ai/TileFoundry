@@ -13,15 +13,20 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Mapping
 
-from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
+from tilefoundry.ir.core import Call, Constant, Expr, Op, Tuple, Var
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.types.dim import is_dim_expr
 from tilefoundry.ir.types.substitute import (
     dim_vars_by_name,
     has_symbolic_dims,
+    substitute_dims,
+    substitute_shape_dim,
 )
-from tilefoundry.ir.visitor import ExprVisitor, ExprWalker
+from tilefoundry.ir.types.tensor_type import TensorType, Type
+from tilefoundry.ir.visitor import ExprMutator, ExprVisitor, ExprWalker
 from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 from .function import Function
 
@@ -188,7 +193,212 @@ def specialize_function(
 
     if not set(dims) & set(residual_dims(chosen)):
         return chosen
-    raise NotImplementedError("specialization rebuild is restored in M2")
+    bound = tuple(substitute_dims(param.type, dims) for param in chosen.params)
+    return _rebuild_at(
+        chosen,
+        bound,
+        ctx if ctx is not None else TypeInferContext(),
+        dims,
+    )
+
+
+def _rebuild_at(
+    chosen: Function,
+    bound_param_types: tuple[Type, ...],
+    ctx: TypeInferContext,
+    dims: Mapping[str, int],
+) -> Function:
+    """Rebuild *chosen* at concrete dimension bindings.
+
+    The mutator memo preserves SSA DAG identity. Its type visitor retains every
+    temporary expression it types, preventing CPython from reusing an id while
+    the rebuild is still in progress.
+    """
+    new_params = tuple(
+        Var(type=type_, name=param.name, is_const=param.is_const)
+        for type_, param in zip(bound_param_types, chosen.params)
+    )
+    subst = {id(old): new for old, new in zip(chosen.params, new_params)}
+    scope = None if ctx.scope is None else dataclasses.replace(ctx.scope, function=chosen)
+    body_ctx = dataclasses.replace(ctx, scope=scope, _active_visitor=None)
+
+    class _Rebuilder(ExprMutator):
+        def __init__(self) -> None:
+            super().__init__()
+            self._memo: dict[int, tuple[Expr, Expr]] = {}
+            self._type_visitor = TypeInferVisitor(body_ctx)
+
+        def visit(self, expr: Expr) -> Expr:
+            hit = self._memo.get(id(expr))
+            if hit is not None:
+                return hit[1]
+            rebuilt = super().visit(expr)
+            self._memo[id(expr)] = (expr, rebuilt)
+            return rebuilt
+
+        def visit_Var(self, var: Var) -> Expr:
+            return subst.get(id(var), var)
+
+        def visit_Constant(self, const: Constant) -> Expr:
+            return const
+
+        def visit_Call(self, call: Call) -> Expr:
+            new_args = tuple(self.visit(arg) for arg in call.args)
+            new_target = call.target
+            if isinstance(new_target, Function):
+                new_target = _specialize_callee(new_target, dims, body_ctx, call)
+            new_target = _substitute_op_dims(new_target, dims)
+            new_metadata = _substitute_authored_dims(call.metadata, dims)
+            if (
+                all(new is old for new, old in zip(new_args, call.args))
+                and new_target is call.target
+                and new_metadata is call.metadata
+            ):
+                return call
+            rebuilt = dataclasses.replace(
+                call,
+                args=new_args,
+                target=new_target,
+                metadata=new_metadata,
+            )
+            return self._retyped(rebuilt)
+
+        def visit_GridRegionExpr(self, grid: GridRegionExpr) -> Expr:
+            new_inits = tuple(self.visit(arg) for arg in grid.init_args)
+            new_phis = tuple(
+                old_phi
+                if new_init.type == old_phi.type
+                else Var(type=new_init.type, name=old_phi.name)
+                for old_phi, new_init in zip(grid.carried_args, new_inits)
+            )
+            for old_phi, new_phi in zip(grid.carried_args, new_phis):
+                if new_phi is not old_phi:
+                    subst[id(old_phi)] = new_phi
+            new_body = self.visit(grid.body)
+            new_yields = tuple(self.visit(value) for value in grid.yield_values)
+            bounds = (grid.extent, grid.step, grid.start)
+            new_bounds = tuple(substitute_shape_dim(bound, dims) for bound in bounds)
+            if (
+                all(new is old for new, old in zip(new_inits, grid.init_args))
+                and all(new is old for new, old in zip(new_phis, grid.carried_args))
+                and new_body is grid.body
+                and all(new is old for new, old in zip(new_yields, grid.yield_values))
+                and new_bounds == bounds
+            ):
+                return grid
+            rebuilt = dataclasses.replace(
+                grid,
+                carried_args=new_phis,
+                init_args=new_inits,
+                body=new_body,
+                yield_values=new_yields,
+                extent=new_bounds[0],
+                step=new_bounds[1],
+                start=new_bounds[2],
+            )
+            return self._retyped(rebuilt)
+
+        def default_visit(self, expr: Expr) -> Expr:
+            rebuilt = super().default_visit(expr)
+            return rebuilt if rebuilt is expr else self._retyped(rebuilt)
+
+        def _retyped(self, rebuilt: Expr) -> Expr:
+            return dataclasses.replace(rebuilt, type=self._type_visitor.visit(rebuilt))
+
+    new_body = _Rebuilder().visit(chosen.body)
+    derived = Function.build(
+        name=chosen.name,
+        params=new_params,
+        body=new_body,
+        return_type=new_body.type,
+        specializations=chosen.specializations,
+    )
+    _record_provenance(derived, chosen, dims)
+    return derived
+
+
+def _specialize_callee(
+    callee: Function,
+    dims: Mapping[str, int],
+    ctx: TypeInferContext,
+    call: Call,
+) -> Function:
+    """Rebuild a nested callee at the dimensions its caller was given."""
+    if callee.variants:
+        raise ValueError(
+            f"specialising through {call and callee.name!r}: the callee "
+            "dispatches on its own variants, which this rebuild does not choose"
+        )
+    if callee.body is None:
+        return callee
+    bound = tuple(substitute_dims(param.type, dims) for param in callee.params)
+    if all(new is param.type for new, param in zip(bound, callee.params)):
+        return callee
+    return _rebuild_at(callee, bound, ctx, dims)
+
+
+def _substitute_authored_dims(
+    metadata: tuple, dims: Mapping[str, int]
+) -> tuple:
+    """Substitute dimension bindings in authored execution-domain metadata."""
+    if not metadata:
+        return metadata
+    from tilefoundry.ir.core.metadata import ExecutionDomainMetadata  # noqa: PLC0415
+    from tilefoundry.ir.types.substitute import substitute_mesh_dims  # noqa: PLC0415
+
+    rebuilt = tuple(
+        dataclasses.replace(
+            item,
+            scopes=tuple(substitute_mesh_dims(mesh, dims) for mesh in item.scopes),
+        )
+        if isinstance(item, ExecutionDomainMetadata)
+        else item
+        for item in metadata
+    )
+    if all(new is old for new, old in zip(rebuilt, metadata)):
+        return metadata
+    return rebuilt
+
+
+def _substitute_op_dims(target: object, dims: Mapping[str, int]) -> object:
+    """Substitute bindings in an operation's shape-valued attributes."""
+    if isinstance(target, Function) or not isinstance(target, Op):
+        return target
+    from tilefoundry.ir.types.shard.layout import LayoutBase  # noqa: PLC0415
+    from tilefoundry.ir.types.shard.mesh import Mesh  # noqa: PLC0415
+    from tilefoundry.ir.types.substitute import (  # noqa: PLC0415
+        substitute_layout_dims,
+        substitute_mesh_dims,
+    )
+
+    changed: dict[str, object] = {}
+    for param in type(target).params():
+        if param.kind != "attribute":
+            continue
+        value = getattr(target, param.name, None)
+        if isinstance(value, TensorType):
+            rebuilt = substitute_dims(value, dims)
+        elif isinstance(value, LayoutBase):
+            rebuilt = substitute_layout_dims(value, dims)
+        elif isinstance(value, Mesh):
+            rebuilt = substitute_mesh_dims(value, dims)
+        elif is_dim_expr(value):
+            rebuilt = substitute_shape_dim(value, dims)
+        elif isinstance(value, tuple) and value and all(is_dim_expr(item) for item in value):
+            rebuilt = tuple(substitute_shape_dim(item, dims) for item in value)
+        else:
+            continue
+        if rebuilt != value:
+            changed[param.name] = rebuilt
+    if not changed:
+        return target
+    attributes = {
+        param.name: getattr(target, param.name)
+        for param in type(target).params()
+        if param.kind == "attribute" and hasattr(target, param.name)
+    }
+    attributes.update(changed)
+    return type(target)(**attributes)
 
 
 def specialize_concretely(

@@ -254,6 +254,8 @@ class ExprVisitor[T](ExprFunctor[T]):
             legacy = getattr(self, f"visit_{type(expr).__name__}", None)
             if legacy is not None:
                 result = legacy(expr)
+            elif type(self).default_visit_leaf is ExprVisitor.default_visit_leaf:
+                result = self.default_visit(expr)
             else:
                 operands_method = getattr(
                     self, f"visit_operands_{type(expr).__name__}", self.visit_operands
