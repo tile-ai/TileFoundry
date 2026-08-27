@@ -39,8 +39,6 @@ class _LiteralStoreOffset:
             for position in tile(_SEQ, _ROW_TILE):
                 base = position + 0
                 for group in range(_GROUPS):
-                    group_index = group + 0
-                    store_base = group_index * _STRIP  # noqa: F841 -- literal control
                     rows = tf.reshard(
                         x[0:1, base : base + _ROW_TILE, :],
                         (1, _ROW_TILE @ mesh.tile, _HEAD),
