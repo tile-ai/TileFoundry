@@ -1866,7 +1866,7 @@ class VariadicInputs:
         items = tuple(values)
         if not all(isinstance(value, runtime.Expr) for value in items):
             raise TypeError("variadic inputs must contain Expr values")
-        self.items = items
+        object.__setattr__(self, "items", items)
 
 
 class VariadicInputsPattern(ElementPattern):

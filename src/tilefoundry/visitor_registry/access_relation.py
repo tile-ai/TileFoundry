@@ -13,6 +13,7 @@ from typing import Callable
 
 import isl
 
+from tilefoundry.ir.core import Expr
 from tilefoundry.ir.hir._helpers import is_one
 from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
 from tilefoundry.ir.types.dim_isl import to_dim, to_domain
@@ -20,6 +21,12 @@ from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis
 
 from .registries import AnalysisRegistry
+
+
+def _local_expr_type(ctx, expr: Expr) -> Type:
+    """Read a context's projected type, or the authored type without inference."""
+    method = getattr(ctx, "local_type_of", None)
+    return method(expr) if method is not None else expr.type
 
 
 @dataclass(frozen=True)
@@ -199,7 +206,7 @@ def projected(relations: AccessRelations, call, ctx) -> AccessRelations:
     same ones: a value nobody sharded is addressed whole by everyone, so left
     alone it would charge one participant the whole of what all of them read.
     """
-    held = ctx.local_type_of(call)
+    held = _local_expr_type(ctx, call)
     fields = held.fields if isinstance(held, TupleType) else (held,)
     logical = call.type
     logical_fields = logical.fields if isinstance(logical, TupleType) else (logical,)
@@ -212,7 +219,7 @@ def projected(relations: AccessRelations, call, ctx) -> AccessRelations:
                 logical_fields[index] if index < len(logical_fields) else None,
             )
         arg = call.args[index]
-        return ctx.local_type_of(arg), arg.type
+        return _local_expr_type(ctx, arg), arg.type
 
     placed = {
         side: tuple(
@@ -499,7 +506,7 @@ def relations_of(call, ctx) -> AccessRelations:
     """
     op_cls = type(call.target)
     relations = projected(coordinates_of(call, ctx), call, ctx)
-    result = ctx.local_type_of(call)
+    result = _local_expr_type(ctx, call)
     wanted = len(result.fields) if isinstance(result, TupleType) else 1
     if len(relations.outputs) != wanted:
         raise ValueError(
@@ -864,7 +871,7 @@ def _control_space(rank: int, ctx, arg) -> "tuple[str, str, str]":
     stated = arg.type
     if isinstance(stated, TupleType):
         return domain, "l", f"0 <= l < {control_leaves(stated)}"
-    held = ctx.local_type_of(arg)
+    held = _local_expr_type(ctx, arg)
     return domain, ", ".join("0" for _ in range(len(getattr(held, "shape", ()) or ()))), ""
 
 
