@@ -107,7 +107,7 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
                     f"is already bound in an outer scope"
                 )
 
-            value_ty = ctx.type_of(stmt.value)
+            value_ty = stmt.value.type
             if stmt.var.type != value_ty:
                 raise VerifyError(
                     f"LetStmt binding {stmt.var.name!r}: var.type {stmt.var.type} "
@@ -194,13 +194,13 @@ def _iter_stmt_expr_fields(stmt):
 
 
 def _check_rank0_int(ctx, stmt, expr, field: str):
-    t = ctx.type_of(expr)
+    t = expr.type
     if not (isinstance(t, TensorType) and t.shape == () and t.dtype in (DType.i32, DType.i64)):
         raise VerifyError(f"{field} must be rank-0 integer, got {t}")
 
 
 def _check_rank0_bool(ctx, stmt, expr):
-    t = ctx.type_of(expr)
+    t = expr.type
     if not (isinstance(t, TensorType) and t.shape == () and t.dtype == DType.bool):
         raise VerifyError(f"condition must be rank-0 bool, got {t}")
 
@@ -386,7 +386,7 @@ def _verify_symbol_call(stmt: Evaluate, fn, module_fn_map, ctx):
             f"param count {len(callee.params)}"
         )
     for i, (arg, param) in enumerate(zip(stmt.args, callee.params)):
-        arg_ty = ctx.type_of(arg)
+        arg_ty = arg.type
         param_ty = param.type
         if type(arg_ty) is not type(param_ty):
             raise VerifyError(
@@ -488,7 +488,7 @@ def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx):
     for extent in stmt.args[1:7]:
         _verify_launch_extent(extent, extent_params, ref.name)
     for i, arg in enumerate(forwarded):
-        if not isinstance(ctx.type_of(arg), TensorType):
+        if not isinstance(arg.type, TensorType):
             raise VerifyError(f"Launch of {ref.name!r}: forwarded arg[{i}] must be a tensor")
     if not module_fn_map:
         return

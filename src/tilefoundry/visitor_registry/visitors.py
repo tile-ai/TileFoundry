@@ -36,27 +36,31 @@ class TypeInferVisitor(ExprVisitor[Type]):
     See [hir §1.1](docs/spec/hir.md#11-function) and
     [visitor-registry §4](docs/spec/visitor-registry.md#4-instance-1--typeinfer).
 
-    ``TypeInferContext.type_of`` reuses the active visitor's memo; without an
-    active traversal, it creates one. A missing leaf raises through
-    ``default_visit_leaf`` rather than trusting a stale ``expr.type``.
+    The visitor owns one identity memo for a complete inference traversal. A
+    missing leaf raises through ``default_visit_leaf`` rather than trusting a
+    stale ``expr.type``.
     """
 
     def __init__(self, ctx: TypeInferContext, *, memo=None) -> None:
         super().__init__(ctx, memo=memo)
         self._visit_depth = 0
+        self._seed = tuple(self._memo.values()) if memo else ()
 
     def visit(self, expr: Expr) -> Type:
         outermost = self._visit_depth == 0
-        previous = self.ctx._active_visitor if outermost else None
-        if outermost:
-            self.ctx._active_visitor = self
+        saved = ()
+        if outermost and self._seed:
+            saved = tuple((node, node.type) for node, _type in self._seed)
+            for node, type_ in self._seed:
+                node.type = type_
         self._visit_depth += 1
         try:
             return canonicalize_dims(super().visit(expr))
         finally:
             self._visit_depth -= 1
             if outermost:
-                self.ctx._active_visitor = previous
+                for node, type_ in saved:
+                    node.type = type_
 
     def visit_leaf_Var(self, var: Var, _operands) -> Type:
         return var.annotation

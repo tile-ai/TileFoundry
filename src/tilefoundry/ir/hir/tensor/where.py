@@ -67,7 +67,7 @@ def _maps(shapes: tuple[tuple, ...]) -> tuple[object, tuple[AffineAccess, ...], 
 
 @register_access_relation(Where)
 def _where_access_relation(call: "Call", ctx) -> AccessRelations:
-    input_types = tuple(ctx.type_of(arg) for arg in call.args)
+    input_types = tuple(arg.type for arg in call.args)
     shapes = tuple(type_.shape for type_ in input_types)
     out_shape = _broadcast_all(shapes)
     _domain, maps, _params = _maps(shapes)
@@ -87,7 +87,7 @@ def _data_relation(relations: AccessRelations) -> AccessRelations:
 
 @register_typeinfer(Where)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    condition, input_, other = (ctx.type_of(arg) for arg in call.args)
+    condition, input_, other = (arg.type for arg in call.args)
     if condition.dtype != DType.bool:
         ctx.error(call, f"condition must have bool dtype, got {condition.dtype}")
     if input_.dtype != other.dtype:

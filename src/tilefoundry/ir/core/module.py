@@ -184,19 +184,19 @@ def _owned_by(child: "Module", parent: "Module") -> "Module":
     effective context, and re-pointing the original would silently change what
     the first owner's subtree answers.
     """
-    owner = getattr(child, "_parent", None)
+    owner = child._parent
     if owner is None or owner is parent:
-        object.__setattr__(child, "_parent", parent)
+        child._parent = parent
         return child
     clone = copy.copy(child)
-    object.__setattr__(clone, "modules", tuple(_owned_by(node, clone) for node in child.modules))
-    object.__setattr__(clone, "_parent", parent)
+    clone.modules = tuple(_owned_by(node, clone) for node in child.modules)
+    clone._parent = parent
     return clone
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class Module:
-    """Frozen container of functions + the name of the public entry function.
+    """Container of functions + the name of the public entry function.
 
     A Module is also the execution domain of the functions it owns: it carries
     the hardware ``target`` and the ordered ``topologies`` budget those
@@ -204,15 +204,16 @@ class Module:
     from the owning Module; ``topologies=()`` declares a topology-free Module.
     """
 
-    name: str
+    name: str = field(hash=False)
     functions: tuple[ModuleFunction, ...]
 
     entry: str | None = None
-    modules: tuple["Module", ...] = field(default_factory=tuple)
+    modules: tuple["Module", ...] = field(default_factory=tuple, hash=False)
     target: Target | None = None
-    topologies: tuple[Topology, ...] | None = None
-    metadata: dict[str, object] = field(default_factory=dict)
-    methods: Mapping[str, object] = field(default_factory=dict)
+    topologies: tuple[Topology, ...] | None = field(default=None, hash=False)
+    metadata: dict[str, object] = field(default_factory=dict, hash=False)
+    methods: Mapping[str, object] = field(default_factory=dict, hash=False)
+    _parent: "Module | None" = field(default=None, compare=False, hash=False, repr=False)
 
     def __post_init__(self) -> None:
         """Post init.
@@ -245,7 +246,7 @@ class Module:
         if self.topologies is not None:
             topologies = tuple(canonicalize_topology_dims(t) for t in self.topologies)
             if topologies != self.topologies:
-                object.__setattr__(self, "topologies", topologies)
+                self.topologies = topologies
             names = [t.name for t in self.topologies]
             dupes = sorted({n for n in names if names.count(n) > 1})
             if dupes:
@@ -262,15 +263,15 @@ class Module:
                     "tilefoundry spec core-ir target-inheritance"
                 )
 
-        object.__setattr__(self, "modules", tuple(_owned_by(child, self) for child in self.modules))
+        self.modules = tuple(_owned_by(child, self) for child in self.modules)
 
     def _owner_path(self) -> str:
         """This Module's dotted path from the outermost declared owner."""
         names = [self.name]
-        node = getattr(self, "_parent", None)
+        node = self._parent
         while node is not None:
             names.append(node.name)
-            node = getattr(node, "_parent", None)
+            node = node._parent
         return ".".join(reversed(names))
 
     def resolve_target(self) -> Target:
@@ -598,7 +599,7 @@ class Module:
     def renamed(self, name: str) -> "Module":
         """An independent copy of this node under a different ``name``."""
         clone = self.cloned()
-        object.__setattr__(clone, "name", name)
+        clone.name = name
         return clone
 
 

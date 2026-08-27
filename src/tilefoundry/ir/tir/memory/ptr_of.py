@@ -24,4 +24,4 @@ class PtrOf(Op):
 
 @register_typeinfer(PtrOf)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    return ctx.type_of(call.args[0])
+    return call.args[0].type

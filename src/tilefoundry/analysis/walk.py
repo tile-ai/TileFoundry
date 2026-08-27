@@ -359,13 +359,13 @@ def attach(expr: Expr, value: IRMetadata) -> None:
     caller's IR unmeasured.
     """
     kept = tuple(item for item in expr.metadata if type(item) is not type(value))
-    object.__setattr__(expr, "metadata", (*kept, value))
+    expr.metadata = (*kept, value)
 
 
 def detach(expr: Expr, metadata_type: type[IRMetadata]) -> None:
     """Remove any *metadata_type* record from *expr*, in place."""
     kept = tuple(item for item in expr.metadata if type(item) is not metadata_type)
-    object.__setattr__(expr, "metadata", kept)
+    expr.metadata = kept
 
 
 __all__ = [

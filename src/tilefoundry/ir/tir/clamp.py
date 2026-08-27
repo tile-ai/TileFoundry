@@ -27,8 +27,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 @register_verify_stmt(Clamp)
 def _(call: "Call", ctx: "VerifyContext") -> None:
-    src_ty = ctx.type_of(call.args[0])
-    dst_ty = ctx.type_of(call.args[1])
+    src_ty = call.args[0].type
+    dst_ty = call.args[1].type
     if src_ty.dtype != dst_ty.dtype:
         ctx.error(call, "Clamp: src and dst dtype must match")
 

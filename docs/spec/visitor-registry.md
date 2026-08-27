@@ -187,11 +187,8 @@ class TypeInferContext:
     scope: FunctionScope | None = None
     mesh_scope: tuple = ()
     child_resolver: ChildModuleResolver | None = None
-    _active_visitor: object | None = None
 
     def child_for(self, callee: Function) -> Module | None: ...
-    def type_of(self, expr: Expr) -> Type: ...
-    def local_type_of(self, expr: Expr) -> Type: ...
     def scope_for(self, callee: Function) -> FunctionScope | None: ...
     def for_callee(self, callee: Function) -> TypeInferContext: ...
     def error(self, node: Expr | Stmt, msg: str) -> NoReturn: ...
@@ -212,7 +209,7 @@ nothing of that kind rather than guessing.
     collected `Module` tree can answer `child_for(callee)` itself.
   - Crossing a Function boundary uses `dataclasses.replace` so a context
     subclass retains its analysis-specific state.
-  - Type memory belongs to the active visitor memo, not to this context.
+  - Type memory belongs to the visitor memo. Contexts do not infer types on demand.
 
 Registry + decorator:
 
@@ -261,12 +258,10 @@ class TypeInferVisitor(ExprVisitor[Type]):
     are visited ([hir §1.2](./hir.md#12-gridregionexpr)).
   - `visit_leaf_ShapeOf` returns the node's declared rank-0 i32 type.
 
-Lifecycle: parser builds a `TypeInferContext` and runs eager
-typeinfer at parse time (see [parser](./parser.md)). A `Module`
-entering the pass pipeline already has every `Expr.type` filled.
-There is no "first TypeInferPass". When a transform changes the
-expression structure and needs to recompute types, it runs a
-`TypeInferVisitor` with the appropriate context (see [passes](./passes.md)).
+Lifecycle: parser builds a `TypeInferContext` and infers each newly built call
+at parse time (see [parser](./parser.md)). The analysis preflight then walks
+each authored body in postorder and writes every `Expr.type` in place before
+consumers run. Contexts never infer a type on demand; visitors own their memo.
 
 ### 4.1 Access relation service — `access_relation`
 
@@ -361,7 +356,7 @@ Context (extends `TypeInferContext` with the active mesh stack):
 
 ```python
 @dataclass
-class VerifyContext(TypeInferContext):   # inherits scope / mesh_scope / type_of
+class VerifyContext(TypeInferContext):   # inherits scope / mesh_scope / child_for
     """Type inference context extended with the active mesh stack.
 
     Attributes:
@@ -553,7 +548,7 @@ class CostContext(TypeInferContext):
     level: str | None = None
     topologies: tuple[Topology, ...] = ()
 
-    def local_type_of(self, expr: Expr) -> Type: ...
+    def local_type_of(self, expr: Expr) -> Type: ...  # read expr.type, then project
     def local_output_type(self, call: Call) -> Type: ...
 
 cost_evaluator_registry: AnalysisRegistry[type[Op]]

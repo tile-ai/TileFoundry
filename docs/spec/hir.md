@@ -57,7 +57,8 @@ class Function(Expr):
   - an `Expr` subclass whose value type is the function signature; always returns
     by value (explicit output params are TIR-only). Typing and shape-dispatch
     rules are stated below.
-  - defined as a frozen dataclass — instances are immutable after construction.
+  - mutable during the compiler's authorised typing, metadata, and specialization updates;
+    fields that are not updated retain structural equality and hashing semantics.
   - a `Function` MUST NOT declare or override execution context. The `Module`
     that owns it declares the `Target` and the ordered `Topology` hierarchy its
     body runs against ([core-ir §1](./core-ir.md#1-module)).
@@ -332,7 +333,7 @@ class GridRegionExpr(Expr):
   - the only HIR exception to pure Call DAG: loop-phi-shaped structured SSA that
     folds a tile-style loop into one `Expr` value; `type` is `TensorType` (single
     carry) or `TupleType` (multi-carry).
-  - defined as a frozen dataclass — instances are immutable after construction.
+  - mutable during the compiler's authorised typing and metadata updates.
 
 **Iteration domain.** Both DSL loop surfaces — `for i in tile(...)` and
 `for i in range(...)` — lower to this one node; they share the domain

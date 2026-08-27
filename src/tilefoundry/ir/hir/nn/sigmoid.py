@@ -28,7 +28,7 @@ class Sigmoid(Op):
 
 @register_typeinfer(Sigmoid)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x_ty = ctx.type_of(call.args[0])
+    x_ty = call.args[0].type
     reject_partials(ctx, call, "x", x_ty.layout, commutes_with=_COMMUTES_WITH)
     return x_ty
 

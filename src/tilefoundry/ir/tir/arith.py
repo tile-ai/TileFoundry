@@ -43,8 +43,8 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
     op = call.target
     if not isinstance(op.kind, BinaryKind):
         ctx.error(call, f"Binary: kind must be BinaryKind enum, got {type(op.kind)}")
-    lty = ctx.type_of(call.args[0])
-    dty = ctx.type_of(call.args[2])
+    lty = call.args[0].type
+    dty = call.args[2].type
     if lty.shape != dty.shape:
         ctx.error(call, f"Binary shape mismatch: lhs {lty.shape} vs dst {dty.shape}")
 
@@ -68,7 +68,7 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
     op = call.target
     if not isinstance(op.kind, UnaryKind):
         ctx.error(call, f"Unary: kind must be UnaryKind enum, got {type(op.kind)}")
-    sty = ctx.type_of(call.args[0])
-    dty = ctx.type_of(call.args[1])
+    sty = call.args[0].type
+    dty = call.args[1].type
     if sty.shape != dty.shape:
         ctx.error(call, f"Unary shape mismatch: src {sty.shape} vs dst {dty.shape}")

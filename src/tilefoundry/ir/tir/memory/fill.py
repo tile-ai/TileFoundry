@@ -29,8 +29,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 @register_verify_stmt(Fill)
 def _(call: "Call", ctx: "VerifyContext") -> None:
-    t_ty = ctx.type_of(call.args[0])
-    v_ty = ctx.type_of(call.args[1])
+    t_ty = call.args[0].type
+    v_ty = call.args[1].type
     if v_ty.shape != ():
         ctx.error(call, "Fill value must be rank-0 scalar")
     if v_ty.dtype != t_ty.dtype:

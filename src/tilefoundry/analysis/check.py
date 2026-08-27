@@ -20,7 +20,6 @@ from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.specialize import (
-    PROVENANCE,
     SpecializationError,
     _record_complete_bindings,
     dim_vars_reached,
@@ -864,7 +863,7 @@ def _inline_view(module: Module, function: Function, budget: int) -> Function:
         variants=(),
         converters=(),
     )
-    object.__setattr__(view, PROVENANCE, function)
+    view._specialized_from = function
     return view
 
 

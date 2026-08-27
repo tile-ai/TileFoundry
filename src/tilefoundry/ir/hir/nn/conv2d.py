@@ -291,9 +291,9 @@ def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
 
 @register_typeinfer(Conv2D)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x = ctx.type_of(call.args[0])
-    w = ctx.type_of(call.args[1])
-    bias = ctx.type_of(call.args[2])
+    x = call.args[0].type
+    w = call.args[1].type
+    bias = call.args[2].type
     stride, padding, dilation, _groups, k_h, k_w = _validate_conv2d(
         call, ctx, x, w, bias
     )
@@ -356,8 +356,8 @@ def _conv2d_access(call: "Call", ctx) -> AccessRelations:
     kernel taps, all of them derived from the operands and the Op's own strides
     because the result's Type is what this answer produces.
     """
-    x = ctx.type_of(call.args[0])
-    weight = ctx.type_of(call.args[1])
+    x = call.args[0].type
+    weight = call.args[1].type
     op = call.target
     k_h = static_dim_value(weight.shape[2])
     k_w = static_dim_value(weight.shape[3])

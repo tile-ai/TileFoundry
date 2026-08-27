@@ -314,14 +314,10 @@ class _DeferredFunction:
         )
         if self.dialect == "hir":
             if self.role is FunctionRole.VARIANT:
-                object.__setattr__(self.parsed, DISPLAY_NAME, self.binding_name)
-                object.__setattr__(self.parsed, "name", base.name)
+                setattr(self.parsed, DISPLAY_NAME, self.binding_name)
+                self.parsed.name = base.name
             elif self.role is FunctionRole.CONVERTER:
-                object.__setattr__(
-                    self.parsed,
-                    "name",
-                    f"{base.name}.converter[{self.key}]",
-                )
+                self.parsed.name = f"{base.name}.converter[{self.key}]"
         return self.parsed
 
     def specialize(self, pattern: Any):
@@ -439,8 +435,8 @@ def _specialize(self: HirFunction, pattern: Any):
                 "`pass` (only the base prototype declares a `pass` body)"
             )
 
-        object.__setattr__(ir, DISPLAY_NAME, fn_inner.__name__)
-        object.__setattr__(ir, "name", self.name)
+        setattr(ir, DISPLAY_NAME, fn_inner.__name__)
+        ir.name = self.name
         verify_function(ir)
         _register(ParsedFuncKind.VARIANT, ir, fn_inner.__name__, pat, base=self)
         return ir
@@ -476,7 +472,7 @@ def _converter(self: HirFunction, weight_name: str):
                 "not `pass`"
             )
 
-        object.__setattr__(ir, "name", f"{self.name}.converter[{weight_name}]")
+        ir.name = f"{self.name}.converter[{weight_name}]"
         verify_function(ir)
         _register(ParsedFuncKind.CONVERTER, ir, fn_inner.__name__, weight_name, base=self)
         return ir

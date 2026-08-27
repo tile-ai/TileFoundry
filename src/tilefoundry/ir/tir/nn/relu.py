@@ -30,8 +30,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 @register_verify_stmt(ReLU)
 def _(call: "Call", ctx: "VerifyContext") -> None:
-    src_ty = ctx.type_of(call.args[0])
-    dst_ty = ctx.type_of(call.args[1])
+    src_ty = call.args[0].type
+    dst_ty = call.args[1].type
     if src_ty.shape != dst_ty.shape:
         ctx.error(call, f"nn.ReLU shape mismatch: {src_ty.shape} vs {dst_ty.shape}")
     if src_ty.dtype != dst_ty.dtype:

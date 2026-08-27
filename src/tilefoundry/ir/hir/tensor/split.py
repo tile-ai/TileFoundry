@@ -70,7 +70,7 @@ def _reject_redistribution(ctx, call: "Call", x_ty, axis: int, parts: int) -> No
 
 @register_typeinfer(Split)
 def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
-    x_ty = ctx.type_of(call.args[0])
+    x_ty = call.args[0].type
     raw_axis = call.target.axis
     rank = len(x_ty.shape)
     axis = raw_axis + rank if raw_axis < 0 else raw_axis
@@ -139,7 +139,7 @@ def _split_access(call: "Call", ctx) -> AccessRelations:
     Walking a part's own coordinates instead would say every part reads the
     first one.
     """
-    source = ctx.type_of(call.args[0])
+    source = call.args[0].type
     rank = len(source.shape)
     axis = call.target.axis + rank if call.target.axis < 0 else call.target.axis
     parts = call.target.num_splits

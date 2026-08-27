@@ -38,8 +38,8 @@ def _softmax_access(call: "Call", ctx) -> AccessRelations:
     believe each output element depends on one input element, and tile an axis
     that cannot be tiled.
     """
-    x_ty = ctx.type_of(call.args[0])
-    logical_x = ctx.type_of(call.args[0])
+    x_ty = call.args[0].type
+    logical_x = call.args[0].type
     authored = call.target.axis
     axis = authored + len(logical_x.shape) if authored < 0 else authored
     rows, names, guards = normalised_rows(x_ty, logical_x, axis)
@@ -57,7 +57,7 @@ def _softmax_access(call: "Call", ctx) -> AccessRelations:
 
 @register_typeinfer(SoftMax)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x_ty = ctx.type_of(call.args[0])
+    x_ty = call.args[0].type
     reject_partials(ctx, call, "x", x_ty.layout)
     return x_ty
 

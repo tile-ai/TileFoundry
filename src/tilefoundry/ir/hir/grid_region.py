@@ -6,7 +6,7 @@ from tilefoundry.ir.core import Expr, Var
 from tilefoundry.ir.types.shape_dim import ShapeDim
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class GridRegionExpr(Expr):
     """Loop-phi-shaped structured SSA folding a tile-style loop into one Expr."""
 

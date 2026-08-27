@@ -34,5 +34,5 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
     op = call.target
     if not isinstance(op.kind, ReduceKind):
         ctx.error(call, f"Reduce: kind must be ReduceKind enum, got {type(op.kind)}")
-    src_ty = ctx.type_of(call.args[0])  # noqa: F841
-    dst_ty = ctx.type_of(call.args[1])  # noqa: F841
+    src_ty = call.args[0].type  # noqa: F841
+    dst_ty = call.args[1].type  # noqa: F841

@@ -24,7 +24,7 @@ class Local(Op):
 
 @register_typeinfer(Local)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x_ty = ctx.type_of(call.args[0])
+    x_ty = call.args[0].type
     if not isinstance(x_ty.layout, ShardLayout):
         ctx.error(call, "Local() input must have ShardLayout")
 

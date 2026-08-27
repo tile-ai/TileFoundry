@@ -428,7 +428,7 @@ class _RankPreserving(TypeInferContext):
     """
 
     def local_type_of(self, expr) -> object:
-        return _local_type(self.type_of(expr))
+        return _local_type(expr.type)
 
 
 def _placed_value(value, loops: tuple[GridRegionExpr, ...]):

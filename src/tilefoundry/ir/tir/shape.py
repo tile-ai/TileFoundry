@@ -15,7 +15,7 @@ from tilefoundry.ir.core import Expr, Var
 from tilefoundry.ir.types.tensor_type import DType, TensorType
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class ShapeOf(Expr):
     """Runtime shape value of a parameter's tensor at a given axis."""
 

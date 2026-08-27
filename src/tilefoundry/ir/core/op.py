@@ -75,13 +75,13 @@ class Op:
         for k, v in attrs.items():
             if k not in attr_defs:
                 raise TypeError(f"{type(self).__name__}: unknown attribute {k!r}")
-            object.__setattr__(self, k, _normalize_attr(k, v))
+            setattr(self, k, _normalize_attr(k, v))
 
         missing = set(attr_defs) - set(attrs)
         for m in list(missing):
             pd = attr_defs[m]
             if pd.has_default:
-                object.__setattr__(self, m, _normalize_attr(m, pd.default))
+                setattr(self, m, _normalize_attr(m, pd.default))
                 missing.discard(m)
         if missing:
             raise TypeError(f"{type(self).__name__}: missing attribute(s) {sorted(missing)}")

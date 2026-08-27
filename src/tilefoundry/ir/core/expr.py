@@ -9,7 +9,7 @@ from tilefoundry.ir.core.op import Op
 from ..types.tensor_type import Type
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class Expr:
     """Typed SSA value. Base of all expression nodes (hir + tir-embedded).
 
@@ -18,7 +18,7 @@ class Expr:
     fields without default-order clashes.
     """
 
-    type: Type = field(kw_only=True)
+    type: Type = field(kw_only=True, hash=False)
     metadata: tuple[IRMetadata, ...] = field(
         default_factory=tuple,
         kw_only=True,
@@ -64,7 +64,7 @@ def child_exprs(expr: Expr):
         yield from walk(getattr(expr, member.name, None))
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class Var(Expr):
     name: str
     is_const: bool = False
@@ -75,12 +75,12 @@ class Var(Expr):
         return self.type
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class Constant(Expr):
     value: object
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class Call(Expr):
     """Call to an Op. Produces a value. Cannot be top-level Stmt in tir."""
 
@@ -126,7 +126,7 @@ class Call(Expr):
         return self._dim_binop(other, "DimMod", reverse=True)
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class Tuple(Expr):
     """Value-form explicit tuple construction.
 

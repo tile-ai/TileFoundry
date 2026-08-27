@@ -1839,7 +1839,8 @@ class CallTypeInferenceRule:
         if not isinstance(infer_context, runtime.TypeInferContext):
             infer_context = runtime.TypeInferContext()
         computed = runtime.TypeInferVisitor(infer_context).visit(value)
-        return dataclasses.replace(value, type=computed)
+        value.type = computed
+        return value
 
 
 class CallExpectedTypeRule:
@@ -1865,7 +1866,7 @@ class VariadicInputs:
         items = tuple(values)
         if not all(isinstance(value, runtime.Expr) for value in items):
             raise TypeError("variadic inputs must contain Expr values")
-        object.__setattr__(self, "items", items)
+        self.items = items
 
 
 class VariadicInputsPattern(ElementPattern):
@@ -3950,7 +3951,7 @@ class StatementPattern(ElementPattern):
                         f"duplicate where annotation for Expr {label!r}",
                     )
                 value = replace_metadata(value, BindingMetadata(match.captures["name"]))
-                object.__setattr__(value, "metadata", (*value.metadata, annotation))
+                value.metadata = (*value.metadata, annotation)
             elif annotation is not None and value.type != annotation:
                 raise ParseError.from_node(
                     match.node, context, "annotated assignment type mismatch"
@@ -4291,10 +4292,10 @@ class FunctionPattern(ElementPattern):
                 specializations=specializations,
             )
             if context.function.role is FunctionRole.VARIANT:
-                object.__setattr__(function, runtime.DISPLAY_NAME, match.captures["name"])
-                object.__setattr__(function, "name", function_name)
+                setattr(function, runtime.DISPLAY_NAME, match.captures["name"])
+                function.name = function_name
             elif context.function.role is FunctionRole.CONVERTER:
-                object.__setattr__(function, "name", f"{function_name}.converter[{converter}]")
+                function.name = f"{function_name}.converter[{converter}]"
             binding = context.function.binding_name or match.captures["name"]
             define = getattr(context.function.module_scope, "define", None)
             if callable(define):

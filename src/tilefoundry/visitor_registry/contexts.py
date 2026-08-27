@@ -73,7 +73,6 @@ class TypeInferContext:
     scope: FunctionScope | None = None
     mesh_scope: tuple = ()
     child_resolver: ChildModuleResolver | None = None
-    _active_visitor: object | None = field(default=None, repr=False, compare=False)
 
     def child_for(self, callee: object):
         """Return the direct child module that owns *callee*, if any."""
@@ -95,24 +94,7 @@ class TypeInferContext:
 
     def for_callee(self, callee: object) -> TypeInferContext:
         """Move this context to *callee* while preserving its concrete class."""
-        return replace(self, scope=self.scope_for(callee), _active_visitor=None)
-
-    def type_of(self, expr: Expr) -> Type:
-        active = self._active_visitor
-        if active is not None:
-            return active.visit(expr)
-        from .visitors import TypeInferVisitor  # noqa: PLC0415
-        return TypeInferVisitor(self).visit(expr)
-
-    def local_type_of(self, expr: Expr) -> Type:
-        """Return ``expr``'s Type as written, there being no window here.
-
-        A context with a topology window overrides this. Asking the question of
-        every context is what lets one registered handler answer both the whole
-        program's quantities and one unit's, instead of two handlers that have
-        to be kept saying the same thing.
-        """
-        return self.type_of(expr)
+        return replace(self, scope=self.scope_for(callee))
 
     def error(self, node: Union[Expr, Stmt], msg: str) -> NoReturn:
         if isinstance(node, Call):
@@ -159,15 +141,10 @@ class CostContext(TypeInferContext):
     level: str | None = None
     topologies: tuple[Topology, ...] = ()
 
-    def type_of(self, expr: Expr) -> Type:
-        selected = self.selected_types.get(id(expr))
-        if selected is not None:
-            return selected
-        return super().type_of(expr)
-
     def local_type_of(self, expr: Expr) -> Type:
         """Return ``expr``'s Type in this context's topology window."""
-        type_ = self.type_of(expr)
+        selected = self.selected_types.get(id(expr))
+        type_ = selected if selected is not None else expr.type
         if self.level is None:
             return type_
         return local_type_of(type_, level=self.level, topologies=self.topologies)
@@ -176,7 +153,7 @@ class CostContext(TypeInferContext):
         """Return the selected candidate output in recursive-local form."""
         output = self.selected_output_type
         if output is None:
-            output = self.type_of(call)
+            output = call.type
         if self.level is None:
             return output
         return local_type_of(output, level=self.level, topologies=self.topologies)

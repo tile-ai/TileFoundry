@@ -24,7 +24,7 @@ class ShapeOf(Op):
 
 @register_typeinfer(ShapeOf)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x_ty = ctx.type_of(call.args[0])
+    x_ty = call.args[0].type
     rank_expr = Constant(type=TensorType.umat_scalar(), value=len(x_ty.shape))
     return TensorType.umat_tensor((rank_expr,), DType.i64)
 

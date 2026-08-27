@@ -120,7 +120,7 @@ def _matmul(call: Call, ctx: CostContext) -> Cost:
     output = _output_type(call, ctx)
     if not all(isinstance(type, TensorType) for type in (lhs, rhs, output)):
         raise ValueError("MatMul cost requires tensor inputs and output")
-    logical_lhs = ctx.type_of(call.args[0])
+    logical_lhs = call.args[0].type
     if not isinstance(logical_lhs, TensorType):
         raise ValueError("MatMul cost requires a tensor lhs")
     _a_m, a_k, _b_n, _b_k = matmul_axes(call.target)
@@ -145,7 +145,7 @@ def _conv2d(call: Call, ctx: CostContext) -> Cost:
         for type_ in (input_, weight, bias, output)
     ):
         raise ValueError("Conv2D cost requires tensor inputs and output")
-    global_weight = ctx.type_of(call.args[1])
+    global_weight = call.args[1].type
     logical_weight_shape = weight.shape
     if isinstance(global_weight.layout, ShardLayout):
         logical_weight_shape = [1] * len(global_weight.shape)

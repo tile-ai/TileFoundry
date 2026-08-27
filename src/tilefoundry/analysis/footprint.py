@@ -224,7 +224,7 @@ class _RankPreserving(TypeInferContext):
     """
 
     def local_type_of(self, expr: Expr) -> object:
-        return _local_type(self.type_of(expr))
+        return _local_type(expr.type)
 
 
 def _placed_in_loops(
@@ -404,7 +404,9 @@ def _relation_cases(
         domain = _iterated(relations)
         if domain is None or not domain.is_bounded():
             raise _Unavailable
-        local_types = tuple(ctx.local_type_of(arg) for arg in call.args)
+        local_types = tuple(
+            ctx.local_type_of(arg) if narrow else arg.type for arg in call.args
+        )
     except (NotImplementedError, TypeError, ValueError, isl.Error) as error:
         raise _Unavailable from error
     return (

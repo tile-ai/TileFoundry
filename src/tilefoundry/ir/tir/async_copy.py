@@ -26,8 +26,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 @register_verify_stmt(CopyAsync)
 def _(call: "Call", ctx: "VerifyContext") -> None:
-    src = ctx.type_of(call.args[0])
-    dst = ctx.type_of(call.args[1])
+    src = call.args[0].type
+    dst = call.args[1].type
     if dst.storage != StorageKind.SMEM:
         ctx.error(call, f"CopyAsync destination must be smem, got {dst.storage}")
     if src.storage != StorageKind.GMEM:

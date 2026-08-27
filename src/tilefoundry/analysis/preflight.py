@@ -17,6 +17,7 @@ from tilefoundry.ir.hir.tensor.reshape import is_induction_var_singleton_reshape
 from tilefoundry.ir.types import Type, callable_type_for
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 from .errors import AnalysisError
 from .walk import called_functions, describe, owning_module, postorder, tensor_types
@@ -33,13 +34,14 @@ def infer_authored_types(
     """
     for fn in reversed(tuple(functions)):
         ctx = TypeInferContext(scope=FunctionScope(module, fn))
+        visitor = TypeInferVisitor(ctx)
         for expr in postorder(fn.body):
-            computed = ctx.type_of(expr)
+            computed = visitor.visit(expr)
             if computed != expr.type:
-                object.__setattr__(expr, "type", computed)
+                expr.type = computed
         if fn.body is not None and fn.return_type != fn.body.type:
-            object.__setattr__(fn, "return_type", fn.body.type)
-            object.__setattr__(fn, "type", callable_type_for(fn.params, fn.body.type))
+            fn.return_type = fn.body.type
+            fn.type = callable_type_for(fn.params, fn.body.type)
 
 
 def _unresolved_local_layout(type_: Type) -> bool:

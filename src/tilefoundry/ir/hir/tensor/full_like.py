@@ -34,7 +34,7 @@ class FullLike(Op):
 
 @register_typeinfer(FullLike)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    return ctx.type_of(call.args[0])
+    return call.args[0].type
 
 
 @register_eval(FullLike)

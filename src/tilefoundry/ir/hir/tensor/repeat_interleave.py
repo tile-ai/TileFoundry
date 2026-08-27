@@ -42,7 +42,7 @@ def _normalize_axis(axis: int, rank: int) -> int:
 
 @register_typeinfer(RepeatInterleave)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x_ty = ctx.type_of(call.args[0])
+    x_ty = call.args[0].type
     op = call.target
     shape = list(x_ty.shape)
     ax = _normalize_axis(op.axis, len(shape))
@@ -82,7 +82,7 @@ def _repeat_interleave_access(call: "Call", ctx) -> AccessRelations:
     positions depend on one element is the pattern's business; the element still
     crossed the boundary once.
     """
-    source = ctx.type_of(call.args[0])
+    source = call.args[0].type
     rank = len(source.shape)
     axis = call.target.axis + rank if call.target.axis < 0 else call.target.axis
     repeats = call.target.repeats

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from tilefoundry.ir.core.expr import Expr
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class SymbolRef(Expr):
     """Leaf ``Expr`` naming a callee ``PrimFunction`` as a call target."""
 

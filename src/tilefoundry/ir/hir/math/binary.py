@@ -103,7 +103,7 @@ def _merge_layout(a: object, b: object, out_shape: tuple) -> object:
 
 @register_access_relation(Binary)
 def _elementwise_binary(call: "Call", ctx) -> AccessRelations:
-    shapes = tuple(tuple(ctx.type_of(arg).shape) for arg in call.args)
+    shapes = tuple(tuple(arg.type.shape) for arg in call.args)
     out_shape = broadcast_shapes(*shapes)
     produced = 1
     for extent in out_shape:
@@ -125,8 +125,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     op = call.target
     if not isinstance(op.kind, BinaryKind):
         ctx.error(call, f"Binary: kind must be BinaryKind, got {type(op.kind)}")
-    lhs_ty = ctx.type_of(call.args[0])
-    rhs_ty = ctx.type_of(call.args[1])
+    lhs_ty = call.args[0].type
+    rhs_ty = call.args[1].type
     if lhs_ty.dtype != rhs_ty.dtype:
         ctx.error(
             call,

@@ -316,7 +316,7 @@ class SourceSpanMetadata(IRMetadata):
 
 ```python
 class Expr:
-    """Provide the immutable base for every typed expression.
+    """Provide the mutable base for every typed expression.
 
     Attributes:
         type: attribute; Expression type.
@@ -330,6 +330,8 @@ class Expr:
 - constraints:
   - base of every expression node; concrete subclasses are dialect-owned, not
     introduced per Op (value-producing Ops appear as `Call` nodes).
+  - `type` and `metadata` may be updated by the authorised typing and analysis
+    passes; expression equality remains structural and metadata is excluded.
   - `metadata` contains only `IRMetadata` values and contains at most one value
     of each exact concrete metadata class; invalid entries or duplicate classes
     raise `VerifyError`, including `SourceSpanMetadata` or `BindingMetadata`

@@ -65,18 +65,17 @@ def _record_provenance(
 ) -> None:
     """Note that *derived* is *origin*, at *dims* when a size was chosen.
 
-    Written through `object.__setattr__` because a Function is frozen; this is
-    the same authoring-phase mutation `seal` and `add_variant` use, and it does
-    not participate in equality, so two functions specialised from different
+    These fields are declared on Function with ``compare=False`` because they
+    do not participate in equality, so two functions specialised from different
     origins are still equal when they are the same program.
 
     Extents are stored sorted by name, so one binding set has one representation.
     A rebuild that chose none records none rather than an empty set, which would
     compare equal to another such rebuild's.
     """
-    object.__setattr__(derived, PROVENANCE, origin)
+    derived._specialized_from = origin
     if dims is not None:
-        object.__setattr__(derived, BOUND_DIMS, tuple(sorted(dims.items())))
+        derived._specialized_dims = tuple(sorted(dims.items()))
 
 
 def _record_complete_bindings(
@@ -87,7 +86,7 @@ def _record_complete_bindings(
         derived = dataclasses.replace(function)
         _record_provenance(derived, function, dims)
         return derived
-    object.__setattr__(function, BOUND_DIMS, tuple(sorted(dims.items())))
+    function._specialized_dims = tuple(sorted(dims.items()))
     return function
 
 
@@ -220,7 +219,7 @@ def _rebuild_at(
     )
     subst = {id(old): new for old, new in zip(chosen.params, new_params)}
     scope = None if ctx.scope is None else dataclasses.replace(ctx.scope, function=chosen)
-    body_ctx = dataclasses.replace(ctx, scope=scope, _active_visitor=None)
+    body_ctx = dataclasses.replace(ctx, scope=scope)
 
     class _Rebuilder(ExprMutator):
         def __init__(self) -> None:

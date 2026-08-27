@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tilefoundry.ir.core import Expr, FunctionScope, TypeInferContext, VerifyError
+from tilefoundry.ir.core import Expr, VerifyError
 from tilefoundry.ir.core.expr import Call, Var
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.tir.stmt import Stmt
@@ -35,8 +35,6 @@ def verify_function(fn: Function, *, module=None) -> None:
         )
     _reject_stmt_nodes(fn.body)
 
-    scope = FunctionScope(module, fn) if module is not None else None
-    TypeInferContext(scope=scope).type_of(fn.body)
 
 
 def _verify_variants(base: Function, *, module=None) -> None:

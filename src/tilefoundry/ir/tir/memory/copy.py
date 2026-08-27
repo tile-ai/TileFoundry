@@ -32,8 +32,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 @register_verify_stmt(Copy)
 def _(call: "Call", ctx: "VerifyContext") -> None:
-    src = ctx.type_of(call.args[0])
-    dst = ctx.type_of(call.args[1])
+    src = call.args[0].type
+    dst = call.args[1].type
     if src.storage == dst.storage and src.shape != dst.shape:
         if not _is_copyable_shard(src, dst):
             ctx.error(call, f"Copy shape mismatch: {src.shape} vs {dst.shape}")

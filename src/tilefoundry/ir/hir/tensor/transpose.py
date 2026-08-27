@@ -52,7 +52,7 @@ def _transpose_view(call: "Call", ctx) -> tuple:
     axes are is the reader's question, asked of every Op the same way.
     """
     perm = tuple(call.target.perm)
-    source = ctx.type_of(call.args[0])
+    source = call.args[0].type
     rank = len(source.shape)
     writes_at = [f"d{source_axis}" for source_axis in perm]
     domain = ", ".join(f"d{index}" for index in range(rank))
@@ -66,14 +66,14 @@ register_access_relation(Transpose)(
     view_relations(
         0,
         _transpose_view,
-        over=lambda call, ctx: ctx.type_of(call.args[0]).shape,
+        over=lambda call, ctx: call.args[0].type.shape,
     )
 )
 
 
 @register_typeinfer(Transpose)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x_ty = ctx.type_of(call.args[0])
+    x_ty = call.args[0].type
     perm = call.target.perm
     if len(perm) != len(x_ty.shape):
         ctx.error(call, f"perm length {len(perm)} != rank {len(x_ty.shape)}")
