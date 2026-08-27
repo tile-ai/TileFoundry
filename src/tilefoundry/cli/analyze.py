@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import sys
 import textwrap
+import threading
+import time
 from pathlib import Path
 from typing import Mapping
 
@@ -32,6 +36,22 @@ EVIDENCE: dict[str, str] = {
 
 
 ANALYSES: tuple[str, ...] = tuple(EVIDENCE)
+_ANALYSIS_TIMEOUT_SECONDS = 300.0
+
+
+def _watch(limit: float) -> None:
+    """Bound the whole analyze command by wall clock."""
+
+    def stop() -> None:
+        time.sleep(limit)
+        sys.stderr.write(
+            "tilefoundry: error: analysis too complex, "
+            f"timed out after {limit:.0f}s\n"
+        )
+        sys.stderr.flush()
+        os._exit(1)
+
+    threading.Thread(target=stop, daemon=True).start()
 
 
 def guidance() -> str:
@@ -107,6 +127,7 @@ def run_authored_analysis(
     runs once on one view, and Metadata ownership keeps one family from changing
     another's records.
     """
+    _watch(_ANALYSIS_TIMEOUT_SECONDS)
     module = load_authored_ir(source)
     function = module.entry_function()
     stated = {} if dims is None else dims

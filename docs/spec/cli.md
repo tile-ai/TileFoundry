@@ -327,6 +327,11 @@ selected Module's resolved Target determines the hardware specification for an
 explicit analysis; there is no ordinary `--target` option.
 
 - constraints:
+  - The whole `analyze` command MUST have a 300-second wall-clock budget. On
+    expiry it MUST write `tilefoundry: error: analysis too complex, timed out
+    after 300s` to standard error, flush that message, and exit nonzero. This
+    budget is currently fixed and MUST NOT be exposed as a CLI flag or public
+    analysis option.
   - `analyze` MUST invoke the public operation once with every requested root,
     so their union dependency closure runs on one inlined Function view
     ([analysis §3](./analysis.md#3-composed-analysis)). Each closure member MUST
