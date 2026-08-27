@@ -10,6 +10,8 @@ extension point for sandbox tests or grouped dispatch.
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 from tilefoundry.ir.core.expr import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -41,26 +43,20 @@ class TypeInferVisitor(ExprVisitor[Type]):
     stale ``expr.type``.
     """
 
-    def __init__(self, ctx: TypeInferContext, *, memo=None) -> None:
+    def __init__(self, ctx: TypeInferContext, *, memo=None, owns_body: bool = True) -> None:
         super().__init__(ctx, memo=memo)
         self._visit_depth = 0
-        self._seed = tuple(self._memo.values()) if memo else ()
+        self._owns_body = owns_body
 
     def visit(self, expr: Expr) -> Type:
-        outermost = self._visit_depth == 0
-        saved = ()
-        if outermost and self._seed:
-            saved = tuple((node, node.type) for node, _type in self._seed)
-            for node, type_ in self._seed:
-                node.type = type_
         self._visit_depth += 1
         try:
-            return canonicalize_dims(super().visit(expr))
+            result = canonicalize_dims(super().visit(expr))
+            if self._owns_body:
+                expr.type = result
+            return result
         finally:
             self._visit_depth -= 1
-            if outermost:
-                for node, type_ in saved:
-                    node.type = type_
 
     def visit_leaf_Var(self, var: Var, _operands) -> Type:
         return var.annotation
@@ -79,7 +75,17 @@ class TypeInferVisitor(ExprVisitor[Type]):
         fn = typeinfer_registry.lookup(op_cls)
         if fn is None:
             self.ctx.error(call, f"no typeinfer registered for {op_cls.__name__}")
-        return fn(call, self.ctx)
+        bound_args = tuple(
+            replace(arg, type=self._memo[id(arg)][1])
+            if id(arg) in self._memo and self._memo[id(arg)][1] != arg.type
+            else arg
+            for arg in call.args
+        )
+        bound_call = (
+            call if all(left is right for left, right in zip(bound_args, call.args))
+            else replace(call, args=bound_args)
+        )
+        return fn(bound_call, self.ctx)
 
     def _call_function(self, call: Call, callee: Function, arg_types: tuple[Type, ...]) -> Type:
         child = self.ctx.child_for(callee)
@@ -122,7 +128,9 @@ class TypeInferVisitor(ExprVisitor[Type]):
 
         if callee.body is None or callee.variants:
             return callee.return_type
-        return TypeInferVisitor(self.ctx.for_callee(callee), memo=memo).visit(callee.body)
+        return TypeInferVisitor(
+            self.ctx.for_callee(callee), memo=memo, owns_body=False
+        ).visit(callee.body)
 
     def visit_leaf_Tuple(self, tup: Tuple, operands) -> Type:
         """Visit Tuple.
@@ -139,7 +147,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
             id(grid.induction_var): (grid.induction_var, grid.induction_var.annotation),
             **{id(phi): (phi, type_) for phi, type_ in zip(grid.carried_args, inits)},
         }
-        return inits, TypeInferVisitor(self.ctx, memo=memo)
+        return inits, TypeInferVisitor(self.ctx, memo=memo, owns_body=self._owns_body)
 
     def visit_leaf_GridRegionExpr(self, grid: GridRegionExpr, operands) -> Type:
         """Carry/body: a no-carry loop's value is its body.
