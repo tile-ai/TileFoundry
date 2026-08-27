@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 import isl
 
-from tilefoundry.ir.core import Call, Constant, Expr
+from tilefoundry.ir.core import Call, Constant, Expr, Var, binding_name
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
@@ -18,6 +18,7 @@ from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice, window_base
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shape_helpers import static_dim_value
@@ -31,7 +32,7 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
     renaming_relation,
 )
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
 from .visitor import StructuralMemo
 from .walk import loop_trip_count
@@ -444,6 +445,120 @@ def _without_parameters(walked: "isl.set") -> "isl.set":
     return walked if not count else walked.project_out(isl.dim_type.PARAM, 0, count)
 
 
+def _labels(fn: Function, structural_memo: StructuralMemo) -> dict[int, str]:
+    values = structural_memo.definition_order(fn)
+    order: list[Expr] = [
+        *fn.params,
+        *(expr for expr in values if isinstance(expr, (Call, Constant))),
+    ]
+    seen = {id(expr) for expr in order}
+    order.extend(expr for expr in values if id(expr) not in seen)
+    taken: set[str] = set()
+    labels: dict[int, str] = {}
+    for position, expr in enumerate(order):
+        base = expr.name if isinstance(expr, Var) else binding_name(expr) or f"<value {position}>"
+        name, suffix = base, 2
+        while name in taken:
+            name = f"{base}_{suffix}"
+            suffix += 1
+        taken.add(name)
+        labels[id(expr)] = name
+    return labels
+
+
+def _enclosing_loops(
+    call: Call,
+    loops: dict[int, GridRegionExpr],
+    structural_memo: StructuralMemo,
+) -> tuple[GridRegionExpr, ...]:
+    return tuple(
+        sorted(
+            (
+                loop
+                for loop in loops.values()
+                if structural_memo.scope(loop).is_variant(call)
+            ),
+            key=lambda loop: -structural_memo.node(loop).definition_index,
+        )
+    )
+
+
+def _collect(
+    module: Module, fn: Function, structural_memo: StructuralMemo, *, narrow: bool = True
+) -> tuple[
+    dict[int, GridRegionExpr],
+    dict[int, list[_Access]],
+    dict[int, list[Call]],
+]:
+    """Collect each directly owned Call's accesses and unavailable relation scopes."""
+    values = structural_memo.definition_order(fn)
+    loops = {id(expr): expr for expr in values if isinstance(expr, GridRegionExpr)}
+    labels = _labels(fn, structural_memo)
+    scope = FunctionScope(module, fn)
+    ctx = _RankPreserving(scope=scope) if narrow else TypeInferContext(scope=scope)
+    accesses: dict[int, list[_Access]] = {key: [] for key in loops}
+    unavailable: dict[int, list[Call]] = {key: [] for key in loops}
+    for call in (expr for expr in values if isinstance(expr, Call)):
+        path = _enclosing_loops(call, loops, structural_memo)
+        if not path or isinstance(call.target, (Slice, Reshape, TupleGetItem)):
+            continue
+        scope = id(path[-1])
+        try:
+            cases = _relation_cases(call, ctx, narrow=narrow)
+        except _Unavailable:
+            for loop in path:
+                unavailable[id(loop)].append(call)
+            continue
+        call_unavailable = False
+        for case in cases:
+            try:
+                domain = _loop_domain(case.domain, path)
+            except _Unavailable:
+                call_unavailable = True
+                break
+            depth = len(path)
+            for index, boundary in _touched(call, case.relations):
+                operand = call.args[index]
+                raw = relation_of(boundary.pattern)
+                local_type = case.local_types[index]
+                if raw.dim(isl.dim_type.OUT) == 0 or not isinstance(local_type, TensorType):
+                    continue
+                access = raw.insert_dims(isl.dim_type.IN, 0, depth)
+                try:
+                    access = _bind_parameters(
+                        access, boundary.pattern, path, local_type, domain, narrow=narrow
+                    )
+                    access = _within(access, local_type)
+                    elements = _one_pass(access, domain, depth)
+                    buffer, access = _source_buffer(
+                        operand, access, path, ctx, narrow=narrow
+                    )
+                    if not isinstance(buffer.type, TensorType):
+                        continue
+                except (NotImplementedError, TypeError, ValueError, isl.Error, _Unavailable):
+                    call_unavailable = True
+                    break
+                accesses[scope].append(
+                    _Access(
+                        buffer_id=id(buffer),
+                        buffer=labels[id(buffer)],
+                        level=str(buffer.type.storage),
+                        bit_width=buffer.type.dtype.bit_width,
+                        call=call,
+                        path=path,
+                        per_call_elements=elements,
+                        relation=access.intersect_domain(domain),
+                        domain=domain,
+                    )
+                )
+            if call_unavailable:
+                break
+        if call_unavailable:
+            for loop in path:
+                unavailable[id(loop)].append(call)
+    return loops, accesses, unavailable
+
+
 def _one_pass(access: isl.map, domain: isl.set, depth: int) -> int:
     """How many elements one iteration reaches, with every loop standing still.
 
@@ -553,6 +668,42 @@ def loop_footprints(
     module: Module, fn: Function, structural_memo: StructuralMemo
 ) -> dict[int, _LoopReading]:
     """Return each authored loop's known reading or best available lower bound."""
+    loops, accesses, unavailable = _collect(module, fn, structural_memo)
+    _, device_accesses, device_unavailable = _collect(
+        module, fn, structural_memo, narrow=False
+    )
+
+    readings: dict[int, _LoopReading] = {}
+    for loop_id, loop in loops.items():
+        local = _reading(
+            loop,
+            accesses,
+            known=not unavailable[loop_id],
+        )
+        device = _reading(
+            loop,
+            device_accesses,
+            known=not device_unavailable[loop_id],
+            validate_repeated=False,
+        )
+        local_rows = {(item.buffer, item.level): item for item in local.buffers}
+        device_rows = {(item.buffer, item.level): item for item in device.buffers}
+        keys = sorted(local_rows.keys() | device_rows.keys())
+        readings[loop_id] = _LoopReading(
+            buffers=tuple(
+                _BufferReading(
+                    buffer=buffer,
+                    level=level,
+                    bytes=(local_rows[key].bytes if key in local_rows else 0),
+                    device_bytes=(device_rows[key].bytes if key in device_rows else 0),
+                    repeated_bytes=(local_rows[key].repeated_bytes if key in local_rows else 0),
+                )
+                for key in keys
+                for buffer, level in (key,)
+            ),
+            known=local.known and device.known,
+        )
+    return readings
 
 
 __all__ = ["loop_footprints"]
