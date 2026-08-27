@@ -183,6 +183,7 @@ class TypeInferContext:
     scope: FunctionScope | None = None
     mesh_scope: tuple = ()
     call_feed_provider: object | None = None
+    _active_visitor: object | None = None
 
     def type_of(self, expr: Expr) -> Type: ...
     def local_type_of(self, expr: Expr) -> Type: ...

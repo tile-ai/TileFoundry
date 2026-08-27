@@ -1,6 +1,6 @@
 """Per-analysis Context dataclasses.
 
-TypeInferContext is the type-of-cache + unified error helper. VerifyContext
+TypeInferContext is the type-inference dispatch + unified error helper. VerifyContext
 extends it with a mesh scope stack. CostContext seeds recursive-local Cost
 Evaluators with the selected candidate's input/output Types.
 
@@ -56,7 +56,7 @@ class FunctionScope:
 
 @dataclass
 class TypeInferContext:
-    """Cache walk-local types and format type-inference errors.
+    """Track walk location and route type-inference queries.
 
     Derivation lives in ``TypeInferVisitor``. ``scope`` says where the walk is
     reading. ``mesh_scope`` carries enclosing scopes to statement verifiers
@@ -67,6 +67,7 @@ class TypeInferContext:
     scope: FunctionScope | None = None
     mesh_scope: tuple = ()
     call_feed_provider: object | None = None
+    _active_visitor: object | None = field(default=None, repr=False, compare=False)
 
     def scope_for(self, callee: object) -> FunctionScope | None:
         """Return the runtime scope in which *callee*'s body is read."""
@@ -85,7 +86,7 @@ class TypeInferContext:
         return child_module_of(self.scope.module, self.scope.function, callee)
 
     def type_of(self, expr: Expr) -> Type:
-        active = getattr(self, "_active_visitor", None)
+        active = self._active_visitor
         if active is not None:
             return active.visit(expr)
         from .visitors import TypeInferVisitor  # noqa: PLC0415

@@ -29,24 +29,32 @@ from .registries import (
 
 
 class TypeInferVisitor(ExprVisitor[Type]):
-    """The one typeinfer derivation rule per ``Expr`` kind.
+    """Derive one type for each ``Expr`` kind.
 
-    The one typeinfer derivation rule per ``Expr`` kind. [hir §1.1](docs/spec/hir.md#11-function),
+    See [hir §1.1](docs/spec/hir.md#11-function) and
     [visitor-registry §4](docs/spec/visitor-registry.md#4-instance-1--typeinfer).
 
-    ``TypeInferContext.type_of`` is the caller-facing cache + dispatch
-    entry; it constructs one of these per lookup and delegates to
-    ``visit(expr)``. There is no ``isinstance`` fallback — an ``Expr``
-    subclass with no ``visit_<Kind>`` here raises via ``default_visit``
-    rather than trusting a possibly-stale ``expr.type`` field.
+    ``TypeInferContext.type_of`` reuses the active visitor's memo; without an
+    active traversal, it creates one. A missing leaf raises through
+    ``default_visit_leaf`` rather than trusting a stale ``expr.type``.
     """
 
     def __init__(self, ctx: TypeInferContext, *, memo=None) -> None:
         super().__init__(ctx, memo=memo)
-        ctx._active_visitor = self
+        self._visit_depth = 0
 
     def visit(self, expr: Expr) -> Type:
-        return canonicalize_dims(super().visit(expr))
+        outermost = self._visit_depth == 0
+        previous = self.ctx._active_visitor if outermost else None
+        if outermost:
+            self.ctx._active_visitor = self
+        self._visit_depth += 1
+        try:
+            return canonicalize_dims(super().visit(expr))
+        finally:
+            self._visit_depth -= 1
+            if outermost:
+                self.ctx._active_visitor = previous
 
     def visit_leaf_Var(self, var: Var, _operands) -> Type:
         return var.annotation
@@ -64,13 +72,13 @@ class TypeInferVisitor(ExprVisitor[Type]):
             self.ctx.error(call, f"no typeinfer registered for {op_cls.__name__}")
         return fn(call, self.ctx)
 
-    def visit_leaf_Tuple(self, tup: Tuple, _operands) -> Type:
+    def visit_leaf_Tuple(self, tup: Tuple, operands) -> Type:
         """Visit Tuple.
 
         Structural: the field types of the (possibly just-elaborated)
         elements, never the node's own stamped ``.type`` ([hir §1.1](docs/spec/hir.md#11-function)).
         """
-        return TupleType(fields=tuple(self.ctx.type_of(e) for e in tup.elements))
+        return TupleType(fields=operands)
 
     def visit_operands(self, expr: Expr):
         if isinstance(expr, GridRegionExpr):
