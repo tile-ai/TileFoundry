@@ -56,7 +56,7 @@ def _axis(call: "Call", ctx: "TypeInferContext", rank: int) -> int:
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if not call.args:
         ctx.error(call, "Stack requires at least one input")
-    types = [a.type for a in call.args]
+    types = [ctx.type_of(a) for a in call.args]
     base = types[0]
     for index, t in enumerate(types[1:], start=1):
         if t.shape != base.shape:
@@ -112,7 +112,7 @@ def _stack_access(call: "Call", ctx) -> AccessRelations:
     every axis it has: borrowing an input's map would describe a value one axis
     short, pinned to whichever position that input landed at.
     """
-    stacked = tuple(call.args[0].type.shape)
+    stacked = tuple(ctx.type_of(call.args[0]).shape)
     rank = len(stacked) + 1
     axis = _axis(call, ctx, rank - 1)
     out_shape = (*stacked[:axis], len(call.args), *stacked[axis:])

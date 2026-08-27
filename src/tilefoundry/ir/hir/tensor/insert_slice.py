@@ -71,9 +71,9 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     rather than the container: how big it is and how much of it this occurrence
     wrote are different numbers, and the rest was already there.
     """
-    result = call.args[0].type
+    result = ctx.type_of(call.args[0])
     rank = len(result.shape)
-    update = call.args[1].type
+    update = ctx.type_of(call.args[1])
     offsets = _offset_axes(call, rank)
     complement, written = placed_window(
         offsets, tuple(update.shape), rank, within=tuple(result.shape)
@@ -106,7 +106,7 @@ def _check_axis(ax: int, dst_ext, upd_ext, off_expr, ctx, call) -> None:
     (``Constant``) offset must place an in-bounds, non-negative window. A
     runtime offset is deferred to the eval bounds guard.
     """
-    off_ty = off_expr.type
+    off_ty = ctx.type_of(off_expr)
     if off_ty.shape != ():
         ctx.error(
             call,
@@ -133,8 +133,8 @@ def _check_axis(ax: int, dst_ext, upd_ext, off_expr, ctx, call) -> None:
 
 @register_typeinfer(InsertSlice)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    dst_ty = call.args[0].type
-    upd_ty = call.args[1].type
+    dst_ty = ctx.type_of(call.args[0])
+    upd_ty = ctx.type_of(call.args[1])
     off_expr = call.args[2]
     rank = len(dst_ty.shape)
     if len(upd_ty.shape) != rank:
@@ -151,7 +151,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         for ax, off_el in enumerate(off_expr.elements):
             _check_axis(ax, dst_ty.shape[ax], upd_ty.shape[ax], off_el, ctx, call)
     else:
-        off_ty = off_expr.type
+        off_ty = ctx.type_of(off_expr)
         if len(off_ty.shape) != 0:
             ctx.error(
                 call,

@@ -38,13 +38,16 @@ class TypeInferVisitor(ExprVisitor[Type]):
     See [hir §1.1](docs/spec/hir.md#11-function) and
     [visitor-registry §4](docs/spec/visitor-registry.md#4-instance-1--typeinfer).
 
-    The visitor owns one identity memo for a complete inference traversal. A
+    The context owns one identity memo for the current inference scope. A
     missing leaf raises through ``default_visit_leaf`` rather than trusting a
     stale ``expr.type``.
     """
 
     def __init__(self, ctx: TypeInferContext, *, memo=None, owns_body: bool = True) -> None:
-        super().__init__(ctx, memo=memo)
+        if memo is not None:
+            ctx = replace(ctx, memo=dict(memo))
+        super().__init__(ctx, memo=ctx.memo)
+        self._memo = ctx.memo
         self._visit_depth = 0
         self._owns_body = owns_body
 
@@ -75,17 +78,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
         fn = typeinfer_registry.lookup(op_cls)
         if fn is None:
             self.ctx.error(call, f"no typeinfer registered for {op_cls.__name__}")
-        bound_args = tuple(
-            replace(arg, type=self._memo[id(arg)][1])
-            if id(arg) in self._memo and self._memo[id(arg)][1] != arg.type
-            else arg
-            for arg in call.args
-        )
-        bound_call = (
-            call if all(left is right for left, right in zip(bound_args, call.args))
-            else replace(call, args=bound_args)
-        )
-        return fn(bound_call, self.ctx)
+        return fn(call, self.ctx)
 
     def _call_function(self, call: Call, callee: Function, arg_types: tuple[Type, ...]) -> Type:
         child = self.ctx.child_for(callee)

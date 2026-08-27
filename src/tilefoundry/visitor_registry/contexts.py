@@ -73,6 +73,7 @@ class TypeInferContext:
     scope: FunctionScope | None = None
     mesh_scope: tuple = ()
     child_resolver: ChildModuleResolver | None = None
+    memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
 
     def child_for(self, callee: object):
         """Return the direct child module that owns *callee*, if any."""
@@ -94,7 +95,16 @@ class TypeInferContext:
 
     def for_callee(self, callee: object) -> TypeInferContext:
         """Move this context to *callee* while preserving its concrete class."""
-        return replace(self, scope=self.scope_for(callee))
+        return replace(self, scope=self.scope_for(callee), memo={})
+
+    def type_of(self, expr: Expr) -> Type:
+        """Read a bound type from this scope, falling back to the node type."""
+        hit = self.memo.get(id(expr))
+        return hit[1] if hit is not None else expr.type
+
+    def local_type_of(self, expr: Expr) -> Type:
+        """Read an expression type without topology projection."""
+        return self.type_of(expr)
 
     def error(self, node: Union[Expr, Stmt], msg: str) -> NoReturn:
         if isinstance(node, Call):
@@ -140,6 +150,10 @@ class CostContext(TypeInferContext):
     selected_output_type: Type | None = None
     level: str | None = None
     topologies: tuple[Topology, ...] = ()
+
+    def type_of(self, expr: Expr) -> Type:
+        selected = self.selected_types.get(id(expr))
+        return selected if selected is not None else super().type_of(expr)
 
     def local_type_of(self, expr: Expr) -> Type:
         """Return ``expr``'s Type in this context's topology window."""

@@ -48,11 +48,11 @@ class RoPE(Op):
 
 @register_typeinfer(RoPE)
 def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
-    q_ty = call.args[0].type
-    k_ty = call.args[1].type
-    cos_ty = call.args[2].type
-    sin_ty = call.args[3].type
-    pos_ty = call.args[4].type
+    q_ty = ctx.type_of(call.args[0])
+    k_ty = ctx.type_of(call.args[1])
+    cos_ty = ctx.type_of(call.args[2])
+    sin_ty = ctx.type_of(call.args[3])
+    pos_ty = ctx.type_of(call.args[4])
     if not q_ty.shape or not k_ty.shape:
         ctx.error(call, "q and k must be at least rank-1")
     head_dim_q = q_ty.shape[-1]
@@ -93,8 +93,8 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     value's head_dim coordinate and at any row those axes could name -- the row
     is an element of `pos_ids`, which nothing here holds, read whole by both.
     """
-    q_ty, k_ty = call.args[0].type, call.args[1].type
-    logical_q = call.args[0].type
+    q_ty, k_ty = ctx.type_of(call.args[0]), ctx.type_of(call.args[1])
+    logical_q = ctx.type_of(call.args[0])
     rank = len(q_ty.shape)
     head_dim = len(logical_q.shape) - 1
     carried = logical_coordinates(q_ty, logical_q)
@@ -106,11 +106,11 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     if narrower is not None:
         grouped = grouped.intersect_range(narrower)
     value, grouped = AffineAccess(value), AffineAccess(grouped)
-    positions = call.args[4].type
+    positions = ctx.type_of(call.args[4])
     tables = []
     for operand in (2, 3):
-        table = call.args[operand].type
-        logical_table = call.args[operand].type
+        table = ctx.type_of(call.args[operand])
+        logical_table = ctx.type_of(call.args[operand])
         rows = len(logical_table.shape) - 1
         tables.append(
             BoundaryRelation(reached_at(
@@ -131,9 +131,9 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
                 BoundaryRelation(reached_at(
                         rank + 1,
                         positions,
-                        call.args[4].type,
+                        ctx.type_of(call.args[4]),
                         {},
-                        free=tuple(range(len(call.args[4].type.shape))),
+                        free=tuple(range(len(ctx.type_of(call.args[4]).shape))),
                     )),
             ),
             outputs=(

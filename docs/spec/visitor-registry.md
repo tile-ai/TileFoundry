@@ -187,10 +187,13 @@ class TypeInferContext:
     scope: FunctionScope | None = None
     mesh_scope: tuple = ()
     child_resolver: ChildModuleResolver | None = None
+    memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
 
     def child_for(self, callee: Function) -> Module | None: ...
     def scope_for(self, callee: Function) -> FunctionScope | None: ...
     def for_callee(self, callee: Function) -> TypeInferContext: ...
+    def type_of(self, expr: Expr) -> Type: ...
+    def local_type_of(self, expr: Expr) -> Type: ...
     def error(self, node: Expr | Stmt, msg: str) -> NoReturn: ...
 ```
 
@@ -209,7 +212,13 @@ nothing of that kind rather than guessing.
     collected `Module` tree can answer `child_for(callee)` itself.
   - Crossing a Function boundary uses `dataclasses.replace` so a context
     subclass retains its analysis-specific state.
-  - Type memory belongs to the visitor memo. Contexts do not infer types on demand.
+  - `memo` is the current scope's identity-pinned type table. Crossing a
+    Function boundary creates a fresh context table; a region keeps its scope
+    and seeds a nested visitor table from the enclosing one.
+  - `type_of` only looks up `memo` and otherwise returns `expr.type`; it never
+    starts a traversal or infers a type on demand.
+  - `local_type_of` is the same read in a context without a topology window;
+    contexts with a window override it to project the read type.
 
 Registry + decorator:
 
@@ -249,7 +258,8 @@ class TypeInferVisitor(ExprVisitor[Type]):
     than trusting a possibly-stale `Expr.type` field.
   - `visit_leaf_Call` branches on its target. An `Op` looks up
     `typeinfer_registry.lookup(type(target))`; an unregistered Op routes through
-    `ctx.error`. A `Function` binds parameters into a new visitor memo and walks
+    `ctx.error`. Handlers read operand types through `ctx.type_of`, which sees
+    the current scope's memo bindings. A `Function` binds parameters into a new visitor memo and walks
     its body in a replaced child context ([hir §1.1](./hir.md#11-function)).
   - `visit_leaf_Tuple` derives a structural `TupleType` directly from its
     already-derived operands, never the Tuple node's stamped `.type`.
@@ -261,7 +271,8 @@ class TypeInferVisitor(ExprVisitor[Type]):
 Lifecycle: parser builds a `TypeInferContext` and infers each newly built call
 at parse time (see [parser](./parser.md)). The analysis preflight then walks
 each authored body in postorder and writes every `Expr.type` in place before
-consumers run. Contexts never infer a type on demand; visitors own their memo.
+consumers run. The visitor and its context share the current scope's memo;
+`type_of` is a constant-time lookup used to expose bindings to handlers.
 
 ### 4.1 Access relation service — `access_relation`
 

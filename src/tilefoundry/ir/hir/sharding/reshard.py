@@ -177,7 +177,7 @@ def _reshard_access(call: "Call", ctx) -> AccessRelations:
     from, so the boundary is exactly identity and never opaque. Which positions
     those indices are is the reader's question, not this one's.
     """
-    logical = call.args[0].type
+    logical = ctx.type_of(call.args[0])
     rank = len(logical.shape)
     reads = identity_access(rank)
     return iterating(
@@ -193,7 +193,7 @@ def _reshard_access(call: "Call", ctx) -> AccessRelations:
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if not call.args:
         ctx.error(call, "missing required input 'x'")
-    x_ty = call.args[0].type
+    x_ty = ctx.type_of(call.args[0])
     op = call.target
     if op.storage is StorageKind.UMAT:
         ctx.error(

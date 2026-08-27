@@ -161,7 +161,7 @@ def _canonical_shard(sl: "ShardLayout", out_shape) -> "ShardLayout":
 
 @register_typeinfer(TopK)
 def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
-    x_ty = call.args[0].type
+    x_ty = ctx.type_of(call.args[0])
     if not x_ty.shape:
         ctx.error(call, "x must be at least rank-1")
     rank = len(x_ty.shape)
@@ -227,7 +227,7 @@ def _topk_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
     ``k`` positions produced and the coordinate scanned to produce them. The
     result projects the first; the source reads the second.
     """
-    x_ty = call.args[0].type
+    x_ty = ctx.type_of(call.args[0])
     rank = len(x_ty.shape)
     axis = call.target.axis
     if axis < 0:

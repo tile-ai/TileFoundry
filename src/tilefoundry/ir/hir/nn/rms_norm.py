@@ -47,8 +47,8 @@ class RMSNorm(Op):
 
 @register_typeinfer(RMSNorm)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x_ty = call.args[0].type
-    w_ty = call.args[1].type
+    x_ty = ctx.type_of(call.args[0])
+    w_ty = ctx.type_of(call.args[1])
 
     if len(x_ty.shape) < 1:
         ctx.error(call, f"x must be rank ≥ 1, got shape {x_ty.shape}")
@@ -73,9 +73,9 @@ def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
     and the row is what each boundary reaches. The weight matches that axis and
     nothing else, so every row reaches all of it -- one weight element each.
     """
-    x_ty = call.args[0].type
-    w_ty = call.args[1].type
-    logical_x = call.args[0].type
+    x_ty = ctx.type_of(call.args[0])
+    w_ty = ctx.type_of(call.args[1])
+    logical_x = ctx.type_of(call.args[0])
     normalised = len(logical_x.shape) - 1
     rows, names, guards = normalised_rows(x_ty, logical_x, normalised)
     domain = ", ".join(f"d{index}" for index in range(len(rows)))
@@ -85,7 +85,7 @@ def _rms_norm_relation(call: "Call", ctx) -> AccessRelations:
         factored_image(
             [logical_term(names, x_ty, logical_x, normalised)],
             w_ty,
-            call.args[1].type,
+            ctx.type_of(call.args[1]),
         )
     )
     return iterating(

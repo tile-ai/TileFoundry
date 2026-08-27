@@ -16,6 +16,7 @@ from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import ShardLayout, Split, product
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 _ATOM = make_atom(SM80_16x8x16_F32BF16BF16F32_TN)
 A_FRAG_SHARD = _ATOM.A
@@ -82,7 +83,7 @@ def _assert_reshard_typeinfer_ok(
 
     call = Call(type=src_ty, target=op, args=(src,))
     ctx = TypeInferContext()
-    out_ty = ctx.type_of(call)
+    out_ty = TypeInferVisitor(ctx).visit(call)
     assert isinstance(out_ty, TensorType), f"expected TensorType, got {out_ty}"
     assert out_ty.layout is dst_layout, "output layout must reference the rank-5 ShardLayout"
 

@@ -45,7 +45,7 @@ class ArgMax(Op):
 
 @register_typeinfer(ArgMax)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x_ty = call.args[0].type
+    x_ty = ctx.type_of(call.args[0])
     if not x_ty.shape:
         ctx.error(call, "x must be at least rank-1")
     rank = len(x_ty.shape)
@@ -110,7 +110,7 @@ def _argmax_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRela
     reduced axis is the whole of what this does. The result names one fewer of
     them, which is the collapse.
     """
-    x_ty = call.args[0].type
+    x_ty = ctx.type_of(call.args[0])
     rank = len(x_ty.shape)
     axis = call.target.axis
     if axis < 0:

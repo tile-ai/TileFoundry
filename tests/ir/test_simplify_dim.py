@@ -229,7 +229,7 @@ def test_a_fully_static_dim_has_one_canonical_int_representation() -> None:
         type=TupleType(fields=(TensorType.scalar(DType.i64),) * 4),
         elements=(_i64(0), _i64(0), _i64(0), _i64(0)),
     )
-    sliced = TypeInferContext().type_of(
+    sliced = TypeInferVisitor(TypeInferContext()).visit(
         Call(
             type=TensorType.scalar(DType.bf16),
             target=Slice(sizes=(1, 4, 32, 128), strides=(1, 1, 1, 1)),
@@ -275,7 +275,7 @@ def test_unary_propagates_dim_var_in_shape() -> None:
     in_ty = TensorType(shape=(s, 8), dtype=DType.f32, layout=None, storage="gmem")
     x = Var(type=in_ty, name="x")
     call = Call(type=in_ty, target=Unary(kind=UnaryKind.NEG), args=(x,))
-    out_ty = TypeInferContext().type_of(call)
+    out_ty = TypeInferVisitor(TypeInferContext()).visit(call)
     assert out_ty.shape == (s, 8)
 
     assert out_ty.shape[0] is s

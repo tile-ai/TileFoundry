@@ -75,7 +75,7 @@ def _concat_access(call: "Call", ctx) -> AccessRelations:
     The segments are the same arithmetic the forward relation states, so the two
     cannot drift: one offset walk, one guard per input.
     """
-    types = [arg.type for arg in call.args]
+    types = [ctx.type_of(arg) for arg in call.args]
     rank = len(types[0].shape)
     axis = _axis(call, ctx, rank)
     extents = tuple(type_.shape[axis] for type_ in types)
@@ -139,7 +139,7 @@ def _reject_concat_axis_splits(call, ctx, types, axis: int) -> None:
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if not call.args:
         ctx.error(call, "Concat requires at least one input")
-    types = [a.type for a in call.args]
+    types = [ctx.type_of(a) for a in call.args]
     base = types[0]
     axis = _axis(call, ctx, len(base.shape))
     for index, t in enumerate(types[1:], start=1):

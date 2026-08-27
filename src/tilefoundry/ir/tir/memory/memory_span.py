@@ -23,4 +23,4 @@ class MemorySpan(Op):
 
 @register_typeinfer(MemorySpan)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    return call.args[0].type
+    return ctx.type_of(call.args[0])

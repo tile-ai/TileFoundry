@@ -143,7 +143,7 @@ def _result_layouts(call, ctx, x_ty, scale_shape, group: int):
 
 @register_typeinfer(Quant)
 def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
-    x_ty = call.args[0].type
+    x_ty = ctx.type_of(call.args[0])
     if not x_ty.shape:
         ctx.error(call, "x must be at least rank-1")
 
@@ -226,7 +226,7 @@ def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelat
     - output ``x_scale`` reduces over the in-group offset (last dim divided by
       ``group``); expressed as an isl map ``[..., j] -> [..., j // group]``.
     """
-    x_ty = call.args[0].type
+    x_ty = ctx.type_of(call.args[0])
     rank = len(x_ty.shape)
     group = call.target.group
 

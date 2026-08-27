@@ -57,9 +57,9 @@ def _reject_normalized_splits(call, ctx, name, type_, first_axis: int) -> None:
 
 @register_typeinfer(LayerNorm)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x_ty = call.args[0].type
-    weight_ty = call.args[1].type
-    bias_ty = call.args[2].type
+    x_ty = ctx.type_of(call.args[0])
+    weight_ty = ctx.type_of(call.args[1])
+    bias_ty = ctx.type_of(call.args[2])
     axis = _normalized_axis(call, ctx, len(x_ty.shape))
     normalized_shape = x_ty.shape[axis:]
     for name, affine_ty in (("weight", weight_ty), ("bias", bias_ty)):
@@ -115,7 +115,7 @@ def _layer_norm_access(call: "Call", ctx) -> AccessRelations:
     axis, so
     their footprint is the suffix's product in every view.
     """
-    x = call.args[0].type
+    x = ctx.type_of(call.args[0])
     authored = call.target.axis
     axis = authored + len(x.shape) if authored < 0 else authored
     rows, names, guards = normalised_rows(x, x, axis)

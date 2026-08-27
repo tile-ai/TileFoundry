@@ -13,7 +13,6 @@ from typing import Callable
 
 import isl
 
-from tilefoundry.ir.core import Expr
 from tilefoundry.ir.hir._helpers import is_one
 from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
 from tilefoundry.ir.types.dim_isl import to_dim, to_domain
@@ -21,12 +20,6 @@ from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis
 
 from .registries import AnalysisRegistry
-
-
-def _local_expr_type(ctx, expr: Expr) -> Type:
-    """Read a context's projected type, or the authored type without inference."""
-    method = getattr(ctx, "local_type_of", None)
-    return method(expr) if method is not None else expr.type
 
 
 @dataclass(frozen=True)
@@ -206,9 +199,9 @@ def projected(relations: AccessRelations, call, ctx) -> AccessRelations:
     same ones: a value nobody sharded is addressed whole by everyone, so left
     alone it would charge one participant the whole of what all of them read.
     """
-    held = _local_expr_type(ctx, call)
+    held = ctx.local_type_of(call)
     fields = held.fields if isinstance(held, TupleType) else (held,)
-    logical = call.type
+    logical = ctx.type_of(call)
     logical_fields = logical.fields if isinstance(logical, TupleType) else (logical,)
     bindings = parameters_of(relations)
 
@@ -219,7 +212,7 @@ def projected(relations: AccessRelations, call, ctx) -> AccessRelations:
                 logical_fields[index] if index < len(logical_fields) else None,
             )
         arg = call.args[index]
-        return _local_expr_type(ctx, arg), arg.type
+        return ctx.local_type_of(arg), ctx.type_of(arg)
 
     placed = {
         side: tuple(
@@ -342,7 +335,7 @@ def renaming_relation(call, ctx) -> "AffineAccess":
     how one relation answers dependence, footprint and movement alike.
     """
     relations = relations_of(call, ctx)
-    if isinstance(call.args[0].type, TupleType):
+    if isinstance(ctx.type_of(call.args[0]), TupleType):
         raise ValueError(
             f"{type(call.target).__name__} renames a field of a tuple, which is "
             "one leaf of it rather than a coordinate change to fold"
@@ -506,7 +499,7 @@ def relations_of(call, ctx) -> AccessRelations:
     """
     op_cls = type(call.target)
     relations = projected(coordinates_of(call, ctx), call, ctx)
-    result = _local_expr_type(ctx, call)
+    result = ctx.local_type_of(call)
     wanted = len(result.fields) if isinstance(result, TupleType) else 1
     if len(relations.outputs) != wanted:
         raise ValueError(
@@ -868,10 +861,10 @@ def _control_space(rank: int, ctx, arg) -> "tuple[str, str, str]":
     its own view gives it.
     """
     domain = ", ".join(f"d{index}" for index in range(rank))
-    stated = arg.type
+    stated = ctx.type_of(arg)
     if isinstance(stated, TupleType):
         return domain, "l", f"0 <= l < {control_leaves(stated)}"
-    held = _local_expr_type(ctx, arg)
+    held = ctx.local_type_of(arg)
     return domain, ", ".join("0" for _ in range(len(getattr(held, "shape", ()) or ()))), ""
 
 
@@ -1079,11 +1072,11 @@ def measures_without_reading(call, ctx) -> AccessRelations:
     empty map, nothing crossing -- rather than an identity claiming a read the
     Op never performs.
     """
-    result = call.args[0].type if call.args else None
+    result = ctx.type_of(call.args[0]) if call.args else None
     out_rank = len(result.shape) if hasattr(result, "shape") else 0
 
     def _empty(arg) -> "AffineAccess":
-        type_ = arg.type
+        type_ = ctx.type_of(arg)
         in_rank = len(type_.shape) if hasattr(type_, "shape") else 0
         reads = ", ".join(f"i{index}" for index in range(in_rank))
         domain = ", ".join(f"d{index}" for index in range(out_rank))
@@ -1157,7 +1150,7 @@ def view_relations(
     """
 
     def _handler(call, ctx) -> AccessRelations:
-        held = call.args[source].type
+        held = ctx.type_of(call.args[source])
         taken = 0 if field is None else (field(call, ctx) or 0)
         result = _field_of(held, taken)
         out_rank = len(result.shape) if hasattr(result, "shape") else 0
@@ -1206,11 +1199,11 @@ def identity_relations(n_inputs: int) -> Callable[..., AccessRelations]:
     """
 
     def _handler(call, ctx) -> AccessRelations:
-        walked = call.args[0].type
+        walked = ctx.type_of(call.args[0])
         out_rank = len(walked.shape)
 
         def _rank_of(arg) -> int:
-            ty = arg.type
+            ty = ctx.type_of(arg)
             return len(ty.shape) if hasattr(ty, "shape") else out_rank
 
         return iterating(

@@ -88,8 +88,8 @@ def _index_select_shard_layout(call, ctx, x_ty, dim: int, out_shape: tuple):
 
 @register_typeinfer(IndexSelect)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x_ty = call.args[0].type
-    index_ty = call.args[1].type
+    x_ty = ctx.type_of(call.args[0])
+    index_ty = ctx.type_of(call.args[1])
     if len(index_ty.shape) != 1:
         ctx.error(call, f"index must be 1-D, got shape {index_ty.shape}")
     if index_ty.dtype not in (DType.i32, DType.i64):
@@ -114,7 +114,7 @@ def _index_select_access_relation(call: "Call", ctx) -> AccessRelations:
     lives in the index, not here. The index itself is read at the coordinate the
     result reached, one element per selected slice.
     """
-    source_ty, index_ty = call.args[0].type, call.args[1].type
+    source_ty, index_ty = ctx.type_of(call.args[0]), ctx.type_of(call.args[1])
     logical_source, logical_index = source_ty, index_ty
     axis = _norm_dim(call.target.dim, len(source_ty.shape))
     out_shape = (

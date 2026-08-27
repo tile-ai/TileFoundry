@@ -28,7 +28,7 @@ register_access_relation(Cast)(identity_relations(1))
 
 @register_typeinfer(Cast)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x_ty = call.args[0].type
+    x_ty = ctx.type_of(call.args[0])
     new_layout = x_ty.layout
     if shard_layout_of(x_ty.layout) is not None:
         relation = coordinates_of(call, ctx)

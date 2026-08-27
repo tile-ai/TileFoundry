@@ -28,7 +28,7 @@ class ReLU(Op):
 
 @register_typeinfer(ReLU)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x_ty = call.args[0].type
+    x_ty = ctx.type_of(call.args[0])
     reject_partials(ctx, call, "x", x_ty.layout, commutes_with=_COMMUTES_WITH)
     return x_ty
 

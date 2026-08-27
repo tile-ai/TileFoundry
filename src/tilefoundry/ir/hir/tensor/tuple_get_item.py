@@ -36,7 +36,7 @@ register_access_relation(TupleGetItem)(
 
 @register_typeinfer(TupleGetItem)
 def _(call: "Call", ctx: "TypeInferContext"):
-    tup_ty = call.args[0].type
+    tup_ty = ctx.type_of(call.args[0])
     if not isinstance(tup_ty, TupleType):
         ctx.error(call, "TupleGetItem on non-TupleType")
     idx = call.target.index

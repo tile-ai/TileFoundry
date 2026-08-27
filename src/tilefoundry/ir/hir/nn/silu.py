@@ -30,7 +30,7 @@ class Silu(Op):
 
 @register_typeinfer(Silu)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x_ty = call.args[0].type
+    x_ty = ctx.type_of(call.args[0])
 
     reject_partials(ctx, call, "x", x_ty.layout)
     return x_ty

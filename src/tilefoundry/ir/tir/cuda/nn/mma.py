@@ -54,9 +54,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 @register_verify_stmt(Mma)
 def _(call: "Call", ctx: "VerifyContext") -> None:
-    acc_ty = call.args[0].type
-    lhs_ty = call.args[1].type
-    rhs_ty = call.args[2].type
+    acc_ty = ctx.type_of(call.args[0])
+    lhs_ty = ctx.type_of(call.args[1])
+    rhs_ty = ctx.type_of(call.args[2])
 
     if len(lhs_ty.shape) == 2 and len(rhs_ty.shape) == 2 and len(acc_ty.shape) == 2:
         m, k_l = lhs_ty.shape[-2], lhs_ty.shape[-1]

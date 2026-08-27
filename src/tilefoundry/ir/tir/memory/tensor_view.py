@@ -37,7 +37,7 @@ class TensorView(Op):
 
 @register_typeinfer(TensorView)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    src_ty = call.args[0].type
+    src_ty = ctx.type_of(call.args[0])
     op = call.target
     new_layout = op.layout
     new_shape = op.shape if op.shape is not None else src_ty.shape

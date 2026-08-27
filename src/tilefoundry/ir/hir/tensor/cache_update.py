@@ -99,8 +99,8 @@ def _cache_update_access(call: "Call", ctx) -> AccessRelations:
     Everything is said in the cache's own axes: which positions those are is the
     reader's question, and answering it here would be answering it twice.
     """
-    cache = tuple(call.args[0].type.shape)
-    logical_new = call.args[3].type
+    cache = tuple(ctx.type_of(call.args[0]).shape)
+    logical_new = ctx.type_of(call.args[3])
     supplied = tuple(logical_new.shape)
     rank = len(cache)
     rows = _rows(call.args[2])
@@ -145,10 +145,10 @@ def _is_scalar(shape) -> bool:
 
 @register_typeinfer(CacheUpdate)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    cache_ty = call.args[0].type
-    cur_ty = call.args[1].type
-    s_ty = call.args[2].type
-    new_ty = call.args[3].type
+    cache_ty = ctx.type_of(call.args[0])
+    cur_ty = ctx.type_of(call.args[1])
+    s_ty = ctx.type_of(call.args[2])
+    new_ty = ctx.type_of(call.args[3])
     if len(cache_ty.shape) != 4 or len(new_ty.shape) != 4:
         ctx.error(call, "cache and new must be rank-4 [B, len, kv_heads, head_dim]")
     if cache_ty.dtype != new_ty.dtype:

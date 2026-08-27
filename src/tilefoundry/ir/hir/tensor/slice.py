@@ -175,7 +175,7 @@ def _slice_view(call: "Call", ctx) -> tuple:
     inside what it reads, whichever of its extent, size, stride and start turn out
     to be numbers.
     """
-    logical_source = call.args[0].type
+    logical_source = ctx.type_of(call.args[0])
     given = call.args[1]
     offsets = given.elements if isinstance(given, Tuple) else (given,)
     sizes, strides = tuple(call.target.sizes), tuple(call.target.strides)
@@ -378,7 +378,7 @@ def _slice_shard_layout(call, ctx, x_ty, source, starts, inherited_offset):
 
 @register_typeinfer(Slice)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x_ty = call.args[0].type
+    x_ty = ctx.type_of(call.args[0])
     starts = call.args[1]
     op = call.target
     rank = len(x_ty.shape)
@@ -387,7 +387,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if not (len(op.sizes) == len(op.strides) == rank):
         ctx.error(call, f"Slice sizes/strides rank must match input rank {rank}")
     for axis, start in enumerate(starts.elements):
-        start_ty = start.type
+        start_ty = ctx.type_of(start)
         if start_ty.shape != () or start_ty.dtype.name not in ("i32", "i64"):
             ctx.error(call, f"Slice start for axis {axis} must be a rank-0 integer")
     for axis, size in enumerate(op.sizes):

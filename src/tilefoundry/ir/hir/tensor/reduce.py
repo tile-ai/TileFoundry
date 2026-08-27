@@ -51,7 +51,7 @@ def _reduced_axes(call: "Call", rank: int) -> tuple:
 
 @register_typeinfer(Reduce)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x_ty = call.args[0].type
+    x_ty = ctx.type_of(call.args[0])
     kind = call.target.kind
 
     commutes_with = (
@@ -166,7 +166,7 @@ def _reduce_access(call: "Call", ctx) -> AccessRelations:
     correspondence to the result comes from both layouts, since a result
     coordinate names a logical axis and not a position.
     """
-    source = call.args[0].type
+    source = ctx.type_of(call.args[0])
     rank = len(source.shape)
     axes = tuple(
         axis + rank if axis < 0 else axis for axis in call.target.axes

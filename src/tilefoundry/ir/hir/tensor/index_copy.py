@@ -68,17 +68,17 @@ def _index_copy_access(call: "Call", ctx) -> AccessRelations:
     where the destination's is `index[i]`, so from here it too is a row nobody
     named, and reaching all of them is the payload.
     """
-    dst = call.args[0].type
-    index = call.args[1].type
-    src = call.args[2].type
-    logical_dst = call.args[0].type
+    dst = ctx.type_of(call.args[0])
+    index = ctx.type_of(call.args[1])
+    src = ctx.type_of(call.args[2])
+    logical_dst = ctx.type_of(call.args[0])
     rank = len(dst.shape)
     dim = call.target.dim + rank if call.target.dim < 0 else call.target.dim
     identity = identity_access(rank)
     carried = logical_coordinates(dst, logical_dst)
     rows = reached_at(rank, dst, logical_dst, carried, free=(dim,))
-    named = reached_at(rank, index, call.args[1].type, {}, free=(0,))
-    payload = reached_at(rank, src, call.args[2].type, carried, free=(dim,))
+    named = reached_at(rank, index, ctx.type_of(call.args[1]), {}, free=(0,))
+    payload = reached_at(rank, src, ctx.type_of(call.args[2]), carried, free=(dim,))
     return iterating(
         dst.shape,
     AccessRelations(

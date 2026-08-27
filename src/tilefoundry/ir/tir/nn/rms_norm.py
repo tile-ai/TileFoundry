@@ -33,9 +33,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 @register_verify_stmt(RMSNorm)
 def _(call: "Call", ctx: "VerifyContext") -> None:
-    src_ty = call.args[0].type
-    dst_ty = call.args[1].type
-    w_ty = call.args[2].type
+    src_ty = ctx.type_of(call.args[0])
+    dst_ty = ctx.type_of(call.args[1])
+    w_ty = ctx.type_of(call.args[2])
 
     if src_ty.shape != dst_ty.shape:
         ctx.error(

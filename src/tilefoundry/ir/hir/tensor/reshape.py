@@ -38,7 +38,7 @@ def _reshape_view(call: "Call", ctx) -> tuple:
     """Where a result coordinate sits in the source it was renamed from."""
     out_shape = tuple(call.target.new_shape)
     return (
-        linearized_view(out_shape, tuple(call.args[0].type.shape)),
+        linearized_view(out_shape, tuple(ctx.type_of(call.args[0]).shape)),
         identity_access(len(out_shape)),
     )
 
@@ -170,7 +170,7 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
 
 @register_typeinfer(Reshape)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    x_ty = call.args[0].type
+    x_ty = ctx.type_of(call.args[0])
     new_shape = tuple(call.target.new_shape)
 
     genuine_sharding = isinstance(x_ty.layout, ShardLayout) and any(

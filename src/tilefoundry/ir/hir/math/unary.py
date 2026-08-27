@@ -52,7 +52,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     op = call.target
     if not isinstance(op.kind, UnaryKind):
         ctx.error(call, f"Unary: kind must be UnaryKind, got {type(op.kind)}")
-    x_ty = call.args[0].type
+    x_ty = ctx.type_of(call.args[0])
     if op.kind is UnaryKind.NOT and x_ty.dtype != DType.bool:
         ctx.error(call, "Unary NOT: operand must be bool")
     if op.kind in _MONOTONE_INCREASING:

@@ -122,8 +122,8 @@ def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
     extent. Which positions any of these coordinates are is the reader's
     question; the result's own extents follow from the operands.
     """
-    lhs = call.args[0].type
-    rhs = call.args[1].type
+    lhs = ctx.type_of(call.args[0])
+    rhs = ctx.type_of(call.args[1])
     a_m, a_k, b_n, b_k = matmul_axes(call.target)
     batch = _broadcast_batch(lhs.shape[:-2], rhs.shape[:-2])
     if batch is None:
@@ -174,8 +174,8 @@ def _elements(shape: tuple) -> int:
 
 @register_typeinfer(MatMul)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    lhs = call.args[0].type
-    rhs = call.args[1].type
+    lhs = ctx.type_of(call.args[0])
+    rhs = ctx.type_of(call.args[1])
     try:
         a_m, a_k, b_n, b_k = matmul_axes(call.target)
     except ValueError as error:
