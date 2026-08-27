@@ -349,11 +349,11 @@ def register_access_relation(op_cls: type): ...
 
 ## 5. Instance 2 — `verify`
 
-Context (extends `TypeInferContext` to share the type-of cache):
+Context (extends `TypeInferContext` with the active mesh stack):
 
 ```python
 @dataclass
-class VerifyContext(TypeInferContext):   # inherits scope / cache / type_of
+class VerifyContext(TypeInferContext):   # inherits scope / mesh_scope / type_of
     """Type inference context extended with the active mesh stack.
 
     Attributes:
