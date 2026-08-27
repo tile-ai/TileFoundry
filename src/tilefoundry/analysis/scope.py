@@ -30,7 +30,7 @@ from .errors import AnalysisError
 from .footprint import _local_type, _widest_allowed
 from .metadata import BufferFootprint, LoopFootprintMetadata
 from .poly.affine import loop_affine_term
-from .visitor import StructuralMemo, StructuralMemoVisitor
+from .walk import children
 
 
 @dataclass(frozen=True)
@@ -182,20 +182,6 @@ def _domain_for(owner: Function | GridRegionExpr, parent: Scope | None) -> isl.s
     return isl.set(f"{prefix}{{ [{names}] : {' and '.join(bounds)} }}")
 
 
-def _scope_tree(memo: StructuralMemo, graph: Function) -> tuple[Scope, dict[int, Scope]]:
-    by_owner: dict[int, Scope] = {}
-
-    def build(owner: Function | GridRegionExpr, parent: Scope | None) -> Scope:
-        domain = _domain_for(owner, parent)
-        scope = Scope(owner, parent, (), 0 if parent is None else parent.depth + 1, domain)
-        by_owner[id(owner)] = scope
-        children = tuple(build(child.owner, scope) for child in memo.scope(owner).children)
-        scope.children = children
-        return scope
-
-    return build(graph, None), by_owner
-
-
 def _bind_access(
     call: Call,
     operand: Expr,
@@ -236,13 +222,21 @@ def _bind_access(
         else:
             term = type("Term", (), {"loop_axis": None, "stride": 0, "low": number, "high": number})()
         local = isl.local_space.from_space(relation.get_space())
-        constraint = isl.constraint.alloc_equality(local)
-        constraint = constraint.set_coefficient_si(isl.dim_type.PARAM, 0, 1)
-        if term.loop_axis is not None:
-            constraint = constraint.set_coefficient_si(
-                isl.dim_type.IN, term.loop_axis, -term.stride
-            )
-        relation = relation.add_constraint(constraint.set_constant_si(-term.low))
+
+        def placed(kind: str, sign: int, constant: int) -> isl.constraint:
+            constraint = getattr(isl.constraint, f"alloc_{kind}")(local)
+            constraint = constraint.set_coefficient_si(isl.dim_type.PARAM, 0, sign)
+            if term.loop_axis is not None:
+                constraint = constraint.set_coefficient_si(
+                    isl.dim_type.IN, term.loop_axis, -sign * term.stride
+                )
+            return constraint.set_constant_si(constant)
+
+        if term.low == term.high:
+            relation = relation.add_constraint(placed("equality", 1, -term.low))
+        else:
+            relation = relation.add_constraint(placed("inequality", 1, -term.low))
+            relation = relation.add_constraint(placed("inequality", -1, term.high))
         relation = relation.project_out(isl.dim_type.PARAM, 0, 1)
     held = _local_type(operand.type) if narrow else operand.type
     box = index_set(tuple(held.shape)) if isinstance(held, TensorType) else None
@@ -262,33 +256,55 @@ def build_scopes(
     views: Sequence[str] = ("narrow", "device"),
 ) -> Scope:
     """Build the scope tree and both access views in one normalized walk."""
-    memo = StructuralMemoVisitor().build(graph)
-    root, by_owner = _scope_tree(memo, graph)
+    by_owner: dict[int, Scope] = {}
+    calls: list[tuple[Call, Scope]] = []
+    seen: set[int] = set()
+
+    def visit(expr: Expr, scope: Scope) -> None:
+        if id(expr) in seen:
+            return
+        seen.add(id(expr))
+        if isinstance(expr, GridRegionExpr):
+            for operand in expr.init_args:
+                visit(operand, scope)
+            child = Scope(expr, scope, (), scope.depth + 1, _domain_for(expr, scope))
+            by_owner[id(expr)] = child
+            scope.children = (*scope.children, child)
+            visit(expr.body, child)
+            for operand in expr.yield_values:
+                visit(operand, child)
+            return
+        if isinstance(expr, Call):
+            calls.append((expr, scope))
+        for operand in children(expr):
+            visit(operand, scope)
+
+    root = Scope(graph, None, (), 0, _domain_for(graph, None))
+    by_owner[id(graph)] = root
+    for param in graph.params:
+        visit(param, root)
+    if graph.body is not None:
+        visit(graph.body, root)
     type_ctx = TypeInferContext(scope=FunctionScope(module, graph))
-    for fn_scope in (scope for scope in by_owner.values() if isinstance(scope.owner, Function)):
-        for expr in memo.definition_order(fn_scope.owner):
-            if not isinstance(expr, Call):
-                continue
-            if isinstance(expr.target, Function) or access_relation_registry.lookup(type(expr.target)) is None:
-                continue
-            owner = by_owner[id(memo.scope_of(expr).owner)]
-            try:
-                relations = relations_of(expr, type_ctx)
-            except (NotImplementedError, TypeError, ValueError, isl.Error):
-                for view in views:
-                    owner.refused.setdefault(view, frozenset())
-                    owner.refused[view] = owner.refused[view] | {expr}
-                continue
+    for expr, owner in calls:
+        if isinstance(expr.target, Function) or access_relation_registry.lookup(type(expr.target)) is None:
+            continue
+        try:
+            relations = relations_of(expr, type_ctx)
+        except (NotImplementedError, TypeError, ValueError, isl.Error):
             for view in views:
-                narrow = view == "narrow"
-                built: list[Access] = []
-                for index, boundary in enumerate(relations.inputs):
-                    if index >= len(expr.args):
-                        continue
-                    access = _bind_access(expr, expr.args[index], boundary, owner, type_ctx, narrow=narrow)
-                    if access is not None:
-                        built.append(access)
-                owner.accesses.setdefault(view, {})[expr] = tuple(built)
+                owner.refused[view] = owner.refused.get(view, frozenset()) | {expr}
+            continue
+        for view in views:
+            narrow = view == "narrow"
+            built: list[Access] = []
+            for index, boundary in enumerate(relations.inputs):
+                if index >= len(expr.args):
+                    continue
+                access = _bind_access(expr, expr.args[index], boundary, owner, type_ctx, narrow=narrow)
+                if access is not None:
+                    built.append(access)
+            owner.accesses.setdefault(view, {})[expr] = tuple(built)
     return root
 
 
