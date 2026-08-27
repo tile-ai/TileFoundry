@@ -14,11 +14,17 @@ from dataclasses import replace
 
 import pytest
 
+from tests.fixtures.placed.performance_findings import _CrossScopePerformance
+from tests.fixtures.placed.symbolic_offset import (
+    _LiteralStoreOffset,
+    _SymbolicStoreOffset,
+)
 from tilefoundry import func, module
 from tilefoundry.analysis import (
     ComputeCostMetadata,
     MemoryHierarchyFacts,
     MemoryMetadata,
+    PerformanceMetadata,
     PerformanceServiceFacts,
     PerformanceSummaryMetadata,
     RooflineMetadata,
@@ -36,6 +42,9 @@ from tilefoundry.ir.core import (
     Call,
     get_metadata,
 )
+from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
@@ -43,6 +52,7 @@ _ROUNDING_M = 14_593
 _ROUNDING_N = 11_489
 _ROUNDING_K = 298_224_413
 _H200 = CudaTarget("nvidia.h200_sxm")
+_ALL_FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 _LARGE_H200 = CudaTarget(
     replace(_H200.device, hbm_capacity_bytes=300_000_000_000_000_000),
     architecture=_H200.architecture,
@@ -142,6 +152,92 @@ class _SharedTile:
 
 def _calls(function) -> tuple[Call, ...]:
     return tuple(expr for expr in collect_exprs(function.body) if isinstance(expr, Call))
+
+
+def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> None:
+    """The outer stage waits for the inner stage to complete."""
+    results = {}
+    for name in ("cross_scope", "nested_control"):
+        function = next(fn for fn in _CrossScopePerformance.functions if fn.name == name)
+        results[name] = analyze(
+            _CrossScopePerformance,
+            function,
+            analysis=_ALL_FAMILIES,
+            dims={"seq_len": 8192},
+        )
+        assert get_metadata(results[name].function, PerformanceSummaryMetadata) is not None
+
+    cross_scope = results["cross_scope"]
+    timed = tuple(
+        (call, get_metadata(call, PerformanceMetadata))
+        for call in _calls(cross_scope.function)
+    )
+    scalar_indices = tuple(
+        (call, record)
+        for call, record in timed
+        if record is not None and isinstance(call.target, Binary) and call.type.shape == ()
+    )
+    stores = tuple(
+        (call, record)
+        for call, record in timed
+        if record is not None and isinstance(call.target, InsertSlice)
+    )
+    loads = tuple(
+        (call, record)
+        for call, record in timed
+        if record is not None and isinstance(call.target, Reshard)
+    )
+
+    outer_index = max(scalar_indices, key=lambda item: item[1].timeline.start_ns)[1]
+    inner_store = max(
+        (
+            record
+            for _call, record in stores
+            if record.timeline.end_ns <= outer_index.timeline.start_ns
+        ),
+        key=lambda record: record.timeline.end_ns,
+    )
+    outer_load = min(
+        (
+            record
+            for _call, record in loads
+            if record.timeline.start_ns >= outer_index.timeline.end_ns
+        ),
+        key=lambda record: record.timeline.start_ns,
+    )
+
+    assert inner_store.timeline.end_ns == outer_index.timeline.start_ns
+    assert outer_index.timeline.end_ns == outer_load.timeline.start_ns
+
+
+def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
+    """Group_index * 32 is an address, not an unbound parameter."""
+    observed = {}
+    for name, owner in (
+        ("literal", _LiteralStoreOffset),
+        ("symbolic", _SymbolicStoreOffset),
+    ):
+        result = analyze(
+            owner,
+            owner.entry_function(),
+            analysis=_ALL_FAMILIES,
+            dims={"seq_len": 8192},
+        )
+        cost = get_metadata(result.function, ComputeCostMetadata)
+        bound = get_metadata(result.function, RooflineMetadata)
+        summary = get_metadata(result.function, PerformanceSummaryMetadata)
+        assert cost is not None and bound is not None and summary is not None
+        observed[name] = (
+            dict(cost.service)["integer"],
+            bound.ideal_ns,
+            summary.timeline.end_ns - summary.timeline.start_ns,
+        )
+
+    literal_service, literal_roofline, literal_performance = observed["literal"]
+    symbolic_service, symbolic_roofline, symbolic_performance = observed["symbolic"]
+    assert literal_roofline == symbolic_roofline == 139_407
+    assert symbolic_service - literal_service == 6
+    assert symbolic_performance - literal_performance == 6
 
 
 def test_roofline_uses_exact_integer_ceiling_above_float_precision() -> None:

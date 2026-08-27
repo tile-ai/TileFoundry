@@ -10,7 +10,7 @@ for two of these and each pair differs in exactly one respect.
 """
 
 from tilefoundry import func, module
-from tilefoundry.dsl import Mesh, Tensor, Topology, tf
+from tilefoundry.dsl import DimVar, Mesh, Tensor, Topology, tf
 from tilefoundry.target import CudaTarget
 
 _H200 = CudaTarget("nvidia.h200_sxm")
@@ -151,3 +151,71 @@ class LevelsNested:
                     (B @ g.seq, KV @ (g.split, m.warp), H @ g.head, D @ m.lane),
                     "gmem",
                 )
+
+
+_CROSS_SCOPE_GRID = 128
+_CROSS_SCOPE_HEAD = 128
+_CROSS_SCOPE_HEADS = 16
+_CROSS_SCOPE_TILE = 256
+_CROSS_SCOPE_STAGES = 2
+_CROSS_SCOPE_SEQ = DimVar("seq_len", 0, 8193)
+
+
+@module(
+    entry="cross_scope",
+    target=_H200,
+    topologies=(Topology("cta", _CROSS_SCOPE_GRID),),
+)
+class _CrossScopePerformance:
+    """A cross-scope consumer and the control that keeps both calls nested."""
+
+    @func
+    def stage(
+        x: Tensor[(_CROSS_SCOPE_HEADS, _CROSS_SCOPE_SEQ, _CROSS_SCOPE_HEAD), "bf16"],
+        out: Tensor[(_CROSS_SCOPE_HEADS, _CROSS_SCOPE_SEQ, _CROSS_SCOPE_HEAD), "bf16"],
+    ) -> Tensor[(_CROSS_SCOPE_HEADS, _CROSS_SCOPE_SEQ, _CROSS_SCOPE_HEAD), "bf16"]:
+        with Mesh(
+            ("cta",), layout=(_CROSS_SCOPE_HEADS, 8), names=("strip", "tile")
+        ) as mesh:
+            acc = out
+            for position in tile(_CROSS_SCOPE_SEQ, _CROSS_SCOPE_TILE):
+                base = position + 0
+                placed = tf.reshard(
+                    x[:, base : base + _CROSS_SCOPE_TILE, :],
+                    (
+                        _CROSS_SCOPE_HEADS @ mesh.strip,
+                        _CROSS_SCOPE_TILE @ mesh.tile,
+                        _CROSS_SCOPE_HEAD,
+                    ),
+                    "smem",
+                )
+                acc = tf.insert_slice(acc, placed + placed, (0, base, 0))
+            return acc
+
+    @func
+    def cross_scope(
+        x: Tensor[(_CROSS_SCOPE_HEADS, _CROSS_SCOPE_SEQ, _CROSS_SCOPE_HEAD), "bf16"],
+        inner: Tensor[(_CROSS_SCOPE_HEADS, _CROSS_SCOPE_SEQ, _CROSS_SCOPE_HEAD), "bf16"],
+        outer: Tensor[(_CROSS_SCOPE_HEADS, _CROSS_SCOPE_SEQ, _CROSS_SCOPE_HEAD), "bf16"],
+    ) -> Tensor[(_CROSS_SCOPE_HEADS, _CROSS_SCOPE_SEQ, _CROSS_SCOPE_HEAD), "bf16"]:
+        with Mesh(("cta",), layout=(_CROSS_SCOPE_GRID,), names=("unit",)) as _mesh:
+            result = x
+            for _batch in range(1):
+                for _stage in range(_CROSS_SCOPE_STAGES):
+                    result = stage(result, inner)
+                result = stage(result, outer)
+            return result
+
+    @func
+    def nested_control(
+        x: Tensor[(_CROSS_SCOPE_HEADS, _CROSS_SCOPE_SEQ, _CROSS_SCOPE_HEAD), "bf16"],
+        inner: Tensor[(_CROSS_SCOPE_HEADS, _CROSS_SCOPE_SEQ, _CROSS_SCOPE_HEAD), "bf16"],
+        outer: Tensor[(_CROSS_SCOPE_HEADS, _CROSS_SCOPE_SEQ, _CROSS_SCOPE_HEAD), "bf16"],
+    ) -> Tensor[(_CROSS_SCOPE_HEADS, _CROSS_SCOPE_SEQ, _CROSS_SCOPE_HEAD), "bf16"]:
+        with Mesh(("cta",), layout=(_CROSS_SCOPE_GRID,), names=("unit",)) as _mesh:
+            result = x
+            for _batch in range(1):
+                for _stage in range(_CROSS_SCOPE_STAGES):
+                    result = stage(result, inner)
+                    result = stage(result, outer)
+            return result
