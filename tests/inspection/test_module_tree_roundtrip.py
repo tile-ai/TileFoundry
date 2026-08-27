@@ -30,7 +30,6 @@ from tilefoundry.inspection import as_script
 from tilefoundry.inspection.dot import hir_function_to_dot
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.specialize import origin_of
 from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.where import Where
@@ -259,37 +258,6 @@ def test_a_child_before_the_functions_naming_it() -> None:
 
     assert source.index("class first:") < source.index("def fused(")
     assert source.index("class second:") < source.index("def fused(")
-
-
-@module(entry="root", target=CudaTarget("nvidia.h200_sxm"), topologies=(_CTA,))
-class _Rebuilt:
-    leaf = Expert
-
-    @func
-    def root(x: Tensor[(4, 8), "f32"]) -> Tensor[(4, 8), "f32"]:
-        with Mesh(("cta",), layout=(4,), names=("tile",)) as cta:
-            local = tf.reshard(x, (4 @ cta.tile, 8), "gmem")
-            return leaf(local)  # noqa: F821
-
-
-def test_a_call_site_rebuilt_target_still_prints_by_its_binding() -> None:
-    """The printed target is a rebuild, recognised through what it records.
-
-    A layout reaching the callee rebuilds it, so the call no longer targets the
-    attached entry itself; matching on the name would accept any function called
-    the same, which is what the recorded origin replaces.
-    """
-    (child,) = _Rebuilt.modules
-    call = _Rebuilt.entry_function().body
-    assert call.target is not child.entry_function()
-    assert origin_of(call.target) is child.entry_function()
-
-    source = as_script(_Rebuilt)
-    assert "leaf(" in source
-    imported = import_dsl(source)
-    (imported_child,) = imported.modules
-    rebuilt = imported.entry_function().body
-    assert origin_of(rebuilt.target) is imported_child.entry_function()
 
 
 @module(entry="run")

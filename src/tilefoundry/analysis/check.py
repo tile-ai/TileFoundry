@@ -53,7 +53,7 @@ from tilefoundry.ir.types.substitute import (
 from tilefoundry.ir.visitor import ExprMutator
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TypeInferContext
-from tilefoundry.visitor_registry.visitors import CostEvaluator
+from tilefoundry.visitor_registry.visitors import CostEvaluator, TypeInferVisitor
 
 from .compute_cost import _call_cost_record, _is_structural_occurrence
 from .errors import AnalysisError
@@ -909,6 +909,9 @@ def check_program(
     infer_authored_types(functions, module)
     validate_call_context(module, functions)
     derived = _inline_view(module, function, budget)
+    TypeInferVisitor(
+        TypeInferContext(scope=FunctionScope(module, derived)), owns_body=True
+    ).visit(derived.body)
     checkers = tuple(analyzer.input_checker for analyzer in analyzers)
     if not checkers:
         return derived
