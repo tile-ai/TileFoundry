@@ -34,11 +34,8 @@ def infer_authored_types(
     """
     for fn in reversed(tuple(functions)):
         ctx = TypeInferContext(scope=FunctionScope(module, fn))
-        visitor = TypeInferVisitor(ctx)
-        for expr in postorder(fn.body):
-            computed = visitor.visit(expr)
-            if computed != expr.type:
-                expr.type = computed
+        if fn.body is not None:
+            TypeInferVisitor(ctx, owns_body=True).visit(fn.body)
         if fn.body is not None and fn.return_type != fn.body.type:
             fn.return_type = fn.body.type
             fn.type = callable_type_for(fn.params, fn.body.type)
