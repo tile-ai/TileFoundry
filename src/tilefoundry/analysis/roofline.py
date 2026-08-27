@@ -21,7 +21,7 @@ from .metadata import (
     TrafficMetadata,
 )
 from .visitor import AnalyzeContext
-from .walk import attach, describe, reachable_functions
+from .walk import attach, describe, postorder, reachable_functions
 
 SELECTOR = "roofline"
 
@@ -124,7 +124,7 @@ def analyze_roofline(
     target = context.target
     facts = target.get_facts(ThroughputFacts)
     for fn in reachable_functions(function):
-        for expr in context.structural_memo.definition_order(fn):
+        for expr in postorder(fn.body):
             if not isinstance(expr, Call):
                 continue
             cost = get_metadata(expr, ComputeCostMetadata)

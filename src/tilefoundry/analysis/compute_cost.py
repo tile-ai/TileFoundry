@@ -12,13 +12,19 @@ from __future__ import annotations
 from tilefoundry.ir.core import Call, VerifyError
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType
-from tilefoundry.visitor_registry.contexts import CostContext
+from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts, ThroughputFacts
 from .metadata import ComputeCostMetadata
+from .scope import walk_scopes
 from .visitor import AnalyzeContext
+from .walk import (
+    attach,
+    collect_exprs,
+    reachable_functions,
+)
 
 SELECTOR = "compute-cost"
 
@@ -144,14 +150,76 @@ def _call_cost_record(
     )
 
 
+def _accumulate(
+    flops: dict[str, int],
+    flops_per_unit: dict[str, int],
+    service: dict[str, int],
+    service_per_unit: dict[str, int],
+    record: ComputeCostMetadata,
+    trips: int,
+) -> None:
+    for name, value in record.flops:
+        flops[name] = flops.get(name, 0) + value * trips
+    for name, value in record.flops_per_unit:
+        flops_per_unit[name] = flops_per_unit.get(name, 0) + value * trips
+    for name, value in record.service:
+        service[name] = service.get(name, 0) + value * trips
+    for name, value in record.service_per_unit:
+        service_per_unit[name] = service_per_unit.get(name, 0) + value * trips
+
+
 def analyze_compute_cost(
     function: Function,
     context: AnalyzeContext,
 ) -> None:
-    """Projection is removed in M8 and rebuilt from Scope/Access in M9."""
-    raise AnalysisError(
-        "compute-cost projection was removed in M8; M9 rebuilds it from Scope/Access"
-    )
+    """Attach one-trip work per Call and multiplicity-aware totals per Function."""
+    module, level = context.module, context.level
+    topologies = module.effective_topologies()
+    for fn in reachable_functions(function):
+        scope = FunctionScope(module, fn)
+        whole = CostContext(scope=scope)
+        local = CostContext(scope=scope, level=level, topologies=topologies)
+        flops: dict[str, int] = {}
+        flops_per_unit: dict[str, int] = {}
+        service: dict[str, int] = {}
+        service_per_unit: dict[str, int] = {}
+        calls = [expr for expr in collect_exprs(fn.body) if isinstance(expr, Call)]
+        for expr in calls:
+            record = _call_cost_record(expr, whole, local)
+            attach(expr, record)
+            owner = next(
+                (
+                    scope_node
+                    for scope_node in walk_scopes(context.root)
+                    if any(item is expr for item in scope_node.accesses.get("narrow", {}))
+                ),
+                None,
+            )
+            if owner is None:
+                owner = context.root
+            repeats = 1
+            cursor = owner
+            while cursor.parent is not None:
+                if cursor.is_variant(expr):
+                    repeats *= max(1, cursor.trips())
+                cursor = cursor.parent
+            _accumulate(
+                flops,
+                flops_per_unit,
+                service,
+                service_per_unit,
+                record,
+                repeats,
+            )
+        attach(
+            fn,
+            ComputeCostMetadata(
+                flops=tuple(sorted(flops.items())),
+                flops_per_unit=tuple(sorted(flops_per_unit.items())),
+                service=tuple(sorted(service.items())),
+                service_per_unit=tuple(sorted(service_per_unit.items())),
+            ),
+        )
 
 
 __all__ = ["SELECTOR", "analyze_compute_cost"]

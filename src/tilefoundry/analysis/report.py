@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, fields, is_dataclass
+from dataclasses import fields, is_dataclass
 from types import UnionType
 from typing import Union, get_args, get_origin, get_type_hints
 
@@ -294,7 +294,7 @@ def _loop_records(
         if record is not None and facts is not None:
             pressure = cache_pressure(record, facts, peaks)
             if pressure:
-                records["cache-pressure"] = [asdict(item) for item in pressure]
+                records["cache-pressure"] = list(pressure)
         rows.append({"value": expr.induction_var.name, **records})
     return rows
 

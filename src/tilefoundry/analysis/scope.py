@@ -30,7 +30,7 @@ from .errors import AnalysisError
 from .footprint import _local_type, _widest_allowed
 from .metadata import BufferFootprint, LoopFootprintMetadata
 from .poly.affine import loop_affine_term
-from .walk import children
+from .walk import children, loop_trip_count
 
 
 @dataclass(frozen=True)
@@ -53,18 +53,53 @@ class Scope:
     accesses: dict[str, dict[Call, tuple[Access, ...]]] = field(default_factory=dict)
     refused: dict[str, frozenset[Call]] = field(default_factory=dict)
 
+    def is_variant(self, value: Expr) -> bool:
+        """Whether *value* depends on this loop's induction or carry values."""
+        if not isinstance(self.owner, GridRegionExpr):
+            return False
+        seeds = (self.owner.induction_var, *self.owner.carried_args)
+        pending = [value]
+        seen: set[int] = set()
+        while pending:
+            expr = pending.pop()
+            if any(expr is seed for seed in seeds):
+                return True
+            if id(expr) in seen:
+                continue
+            seen.add(id(expr))
+            pending.extend(children(expr))
+        return False
+
+    def is_invariant(self, value: Expr) -> bool:
+        """Whether *value* is independent of this loop's induction values."""
+        return not self.is_variant(value)
+
     def trips(self) -> int:
         """Return this scope's iteration count relative to its parent."""
+        cached = getattr(self, "_trips_cache", None)
+        if cached is not None:
+            return cached
         if self.parent is None:
             return 1
+        if isinstance(self.owner, GridRegionExpr):
+            authored = loop_trip_count(self.owner)
+            if authored != 1 or all(isinstance(value, int) for value in (self.owner.start, self.owner.extent, self.owner.step)):
+                self._trips_cache = max(1, authored)
+                return self._trips_cache
         count = self.domain.count_val()
         parent_count = self.parent.domain.count_val()
         if not count.is_int() or not parent_count.is_int() or not parent_count.get_num_si():
             return 1
-        return max(1, count.get_num_si() // parent_count.get_num_si())
+        result = max(1, count.get_num_si() // parent_count.get_num_si())
+        self._trips_cache = result
+        return result
 
     def one_pass(self, access: Access) -> int:
         """Count one pass of this scope's relation with loop axes held still."""
+        cache = getattr(self, "_one_pass_cache", {})
+        cached = cache.get(id(access))
+        if cached is not None:
+            return cached
         standing = self.domain.insert_dims(
             isl.dim_type.SET,
             self.depth,
@@ -82,10 +117,17 @@ class Scope:
         amount = reached.coalesce().count_val()
         if not amount.is_int():
             raise AnalysisError("scope access has no finite one-pass extent")
-        return amount.get_num_si()
+        result = amount.get_num_si()
+        cache[id(access)] = result
+        self._one_pass_cache = cache
+        return result
 
     def over(self, access: Access) -> isl.set:
         """Return the source elements reached while this scope varies."""
+        cache = getattr(self, "_over_cache", {})
+        cached = cache.get(id(access))
+        if cached is not None:
+            return cached
         domain = self.domain.insert_dims(
             isl.dim_type.SET,
             self.depth,
@@ -97,7 +139,10 @@ class Scope:
                 axis,
                 domain.dim_min_val(axis).get_num_si(),
             )
-        return access.relation.intersect_domain(domain).range()
+        result = access.relation.intersect_domain(domain).range()
+        cache[id(access)] = result
+        self._over_cache = cache
+        return result
 
     def reaching(self, view: str) -> Iterator[Access]:
         """Yield accesses owned by this scope and all descendant scopes."""
@@ -117,22 +162,24 @@ class Scope:
         rows: dict[tuple[int, str], tuple[Expr, int, int]] = {}
         for view, scale in (("narrow", "bytes"), ("device", "device_bytes")):
             for access in self.reaching(view):
-                amount = self.over(access).count_val()
-                if not amount.is_int():
+                try:
+                    amount = self.one_pass(access)
+                except AnalysisError:
                     continue
                 size = static_bytes(access.buffer.type)
                 if size is None:
                     continue
-                key = (id(access.buffer), str(access.buffer.type.storage))
+                device_amount = amount * max(1, self.trips())
+                key = (id(access.buffer), str(getattr(access.buffer.type, "storage", "unknown")))
                 current = rows.get(key, (access.buffer, 0, 0))
                 rows[key] = (
                     current[0],
-                    current[1] + (amount.get_num_si() * size if scale == "bytes" else 0),
-                    current[2] + (amount.get_num_si() * size if scale == "device_bytes" else 0),
+                    current[1] + (amount * size if scale == "bytes" else 0),
+                    current[2] + (device_amount * size if scale == "device_bytes" else 0),
                 )
         footprints = tuple(
             BufferFootprint(
-                buffer=binding_name(buffer) or f"<buffer {buffer_id}>",
+                buffer=binding_name(values[0]) or f"<buffer {buffer_id}>",
                 level=level,
                 bytes=values[1],
                 device_bytes=values[2],
@@ -256,6 +303,40 @@ def build_scopes(
     views: Sequence[str] = ("narrow", "device"),
 ) -> Scope:
     """Build the scope tree and both access views in one normalized walk."""
+    class IdentityMap:
+        """Small identity-keyed mapping for recursive IR expressions."""
+
+        def __init__(self) -> None:
+            self._entries: list[tuple[Call, tuple[Access, ...]]] = []
+
+        def __setitem__(self, key: Call, value: tuple[Access, ...]) -> None:
+            for index, (existing, _value) in enumerate(self._entries):
+                if existing is key:
+                    self._entries[index] = (key, value)
+                    return
+            self._entries.append((key, value))
+
+        def __iter__(self):
+            return (key for key, _value in self._entries)
+
+        def __len__(self) -> int:
+            return len(self._entries)
+
+        def get(self, key: Call, default=None):
+            for existing, value in self._entries:
+                if existing is key:
+                    return value
+            return default
+
+        def values(self):
+            return (value for _key, value in self._entries)
+
+        def items(self):
+            return tuple(self._entries)
+
+    def empty_accesses() -> dict[str, IdentityMap]:
+        return {view: IdentityMap() for view in views}
+
     by_owner: dict[int, Scope] = {}
     calls: list[tuple[Call, Scope]] = []
     seen: set[int] = set()
@@ -267,7 +348,7 @@ def build_scopes(
         if isinstance(expr, GridRegionExpr):
             for operand in expr.init_args:
                 visit(operand, scope)
-            child = Scope(expr, scope, (), scope.depth + 1, _domain_for(expr, scope))
+            child = Scope(expr, scope, (), scope.depth + 1, _domain_for(expr, scope), empty_accesses())
             by_owner[id(expr)] = child
             scope.children = (*scope.children, child)
             visit(expr.body, child)
@@ -279,7 +360,7 @@ def build_scopes(
         for operand in children(expr):
             visit(operand, scope)
 
-    root = Scope(graph, None, (), 0, _domain_for(graph, None))
+    root = Scope(graph, None, (), 0, _domain_for(graph, None), empty_accesses())
     by_owner[id(graph)] = root
     for param in graph.params:
         visit(param, root)
@@ -304,8 +385,15 @@ def build_scopes(
                 access = _bind_access(expr, expr.args[index], boundary, owner, type_ctx, narrow=narrow)
                 if access is not None:
                     built.append(access)
-            owner.accesses.setdefault(view, {})[expr] = tuple(built)
+            owner.accesses.setdefault(view, IdentityMap())[expr] = tuple(built)
     return root
 
 
-__all__ = ["Access", "Scope", "build_scopes"]
+def walk_scopes(root: Scope) -> Iterator[Scope]:
+    """Yield a scope and its descendants in lexical order."""
+    yield root
+    for child in root.children:
+        yield from walk_scopes(child)
+
+
+__all__ = ["Access", "Scope", "build_scopes", "walk_scopes"]

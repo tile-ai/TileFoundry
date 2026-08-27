@@ -34,7 +34,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.compute_cost import _local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.scope import build_scopes as StructuralMemoVisitor
+from tilefoundry.analysis.scope import build_scopes, walk_scopes
 from tilefoundry.analysis.walk import collect_exprs, describe
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.metadata import ExecutionDomainMetadata
@@ -99,7 +99,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
     module_target = result.module.resolve_target()
     throughput = module_target.get_facts(ThroughputFacts)
     services = module_target.get_facts(PerformanceServiceFacts)
-    structural_memo = StructuralMemoVisitor().build(fn)
+    scopes = tuple(walk_scopes(build_scopes(result.module, fn)))
     timed = 0
     for expr in collect_exprs(fn.body):
         if not isinstance(expr, Call) or isinstance(expr.target, Function):
@@ -125,7 +125,21 @@ def assert_performance_contract(result: AnalysisResult) -> None:
         span = record.timeline.end_ns - record.timeline.start_ns
         assert span % duration == 0, describe(expr)
         runs = span // duration
-        available = structural_memo.execution_count(expr)
+        available = 1
+        owner = next(
+            (
+                scope
+                for scope in scopes
+                if any(item is expr for item in scope.accesses.get("narrow", {}))
+            ),
+            None,
+        )
+        if owner is not None:
+            cursor = owner
+            while cursor.parent is not None:
+                if cursor.is_variant(expr):
+                    available *= max(1, cursor.trips())
+                cursor = cursor.parent
         assert 1 <= runs <= available and available % runs == 0, describe(expr)
         trips, stride = record.timeline.trips, record.timeline.stride_ns
         assert 1 <= trips <= available and available % trips == 0, describe(expr)
