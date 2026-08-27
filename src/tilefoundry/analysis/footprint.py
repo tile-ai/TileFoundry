@@ -8,16 +8,11 @@ from dataclasses import dataclass, field
 import isl
 
 from tilefoundry.ir.core import Call, Constant, Expr, Var, binding_name
-from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.sharding.local import Local
-from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.hir.tensor.slice import Slice, window_base
+from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
@@ -34,6 +29,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
+from .poly.affine import LoopAffineTerm, loop_affine_term
 from .visitor import StructuralMemo
 from .walk import loop_trip_count
 
@@ -136,56 +132,6 @@ def _loop_domain(inner: isl.set, loops: tuple[GridRegionExpr, ...]) -> isl.set:
     return inner.insert_dims(isl.dim_type.SET, 0, len(loops)).intersect(box)
 
 
-def _constant_int(expr: Expr) -> int | None:
-    if (
-        isinstance(expr, Constant)
-        and isinstance(expr.value, int)
-        and not isinstance(expr.value, bool)
-    ):
-        return int(expr.value)
-    return None
-
-
-def _static_range(expr: Expr, *, narrow: bool) -> tuple[int, int] | None:
-    """Bound one mesh-position expression, or erase its fixed local translation."""
-    value = _constant_int(expr)
-    if value is not None:
-        return value, value
-    if not isinstance(expr, Call):
-        return None
-    if isinstance(expr.target, Local):
-        return (0, 0) if narrow else _static_range(expr.args[0], narrow=narrow)
-    if isinstance(expr.target, (Reshape, Reshard)):
-        return _static_range(expr.args[0], narrow=narrow)
-    if isinstance(expr.target, Arange):
-        start, step = expr.target.start, expr.target.step
-        (length,) = expr.target.type.shape
-        if not all(
-            isinstance(item, int) and not isinstance(item, bool) for item in (start, step, length)
-        ):
-            return None
-        if length <= 0:
-            return 0, 0
-        return start, start + (length - 1) * step
-    if isinstance(expr.target, Binary):
-        left = _static_range(expr.args[0], narrow=narrow)
-        right = _static_range(expr.args[1], narrow=narrow)
-        if left is None or right is None:
-            return None
-        if expr.target.kind is BinaryKind.ADD:
-            return left[0] + right[0], left[1] + right[1]
-        if expr.target.kind is BinaryKind.MUL:
-            products = tuple(a * b for a in left for b in right)
-            return min(products), max(products)
-    return None
-
-
-
-
-
-
-
-
 def _source_buffer(
     expr: Expr,
     access: isl.map,
@@ -228,52 +174,18 @@ class _RankPreserving(TypeInferContext):
         return _local_type(expr.type)
 
 
-def _placed_in_loops(
-    value: Expr, loops: tuple[GridRegionExpr, ...], *, narrow: bool
-) -> tuple[int | None, int, int]:
-    """Which loop coordinate one runtime value is, and at what offset.
-
-    A relation's parameter is bound to the operand that states it, and that
-    operand may be an induction variable, or one plus something invariant. Then
-    the parameter is that loop's coordinate and projecting it out unions over
-    the trip; anything else this cannot place is refused to its caller.
-    """
-    base, offset = window_base(value)
-    if base is None:
-        return None, offset, offset
-    for index, loop in enumerate(loops):
-        if loop.induction_var is base:
-            return index, offset, offset
-    if isinstance(value, Call) and isinstance(value.target, Binary):
-        if value.target.kind is BinaryKind.ADD:
-            for loop_expr, invariant in (
-                (value.args[0], value.args[1]),
-                (value.args[1], value.args[0]),
-            ):
-                for index, loop in enumerate(loops):
-                    if loop.induction_var is loop_expr:
-                        bounds = _static_range(invariant, narrow=narrow)
-                        if bounds is not None:
-                            return index, bounds[0], bounds[1]
-    raise _Unavailable
-
-
 def _placed_parameter(
     value: object, loops: tuple[GridRegionExpr, ...], *, narrow: bool
-) -> tuple[int | None, int, int] | None:
+) -> LoopAffineTerm | None:
     """Where in this loop nest a parameter's value sits, when it sits anywhere."""
     if not isinstance(value, Expr):
         return None
-    try:
-        return _placed_in_loops(value, loops, narrow=narrow)
-    except _Unavailable:
-        bounds = _static_range(value, narrow=narrow)
-        return None if bounds is None else (None, bounds[0], bounds[1])
+    return loop_affine_term(value, loops, narrow=narrow)
 
 
 def _widest_allowed(
     access: isl.map, name: str, held: object
-) -> tuple[None, int, int] | None:
+) -> LoopAffineTerm | None:
     """The value a parameter may take that reaches the most of its operand.
 
     A footprint is an upper bound, so a parameter nobody here can place takes
@@ -293,7 +205,7 @@ def _widest_allowed(
     box = index_set(tuple(held.shape)) if isinstance(held, TensorType) else None
     if box is None or box.dim(isl.dim_type.SET) != access.dim(isl.dim_type.OUT):
         least = ends[0].get_num_si()
-        return (None, least, least)
+        return LoopAffineTerm(None, 0, least, least)
     best: tuple[int, int] | None = None
     for value in sorted({end.get_num_si() for end in ends}):
         reach = access.intersect_params(
@@ -304,7 +216,7 @@ def _widest_allowed(
             return None
         if best is None or amount.get_num_si() > best[0]:
             best = (amount.get_num_si(), value)
-    return None if best is None else (None, best[1], best[1])
+    return None if best is None else LoopAffineTerm(None, 0, best[1], best[1])
 
 
 def _bind_parameters(
@@ -333,31 +245,32 @@ def _bind_parameters(
         value = bound.get(name)
         number = static_dim_value(value)
         if number is not None:
-            loop_axis, low, high = None, number, number
+            term = LoopAffineTerm(None, 0, number, number)
         else:
-            placed = _placed_parameter(value, loops, narrow=narrow)
-            if placed is None:
-                placed = _widest_allowed(access, name, held)
-            if placed is None:
+            term = _placed_parameter(value, loops, narrow=narrow)
+            if term is None:
+                term = _widest_allowed(access, name, held)
+            if term is None:
                 access = access.project_out(isl.dim_type.PARAM, 0, 1)
                 continue
-            loop_axis, low, high = placed
         local = isl.local_space.from_space(access.get_space())
 
         def placed(constraint: isl.constraint, sign: int) -> isl.constraint:
             constraint = constraint.set_coefficient_si(isl.dim_type.PARAM, 0, sign)
-            if loop_axis is not None:
-                constraint = constraint.set_coefficient_si(isl.dim_type.IN, loop_axis, -sign)
+            if term.loop_axis is not None:
+                constraint = constraint.set_coefficient_si(
+                    isl.dim_type.IN, term.loop_axis, -sign * term.stride
+                )
             return constraint
 
-        if low == high:
+        if term.low == term.high:
             equality = placed(isl.constraint.alloc_equality(local), 1)
-            access = access.add_constraint(equality.set_constant_si(-low))
+            access = access.add_constraint(equality.set_constant_si(-term.low))
         else:
             floor = placed(isl.constraint.alloc_inequality(local), 1)
             ceiling = placed(isl.constraint.alloc_inequality(local), -1)
-            access = access.add_constraint(floor.set_constant_si(-low))
-            access = access.add_constraint(ceiling.set_constant_si(high))
+            access = access.add_constraint(floor.set_constant_si(-term.low))
+            access = access.add_constraint(ceiling.set_constant_si(term.high))
         access = access.project_out(isl.dim_type.PARAM, 0, 1)
     return access
 

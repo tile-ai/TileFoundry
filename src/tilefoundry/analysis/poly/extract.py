@@ -14,13 +14,13 @@ from dataclasses import dataclass
 
 import isl
 
-from tilefoundry.ir.core import Call, Tuple, TypeInferContext, Var, binding_name
+from tilefoundry.ir.core import Call, Expr, Tuple, TypeInferContext, Var, binding_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.tensor.full_like import FullLike
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.hir.tensor.slice import Slice, window_base
+from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.types import TensorType, TupleType
@@ -38,6 +38,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 
 from ..walk import children, collect_exprs
+from .affine import loop_affine_term
 from .errors import ExtractError
 from .model import TileGraph, TileUnit
 
@@ -158,28 +159,6 @@ def _buffer_namer():
     name_for.alias = alias
     name_for.pierce = pierce
     return name_for
-
-
-
-
-def _slice_start(start, loops: tuple[GridRegionExpr, ...]) -> tuple[int | None, int]:
-    """Resolve an affine Slice start to an optional loop dimension plus offset.
-
-    A window moved by a compile-time offset (``i + C``) is that same loop
-    dimension carrying the offset, so both halves of the pair are used.
-    """
-    base, offset = window_base(start)
-    if base is None:
-        return None, offset
-    if isinstance(base, Var):
-        for pos, loop in enumerate(loops):
-            if loop.induction_var is base:
-                return pos, offset
-    raise ExtractError(
-        "extract: Slice starts must be integer constants, enclosing loop "
-        "induction variables, or one of those moved by a compile-time offset, "
-        f"got {start!r}"
-    )
 
 
 
@@ -389,10 +368,12 @@ def _placed_value(value, loops: tuple[GridRegionExpr, ...]):
     """
     if isinstance(value, DimVar):
         return None
-    try:
-        return _slice_start(value, loops)
-    except (AttributeError, TypeError, ExtractError):
+    if not isinstance(value, Expr):
         return None
+    term = loop_affine_term(value, loops, narrow=False)
+    if term is None or term.low != term.high:
+        return None
+    return term.loop_axis, term.stride, term.low
 
 
 def _place_parameters(
@@ -418,18 +399,21 @@ def _place_parameters(
             continue
         number = static_dim_value(value)
         loop_position = None
+        stride = 0
         if number is None:
             placed = _placed_value(value, loops)
             if placed is None:
                 access = access.project_out(isl.dim_type.PARAM, position, 1)
                 continue
-            loop_position, number = placed
+            loop_position, stride, number = placed
         local = isl.local_space.from_space(access.get_space())
         equality = isl.constraint.alloc_equality(local).set_coefficient_si(
             isl.dim_type.PARAM, position, 1
         )
         if loop_position is not None:
-            equality = equality.set_coefficient_si(isl.dim_type.IN, loop_position, -1)
+            equality = equality.set_coefficient_si(
+                isl.dim_type.IN, loop_position, -stride
+            )
         access = access.add_constraint(equality.set_constant_si(-number))
         access = access.project_out(isl.dim_type.PARAM, position, 1)
     return access
