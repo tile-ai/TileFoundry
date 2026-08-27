@@ -41,30 +41,30 @@ class TypeInferVisitor(ExprVisitor[Type]):
     rather than trusting a possibly-stale ``expr.type`` field.
     """
 
-    def __init__(self, ctx: TypeInferContext) -> None:
-        super().__init__()
-        self.ctx = ctx
+    def __init__(self, ctx: TypeInferContext, *, memo=None) -> None:
+        super().__init__(ctx, memo=memo)
+        ctx._active_visitor = self
 
     def visit(self, expr: Expr) -> Type:
         return canonicalize_dims(super().visit(expr))
 
-    def visit_Var(self, var: Var) -> Type:
-        return var.type
+    def visit_leaf_Var(self, var: Var, _operands) -> Type:
+        return var.annotation
 
-    def visit_Constant(self, c: Constant) -> Type:
+    def visit_leaf_Constant(self, c: Constant, _operands) -> Type:
         declared = c.type
         if declared is not None:
             return declared
         return _constant_type(c.value)
 
-    def visit_Call(self, call: Call) -> Type:
+    def visit_leaf_Call(self, call: Call, _operands) -> Type:
         op_cls = type(call.target)
         fn = typeinfer_registry.lookup(op_cls)
         if fn is None:
             self.ctx.error(call, f"no typeinfer registered for {op_cls.__name__}")
         return fn(call, self.ctx)
 
-    def visit_Tuple(self, tup: Tuple) -> Type:
+    def visit_leaf_Tuple(self, tup: Tuple, _operands) -> Type:
         """Visit Tuple.
 
         Structural: the field types of the (possibly just-elaborated)
@@ -72,7 +72,12 @@ class TypeInferVisitor(ExprVisitor[Type]):
         """
         return TupleType(fields=tuple(self.ctx.type_of(e) for e in tup.elements))
 
-    def visit_GridRegionExpr(self, grid: GridRegionExpr) -> Type:
+    def visit_operands(self, expr: Expr):
+        if isinstance(expr, GridRegionExpr):
+            return tuple(self.visit(arg) for arg in expr.init_args)
+        return super().visit_operands(expr)
+
+    def visit_leaf_GridRegionExpr(self, grid: GridRegionExpr, _operands) -> Type:
         """Carry/body: a no-carry loop's value is its body.
 
         A carrying loop's value is its ``carried_args`` phi variables' declared
@@ -88,7 +93,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
             return grid.carried_args[0].type
         return TupleType(fields=tuple(p.type for p in grid.carried_args))
 
-    def visit_ShapeOf(self, shape_of: ShapeOf) -> Type:
+    def visit_leaf_ShapeOf(self, shape_of: ShapeOf, _operands) -> Type:
         """A ``tir.ShapeOf`` always carries its own concrete (rank-0 i32) type at construction.
 
         A ``tir.ShapeOf`` always carries its own concrete (rank-0 i32)
@@ -96,7 +101,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
         """
         return shape_of.type
 
-    def default_visit(self, expr: Expr) -> Type:
+    def default_visit_leaf(self, expr: Expr, _operands) -> Type:
         self.ctx.error(expr, f"no typeinfer rule for Expr subclass {type(expr).__name__}")
 
 

@@ -85,6 +85,9 @@ class TypeInferContext:
         return child_module_of(self.scope.module, self.scope.function, callee)
 
     def type_of(self, expr: Expr) -> Type:
+        active = getattr(self, "_active_visitor", None)
+        if active is not None:
+            return active.visit(expr)
         from .visitors import TypeInferVisitor  # noqa: PLC0415
         return TypeInferVisitor(self).visit(expr)
 

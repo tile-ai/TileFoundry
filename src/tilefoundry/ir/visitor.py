@@ -221,7 +221,9 @@ class ExprVisitor[T](ExprFunctor[T]):
 
     def __init__(
         self,
+        ctx: Any | None = None,
         *,
+        memo: dict[int, tuple[Expr, T]] | None = None,
         visit_other_functions: bool = False,
         root_function: Expr | None = None,
     ) -> None:
@@ -232,22 +234,41 @@ class ExprVisitor[T](ExprFunctor[T]):
         and return a result belonging to a different expression.
         """
         super().__init__()
+        self.ctx = ctx
         self._root = root_function
         self._visit_other_functions = visit_other_functions
-        self._memo: dict[int, tuple[Expr, T]] = {}
+        self._memo: dict[int, tuple[Expr, T]] = dict(memo) if memo else {}
 
     def dispatch_visit(self, expr: Expr) -> T:
         hit = self._memo.get(id(expr))
         if hit is not None:
             return hit[1]
-        result = super().dispatch_visit(expr)
+        leaf = getattr(self, f"visit_leaf_{type(expr).__name__}", None)
+        if leaf is not None:
+            operands_method = getattr(
+                self, f"visit_operands_{type(expr).__name__}", self.visit_operands
+            )
+            operands = operands_method(expr)
+            result = leaf(expr, operands)
+        else:
+            legacy = getattr(self, f"visit_{type(expr).__name__}", None)
+            if legacy is not None:
+                result = legacy(expr)
+            else:
+                operands_method = getattr(
+                    self, f"visit_operands_{type(expr).__name__}", self.visit_operands
+                )
+                operands = operands_method(expr)
+                result = self.default_visit_leaf(expr, operands)
         self._memo[id(expr)] = (expr, result)
         return result
 
-    def visit_operands(self, expr: Expr) -> None:
+    def visit_operands(self, expr: Expr) -> tuple[T, ...]:
         """Visit value children from the fixed `_expr_children` table."""
-        for child in _expr_children(expr):
-            self.visit(child)
+        return tuple(self.visit(child) for child in _expr_children(expr))
+
+    def default_visit_leaf(self, expr: Expr, operands: tuple[T, ...]) -> T:
+        return self.default_visit(expr)
 
     def can_visit_function_body(self, fn: Expr) -> bool:
         return self._visit_other_functions or fn is self._root

@@ -69,6 +69,11 @@ class Var(Expr):
     name: str
     is_const: bool = False
 
+    @property
+    def annotation(self) -> Type:
+        """The authored type annotation used when no visitor binding exists."""
+        return self.type
+
 
 @dataclass(frozen=True)
 class Constant(Expr):
