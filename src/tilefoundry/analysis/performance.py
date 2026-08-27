@@ -12,6 +12,7 @@ refers back to those same scopes rather than copying a second scope tree.
 
 from __future__ import annotations
 
+import heapq
 from dataclasses import dataclass
 
 from tilefoundry.ir.core import Call, Expr, get_metadata
@@ -325,49 +326,83 @@ def build_timeline(
             scope = owner.materialized_scope
         return visible
 
+    resolved_predecessors: dict[
+        int, tuple[tuple[OccurrencePlan, Call | GridRegionExpr], ...]
+    ] = {}
+
+    def predecessors(
+        occurrence: OccurrencePlan,
+    ) -> tuple[tuple[OccurrencePlan, Call | GridRegionExpr], ...]:
+        """Resolve and validate one occurrence's visible predecessors once."""
+        cached = resolved_predecessors.get(id(occurrence.expr))
+        if cached is not None:
+            return cached
+        resolved: list[tuple[OccurrencePlan, Call | GridRegionExpr]] = []
+        for predecessor_expr in occurrence.predecessors:
+            predecessor = plan_by_id.get(id(predecessor_expr))
+            if predecessor is None or predecessor.expr is not predecessor_expr:
+                raise AnalysisError(
+                    f"{describe(occurrence.expr)}: performance plan invariant: "
+                    f"predecessor {describe(predecessor_expr)} has no occurrence plan"
+                )
+            resolved.append((predecessor, dependency_entry(predecessor, occurrence)))
+        result = tuple(resolved)
+        resolved_predecessors[id(occurrence.expr)] = result
+        return result
+
     def ordered_occurrences(scope: ScopeMemo) -> tuple[OccurrencePlan, ...]:
-        """Preserve definition order except where a visible dependency requires it."""
-        pending = list(direct.get(scope, ()))
+        """Stable topological order, preferring definition order among ready work."""
+        pending = tuple(direct.get(scope, ()))
+        by_id = {id(occurrence.expr): occurrence for occurrence in pending}
+        position = {id(occurrence.expr): index for index, occurrence in enumerate(pending)}
         required: dict[int, tuple[Call | GridRegionExpr, ...]] = {}
+        dependents: dict[int, list[OccurrencePlan]] = {}
+        indegree: dict[int, int] = {}
         for occurrence in pending:
             visible: dict[int, Call | GridRegionExpr] = {}
-            for predecessor_expr in occurrence.predecessors:
-                predecessor = plan_by_id.get(id(predecessor_expr))
-                if predecessor is None or predecessor.expr is not predecessor_expr:
-                    raise AnalysisError(
-                        f"{describe(occurrence.expr)}: performance plan invariant: "
-                        f"predecessor {describe(predecessor_expr)} has no occurrence plan"
-                    )
-                dependency = dependency_entry(predecessor, occurrence)
+            for _predecessor, dependency in predecessors(occurrence):
                 if dependency is not occurrence.expr:
                     visible[id(dependency)] = dependency
-            required[id(occurrence.expr)] = tuple(visible.values())
+            dependencies = tuple(visible.values())
+            key = id(occurrence.expr)
+            required[key] = dependencies
+            indegree[key] = len(dependencies)
+            for dependency in dependencies:
+                dependents.setdefault(id(dependency), []).append(occurrence)
 
         ordered: list[OccurrencePlan] = []
-        completed: set[int] = set()
-        while pending:
-            ready = next(
-                (
-                    occurrence
-                    for occurrence in pending
-                    if all(
-                        id(predecessor) in completed
-                        for predecessor in required[id(occurrence.expr)]
+        ready = [
+            (position[key], key)
+            for key, degree in indegree.items()
+            if degree == 0
+        ]
+        heapq.heapify(ready)
+        while ready:
+            _index, key = heapq.heappop(ready)
+            occurrence = by_id[key]
+            ordered.append(occurrence)
+            for dependent in dependents.get(key, ()):
+                dependent_key = id(dependent.expr)
+                indegree[dependent_key] -= 1
+                if indegree[dependent_key] == 0:
+                    heapq.heappush(
+                        ready, (position[dependent_key], dependent_key)
                     )
-                ),
-                None,
+        if len(ordered) != len(pending):
+            completed = {id(occurrence.expr) for occurrence in ordered}
+            blocked = next(
+                occurrence for occurrence in pending if id(occurrence.expr) not in completed
             )
-            if ready is None:
-                blocked = pending[0]
-                missing = required[id(blocked.expr)]
-                raise AnalysisError(
-                    f"{describe(blocked.expr)}: performance plan invariant: "
-                    f"scope {describe(scope.owner)} has a dependency cycle through "
-                    f"predecessor {describe(missing[0])}"
-                )
-            pending.remove(ready)
-            ordered.append(ready)
-            completed.add(id(ready.expr))
+            missing = next(
+                dependency
+                for dependency in required[id(blocked.expr)]
+                if id(dependency) not in completed
+            )
+            raise AnalysisError(
+                f"{describe(blocked.expr)}: performance plan invariant: "
+                f"scope {describe(scope.owner)} has a dependency cycle through "
+                f"predecessor {describe(missing)}"
+            )
         return tuple(ordered)
 
     def solve(
@@ -383,19 +418,12 @@ def build_timeline(
 
         for occurrence in ordered_occurrences(scope):
             ready = origin_ns
-            for predecessor_expr in occurrence.predecessors:
-                predecessor = plan_by_id.get(id(predecessor_expr))
-                if predecessor is None or predecessor.expr is not predecessor_expr:
-                    raise AnalysisError(
-                        f"{describe(occurrence.expr)}: performance plan invariant: "
-                        f"predecessor {describe(predecessor_expr)} has no occurrence plan"
-                    )
-                visible = dependency_entry(predecessor, occurrence)
+            for predecessor, visible in predecessors(occurrence):
                 predecessor_entry = available.get(id(visible))
                 if predecessor_entry is None or predecessor_entry.expr is not visible:
                     raise AnalysisError(
                         f"{describe(occurrence.expr)}: performance plan invariant: "
-                        f"predecessor {describe(predecessor_expr)} materialized in "
+                        f"predecessor {describe(predecessor.expr)} materialized in "
                         f"{describe(predecessor.materialized_scope.owner)} has no "
                         f"completed timeline entry visible from "
                         f"{describe(scope.owner)}"
