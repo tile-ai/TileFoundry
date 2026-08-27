@@ -45,9 +45,7 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
             cost = get_metadata(call, ComputeCostMetadata)
             moved = get_metadata(call, TrafficMetadata)
             if cost is None or moved is None:
-                raise AnalysisError(
-                    f"performance: missing compute/memory record for {call!r}"
-                )
+                raise AnalysisError(f"performance: missing compute/memory record for {call!r}")
             duration = _local_duration_ns(
                 cost,
                 facts,
@@ -73,8 +71,8 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
                     TimelineMetadata(
                         start_ns=cursor,
                         end_ns=cursor + scheduled,
-                        trips=1,
-                        stride_ns=0,
+                        trips=trips,
+                        stride_ns=scheduled if trips > 1 else 0,
                     )
                 ),
             )
