@@ -177,40 +177,13 @@ class FunctionScope:
 
 
 @dataclass
-class CallFeed(Generic[T]):
-    """Values supplied to one callee, keyed by formal parameter identity."""
-
-    by_param: Mapping[int, T]
-
-    def value_for(self, param: Param) -> T: ...
-
-
-class CallFeedProvider(Protocol[T]):
-    def build_call_feed(self, callee: Function, supplied: tuple[T, ...]) -> CallFeed[T]: ...
-    def scope_for(self, callee: Function) -> FunctionScope | None: ...
-
-
-@dataclass
 class TypeInferContext:
-    """Walk-local type cache, mesh scope, and elaboration cache.
-
-    Attributes:
-        scope: attribute; where the walk is reading, or ``None`` when it was
-            given no scope.
-        cache: attribute; memoized ``id(expr)`` to inferred ``Type``.
-        mesh_scope: attribute; enclosing mesh scope tuple.
-        elaboration_cache: attribute; memoized specialization instances.
-    """
+    """Walk location and parser-owned child-module resolution state."""
 
     scope: FunctionScope | None = None
-    cache: dict[int, Type] = field(default_factory=dict)
     mesh_scope: tuple = ()
-    elaboration_cache: dict[tuple, Any] = field(default_factory=dict)
-    call_feed_provider: CallFeedProvider[Type] | None = None
-    feed: CallFeed[Type] | None = None
+    call_feed_provider: object | None = None
 
-    def type_of(self, expr: Expr) -> Type: ...
-    def build_call_feed(self, callee: Function, supplied: tuple[Type, ...]) -> CallFeed[Type]: ...
     def scope_for(self, callee: Function) -> FunctionScope | None: ...
     def error(self, node: Expr | Stmt, msg: str) -> NoReturn: ...
 ```
@@ -226,16 +199,10 @@ nothing of that kind rather than guessing.
   - `scope` MUST be the only context state describing where a walk is reading,
     and the pair MUST be reachable from the package root together, since one is
     how the other is constructed.
-  - A `CallFeed` MUST contain only the formal parameter identity to value mapping;
-    it MUST NOT carry a Module, scope, reading, or parser metadata.
-  - `CallFeedProvider` is context-owned: Parser, Type Inference, and function-level
-    Evaluator provide their own value type and ownership rules. HIR consumes
-    `TypeInferContext.build_call_feed()` and does not own a resolver.
-  - `type_of` is a walk-local cache only — it holds no dispatch rule of its
-    own. A cache miss delegates to `TypeInferVisitor(self).visit(expr)`
-    (below), whose `visit_Call` is what consults
-    `typeinfer_registry.lookup(type(target))`; an unregistered Op call
-    routes through `ctx.error`.
+  - `call_feed_provider` is parser-owned child-module resolution state. It is
+    retained until the type-inference rewrite replaces its feed API with
+    `child_for(callee)`.
+  - Type memory belongs to the active visitor memo, not to this context.
 
 Registry + decorator:
 

@@ -214,11 +214,7 @@ def reachable_functions(root: Function) -> tuple[Function, ...]:
 
 def called_functions(fn: Function) -> tuple[Function, ...]:
     """Every Function *fn* calls directly, in the order its body reaches them."""
-    found: list[Function] = []
-    for expr in postorder(fn.body):
-        if isinstance(expr, Call) and isinstance(expr.target, Function):
-            found.append(expr.target)
-    return tuple(found)
+    return tuple(expr.target for expr in postorder(fn.body) if isinstance(expr, Call) and isinstance(expr.target, Function))
 
 
 def owning_module(root: Module, fn: Function) -> Module:

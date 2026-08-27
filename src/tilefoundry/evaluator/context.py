@@ -4,8 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from tilefoundry.visitor_registry.contexts import CallFeed
-
 
 @dataclass(frozen=True)
 class EvalContext:
@@ -26,7 +24,6 @@ class EvalContext:
 class FunctionEvalContext:
     """Runtime state for one recursive function invocation."""
 
-    feed: CallFeed[Any]
     loaded_module: Any | None = None
     device: str = "cpu"
     dim_bindings: dict[str, int] | None = None

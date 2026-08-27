@@ -71,7 +71,7 @@ from tilefoundry.ir.types.shard import (
 )
 from tilefoundry.ir.types.shard.layout import LayoutBase
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
-from tilefoundry.visitor_registry.contexts import CallFeed, FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 T = TypeVar("T")
@@ -774,7 +774,7 @@ class FuncParserContext:
 
 
 @dataclass(frozen=True)
-class ParserCallFeedProvider:
+class ParserChildModuleProvider:
     """Build call feeds from the authored module scope during parsing."""
 
     module_scope: object | None
@@ -786,23 +786,6 @@ class ParserCallFeedProvider:
             if getattr(child, "owns", lambda *_args, **_kwargs: False)(callee, derived=True):
                 return child
         return None
-
-    def build_call_feed(self, callee: object, supplied: tuple[object, ...]) -> CallFeed:
-        child = self._child_for(callee)
-        params = tuple(p for p in callee.params if not (child is not None and p.is_const))
-        if len(supplied) != len(params):
-            kind = "activation(s)" if child is not None else "parameter(s)"
-            raise VerifyError(
-                f"hir Function call {callee.name!r}: arity mismatch — "
-                f"callee declares {len(params)} {kind}, call passed {len(supplied)}"
-            )
-        given = iter(supplied)
-        return CallFeed(
-            {
-                id(param): param.type if child is not None and param.is_const else next(given)
-                for param in callee.params
-            }
-        )
 
     def scope_for(self, callee: object) -> FunctionScope | None:
         child = self._child_for(callee)
@@ -1168,7 +1151,7 @@ class MatchContext:
     def from_function(cls, function: FuncParserContext) -> MatchContext:
         scope = LexicalScope()
         provider = (
-            ParserCallFeedProvider(function.module_scope)
+            ParserChildModuleProvider(function.module_scope)
             if function.module_scope is not None
             else None
         )
@@ -1205,7 +1188,7 @@ class MatchContext:
         if switching_function:
             scope = LexicalScope()
             provider = (
-                ParserCallFeedProvider(function.module_scope)
+                ParserChildModuleProvider(function.module_scope)
                 if function is not None and function.module_scope is not None
                 else None
             )

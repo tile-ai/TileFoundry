@@ -8,7 +8,7 @@ does not lower to TIR or invoke codegen / runtime.
 ```mermaid
 flowchart TB
     evaluate["<b>evaluate()</b><br/>entry"]
-    Evaluator["<b>Evaluator</b><br/>ExprVisitor[Value]"]
+    Evaluator["<b>EvaluatorVisitor</b><br/>ExprVisitor[Value]"]
     registry["<b>eval_registry</b><br/>register_eval(Op)"]
     handler["per-op handler<br/>(EvalContext → Value)"]
     Value["<b>Value</b>"]
@@ -167,7 +167,7 @@ Evaluation is an `ExprVisitor[Value]`
 a shared sub-DAG ([hir §1.1](./hir.md#11-function)) is evaluated once:
 
 ```python
-class Evaluator(ExprVisitor):
+class EvaluatorVisitor(ExprVisitor):
     """Evaluate expressions with identity-based memoization."""
 
     def visit(self, expr: Expr) -> Value: ...
@@ -200,7 +200,7 @@ class Evaluator(ExprVisitor):
 A `GridRegionExpr` ([hir §1.2](./hir.md#12-gridregionexpr)) is a loop over its iteration
 domain whose carry chain starts from `init_args`:
 
-`Evaluator.visit_GridRegionExpr(region)` implements the loop; there is no
+`EvaluatorVisitor.visit_GridRegionExpr(region)` implements the loop; there is no
 separate `eval_grid` function.
 
 - The first iteration binds each `carried_args` phi to the matching

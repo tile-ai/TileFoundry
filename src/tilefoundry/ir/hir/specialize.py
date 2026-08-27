@@ -19,12 +19,11 @@ from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types.substitute import (
     dim_vars_by_name,
     has_symbolic_dims,
-    substitute_dims,
 )
 from tilefoundry.ir.visitor import ExprVisitor, ExprWalker
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
-from .function import Function, rebuild_at
+from .function import Function
 
 
 def canonical_specialization_signature(
@@ -189,10 +188,7 @@ def specialize_function(
 
     if not set(dims) & set(residual_dims(chosen)):
         return chosen
-    bound = tuple(substitute_dims(param.type, dims) for param in chosen.params)
-    return rebuild_at(
-        chosen, bound, ctx if ctx is not None else TypeInferContext(), dims=dims
-    )
+    raise NotImplementedError("specialization rebuild is restored in M2")
 
 
 def specialize_concretely(
@@ -432,6 +428,7 @@ __all__ = [
     "PROVENANCE",
     "SpecializationError",
     "bound_dims_of",
+    "canonical_specialization_signature",
     "dim_vars_reached",
     "is_concrete",
     "origin_of",

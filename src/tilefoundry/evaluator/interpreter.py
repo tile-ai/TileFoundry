@@ -24,7 +24,6 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.visitor import ExprVisitor
-from tilefoundry.visitor_registry.contexts import CallFeed
 
 
 def _default_device() -> str:
@@ -77,21 +76,16 @@ def child_module_instance(loaded_module, callee: Function):
     return matches[0] if matches else None
 
 
-class Evaluator(ExprVisitor):
+class EvaluatorVisitor(ExprVisitor):
     """``ExprVisitor[Value]`` evaluated with one memo per execution scope."""
 
-    def __init__(
-        self, env: dict[int, Value], device: str,
-        dim_env: dict[str, int] | None = None,
-        reading=None,
-        function_context: FunctionEvalContext | None = None,
-    ) -> None:
+    def __init__(self, ctx: FunctionEvalContext, *, memo=None) -> None:
         super().__init__()
-        self.env = env
-        self.device = device
-        self.dim_env = dim_env or {}
-        self.function_context = function_context
-        self.reading = reading if function_context is None else function_context.loaded_module
+        self.env = dict(memo or {})
+        self.device = ctx.device
+        self.dim_env = ctx.dim_bindings or {}
+        self.function_context = ctx
+        self.reading = ctx.loaded_module
     def visit_Var(self, var: Var) -> Value:
         try:
             return self.env[id(var)]
@@ -145,21 +139,13 @@ class Evaluator(ExprVisitor):
             for param in callee.params
         ]
         target = _select_variant(callee, args) if callee.variants else callee
-        feed = CallFeed({id(param): arg for param, arg in zip(target.params, args)})
         function_context = FunctionEvalContext(
-            feed=feed,
             loaded_module=child if child is not None else self.reading,
             device=self.device,
             dim_bindings=_bind_dim_vars(target.params, args),
         )
-        sub_env = dict(feed.by_param)
-        return Evaluator(
-            sub_env,
-            self.device,
-            function_context.dim_bindings,
-            function_context.loaded_module,
-            function_context=function_context,
-        ).visit(target.body)
+        sub_env = {id(param): arg for param, arg in zip(target.params, args)}
+        return EvaluatorVisitor(function_context, memo=sub_env).visit(target.body)
 
     def _resolve_loop_field(self, dim, what: str) -> int:
         """Resolve loop field.
@@ -212,8 +198,9 @@ class Evaluator(ExprVisitor):
 
             last = None
             for i in indices:
-                last = Evaluator(
-                    iter_env(i, ()), self.device, self.dim_env, self.reading
+                last = EvaluatorVisitor(
+                    FunctionEvalContext(self.reading, self.device, self.dim_env),
+                    memo=iter_env(i, ()),
                 ).visit(region.body)
             if last is None:
                 raise EvalError(
@@ -223,8 +210,9 @@ class Evaluator(ExprVisitor):
 
         carried = [self.visit(init) for init in region.init_args]
         for i in indices:
-            sub = Evaluator(
-                iter_env(i, carried), self.device, self.dim_env, self.reading
+            sub = EvaluatorVisitor(
+                FunctionEvalContext(self.reading, self.device, self.dim_env),
+                memo=iter_env(i, carried),
             )
             carried = [sub.visit(y) for y in region.yield_values]
         return carried[0] if len(carried) == 1 else TupleValue(tuple(carried))
@@ -318,7 +306,9 @@ def _run_bound(fn: Function, args, *, device: str | None = None, reading=None):
     target = _select_variant(fn, values) if fn.variants else fn
     env = {id(param): value for param, value in zip(target.params, values)}
     dim_env = _bind_dim_vars(target.params, values)
-    return _unwrap(Evaluator(env, device, dim_env, reading).visit(target.body))
+    return _unwrap(
+        EvaluatorVisitor(FunctionEvalContext(reading, device, dim_env), memo=env).visit(target.body)
+    )
 
 
 def evaluate(fn_or_call, *inputs, backend: str = "torch", device: str | None = None):
@@ -352,11 +342,11 @@ def evaluate(fn_or_call, *inputs, backend: str = "torch", device: str | None = N
         target = _select_variant(fn, values) if fn.variants else fn
         env = {id(param): value for param, value in zip(target.params, values)}
         dim_env = _bind_dim_vars(target.params, values)
-        result = Evaluator(env, device, dim_env).visit(target.body)
+        result = EvaluatorVisitor(FunctionEvalContext(None, device, dim_env), memo=env).visit(target.body)
     elif isinstance(fn_or_call, Call):
         if inputs:
             raise EvalError("evaluator: a Call entry takes no positional inputs")
-        result = Evaluator({}, device).visit(fn_or_call)
+        result = EvaluatorVisitor(FunctionEvalContext(None, device), memo={}).visit(fn_or_call)
     else:
         raise EvalError(
             f"evaluator: expected a Function or Call, got {type(fn_or_call).__name__}"
