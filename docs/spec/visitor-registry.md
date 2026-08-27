@@ -251,6 +251,8 @@ class TypeInferVisitor(ExprVisitor[Type]):
     def visit_leaf_Tuple(self, tup: Tuple, field_types, ctx): ...
     def visit_GridRegionExpr(self, grid, ctx): ...
     def visit_leaf_ShapeOf(self, shape_of: ShapeOf, operands, ctx) -> Type: ...
+
+def inference_type(expr: Expr, ctx: TypeInferContext | None = None) -> Type: ...
 ```
 
 - constraints:
@@ -271,6 +273,9 @@ class TypeInferVisitor(ExprVisitor[Type]):
     ([hir §1.2](./hir.md#12-gridregionexpr)). It overrides the complete node
     visit; the base has no per-kind operand hook.
   - `visit_leaf_ShapeOf` returns the node's declared rank-0 i32 type.
+  - `inference_type` creates a fresh non-owning visitor and returns the inferred
+    type without writing it to `expr.type`; traversal-wide inference continues
+    to use its own shared visitor and memo.
 
 Lifecycle: parser builds a `TypeInferContext` and infers each newly built call
 at parse time (see [parser](./parser.md)). The analysis preflight then walks

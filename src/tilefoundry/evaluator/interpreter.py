@@ -8,7 +8,7 @@ from typing import Any
 
 import torch
 
-from tilefoundry.evaluator.context import EvalContext, FunctionEvalContext
+from tilefoundry.evaluator.context import EvaluateContext
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.evaluator.registry import eval_registry
 from tilefoundry.evaluator.value import (
@@ -83,21 +83,21 @@ class EvaluatorVisitor(ExprVisitor):
     def __init__(self, *, memo=None) -> None:
         super().__init__(memo=memo)
 
-    def visit_leaf_Var(self, var: Var, _operands, ctx: FunctionEvalContext) -> Value:
+    def visit_leaf_Var(self, var: Var, _operands, ctx: EvaluateContext) -> Value:
         raise EvalError(f"evaluator: unbound variable {var.name!r}")
 
     def visit_leaf_Constant(
-        self, const: Constant, _operands, ctx: FunctionEvalContext
+        self, const: Constant, _operands, ctx: EvaluateContext
     ) -> TensorValue:
         data = torch.as_tensor(
             const.value, dtype=to_torch_dtype(const.type.dtype), device=ctx.device
         )
         return TensorValue(data=data, type=const.type)
 
-    def visit_leaf_Tuple(self, tup: Tuple, operands, ctx: FunctionEvalContext) -> TupleValue:
+    def visit_leaf_Tuple(self, tup: Tuple, operands, ctx: EvaluateContext) -> TupleValue:
         return TupleValue(operands)
 
-    def visit_leaf_Call(self, call: Call, args, ctx: FunctionEvalContext) -> Value:
+    def visit_leaf_Call(self, call: Call, args, ctx: EvaluateContext) -> Value:
         target = call.target
         if isinstance(target, Function):
             return self._call_function(target, args, ctx)
@@ -107,18 +107,10 @@ class EvaluatorVisitor(ExprVisitor):
                 f"evaluator: no @register_eval handler for "
                 f"{type(target).__name__}"
             )
-        return handler(
-            EvalContext(
-                op=target,
-                args=args,
-                result_type=call.type,
-                device=ctx.device,
-                dim_bindings=ctx.dim_bindings or {},
-            )
-        )
+        return handler(ctx.for_op(target, args, call.type))
 
     def _call_function(
-        self, callee: Function, arg_values, ctx: FunctionEvalContext
+        self, callee: Function, arg_values, ctx: EvaluateContext
     ) -> Value:
         child = child_module_instance(ctx.loaded_module, callee)
         supplied = [p for p in callee.params if not (child is not None and p.is_const)]
@@ -142,7 +134,7 @@ class EvaluatorVisitor(ExprVisitor):
                     f"evaluator: call to {target.name!r}: argument for "
                     f"{param.name!r} expects {param.annotation!r}, got {value.type!r}"
                 )
-        function_context = FunctionEvalContext(
+        function_context = EvaluateContext(
             loaded_module=child if child is not None else ctx.loaded_module,
             device=ctx.device,
             dim_bindings=_bind_dim_vars(target.params, args),
@@ -150,7 +142,7 @@ class EvaluatorVisitor(ExprVisitor):
         memo = {id(param): (param, arg) for param, arg in zip(target.params, args)}
         return EvaluatorVisitor(memo=memo).visit(target.body, function_context)
 
-    def _resolve_loop_field(self, dim, what: str, ctx: FunctionEvalContext) -> int:
+    def _resolve_loop_field(self, dim, what: str, ctx: EvaluateContext) -> int:
         """Resolve loop field.
 
         Resolve a ``GridRegionExpr`` ``extent`` / ``step`` ``ShapeDim`` to a
@@ -161,12 +153,12 @@ class EvaluatorVisitor(ExprVisitor):
         if isinstance(dim, int):
             return dim
         try:
-            return resolve_dim(dim, ctx.dim_bindings or {})
+            return resolve_dim(dim, ctx.dim_bindings)
         except ValueError as exc:
             raise EvalError(f"evaluator: GridRegion {what}: {exc}") from None
 
     def visit_GridRegionExpr(
-        self, region: GridRegionExpr, ctx: FunctionEvalContext
+        self, region: GridRegionExpr, ctx: EvaluateContext
     ) -> Value:
         init_values = tuple(self.visit(init, ctx) for init in region.init_args)
         iv = region.induction_var
@@ -311,7 +303,12 @@ def _run_bound(fn: Function, args, *, device: str | None = None, reading=None):
     dim_env = _bind_dim_vars(target.params, values)
     return _unwrap(
         EvaluatorVisitor(memo=memo).visit(
-            target.body, FunctionEvalContext(reading, device, dim_env)
+            target.body,
+            EvaluateContext(
+                loaded_module=reading,
+                device=device,
+                dim_bindings=dim_env,
+            ),
         )
     )
 
@@ -348,13 +345,14 @@ def evaluate(fn_or_call, *inputs, backend: str = "torch", device: str | None = N
         memo = {id(param): (param, value) for param, value in zip(target.params, values)}
         dim_env = _bind_dim_vars(target.params, values)
         result = EvaluatorVisitor(memo=memo).visit(
-            target.body, FunctionEvalContext(None, device, dim_env)
+            target.body,
+            EvaluateContext(device=device, dim_bindings=dim_env),
         )
     elif isinstance(fn_or_call, Call):
         if inputs:
             raise EvalError("evaluator: a Call entry takes no positional inputs")
         result = EvaluatorVisitor(memo={}).visit(
-            fn_or_call, FunctionEvalContext(None, device)
+            fn_or_call, EvaluateContext(device=device)
         )
     else:
         raise EvalError(

@@ -8,7 +8,7 @@ import torch
 from tests.evaluator.eval_utils import EvalCase, run_eval_case
 from tests.ops.cost_utils import CostCase, run_cost_case
 from tests.ops.typeinfer_utils import ExpectedError, TypeInferCase, infer_call, run_typeinfer_case
-from tilefoundry.evaluator.context import EvalContext
+from tilefoundry.evaluator.context import EvaluateContext
 from tilefoundry.evaluator.registry import eval_registry
 from tilefoundry.evaluator.value import TensorValue, TupleValue
 from tilefoundry.ir.hir.tensor.split import Split
@@ -88,7 +88,7 @@ def test_split_values_carry_their_exact_inferred_field_types() -> None:
     assert handler is not None
 
     result = handler(
-        EvalContext(
+        EvaluateContext(
             op=op,
             args=(TensorValue(torch.arange(32).reshape(8, 4).float(), source_type),),
             result_type=result_type,

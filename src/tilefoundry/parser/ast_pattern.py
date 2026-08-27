@@ -796,9 +796,7 @@ class ParserTypeInferContext(TypeInferContext):
 
     def child_for(self, callee: object):
         if self.child_resolver is not None:
-            child = self.child_resolver.child_for(callee)
-            if child is not None:
-                return child
+            return self.child_resolver.child_for(callee)
         return super().child_for(callee)
 
 @dataclass(frozen=True)

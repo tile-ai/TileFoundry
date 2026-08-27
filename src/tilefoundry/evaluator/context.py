@@ -1,33 +1,22 @@
-"""Eval context handed to a ``@register_eval`` handler."""
+"""Evaluation context shared by recursive walks and registered Op handlers."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 
 @dataclass(frozen=True)
-class EvalContext:
-    """Operands + op + result type for one Op evaluation."""
+class EvaluateContext:
+    """Operands, Op-local values, and runtime state for one evaluation."""
 
-    op: Any
-    args: tuple[Any, ...]
-    result_type: Any
-    device: str = "cpu"
-    dim_bindings: dict[str, int] | None = None
-
-    def __post_init__(self) -> None:
-        if self.dim_bindings is None:
-            object.__setattr__(self, "dim_bindings", {})
-
-
-@dataclass(frozen=True)
-class FunctionEvalContext:
-    """Runtime state for one recursive function invocation."""
-
+    op: Any = None
+    args: tuple[Any, ...] = ()
+    result_type: Any = None
     loaded_module: Any | None = None
     device: str = "cpu"
-    dim_bindings: dict[str, int] | None = None
+    dim_bindings: Mapping[str, int] = field(default_factory=dict)
 
-    def __post_init__(self) -> None:
-        if self.dim_bindings is None:
-            object.__setattr__(self, "dim_bindings", {})
+    def for_op(self, op: Any, args: tuple[Any, ...], result_type: Any) -> EvaluateContext:
+        """Add one Call's evaluated operands while preserving runtime state."""
+        return replace(self, op=op, args=args, result_type=result_type)

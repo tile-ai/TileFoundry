@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from tilefoundry.evaluator.context import EvalContext, FunctionEvalContext
+from tilefoundry.evaluator.context import EvaluateContext
 from tilefoundry.evaluator.registry import eval_registry, register_eval
 from tilefoundry.evaluator.value import (
     EvalError,
@@ -22,8 +22,7 @@ __all__ = [
     "Value",
     "TensorValue",
     "TupleValue",
-    "EvalContext",
-    "FunctionEvalContext",
+    "EvaluateContext",
     "EvalError",
     "to_torch_dtype",
     "as_layout_view",

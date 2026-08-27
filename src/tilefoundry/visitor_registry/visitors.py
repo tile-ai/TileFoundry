@@ -179,6 +179,13 @@ class TypeInferVisitor(ExprVisitor[Type]):
         ctx.error(expr, f"no typeinfer rule for Expr subclass {type(expr).__name__}")
 
 
+def inference_type(expr: Expr, ctx: TypeInferContext | None = None) -> Type:
+    """Infer and return *expr*'s type without writing it back to the IR."""
+    return TypeInferVisitor(owns_body=False).visit(
+        expr, ctx if ctx is not None else TypeInferContext()
+    )
+
+
 class VerifyVisitor(StmtVisitor[None]):
     """Dispatch verify_stmt per Stmt subclass.
 
@@ -304,6 +311,7 @@ class CostEvaluator(ExprWalker[Cost]):
 
 __all__ = [
     "TypeInferVisitor",
+    "inference_type",
     "VerifyVisitor",
     "CodegenVisitor",
     "CostEvaluator",
