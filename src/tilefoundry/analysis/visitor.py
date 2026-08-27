@@ -16,12 +16,14 @@ from .walk import children
 
 @dataclass
 class AnalyzeContext:
-    """Per-call inputs and the structural facts shared by analysis families."""
+    """Per-call inputs and the current shared lexical scope."""
 
     module: Module
     target: Target
     level: str | None
     options: object | None
+    root: "Scope"
+    current: "Scope"
     @classmethod
     def create(
         cls,
@@ -31,8 +33,15 @@ class AnalyzeContext:
         level: str | None = None,
         options: object | None = None,
     ) -> "AnalyzeContext":
-        """Build a context and collect one structural memo for ``graph``."""
-        return cls(module, target, level, options)
+        """Build a context and collect one scope/access tree for ``graph``."""
+        from .scope import build_scopes  # noqa: PLC0415
+
+        root = build_scopes(module, graph)
+        return cls(module, target, level, options, root, root)
+
+    def enter(self, child: "Scope") -> "AnalyzeContext":
+        """Return a context focused on one child lexical scope."""
+        return type(self)(self.module, self.target, self.level, self.options, self.root, child)
 
 
 @dataclass(frozen=True, eq=False)

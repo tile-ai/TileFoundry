@@ -423,7 +423,7 @@ layer settles is which type a field holds and what its keys name:
   - A rendering MUST report what the caller requested. Dependency records nobody
     requested MUST stay on the IR and MUST NOT be reported except for roofline's
     bounded evidence defined below. Record ownership MUST come from the
-    Target-selected descriptor ([§3.1](#31-target-selected-analyzers)).
+    Target-selected descriptor ([§3.2](#32-target-selected-analyzers)).
   - Every rendering of one run MUST select records through one shared decision
     and MUST show only records actually written.
   - Every reported quantity MUST come from a record, except a total that is the
@@ -1410,7 +1410,18 @@ def analyze(
     renderings of it and of the Metadata on the IR, and MUST NOT be fields of
     it.
 
-### 3.1 Target-selected Analyzers
+### 3.1 Shared Scope and Access
+
+The normalized HIR is visited once per `analyze()` call. That visit produces a
+`Scope` tree parallel to Function/GridRegionExpr nesting and `Access` relations
+for the narrow and device views. `Scope.domain` is the accumulated authored
+loop domain; `Scope.accesses` and `Scope.refused` are the only family inputs for
+loop footprints, movement, and placement. An `Access` stores only its relation
+and allocation expression; storage level and element width are read from the
+allocation type. A refused descendant makes its owning scope unknown for that
+view. Non-affine runtime indices retain the widest legal access approximation.
+
+### 3.2 Target-selected Analyzers
 
 ```python
 class AnalyzeContext:
@@ -1418,7 +1429,8 @@ class AnalyzeContext:
     target: Target
     level: str | None
     options: object | None
-    structural_memo: StructuralMemo
+    root: Scope
+    current: Scope
 
 
 AnalysisCallable = Callable[
@@ -1462,8 +1474,8 @@ class Target:
 - constraints:
   - `AnalysisCallable` MUST receive the normalized Function graph and one
     `AnalyzeContext` carrying the exact Module, Target, resolved topology level,
-    caller options, and shared structural memo. The level MAY be `None` only
-    when the Module declares no topology; options MAY be `None`.
+    caller options, and the shared root/current `Scope` view. The level MAY be
+    `None` only when the Module declares no topology; options MAY be `None`.
   - Analyze MUST obtain every root and dependency from the same exact Target
     instance through `get_analyzer`.
   - A Target subclass MUST inherit its base Analyzers through normal Python
