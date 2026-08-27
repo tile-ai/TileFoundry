@@ -774,7 +774,7 @@ class FuncParserContext:
 
 
 @dataclass(frozen=True)
-class ParserChildModuleProvider:
+class ParserCallFeedProvider:
     """Build call feeds from the authored module scope during parsing."""
 
     module_scope: object | None
@@ -1151,7 +1151,7 @@ class MatchContext:
     def from_function(cls, function: FuncParserContext) -> MatchContext:
         scope = LexicalScope()
         provider = (
-            ParserChildModuleProvider(function.module_scope)
+            ParserCallFeedProvider(function.module_scope)
             if function.module_scope is not None
             else None
         )
@@ -1188,7 +1188,7 @@ class MatchContext:
         if switching_function:
             scope = LexicalScope()
             provider = (
-                ParserChildModuleProvider(function.module_scope)
+                ParserCallFeedProvider(function.module_scope)
                 if function is not None and function.module_scope is not None
                 else None
             )

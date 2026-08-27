@@ -1836,18 +1836,25 @@ def _derive_meshes_from_body(expr) -> tuple[Mesh | None, Mesh | None]:
     return deriver.cta_mesh, deriver.thread_mesh
 
 
+class _CalleeCollector(ExprWalker[None]):
+    """Collect the set of HIR function names called anywhere in an Expr."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.found: set[str] = set()
+
+    def visit_Call(self, call: Call) -> None:
+        tgt = call.target
+        if isinstance(tgt, HirFunction):
+            self.found.add(tgt.name)
+        self.visit_operands(call)
+
+
 def _collect_hir_callee_names(expr) -> set[str]:
     """Return the set of HIR function names called anywhere in ``expr``."""
-    found: set[str] = set()
-
-    class _Collector(ExprWalker[None]):
-        def visit_Call(self, call: Call) -> None:
-            if isinstance(call.target, HirFunction):
-                found.add(call.target.name)
-            self.visit_operands(call)
-
-    _Collector().visit(expr)
-    return found
+    collector = _CalleeCollector()
+    collector.visit(expr)
+    return collector.found
 
 
 def _topo_order_dispatch_groups(

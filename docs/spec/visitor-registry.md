@@ -184,6 +184,8 @@ class TypeInferContext:
     mesh_scope: tuple = ()
     call_feed_provider: object | None = None
 
+    def type_of(self, expr: Expr) -> Type: ...
+    def local_type_of(self, expr: Expr) -> Type: ...
     def scope_for(self, callee: Function) -> FunctionScope | None: ...
     def error(self, node: Expr | Stmt, msg: str) -> NoReturn: ...
 ```
@@ -225,7 +227,7 @@ Visitor:
 
 ```python
 class TypeInferVisitor(ExprVisitor[Type]):
-    def __init__(self, ctx: TypeInferContext): ...   # ctx carries the cache and helpers
+    def __init__(self, ctx: TypeInferContext): ...   # ctx carries the helpers
     def visit_Var(self, var: Var): ...               # return the Var's type
     def visit_Constant(self, c: Constant): ...       # the node's own declared type
     def visit_Call(self, call: Call): ...            # typeinfer_registry.lookup(type(call.target))
