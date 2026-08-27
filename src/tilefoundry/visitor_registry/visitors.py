@@ -121,9 +121,16 @@ class TypeInferVisitor(ExprVisitor[Type]):
 
         if callee.body is None or callee.variants:
             return callee.return_type
-        return TypeInferVisitor(
+
+        key = (id(callee), arg_types)
+        cached = self.ctx.instantiated_memo.get(key)
+        if cached is not None:
+            return cached
+        result = TypeInferVisitor(
             self.ctx.for_callee(callee), memo=memo, owns_body=False
         ).visit(callee.body)
+        self.ctx.instantiated_memo[key] = result
+        return result
 
     def visit_leaf_Tuple(self, tup: Tuple, operands) -> Type:
         """Visit Tuple.

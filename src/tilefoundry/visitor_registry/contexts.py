@@ -74,6 +74,9 @@ class TypeInferContext:
     mesh_scope: tuple = ()
     child_resolver: ChildModuleResolver | None = None
     memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
+    instantiated_memo: dict[tuple[int, tuple[Type, ...]], Type] = field(
+        default_factory=dict, repr=False, compare=False
+    )
 
     def child_for(self, callee: object):
         """Return the direct child module that owns *callee*, if any."""
@@ -94,7 +97,7 @@ class TypeInferContext:
         return FunctionScope(child or self.scope.module, callee)
 
     def for_callee(self, callee: object) -> TypeInferContext:
-        """Move this context to *callee* while preserving its concrete class."""
+        """Move to *callee* with a fresh scope memo and the shared call cache."""
         return replace(self, scope=self.scope_for(callee), memo={})
 
     def type_of(self, expr: Expr) -> Type:

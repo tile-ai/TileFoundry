@@ -23,6 +23,7 @@ from tilefoundry.ir.core.pattern import locate_dim_var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.ir.visitor import ExprVisitor
 
 
@@ -135,6 +136,12 @@ class EvaluatorVisitor(ExprVisitor):
             for param in callee.params
         ]
         target = _select_variant(callee, args) if callee.variants else callee
+        for param, value in zip(target.params, args):
+            if not types_compatible(param.annotation, value.type):
+                raise EvalError(
+                    f"evaluator: call to {target.name!r}: argument for "
+                    f"{param.name!r} expects {param.annotation!r}, got {value.type!r}"
+                )
         function_context = FunctionEvalContext(
             loaded_module=child if child is not None else self.reading,
             device=self.device,

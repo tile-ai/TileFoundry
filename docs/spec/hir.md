@@ -126,6 +126,11 @@ Caller-supplied layout (sharding) flowing into a layout-unconstrained
 parameter propagates through the body, including through a `Tuple` or
 `GridRegionExpr` return.
 
+Within one inference traversal, repeated calls to the same `Function` object
+with equal argument types MUST reuse the previously inferred result type. The
+cache key uses callee identity and the argument-type tuple; the cached value is
+only a `Type`, never a derived `Function` or a replacement `Call.target`.
+
 Argument types bind to supplied parameters in order. A `ConstTensor` parameter
 owned by a direct child module is omitted from `Call.args` and keeps its
 declared type in the callee visitor memo; no value it stands for enters the IR,

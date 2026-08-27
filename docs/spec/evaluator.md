@@ -194,6 +194,9 @@ class EvaluatorVisitor(ExprVisitor):
   evaluated arguments to the callee's parameters in a fresh environment
   and evaluates the callee `body` — the same value semantics a call site
   has under type inference.
+  Each evaluated argument's HIR type MUST be compatible with its parameter
+  annotation under the Function-boundary rules in HIR; an incompatible value
+  raises `EvalError` before the callee body is evaluated.
 
 ## 5. `GridRegionExpr`
 

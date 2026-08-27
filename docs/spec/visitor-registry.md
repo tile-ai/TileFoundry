@@ -188,6 +188,9 @@ class TypeInferContext:
     mesh_scope: tuple = ()
     child_resolver: ChildModuleResolver | None = None
     memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
+    instantiated_memo: dict[tuple[int, tuple[Type, ...]], Type] = field(
+        default_factory=dict, repr=False, compare=False
+    )
 
     def child_for(self, callee: Function) -> Module | None: ...
     def scope_for(self, callee: Function) -> FunctionScope | None: ...
@@ -215,6 +218,12 @@ nothing of that kind rather than guessing.
   - `memo` is the current scope's identity-pinned type table. Crossing a
     Function boundary creates a fresh context table; a region keeps its scope
     and seeds a nested visitor table from the enclosing one.
+  - `instantiated_memo` is the traversal-wide Function-call result table,
+    keyed by `(id(callee), argument_types)`. Crossing a Function boundary MUST
+    preserve the same table object. It stores Types only and never introduces
+    a derived Function into the IR.
+  - The two tables have opposite lifetimes: `memo` is replaced at a Function
+    boundary, while `instantiated_memo` is shared by the complete traversal.
   - `type_of` only looks up `memo` and otherwise returns `expr.type`; it never
     starts a traversal or infers a type on demand.
   - `local_type_of` is the same read in a context without a topology window;
@@ -260,7 +269,8 @@ class TypeInferVisitor(ExprVisitor[Type]):
     `typeinfer_registry.lookup(type(target))`; an unregistered Op routes through
     `ctx.error`. Handlers read operand types through `ctx.type_of`, which sees
     the current scope's memo bindings. A `Function` binds parameters into a new visitor memo and walks
-    its body in a replaced child context ([hir §1.1](./hir.md#11-function)).
+    its body in a replaced child context ([hir §1.1](./hir.md#11-function)); repeated calls to the same
+    callee with equal argument types reuse the result in `instantiated_memo`.
   - `visit_leaf_Tuple` derives a structural `TupleType` directly from its
     already-derived operands, never the Tuple node's stamped `.type`.
   - `visit_operands_GridRegionExpr` derives init values outside the region,
