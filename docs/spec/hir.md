@@ -140,8 +140,8 @@ Omitting a parameter is valid only where, within that scope, the callee is
 uniquely owned by a direct child of the caller's owner
 ([core-ir §1](./core-ir.md#1-module)); before collection the authored binding
 answers the same question of the child it names. Ownership that is missing,
-ambiguous, or not a direct child supplies every declared parameter, as does
-so a standalone or low-level call cannot acquire implicit constants.
+ambiguous, or not a direct child supplies every declared parameter, so a
+standalone or low-level call cannot acquire implicit constants.
 
 Caller and callee MUST resolve one effective `Target` and one effective topology
 hierarchy: a same-kernel call is one execution context, whichever `Module` owns
