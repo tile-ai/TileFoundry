@@ -34,7 +34,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.compute_cost import _local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.visitor import StructuralMemoVisitor
+from tilefoundry.analysis.scope import build_scopes as StructuralMemoVisitor
 from tilefoundry.analysis.walk import collect_exprs, describe
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.metadata import ExecutionDomainMetadata
