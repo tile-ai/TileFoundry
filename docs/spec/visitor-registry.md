@@ -365,7 +365,7 @@ class VerifyContext(TypeInferContext):   # inherits scope / mesh_scope / type_of
 ```
 
 - constraints:
-  - shares typeinfer's type-of cache; adds a mesh-scope stack.
+  - adds a mesh-scope stack for verification traversal.
 
 Registry + decorator:
 

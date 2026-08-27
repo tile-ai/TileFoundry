@@ -17,7 +17,6 @@ from tilefoundry.ir.hir.tensor.reshape import is_induction_var_singleton_reshape
 from tilefoundry.ir.types import Type, callable_type_for
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
-from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 from .errors import AnalysisError
 from .walk import called_functions, describe, owning_module, postorder, tensor_types
@@ -35,10 +34,9 @@ def infer_authored_types(
     for fn in reversed(tuple(functions)):
         ctx = TypeInferContext(scope=FunctionScope(module, fn))
         for expr in postorder(fn.body):
-            computed = TypeInferVisitor(ctx).visit(expr)
+            computed = ctx.type_of(expr)
             if computed != expr.type:
                 object.__setattr__(expr, "type", computed)
-            ctx.cache[id(expr)] = computed
         if fn.body is not None and fn.return_type != fn.body.type:
             object.__setattr__(fn, "return_type", fn.body.type)
             object.__setattr__(fn, "type", callable_type_for(fn.params, fn.body.type))
