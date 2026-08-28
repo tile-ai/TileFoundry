@@ -19,6 +19,7 @@ from tilefoundry.ir.hir.specialize import DISPLAY_NAME
 from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.tir.intrinsic import intrinsic as _intrinsic
 from tilefoundry.ir.tir.verify import verify_prim_function
+from tilefoundry.ir.types.shard import Mesh
 from tilefoundry.module import UNDECLARED, _Entry
 from tilefoundry.parser import FuncParserContext, FunctionRole, parse_function
 from tilefoundry.parser.ast_pattern import LexicalScope, module_context_for_frame
@@ -228,6 +229,7 @@ def _parse_authored(
     key: object | None = None,
     target: object | None = None,
     topologies: tuple | None = None,
+    mesh: Mesh | None = None,
     module_context=None,
     closure: Mapping[str, Any] | None = None,
 ):
@@ -253,6 +255,7 @@ def _parse_authored(
             closure=closure,
             base=base,
             key=key,
+            mesh=mesh,
         )
     else:
         topology_scope = {
@@ -268,6 +271,7 @@ def _parse_authored(
             base=base,
             key=key,
             target=target if dialect == "tir" else None,
+            mesh=mesh,
             binding_name=binding_name,
         )
     return parse_function(fn_inner, context)
@@ -293,6 +297,7 @@ class _DeferredFunction:
     role: FunctionRole
     binding_name: str
     closure: Mapping[str, Any]
+    mesh: Mesh | None = None
     base: object | None = None
     key: object | None = None
     parsed: object | None = None
@@ -309,6 +314,7 @@ class _DeferredFunction:
             binding_name=self.binding_name,
             base=base,
             key=self.key,
+            mesh=self.mesh,
             module_context=self.module_context,
             closure=self.closure,
         )
@@ -357,16 +363,19 @@ class _DeferredFunction:
         return _wrap_converter
 
 
-def func(fn=None, *, topologies=UNDECLARED, target=None):
+def func(fn=None, *, topologies=UNDECLARED, target=None, mesh=None):
     """Decorator: parse an ``@func``-decorated function into HIR.
 
     Plain ``@func`` inherits its owning module's topology. Supplying a target or
     topology makes an implicit single-function module with its own execution
-    domain. A ``pass`` body declares a dispatch prototype whose implementations
-    are registered through :meth:`Function.specialize`.
+    domain. ``mesh`` names the function's outer execution domain in both its
+    signature and body. A ``pass`` body declares a dispatch prototype whose
+    implementations are registered through :meth:`Function.specialize`.
     """
     if target is not None:
         target_instance(target)
+    if mesh is not None and not isinstance(mesh, Mesh):
+        raise TypeError(f"tilefoundry.func: mesh must be a Mesh, got {type(mesh).__name__}")
     resolved_target = target
     declares_context = resolved_target is not None or topologies is not UNDECLARED
     declared_topologies = None if topologies is UNDECLARED else tuple(topologies)
@@ -381,6 +390,7 @@ def func(fn=None, *, topologies=UNDECLARED, target=None):
                 FunctionRole.ROOT,
                 fn_inner.__name__,
                 _capture_function_closure(fn_inner),
+                mesh=mesh,
             )
             module_context.declarations.append(declaration)
             return declaration
@@ -391,6 +401,7 @@ def func(fn=None, *, topologies=UNDECLARED, target=None):
             binding_name=fn_inner.__name__,
             target=resolved_target,
             topologies=declared_topologies,
+            mesh=mesh,
         )
         verify_function(ir)
         _register(ParsedFuncKind.KERNEL, ir, fn_inner.__name__, None)

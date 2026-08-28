@@ -736,6 +736,7 @@ class FuncParserContext:
     base: object | None = None
     key: object | None = None
     target: object | None = None
+    mesh: object | None = None
     output_count: int = 1
     hardware_context: Mapping[str, object] = field(default_factory=dict)
     binding_name: str | None = None
@@ -882,6 +883,7 @@ class ModuleBuildContext:
         closure: Mapping[str, object] | None = None,
         base: object | None = None,
         key: object | None = None,
+        mesh: object | None = None,
     ) -> FuncParserContext:
         topology_scope = {
             getattr(topology, "name", str(index)): topology
@@ -898,6 +900,7 @@ class ModuleBuildContext:
             base=base,
             key=key,
             target=self.target if dialect == "tir" else None,
+            mesh=mesh,
             binding_name=binding_name,
         )
 
@@ -1166,6 +1169,9 @@ class MatchContext:
             _TYPE_INFER_CONTEXT,
             ParserTypeInferContext(child_resolver=provider),
         )
+        if function.mesh is not None:
+            scope.define("mesh", function.mesh)
+            function.state.mesh_stack.append(function.mesh)
         return cls(
             function=function,
             module=None,

@@ -459,7 +459,8 @@ class MeshAxisPattern(ElementPattern):
         mesh = context.lexical_scope.lookup(binding)
         if mesh is None:
             try:
-                mesh = _resolve_reference(node.value, context)
+                reference = node if isinstance(node, ast.Name) else node.value
+                mesh = _resolve_reference(reference, context)
             except ParseError:
                 mesh = None
         if not isinstance(mesh, runtime.Mesh):
