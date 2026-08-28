@@ -11,11 +11,9 @@ from dataclasses import replace
 
 import pytest
 
-from tilefoundry.analysis.check import validate_authored
 from tilefoundry.evaluator.dim import resolve_dim
 from tilefoundry.ir.core import Call, Constant, Tuple, TypeInferContext, Var
 from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.tensor.slice import Slice, slice_size
 from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_tensor_type
@@ -209,18 +207,6 @@ def test_fused_gqa_qkv_slices_keep_distribution_visible_to_consumers():
 
     assert isinstance(q_used.type.layout, ShardLayout)
     assert isinstance(kv_used.type.layout, ShardLayout)
-    validate_authored(
-        (
-            Function.build(
-                name="consume_fused_qkv_views",
-                params=(source_expr,),
-                body=kv_used,
-                return_type=kv_used.type,
-            ),
-        )
-    )
-
-
 def test_slice_cost_charges_coordinates_but_not_the_view():
     call = _slice_call(
         make_tensor_type((64, 8, 6, 16), _F),

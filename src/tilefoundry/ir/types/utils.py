@@ -18,6 +18,7 @@ from .shard import (
     shard_layout_of,
 )
 from .shard.layout_algebra import size
+from .shard.shard_layout import split_target_axes
 from .tensor_type import TensorType, TupleType, Type
 
 

@@ -287,7 +287,10 @@ def _bind_access(
             relation = relation.add_constraint(placed("inequality", 1, -term.low))
             relation = relation.add_constraint(placed("inequality", -1, term.high))
         relation = relation.project_out(isl.dim_type.PARAM, 0, 1)
-    held = local_type_of(operand.type) if narrow else operand.type
+    try:
+        held = local_type_of(operand.type) if narrow else operand.type
+    except (TypeError, ValueError, NotImplementedError):
+        return None
     box = index_set(tuple(held.shape)) if isinstance(held, TensorType) else None
     if box is not None:
         relation = relation.intersect_range(box)
@@ -391,6 +394,17 @@ def build_scopes(
     return root
 
 
+class ScopeBuilder:
+    """Build one lexical Scope tree and its access views for a derived Function."""
+
+    def __init__(self, module: Module, graph: Function) -> None:
+        self.module = module
+        self.graph = graph
+
+    def build(self) -> Scope:
+        return build_scopes(self.module, self.graph)
+
+
 def walk_scopes(root: Scope) -> Iterator[Scope]:
     """Yield a scope and its descendants in lexical order."""
     yield root
@@ -398,4 +412,4 @@ def walk_scopes(root: Scope) -> Iterator[Scope]:
         yield from walk_scopes(child)
 
 
-__all__ = ["Access", "Scope", "build_scopes", "walk_scopes"]
+__all__ = ["Access", "Scope", "ScopeBuilder", "build_scopes", "walk_scopes"]

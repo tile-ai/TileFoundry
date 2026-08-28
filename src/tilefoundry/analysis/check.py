@@ -66,10 +66,10 @@ from tilefoundry.ir.types.substitute import (
     substitute_shape_dim,
     substitute_topology_dims,
 )
-from tilefoundry.ir.visitor import BindingSubstitutionCloner, collect_exprs
+from tilefoundry.ir.visitor import BindingSubstitutionCloner, ExprVisitor, collect_exprs
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TypeInferContext
-from tilefoundry.visitor_registry.visitors import TypeInferVisitor
+from tilefoundry.visitor_registry.visitors import inference_type
 
 from .compute_cost import _call_cost_record, _is_structural_occurrence
 from .errors import AnalysisError
@@ -822,6 +822,100 @@ def _inline_view(module: Module, function: Function, budget: int) -> Function:
     return view
 
 
+class InlineCloner:
+    """Clone and inline one authored Function into an analysis view."""
+
+    def __init__(
+        self, module: Module, function: Function, budget: int = _INLINE_NODES
+    ) -> None:
+        self.module = module
+        self.function = function
+        self.budget = budget
+
+    def clone(self) -> Function:
+        """Return a fresh single-function view with every call site inlined."""
+        return _inline_view(self.module, self.function, self.budget)
+
+
+class ValidateVisitor(ExprVisitor[None]):
+    """Answer every authored-program requirement in one validation pass."""
+
+    def __init__(
+        self,
+        module: Module,
+        function: Function,
+        level: str | None,
+        analyzers: tuple[object, ...],
+        source_function: Function | None = None,
+    ) -> None:
+        super().__init__(root_function=function)
+        self.module = module
+        self.function = function
+        self.level = level
+        self.analyzers = analyzers
+        self.source_function = source_function or function
+
+    def run(self) -> None:
+        """Validate non-expression inputs, then visit every derived expression once."""
+        _require_concrete_geometry(self.module, self.function, error_type=AnalysisError)
+        target = self.module.resolve_target()
+        for topology in self.module.effective_topologies():
+            try:
+                target.validate_program_topology(topology)
+            except ValueError as error:
+                raise AnalysisError(
+                    f"program topology level {topology.name!r} with extent "
+                    f"{topology.size!r} is invalid: {error}"
+                ) from None
+        if self.level is not None:
+            try:
+                self.module.resolve_topology(self.level)
+            except ValueError as error:
+                raise AnalysisError(
+                    f"program topology level {self.level!r} is invalid: {error}"
+                ) from None
+
+        validate_call_context(self.module, reachable_functions(self.source_function))
+        checkers = tuple(analyzer.input_checker for analyzer in self.analyzers)
+        if not checkers:
+            return
+        self._checkers = checkers
+        ctx = analysis_check_context(self.module, self.function, self.level)
+        for checker in checkers:
+            checker.check_target(ctx)
+        for param in self.function.params:
+            self._validate_expr(param, ctx)
+        self.visit(self.function.body, ctx)
+        if _unresolved_local_layout(self.function.body.type):
+            raise AnalysisError(
+                f"function {self.function.name!r} result: distribution inference stopped "
+                "with an unresolved layout"
+            )
+        for checker in checkers:
+            checker.finish(self.function, ctx)
+
+    def default_visit_leaf(
+        self, expr: Expr, _operands: tuple[None, ...], ctx: AnalysisCheckContext
+    ) -> None:
+        self._validate_expr(expr, ctx)
+
+    def _validate_expr(self, expr: Expr, ctx: AnalysisCheckContext) -> None:
+        _reject_schedule_constraint(expr)
+        if (
+            isinstance(expr, Call)
+            and _unresolved_local_layout(expr.type)
+            and not is_induction_var_singleton_reshape(expr)
+        ):
+            raise AnalysisError(
+                f"{describe(expr)}: distribution inference stopped with an "
+                "unresolved layout"
+            )
+        if not isinstance(expr, Call) or isinstance(expr.target, Function):
+            return
+        for checker in self._checkers:
+            checker.check_call(expr, ctx)
+
+
 def check_program(
     module: Module,
     function: Function,
@@ -844,61 +938,10 @@ def check_program(
             f"inlining {function.name!r} needs a non-negative integer node budget, "
             f"got {budget!r}"
         )
-    _require_concrete_geometry(module, function, error_type=AnalysisError)
-    target = module.resolve_target()
-    for topology in module.effective_topologies():
-        try:
-            target.validate_program_topology(topology)
-        except ValueError as error:
-            raise AnalysisError(
-                f"program topology level {topology.name!r} with extent "
-                f"{topology.size!r} is invalid: {error}"
-            ) from None
-    if level is not None:
-        try:
-            module.resolve_topology(level)
-        except ValueError as error:
-            raise AnalysisError(f"program topology level {level!r} is invalid: {error}") from None
-
-    functions = reachable_functions(function)
-    infer_authored_types(functions, module)
-    validate_call_context(module, functions)
-    derived = _inline_view(module, function, budget)
-    TypeInferVisitor(owns_body=True).visit(
-        derived.body, TypeInferContext(scope=FunctionScope(module, derived))
-    )
-    checkers = tuple(analyzer.input_checker for analyzer in analyzers)
-    if not checkers:
-        return derived
-    ctx = analysis_check_context(module, derived, level)
-    for checker in checkers:
-        checker.check_target(ctx)
-    for expr in collect_exprs(derived.body):
-        if not isinstance(expr, Call) or isinstance(expr.target, Function):
-            continue
-        for checker in checkers:
-            checker.check_call(expr, ctx)
-    for checker in checkers:
-        checker.finish(derived, ctx)
+    derived = InlineCloner(module, function, budget).clone()
+    inference_type(derived.body, TypeInferContext(scope=FunctionScope(module, derived)))
+    ValidateVisitor(module, derived, level, analyzers, source_function=function).run()
     return derived
-
-
-def infer_authored_types(
-    functions: Iterable[Function], module: Module | None
-) -> None:
-    """Re-derive every authored value type in place.
-
-    Callees are inferred before their callers, so a call site reads a return
-    type that has already been recomputed rather than the one it was authored
-    with.
-    """
-    for fn in reversed(tuple(functions)):
-        ctx = TypeInferContext(scope=FunctionScope(module, fn))
-        if fn.body is not None:
-            TypeInferVisitor(owns_body=True).visit(fn.body, ctx)
-        if fn.body is not None and fn.return_type != fn.body.type:
-            fn.return_type = fn.body.type
-            fn.type = callable_type_for(fn.params, fn.body.type)
 
 
 def _unresolved_local_layout(type_: Type) -> bool:
@@ -923,32 +966,6 @@ def _reject_schedule_constraint(expr: Expr) -> None:
         f"{describe(expr)}: authored analysis does not accept where(...); "
         "write a concrete layout/storage with Tensor annotations or reshard"
     )
-
-
-def validate_authored(functions: Iterable[Function]) -> None:
-    """Reject an authored program no analysis can measure.
-
-    A schedule constraint means the author deferred a decision to the schedule
-    stage, so there is no single program to measure yet; an unresolved local
-    layout means distribution inference stopped short of one.
-    """
-    for fn in functions:
-        for expr in (*fn.params, *collect_exprs(fn.body)):
-            _reject_schedule_constraint(expr)
-            if (
-                isinstance(expr, Call)
-                and _unresolved_local_layout(expr.type)
-                and not is_induction_var_singleton_reshape(expr)
-            ):
-                raise AnalysisError(
-                    f"{describe(expr)}: distribution inference stopped with an "
-                    "unresolved layout"
-                )
-        if fn.body is not None and _unresolved_local_layout(fn.body.type):
-            raise AnalysisError(
-                f"function {fn.name!r} result: distribution inference stopped "
-                "with an unresolved layout"
-            )
 
 
 def validate_call_context(module: Module, functions: Iterable[Function]) -> None:
@@ -983,9 +1000,9 @@ def validate_call_context(module: Module, functions: Iterable[Function]) -> None
 
 __all__ = [
     "AnalysisCheckContext",
+    "InlineCloner",
     "PerformanceInputChecker",
+    "ValidateVisitor",
     "check_program",
-    "infer_authored_types",
-    "validate_authored",
     "validate_call_context",
 ]

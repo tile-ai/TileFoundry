@@ -14,7 +14,6 @@ from tilefoundry.analysis import analyze, check_program
 from tilefoundry.analysis.check import (
     _program_dim_vars,
     _resolve_program_geometry,
-    validate_authored,
 )
 from tilefoundry.cli.source import load_authored_ir, suggested_extents
 from tilefoundry.inspection import PythonPrintOptions, as_script
@@ -23,7 +22,6 @@ from tilefoundry.inspection.analysis_report import (
     render_json,
     render_text,
 )
-from tilefoundry.ir.core.module import reachable_functions
 from tilefoundry.ir.hir.specialize import SpecializationError
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
@@ -154,7 +152,6 @@ def run_authored_analysis(
         except SpecializationError as error:
             raise ValueError(f"analyze: {error}") from None
         expanded = check_program(checked_module, checked)
-        validate_authored(reachable_functions(checked))
         annotated = as_script(expanded, options=PythonPrintOptions(show_types=True))
         Path(out_path).write_text(annotated, encoding="utf-8")
         return 0

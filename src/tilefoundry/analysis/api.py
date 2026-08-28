@@ -13,14 +13,15 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from tilefoundry.analysis.check import _resolve_program_geometry, check_program, validate_authored
+from tilefoundry.analysis.check import _resolve_program_geometry, check_program
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.report import render_json, report_data
+from tilefoundry.analysis.scope import ScopeBuilder
 from tilefoundry.analysis.visitor import AnalyzeContext
 from tilefoundry.dump import DumpFlags, dump
 from tilefoundry.ir.core import IRMetadata
-from tilefoundry.ir.core.module import Module, reachable_functions
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import SpecializationError
 from tilefoundry.ir.visitor import function_values
@@ -151,9 +152,9 @@ def analyze(
     closure = _closure(target, roots)
 
     function = check_program(module, function, level=level, analyzers=closure)
-    functions = reachable_functions(function)
-    validate_authored(functions)
-    context = AnalyzeContext.create(module, function, target, level, options)
+    functions = (function,)
+    scope = ScopeBuilder(module, function).build()
+    context = AnalyzeContext(module, target, level, options, root=scope, current=scope)
 
     order: list[type[IRMetadata]] = []
     written_records: set[tuple[int, type]] = set()
