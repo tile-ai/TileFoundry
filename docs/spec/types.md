@@ -101,13 +101,14 @@ dispatch is described in
 
 ```python
 def local_type_of(
-    type: Type, *, level: str, topologies: tuple[Topology, ...]
+    type: Type, *, level: str | None = None, topologies: tuple[Topology, ...] = ()
 ) -> Type:
-    """Project every tensor leaf to what one unit of a topology level holds.
+    """Project every tensor leaf to what one unit holds.
 
     Args:
         type: Type to project.
-        level: Topology level whose unit is being projected.
+        level: Topology level whose unit is being projected. When omitted,
+            every Split divides and the logical rank is preserved.
         topologies: Ordered declared topology levels with resolved extents.
 
     Returns:
@@ -117,10 +118,12 @@ def local_type_of(
 ```
 
 - constraints:
-  - `local_type_of` MUST recursively project every tensor leaf and rebuild
-    `TupleType` structure.
-  - A `Split` at `level` or a coarser topology level MUST divide; a finer
-    `Split`, `Broadcast`, and `Partial` MUST NOT divide.
+  - With `level`, `local_type_of` MUST recursively project every tensor leaf and
+    rebuild `TupleType` structure. A `Split` at `level` or a coarser topology
+    level MUST divide; a finer `Split`, `Broadcast`, and `Partial` MUST NOT.
+  - Without `level`, every `Split` MUST divide, the returned tensor layout MUST
+    be `None`, and the tensor's logical rank MUST remain unchanged. This form
+    is the logical-axis projection used by relation construction.
   - Each resolved nested `ShardLayout` MUST be applied exactly once per layer.
     Every mesh axis MUST state its own extent, and local projection MUST use
     that extent without substituting a target or topology capacity. A stated

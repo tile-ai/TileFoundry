@@ -182,14 +182,40 @@ def make_shard_tensor_type(
     return TensorType(shape=shape, dtype=dtype, layout=layout, storage=storage)
 
 
-def local_type_of(type: Type, *, level: str, topologies: tuple[Topology, ...]) -> Type:
-    """Project every tensor leaf to what one unit of *level* holds.
+def local_type_of(
+    type: Type, *, level: str | None = None, topologies: tuple[Topology, ...] = ()
+) -> Type:
+    """Project every tensor leaf to what one unit holds.
 
-    A ``Split`` at *level* or a coarser declared level divides. Finer splits do
-    not change what the containing unit holds, while ``Broadcast`` and
-    ``Partial`` never divide. ``topologies`` supplies the ordered hierarchy and
-    concrete extents.
+    With ``level``: a ``Split`` at that level or coarser divides, while finer
+    splits, ``Broadcast``, and ``Partial`` do not; logical axes may factor into
+    layout positions, and ``topologies`` supplies the ordered hierarchy.
+    Without ``level``: every ``Split`` divides, the layout is dropped, and the
+    logical rank is preserved. This form is for relations over logical axes,
+    where factoring an axis into layout positions would lose the modeled flow.
     """
+    if level is None:
+        if not isinstance(type, TensorType):
+            return type
+        layout = shard_layout_of(type.layout)
+        if layout is None:
+            return type
+        local = list(type.shape)
+        for mesh_axis, tensor_axis in enumerate(split_target_axes(layout, type.shape)):
+            if tensor_axis is None:
+                continue
+            extent = layout.mesh.layout.shape[mesh_axis]
+            if extent is None:
+                local[tensor_axis] = 1
+                continue
+            size = local[tensor_axis]
+            if not isinstance(size, int) or isinstance(size, bool) or size % extent != 0:
+                raise ValueError(
+                    "local_type_of: Split axis extent is not divisible by mesh extent"
+                )
+            local[tensor_axis] = size // extent
+        return TensorType(shape=tuple(local), dtype=type.dtype, layout=None, storage=type.storage)
+
     levels = {topology.name: index for index, topology in enumerate(topologies)}
     if level not in levels:
         available = ", ".join(levels) or "none"

@@ -18,7 +18,7 @@ truth for the directory's structure and invariants.
 | Directory | Owning spec | Contents |
 |---|---|---|
 | `ir/core/` | [core-ir](./core-ir.md) | Shared node algebra: `Module` / `Expr` / `Var` / `Constant` / `Tuple` / `Op` / `Call` / `Stmt` (base class) / `OpSchema` / `ParamDef` / call-graph and ownership queries / typed metadata attach-detach and diagnostics / `@register_op` / `@register_alias` / `op_registry` / `errors`. |
-| `ir/types/` | [types](./types.md) | Type-system root: `Type` / `TensorType` / `TupleType` / `UnitType` / `CallableType` / `DType` / `StorageKind` / `resolve_storage` / tensor-leaf, byte-by-storage, and topology-extent queries / `dim.*` (with their typeinfer). |
+| `ir/types/` | [types](./types.md) | Type-system root: `Type` / `TensorType` / `TupleType` / `UnitType` / `CallableType` / `DType` / `StorageKind` / `resolve_storage` / local projections (`local_type_of`) / tensor-leaf, byte-by-storage, and topology-extent queries / `dim.*` (with their typeinfer). |
 | `ir/types/shard/` | [shard](./shard.md) | Shard / layout sublayer: `Topology` / `Mesh` / `Layout` / `ComposedLayout` / `ShardLayout` / `ShardAttr` (`Split` / `Broadcast` / `Dynamic` / `Partial`). The physical nesting reflects the spec's "sublayer" relationship. |
 | `ir/constraints/` | [schedule](./schedule.md) | Authored scheduling constraints: the shared base plus layout, mesh, and storage constraint records. |
 | `ir/visitor.py` | [visitor-mutator](./visitor-mutator.md) | `ExprFunctor` / `ExprVisitor` / `ExprWalker` / `ExprCollector` / `ExprCloner` / `BindingSubstitutionCloner` / `StmtVisitor` / `StmtMutator` / `StmtExprMutator`, plus `collect_exprs`, value-operand/function-value queries, and the canonical `PrimFunction` walk and rewrite entries. |

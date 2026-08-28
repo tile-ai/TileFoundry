@@ -7,8 +7,6 @@ import math
 import isl
 
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard import shard_layout_of
-from tilefoundry.ir.types.shard.shard_layout import split_target_axes
 from tilefoundry.visitor_registry.access_relation import index_set
 
 from .poly.affine import LoopAffineTerm
@@ -16,28 +14,6 @@ from .poly.affine import LoopAffineTerm
 
 class _Unavailable(Exception):
     """An access that cannot be represented by this authored-loop model."""
-
-
-def _local_type(type_: object) -> object:
-    """Narrow every Split axis while preserving the tensor's logical rank."""
-    if not isinstance(type_, TensorType):
-        return type_
-    layout = shard_layout_of(type_.layout)
-    if layout is None:
-        return type_
-    local = list(type_.shape)
-    for mesh_axis, tensor_axis in enumerate(split_target_axes(layout, type_.shape)):
-        if tensor_axis is None:
-            continue
-        extent = layout.mesh.layout.shape[mesh_axis]
-        if extent is None:
-            local[tensor_axis] = 1
-            continue
-        size = local[tensor_axis]
-        if not isinstance(size, int) or isinstance(size, bool) or size % extent != 0:
-            raise _Unavailable
-        local[tensor_axis] = size // extent
-    return TensorType(shape=tuple(local), dtype=type_.dtype, layout=None, storage=type_.storage)
 
 
 def _static_loop_bound(value: object) -> int:

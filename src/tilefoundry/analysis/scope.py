@@ -16,6 +16,7 @@ from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.ir.visitor import expr_operands
 from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
@@ -28,7 +29,7 @@ from tilefoundry.visitor_registry.access_relation import (
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
 from .errors import AnalysisError
-from .footprint import _local_type, _widest_allowed
+from .footprint import _widest_allowed
 from .metadata import BufferFootprint, LoopFootprintMetadata
 from .poly.affine import loop_affine_term
 
@@ -286,7 +287,7 @@ def _bind_access(
             relation = relation.add_constraint(placed("inequality", 1, -term.low))
             relation = relation.add_constraint(placed("inequality", -1, term.high))
         relation = relation.project_out(isl.dim_type.PARAM, 0, 1)
-    held = _local_type(operand.type) if narrow else operand.type
+    held = local_type_of(operand.type) if narrow else operand.type
     box = index_set(tuple(held.shape)) if isinstance(held, TensorType) else None
     if box is not None:
         relation = relation.intersect_range(box)
