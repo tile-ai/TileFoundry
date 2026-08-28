@@ -362,7 +362,7 @@ def test_a_call_nobody_claims_is_named_without_taking_a_turn() -> None:
     assert host.body is not None
 
 
-def test_a_boundary_states_which_axis_disagrees() -> None:
+def test_a_boundary_rejects_a_different_split_axis() -> None:
     with pytest.raises(VerifyError, match="type mismatch.*param 'x'"):
 
         @module(
@@ -382,7 +382,7 @@ def test_a_boundary_states_which_axis_disagrees() -> None:
                 )
 
 
-def test_a_boundary_states_when_storage_disagrees() -> None:
+def test_a_boundary_rejects_a_different_storage() -> None:
     with pytest.raises(VerifyError, match="type mismatch.*param 'x'"):
 
         @module(
