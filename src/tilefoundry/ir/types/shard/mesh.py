@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tilefoundry.ir.types.shape_dim import ShapeDim
-from tilefoundry.ir.types.shard.int_tuple import flatten, product
+from tilefoundry.ir.types.shard.int_tuple import flatten
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
 from tilefoundry.ir.types.shard.layout_algebra import c_order_strides
 
@@ -36,7 +36,7 @@ class Mesh:
     See [shard §5](docs/spec/shard.md#5-mesh).
     """
 
-    topologies: tuple[Topology, ...]
+    topologies: tuple[Topology | str, ...]
     layout: "Layout | ComposedLayout"
     names: tuple[str, ...] = ()
 
@@ -45,21 +45,6 @@ class Mesh:
         if isinstance(layout, tuple):
             layout = Layout(shape=layout, strides=c_order_strides(layout))
             object.__setattr__(self, "layout", layout)
-
-        string_topologies = tuple(
-            topology for topology in self.topologies if isinstance(topology, str)
-        )
-        if string_topologies:
-            if len(self.topologies) != 1:
-                raise ValueError(
-                    "Mesh: string topology form supports exactly one level; "
-                    "use explicit Topology objects for multiple levels"
-                )
-            object.__setattr__(
-                self,
-                "topologies",
-                (Topology(string_topologies[0], product(layout.shape)),),
-            )
 
         for axis, extent in enumerate(flatten(self.layout.shape)):
             if extent is None:
@@ -126,7 +111,6 @@ class Mesh:
             layout=sliced,
             names=self.names,
         )
-
 
 
 def level_axes(mesh: "Mesh") -> tuple[tuple[int, ...], ...]:

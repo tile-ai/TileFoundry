@@ -3115,23 +3115,18 @@ class MeshContextPattern(ElementPattern):
                     context,
                     "Mesh topologies must be a tuple",
                 )
-            if all(isinstance(name, str) for name in topology_names):
-                try:
-                    topologies = tuple(context.function.topologies[name] for name in topology_names)
-                except KeyError as error:
-                    raise ParseError.from_node(
-                        match.node,
-                        context,
-                        f"topology {error.args[0]!r} not declared by @module",
-                    ) from error
-            elif all(hasattr(topology, "name") for topology in topology_names):
-                topologies = topology_names
-            else:
+            try:
+                topologies = runtime.resolve_mesh_topologies(
+                    topology_names, context.function.topologies
+                )
+            except KeyError as error:
                 raise ParseError.from_node(
                     match.node,
                     context,
-                    "Mesh topologies must be names or Topology objects",
-                )
+                    f"topology {error.args[0]!r} not declared by @module",
+                ) from error
+            except TypeError as error:
+                raise ParseError.from_node(match.node, context, str(error)) from error
             names = children.get("names", ())
             try:
                 mesh = runtime.Mesh(

@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import FrameType, SimpleNamespace
-from typing import Any, ClassVar, Generic, Protocol, TypeVar
+from typing import Any, ClassVar, Generic, Protocol, TypeVar, cast
 from typing import Literal as TypingLiteral
 
 from tilefoundry.ir.core import (
@@ -65,6 +65,7 @@ from tilefoundry.ir.types.shard import (
     Mesh,
     ShardLayout,
     Split,
+    Topology,
     c_order_strides,
     canonical_shard_layout,
     composed,
@@ -77,6 +78,18 @@ from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 T = TypeVar("T")
 _RETURN_TYPE = "<return_type>"
 _TYPE_INFER_CONTEXT = "<type_infer_context>"
+
+
+def _resolve_mesh_topologies(
+    topologies: tuple[Topology | str, ...],
+    declared: Mapping[str, Topology],
+) -> tuple[Topology, ...]:
+    """Resolve string topology names against one function's declared hierarchy."""
+    if all(isinstance(topology, str) for topology in topologies):
+        return tuple(declared[topology] for topology in topologies)
+    if all(hasattr(topology, "name") for topology in topologies):
+        return cast(tuple[Topology, ...], topologies)
+    raise TypeError("Mesh topologies must be names or Topology objects")
 
 
 class MatchFailure:
@@ -211,6 +224,7 @@ runtime = SimpleNamespace(
     slice_size=slice_size,
     simplify_dim=simplify_dim,
     resolve_storage=resolve_storage,
+    resolve_mesh_topologies=_resolve_mesh_topologies,
 )
 
 
@@ -1169,10 +1183,7 @@ class MatchContext:
             _TYPE_INFER_CONTEXT,
             ParserTypeInferContext(child_resolver=provider),
         )
-        if function.mesh is not None:
-            scope.define("mesh", function.mesh)
-            function.state.mesh_stack.append(function.mesh)
-        return cls(
+        context = cls(
             function=function,
             module=None,
             situation="function",
@@ -1180,6 +1191,25 @@ class MatchContext:
             lexical_scope=scope,
             values=function.hardware_context,
         )
+        if function.mesh is not None:
+            try:
+                topologies = _resolve_mesh_topologies(
+                    function.mesh.topologies, function.topologies
+                )
+            except KeyError as error:
+                raise ParseError.from_node(
+                    ast.Name(id=error.args[0]),
+                    context,
+                    f"topology {error.args[0]!r} not declared by @module",
+                ) from error
+            except TypeError as error:
+                raise ParseError.from_node(
+                    ast.Name(id="mesh"), context, str(error)
+                ) from error
+            mesh = dataclasses.replace(function.mesh, topologies=topologies)
+            scope.define("mesh", mesh)
+            function.state.mesh_stack.append(mesh)
+        return context
 
     def child(
         self,
