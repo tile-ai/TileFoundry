@@ -210,9 +210,15 @@ def local_type_of(
                 local[tensor_axis] = 1
                 continue
             size = local[tensor_axis]
-            if not isinstance(size, int) or isinstance(size, bool) or size % extent != 0:
+            if not isinstance(size, int) or isinstance(size, bool):
                 raise ValueError(
-                    "local_type_of: Split axis extent is not divisible by mesh extent"
+                    f"tensor axis {tensor_axis} is Split-sharded but its extent "
+                    f"{size!r} is not a static int"
+                )
+            if size % extent != 0:
+                raise ValueError(
+                    f"tensor axis {tensor_axis} (extent {size}) is not evenly "
+                    f"divisible by its mesh extent {extent}"
                 )
             local[tensor_axis] = size // extent
         return TensorType(shape=tuple(local), dtype=type.dtype, layout=None, storage=type.storage)

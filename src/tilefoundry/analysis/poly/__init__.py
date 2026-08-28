@@ -9,7 +9,7 @@ from .access import (
     time_extents,
 )
 from .errors import ExtractError
-from .extract import _local_type, extract
+from .extract import extract
 from .model import TileGraph, TileUnit
 
 __all__ = [
@@ -21,7 +21,6 @@ __all__ = [
     "access_footprints",
     "carried_distances",
     "extract",
-    "_local_type",
     "statement_time_dims",
     "time_extents",
 ]

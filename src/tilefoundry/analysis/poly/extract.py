@@ -185,9 +185,6 @@ def _assign_statement_names(ops: list[object]) -> list[str]:
     return names
 
 
-_local_type = local_type_of
-
-
 def _static_loop_bound(dim, what: str) -> int:
     if isinstance(dim, int) and not isinstance(dim, bool):
         return dim
@@ -319,7 +316,7 @@ class _RankPreserving(TypeInferContext):
     """
 
     def local_type_of(self, expr) -> object:
-        return _local_type(expr.type)
+        return local_type_of(expr.type)
 
 
 def _placed_value(value, loops: tuple[GridRegionExpr, ...]):
