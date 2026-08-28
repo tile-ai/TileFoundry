@@ -11,7 +11,6 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 
-from tilefoundry.ir.constraints import ScheduleConstraintMetadata
 from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
@@ -40,7 +39,6 @@ from tilefoundry.ir.hir.specialize import (
     is_concrete,
     specialize_concretely,
 )
-from tilefoundry.ir.hir.tensor.reshape import is_induction_var_singleton_reshape
 from tilefoundry.ir.types import Type, callable_type_for, tensor_types
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import (
@@ -59,7 +57,6 @@ from tilefoundry.ir.types.shard.layout_algebra import (
     project,
     size,
 )
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.substitute import (
     DimSubstitutionError,
     dim_vars_by_name,
@@ -883,33 +880,16 @@ class ValidateVisitor(ExprVisitor[None]):
         ctx = analysis_check_context(self.module, self.function, self.level)
         for checker in checkers:
             checker.check_target(ctx)
-        for param in self.function.params:
-            self._validate_expr(param, ctx)
         self.visit(self.function.body, ctx)
-        if _unresolved_local_layout(self.function.body.type):
-            raise AnalysisError(
-                f"function {self.function.name!r} result: distribution inference stopped "
-                "with an unresolved layout"
-            )
         for checker in checkers:
             checker.finish(self.function, ctx)
 
     def default_visit_leaf(
         self, expr: Expr, _operands: tuple[None, ...], ctx: AnalysisCheckContext
     ) -> None:
-        self._validate_expr(expr, ctx)
+        self._check_expr(expr, ctx)
 
-    def _validate_expr(self, expr: Expr, ctx: AnalysisCheckContext) -> None:
-        _reject_schedule_constraint(expr)
-        if (
-            isinstance(expr, Call)
-            and _unresolved_local_layout(expr.type)
-            and not is_induction_var_singleton_reshape(expr)
-        ):
-            raise AnalysisError(
-                f"{describe(expr)}: distribution inference stopped with an "
-                "unresolved layout"
-            )
+    def _check_expr(self, expr: Expr, ctx: AnalysisCheckContext) -> None:
         if not isinstance(expr, Call) or isinstance(expr.target, Function):
             return
         for checker in self._checkers:
@@ -942,30 +922,6 @@ def check_program(
     inference_type(derived.body, TypeInferContext(scope=FunctionScope(module, derived)))
     ValidateVisitor(module, derived, level, analyzers, source_function=function).run()
     return derived
-
-
-def _unresolved_local_layout(type_: Type) -> bool:
-    """Whether *type_* places data in local storage without saying how.
-
-    A shaped value in registers or shared memory is distributed across the
-    threads of its level. Without a layout there is no such distribution, so
-    every per-thread number measured from it would be invented.
-    """
-    return any(
-        tensor.storage in {StorageKind.RMEM, StorageKind.SMEM}
-        and tensor.shape
-        and tensor.layout is None
-        for tensor in tensor_types(type_)
-    )
-
-
-def _reject_schedule_constraint(expr: Expr) -> None:
-    if get_metadata(expr, ScheduleConstraintMetadata) is None:
-        return
-    raise AnalysisError(
-        f"{describe(expr)}: authored analysis does not accept where(...); "
-        "write a concrete layout/storage with Tensor annotations or reshard"
-    )
 
 
 def validate_call_context(module: Module, functions: Iterable[Function]) -> None:

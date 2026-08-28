@@ -1281,10 +1281,12 @@ class AnalysisCheckContext:
   - `budget` MUST be a non-negative integer limiting the number of unique body
     expression nodes after inlining. An oversized view MUST fail with both its
     size and the limit and MUST NOT return a partial Function.
-  - Authored-analysis readiness is not a program-level check. Analyze MUST
-    separately reject schedule constraints and unresolved local layouts before
-    running an analyzer; Schedule MAY consume or diagnose those inputs under
-    its own algorithm contract.
+  - Authored-analysis readiness is not a program-level rejection. Analyze MUST
+    NOT reject a schedule constraint: `where(...)` is a scheduling input, and a
+    program carrying one is measured as written. Its per-unit figures MUST
+    equal its whole-program figures because a deferred layout states no
+    distribution to project through. Schedule MAY consume or diagnose those
+    inputs under its own algorithm contract.
 
 `tilefoundry.analysis.api.analyze` is the dependency-composed measurement
 operation. One call selects one or more root analyses by name; the operation

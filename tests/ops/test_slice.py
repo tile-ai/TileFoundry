@@ -207,6 +207,8 @@ def test_fused_gqa_qkv_slices_keep_distribution_visible_to_consumers():
 
     assert isinstance(q_used.type.layout, ShardLayout)
     assert isinstance(kv_used.type.layout, ShardLayout)
+
+
 def test_slice_cost_charges_coordinates_but_not_the_view():
     call = _slice_call(
         make_tensor_type((64, 8, 6, 16), _F),
