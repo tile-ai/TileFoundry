@@ -71,22 +71,22 @@ def numel(type: Type) -> int:
     silently drops a dimension reads as a smaller tensor, not as an unknown
     one. A concrete zero extent is a zero-sized tensor.
     """
-    if isinstance(type, TensorType):
-        values = []
-        for dim in type.shape:
-            if not isinstance(dim, int) or isinstance(dim, bool):
-                from .substitute import dim_vars_by_name  # noqa: PLC0415
+    return sum(_leaf_numel(leaf) for leaf in tensor_types(type))
 
-                names = dim_vars_by_name(dim)
-                hint = f"; bind it with --dim {next(iter(names))}=EXTENT" if names else ""
-                raise ValueError(f"numel: tensor extent {dim!r} is not concrete{hint}")
-            if dim < 0:
-                raise ValueError(f"numel: tensor extent {dim} is negative")
-            values.append(dim)
-        return math.prod(values)
-    if isinstance(type, TupleType):
-        return sum(numel(field) for field in type.fields)
-    return 0
+
+def _leaf_numel(type: TensorType) -> int:
+    values = []
+    for dim in type.shape:
+        if not isinstance(dim, int) or isinstance(dim, bool):
+            from .substitute import dim_vars_by_name  # noqa: PLC0415
+
+            names = dim_vars_by_name(dim)
+            hint = f"; bind it with --dim {next(iter(names))}=EXTENT" if names else ""
+            raise ValueError(f"numel: tensor extent {dim!r} is not concrete{hint}")
+        if dim < 0:
+            raise ValueError(f"numel: tensor extent {dim} is negative")
+        values.append(dim)
+    return math.prod(values)
 
 
 def tensor_bytes(type: Type) -> int:
@@ -96,11 +96,10 @@ def tensor_bytes(type: Type) -> int:
     every backend. A sub-byte dtype rounds up to whole bytes per leaf, because
     a leaf is addressed on its own.
     """
-    if isinstance(type, TensorType):
-        return math.ceil(numel(type) * type.dtype.bit_width / 8)
-    if isinstance(type, TupleType):
-        return sum(tensor_bytes(field) for field in type.fields)
-    return 0
+    return sum(
+        math.ceil(_leaf_numel(leaf) * leaf.dtype.bit_width / 8)
+        for leaf in tensor_types(type)
+    )
 
 
 def tensor_types(type: Type) -> tuple[TensorType, ...]:

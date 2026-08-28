@@ -8,17 +8,8 @@ different count of the same flops.
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import (
-    Call,
-    get_metadata,
-)
-from tilefoundry.ir.core import (
-    attach_metadata as attach,
-)
-from tilefoundry.ir.core import (
-    describe_expr as describe,
-)
-from tilefoundry.ir.core.module import reachable_functions
+from tilefoundry.ir.core import Call, describe_expr, get_metadata
+from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.visitor import collect_exprs
@@ -130,39 +121,38 @@ def analyze_roofline(
     function: Function,
     context: AnalyzeContext,
 ) -> None:
-    """Attach a bound to every Call, and one to every Function, reachable here."""
+    """Attach a bound to every Call and the normalized Function."""
     target = context.target
     facts = target.get_facts(ThroughputFacts)
-    for fn in reachable_functions(function):
-        for expr in collect_exprs(fn.body):
-            if not isinstance(expr, Call):
-                continue
-            cost = get_metadata(expr, ComputeCostMetadata)
-            if cost is None:
-                raise AnalysisError(
-                    f"{describe(expr)}: roofline needs the compute-cost record "
-                    "this call was never given"
-                )
-            moved = get_metadata(expr, TrafficMetadata)
-            if moved is None:
-                raise AnalysisError(
-                    f"{describe(expr)}: roofline needs the traffic record the "
-                    "memory family states for every call it measures"
-                )
-            attach(expr, _cost_bound(cost, moved, facts))
-        total = get_metadata(fn, ComputeCostMetadata)
-        if total is None:
+    for expr in collect_exprs(function.body):
+        if not isinstance(expr, Call):
+            continue
+        cost = get_metadata(expr, ComputeCostMetadata)
+        if cost is None:
             raise AnalysisError(
-                f"function {fn.name!r}: roofline needs the compute-cost root "
-                "record this function was never given"
+                f"{describe_expr(expr)}: roofline needs the compute-cost record "
+                "this call was never given"
             )
-        moved = get_metadata(fn, TrafficMetadata)
+        moved = get_metadata(expr, TrafficMetadata)
         if moved is None:
             raise AnalysisError(
-                f"function {fn.name!r}: roofline needs the traffic root record "
-                "the memory family states for every function it measures"
+                f"{describe_expr(expr)}: roofline needs the traffic record the "
+                "memory family states for every call it measures"
             )
-        attach(fn, _cost_bound(total, moved, facts))
+        attach(expr, _cost_bound(cost, moved, facts))
+    total = get_metadata(function, ComputeCostMetadata)
+    if total is None:
+        raise AnalysisError(
+            f"function {function.name!r}: roofline needs the compute-cost root "
+            "record this function was never given"
+        )
+    moved = get_metadata(function, TrafficMetadata)
+    if moved is None:
+        raise AnalysisError(
+            f"function {function.name!r}: roofline needs the traffic root record "
+            "the memory family states for every function it measures"
+        )
+    attach(function, _cost_bound(total, moved, facts))
 
 
 __all__ = ["SELECTOR", "analyze_roofline"]

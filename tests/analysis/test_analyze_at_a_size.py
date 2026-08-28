@@ -35,8 +35,7 @@ from tilefoundry.analysis import (
 from tilefoundry.analysis.compute_cost import _local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.scope import build_scopes, walk_scopes
-from tilefoundry.ir.core import Call, get_metadata
-from tilefoundry.ir.core import describe_expr as describe
+from tilefoundry.ir.core import Call, describe_expr, get_metadata
 from tilefoundry.ir.core.metadata import ExecutionDomainMetadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -124,7 +123,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
         assert record.timeline.end_ns <= summary.timeline.end_ns
 
         span = record.timeline.end_ns - record.timeline.start_ns
-        assert span % duration == 0, describe(expr)
+        assert span % duration == 0, describe_expr(expr)
         runs = span // duration
         available = 1
         owner = next(
@@ -141,21 +140,21 @@ def assert_performance_contract(result: AnalysisResult) -> None:
                 if cursor.is_variant(expr):
                     available *= max(1, cursor.trips())
                 cursor = cursor.parent
-        assert 1 <= runs <= available and available % runs == 0, describe(expr)
+        assert 1 <= runs <= available and available % runs == 0, describe_expr(expr)
         trips, stride = record.timeline.trips, record.timeline.stride_ns
-        assert 1 <= trips <= available and available % trips == 0, describe(expr)
-        assert (stride == 0) if trips == 1 else (stride >= span), describe(expr)
+        assert 1 <= trips <= available and available % trips == 0, describe_expr(expr)
+        assert (stride == 0) if trips == 1 else (stride >= span), describe_expr(expr)
         assert (
             record.timeline.end_ns + (trips - 1) * stride <= summary.timeline.end_ns
-        ), describe(expr)
+        ), describe_expr(expr)
     assert bool(timed) is bool(predicted_ns)
     _every_number_counts_something(result)
     for expr in collect_exprs(fn.body):
         if not isinstance(expr, GridRegionExpr):
             continue
-        assert get_metadata(expr, PerformanceMetadata) is None, describe(expr)
-        assert get_metadata(expr, PerformanceSummaryMetadata) is None, describe(expr)
-        assert get_metadata(expr, LoopFootprintMetadata) is not None, describe(expr)
+        assert get_metadata(expr, PerformanceMetadata) is None, describe_expr(expr)
+        assert get_metadata(expr, PerformanceSummaryMetadata) is None, describe_expr(expr)
+        assert get_metadata(expr, LoopFootprintMetadata) is not None, describe_expr(expr)
 
 
 @pytest.mark.parametrize(
@@ -209,16 +208,16 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
                 continue
             for field in rows:
                 for name, value in getattr(held, field):
-                    assert value >= 0, f"{describe(expr)}: {field}[{name}] = {value}"
+                    assert value >= 0, f"{describe_expr(expr)}: {field}[{name}] = {value}"
             if record is TrafficMetadata:
                 for field in ("whole", "per_unit"):
                     for level, moved in getattr(held, field):
                         assert moved.read >= 0 and moved.write >= 0, (
-                            f"{describe(expr)}: {field}[{level}] = {moved}"
+                            f"{describe_expr(expr)}: {field}[{level}] = {moved}"
                         )
                 for position, moved in enumerate(held.operands):
                     assert moved.read >= 0 and moved.write >= 0, (
-                        f"{describe(expr)}: operand {position} = {moved}"
+                        f"{describe_expr(expr)}: operand {position} = {moved}"
                     )
             if record is MemoryMetadata:
                 for level in held.footprint:
@@ -253,7 +252,7 @@ def test_every_concrete_program_answers_for_where_it_runs(case: ConcreteCase) ->
     assert result.module is owner
     assert set(result.executed) == set(FAMILIES)
     undomained = [
-        describe(call)
+        describe_expr(call)
         for call in collect_exprs(result.function.body)
         if isinstance(call, Call)
         and not isinstance(call.target, Function)

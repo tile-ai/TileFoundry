@@ -17,10 +17,8 @@ from tilefoundry.ir.core import (
     ExecutionDomainMetadata,
     Expr,
     Var,
+    describe_expr,
     get_metadata,
-)
-from tilefoundry.ir.core import (
-    describe_expr as describe,
 )
 from tilefoundry.ir.core.module import (
     Module,
@@ -327,7 +325,7 @@ def _call_placements(
             if _is_structural_occurrence(cost, moved, bandwidth_level=timed):
                 result[id(expr)] = frozenset()
                 continue
-            raise AnalysisError(f"performance: {describe(expr)}: {error}") from None
+            raise AnalysisError(f"performance: {describe_expr(expr)}: {error}") from None
     return result
 
 
@@ -425,7 +423,7 @@ class PerformanceInputChecker:
         try:
             _execution_placement(call, ctx.selected_topology)
         except AnalysisError as error:
-            raise AnalysisError(f"performance: {describe(call)}: {error}") from None
+            raise AnalysisError(f"performance: {describe_expr(call)}: {error}") from None
 
     def finish(self, function: Function, ctx: AnalysisCheckContext) -> None:
         """Nothing further: where the buffers go is decided with the schedule."""

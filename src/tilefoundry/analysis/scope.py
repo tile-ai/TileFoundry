@@ -17,7 +17,7 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.utils import local_type_of
-from tilefoundry.ir.visitor import expr_operands
+from tilefoundry.ir.visitor import expr_children
 from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
     index_set,
@@ -68,7 +68,7 @@ class Scope:
             if id(expr) in seen:
                 continue
             seen.add(id(expr))
-            pending.extend(expr_operands(expr))
+            pending.extend(expr_children(expr))
         return False
 
     def is_invariant(self, value: Expr) -> bool:
@@ -362,7 +362,7 @@ def build_scopes(
             return
         if isinstance(expr, Call):
             calls.append((expr, scope))
-        for operand in expr_operands(expr):
+        for operand in expr_children(expr):
             visit(operand, scope)
 
     root = Scope(graph, None, (), 0, _domain_for(graph, None), empty_accesses())

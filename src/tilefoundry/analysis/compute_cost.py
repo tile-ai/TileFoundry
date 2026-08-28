@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from tilefoundry.ir.core import Call, VerifyError
 from tilefoundry.ir.core import attach_metadata as attach
-from tilefoundry.ir.core.module import reachable_functions
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.visitor import collect_exprs
@@ -173,44 +172,43 @@ def analyze_compute_cost(
     """Attach one-trip work per Call and multiplicity-aware totals per Function."""
     module, level = context.module, context.level
     topologies = module.effective_topologies()
-    for fn in reachable_functions(function):
-        scope = FunctionScope(module, fn)
-        whole = CostContext(scope=scope)
-        local = CostContext(scope=scope, level=level, topologies=topologies)
-        flops: dict[str, int] = {}
-        flops_per_unit: dict[str, int] = {}
-        service: dict[str, int] = {}
-        service_per_unit: dict[str, int] = {}
-        calls = [expr for expr in collect_exprs(fn.body) if isinstance(expr, Call)]
-        for expr in calls:
-            record = _call_cost_record(expr, whole, local)
-            attach(expr, record)
-            owner = next(
-                (
-                    scope_node
-                    for scope_node in walk_scopes(context.root)
-                    if any(item is expr for item in scope_node.accesses.get("narrow", {}))
-                ),
-                None,
-            )
-            if owner is None:
-                owner = context.root
-            repeats = 1
-            cursor = owner
-            while cursor.parent is not None:
-                if cursor.is_variant(expr):
-                    repeats *= max(1, cursor.trips())
-                cursor = cursor.parent
-            _accumulate(
-                flops,
-                flops_per_unit,
-                service,
-                service_per_unit,
-                record,
-                repeats,
-            )
+    scope = FunctionScope(module, function)
+    whole = CostContext(scope=scope)
+    local = CostContext(scope=scope, level=level, topologies=topologies)
+    flops: dict[str, int] = {}
+    flops_per_unit: dict[str, int] = {}
+    service: dict[str, int] = {}
+    service_per_unit: dict[str, int] = {}
+    calls = [expr for expr in collect_exprs(function.body) if isinstance(expr, Call)]
+    for expr in calls:
+        record = _call_cost_record(expr, whole, local)
+        attach(expr, record)
+        owner = next(
+            (
+                scope_node
+                for scope_node in walk_scopes(context.root)
+                if any(item is expr for item in scope_node.accesses.get("narrow", {}))
+            ),
+            None,
+        )
+        if owner is None:
+            owner = context.root
+        repeats = 1
+        cursor = owner
+        while cursor.parent is not None:
+            if cursor.is_variant(expr):
+                repeats *= max(1, cursor.trips())
+            cursor = cursor.parent
+        _accumulate(
+            flops,
+            flops_per_unit,
+            service,
+            service_per_unit,
+            record,
+            repeats,
+        )
         attach(
-            fn,
+            function,
             ComputeCostMetadata(
                 flops=tuple(sorted(flops.items())),
                 flops_per_unit=tuple(sorted(flops_per_unit.items())),

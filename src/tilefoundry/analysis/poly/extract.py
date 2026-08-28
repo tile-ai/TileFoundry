@@ -27,7 +27,7 @@ from tilefoundry.ir.types import TupleType
 from tilefoundry.ir.types.dim import DimVar, is_dim_op_call
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.utils import local_type_of
-from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_operands
+from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     BoundaryRelation,
@@ -830,7 +830,7 @@ def _loop_scopes(root) -> dict[int, tuple[GridRegionExpr, ...]]:
                 own |= set(variance.get(id(init), frozenset()))
         else:
             own = set()
-            for child in expr_operands(e):
+            for child in expr_children(e):
                 own |= variance.get(id(child), frozenset())
         variance[id(e)] = frozenset(own)
 

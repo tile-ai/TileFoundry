@@ -72,7 +72,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
 )
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.substitute import dim_vars_by_name
-from tilefoundry.ir.visitor import ExprFunctor, _expr_children
+from tilefoundry.ir.visitor import ExprFunctor, expr_children
 from tilefoundry.utils.python_source import PythonExpr
 
 from .values import PARTS, render_comment
@@ -696,7 +696,7 @@ def iter_exprs(root: Expr | None, seen: set[int] | None = None) -> Iterator[Expr
     """Iter exprs.
 
     Post-order traversal of *root* and its descendants via
-    ``tilefoundry.ir.visitor._expr_children`` (which, unlike the hand-rolled
+    ``tilefoundry.ir.visitor.expr_children`` (which, unlike the hand-rolled
     walkers this replaces, descends into ``GridRegionExpr``). Each node is
     yielded exactly once by object identity; *seen* lets callers share dedup
     state across repeated calls (e.g. one per function param).
@@ -709,7 +709,7 @@ def iter_exprs(root: Expr | None, seen: set[int] | None = None) -> Iterator[Expr
     if key in seen:
         return
     seen.add(key)
-    for child in _expr_children(root):
+    for child in expr_children(root):
         yield from iter_exprs(child, seen)
     yield root
 

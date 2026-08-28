@@ -40,7 +40,7 @@ __all__ = [
     "collect_exprs",
     "ExprCloner",
     "BindingSubstitutionCloner",
-    "expr_operands",
+    "expr_children",
     "function_values",
     "StmtVisitor",
     "StmtMutator",
@@ -50,7 +50,7 @@ __all__ = [
 ]
 
 
-def _expr_children(expr: Expr) -> tuple[Expr, ...]:
+def expr_children(expr: Expr) -> tuple[Expr, ...]:
     """Enumerate direct child Expr nodes of `expr`.
 
     Binding-site Var fields (e.g. `GridRegionExpr.induction_var` /
@@ -72,11 +72,11 @@ def _expr_children(expr: Expr) -> tuple[Expr, ...]:
         case Tuple(elements=elements):
             return elements
         case _:
-            raise AssertionError(f"_expr_children: unknown Expr subclass {type(expr).__name__}")
+            raise AssertionError(f"expr_children: unknown Expr subclass {type(expr).__name__}")
 
 
 def _rebuild_expr(expr: Expr, new_children: tuple[Expr, ...]) -> Expr:
-    """Rebuild `expr` with replaced children (same order as _expr_children).
+    """Rebuild `expr` with replaced children (same order as expr_children).
 
     Binding-site fields are carried over untouched.
     """
@@ -264,8 +264,8 @@ class ExprVisitor[T](ExprFunctor[T]):
         return result
 
     def visit_operands(self, expr: Expr, ctx: Any) -> tuple[T, ...]:
-        """Visit value children from the fixed `_expr_children` table."""
-        return tuple(self.visit(child, ctx) for child in _expr_children(expr))
+        """Visit value children from the fixed `expr_children` table."""
+        return tuple(self.visit(child, ctx) for child in expr_children(expr))
 
     def default_visit_leaf(self, expr: Expr, operands: tuple[T, ...], ctx: Any) -> T:
         return self.default_visit(expr, ctx)
@@ -326,7 +326,7 @@ def _generic_expr_rewrite(expr: Expr, visit_fn: Callable[[Expr], Expr]) -> Expr:
     identity when no child changed. Shared by `ExprCloner.default_visit`
     and `StmtExprMutator._expr_generic_visit`.
     """
-    children = _expr_children(expr)
+    children = expr_children(expr)
     new_children = tuple(visit_fn(c) for c in children)
     if all(nc is oc for nc, oc in zip(new_children, children)):
         return expr
@@ -346,16 +346,6 @@ class ExprCloner(ExprVisitor[Expr]):
 
 
 from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: E402
-
-
-def expr_operands(expr: Expr) -> tuple[Expr, ...]:
-    """Direct value operands of *expr*, without entering a Function body.
-
-    A Function is a callable value, not an operand container. Traversals that
-    intentionally enter its body use ``collect_exprs(function.body)``; dataflow
-    queries use this function so a call edge does not become a value edge.
-    """
-    return () if isinstance(expr, HirFunction) else _expr_children(expr)
 
 
 def function_values(function: HirFunction) -> tuple[Expr, ...]:
