@@ -41,11 +41,20 @@ def test_a_dispatch_prototype_still_requires_a_return_annotation() -> None:
 
 
 def test_a_storage_the_target_does_not_have_is_refused() -> None:
-    with pytest.raises(ParseError, match="storage tmem is not allowed by hardware context"):
+    refusal = re.escape(
+        "storage tmem is not allowed by hardware context ('gmem', 'smem', 'rmem', 'umat')"
+    )
+    with pytest.raises(ParseError, match=refusal):
 
         @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
         def wrong(x: Tensor[(4,), "f32", None, "tmem"]):
             return x
+
+    with pytest.raises(ParseError, match=refusal):
+
+        @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+        def wrong_body(x: Tensor[(4,), "f32"]):
+            return tf.zeros(Tensor[(4,), "f32", None, "tmem"])
 
 
 def test_a_storage_the_target_has_is_accepted() -> None:
