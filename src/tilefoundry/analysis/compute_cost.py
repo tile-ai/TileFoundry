@@ -187,7 +187,7 @@ def analyze_compute_cost(
             (
                 scope_node
                 for scope_node in walk_scopes(context.root)
-                if any(item is expr for item in scope_node.accesses.get("narrow", {}))
+                if id(expr) in scope_node.accesses.get("narrow", {})
             ),
             None,
         )

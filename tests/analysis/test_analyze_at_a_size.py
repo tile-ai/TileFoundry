@@ -130,7 +130,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
             (
                 scope
                 for scope in scopes
-                if any(item is expr for item in scope.accesses.get("narrow", {}))
+                if id(expr) in scope.accesses.get("narrow", {})
             ),
             None,
         )

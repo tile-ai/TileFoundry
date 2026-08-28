@@ -84,7 +84,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             (
                 scope
                 for scope in scopes
-                if any(item is call for item in scope.accesses.get("narrow", {}))
+                if id(call) in scope.accesses.get("narrow", {})
             ),
             None,
         )

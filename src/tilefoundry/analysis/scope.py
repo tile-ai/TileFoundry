@@ -51,25 +51,20 @@ class Scope:
     children: tuple["Scope", ...]
     depth: int
     domain: isl.set
-    accesses: dict[str, dict[Call, tuple[Access, ...]]] = field(default_factory=dict)
+    accesses: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(
+        default_factory=dict
+    )
     refused: dict[str, frozenset[Call]] = field(default_factory=dict)
+    _variance: dict[int, frozenset[int]] = field(default_factory=dict, repr=False)
 
     def is_variant(self, value: Expr) -> bool:
         """Whether *value* depends on this loop's induction or carry values."""
         if not isinstance(self.owner, GridRegionExpr):
             return False
-        seeds = (self.owner.induction_var, *self.owner.carried_args)
-        pending = [value]
-        seen: set[int] = set()
-        while pending:
-            expr = pending.pop()
-            if any(expr is seed for seed in seeds):
-                return True
-            if id(expr) in seen:
-                continue
-            seen.add(id(expr))
-            pending.extend(expr_children(expr))
-        return False
+        root = self
+        while root.parent is not None:
+            root = root.parent
+        return id(self) in root._variance.get(id(value), frozenset())
 
     def is_invariant(self, value: Expr) -> bool:
         """Whether *value* is independent of this loop's induction values."""
@@ -148,7 +143,7 @@ class Scope:
 
     def reaching(self, view: str) -> Iterator[Access]:
         """Yield accesses owned by this scope and all descendant scopes."""
-        for values in self.accesses.get(view, {}).values():
+        for _call, values in self.accesses.get(view, {}).values():
             yield from values
         for child in self.children:
             yield from child.reaching(view)
@@ -308,43 +303,43 @@ def build_scopes(
     views: Sequence[str] = ("narrow", "device"),
 ) -> Scope:
     """Build the scope tree and both access views in one normalized walk."""
-    class IdentityMap:
-        """Small identity-keyed mapping for recursive IR expressions."""
+    def empty_accesses() -> dict[str, dict[int, tuple[Call, tuple[Access, ...]]]]:
+        return {view: {} for view in views}
 
-        def __init__(self) -> None:
-            self._entries: list[tuple[Call, tuple[Access, ...]]] = []
-
-        def __setitem__(self, key: Call, value: tuple[Access, ...]) -> None:
-            for index, (existing, _value) in enumerate(self._entries):
-                if existing is key:
-                    self._entries[index] = (key, value)
-                    return
-            self._entries.append((key, value))
-
-        def __iter__(self):
-            return (key for key, _value in self._entries)
-
-        def __len__(self) -> int:
-            return len(self._entries)
-
-        def get(self, key: Call, default=None):
-            for existing, value in self._entries:
-                if existing is key:
-                    return value
-            return default
-
-        def values(self):
-            return (value for _key, value in self._entries)
-
-        def items(self):
-            return tuple(self._entries)
-
-    def empty_accesses() -> dict[str, IdentityMap]:
-        return {view: IdentityMap() for view in views}
-
-    by_owner: dict[int, Scope] = {}
-    calls: list[tuple[Call, Scope]] = []
+    type_ctx = TypeInferContext(scope=FunctionScope(module, graph))
+    seeds: dict[int, Scope] = {}
+    variance: dict[int, frozenset[int]] = {}
     seen: set[int] = set()
+
+    def record_accesses(expr: Call, scope: Scope) -> None:
+        if isinstance(expr.target, Function) or access_relation_registry.lookup(type(expr.target)) is None:
+            return
+        try:
+            relations = relations_of(expr, type_ctx)
+        except (NotImplementedError, TypeError, ValueError, isl.Error):
+            for view in views:
+                scope.refused[view] = scope.refused.get(view, frozenset()) | {expr}
+            return
+        for view in views:
+            narrow = view == "narrow"
+            built: list[Access] = []
+            for index, boundary in enumerate(relations.inputs):
+                if index >= len(expr.args):
+                    continue
+                access = _bind_access(
+                    expr, expr.args[index], boundary, scope, type_ctx, narrow=narrow
+                )
+                if access is not None:
+                    built.append(access)
+            scope.accesses.setdefault(view, {})[id(expr)] = (expr, tuple(built))
+
+    def record_variance(expr: Expr, operands: tuple[Expr, ...]) -> None:
+        changing: set[int] = set()
+        for operand in operands:
+            changing.update(variance.get(id(operand), frozenset()))
+        if (loop := seeds.get(id(expr))) is not None:
+            changing.add(id(loop))
+        variance[id(expr)] = frozenset(changing)
 
     def visit(expr: Expr, scope: Scope) -> None:
         if id(expr) in seen:
@@ -354,43 +349,28 @@ def build_scopes(
             for operand in expr.init_args:
                 visit(operand, scope)
             child = Scope(expr, scope, (), scope.depth + 1, _domain_for(expr, scope), empty_accesses())
-            by_owner[id(expr)] = child
             scope.children = (*scope.children, child)
+            seeds[id(expr.induction_var)] = child
+            for carried in expr.carried_args:
+                seeds[id(carried)] = child
             visit(expr.body, child)
             for operand in expr.yield_values:
                 visit(operand, child)
+            record_variance(expr, expr_children(expr))
             return
         if isinstance(expr, Call):
-            calls.append((expr, scope))
-        for operand in expr_children(expr):
+            record_accesses(expr, scope)
+        operands = expr_children(expr)
+        for operand in operands:
             visit(operand, scope)
+        record_variance(expr, operands)
 
     root = Scope(graph, None, (), 0, _domain_for(graph, None), empty_accesses())
-    by_owner[id(graph)] = root
     for param in graph.params:
         visit(param, root)
     if graph.body is not None:
         visit(graph.body, root)
-    type_ctx = TypeInferContext(scope=FunctionScope(module, graph))
-    for expr, owner in calls:
-        if isinstance(expr.target, Function) or access_relation_registry.lookup(type(expr.target)) is None:
-            continue
-        try:
-            relations = relations_of(expr, type_ctx)
-        except (NotImplementedError, TypeError, ValueError, isl.Error):
-            for view in views:
-                owner.refused[view] = owner.refused.get(view, frozenset()) | {expr}
-            continue
-        for view in views:
-            narrow = view == "narrow"
-            built: list[Access] = []
-            for index, boundary in enumerate(relations.inputs):
-                if index >= len(expr.args):
-                    continue
-                access = _bind_access(expr, expr.args[index], boundary, owner, type_ctx, narrow=narrow)
-                if access is not None:
-                    built.append(access)
-            owner.accesses.setdefault(view, IdentityMap())[expr] = tuple(built)
+    root._variance = variance
     return root
 
 

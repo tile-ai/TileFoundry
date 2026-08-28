@@ -43,7 +43,7 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
             (
                 candidate
                 for candidate in scopes
-                if any(item is call for item in candidate.accesses.get("narrow", {}))
+                if id(call) in candidate.accesses.get("narrow", {})
             ),
             context.root,
         )
