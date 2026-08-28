@@ -156,12 +156,19 @@ equal. A mismatch is invalid; it is not a nested launch.
 Argument ↔ parameter binding is:
 
 - Arity MUST match — exactly one argument per supplied parameter.
-- A parameter that is a `TensorType` with `layout is None` is a **template
-  wildcard**: it binds to the argument's full type, including any
-  `ShardLayout`, once the argument's logical `shape` and `dtype` match.
-- A parameter that carries a `ShardLayout` is an explicit **contract**: the
-  argument type MUST match it exactly.
-- Any other parameter requires exact type equality.
+- A declared field that is not `None` MUST equal the corresponding argument
+  field. A declared `None` leaves only that field undecided and binds it from
+  the argument. This rule applies recursively:
+  - `TensorType.shape` and `dtype` always match exactly. `storage` matches
+    exactly unless the parameter states `UMAT`, whose residency is undecided.
+    `layout=None` leaves layout undecided; a stated layout recurses below.
+  - For `Layout`, stated `shape` and `strides` fields match independently. For
+    `ShardLayout`, stated `mesh`, `attrs`, and nested `layout` fields match
+    independently, and the nested layout follows this same rule.
+- Any type not covered by that recursive structure requires exact equality.
+- After a successful match, inference binds the parameter to the argument's
+  full type. Fields the declaration constrained have already been proved equal;
+  fields it left undecided retain the argument's concrete values.
 - `DimVar` shapes keep envelope matching — inference does not
   monomorphize a dynamic shape into a concrete one (that is **Shape
   dispatch and specializations** below, unaffected by call typing).
@@ -185,17 +192,13 @@ separate operation that produces a derived `Function`; such a derived
 function records its origin and chosen dimensions as specified by the
 **Function specialization API** below.
 
-**Signature annotation `Layout.strides` materialization.** A
-`Tensor[..., (sugar)]` annotation on a parameter or return appears
-at the kernel boundary, where the underlying engine is a shared
-buffer handed across the FFI surface. When the surface sugar emits
-`Layout(strides=None)` ([parser.md §2.1](./parser.md#21-syntax)),
-function-signature binding MUST materialize it to **shared-engine
-C-order over the canonical global shape** before the resulting
-`TensorType` enters the body. Verbose `Layout(strides=tuple)`
-annotations are preserved verbatim. After signature binding, no
-`Tensor[...]` annotation reachable from the function carries
-`strides=None`.
+The placement sugar in a signature emits `Layout(strides=None)`
+([parser.md §2.1](./parser.md#21-syntax)). Under the recursive rule, this leaves
+only `strides` undecided: the layout's stated shape, mesh, and shard attributes
+remain constraints, while the argument's concrete strides bind into the
+callee. A verbose `Layout(strides=tuple)` states a concrete stride contract and
+MUST match exactly. Signature binding does not materialize either form into a
+different layout.
 
 **SSA shape**. HIR is pure **SSA-as-DAG** — sharing of intermediate
 results is expressed by Python object identity:

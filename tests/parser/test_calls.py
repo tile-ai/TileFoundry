@@ -360,3 +360,86 @@ def test_a_call_nobody_claims_is_named_without_taking_a_turn() -> None:
         launch(device, a, out, grid=(2, 1, 1), block=(1, 1, 1))  # noqa: F821
 
     assert host.body is not None
+
+
+def test_a_boundary_states_which_axis_disagrees() -> None:
+    with pytest.raises(VerifyError, match="layout attrs mismatch.*param 'x'"):
+
+        @module(
+            entry="root",
+            target=CudaTarget("nvidia.h200_sxm"),
+            topologies=(Topology("cta", 8),),
+        )
+        class AxisMismatch:
+            @func(mesh=Mesh(("cta",), (8,), names=("b",)))
+            def stage(x: Tensor[(8, 8 @ mesh.b), "f32", "smem"]):  # noqa: F821
+                return tf.add(x, x)
+
+            @func(mesh=Mesh(("cta",), (8,), names=("b",)))
+            def root(x: Tensor[(8, 8), "f32"]):
+                return stage(  # noqa: F821
+                    tf.reshard(x, (8 @ mesh.b, 8), "smem")  # noqa: F821
+                )
+
+
+def test_a_boundary_states_when_storage_disagrees() -> None:
+    with pytest.raises(VerifyError, match="storage mismatch.*param 'x'"):
+
+        @module(
+            entry="root",
+            target=CudaTarget("nvidia.h200_sxm"),
+            topologies=(Topology("cta", 8),),
+        )
+        class StorageMismatch:
+            @func(mesh=Mesh(("cta",), (8,), names=("b",)))
+            def stage(x: Tensor[(8 @ mesh.b, 8), "f32", "rmem"]):  # noqa: F821
+                return tf.add(x, x)
+
+            @func(mesh=Mesh(("cta",), (8,), names=("b",)))
+            def root(x: Tensor[(8, 8), "f32"]):
+                return stage(  # noqa: F821
+                    tf.reshard(x, (8 @ mesh.b, 8), "smem")  # noqa: F821
+                )
+
+
+def test_a_layout_undefined_boundary_still_constrains_storage() -> None:
+    with pytest.raises(VerifyError, match="storage mismatch.*param 'x'"):
+
+        @module(
+            entry="root",
+            target=CudaTarget("nvidia.h200_sxm"),
+            topologies=(Topology("cta", 8),),
+        )
+        class LayoutUndefinedStorageMismatch:
+            @func(mesh=Mesh(("cta",), (8,), names=("b",)))
+            def stage(x: Tensor[(8, 8), "bf16", None, "smem"]):
+                return tf.add(x, x)
+
+            @func(mesh=Mesh(("cta",), (8,), names=("b",)))
+            def root(x: Tensor[(8, 8), "f32"]):
+                actual = tf.reshard(tf.cast(x, dtype="bf16"), (8, 8), "rmem")
+                return stage(actual)  # noqa: F821
+
+
+def test_a_boundary_rejects_a_bare_undeclared_mesh_name() -> None:
+    with pytest.raises(ParseError, match="'nope' is not an active Mesh"):
+
+        @module(
+            entry="root",
+            target=CudaTarget("nvidia.h200_sxm"),
+            topologies=(Topology("cta", 8),),
+        )
+        class UndeclaredMesh:
+            @func(mesh=Mesh(("cta",), (8,), names=("b",)))
+            def root(x: Tensor[(8 @ nope, 8), "f32"]):  # noqa: F821
+                return tf.add(x, x)
+
+
+def test_function_mesh_requires_a_module_topology_declaration() -> None:
+    with pytest.raises(ParseError, match="topology 'cta' not declared by @module"):
+
+        @module(entry="run")
+        class MissingTopology:
+            @func(mesh=Mesh(("cta",), (8,), names=("b",)))
+            def run(x: Tensor[(8 @ mesh.b, 8), "f32"]):  # noqa: F821
+                return tf.add(x, x)

@@ -23,16 +23,43 @@ from .tensor_type import TensorType, TupleType, Type
 def types_compatible(declared: Type, actual: Type) -> bool:
     """Return whether *actual* may bind a position declared as *declared*.
 
-    A layout-free tensor declaration is a wildcard for physical placement;
-    its logical shape and dtype must still match. Every other type is an exact
-    contract.
+    Every non-``None`` declared field constrains the corresponding actual
+    field. ``UMAT`` is the storage field's undecided value. Layout descriptors
+    apply the same rule recursively.
     """
-    if (
-        isinstance(declared, TensorType)
-        and isinstance(actual, TensorType)
-        and declared.layout is None
-    ):
-        return actual.shape == declared.shape and actual.dtype == declared.dtype
+
+    def field_compatible(declared_field, actual_field) -> bool:
+        return declared_field is None or declared_field == actual_field
+
+    def layout_compatible(declared_layout, actual_layout) -> bool:
+        if declared_layout is None:
+            return True
+        if isinstance(declared_layout, Layout):
+            return (
+                isinstance(actual_layout, Layout)
+                and field_compatible(declared_layout.shape, actual_layout.shape)
+                and field_compatible(declared_layout.strides, actual_layout.strides)
+            )
+        if isinstance(declared_layout, ShardLayout):
+            return (
+                isinstance(actual_layout, ShardLayout)
+                and field_compatible(declared_layout.mesh, actual_layout.mesh)
+                and field_compatible(declared_layout.attrs, actual_layout.attrs)
+                and layout_compatible(declared_layout.layout, actual_layout.layout)
+            )
+        return actual_layout == declared_layout
+
+    if isinstance(declared, TensorType):
+        return (
+            isinstance(actual, TensorType)
+            and declared.shape == actual.shape
+            and declared.dtype == actual.dtype
+            and (
+                declared.storage is StorageKind.UMAT
+                or declared.storage == actual.storage
+            )
+            and layout_compatible(declared.layout, actual.layout)
+        )
     return actual == declared
 
 
