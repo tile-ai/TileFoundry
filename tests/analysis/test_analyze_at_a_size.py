@@ -35,8 +35,8 @@ from tilefoundry.analysis import (
 from tilefoundry.analysis.compute_cost import _local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.scope import build_scopes, walk_scopes
-from tilefoundry.analysis.walk import collect_exprs, describe
 from tilefoundry.ir.core import Call, get_metadata
+from tilefoundry.ir.core import describe_expr as describe
 from tilefoundry.ir.core.metadata import ExecutionDomainMetadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -48,6 +48,7 @@ from tilefoundry.ir.hir.specialize import (
 from tilefoundry.ir.types.shard import (
     Topology,
 )
+from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFacts
 

@@ -401,7 +401,7 @@ def states_execution_domain(
 ) -> bool:
     """Whether *function*, once concrete, runs anything inside a Mesh of *level*."""
     from tilefoundry.analysis.check import _resolve_program_geometry
-    from tilefoundry.analysis.walk import collect_exprs
+    from tilefoundry.ir.visitor import collect_exprs
     from tilefoundry.ir.core import Call, get_metadata
     from tilefoundry.ir.core.metadata import ExecutionDomainMetadata
     from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext

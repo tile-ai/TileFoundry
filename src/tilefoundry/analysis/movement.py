@@ -8,8 +8,9 @@ those bytes are charged, which is where the leaves it reached live.
 from __future__ import annotations
 
 from tilefoundry.ir.core import Call, VerifyError
+from tilefoundry.ir.core import describe_expr as describe
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types import TensorType, TupleType, Type
+from tilefoundry.ir.types import TensorType, TupleType, Type, bytes_by_storage
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
@@ -24,7 +25,6 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
 from .metadata import TrafficBytes, TrafficMetadata
-from .walk import bytes_by_storage, describe
 
 _UMAT_CONSUMPTION_LEVEL = str(StorageKind.RMEM)
 

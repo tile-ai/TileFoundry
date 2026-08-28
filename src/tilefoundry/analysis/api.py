@@ -18,12 +18,12 @@ from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.analysis.visitor import AnalyzeContext
-from tilefoundry.analysis.walk import reachable_functions, values_of
 from tilefoundry.dump import DumpFlags, dump
 from tilefoundry.ir.core import IRMetadata
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, reachable_functions
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import SpecializationError
+from tilefoundry.ir.visitor import function_values
 from tilefoundry.target import Target, UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
@@ -215,7 +215,7 @@ def _metadata_snapshot(
     """
     snapshot: dict[tuple[int, type], int] = {}
     for fn in functions:
-        for expr in values_of(fn):
+        for expr in function_values(fn):
             for item in expr.metadata:
                 snapshot[(id(expr), type(item))] = id(item)
     return snapshot

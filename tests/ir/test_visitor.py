@@ -15,7 +15,6 @@ import gc
 
 import pytest
 
-from tilefoundry.analysis.walk import collect_exprs
 from tilefoundry.ir.core import Call, Constant, Expr, Op, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -45,6 +44,7 @@ from tilefoundry.ir.visitor import (
     StmtExprMutator,
     StmtMutator,
     StmtVisitor,
+    collect_exprs,
     rewrite_prim_function,
     walk_prim_function,
 )

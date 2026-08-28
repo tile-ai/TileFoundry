@@ -72,6 +72,25 @@ def source_metadata(expr: "Expr") -> tuple[IRMetadata, ...]:
     )
 
 
+def describe_expr(expr: "Expr") -> str:
+    """One diagnostic line locating *expr* in authored source."""
+    span = get_metadata(expr, SourceSpanMetadata)
+    prefix = f"{span.file}:{span.line}:{span.column}: " if span is not None else ""
+    op = type(expr.target).__name__ if hasattr(expr, "target") else type(expr).__name__
+    return f"{prefix}binding={binding_name(expr) or '<unnamed>'} op={op}"
+
+
+def attach_metadata(expr: "Expr", value: IRMetadata) -> None:
+    """Attach *value* to *expr* in place, replacing its concrete metadata type."""
+    kept = tuple(item for item in expr.metadata if type(item) is not type(value))
+    expr.metadata = (*kept, value)
+
+
+def detach_metadata(expr: "Expr", cls: type[IRMetadata]) -> None:
+    """Remove metadata of concrete type *cls* from *expr* in place."""
+    expr.metadata = tuple(item for item in expr.metadata if type(item) is not cls)
+
+
 def replace_metadata(expr: "Expr", value: IRMetadata) -> "Expr":
     """Return ``expr`` with metadata of ``value``'s concrete class replaced."""
     value_cls = type(value)
@@ -102,7 +121,10 @@ __all__ = [
     "ExecutionDomainMetadata",
     "SourceSpanMetadata",
     "binding_name",
+    "describe_expr",
     "diagnostic_location",
+    "attach_metadata",
+    "detach_metadata",
     "get_metadata",
     "remove_metadata",
     "replace_metadata",

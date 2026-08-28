@@ -160,6 +160,10 @@ def tensor_bytes(type: Type) -> int:
         The logical byte size.
     """
     ...
+
+def tensor_types(type: Type) -> tuple[TensorType, ...]: ...
+def bytes_by_storage(type: Type, *, umat_level: str | None = None) -> dict[str, int]: ...
+def topology_extent(type: Type, name: str) -> int | None: ...
 ```
 
 - constraints:
@@ -172,6 +176,13 @@ def tensor_bytes(type: Type) -> int:
     because a leaf is addressed on its own.
   - These MUST be the logical size the type states, so they MUST be the same
     number for every backend and MUST NOT live in a target package.
+  - `tensor_types` MUST return those same tensor leaves in tuple field order.
+  - `bytes_by_storage` MUST group their logical bytes by storage name. A `UMAT`
+    leaf contributes nothing unless the caller supplies the level where it is
+    materialized.
+  - `topology_extent` MUST return the one positive static layout size stated for
+    `name`, `None` when no leaf states it, and reject a multi-topology layout or
+    conflicting extents rather than choose one.
 
 ### `StorageKind` and `resolve_storage`
 

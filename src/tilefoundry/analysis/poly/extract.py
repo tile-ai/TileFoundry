@@ -27,7 +27,7 @@ from tilefoundry.ir.types import TensorType, TupleType
 from tilefoundry.ir.types.dim import DimVar, is_dim_op_call
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard.shard_layout import shard_layout_of, split_target_axes
-from tilefoundry.ir.visitor import ExprVisitor
+from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_operands
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     BoundaryRelation,
@@ -37,7 +37,6 @@ from tilefoundry.visitor_registry.access_relation import (
     renaming_relation,
 )
 
-from ..walk import children, collect_exprs
 from .affine import loop_affine_term
 from .errors import ExtractError
 from .model import TileGraph, TileUnit
@@ -870,7 +869,7 @@ def _loop_scopes(root) -> dict[int, tuple[GridRegionExpr, ...]]:
                 own |= set(variance.get(id(init), frozenset()))
         else:
             own = set()
-            for child in children(e):
+            for child in expr_operands(e):
                 own |= variance.get(id(child), frozenset())
         variance[id(e)] = frozenset(own)
 

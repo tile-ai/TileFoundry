@@ -5,9 +5,12 @@ from __future__ import annotations
 from collections import defaultdict
 
 from tilefoundry.ir.core import Call, get_metadata
+from tilefoundry.ir.core import attach_metadata as attach
+from tilefoundry.ir.core.module import reachable_functions
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.visitor import collect_exprs
 
 from .compute_cost import _local_duration_ns
 from .errors import AnalysisError
@@ -22,7 +25,6 @@ from .metadata import (
 )
 from .scope import walk_scopes
 from .visitor import AnalyzeContext
-from .walk import attach, postorder, reachable_functions
 
 SELECTOR = "performance"
 
@@ -36,7 +38,7 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
     for fn in reachable_functions(function):
         scopes = tuple(walk_scopes(context.root))
         local = []
-        for call in postorder(fn.body):
+        for call in collect_exprs(fn.body):
             if not isinstance(call, Call):
                 continue
             scope = next(

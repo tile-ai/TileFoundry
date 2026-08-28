@@ -16,6 +16,7 @@ from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.visitor import expr_operands
 from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
     index_set,
@@ -30,7 +31,6 @@ from .errors import AnalysisError
 from .footprint import _local_type, _widest_allowed
 from .metadata import BufferFootprint, LoopFootprintMetadata
 from .poly.affine import loop_affine_term
-from .walk import children, loop_trip_count
 
 
 @dataclass(frozen=True)
@@ -67,7 +67,7 @@ class Scope:
             if id(expr) in seen:
                 continue
             seen.add(id(expr))
-            pending.extend(children(expr))
+            pending.extend(expr_operands(expr))
         return False
 
     def is_invariant(self, value: Expr) -> bool:
@@ -82,10 +82,11 @@ class Scope:
         if self.parent is None:
             return 1
         if isinstance(self.owner, GridRegionExpr):
-            authored = loop_trip_count(self.owner)
-            if authored != 1 or all(isinstance(value, int) for value in (self.owner.start, self.owner.extent, self.owner.step)):
-                self._trips_cache = max(1, authored)
-                return self._trips_cache
+            start, extent, step = self.owner.start, self.owner.extent, self.owner.step
+            if all(isinstance(value, int) for value in (start, extent, step)):
+                result = 1 if step <= 0 or extent <= start else -(-(extent - start) // step)
+                self._trips_cache = result
+                return result
         count = self.domain.count_val()
         parent_count = self.parent.domain.count_val()
         if not count.is_int() or not parent_count.is_int() or not parent_count.get_num_si():
@@ -357,7 +358,7 @@ def build_scopes(
             return
         if isinstance(expr, Call):
             calls.append((expr, scope))
-        for operand in children(expr):
+        for operand in expr_operands(expr):
             visit(operand, scope)
 
     root = Scope(graph, None, (), 0, _domain_for(graph, None), empty_accesses())

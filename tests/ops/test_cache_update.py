@@ -23,7 +23,6 @@ from tests.ops.typeinfer_utils import (
 from tilefoundry import func, module
 from tilefoundry.analysis import ComputeCostMetadata, TrafficMetadata
 from tilefoundry.analysis.api import analyze
-from tilefoundry.analysis.walk import collect_exprs
 from tilefoundry.dsl import Mesh, Tensor, tf
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
@@ -37,6 +36,7 @@ from tilefoundry.ir.types import (
 )
 from tilefoundry.ir.types.shard import Topology, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Partial
+from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator, TypeInferVisitor

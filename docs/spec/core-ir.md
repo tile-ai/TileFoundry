@@ -196,6 +196,21 @@ step.
   - A bare `@func` / `@prim_func` MUST become an implicit single-function
     Module whose `entry` names that function.
 
+The shared HIR call-graph queries are:
+
+```python
+def called_functions(function: HirFunction) -> tuple[HirFunction, ...]: ...
+def reachable_functions(root: HirFunction) -> tuple[HirFunction, ...]: ...
+```
+
+- constraints:
+  - `called_functions` MUST return each direct Function-call target in the
+    body's operand-before-consumer definition order. Repeated call sites remain
+    repeated entries.
+  - `reachable_functions` MUST return the root followed by its transitively
+    called Functions, callers before callees and deduplicated by Function
+    identity.
+
 ### 1.1 Function access
 
 A `Module` mirrors the model it describes: a caller reaches a kernel, a child
@@ -342,24 +357,32 @@ class Expr:
 def get_metadata(expr: "Expr", cls: type[T]) -> T | None: ...
 def replace_metadata(expr: "Expr", value: IRMetadata) -> "Expr": ...
 def remove_metadata(expr: "Expr", cls: type[IRMetadata]) -> "Expr": ...
+def attach_metadata(expr: "Expr", value: IRMetadata) -> None: ...
+def detach_metadata(expr: "Expr", cls: type[IRMetadata]) -> None: ...
 def binding_name(expr: "Expr") -> str | None: ...
+def describe_expr(expr: "Expr") -> str: ...
 def diagnostic_location(expr: "Expr") -> str | None: ...
 def source_metadata(expr: "Expr") -> tuple[IRMetadata, ...]: ...
 ```
 
 - constraints:
-  - all three helpers match an exact concrete class, not subclasses, and never
-    mutate the input expression.
+  - `get_metadata`, `replace_metadata`, and `remove_metadata` match an exact
+    concrete class, not subclasses, and never mutate the input expression.
   - `get_metadata` returns the unique matching value or `None`.
   - `replace_metadata` returns a copy with the matching value replaced in its
     existing position; every other value keeps its relative order, and a value
     whose class is absent is appended.
   - `remove_metadata` returns a copy without the matching value; when the class
     is absent it returns the input expression unchanged.
+  - `attach_metadata` and `detach_metadata` perform those exact-class updates
+    in place for passes that annotate the caller's IR. Attaching replaces any
+    existing value and appends the new value after the retained metadata.
   - `binding_name` returns the authored SSA label. `diagnostic_location`
     prefers a source span and falls back to that label. `source_metadata`
     copies only binding/span metadata when a compiler pass synthesizes a
     replacement expression.
+  - `describe_expr` returns one diagnostic line with the source span when
+    present, the binding name or `<unnamed>`, and the Call target or Expr class.
 
 `Expr` always carries a `type`. The runtime class of `Expr.type` is
 one of `TensorType` / `TupleType` / `UnitType`

@@ -20,11 +20,12 @@ from tilefoundry.analysis.metadata import (
     RooflineMetadata,
     TrafficMetadata,
 )
-from tilefoundry.analysis.walk import collect_exprs, tensor_types
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.types import tensor_types
+from tilefoundry.ir.visitor import collect_exprs
 
 _FAMILIES: dict[type[IRMetadata], str] = {}
 _EXPR_FIELDS: dict[type[IRMetadata], dict[str, Callable[..., object]]] = {}

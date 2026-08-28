@@ -16,7 +16,6 @@ from tilefoundry.analysis.check import (
     _resolve_program_geometry,
     validate_authored,
 )
-from tilefoundry.analysis.walk import reachable_functions
 from tilefoundry.cli.source import load_authored_ir, suggested_extents
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.analysis_report import (
@@ -24,6 +23,7 @@ from tilefoundry.inspection.analysis_report import (
     render_json,
     render_text,
 )
+from tilefoundry.ir.core.module import reachable_functions
 from tilefoundry.ir.hir.specialize import SpecializationError
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 

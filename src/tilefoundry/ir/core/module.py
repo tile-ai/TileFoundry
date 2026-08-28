@@ -71,6 +71,35 @@ def child_module_of(root: "Module", caller: object, callee: object) -> "Module |
     return called if any(child is called for child in owner.modules) else None
 
 
+def called_functions(function: HirFunction) -> tuple[HirFunction, ...]:
+    """Every HIR Function called directly by *function*, in definition order."""
+    from tilefoundry.ir.core.expr import Call  # noqa: PLC0415 -- cycle
+    from tilefoundry.ir.visitor import collect_exprs  # noqa: PLC0415 -- cycle
+
+    return tuple(
+        expr.target
+        for expr in collect_exprs(function.body)
+        if isinstance(expr, Call) and isinstance(expr.target, HirFunction)
+    )
+
+
+def reachable_functions(root: HirFunction) -> tuple[HirFunction, ...]:
+    """*root* and every HIR Function it calls, callers before callees."""
+    reached: list[HirFunction] = []
+    seen: set[int] = set()
+
+    def visit(function: HirFunction) -> None:
+        if id(function) in seen:
+            return
+        seen.add(id(function))
+        reached.append(function)
+        for callee in called_functions(function):
+            visit(callee)
+
+    visit(root)
+    return tuple(reached)
+
+
 def _extended_dims(params, arg_types, dims: dict) -> dict:
     """*dims* plus the extents these argument types give *params*' DimVar axes."""
     from tilefoundry.ir.types.dim import DimVar  # noqa: PLC0415 -- avoid import cycle
@@ -870,6 +899,9 @@ __all__ = [
     "LoadedModule",
     "Module",
     "ModuleFunction",
+    "called_functions",
     "function_selectors",
+    "owning_module",
+    "reachable_functions",
     "select",
 ]

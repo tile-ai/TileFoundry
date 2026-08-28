@@ -18,13 +18,15 @@ from tilefoundry import func, module
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.metadata import ComputeCostMetadata, TrafficMetadata
-from tilefoundry.analysis.walk import collect_exprs, reachable_functions, tensor_types
 from tilefoundry.dsl import ConstTensor, DimVar, Tensor, Topology, tf
 from tilefoundry.ir.core import Call, get_metadata
+from tilefoundry.ir.core.module import reachable_functions
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.nn.matmul import MatMul
+from tilefoundry.ir.types import tensor_types
 from tilefoundry.ir.types.shard.layout import ComposedLayout
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 
 _H200 = "nvidia.h200_sxm"

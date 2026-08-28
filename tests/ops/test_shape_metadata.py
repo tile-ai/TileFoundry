@@ -7,7 +7,6 @@ import torch
 
 from tests.ops.cost_utils import CostCase, run_cost_case
 from tilefoundry import func
-from tilefoundry.analysis.walk import collect_exprs
 from tilefoundry.dsl import DimVar, Tensor, tf
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call
@@ -16,6 +15,7 @@ from tilefoundry.ir.hir.tensor.shape_of import ShapeOf
 from tilefoundry.ir.types import TensorType, make_tensor_type
 from tilefoundry.ir.types.shard.layout import EMPTY_LAYOUT
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 _S = DimVar("runtime_shape", 1, 9)

@@ -15,17 +15,24 @@ from tilefoundry.ir.constraints import ScheduleConstraintMetadata
 from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
-    Constant,
     ExecutionDomainMetadata,
     Expr,
-    Tuple,
     Var,
     get_metadata,
 )
-from tilefoundry.ir.core.module import Module, child_module_of, owning_module, subtree
+from tilefoundry.ir.core import (
+    describe_expr as describe,
+)
+from tilefoundry.ir.core.module import (
+    Module,
+    called_functions,
+    child_module_of,
+    owning_module,
+    reachable_functions,
+    subtree,
+)
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.specialize import (
     SpecializationError,
     _record_complete_bindings,
@@ -34,7 +41,7 @@ from tilefoundry.ir.hir.specialize import (
     specialize_concretely,
 )
 from tilefoundry.ir.hir.tensor.reshape import is_induction_var_singleton_reshape
-from tilefoundry.ir.types import Type, callable_type_for
+from tilefoundry.ir.types import Type, callable_type_for, tensor_types
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import (
     ComposedLayout,
@@ -59,7 +66,7 @@ from tilefoundry.ir.types.substitute import (
     substitute_shape_dim,
     substitute_topology_dims,
 )
-from tilefoundry.ir.visitor import ExprCloner
+from tilefoundry.ir.visitor import BindingSubstitutionCloner, collect_exprs
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
@@ -76,13 +83,6 @@ from .metadata import (
     TrafficMetadata,
 )
 from .movement import call_traffic
-from .walk import (
-    called_functions,
-    collect_exprs,
-    describe,
-    reachable_functions,
-    tensor_types,
-)
 
 _INLINE_NODES = 10_000
 _DERIVED_METADATA = {
@@ -529,6 +529,18 @@ def _reached_owners(module: Module, function: Function) -> tuple[Module, ...]:
     return tuple(owners)
 
 
+def _required_owner(module: Module, function: Function) -> Module:
+    """Resolve *function*'s owner or retain analysis's actionable failure."""
+    owner = owning_module(module, function)
+    if owner is None:
+        raise AnalysisError(
+            f"function {function.name!r} is owned by no single node of module "
+            f"{module.name!r}; analysis answers ownership within the tree it was "
+            "given, never by name"
+        )
+    return owner
+
+
 def _substitute_module_tree(module: Module, dims: Mapping[str, int]) -> Module:
     effective = tuple(
         substitute_topology_dims(topology, dims)
@@ -657,56 +669,21 @@ def _view_metadata(expr: Expr) -> tuple:
     )
 
 
-class _InlineMutator(ExprCloner):
+class _AnalysisViewCloner(BindingSubstitutionCloner):
+    """Clone one inline call site after substituting its parameter bindings.
+
+    ``BindingSubstitutionCloner`` preserves sharing within this call site by
+    memoizing source expressions by identity. ``_Inliner`` creates a fresh
+    instance for every call site, so two calls to the same Function still get
+    independent cloned bodies and derived metadata.
+    """
+
     def __init__(self, owner, function, path, active) -> None:
-        super().__init__()
+        super().__init__(metadata=_view_metadata)
         self.owner = owner
         self.function = function
         self.path = path
         self.active = active
-
-    def visit_Var(self, expr: Var, ctx: Mapping[int, Expr]) -> Expr:
-        bound = ctx.get(id(expr))
-        if bound is not None:
-            return bound
-        return replace(expr, metadata=_view_metadata(expr))
-
-    def visit_Constant(self, expr: Constant, ctx: Mapping[int, Expr]) -> Expr:
-        return replace(expr, metadata=_view_metadata(expr))
-
-    def visit_Tuple(self, expr: Tuple, ctx: Mapping[int, Expr]) -> Expr:
-        return replace(
-            expr,
-            elements=tuple(self.visit(item, ctx) for item in expr.elements),
-            metadata=_view_metadata(expr),
-        )
-
-    def visit_GridRegionExpr(
-        self, grid: GridRegionExpr, ctx: Mapping[int, Expr]
-    ) -> GridRegionExpr:
-        init_args = tuple(self.visit(item, ctx) for item in grid.init_args)
-        induction_var = replace(
-            grid.induction_var, metadata=_view_metadata(grid.induction_var)
-        )
-        carried_args = tuple(
-            replace(item, metadata=_view_metadata(item)) for item in grid.carried_args
-        )
-        inner_env = dict(ctx)
-        inner_env[id(grid.induction_var)] = induction_var
-        inner_env.update(
-            (id(old), new) for old, new in zip(grid.carried_args, carried_args)
-        )
-        body = self.visit(grid.body, inner_env)
-        yield_values = tuple(self.visit(item, inner_env) for item in grid.yield_values)
-        return replace(
-            grid,
-            induction_var=induction_var,
-            carried_args=carried_args,
-            init_args=init_args,
-            body=body,
-            yield_values=yield_values,
-            metadata=_view_metadata(grid),
-        )
 
     def visit_Call(self, expr: Call, ctx: Mapping[int, Expr]) -> Expr:
         target = expr.target
@@ -797,7 +774,7 @@ class _Inliner:
         path: tuple[str, ...],
         active: frozenset[int],
     ) -> Expr:
-        return _InlineMutator(self, function, path, active).visit(expr, env)
+        return _AnalysisViewCloner(self, function, path, active).visit(expr, env)
 
 
 def _inline_view(module: Module, function: Function, budget: int) -> Function:
@@ -917,14 +894,11 @@ def infer_authored_types(
     """
     for fn in reversed(tuple(functions)):
         ctx = TypeInferContext(scope=FunctionScope(module, fn))
-        for expr in collect_exprs(fn.body):
-            computed = TypeInferVisitor(ctx).visit(expr)
-            if computed != expr.type:
-                object.__setattr__(expr, "type", computed)
-            ctx.cache[id(expr)] = computed
+        if fn.body is not None:
+            TypeInferVisitor(owns_body=True).visit(fn.body, ctx)
         if fn.body is not None and fn.return_type != fn.body.type:
-            object.__setattr__(fn, "return_type", fn.body.type)
-            object.__setattr__(fn, "type", callable_type_for(fn.params, fn.body.type))
+            fn.return_type = fn.body.type
+            fn.type = callable_type_for(fn.params, fn.body.type)
 
 
 def _unresolved_local_layout(type_: Type) -> bool:
@@ -986,9 +960,9 @@ def validate_call_context(module: Module, functions: Iterable[Function]) -> None
     passes and any other value is a different context, not a nested launch.
     """
     for caller in functions:
-        caller_owner = owning_module(module, caller)
+        caller_owner = _required_owner(module, caller)
         for callee in called_functions(caller):
-            callee_owner = owning_module(module, callee)
+            callee_owner = _required_owner(module, callee)
             if callee_owner is caller_owner:
                 continue
             if not any(child is callee_owner for child in caller_owner.modules):

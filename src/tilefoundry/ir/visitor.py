@@ -9,6 +9,7 @@ See [tir §2](docs/spec/tir.md#2-tir-expr-and-callable-constructs).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any, Callable
 
@@ -38,6 +39,9 @@ __all__ = [
     "ExprCollector",
     "collect_exprs",
     "ExprCloner",
+    "BindingSubstitutionCloner",
+    "expr_operands",
+    "function_values",
     "StmtVisitor",
     "StmtMutator",
     "StmtExprMutator",
@@ -342,6 +346,84 @@ class ExprCloner(ExprVisitor[Expr]):
 
 
 from tilefoundry.ir.hir.function import Function as HirFunction  # noqa: E402
+
+
+def expr_operands(expr: Expr) -> tuple[Expr, ...]:
+    """Direct value operands of *expr*, without entering a Function body.
+
+    A Function is a callable value, not an operand container. Traversals that
+    intentionally enter its body use ``collect_exprs(function.body)``; dataflow
+    queries use this function so a call edge does not become a value edge.
+    """
+    return () if isinstance(expr, HirFunction) else _expr_children(expr)
+
+
+def function_values(function: HirFunction) -> tuple[Expr, ...]:
+    """The Function, its parameters, and every value reachable from its body."""
+    return (function, *function.params, *collect_exprs(function.body))
+
+
+class BindingSubstitutionCloner(ExprCloner):
+    """Clone an Expr DAG while replacing Vars from an identity-keyed environment.
+
+    This is an ``ExprCloner``, so one instance memoizes by source-expression
+    identity: shared inputs remain shared in its output. Callers that need
+    independent copies, such as two inline call sites, use one cloner instance
+    per copy. Binding sites in a GridRegion create an extended environment for
+    its body and yields without rewriting a Var slot to a non-Var value.
+    """
+
+    def __init__(self, metadata: Callable[[Expr], tuple] | None = None) -> None:
+        super().__init__()
+        self._cloned_metadata = metadata or (lambda expr: expr.metadata)
+
+    def visit_Var(self, expr: Var, ctx: Mapping[int, Expr]) -> Expr:
+        bound = ctx.get(id(expr))
+        if bound is not None:
+            return bound
+        return replace(expr, metadata=self._cloned_metadata(expr))
+
+    def visit_Constant(self, expr: Constant, ctx: Mapping[int, Expr]) -> Expr:
+        return replace(expr, metadata=self._cloned_metadata(expr))
+
+    def visit_Tuple(self, expr: Tuple, ctx: Mapping[int, Expr]) -> Expr:
+        return replace(
+            expr,
+            elements=tuple(self.visit(item, ctx) for item in expr.elements),
+            metadata=self._cloned_metadata(expr),
+        )
+
+    def visit_GridRegionExpr(
+        self, grid: GridRegionExpr, ctx: Mapping[int, Expr]
+    ) -> GridRegionExpr:
+        init_args = tuple(self.visit(item, ctx) for item in grid.init_args)
+        induction_var = replace(
+            grid.induction_var,
+            metadata=self._cloned_metadata(grid.induction_var),
+        )
+        carried_args = tuple(
+            replace(item, metadata=self._cloned_metadata(item))
+            for item in grid.carried_args
+        )
+        inner = dict(ctx)
+        inner[id(grid.induction_var)] = induction_var
+        inner.update((id(old), new) for old, new in zip(grid.carried_args, carried_args))
+        return replace(
+            grid,
+            induction_var=induction_var,
+            carried_args=carried_args,
+            init_args=init_args,
+            body=self.visit(grid.body, inner),
+            yield_values=tuple(self.visit(item, inner) for item in grid.yield_values),
+            metadata=self._cloned_metadata(grid),
+        )
+
+    def visit_Call(self, expr: Call, ctx: Mapping[int, Expr]) -> Expr:
+        return replace(
+            expr,
+            args=tuple(self.visit(arg, ctx) for arg in expr.args),
+            metadata=self._cloned_metadata(expr),
+        )
 
 
 class StmtVisitor[T]:

@@ -5,10 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tilefoundry.ir.core import Call, Constant, Var, binding_name
+from tilefoundry.ir.core import attach_metadata as attach
+from tilefoundry.ir.core.module import reachable_functions
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.types import bytes_by_storage
+from tilefoundry.ir.visitor import collect_exprs, expr_operands
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
-from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
 from .facts import MemoryHierarchyFacts
@@ -24,7 +27,6 @@ from .metadata import (
 from .movement import add_traffic, call_traffic
 from .scope import walk_scopes
 from .visitor import AnalyzeContext
-from .walk import attach, bytes_by_storage, children, postorder, reachable_functions
 
 SELECTOR = "memory"
 
@@ -39,11 +41,14 @@ class MemoryOptions:
 
 
 def _lifetimes(fn: Function, facts: MemoryHierarchyFacts) -> tuple[ValueLifetime, ...]:
-    values = [*fn.params, *(expr for expr in postorder(fn.body) if isinstance(expr, (Call, Constant)))]
+    values = [
+        *fn.params,
+        *(expr for expr in collect_exprs(fn.body) if isinstance(expr, (Call, Constant))),
+    ]
     index_by_id = {id(expr): index for index, expr in enumerate(values)}
     last_by_id = dict(index_by_id)
     for index, consumer in enumerate(values):
-        for operand in children(consumer):
+        for operand in expr_operands(consumer):
             if id(operand) in last_by_id and index > last_by_id[id(operand)]:
                 last_by_id[id(operand)] = index
     result: list[ValueLifetime] = []
@@ -69,14 +74,14 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     facts = context.target.get_facts(MemoryHierarchyFacts)
     topologies = module.effective_topologies()
     for fn in reachable_functions(function):
-        whole = CostEvaluator(CostContext(scope=FunctionScope(module, fn)))
-        local = CostEvaluator(
-            CostContext(scope=FunctionScope(module, fn), level=level, topologies=topologies)
+        whole = CostContext(scope=FunctionScope(module, fn))
+        local = CostContext(
+            scope=FunctionScope(module, fn), level=level, topologies=topologies
         )
         totals: dict[str, TrafficBytes] = {}
         shares: dict[str, TrafficBytes] = {}
         scopes = tuple(walk_scopes(context.root))
-        for call in (expr for expr in postorder(fn.body) if hasattr(expr, "target")):
+        for call in (expr for expr in collect_exprs(fn.body) if hasattr(expr, "target")):
             owner = next(
                 (
                     scope

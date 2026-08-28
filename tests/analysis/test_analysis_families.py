@@ -36,7 +36,6 @@ from tilefoundry.analysis.compute_cost import (
     _local_duration_ns,
 )
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.walk import collect_exprs
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
 from tilefoundry.ir.core import (
     Call,
@@ -45,6 +44,7 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
+from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 

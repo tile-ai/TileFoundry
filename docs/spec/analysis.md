@@ -1420,6 +1420,10 @@ loop footprints, movement, and placement. An `Access` stores only its relation
 and allocation expression; storage level and element width are read from the
 allocation type. A refused descendant makes its owning scope unknown for that
 view. Non-affine runtime indices retain the widest legal access approximation.
+Normalization clones each reached Function call site independently. Within one
+call site, source expressions shared by identity remain one shared expression
+in the clone; sharing never aliases the independently cloned body of another
+call site.
 
 ### 3.2 Target-selected Analyzers
 

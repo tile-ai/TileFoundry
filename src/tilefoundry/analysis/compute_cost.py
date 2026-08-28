@@ -10,8 +10,11 @@ against a target's rates.
 from __future__ import annotations
 
 from tilefoundry.ir.core import Call, VerifyError
+from tilefoundry.ir.core import attach_metadata as attach
+from tilefoundry.ir.core.module import reachable_functions
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType
+from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
@@ -20,11 +23,6 @@ from .facts import PerformanceServiceFacts, ThroughputFacts
 from .metadata import ComputeCostMetadata
 from .scope import walk_scopes
 from .visitor import AnalyzeContext
-from .walk import (
-    attach,
-    collect_exprs,
-    reachable_functions,
-)
 
 SELECTOR = "compute-cost"
 

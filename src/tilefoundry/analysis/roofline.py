@@ -8,9 +8,20 @@ different count of the same flops.
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Call, get_metadata
+from tilefoundry.ir.core import (
+    Call,
+    get_metadata,
+)
+from tilefoundry.ir.core import (
+    attach_metadata as attach,
+)
+from tilefoundry.ir.core import (
+    describe_expr as describe,
+)
+from tilefoundry.ir.core.module import reachable_functions
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType
+from tilefoundry.ir.visitor import collect_exprs
 
 from .errors import AnalysisError
 from .facts import ThroughputFacts
@@ -21,7 +32,6 @@ from .metadata import (
     TrafficMetadata,
 )
 from .visitor import AnalyzeContext
-from .walk import attach, describe, postorder, reachable_functions
 
 SELECTOR = "roofline"
 
@@ -124,7 +134,7 @@ def analyze_roofline(
     target = context.target
     facts = target.get_facts(ThroughputFacts)
     for fn in reachable_functions(function):
-        for expr in postorder(fn.body):
+        for expr in collect_exprs(fn.body):
             if not isinstance(expr, Call):
                 continue
             cost = get_metadata(expr, ComputeCostMetadata)

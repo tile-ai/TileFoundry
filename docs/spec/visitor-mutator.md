@@ -1,7 +1,7 @@
 # TileFoundry Spec — IR Visitor / Mutator
 
 The IR traversal / rewrite framework: `ExprFunctor[T]` /
-`ExprVisitor[T]` / `ExprWalker[T]` / `ExprCloner` / `StmtVisitor[T]` /
+`ExprVisitor[T]` / `ExprWalker[T]` / `ExprCloner` / `BindingSubstitutionCloner` / `StmtVisitor[T]` /
 `StmtMutator` / `StmtExprMutator`.
 A shared compiler facility, owned by neither analysis nor any
 specific pass.
@@ -164,6 +164,15 @@ class ExprCloner(ExprVisitor[Expr]):                   # memoized identity-prese
     A shared input node is cloned at most once and every consumer receives the
     same cloned result.
 
+`BindingSubstitutionCloner` is the binding-aware specialization. It replaces
+`Var` values from an identity-keyed environment and extends that environment
+for `GridRegionExpr` induction and carried bindings. It inherits
+`ExprCloner`'s identity memo: sharing within one clone is preserved, while a
+caller that needs independent copies MUST use a fresh instance for each copy.
+`expr_operands(expr)` exposes value/dataflow operands without entering a
+`Function` body; `function_values(function)` includes the Function, its
+parameters, and the canonical `collect_exprs(function.body)` order.
+
 `_rebuild_expr(expr, new_children)` constructs a new Expr of the
 same subclass while preserving non-child fields (`type`, `source`).
 
@@ -277,7 +286,8 @@ position, instead of `Evaluate(op, args)`, is malformed IR
 ## 8. Implementation location
 
 - Public exports: `ExprFunctor`, `ExprVisitor`, `ExprWalker`, `ExprCollector`,
-  `collect_exprs`, `ExprCloner`, `StmtVisitor`, `StmtMutator`,
+  `collect_exprs`, `ExprCloner`, `BindingSubstitutionCloner`, `expr_operands`,
+  `function_values`, `StmtVisitor`, `StmtMutator`,
   `StmtExprMutator`, `walk_prim_function`,
   `rewrite_prim_function`.
 - The four child-enumeration / rebuild tables

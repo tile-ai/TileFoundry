@@ -17,7 +17,6 @@ from tests.fixtures.placed.derived_prefill import DerivedPrefill
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tilefoundry import func, module
-from tilefoundry.analysis.walk import collect_exprs
 from tilefoundry.dsl import (  # noqa: F401
     ConstTensor,
     DimVar,
@@ -33,6 +32,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.where import Where
+from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 
 _CTA = context_fixture.CONTEXT_CTA
