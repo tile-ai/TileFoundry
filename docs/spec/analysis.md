@@ -1283,10 +1283,11 @@ class AnalysisCheckContext:
     size and the limit and MUST NOT return a partial Function.
   - Authored-analysis readiness is not a program-level rejection. Analyze MUST
     NOT reject a schedule constraint: `where(...)` is a scheduling input, and a
-    program carrying one is measured as written. Its per-unit figures MUST
-    equal its whole-program figures because a deferred layout states no
-    distribution to project through. Schedule MAY consume or diagnose those
-    inputs under its own algorithm contract.
+    program carrying one is measured as written. A value whose placement is
+    deferred contributes its whole-program figures to the per-unit total,
+    because a deferred layout states no distribution to project through;
+    values with a resolved layout still project. Schedule MAY consume or
+    diagnose those inputs under its own algorithm contract.
 
 `tilefoundry.analysis.api.analyze` is the dependency-composed measurement
 operation. One call selects one or more root analyses by name; the operation
