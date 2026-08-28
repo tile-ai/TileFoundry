@@ -11,13 +11,19 @@ from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.tir.verify import verify_module
 from tilefoundry.ir.types import DType, TensorType, callable_type_for_prim_function
+from tilefoundry.ir.types.shard import Layout
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import CpuTarget, CudaTarget
 
 
 def test_launch_rejects_forwarded_type_that_differs_from_device_param() -> None:
     device_type = TensorType(shape=(8,), dtype=DType.f32, layout=None, storage=StorageKind.GMEM)
-    host_type = TensorType(shape=(8,), dtype=DType.f16, layout=None, storage=StorageKind.GMEM)
+    host_type = TensorType(
+        shape=(8,),
+        dtype=DType.f32,
+        layout=Layout(shape=(8,), strides=(1,)),
+        storage=StorageKind.GMEM,
+    )
     device_arg = Var(type=device_type, name="device_arg")
     device = PrimFunction(
         name="device",

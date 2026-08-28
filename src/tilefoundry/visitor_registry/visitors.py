@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from tilefoundry.ir.core.expr import Call, Constant, Expr, Tuple, Var
-from tilefoundry.ir.hir.function import Function, call_arity_mismatch
+from tilefoundry.ir.hir.function import Function, expected_arity_if_mismatched
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmt import Stmt
@@ -89,7 +89,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
         ctx: TypeInferContext,
     ) -> Type:
         child = ctx.child_for(callee)
-        expected_arity = call_arity_mismatch(callee, child, len(arg_types))
+        expected_arity = expected_arity_if_mismatched(callee, child, len(arg_types))
         if expected_arity is not None:
             kind = "activation(s)" if child is not None else "parameter(s)"
             ctx.error(

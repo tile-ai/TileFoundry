@@ -8,7 +8,7 @@ from tilefoundry.ir.types import Type, callable_type_for
 from tilefoundry.ir.types.substitute import canonicalize_dims
 
 
-def call_arity_mismatch(
+def expected_arity_if_mismatched(
     callee: "Function", child: object | None, actual_count: int
 ) -> int | None:
     """Return the expected call arity when *actual_count* differs, else ``None``."""
@@ -108,4 +108,4 @@ class Function(Expr):
             conv.seal()
 
 
-__all__ = ["Function", "call_arity_mismatch"]
+__all__ = ["Function", "expected_arity_if_mismatched"]

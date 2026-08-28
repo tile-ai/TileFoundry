@@ -34,7 +34,6 @@ from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Broadcast, Layout, Partial, Split
-from tilefoundry.ir.types.utils import types_compatible
 
 from .ast_pattern import (
     _BINARY_OPERATORS,
@@ -1811,6 +1810,7 @@ class CallBindingRule:
 
 
 def _types_compatible(actual: object, expected: object) -> bool:
+    """Keep parser's normalized shape/dtype rule until M3 removes it."""
     if actual == expected:
         return True
     if isinstance(actual, runtime.TensorType) and isinstance(expected, runtime.TensorType):
@@ -1820,19 +1820,7 @@ def _types_compatible(actual: object, expected: object) -> bool:
         except (TypeError, ValueError):
             actual_shape = actual.shape
             expected_shape = expected.shape
-        declared = runtime.TensorType(
-            shape=expected_shape,
-            dtype=expected.dtype,
-            layout=None,
-            storage=expected.storage,
-        )
-        given = runtime.TensorType(
-            shape=actual_shape,
-            dtype=actual.dtype,
-            layout=None,
-            storage=actual.storage,
-        )
-        return types_compatible(declared, given)
+        return actual_shape == expected_shape and actual.dtype == expected.dtype
     if isinstance(actual, runtime.TupleType) and isinstance(expected, runtime.TupleType):
         return len(actual.fields) == len(expected.fields) and all(
             _types_compatible(left, right) for left, right in zip(actual.fields, expected.fields)
