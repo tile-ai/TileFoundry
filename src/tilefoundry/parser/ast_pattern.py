@@ -585,7 +585,6 @@ class ChildPattern(CombinatorPattern):
         situation: str,
         role: str | None = None,
         *,
-        expected_type: object | Callable[[object, MatchContext], object] | None = None,
         values: Mapping[str, object]
         | Callable[[object, MatchContext], Mapping[str, object]]
         | None = None,
@@ -596,7 +595,6 @@ class ChildPattern(CombinatorPattern):
         self._pattern = pattern
         self.situation = situation
         self.role = role
-        self.expected_type = expected_type
         self.values = values
         self.isolated_scope = isolated_scope
         self.transform = transform
@@ -614,18 +612,12 @@ class ChildPattern(CombinatorPattern):
         if not isinstance(value, ast.AST):
             return None
         values = self.values(value, context) if callable(self.values) else self.values or {}
-        expected_type = (
-            self.expected_type(value, context)
-            if callable(self.expected_type)
-            else self.expected_type
-        )
         child = AstChild(
             self.name,
             self.pattern,
             value,
             self.situation,
             self.role,
-            expected_type=expected_type,
             values=values,
             isolated_scope=self.isolated_scope,
         )
@@ -1165,7 +1157,6 @@ class MatchContext:
     situation: str
     role: str | None = None
     binding_name: str | None = None
-    expected_type: object | None = None
     lexical_scope: LexicalScope = field(default_factory=LexicalScope)
     parent: MatchContext | None = None
     values: Mapping[str, object] = field(default_factory=dict)
@@ -1216,7 +1207,6 @@ class MatchContext:
         situation: str,
         role: str | None = None,
         binding_name: str | None = None,
-        expected_type: object | None = None,
         values: Mapping[str, object] | None = None,
         lexical_bindings: Mapping[str, object] | None = None,
         isolated_scope: bool = False,
@@ -1249,7 +1239,6 @@ class MatchContext:
             situation=situation,
             role=role,
             binding_name=binding_name,
-            expected_type=expected_type,
             lexical_scope=scope,
             parent=self,
             values=merged,
@@ -1286,7 +1275,6 @@ class AstChild:
     node: ast.AST
     situation: str
     role: str | None = None
-    expected_type: object | None = None
     values: Mapping[str, object] = field(default_factory=dict)
     isolated_scope: bool = False
     function_context: FuncParserContext | None = None
@@ -1390,7 +1378,6 @@ def parse_node(pattern: AstPattern[T], node: ast.AST, context: MatchContext) -> 
             situation=child.situation,
             role=child.role,
             binding_name=binding_name,
-            expected_type=child.expected_type,
             values=child.values,
             lexical_bindings=child.lexical_bindings,
             isolated_scope=child.isolated_scope,

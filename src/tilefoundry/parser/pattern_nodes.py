@@ -2282,10 +2282,11 @@ class CallPattern(ElementPattern):
                 operation = schema.builder(**attrs)
             except (TypeError, ValueError) as error:
                 raise ParseError.from_node(match.node, context, str(error)) from error
-            placeholder_type = context.expected_type
-            if placeholder_type is None:
-                placeholder_type = runtime.TensorType.scalar(runtime.DType.f32)
-            return runtime.Call(type=placeholder_type, target=operation, args=inputs)
+            return runtime.Call(
+                type=runtime.TensorType.scalar(runtime.DType.f32),
+                target=operation,
+                args=inputs,
+            )
         elif match.branch_id == "function_call":
             callee = match.captures["callee"]
             args = tuple(children.values())
