@@ -530,6 +530,13 @@ def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx):
             f"visible param count {len(visible)} (hidden shape scalars are "
             f"derived host-side, not passed)"
         )
+    for i, (arg, param) in enumerate(zip(forwarded, visible)):
+        arg_ty = ctx.type_of(arg)
+        if arg_ty != param.type:
+            raise VerifyError(
+                f"Launch of {callee.name!r}: forwarded arg[{i}] type {arg_ty} != "
+                f"visible param {param.name!r} type {param.type}"
+            )
 
     visible_tensors = {p.name for p in visible if isinstance(p.type, TensorType) and p.type.shape}
     for p in callee.params:

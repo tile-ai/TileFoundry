@@ -34,6 +34,7 @@ from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Broadcast, Layout, Partial, Split
+from tilefoundry.ir.types.utils import types_compatible
 
 from .ast_pattern import (
     _BINARY_OPERATORS,
@@ -1819,7 +1820,19 @@ def _types_compatible(actual: object, expected: object) -> bool:
         except (TypeError, ValueError):
             actual_shape = actual.shape
             expected_shape = expected.shape
-        return actual_shape == expected_shape and actual.dtype == expected.dtype
+        declared = runtime.TensorType(
+            shape=expected_shape,
+            dtype=expected.dtype,
+            layout=None,
+            storage=expected.storage,
+        )
+        given = runtime.TensorType(
+            shape=actual_shape,
+            dtype=actual.dtype,
+            layout=None,
+            storage=actual.storage,
+        )
+        return types_compatible(declared, given)
     if isinstance(actual, runtime.TupleType) and isinstance(expected, runtime.TupleType):
         return len(actual.fields) == len(expected.fields) and all(
             _types_compatible(left, right) for left, right in zip(actual.fields, expected.fields)
