@@ -239,11 +239,11 @@ class CudaTarget(Target):
     `architecture.shared_memory_per_cta_bytes`, and MUST be reported as belonging
     to the `cta` scope even when the level being scheduled is `thread`
     ([schedule §5](./schedule.md#5-scheduling-facts)).
-  - The tensor-memory level MUST be projected as
-    `architecture.tensor_memory_per_cta_bytes` and MUST report no capacity where
-    the architecture states none. A level naming a capacity on hardware that has
-    no such store would offer a plan somewhere to hold accumulators that does not
-    exist.
+  - The tensor-memory level MUST be projected with
+    `architecture.tensor_memory_per_cta_bytes` only where the architecture states
+    a capacity, and MUST be absent from `explicit_levels` where it states `None`.
+    A level on hardware that has no such store would offer a plan somewhere to
+    hold accumulators that does not exist.
   - The partition projection MUST state the device's SM count as the parallel
     units, its HBM bandwidth and capacity, and its dense peak rate per DType
     ([schedule §5.2](./schedule.md#52-partitionfacts)). Every one of those MUST be

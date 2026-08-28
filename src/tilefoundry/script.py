@@ -22,7 +22,11 @@ from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.ir.types.shard import Mesh
 from tilefoundry.module import UNDECLARED, _Entry
 from tilefoundry.parser import FuncParserContext, FunctionRole, parse_function
-from tilefoundry.parser.ast_pattern import LexicalScope, module_context_for_frame
+from tilefoundry.parser.ast_pattern import (
+    LexicalScope,
+    _hardware_context,
+    module_context_for_frame,
+)
 from tilefoundry.target.base import target_instance
 
 
@@ -270,8 +274,9 @@ def _parse_authored(
             module_scope=LexicalScope(),
             base=base,
             key=key,
-            target=target if dialect == "tir" else None,
+            target=target,
             mesh=mesh,
+            hardware_context=_hardware_context(target),
             binding_name=binding_name,
         )
     return parse_function(fn_inner, context)

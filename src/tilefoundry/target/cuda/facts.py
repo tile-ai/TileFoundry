@@ -63,23 +63,22 @@ def memory_hierarchy(target: CudaTarget, query: object = None) -> MemoryHierarch
             ),
             ExplicitMemoryLevelFacts(
                 name="rmem",
-
-
                 capacity_bytes=architecture.registers_per_sm_32bit * 4,
                 scope="sm",
                 owner=architecture.rmem_owner,
             ),
-
-
-
-
-
-            ExplicitMemoryLevelFacts(
-                name="tmem",
-                capacity_bytes=architecture.tensor_memory_per_cta_bytes,
-                scope="cta",
-                owner=architecture.tmem_owner,
-            ),
+        )
+        + (
+            (
+                ExplicitMemoryLevelFacts(
+                    name="tmem",
+                    capacity_bytes=architecture.tensor_memory_per_cta_bytes,
+                    scope="cta",
+                    owner=architecture.tmem_owner,
+                ),
+            )
+            if architecture.tensor_memory_per_cta_bytes is not None
+            else ()
         ),
         implicit_levels=(
             ImplicitMemoryLevelFacts(name="l1", capacity_bytes=None, scope="sm"),

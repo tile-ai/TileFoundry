@@ -170,7 +170,7 @@ def test_an_external_document_pair_stays_out_of_the_available_namespace(
     memory = target.get_facts(MemoryHierarchyFacts)
     throughput = target.get_facts(ThroughputFacts)
     assert memory.explicit("gmem").capacity_bytes == 32_000_000_000
-    assert memory.explicit("tmem").capacity_bytes is None
+    assert memory.explicit("tmem") is None
     assert throughput.peak_for(DType.f16) == 125_000_000_000_000
     assert throughput.peak_for(DType.bf16) is None
     architecture_document, device_document = hardware_documents(target)

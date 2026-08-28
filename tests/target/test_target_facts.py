@@ -38,7 +38,6 @@ def test_builtin_targets_own_their_facts_projections() -> None:
         "gmem": "target",
         "smem": "cta",
         "rmem": "thread",
-        "tmem": "cta",
     }
     assert AmxTarget().get_facts(ThroughputFacts).bandwidth_level == "gmem"
     assert {
@@ -53,15 +52,15 @@ def test_two_cuda_products_project_the_hardware_each_one_is() -> None:
     One projection serves both products, so what separates them is what their
     documents record rather than a branch per architecture.
 
-    Tensor memory is the case that matters: a level with no capacity says the
-    architecture has no such store, and a capacity says a CTA's accumulators live
-    in one. A projection that reported the same for both would price a Blackwell
-    kernel against Hopper's registers.
+    Tensor memory is the case that matters: an absent level says the architecture
+    has no such store, and a capacity says a CTA's accumulators live in one. A
+    projection that reported the same for both would price a Blackwell kernel
+    against Hopper's registers.
     """
     hopper = CudaTarget("nvidia.h200_sxm")
     blackwell = CudaTarget("nvidia.b200_sxm")
 
-    assert hopper.get_facts(MemoryHierarchyFacts).explicit("tmem").capacity_bytes is None
+    assert hopper.get_facts(MemoryHierarchyFacts).explicit("tmem") is None
     tmem = blackwell.get_facts(MemoryHierarchyFacts).explicit("tmem")
     assert (tmem.capacity_bytes, tmem.scope) == (262_144, "cta")
 

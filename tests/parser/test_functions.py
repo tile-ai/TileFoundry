@@ -40,6 +40,28 @@ def test_a_dispatch_prototype_still_requires_a_return_annotation() -> None:
                 pass
 
 
+def test_a_storage_the_target_does_not_have_is_refused() -> None:
+    with pytest.raises(ParseError, match="storage tmem is not allowed by hardware context"):
+
+        @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+        def wrong(x: Tensor[(4,), "f32", None, "tmem"]):
+            return x
+
+
+def test_a_storage_the_target_has_is_accepted() -> None:
+    @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+    def fine(x: Tensor[(4,), "f32", None, "smem"]):
+        return x
+
+    assert fine.entry_function().params[0].annotation.storage is StorageKind.SMEM
+
+    @func(target=CudaTarget("nvidia.b200_sxm"), topologies=(Topology("cta", 1),))
+    def blackwell(x: Tensor[(4,), "f32", None, "tmem"]):
+        return x
+
+    assert blackwell.entry_function().params[0].annotation.storage is StorageKind.TMEM
+
+
 def test_a_function_may_have_a_leading_docstring() -> None:
     @func
     def documented(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:

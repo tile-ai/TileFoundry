@@ -72,11 +72,23 @@ from tilefoundry.ir.types.shard import (
 )
 from tilefoundry.ir.types.shard.layout import LayoutBase
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
+from tilefoundry.target import MemoryHierarchyFacts, Target, UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 T = TypeVar("T")
 _TYPE_INFER_CONTEXT = "<type_infer_context>"
+
+
+def _hardware_context(target: Target | None) -> dict[str, object]:
+    if target is None:
+        return {}
+    try:
+        facts = target.get_facts(MemoryHierarchyFacts)
+    except UnsupportedCapabilityError:
+        return {}
+    allowed = tuple(resolve_storage(level.name) for level in facts.explicit_levels)
+    return {"allowed_storage": (*allowed, StorageKind.UMAT)}
 
 
 def _resolve_mesh_topologies(
@@ -904,8 +916,9 @@ class ModuleBuildContext:
             module=self,
             base=base,
             key=key,
-            target=self.target if dialect == "tir" else None,
+            target=self.target,
             mesh=mesh,
+            hardware_context=_hardware_context(self.target),
             binding_name=binding_name,
         )
 
