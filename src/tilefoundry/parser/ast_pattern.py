@@ -76,7 +76,6 @@ from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContex
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 T = TypeVar("T")
-_RETURN_TYPE = "<return_type>"
 _TYPE_INFER_CONTEXT = "<type_infer_context>"
 
 
@@ -1244,8 +1243,6 @@ class MatchContext:
         if lexical_bindings:
             for name, value in lexical_bindings.items():
                 scope.define(name, value)
-        if expected_type is None and role == "return_value":
-            expected_type = scope.lookup(_RETURN_TYPE)
         return MatchContext(
             function=function or self.function,
             module=module or self.module,

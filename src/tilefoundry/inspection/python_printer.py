@@ -304,12 +304,19 @@ def _shard_layout_surface_str(
         return None
     splits, partials = classified
 
-
     if not splits and not partials and not mesh_unique:
         return None
 
+    c_strides = try_c_order_strides(layout.shape)
+    explicit = layout.strides is not None and layout.strides != c_strides
+    if explicit and any(
+        i in splits and _shape_entry_str(dim, nested=True) != shape_entry_str(dim)
+        for i, dim in enumerate(layout.shape)
+    ):
+        return None
+
     dims = [
-        f"{shape_entry_str(d)} {' '.join(f'@ {r}' for r in splits[i])}"
+        f"{_shape_entry_str(d, nested=True)} {' '.join(f'@ {r}' for r in splits[i])}"
         if i in splits
         else shape_entry_str(d)
         for i, d in enumerate(layout.shape)
@@ -319,8 +326,6 @@ def _shard_layout_surface_str(
         dim_str += ","
     axis_tuple = f"({dim_str})"
 
-    c_strides = try_c_order_strides(layout.shape)
-    explicit = layout.strides is not None and layout.strides != c_strides
     stride_str = _shape_tuple(layout.strides) if explicit else None
     value_set = "{" + ", ".join(partials) + "}" if partials else None
 

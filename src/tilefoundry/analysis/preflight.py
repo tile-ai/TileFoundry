@@ -14,7 +14,7 @@ from tilefoundry.ir.core import Call, Expr, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.reshape import is_induction_var_singleton_reshape
-from tilefoundry.ir.types import Type, callable_type_for
+from tilefoundry.ir.types import Type
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
@@ -36,9 +36,6 @@ def infer_authored_types(
         ctx = TypeInferContext(scope=FunctionScope(module, fn))
         if fn.body is not None:
             TypeInferVisitor(owns_body=True).visit(fn.body, ctx)
-        if fn.body is not None and fn.return_type != fn.body.type:
-            fn.return_type = fn.body.type
-            fn.type = callable_type_for(fn.params, fn.body.type)
 
 
 def _unresolved_local_layout(type_: Type) -> bool:

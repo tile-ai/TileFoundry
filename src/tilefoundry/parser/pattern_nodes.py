@@ -37,7 +37,6 @@ from tilefoundry.ir.types.shard import Broadcast, Layout, Partial, Split
 
 from .ast_pattern import (
     _BINARY_OPERATORS,
-    _RETURN_TYPE,
     _TYPE_INFER_CONTEXT,
     _UNARY_OPERATORS,
     AstChild,
@@ -1166,9 +1165,7 @@ class ReturnTypePattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        value = children["type"]
-        context.lexical_scope.define(_RETURN_TYPE, value)
-        return value
+        return children["type"]
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
@@ -1810,25 +1807,6 @@ class CallBindingRule:
         return value
 
 
-def _types_compatible(actual: object, expected: object) -> bool:
-    """Keep parser's normalized shape/dtype rule until M3 removes it."""
-    if actual == expected:
-        return True
-    if isinstance(actual, runtime.TensorType) and isinstance(expected, runtime.TensorType):
-        try:
-            actual_shape = tuple(runtime.normalize_dim(dim) for dim in actual.shape)
-            expected_shape = tuple(runtime.normalize_dim(dim) for dim in expected.shape)
-        except (TypeError, ValueError):
-            actual_shape = actual.shape
-            expected_shape = expected.shape
-        return actual_shape == expected_shape and actual.dtype == expected.dtype
-    if isinstance(actual, runtime.TupleType) and isinstance(expected, runtime.TupleType):
-        return len(actual.fields) == len(expected.fields) and all(
-            _types_compatible(left, right) for left, right in zip(actual.fields, expected.fields)
-        )
-    return False
-
-
 @dataclass(frozen=True)
 class CallTypeInferenceRule:
     STATEMENT: ClassVar[str] = "A call's result type must be inferred from its binding."
@@ -1842,21 +1820,6 @@ class CallTypeInferenceRule:
             infer_context = runtime.TypeInferContext()
         computed = runtime.TypeInferVisitor().visit(value, infer_context)
         value.type = computed
-        return value
-
-
-class CallExpectedTypeRule:
-    STATEMENT: ClassVar[str] = "A call's inferred type must satisfy the expected expression type."
-
-    def apply(self, value, *, match, context):
-        expected = context.expected_type
-        actual = getattr(value, "type", None)
-        if expected is not None and not _types_compatible(actual, expected):
-            raise ParseError.from_node(
-                match.node,
-                context,
-                f"expression type {actual!r} does not match expected type {expected!r}",
-            )
         return value
 
 
@@ -2345,7 +2308,6 @@ class CallPattern(ElementPattern):
         CallVariadicInputFormRule(),
         CallBindingRule(),
         CallTypeInferenceRule(),
-        CallExpectedTypeRule(),
     )
 
 
@@ -2380,7 +2342,6 @@ def _expression_operator_pattern(operator_type: type[ast.AST]) -> ChoicePattern:
 _CALL_RESULT_RULES: tuple[AstRule[Any], ...] = (
     CallBindingRule(),
     CallTypeInferenceRule(),
-    CallExpectedTypeRule(),
 )
 
 
@@ -2512,7 +2473,6 @@ class BinaryExpressionPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         CallBindingRule(),
         CallTypeInferenceRule(),
-        CallExpectedTypeRule(),
     )
 
 
@@ -2556,7 +2516,6 @@ class UnaryExpressionPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         CallBindingRule(),
         CallTypeInferenceRule(),
-        CallExpectedTypeRule(),
     )
 
 
@@ -4072,25 +4031,6 @@ class FunctionSignatureRule:
 
 
 @dataclass(frozen=True)
-class FunctionReturnRule:
-    STATEMENT: ClassVar[str] = "A HIR function body's inferred type must match its return type."
-
-    def apply(self, value, *, match, context):
-        if isinstance(value, runtime.Function) and value.body is not None:
-            infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
-            if not isinstance(infer_context, runtime.TypeInferContext):
-                infer_context = runtime.TypeInferContext()
-            body_type = runtime.TypeInferVisitor().visit(value.body, infer_context)
-            if not _types_compatible(body_type, value.return_type):
-                raise ParseError.from_node(
-                    match.node,
-                    context,
-                    f"function body type {body_type!r} does not match return {value.return_type!r}",
-                )
-        return value
-
-
-@dataclass(frozen=True)
 class FunctionDialectRule:
     STATEMENT: ClassVar[str] = (
         "A function kind and constructed value must agree with the active dialect."
@@ -4246,36 +4186,20 @@ class FunctionPattern(ElementPattern):
         specializations = context.function.specializations
         converter = context.function.converter
         if context.function.dialect == "hir":
-            if declared_return is None:
-                if body is None:
+            if body is None:
+                if declared_return is None:
                     raise ParseError.from_node(
                         match.node,
                         context,
                         "HIR pass prototype requires a return annotation",
                     )
-                declared_return = body.type
-            elif (
-                isinstance(declared_return, runtime.TensorType)
-                and isinstance(body, runtime.Expr)
-                and isinstance(body.type, runtime.TensorType)
-                and declared_return.shape == body.type.shape
-                and declared_return.dtype == body.type.dtype
-                and declared_return.storage == body.type.storage
-                and isinstance(declared_return.layout, runtime.ShardLayout)
-                and isinstance(body.type.layout, runtime.ShardLayout)
-                and isinstance(declared_return.layout.layout, runtime.Layout)
-                and isinstance(body.type.layout.layout, runtime.Layout)
-                and declared_return.layout.attrs == body.type.layout.attrs
-                and declared_return.layout.mesh == body.type.layout.mesh
-                and declared_return.layout.layout.strides is None
-                and body.type.layout.layout.strides is not None
-            ):
-                declared_return = runtime.TensorType(
-                    shape=declared_return.shape,
-                    dtype=declared_return.dtype,
-                    layout=body.type.layout,
-                    storage=declared_return.storage,
-                )
+                return_type = declared_return
+            elif context.function.role is FunctionRole.VARIANT:
+                base = context.function.base
+                assert isinstance(base, runtime.Function)
+                return_type = base.return_type
+            else:
+                return_type = body.type
             function_name = (
                 getattr(context.function.base, "name", None)
                 or context.function.base_name
@@ -4285,7 +4209,7 @@ class FunctionPattern(ElementPattern):
                 name=function_name,
                 params=params,
                 body=body,
-                return_type=declared_return,
+                return_type=return_type,
                 specializations=specializations,
             )
             if context.function.role is FunctionRole.VARIANT:
@@ -4317,7 +4241,6 @@ class FunctionPattern(ElementPattern):
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         FunctionSignatureRule(),
-        FunctionReturnRule(),
         FunctionDialectRule(),
         FunctionRoleValidationRule(),
         FunctionRegistrationRule(),
@@ -4342,7 +4265,6 @@ __all__ = [
     "BinaryExpressionPattern",
     "BlockPattern",
     "CallBindingRule",
-    "CallExpectedTypeRule",
     "CallPattern",
     "CallTypeInferenceRule",
     "ConstantPattern",
@@ -4354,7 +4276,6 @@ __all__ = [
     "FunctionDialectRule",
     "FunctionPattern",
     "FunctionRegistrationRule",
-    "FunctionReturnRule",
     "FunctionRoleValidationRule",
     "FunctionSignatureRule",
     "IndexEndpointPattern",

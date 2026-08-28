@@ -217,6 +217,28 @@ def test_nested_composed_shard_layout_roundtrips_without_flattening() -> None:
     assert as_script(import_dsl(printed)) == printed
 
 
+def test_compound_split_without_explicit_strides_stays_compact() -> None:
+    fn = import_dsl(
+        "from __future__ import annotations\n"
+        "from tilefoundry import func\n"
+        "from tilefoundry.dsl import DimVar, Tensor\n"
+        "from tilefoundry.ir.types.shard import Layout, Mesh, Topology\n"
+        "\n"
+        'n = DimVar("n", 1, 65)\n'
+        "tiles = ((n - 1) // 8) + 1\n"
+        'cta = Mesh((Topology("cta", tiles),), Layout((tiles,), (1,)), names=("tile",))\n'
+        "\n"
+        "@func\n"
+        'def f(x: Tensor[(tiles, 8), "f32", (tiles @ cta.tile, 8)]):\n'
+        "    return x\n"
+    )
+
+    printed = as_script(fn)
+
+    assert "(((n - 1) // 8) + 1) @ cta.tile" in printed
+    assert as_script(import_dsl(printed)) == printed
+
+
 def test_carry_updates_print_last_without_shadowing_the_old_value() -> None:
     fn = import_dsl(
         _HEADER + "\n@func\n"

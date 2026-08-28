@@ -45,11 +45,13 @@ _N = DimVar("n_print", 1, 9)
 def test_a_derived_topology_and_mesh_geometry_survive_the_round_trip() -> None:
     source = as_script(DerivedPrefill)
     imported = import_dsl(source)
+    signature = source[source.index("    def prefill(") : source.index("        local =")]
 
     assert 'prefill_n = DimVar("prefill_n", 1, 65)' in source
     assert 'topology_only = DimVar("topology_only", 1, 1025)' in source
     assert 'Topology("cta", ((prefill_n - 1) // 8) + 1)' in source
     assert 'Topology("thread", topology_only)' in source
+    assert "ShardLayout(" in signature
     assert imported.topologies == DerivedPrefill.topologies
     assert imported.entry_function().params[0].type == (
         DerivedPrefill.entry_function().params[0].type

@@ -177,7 +177,6 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | Owner | Situation | Rule | Statement | Source |
 | --- | --- | --- | --- | --- |
 | binary_expression, matmul_expression, op_call, unary_expression | expression, slice_endpoint, subscript_index | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
-| binary_expression, matmul_expression, op_call, unary_expression | expression, slice_endpoint, subscript_index | CallExpectedTypeRule | A call's inferred type must satisfy the expected expression type. | src/tilefoundry/parser/pattern_nodes.py |
 | binary_expression, matmul_expression, op_call, unary_expression | expression, slice_endpoint, subscript_index | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
 | dim_expr | dim_expr, layout_extent, layout_shape, tensor_dim_expr, tensor_optional_slot, tensor_shape | ShapeDimRule | A shape dimension must be an integer, DimVar, or expression. | src/tilefoundry/parser/ast_pattern.py |
 | dtype | tensor_dtype | CanonicalDTypeRule | A dtype must resolve to a canonical DType. | src/tilefoundry/parser/ast_pattern.py |
@@ -185,7 +184,6 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | explicit_layout, layout, placed_layout, plain_layout | layout_shape, tensor_optional_slot, tensor_shape | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
 | function | function | FunctionDialectRule | A function kind and constructed value must agree with the active dialect. | src/tilefoundry/parser/pattern_nodes.py |
 | function | function | FunctionRegistrationRule | A validated function must be registered exactly once in its owning scope. | src/tilefoundry/parser/pattern_nodes.py |
-| function | function | FunctionReturnRule | A HIR function body's inferred type must match its return type. | src/tilefoundry/parser/pattern_nodes.py |
 | function | function | FunctionRoleValidationRule | A root, variant, or converter must satisfy its role before registration. | src/tilefoundry/parser/pattern_nodes.py |
 | function | function | FunctionSignatureRule | A function must construct an ordered parameter tuple. | src/tilefoundry/parser/pattern_nodes.py |
 | index_slice | subscript_index | TileWindowSliceBoundRule | A tile window cannot be used as a slice bound. | src/tilefoundry/parser/pattern_nodes.py |

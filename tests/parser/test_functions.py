@@ -6,11 +6,38 @@ import re
 
 import pytest
 
-from tilefoundry import func
+from tilefoundry import func, module
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.inspection import as_script
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.parser import ParseError
 from tilefoundry.target import CudaTarget
+
+
+def test_a_lying_return_annotation_is_ignored_not_rejected() -> None:
+    @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+    def annotated(
+        x: Tensor[(8, 16), "f32"],
+    ) -> Tensor[(8, 16), "f32", None, "smem"]:
+        return tf.mul(x, x)
+
+    fn = annotated.entry_function()
+    assert fn.return_type == fn.body.type
+    assert fn.return_type.storage is StorageKind.GMEM
+
+
+def test_a_dispatch_prototype_still_requires_a_return_annotation() -> None:
+    with pytest.raises(ParseError, match="prototype requires a return annotation"):
+
+        @module(
+            entry="root",
+            target=CudaTarget("nvidia.h200_sxm"),
+            topologies=(Topology("cta", 1),),
+        )
+        class NoReturn:
+            @func
+            def root(x: Tensor[(8, 16), "f32"]):
+                pass
 
 
 def test_a_function_may_have_a_leading_docstring() -> None:
