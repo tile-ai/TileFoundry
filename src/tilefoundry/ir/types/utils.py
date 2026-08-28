@@ -20,51 +20,46 @@ from .shard import (
 from .tensor_type import TensorType, TupleType, Type
 
 
-def _layout_mismatch_field(declared, actual) -> str | None:
-    if declared is None:
-        return None
-    if isinstance(declared, Layout):
-        if not isinstance(actual, Layout):
-            return "layout"
-        if declared.shape is not None and declared.shape != actual.shape:
-            return "layout shape"
-        if declared.strides is not None and declared.strides != actual.strides:
-            return "layout strides"
-        return None
-    if isinstance(declared, ShardLayout):
-        if not isinstance(actual, ShardLayout):
-            return "layout"
-        if declared.mesh is not None and declared.mesh != actual.mesh:
-            return "layout mesh"
-        if declared.attrs is not None and declared.attrs != actual.attrs:
-            return "layout attrs"
-        return _layout_mismatch_field(declared.layout, actual.layout)
-    return None if actual == declared else "layout"
-
-
-def type_mismatch_field(declared: Type, actual: Type) -> str | None:
-    """Return the first declared field that rejects *actual*, or ``None``.
+def types_compatible(declared: Type, actual: Type) -> bool:
+    """Return whether *actual* may bind a position declared as *declared*.
 
     Every non-``None`` declared field constrains the corresponding actual
     field. ``UMAT`` is the storage field's undecided value. Layout descriptors
     apply the same rule recursively.
     """
+    def field_compatible(declared_field, actual_field) -> bool:
+        return declared_field is None or declared_field == actual_field
+
+    def layout_compatible(declared_layout, actual_layout) -> bool:
+        if declared_layout is None:
+            return True
+        if isinstance(declared_layout, Layout):
+            return (
+                isinstance(actual_layout, Layout)
+                and field_compatible(declared_layout.shape, actual_layout.shape)
+                and field_compatible(declared_layout.strides, actual_layout.strides)
+            )
+        if isinstance(declared_layout, ShardLayout):
+            return (
+                isinstance(actual_layout, ShardLayout)
+                and field_compatible(declared_layout.mesh, actual_layout.mesh)
+                and field_compatible(declared_layout.attrs, actual_layout.attrs)
+                and layout_compatible(declared_layout.layout, actual_layout.layout)
+            )
+        return actual_layout == declared_layout
+
     if isinstance(declared, TensorType):
-        if not isinstance(actual, TensorType):
-            return "type"
-        if declared.shape != actual.shape:
-            return "shape"
-        if declared.dtype != actual.dtype:
-            return "dtype"
-        if declared.storage is not StorageKind.UMAT and declared.storage != actual.storage:
-            return "storage"
-        return _layout_mismatch_field(declared.layout, actual.layout)
-    return None if actual == declared else "type"
-
-
-def types_compatible(declared: Type, actual: Type) -> bool:
-    """Return whether *actual* may bind a position declared as *declared*."""
-    return type_mismatch_field(declared, actual) is None
+        return (
+            isinstance(actual, TensorType)
+            and declared.shape == actual.shape
+            and declared.dtype == actual.dtype
+            and (
+                declared.storage is StorageKind.UMAT
+                or declared.storage == actual.storage
+            )
+            and layout_compatible(declared.layout, actual.layout)
+        )
+    return actual == declared
 
 
 def numel(type: Type) -> int:

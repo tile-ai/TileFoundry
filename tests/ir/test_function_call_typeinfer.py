@@ -88,9 +88,9 @@ def test_explicit_sharded_formal_constrains_its_actual():
 
     f = _add_callee(_SPLIT0)
     assert infer_call(f, _SPLIT0) == _SPLIT0
-    with pytest.raises(VerifyError, match="layout mismatch"):
+    with pytest.raises(VerifyError, match="type mismatch"):
         infer_call(f, _PLAIN)
-    with pytest.raises(VerifyError, match="layout attrs mismatch"):
+    with pytest.raises(VerifyError, match="type mismatch"):
         infer_call(f, make_shard_tensor_type((4, 8), mesh=_M, attrs=(Split(1),)))
 
 
@@ -140,9 +140,9 @@ def test_symbolic_arithmetic_signature_matches_inferred_argument():
 def test_plain_formal_rejects_shape_or_dtype_mismatch():
 
     f = _add_callee(_PLAIN)
-    with pytest.raises(VerifyError, match="shape mismatch"):
+    with pytest.raises(VerifyError, match="type mismatch"):
         infer_call(f, make_tensor_type((4, 16), _F))
-    with pytest.raises(VerifyError, match="dtype mismatch"):
+    with pytest.raises(VerifyError, match="type mismatch"):
         infer_call(f, make_tensor_type((4, 8), DType.bf16))
 
 

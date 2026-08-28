@@ -20,7 +20,7 @@ from tilefoundry.evaluator.value import (
 )
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
 from tilefoundry.ir.core.pattern import locate_dim_var
-from tilefoundry.ir.hir.function import Function, expected_arity_if_mismatched
+from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.utils import types_compatible
@@ -113,12 +113,14 @@ class EvaluatorVisitor(ExprVisitor):
         self, callee: Function, arg_values, ctx: EvaluateContext
     ) -> Value:
         child = child_module_instance(ctx.loaded_module, callee)
-        expected_arity = expected_arity_if_mismatched(callee, child, len(arg_values))
-        if expected_arity is not None:
+        supplied = [
+            param for param in callee.params if not (child is not None and param.is_const)
+        ]
+        if len(arg_values) != len(supplied):
             kind = "activation(s)" if child is not None else "args"
             raise EvalError(
                 f"evaluator: call to {callee.name!r} expects "
-                f"{expected_arity} {kind}, got {len(arg_values)}"
+                f"{len(supplied)} {kind}, got {len(arg_values)}"
             )
         given = iter(arg_values)
         args = [

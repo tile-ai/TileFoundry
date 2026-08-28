@@ -8,16 +8,6 @@ from tilefoundry.ir.types import Type, callable_type_for
 from tilefoundry.ir.types.substitute import canonicalize_dims
 
 
-def expected_arity_if_mismatched(
-    callee: "Function", child: object | None, actual_count: int
-) -> int | None:
-    """Return the expected call arity when *actual_count* differs, else ``None``."""
-    expected = sum(
-        not (child is not None and param.is_const) for param in callee.params
-    )
-    return expected if actual_count != expected else None
-
-
 @dataclass(unsafe_hash=True)
 class Function(Expr):
     """Contain a pure-SSA HIR body with its callable value type.
@@ -108,4 +98,4 @@ class Function(Expr):
             conv.seal()
 
 
-__all__ = ["Function", "expected_arity_if_mismatched"]
+__all__ = ["Function"]

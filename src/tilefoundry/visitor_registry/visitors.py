@@ -13,14 +13,14 @@ from __future__ import annotations
 from dataclasses import replace
 
 from tilefoundry.ir.core.expr import Call, Constant, Expr, Tuple, Var
-from tilefoundry.ir.hir.function import Function, expected_arity_if_mismatched
+from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TupleType, Type, UnitType
-from tilefoundry.ir.types.utils import type_mismatch_field
+from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.ir.visitor import ExprVisitor, ExprWalker, StmtVisitor
 
 from .contexts import Cost, CostContext, TypeInferContext, VerifyContext
@@ -89,13 +89,15 @@ class TypeInferVisitor(ExprVisitor[Type]):
         ctx: TypeInferContext,
     ) -> Type:
         child = ctx.child_for(callee)
-        expected_arity = expected_arity_if_mismatched(callee, child, len(arg_types))
-        if expected_arity is not None:
+        supplied = tuple(
+            param for param in callee.params if not (child is not None and param.is_const)
+        )
+        if len(arg_types) != len(supplied):
             kind = "activation(s)" if child is not None else "parameter(s)"
             ctx.error(
                 call,
                 f"hir Function call {callee.name!r}: arity mismatch — "
-                f"callee declares {expected_arity} {kind}, call passed {len(arg_types)}",
+                f"callee declares {len(supplied)} {kind}, call passed {len(arg_types)}",
             )
 
         given = iter(enumerate(arg_types))
@@ -106,10 +108,10 @@ class TypeInferVisitor(ExprVisitor[Type]):
                 continue
             index, arg_type = next(given)
             declared = param.annotation
-            if (field := type_mismatch_field(declared, arg_type)) is not None:
+            if not types_compatible(declared, arg_type):
                 ctx.error(
                     call,
-                    f"hir Function call {callee.name!r}: arg {index} {field} mismatch — "
+                    f"hir Function call {callee.name!r}: arg {index} type mismatch — "
                     f"callee param {param.name!r} expects {declared!r}, got {arg_type!r}",
                 )
             memo[id(param)] = (param, arg_type)

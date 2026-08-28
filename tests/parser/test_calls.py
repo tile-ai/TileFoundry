@@ -363,7 +363,7 @@ def test_a_call_nobody_claims_is_named_without_taking_a_turn() -> None:
 
 
 def test_a_boundary_states_which_axis_disagrees() -> None:
-    with pytest.raises(VerifyError, match="layout attrs mismatch.*param 'x'"):
+    with pytest.raises(VerifyError, match="type mismatch.*param 'x'"):
 
         @module(
             entry="root",
@@ -383,7 +383,7 @@ def test_a_boundary_states_which_axis_disagrees() -> None:
 
 
 def test_a_boundary_states_when_storage_disagrees() -> None:
-    with pytest.raises(VerifyError, match="storage mismatch.*param 'x'"):
+    with pytest.raises(VerifyError, match="type mismatch.*param 'x'"):
 
         @module(
             entry="root",
@@ -403,7 +403,7 @@ def test_a_boundary_states_when_storage_disagrees() -> None:
 
 
 def test_a_layout_undefined_boundary_still_constrains_storage() -> None:
-    with pytest.raises(VerifyError, match="storage mismatch.*param 'x'"):
+    with pytest.raises(VerifyError, match="type mismatch.*param 'x'"):
 
         @module(
             entry="root",
