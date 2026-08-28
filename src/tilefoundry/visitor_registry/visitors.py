@@ -18,11 +18,9 @@ from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope
-from tilefoundry.ir.types.shard import Layout, ShardLayout
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.substitute import canonicalize_dims
-from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type, UnitType
-from tilefoundry.ir.types.utils import types_compatible
+from tilefoundry.ir.types.tensor_type import TupleType, Type, UnitType
+from tilefoundry.ir.types.utils import type_mismatch_field
 from tilefoundry.ir.visitor import ExprVisitor, ExprWalker, StmtVisitor
 
 from .contexts import Cost, CostContext, TypeInferContext, VerifyContext
@@ -32,38 +30,6 @@ from .registries import (
     typeinfer_registry,
     verify_stmt_registry,
 )
-
-
-def _layout_mismatch_field(declared, actual) -> str:
-    if isinstance(declared, Layout) and isinstance(actual, Layout):
-        if declared.shape is not None and declared.shape != actual.shape:
-            return "layout shape"
-        if declared.strides is not None and declared.strides != actual.strides:
-            return "layout strides"
-    elif isinstance(declared, ShardLayout) and isinstance(actual, ShardLayout):
-        if declared.mesh is not None and declared.mesh != actual.mesh:
-            return "layout mesh"
-        if declared.attrs is not None and declared.attrs != actual.attrs:
-            return "layout attrs"
-        if declared.layout is not None:
-            return _layout_mismatch_field(declared.layout, actual.layout)
-    return "layout"
-
-
-def _type_mismatch_field(declared: Type, actual: Type) -> str:
-    """Name the first declared field that rejects an actual type."""
-    if isinstance(declared, TensorType) and isinstance(actual, TensorType):
-        if declared.shape != actual.shape:
-            return "shape"
-        if declared.dtype != actual.dtype:
-            return "dtype"
-        if (
-            declared.storage is not StorageKind.UMAT
-            and declared.storage != actual.storage
-        ):
-            return "storage"
-        return _layout_mismatch_field(declared.layout, actual.layout)
-    return "type"
 
 
 class TypeInferVisitor(ExprVisitor[Type]):
@@ -140,8 +106,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
                 continue
             index, arg_type = next(given)
             declared = param.annotation
-            if not types_compatible(declared, arg_type):
-                field = _type_mismatch_field(declared, arg_type)
+            if (field := type_mismatch_field(declared, arg_type)) is not None:
                 ctx.error(
                     call,
                     f"hir Function call {callee.name!r}: arg {index} {field} mismatch — "
