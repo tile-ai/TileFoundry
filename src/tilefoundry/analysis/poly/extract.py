@@ -23,10 +23,10 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
-from tilefoundry.ir.types import TensorType, TupleType
+from tilefoundry.ir.types import TupleType
 from tilefoundry.ir.types.dim import DimVar, is_dim_op_call
 from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.shard.shard_layout import shard_layout_of, split_target_axes
+from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_operands
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -185,43 +185,7 @@ def _assign_statement_names(ops: list[object]) -> list[str]:
     return names
 
 
-def _local_type(ty: TensorType) -> TensorType:
-    """Narrow a sharded tensor to its rank-preserving local shape.
-
-    Divide tensor axes named by ``split_target_axes`` rather than factored layout
-    positions, which may outnumber tensor rank and silently lose ISL flow.
-    Partial, broadcast, and dynamic mesh axes consume no tensor axis. Keeping
-    this conversion here makes every registered relation sharding-aware.
-    """
-    if not isinstance(ty, TensorType):
-        return ty
-    layout = shard_layout_of(ty.layout)
-    if layout is None:
-        return ty
-    targets = split_target_axes(layout, ty.shape)
-    mesh_extents = layout.mesh.layout.shape
-    local = list(ty.shape)
-    for mesh_axis, tensor_axis in enumerate(targets):
-        if tensor_axis is None:
-            continue
-        extent = mesh_extents[mesh_axis]
-        if extent is None:
-            local[tensor_axis] = 1
-            continue
-        size = local[tensor_axis]
-        if not isinstance(size, int) or isinstance(size, bool):
-            raise ExtractError(
-                f"extract: tensor axis {tensor_axis} is Split-sharded "
-                f"but its extent {size!r} is not a static int -- cannot divide "
-                "a dynamic axis by a mesh extent"
-            )
-        if size % extent != 0:
-            raise ExtractError(
-                f"extract: tensor axis {tensor_axis} (extent {size}) "
-                f"is not evenly divisible by its mesh extent {extent}"
-            )
-        local[tensor_axis] = size // extent
-    return TensorType(shape=tuple(local), dtype=ty.dtype, layout=None, storage=ty.storage)
+_local_type = local_type_of
 
 
 def _static_loop_bound(dim, what: str) -> int:
