@@ -334,7 +334,7 @@ explicit analysis; there is no ordinary `--target` option.
     analysis option.
   - `analyze` MUST invoke the public operation once with every requested root,
     so their union dependency closure runs on one inlined Function view
-    ([analysis §3](./analysis.md#3-composed-analysis)). Each closure member MUST
+    ([analysis §2](./analysis.md#2-composed-analysis)). Each closure member MUST
     run once, and requesting another root MUST NOT let one analyzer change
     Metadata owned by another.
   - A selection MUST resolve to a Module. A bare Function MUST be rejected
@@ -350,7 +350,7 @@ explicit analysis; there is no ordinary `--target` option.
     It MUST be refused as an argument-combination error when no analysis flag was
     supplied, naming that a report needs a requested root and printing the
     `analyze` usage. Both formats MUST carry the same conclusions
-    ([analysis §2](./analysis.md#2-authored-hir-metrics)).
+    ([analysis §1](./analysis.md#1-authored-hir-metrics)).
   - `--operands` MUST add each operand's share of a call's traffic to that call's
     annotation, and MUST NOT change the JSON report, which carries that split
     either way. It is the traffic the annotation already states, one layer finer,
@@ -368,7 +368,7 @@ explicit analysis; there is no ordinary `--target` option.
     MUST be repeatable to bind several. One dimension MUST receive one extent;
     a comma-separated list of extents for one dimension MUST be rejected because
     several extents together are a `check` request. It MUST be passed through as the
-    operation's `dims` ([analysis §2.2](./analysis.md#22-analysis-families));
+    operation's `dims` ([analysis §1.2](./analysis.md#12-analysis-families));
     the CLI MUST NOT specialise the selection itself, because then what it
     wrote would be about a program the operation never saw.
   - A `--dim` argument that is not `NAME=EXTENT`, or whose extent is not an
@@ -397,7 +397,7 @@ explicit analysis; there is no ordinary `--target` option.
   - Output MUST report the analyses that were requested. A dependency that ran
     because a requested root needed it MUST appear in the executed list and, other
     than the bounded roofline support view defined by
-    [analysis §2](./analysis.md#2-authored-hir-metrics), MUST NOT have its own
+    [analysis §1](./analysis.md#1-authored-hir-metrics), MUST NOT have its own
     measurements reported.
   - The report's `target` field MUST be the concrete Target value's `identity`,
     so two products served by one Target class remain distinguishable.

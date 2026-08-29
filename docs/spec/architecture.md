@@ -138,10 +138,9 @@ This stage layers two concerns on top of the same IR:
    are both ordinary stages in that manager. A pass may use a
    pass-private intermediate representation without elevating it to a
    peer IR layer.
-3. **Fact layer** — the polyhedral model of one HIR `Function` body and
-   the authored-HIR metrics ([analysis](./analysis.md)). It is neither a
-   pass nor an IR layer: it measures, and it decides nothing over what it
-   measures.
+3. **Fact layer** — the authored-HIR metrics measured over one HIR
+   `Function` ([analysis](./analysis.md)). It is neither a pass nor an IR
+   layer: it measures, and it decides nothing over what it measures.
 
 IR traversal / rewrite utilities (`ExprVisitor` / `ExprCloner` /
 `StmtVisitor` / `StmtMutator` / mixed stmt-expr rewriters) are shared
@@ -208,7 +207,7 @@ This table is the authoritative spec-to-box map. Each row lists the
 | **[evaluator](./evaluator.md)** | HIR reference interpreter: `evaluate` entry, `Value` family (`TensorValue` / `TupleValue`), `register_eval` op registry, node-evaluation + `GridRegionExpr` + layout-domain rules. Logical reference oracle, no codegen / runtime |
 | **[visitor-registry](./visitor-registry.md)** | Derived-visitor dispatch pattern: `AnalysisRegistry`, per-class handler registration, four instances (`typeinfer` / `verify` / `codegen_<target>` / `cost`) with their Context / Visitor derivations |
 | **[semantic-analysis](./semantic-analysis.md)** | Static analysis service semantics: type propagation (relation-derived type behavior), access relation analysis, shard propagation (logical shape → layout domain, relation-driven propagation, output storage + mesh/layout compatibility). The registration mechanism itself is owned by visitor-registry |
-| **[analysis](./analysis.md)** | Fact layer: the polyhedral model of one HIR Function body (`TileGraph` / `extract`, authored-loop modelling, and the facts measured over a time relation), and the composed authored-HIR measurement — its analysis families, their owned Metadata records, and the narrow Target Facts each family declares |
+| **[analysis](./analysis.md)** | Fact layer: the composed authored-HIR measurement — its analysis families, their owned Metadata records, and the narrow Target Facts each family declares |
 | **[visitor-mutator](./visitor-mutator.md)** | IR traversal / rewrite infrastructure: expr / stmt visitors, mutators, identity-preserving rewrite invariants, mixed stmt-expr traversal |
 | **[passes](./passes.md)** | Pass framework + implemented passes: `Pass` / `PassManager`, three pass granularities, per-pass subsections (lowering / optimization rules) |
 | **[target](./target.md)** | Target capability descriptors, architecture/device facts, Facts projection, and admitted program topology levels |

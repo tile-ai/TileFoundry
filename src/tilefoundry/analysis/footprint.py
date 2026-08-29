@@ -9,7 +9,7 @@ import isl
 from tilefoundry.ir.types import TensorType
 from tilefoundry.visitor_registry.access_relation import index_set
 
-from .poly.affine import LoopAffineTerm
+from .affine import LoopAffineTerm
 
 
 class _Unavailable(Exception):

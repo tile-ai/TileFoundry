@@ -33,30 +33,15 @@ from .metadata import (
 from .registry import Analyzer
 from .api import AnalysisResult, analyze
 from .check import check_program
-from .poly import (
-    AccessFootprint,
-    AxisExtent,
-    ExtractError,
-    TileGraph,
-    TileUnit,
-    access_footprints,
-    carried_distances,
-    extract,
-    statement_time_dims,
-    time_extents,
-)
 
 
 __all__ = [
-    "AccessFootprint",
     "Analyzer",
     "AnalysisError",
     "AnalysisResult",
-    "AxisExtent",
     "BufferFootprint",
     "ComputeCostMetadata",
     "ExplicitMemoryLevelFacts",
-    "ExtractError",
     "ImplicitMemoryLevelFacts",
     "LevelFootprint",
     "LoopFootprintMetadata",
@@ -72,16 +57,9 @@ __all__ = [
     "RooflineMetadata",
     "TrafficMetadata",
     "ThroughputFacts",
-    "TileGraph",
-    "TileUnit",
     "TimelineMetadata",
     "TrafficBytes",
     "ValueLifetime",
-    "access_footprints",
     "analyze",
-    "carried_distances",
     "check_program",
-    "extract",
-    "statement_time_dims",
-    "time_extents",
 ]

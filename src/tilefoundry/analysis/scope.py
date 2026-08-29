@@ -30,10 +30,10 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
+from .affine import loop_affine_term
 from .errors import AnalysisError
 from .footprint import _widest_allowed
 from .metadata import BufferFootprint, LoopFootprintMetadata
-from .poly.affine import loop_affine_term
 
 
 @dataclass(frozen=True)

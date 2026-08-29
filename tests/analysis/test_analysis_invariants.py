@@ -77,8 +77,8 @@ HQ, HKV, HEAD_DIM, MAX_POS = 16, 8, 128, 8
 def test_every_callable_op_states_its_coordinates_exactly_once() -> None:
     """One canonical relation per Op, enumerated rather than listed by hand.
 
-    Where an Op reads and writes is stated once, so type inference, the
-    polyhedral model, the loop footprint and the movement half read one answer.
+    Where an Op reads and writes is stated once, so type inference, the loop
+    footprint and the movement half read one answer.
     The set is taken from the Op registry itself, so an Op added to the surface
     joins this without anybody adding it here. The other dialect is not a Call
     target of these analyses and an Op a test registers is not part of the

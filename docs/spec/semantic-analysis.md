@@ -65,8 +65,6 @@ behavior, shard propagation, dependence and movement: per boundary, an affine
 access map from the Op's own iteration space to a tensor's index space. Its
 carrier `AccessRelations` and the registry that produces it are both defined in
 [visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation).
-The polyhedral model that lifts a whole `Function` body out of these per-op
-relations is owned by [analysis §1](./analysis.md#1-polyhedral-model).
 The rule reads only the access maps' affine structure (which domain dim each
 axis uses), never the domain bounds, so it is size-agnostic and identical for
 static and dynamic shapes.

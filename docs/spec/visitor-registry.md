@@ -286,10 +286,10 @@ consumers run. The visitor and its context share the current scope's memo;
 ### 4.1 Access relation service — `access_relation`
 
 One registry over the Op classes says where each Op reads and writes, and every
-reader asks it. Typeinfer asks it to derive the result's Type, the polyhedral
-model asks it for dependences, and the movement family asks it how much crossed
-each boundary. There is no second registry and no fallback: a boundary nobody
-can price is a boundary nobody can schedule.
+reader asks it. Typeinfer asks it to derive the result's Type, the loop
+footprint asks it for the bytes one authored loop touches, and the movement
+family asks it how much crossed each boundary. There is no second registry and
+no fallback: a boundary nobody can price is a boundary nobody can measure.
 
 ```python
 class AffineAccess:

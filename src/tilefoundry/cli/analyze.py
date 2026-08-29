@@ -101,10 +101,10 @@ def guidance() -> str:
             is an observation, not a bound.
 
         Each family's record, how every field is computed, and what it prints:
-          tilefoundry spec analysis 2.2.1    compute-cost
-          tilefoundry spec analysis 2.2.2    memory
-          tilefoundry spec analysis 2.2.3    roofline
-          tilefoundry spec analysis 2.2.4    performance
+          tilefoundry spec analysis 1.2.1    compute-cost
+          tilefoundry spec analysis 1.2.2    memory
+          tilefoundry spec analysis 1.2.3    roofline
+          tilefoundry spec analysis 1.2.4    performance
         """
     )
 

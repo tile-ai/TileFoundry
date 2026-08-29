@@ -307,7 +307,7 @@ key, its type, and where its value comes from. Metadata with no declaration
 renders as nothing, which is how an annotation that is not a report -- a binding
 name, a constraint -- stays off the line.
 
-A record an analysis report projects ([analysis §2](./analysis.md#2-authored-hir-metrics))
+A record an analysis report projects ([analysis §1](./analysis.md#1-authored-hir-metrics))
 MUST NOT emit a key that projection cannot state; it MAY emit fewer, because a
 comment is read on a line and JSON is read by a program. A record no report
 projects is comment-only -- `SourceSpanMetadata` is where an expression was
