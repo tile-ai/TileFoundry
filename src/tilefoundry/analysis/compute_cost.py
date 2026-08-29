@@ -9,18 +9,20 @@ against a target's rates.
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Call, VerifyError
+from dataclasses import dataclass, field, replace
+
+from tilefoundry.ir.core import Call, Expr, VerifyError
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types import DType
-from tilefoundry.ir.visitor import collect_exprs
+from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts, ThroughputFacts
 from .metadata import ComputeCostMetadata
-from .scope import walk_scopes
 from .visitor import AnalyzeContext
 
 SELECTOR = "compute-cost"
@@ -165,6 +167,60 @@ def _accumulate(
         service_per_unit[name] = service_per_unit.get(name, 0) + value * trips
 
 
+@dataclass
+class ComputeCostContext(AnalyzeContext):
+    """State carried through the compute-cost expression walk."""
+
+    whole: CostContext | None = None
+    local: CostContext | None = None
+    flops: dict[str, int] = field(default_factory=dict)
+    flops_per_unit: dict[str, int] = field(default_factory=dict)
+    service: dict[str, int] = field(default_factory=dict)
+    service_per_unit: dict[str, int] = field(default_factory=dict)
+    call_count: list[int] = field(default_factory=lambda: [0])
+
+
+class ComputeCostVisitor(ExprVisitor[None]):
+    """Attach per-Call work and accumulate multiplicity-aware totals."""
+
+    def visit_GridRegionExpr(
+        self, expr: GridRegionExpr, ctx: ComputeCostContext
+    ) -> None:
+        child = next(item for item in ctx.current.children if item.owner is expr)
+        inner = replace(ctx, current=child)
+        for operand in expr.init_args:
+            self.visit(operand, ctx)
+        self.visit(expr.body, inner)
+        for operand in expr.yield_values:
+            self.visit(operand, inner)
+
+    def default_visit_leaf(
+        self, expr: Expr, _operands: tuple[None, ...], ctx: ComputeCostContext
+    ) -> None:
+        if not isinstance(expr, Call):
+            return
+        ctx.call_count[0] += 1
+        if ctx.whole is None or ctx.local is None:
+            raise AnalysisError("compute-cost: visitor context is missing cost contexts")
+        record = _call_cost_record(expr, ctx.whole, ctx.local)
+        attach(expr, record)
+        owner = ctx.current if id(expr) in ctx.current.accesses["narrow"] else ctx.root
+        repeats = 1
+        cursor = owner
+        while cursor.parent is not None:
+            if cursor.is_variant(expr):
+                repeats *= max(1, cursor.trips())
+            cursor = cursor.parent
+        _accumulate(
+            ctx.flops,
+            ctx.flops_per_unit,
+            ctx.service,
+            ctx.service_per_unit,
+            record,
+            repeats,
+        )
+
+
 def analyze_compute_cost(
     function: Function,
     context: AnalyzeContext,
@@ -175,45 +231,25 @@ def analyze_compute_cost(
     scope = FunctionScope(module, function)
     whole = CostContext(scope=scope)
     local = CostContext(scope=scope, level=level, topologies=topologies)
-    flops: dict[str, int] = {}
-    flops_per_unit: dict[str, int] = {}
-    service: dict[str, int] = {}
-    service_per_unit: dict[str, int] = {}
-    calls = [expr for expr in collect_exprs(function.body) if isinstance(expr, Call)]
-    for expr in calls:
-        record = _call_cost_record(expr, whole, local)
-        attach(expr, record)
-        owner = next(
-            (
-                scope_node
-                for scope_node in walk_scopes(context.root)
-                if id(expr) in scope_node.accesses.get("narrow", {})
-            ),
-            None,
-        )
-        if owner is None:
-            owner = context.root
-        repeats = 1
-        cursor = owner
-        while cursor.parent is not None:
-            if cursor.is_variant(expr):
-                repeats *= max(1, cursor.trips())
-            cursor = cursor.parent
-        _accumulate(
-            flops,
-            flops_per_unit,
-            service,
-            service_per_unit,
-            record,
-            repeats,
-        )
+    cost_context = ComputeCostContext(
+        module=module,
+        target=context.target,
+        level=level,
+        options=context.options,
+        root=context.root,
+        current=context.current,
+        whole=whole,
+        local=local,
+    )
+    ComputeCostVisitor().visit(function.body, cost_context)
+    if cost_context.call_count[0] > 0:
         attach(
             function,
             ComputeCostMetadata(
-                flops=tuple(sorted(flops.items())),
-                flops_per_unit=tuple(sorted(flops_per_unit.items())),
-                service=tuple(sorted(service.items())),
-                service_per_unit=tuple(sorted(service_per_unit.items())),
+                flops=tuple(sorted(cost_context.flops.items())),
+                flops_per_unit=tuple(sorted(cost_context.flops_per_unit.items())),
+                service=tuple(sorted(cost_context.service.items())),
+                service_per_unit=tuple(sorted(cost_context.service_per_unit.items())),
             ),
         )
 

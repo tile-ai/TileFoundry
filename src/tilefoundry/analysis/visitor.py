@@ -18,9 +18,6 @@ class AnalyzeContext:
     options: object | None
     root: "Scope"
     current: "Scope"
-    def enter(self, child: "Scope") -> "AnalyzeContext":
-        """Return a context focused on one child lexical scope."""
-        return type(self)(self.module, self.target, self.level, self.options, self.root, child)
 
 
 __all__ = ["AnalyzeContext"]
