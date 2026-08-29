@@ -9,10 +9,8 @@ points are uneven (``qk_nope_head_dim=64`` against ``qk_rope_head_dim=32``,
 makes equal parts, so the model states them with ``tf.slice`` -- and no analysis
 has a cost evaluator for ``Slice``. Measured per (function, family): the two
 Slice-free functions analyse under all four families; the two that carry a Slice
-fail under all four with ``no cost evaluator registered for Slice``.
-
-A ``Slice`` cost evaluator retires the problem; until one exists, this case is
-not in ``registry.CORPUS``.
+fail under all four with ``no cost evaluator registered for Slice``. A ``Slice``
+cost evaluator retires the problem and lifts every gate below at once.
 """
 
 from __future__ import annotations
