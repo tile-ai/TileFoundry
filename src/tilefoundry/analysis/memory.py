@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
-from tilefoundry.ir.core import Call, Constant, Var, binding_name
+from tilefoundry.ir.core import Call, Constant, Expr, Var, binding_name
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.types import bytes_by_storage
-from tilefoundry.ir.visitor import collect_exprs, expr_children
+from tilefoundry.ir.visitor import ExprVisitor, expr_children
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
 
 from .errors import AnalysisError
@@ -24,7 +24,6 @@ from .metadata import (
     ValueLifetime,
 )
 from .movement import add_traffic, call_traffic
-from .scope import walk_scopes
 from .visitor import AnalyzeContext
 
 SELECTOR = "memory"
@@ -39,11 +38,9 @@ class MemoryOptions:
     random_seed: int = 0
 
 
-def _lifetimes(fn: Function, facts: MemoryHierarchyFacts) -> tuple[ValueLifetime, ...]:
-    values = [
-        *fn.params,
-        *(expr for expr in collect_exprs(fn.body) if isinstance(expr, (Call, Constant))),
-    ]
+def _lifetimes(
+    values: list[Expr], facts: MemoryHierarchyFacts
+) -> tuple[ValueLifetime, ...]:
     index_by_id = {id(expr): index for index, expr in enumerate(values)}
     last_by_id = dict(index_by_id)
     for index, consumer in enumerate(values):
@@ -66,6 +63,55 @@ def _lifetimes(fn: Function, facts: MemoryHierarchyFacts) -> tuple[ValueLifetime
     return tuple(result)
 
 
+@dataclass
+class MemoryContext(AnalyzeContext):
+    """State carried through the memory-family expression walk."""
+
+    whole: CostContext | None = None
+    local: CostContext | None = None
+    totals: dict[str, TrafficBytes] = field(default_factory=dict)
+    shares: dict[str, TrafficBytes] = field(default_factory=dict)
+    values: list[Expr] = field(default_factory=list)
+
+
+class MemoryVisitor(ExprVisitor[None]):
+    """Attach per-Call traffic while collecting lifetime order and loop footprints."""
+
+    def visit_GridRegionExpr(
+        self, expr: GridRegionExpr, ctx: MemoryContext
+    ) -> None:
+        child = next(item for item in ctx.current.children if item.owner is expr)
+        inner = replace(ctx, current=child)
+        for operand in expr.init_args:
+            self.visit(operand, ctx)
+        self.visit(expr.body, inner)
+        for operand in expr.yield_values:
+            self.visit(operand, inner)
+        attach(expr, child.footprint())
+
+    def default_visit_leaf(
+        self, expr: Expr, _operands: tuple[None, ...], ctx: MemoryContext
+    ) -> None:
+        if isinstance(expr, (Call, Constant)):
+            ctx.values.append(expr)
+        if not isinstance(expr, Call):
+            return
+        recorded = id(expr) in ctx.current.accesses["narrow"]
+        if ctx.whole is None or ctx.local is None:
+            raise AnalysisError("memory: visitor context is missing cost contexts")
+        moved = call_traffic(expr, ctx.whole, ctx.local) if recorded else TrafficMetadata()
+        attach(expr, moved)
+        if not recorded:
+            return
+        repeats = 1
+        cursor = ctx.current
+        while cursor.parent is not None:
+            if cursor.is_variant(expr):
+                repeats *= max(1, cursor.trips())
+            cursor = cursor.parent
+        add_traffic(ctx.totals, ctx.shares, moved, repeats)
+
+
 def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     """Attach traffic and per-loop footprints from the shared Scope tree."""
     module = context.module
@@ -76,41 +122,31 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     local = CostContext(
         scope=FunctionScope(module, function), level=level, topologies=topologies
     )
-    totals: dict[str, TrafficBytes] = {}
-    shares: dict[str, TrafficBytes] = {}
-    scopes = tuple(walk_scopes(context.root))
-    for call in (expr for expr in collect_exprs(function.body) if hasattr(expr, "target")):
-        owner = next(
-            (
-                scope
-                for scope in scopes
-                if id(call) in scope.accesses.get("narrow", {})
-            ),
-            None,
-        )
-        moved = call_traffic(call, whole, local) if owner is not None else TrafficMetadata()
-        attach(call, moved)
-        if owner is not None:
-            repeats = 1
-            cursor = owner
-            while cursor.parent is not None:
-                if cursor.is_variant(call):
-                    repeats *= max(1, cursor.trips())
-                cursor = cursor.parent
-            add_traffic(totals, shares, moved, repeats)
+    memory_context = MemoryContext(
+        module=module,
+        target=context.target,
+        level=level,
+        options=context.options,
+        root=context.root,
+        current=context.current,
+        whole=whole,
+        local=local,
+        values=list(function.params),
+    )
+    MemoryVisitor().visit(function.body, memory_context)
     attach(
         function,
         TrafficMetadata(
-            whole=tuple(sorted(totals.items())),
-            per_unit=tuple(sorted(shares.items())),
+            whole=tuple(sorted(memory_context.totals.items())),
+            per_unit=tuple(sorted(memory_context.shares.items())),
         ),
     )
-    lifetimes = _lifetimes(function, facts)
+    lifetimes = _lifetimes(memory_context.values, facts)
     topology_size = 1
     if topologies and isinstance(topologies[0].size, int):
         topology_size = max(1, topologies[0].size)
     levels_list: list[LevelFootprint] = []
-    for name in sorted({item.level for item in lifetimes} | set(shares)):
+    for name in sorted({item.level for item in lifetimes} | set(memory_context.shares)):
         declared = facts.explicit(name)
         divisor = topology_size if declared is not None and declared.owner != "target" else 1
         rows = [item for item in lifetimes if item.level == name]
@@ -141,9 +177,6 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             allocation=AllocationMetadata(solver_status="optimal"),
         ),
     )
-    for scope in walk_scopes(context.root):
-        if isinstance(scope.owner, GridRegionExpr):
-            attach(scope.owner, scope.footprint())
 
 
 def cache_pressure(

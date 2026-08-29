@@ -8,11 +8,11 @@ different count of the same flops.
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Call, describe_expr, get_metadata
+from tilefoundry.ir.core import Call, Expr, describe_expr, get_metadata
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types import DType
-from tilefoundry.ir.visitor import collect_exprs
+from tilefoundry.ir.visitor import ExprVisitor
 
 from .errors import AnalysisError
 from .facts import ThroughputFacts
@@ -117,16 +117,18 @@ def _cost_bound(
     )
 
 
-def analyze_roofline(
-    function: Function,
-    context: AnalyzeContext,
-) -> None:
-    """Attach a bound to every Call and the normalized Function."""
-    target = context.target
-    facts = target.get_facts(ThroughputFacts)
-    for expr in collect_exprs(function.body):
+class RooflineVisitor(ExprVisitor[None]):
+    """Attach one bound per Call in expression order."""
+
+    def __init__(self, facts: ThroughputFacts) -> None:
+        super().__init__()
+        self.facts = facts
+
+    def default_visit_leaf(
+        self, expr: Expr, _operands: tuple[None, ...], _ctx: AnalyzeContext
+    ) -> None:
         if not isinstance(expr, Call):
-            continue
+            return
         cost = get_metadata(expr, ComputeCostMetadata)
         if cost is None:
             raise AnalysisError(
@@ -139,7 +141,17 @@ def analyze_roofline(
                 f"{describe_expr(expr)}: roofline needs the traffic record the "
                 "memory family states for every call it measures"
             )
-        attach(expr, _cost_bound(cost, moved, facts))
+        attach(expr, _cost_bound(cost, moved, self.facts))
+
+
+def analyze_roofline(
+    function: Function,
+    context: AnalyzeContext,
+) -> None:
+    """Attach a bound to every Call and the normalized Function."""
+    target = context.target
+    facts = target.get_facts(ThroughputFacts)
+    RooflineVisitor(facts).visit(function.body, context)
     total = get_metadata(function, ComputeCostMetadata)
     if total is None:
         raise AnalysisError(
