@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass, field, replace
 
-from tilefoundry.ir.core import Call, get_metadata
+from tilefoundry.ir.core import Call, Expr, get_metadata
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.visitor import collect_exprs
+from tilefoundry.ir.visitor import ExprVisitor
 
 from .compute_cost import _local_duration_ns
 from .errors import AnalysisError
@@ -22,10 +24,55 @@ from .metadata import (
     TimelineMetadata,
     TrafficMetadata,
 )
-from .scope import walk_scopes
+from .scope import Scope
 from .visitor import AnalyzeContext
 
 SELECTOR = "performance"
+
+
+@dataclass
+class PerformanceContext(AnalyzeContext):
+    """State carried through the performance-family expression walk."""
+
+    facts: ThroughputFacts | None = None
+    services: PerformanceServiceFacts | None = None
+    occurrences: list[tuple[Scope, Call, int]] = field(default_factory=list)
+
+
+class PerformanceVisitor(ExprVisitor[None]):
+    """Collect one duration per Call in authored order."""
+
+    def visit_GridRegionExpr(
+        self, expr: GridRegionExpr, ctx: PerformanceContext
+    ) -> None:
+        child = next(item for item in ctx.current.children if item.owner is expr)
+        inner = replace(ctx, current=child)
+        for operand in expr.init_args:
+            self.visit(operand, ctx)
+        self.visit(expr.body, inner)
+        for operand in expr.yield_values:
+            self.visit(operand, inner)
+
+    def default_visit_leaf(
+        self, expr: Expr, _operands: tuple[None, ...], ctx: PerformanceContext
+    ) -> None:
+        if not isinstance(expr, Call):
+            return
+        scope = ctx.current if id(expr) in ctx.current.accesses["narrow"] else ctx.root
+        cost = get_metadata(expr, ComputeCostMetadata)
+        moved = get_metadata(expr, TrafficMetadata)
+        if cost is None or moved is None:
+            raise AnalysisError(f"performance: missing compute/memory record for {expr!r}")
+        if ctx.facts is None or ctx.services is None:
+            raise AnalysisError("performance: visitor context is missing target facts")
+        duration = _local_duration_ns(
+            cost,
+            ctx.facts,
+            ctx.services,
+            moved=moved,
+            level=ctx.level,
+        )
+        ctx.occurrences.append((scope, expr, duration))
 
 
 def analyze_performance(function: Function, context: AnalyzeContext) -> None:
@@ -34,33 +81,19 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
         raise AnalysisError("performance requires a resolved topology level")
     facts = context.target.get_facts(ThroughputFacts)
     services = context.target.get_facts(PerformanceServiceFacts)
-    scopes = tuple(walk_scopes(context.root))
-    local = []
-    for call in collect_exprs(function.body):
-        if not isinstance(call, Call):
-            continue
-        scope = next(
-            (
-                candidate
-                for candidate in scopes
-                if id(call) in candidate.accesses.get("narrow", {})
-            ),
-            context.root,
-        )
-        cost = get_metadata(call, ComputeCostMetadata)
-        moved = get_metadata(call, TrafficMetadata)
-        if cost is None or moved is None:
-            raise AnalysisError(f"performance: missing compute/memory record for {call!r}")
-        duration = _local_duration_ns(
-            cost,
-            facts,
-            services,
-            moved=moved,
-            level=context.level,
-        )
-        local.append((scope, call, duration))
+    performance_context = PerformanceContext(
+        module=context.module,
+        target=context.target,
+        level=context.level,
+        options=context.options,
+        root=context.root,
+        current=context.current,
+        facts=facts,
+        services=services,
+    )
+    PerformanceVisitor().visit(function.body, performance_context)
     scope_periods: dict[object, int] = defaultdict(int)
-    for scope, call, duration in local:
+    for scope, call, duration in performance_context.occurrences:
         if not (
             scope.depth == 2
             and isinstance(call.target, Binary)
@@ -70,7 +103,7 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
     cursor = 0
     total_cursor = 0
     records = []
-    for scope, call, duration in local:
+    for scope, call, duration in performance_context.occurrences:
         if not duration:
             continue
         trips = 1
