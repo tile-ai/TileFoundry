@@ -22,9 +22,9 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     AffineAccess,
     BoundaryRelation,
-    coordinates_of,
     iterating,
     register_access_relation,
+    relations_of,
 )
 from tilefoundry.visitor_registry.shard_propagate import (
     derive_output_shard_layout,
@@ -143,12 +143,8 @@ def _validate_conv2d(call, ctx, x, weight, bias):
 
 
 def _output_shape(x, weight, stride, padding, dilation, k_h, k_w) -> tuple:
-    height = _out_spatial(
-        x.shape[2], k_h, stride[0], padding[0], dilation[0]
-    )
-    width = _out_spatial(
-        x.shape[3], k_w, stride[1], padding[1], dilation[1]
-    )
+    height = _out_spatial(x.shape[2], k_h, stride[0], padding[0], dilation[0])
+    width = _out_spatial(x.shape[3], k_w, stride[1], padding[1], dilation[1])
     static_height = static_dim_value(height)
     static_width = static_dim_value(width)
     return (
@@ -241,14 +237,8 @@ def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
                 )
             contraction_splits[mesh_axis] = (name, domain_dim)
 
-    for mesh_axis in sorted(
-        channel_split_axes["input"] ^ channel_split_axes["weight"]
-    ):
-        missing = (
-            "weight"
-            if mesh_axis in channel_split_axes["input"]
-            else "input"
-        )
+    for mesh_axis in sorted(channel_split_axes["input"] ^ channel_split_axes["weight"]):
+        missing = "weight" if mesh_axis in channel_split_axes["input"] else "input"
         ctx.error(
             call,
             f"{missing} must carry a matching input-channel Split on mesh axis "
@@ -265,14 +255,9 @@ def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
 
     bias_reductions = partial_reductions_by_axis(bias.layout)
     for mesh_axis in sorted(required_partial_axes):
-        reduction = (
-            bias_reductions[mesh_axis]
-            if mesh_axis < len(bias_reductions)
-            else None
-        )
+        reduction = bias_reductions[mesh_axis] if mesh_axis < len(bias_reductions) else None
         if reduction != "sum" or not (
-            (bias_layout := shard_layout_of(bias.layout)) is not None
-            and bias_layout.mesh == mesh
+            (bias_layout := shard_layout_of(bias.layout)) is not None and bias_layout.mesh == mesh
         ):
             ctx.error(
                 call,
@@ -294,9 +279,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x = ctx.type_of(call.args[0])
     w = ctx.type_of(call.args[1])
     bias = ctx.type_of(call.args[2])
-    stride, padding, dilation, _groups, k_h, k_w = _validate_conv2d(
-        call, ctx, x, w, bias
-    )
+    stride, padding, dilation, _groups, k_h, k_w = _validate_conv2d(call, ctx, x, w, bias)
     out_shape = _output_shape(x, w, stride, padding, dilation, k_h, k_w)
     for name, extent in zip(("height", "width"), out_shape[2:]):
         static = static_dim_value(extent)
@@ -305,7 +288,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
     _require_exact_partial_state(call, ctx, x, w, bias)
     _require_group_aligned_output_split(call, ctx, w, bias, _groups)
-    relation = coordinates_of(call, ctx)
+    relation = relations_of(call, ctx)
     try:
         shard = derive_output_shard_layout(
             (x, w, bias),
@@ -317,12 +300,9 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     except ValueError as error:
         ctx.error(
             call,
-            f"cannot derive input ownership: {error}; use an explicit Reshard "
-            "before Conv2D",
+            f"cannot derive input ownership: {error}; use an explicit Reshard before Conv2D",
         )
-    layout = shard or Layout(
-        shape=out_shape, strides=try_c_order_strides(out_shape)
-    )
+    layout = shard or Layout(shape=out_shape, strides=try_c_order_strides(out_shape))
     return TensorType(
         shape=out_shape,
         dtype=x.dtype,
@@ -386,11 +366,15 @@ def _conv2d_access(call: "Call", ctx) -> AccessRelations:
         AccessRelations(
             inputs=(
                 BoundaryRelation(reached),
-                BoundaryRelation(AffineAccess(isl.multi_aff(f"{{ [{domain}] -> [co, ci, kh, kw] }}"))),
+                BoundaryRelation(
+                    AffineAccess(isl.multi_aff(f"{{ [{domain}] -> [co, ci, kh, kw] }}"))
+                ),
                 BoundaryRelation(AffineAccess(isl.multi_aff(f"{{ [{domain}] -> [co] }}"))),
             ),
             outputs=(
-                BoundaryRelation(AffineAccess(isl.multi_aff(f"{{ [{domain}] -> [n, co, oh, ow] }}"))),
+                BoundaryRelation(
+                    AffineAccess(isl.multi_aff(f"{{ [{domain}] -> [n, co, oh, ow] }}"))
+                ),
             ),
         ),
     )

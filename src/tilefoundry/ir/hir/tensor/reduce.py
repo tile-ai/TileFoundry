@@ -25,10 +25,10 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     AffineAccess,
     BoundaryRelation,
-    coordinates_of,
     identity_access,
     iterating,
     register_access_relation,
+    relations_of,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
@@ -81,7 +81,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     )
     source_shard = shard_layout_of(x_ty.layout)
     if source_shard is not None:
-        relation = coordinates_of(call, ctx)
+        relation = relations_of(call, ctx)
         derived = derive_output_shard_layout(
             (x_ty,),
             relation,
@@ -168,9 +168,7 @@ def _reduce_access(call: "Call", ctx) -> AccessRelations:
     """
     source = ctx.type_of(call.args[0])
     rank = len(source.shape)
-    axes = tuple(
-        axis + rank if axis < 0 else axis for axis in call.target.axes
-    )
+    axes = tuple(axis + rank if axis < 0 else axis for axis in call.target.axes)
     out_shape = tuple(
         (1 if axis in axes else extent)
         for axis, extent in enumerate(source.shape)
@@ -179,14 +177,10 @@ def _reduce_access(call: "Call", ctx) -> AccessRelations:
     carried = {axis: f"d{axis}" for axis in range(rank)}
     surviving = [axis for axis in range(rank) if axis not in axes]
     came_from = (
-        {axis: axis for axis in range(rank)}
-        if call.target.keepdim
-        else dict(enumerate(surviving))
+        {axis: axis for axis in range(rank)} if call.target.keepdim else dict(enumerate(surviving))
     )
     writes_at = [
-        "0"
-        if axis not in came_from or came_from[axis] in axes
-        else carried[came_from[axis]]
+        "0" if axis not in came_from or came_from[axis] in axes else carried[came_from[axis]]
         for axis in range(len(out_shape))
     ]
     collapses = ", ".join(writes_at)

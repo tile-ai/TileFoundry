@@ -20,8 +20,10 @@ from tilefoundry.ir.types import TensorType, TupleType, Type, bytes_by_storage
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import ExprVisitor, expr_children
 from tilefoundry.visitor_registry.access_relation import (
+    AccessRelations,
     access_relation_registry,
     leaves_of,
+    projected,
     reached_elements,
     reached_leaves,
     relations_of,
@@ -109,7 +111,11 @@ def _bytes_for(held: Type, elements: int | None) -> int | None:
 
 
 def _movement(
-    call: Call, cost: Cost, ctx: CostContext, types: tuple[Type, ...]
+    call: Call,
+    cost: Cost,
+    ctx: CostContext,
+    types: tuple[Type, ...],
+    stated_relations: AccessRelations | None = None,
 ) -> tuple[tuple[tuple[str, TrafficBytes], ...], tuple[TrafficBytes, ...]]:
     """What each operand of *call* moves, and the levels those bytes are at.
 
@@ -127,7 +133,7 @@ def _movement(
             f"{describe_expr(call)}: cost reports {len(cost.traffic)} operands, "
             f"the call has {len(operands)}"
         )
-    stated = cost.traffic
+    traffic = cost.traffic
     if isinstance(call.target, Function):
         charged = [
             bytes_by_storage(
@@ -142,26 +148,27 @@ def _movement(
                 f"{describe_expr(call)}: states no access relations, so nothing here "
                 "says what it moves"
             )
-        relations = relations_of(call, ctx)
+        stated_relations = (
+            stated_relations if stated_relations is not None else relations_of(call, ctx)
+        )
+        local_relations = projected(stated_relations, call, ctx)
         result = ctx.local_type_of(call)
         fields = result.fields if isinstance(result, TupleType) else (result,)
-        if len(fields) > len(relations.outputs):
+        if len(fields) > len(local_relations.outputs):
             raise AnalysisError(
-                f"{describe_expr(call)}: states {len(relations.outputs)} output "
+                f"{describe_expr(call)}: states {len(local_relations.outputs)} output "
                 f"boundaries for a result of {len(fields)} fields"
             )
         amounts, charged = [], []
         for index, moved in enumerate(cost.traffic):
             if index == len(call.args):
                 asked = tuple(
-                    (field_, relations.outputs[position].pattern)
+                    (field_, local_relations.outputs[position].pattern)
                     for position, field_ in enumerate(fields)
                 )
                 level = None
             else:
-                asked = (
-                    (types[index], relations.inputs[index].pattern),
-                )
+                asked = ((types[index], local_relations.inputs[index].pattern),)
                 level = _UMAT_CONSUMPTION_LEVEL
             answer = _reached_bytes(asked, level)
             if answer is None:
@@ -170,20 +177,18 @@ def _movement(
                     "nothing here can charge in bytes"
                 )
             moving, by_level = answer
-            amounts.append(
-                TrafficBytes(moving if moved.read else 0, moving if moved.write else 0)
-            )
+            amounts.append(TrafficBytes(moving if moved.read else 0, moving if moved.write else 0))
             charged.append(by_level)
-        stated = tuple(amounts)
+        traffic = tuple(amounts)
     reads: dict[str, int] = {}
     writes: dict[str, int] = {}
-    for moved, split in zip(stated, charged):
+    for moved, split in zip(traffic, charged):
         for level, value in split.items():
             if moved.read:
                 reads[level] = reads.get(level, 0) + value
             if moved.write:
                 writes[level] = writes.get(level, 0) + value
-    moving = any(item.read or item.write for item in stated)
+    moving = any(item.read or item.write for item in traffic)
     levels = (
         tuple(
             (level, TrafficBytes(reads.get(level, 0), writes.get(level, 0)))
@@ -192,11 +197,14 @@ def _movement(
         if moving
         else ()
     )
-    return levels, stated
+    return levels, traffic
 
 
 def call_traffic(
-    expr: Call, whole: CostContext, local: CostContext
+    expr: Call,
+    whole: CostContext,
+    local: CostContext,
+    stated_relations: AccessRelations | None = None,
 ) -> TrafficMetadata:
     """What one Call moves, whole and for one participant.
 
@@ -218,11 +226,9 @@ def call_traffic(
             *(ctx.local_type_of(arg) for arg in expr.args),
             ctx.local_type_of(expr),
         )
-        asked.append(_movement(expr, cost, ctx, types))
+        asked.append(_movement(expr, cost, ctx, types, stated_relations))
     (whole_levels, operands), (unit_levels, _unit_operands) = asked
-    return TrafficMetadata(
-        whole=whole_levels, per_unit=unit_levels, operands=operands
-    )
+    return TrafficMetadata(whole=whole_levels, per_unit=unit_levels, operands=operands)
 
 
 def add_traffic(
@@ -241,9 +247,7 @@ def add_traffic(
             )
 
 
-def _lifetimes(
-    values: list[Expr], facts: MemoryHierarchyFacts
-) -> tuple[ValueLifetime, ...]:
+def _lifetimes(values: list[Expr], facts: MemoryHierarchyFacts) -> tuple[ValueLifetime, ...]:
     index_by_id = {id(expr): index for index, expr in enumerate(values)}
     last_by_id = dict(index_by_id)
     for index, consumer in enumerate(values):
@@ -255,14 +259,20 @@ def _lifetimes(
         for level, amount in bytes_by_storage(expr.type).items():
             if facts.explicit(level) is None:
                 continue
-            result.append(ValueLifetime(
-                binding=(getattr(expr, "name", None) or binding_name(expr) or f"<value {index}>"),
-                level=level,
-                bytes=amount,
-                defined_at=index,
-                last_used_at=(len(values) - 1 if isinstance(expr, Var) else last_by_id[id(expr)]),
-                persistent=isinstance(expr, Var),
-            ))
+            result.append(
+                ValueLifetime(
+                    binding=(
+                        getattr(expr, "name", None) or binding_name(expr) or f"<value {index}>"
+                    ),
+                    level=level,
+                    bytes=amount,
+                    defined_at=index,
+                    last_used_at=(
+                        len(values) - 1 if isinstance(expr, Var) else last_by_id[id(expr)]
+                    ),
+                    persistent=isinstance(expr, Var),
+                )
+            )
     return tuple(result)
 
 
@@ -280,9 +290,7 @@ class MemoryContext(AnalyzeContext):
 class MemoryVisitor(ExprVisitor[None]):
     """Attach per-Call traffic while collecting lifetime order and loop footprints."""
 
-    def visit_GridRegionExpr(
-        self, expr: GridRegionExpr, ctx: MemoryContext
-    ) -> None:
+    def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx: MemoryContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is expr)
         inner = replace(ctx, current=child)
         for operand in expr.init_args:
@@ -302,7 +310,16 @@ class MemoryVisitor(ExprVisitor[None]):
         recorded = id(expr) in ctx.current.accesses["narrow"]
         if ctx.whole is None or ctx.local is None:
             raise AnalysisError("memory: visitor context is missing cost contexts")
-        moved = call_traffic(expr, ctx.whole, ctx.local) if recorded else TrafficMetadata()
+        moved = (
+            call_traffic(
+                expr,
+                ctx.whole,
+                ctx.local,
+                ctx.current.stated_relations(expr, ctx.whole),
+            )
+            if recorded
+            else TrafficMetadata()
+        )
         attach(expr, moved)
         if not recorded:
             return
@@ -322,9 +339,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     facts = context.target.get_facts(MemoryHierarchyFacts)
     topologies = module.effective_topologies()
     whole = CostContext(scope=FunctionScope(module, function))
-    local = CostContext(
-        scope=FunctionScope(module, function), level=level, topologies=topologies
-    )
+    local = CostContext(scope=FunctionScope(module, function), level=level, topologies=topologies)
     memory_context = MemoryContext(
         module=module,
         target=context.target,
@@ -357,14 +372,20 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         for point in range(len(lifetimes) + 1):
             peak = max(
                 peak,
-                sum(item.bytes // divisor for item in rows if item.defined_at <= point <= item.last_used_at),
+                sum(
+                    item.bytes // divisor
+                    for item in rows
+                    if item.defined_at <= point <= item.last_used_at
+                ),
             )
-        levels_list.append(LevelFootprint(
-            level=name,
-            peak_bytes=peak,
-            persistent_bytes=sum(item.bytes // divisor for item in rows if item.persistent),
-            capacity_bytes=declared.capacity_bytes if declared is not None else None,
-        ))
+        levels_list.append(
+            LevelFootprint(
+                level=name,
+                peak_bytes=peak,
+                persistent_bytes=sum(item.bytes // divisor for item in rows if item.persistent),
+                capacity_bytes=declared.capacity_bytes if declared is not None else None,
+            )
+        )
     levels = tuple(levels_list)
     for level in levels:
         if level.capacity_bytes is not None and level.peak_bytes > level.capacity_bytes:
@@ -405,17 +426,23 @@ def cache_pressure(
             remaining = shared_bytes - peaks.get(peer, 0)
             capacity = remaining if capacity is None else min(capacity, remaining)
         status = (
-            "unknown" if capacity is None else
-            "exceeds" if working_set > capacity else
-            "fits" if record.known else "lower-bound"
+            "unknown"
+            if capacity is None
+            else "exceeds"
+            if working_set > capacity
+            else "fits"
+            if record.known
+            else "lower-bound"
         )
-        rows.append({
-            "cache_level": level.name,
-            "backing_level": backing_name,
-            "device_bytes": working_set,
-            "capacity_bytes": capacity,
-            "status": status,
-        })
+        rows.append(
+            {
+                "cache_level": level.name,
+                "backing_level": backing_name,
+                "device_bytes": working_set,
+                "capacity_bytes": capacity,
+                "status": status,
+            }
+        )
     return tuple(rows)
 
 

@@ -6,6 +6,7 @@ written at. Nothing else is stated. How much crosses a boundary, what an Op
 walks, and whether two boundaries meet are all answers derived from those
 relations, so there is one place to be right and nothing to keep in step.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -40,9 +41,7 @@ class AffineAccess:
         if isinstance(self.relation, isl.multi_aff):
             object.__setattr__(self, "relation", isl.map.from_multi_aff(self.relation))
         if not isinstance(self.relation, isl.map):
-            raise ValueError(
-                f"an affine access is a relation, not {self.relation!r}"
-            )
+            raise ValueError(f"an affine access is a relation, not {self.relation!r}")
         named = {
             self.relation.get_dim_name(isl.dim_type.PARAM, index)
             for index in range(self.relation.dim(isl.dim_type.PARAM))
@@ -108,9 +107,7 @@ class AccessRelations:
             if not isinstance(stated, tuple) or not all(
                 isinstance(item, BoundaryRelation) for item in stated
             ):
-                raise ValueError(
-                    f"{side} is one BoundaryRelation per boundary, got {stated!r}"
-                )
+                raise ValueError(f"{side} is one BoundaryRelation per boundary, got {stated!r}")
         if not self.outputs:
             raise ValueError("an operation produces at least one value to describe")
 
@@ -131,7 +128,8 @@ def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
     The handler signature is ``(call, ctx) -> AccessRelations``. What it answers
     comes before the Call has a Type, so it may read its operands, its Op's
     attributes and the values its parameters bind, and not the Call's own Type.
-    Holding that answer against the Call is a separate step, `relations_of`.
+    Projecting that answer onto a reader's view is a separate step,
+    `local_relations_of`.
     """
 
     def decorate(handler: Callable) -> Callable:
@@ -141,8 +139,8 @@ def register_access_relation(op_cls: type) -> Callable[[Callable], Callable]:
     return decorate
 
 
-def coordinates_of(call, ctx) -> AccessRelations:
-    """One Op's coordinates, before anything derives what the Call returns.
+def relations_of(call, ctx) -> AccessRelations:
+    """One Op's declared relations, before deriving what the Call returns.
 
     This is what type inference asks, so nothing here may consult the Type being
     derived. What is held is the one thing a caller counts on without that Type:
@@ -223,8 +221,7 @@ def projected(relations: AccessRelations, call, ctx) -> AccessRelations:
     }
     answered = {
         side: tuple(
-            _answered(boundary, views(index, side)[1])
-            for index, boundary in enumerate(boundaries)
+            _answered(boundary, views(index, side)[1]) for index, boundary in enumerate(boundaries)
         )
         for side, boundaries in (("input", relations.inputs), ("output", relations.outputs))
     }
@@ -236,16 +233,28 @@ def projected(relations: AccessRelations, call, ctx) -> AccessRelations:
         )
         for side, relations_placed in placed.items()
     }
-    if share is None:
-        return AccessRelations(inputs=carried["input"], outputs=carried["output"])
-    return AccessRelations(
-        inputs=tuple(
-            _iterating_over(boundary, share, bindings) for boundary in carried["input"]
-        ),
-        outputs=tuple(
-            _iterating_over(boundary, share, bindings) for boundary in carried["output"]
-        ),
+    local_relations = (
+        AccessRelations(inputs=carried["input"], outputs=carried["output"])
+        if share is None
+        else AccessRelations(
+            inputs=tuple(
+                _iterating_over(boundary, share, bindings) for boundary in carried["input"]
+            ),
+            outputs=tuple(
+                _iterating_over(boundary, share, bindings) for boundary in carried["output"]
+            ),
+        )
     )
+    result = ctx.local_type_of(call)
+    wanted = len(result.fields) if isinstance(result, TupleType) else 1
+    if len(local_relations.outputs) != wanted:
+        op_cls = type(call.target)
+        raise ValueError(
+            f"{op_cls.__name__} describes {len(local_relations.outputs)} output "
+            f"boundar{'y' if len(local_relations.outputs) == 1 else 'ies'} of a call "
+            f"with {wanted}"
+        )
+    return local_relations
 
 
 def _answered(boundary: "BoundaryRelation", logical) -> "isl.set":
@@ -262,9 +271,7 @@ def _answered(boundary: "BoundaryRelation", logical) -> "isl.set":
     return relation.intersect_range(box).domain()
 
 
-def _own_iterations(
-    stated: AccessRelations, placed: dict, answered: dict
-) -> "isl.set | None":
+def _own_iterations(stated: AccessRelations, placed: dict, answered: dict) -> "isl.set | None":
     """Which of an Op's iterations this participant performs, or None if all.
 
     A value handed out in pieces says which iterations belong to whoever holds
@@ -285,9 +292,7 @@ def _own_iterations(
             if asked.is_empty():
                 continue
             try:
-                allowed = placed[side][index].domain().union(
-                    walked.subtract(answered[side][index])
-                )
+                allowed = placed[side][index].domain().union(walked.subtract(answered[side][index]))
                 bounds = asked.params()
             except isl.Error as error:
                 raise ValueError(
@@ -325,7 +330,7 @@ def _iterating_over(
     return _rebuilt(held, bindings)
 
 
-def renaming_relation(call, ctx) -> "AffineAccess":
+def renaming_relation(call, ctx, stated: AccessRelations | None = None) -> "AffineAccess":
     """One view's own coordinates, as coordinates of the value it renames.
 
     A view states where it reads and where it writes over one space, so going
@@ -334,16 +339,18 @@ def renaming_relation(call, ctx) -> "AffineAccess":
     buffer asks for this rather than rebuilding the Op's arithmetic, which is
     how one relation answers dependence, footprint and movement alike.
     """
-    relations = relations_of(call, ctx)
+    local_relations = projected(
+        stated if stated is not None else relations_of(call, ctx), call, ctx
+    )
     if isinstance(ctx.type_of(call.args[0]), TupleType):
         raise ValueError(
             f"{type(call.target).__name__} renames a field of a tuple, which is "
             "one leaf of it rather than a coordinate change to fold"
         )
-    written = relation_of(relations.outputs[0].pattern)
-    reads = relation_of(relations.inputs[0].pattern)
+    written = relation_of(local_relations.outputs[0].pattern)
+    reads = relation_of(local_relations.inputs[0].pattern)
     folded = written.reverse().apply_range(reads)
-    bindings = parameters_of(relations)
+    bindings = parameters_of(local_relations)
     return AffineAccess(
         folded,
         tuple(
@@ -388,9 +395,7 @@ def shape_from_relation(
         return tuple(extents[axis] for axis in range(rank))
     image = reached.range()
     bindings = parameters_of(relations)
-    return tuple(
-        to_dim(image.dim_max(axis).add_constant(1), bindings) for axis in range(rank)
-    )
+    return tuple(to_dim(image.dim_max(axis).add_constant(1), bindings) for axis in range(rank))
 
 
 def boundary_maps(relations: AccessRelations) -> tuple["isl.map", ...]:
@@ -401,14 +406,11 @@ def boundary_maps(relations: AccessRelations) -> tuple["isl.map", ...]:
     result -- takes them here rather than knowing how the record is shaped.
     """
     return tuple(
-        relation_of(boundary.pattern)
-        for boundary in (*relations.inputs, *relations.outputs)
+        relation_of(boundary.pattern) for boundary in (*relations.inputs, *relations.outputs)
     )
 
 
-def _placed(
-    boundary: "BoundaryRelation", local, logical, side: str, index: int, call
-) -> "isl.map":
+def _placed(boundary: "BoundaryRelation", local, logical, side: str, index: int, call) -> "isl.map":
     """One boundary's image carried from logical axes onto the positions it has.
 
     Held to the positions this participant was given, so which iterations are
@@ -480,7 +482,8 @@ def _held_countable(
     falling back on what the Op said, because two answers is the thing this
     carrier exists to remove.
     """
-    if reached_elements(boundary.pattern) is None:
+    image = _reached_image(boundary.pattern)
+    if image.dim(isl.dim_type.PARAM) or not image.is_bounded():
         raise ValueError(
             f"{type(call.target).__name__} states {side} {index} as "
             f"{relation_of(boundary.pattern)}, which reaches no countable number "
@@ -489,25 +492,15 @@ def _held_countable(
     return boundary
 
 
-def relations_of(call, ctx) -> AccessRelations:
-    """One Op's coordinates, held also against the Type the Call now has.
+def local_relations_of(call, ctx) -> AccessRelations:
+    """One Op's relations, held against the Type in this reader's view.
 
     The Op stated its coordinates in its own axes; here they are carried onto the
     positions this reader addresses, and then held to the Call. What is checked
     is what needs the Type: one boundary per output field, each written at the
     rank that field has in this view.
     """
-    op_cls = type(call.target)
-    relations = projected(coordinates_of(call, ctx), call, ctx)
-    result = ctx.local_type_of(call)
-    wanted = len(result.fields) if isinstance(result, TupleType) else 1
-    if len(relations.outputs) != wanted:
-        raise ValueError(
-            f"{op_cls.__name__} describes {len(relations.outputs)} output "
-            f"boundar{'y' if len(relations.outputs) == 1 else 'ies'} of a call "
-            f"with {wanted}"
-        )
-    return relations
+    return projected(relations_of(call, ctx), call, ctx)
 
 
 def logical_axes_of(local: "Type", logical: "Type") -> list[int]:
@@ -673,8 +666,7 @@ def iterating(extents: "Sequence", relations: "AccessRelations") -> "AccessRelat
         domain, named = to_domain(tuple(extents))
     except (TypeError, ValueError, isl.Error) as error:
         raise ValueError(
-            f"an Op states it iterates {tuple(extents)}, which is no space to "
-            f"walk: {error}"
+            f"an Op states it iterates {tuple(extents)}, which is no space to walk: {error}"
         ) from error
     return AccessRelations(
         inputs=tuple(_held_to(boundary, domain, named) for boundary in relations.inputs),
@@ -682,9 +674,7 @@ def iterating(extents: "Sequence", relations: "AccessRelations") -> "AccessRelat
     )
 
 
-def _held_to(
-    boundary: "BoundaryRelation", domain: "isl.set", named: dict
-) -> "BoundaryRelation":
+def _held_to(boundary: "BoundaryRelation", domain: "isl.set", named: dict) -> "BoundaryRelation":
     """One boundary, restricted to the coordinates its Op iterates."""
     pattern = boundary.pattern
     relation = relation_of(pattern)
@@ -720,8 +710,7 @@ def relation_of(pattern: "AffineAccess") -> "isl.map":
 def index_set(shape) -> "isl.set | None":
     """The coordinates one value legally has, or nothing when its shape is not numbers."""
     if any(
-        not isinstance(extent, int) or isinstance(extent, bool) or extent < 0
-        for extent in shape
+        not isinstance(extent, int) or isinstance(extent, bool) or extent < 0 for extent in shape
     ):
         return None
     if not shape:
@@ -780,6 +769,21 @@ def settled(pattern: "AffineAccess") -> "isl.map":
     return settled_at.project_out(isl.dim_type.PARAM, 0, len(names))
 
 
+def _reached_image(
+    pattern: "AffineAccess",
+    box: "isl.set | None" = None,
+    within: "isl.set | None" = None,
+) -> "isl.set":
+    """The distinct boundary coordinates reached in one occurrence."""
+    relation = settled(pattern)
+    if within is not None:
+        relation = relation.intersect_domain(within)
+    image = relation.range()
+    if box is not None and box.tuple_dim() == image.tuple_dim():
+        image = image.intersect(box)
+    return image
+
+
 def reached_elements(
     pattern: "AffineAccess", box: "isl.set | None" = None, within: "isl.set | None" = None
 ) -> int | None:
@@ -791,12 +795,7 @@ def reached_elements(
     occurrence, so a parameter nobody bound settles at its first legal binding:
     how many crossings a loop performs is the footprint family's question.
     """
-    relation = settled(pattern)
-    if within is not None:
-        relation = relation.intersect_domain(within)
-    image = relation.range()
-    if box is not None and box.tuple_dim() == image.tuple_dim():
-        image = image.intersect(box)
+    image = _reached_image(pattern, box, within)
     if image.dim(isl.dim_type.PARAM):
         return None
     try:
@@ -847,9 +846,7 @@ def reached_leaves(pattern: "AffineAccess", count: int) -> "frozenset[int] | Non
     if image.dim(isl.dim_type.PARAM) or image.tuple_dim() != 1:
         return None
     return frozenset(
-        leaf
-        for leaf in range(count)
-        if not image.intersect(isl.set(f"{{ [{leaf}] }}")).is_empty()
+        leaf for leaf in range(count) if not image.intersect(isl.set(f"{{ [{leaf}] }}")).is_empty()
     )
 
 
@@ -957,8 +954,7 @@ def window_source(
             guards.append(f"1 <= {extent}")
             guards.extend(_at_most(extent, limits, axis))
         guards.append(
-            f"0 <= {walked} - {begin} < {extent}" if begin != "0"
-            else f"0 <= {walked} < {extent}"
+            f"0 <= {walked} - {begin} < {extent}" if begin != "0" else f"0 <= {walked} < {extent}"
         )
     domain = ", ".join(f"d{index}" for index in range(rank))
     image = ", ".join(factored_image(reads, local, logical))
@@ -988,9 +984,7 @@ def positions_of(local: "Type", logical: "Type") -> "isl.map":
     """
     belongs = logical_axes_of(local, logical)
     coordinates = ", ".join(f"c{axis}" for axis in range(len(logical.shape)))
-    image = factored_image(
-        [f"c{axis}" for axis in range(len(logical.shape))], local, logical
-    )
+    image = factored_image([f"c{axis}" for axis in range(len(logical.shape))], local, logical)
     guards = []
     held: dict[int, int] = {}
     for position, owner in enumerate(belongs):
@@ -1055,8 +1049,7 @@ def broadcast_access(result_shape: tuple, operand_shape: tuple) -> "AffineAccess
     dims = [f"d{index}" for index in range(rank)]
     offset = rank - len(operand_shape)
     reads = [
-        "0" if operand_shape[index - offset] == 1 else dims[index]
-        for index in range(offset, rank)
+        "0" if operand_shape[index - offset] == 1 else dims[index] for index in range(offset, rank)
     ]
     domain = ", ".join(dims)
     if not reads:
@@ -1087,9 +1080,7 @@ def measures_without_reading(call, ctx) -> AccessRelations:
         AccessRelations(
             inputs=tuple(BoundaryRelation(_empty(arg)) for arg in call.args),
             outputs=(
-                BoundaryRelation(
-                    _empty(call.args[0]) if call.args else identity_access(out_rank)
-                ),
+                BoundaryRelation(_empty(call.args[0]) if call.args else identity_access(out_rank)),
             ),
         ),
     )
@@ -1108,9 +1099,7 @@ def linearized_view(out_shape: tuple, in_shape: tuple) -> "AffineAccess":
         not isinstance(extent, int) or isinstance(extent, bool) or extent < 0
         for extent in (*out_shape, *in_shape)
     ):
-        raise ValueError(
-            f"a view relabels a shape it can count: {out_shape!r} from {in_shape!r}"
-        )
+        raise ValueError(f"a view relabels a shape it can count: {out_shape!r} from {in_shape!r}")
     out_rank, in_rank = len(out_shape), len(in_shape)
     if 0 in out_shape or 0 in in_shape:
         dims = ", ".join(f"d{index}" for index in range(out_rank))
@@ -1166,18 +1155,14 @@ def view_relations(
             begin, count = leaf_span(held, taken)
             coordinates = ", ".join(f"d{index}" for index in range(walked))
             reads = AffineAccess(
-                isl.map(
-                    f"{{ [{coordinates}] -> [l] : {begin} <= l < {begin + count} }}"
-                )
+                isl.map(f"{{ [{coordinates}] -> [l] : {begin} <= l < {begin + count} }}")
             )
         walks = (getattr(result, "shape", ()) or ()) if over is None else over(call, ctx)
         return iterating(
             walks,
             AccessRelations(
                 inputs=tuple(
-                    BoundaryRelation(
-                        reads if index == source else control_read(walked, ctx, arg)
-                    )
+                    BoundaryRelation(reads if index == source else control_read(walked, ctx, arg))
                     for index, arg in enumerate(call.args)
                 ),
                 outputs=(BoundaryRelation(written),),
@@ -1243,13 +1228,13 @@ __all__ = [
     "AffineAccess",
     "BoundaryRelation",
     "access_relation_registry",
-    "coordinates_of",
     "index_set",
     "iterating",
     "identity_access",
     "identity_relations",
     "logical_axes_of",
     "logical_coordinates",
+    "local_relations_of",
     "placed_window",
     "boundary_maps",
     "projected",

@@ -61,8 +61,8 @@ from tilefoundry.visitor_registry.access_relation import (
     AffineAccess,
     BoundaryRelation,
     access_relation_registry,
-    coordinates_of,
     index_set,
+    local_relations_of,
     relation_of,
     relations_of,
 )
@@ -97,9 +97,7 @@ def test_every_callable_op_states_its_coordinates_exactly_once() -> None:
     )
     assert not missing, f"callable ops with no access relation: {missing}"
     stated = set(access_relation_registry._map)
-    assert stated == callable_ops, sorted(
-        op.__name__ for op in stated ^ callable_ops
-    )
+    assert stated == callable_ops, sorted(op.__name__ for op in stated ^ callable_ops)
 
 
 def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
@@ -117,21 +115,10 @@ def test_an_op_with_no_registered_relation_has_no_fallback() -> None:
     held = make_tensor_type((4,), DType.f32)
     call = Call(type=held, target=Unstated(), args=(Var(type=held, name="x"),))
     with pytest.raises(ValueError, match="Unstated states no access relations"):
-        coordinates_of(call, TypeInferContext())
+        relations_of(call, TypeInferContext())
 
 
-
-
-
-
-
-
-
-
-
-
-
-def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed()  -> None:
+def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed() -> None:
     """A relation may be written past its value; a projected one never reaches there.
 
     An insert reads its update at the coordinate the window shifted back to, and
@@ -142,12 +129,8 @@ def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed()  -
     """
     cta = Topology("cta", 2)
     mesh = make_mesh((2,), ("c",), topology=cta)
-    destination = make_shard_tensor_type(
-        (8,), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32
-    )
-    update = make_shard_tensor_type(
-        (4,), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32
-    )
+    destination = make_shard_tensor_type((8,), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32)
+    update = make_shard_tensor_type((4,), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32)
     call = Call(
         type=destination,
         target=InsertSlice(),
@@ -159,13 +142,13 @@ def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed()  -
     )
     ctx = CostContext(level="cta", topologies=(cta,))
 
-    stated = coordinates_of(call, ctx)
+    stated = relations_of(call, ctx)
     reads = relation_of(stated.inputs[1].pattern)
-    assert not reads.intersect_range(
-        isl.set("{ [c0] : c0 < 0 }")
-    ).is_empty(), "the window's own read runs before its operand begins"
+    assert not reads.intersect_range(isl.set("{ [c0] : c0 < 0 }")).is_empty(), (
+        "the window's own read runs before its operand begins"
+    )
 
-    relations = relations_of(call, ctx)
+    relations = local_relations_of(call, ctx)
     held = (
         *(ctx.local_type_of(arg) for arg in call.args),
         ctx.local_type_of(call),
@@ -178,12 +161,11 @@ def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed()  -
         assert box is not None and reached.is_subset(box), (
             f"a boundary reached {reached} outside the {tuple(view.shape)} it was given"
         )
-    assert relation_of(relations.inputs[1].pattern).domain().is_equal(
-        isl.set("{ [d0] : 2 <= d0 <= 3 }")
+    assert (
+        relation_of(relations.inputs[1].pattern)
+        .domain()
+        .is_equal(isl.set("{ [d0] : 2 <= d0 <= 3 }"))
     ), "so the iterations left are the ones whose read this participant holds"
-
-
-
 
 
 def _assert_shape(text: str, declared: object) -> None:
@@ -223,9 +205,6 @@ def _assert_shape(text: str, declared: object) -> None:
         raise AssertionError(f"{declared} has no rendering: {text}")
 
 
-
-
-
 def test_a_reached_leaf_is_charged_at_its_own_level_and_the_others_are_not() -> None:
     """One tuple, two levels, and one boundary that only reached one of them.
 
@@ -255,9 +234,7 @@ def test_a_reached_leaf_is_charged_at_its_own_level_and_the_others_are_not() -> 
         return AccessRelations(
             inputs=(
                 relations.inputs[0],
-                BoundaryRelation(
-                    AffineAccess(held.intersect_range(isl.set("{ [l] : l = 1 }")))
-                ),
+                BoundaryRelation(AffineAccess(held.intersect_range(isl.set("{ [l] : l = 1 }")))),
             ),
             outputs=relations.outputs,
         )
@@ -290,12 +267,8 @@ def test_a_reached_leaf_is_charged_at_its_own_level_and_the_others_are_not() -> 
     written = AccessRelations(
         inputs=(),
         outputs=(
-            BoundaryRelation(
-                AffineAccess(isl.map("{ [d0] -> [c0] : c0 = d0 and 0 <= d0 < 2 }"))
-            ),
-            BoundaryRelation(
-                AffineAccess(isl.map("{ [d0] -> [c0] : c0 = 0 and 0 <= d0 < 2 }"))
-            ),
+            BoundaryRelation(AffineAccess(isl.map("{ [d0] -> [c0] : c0 = d0 and 0 <= d0 < 2 }"))),
+            BoundaryRelation(AffineAccess(isl.map("{ [d0] -> [c0] : c0 = 0 and 0 <= d0 < 2 }"))),
         ),
     )
     result = TupleType(

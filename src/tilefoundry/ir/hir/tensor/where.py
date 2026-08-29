@@ -22,9 +22,9 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     AffineAccess,
     BoundaryRelation,
-    coordinates_of,
     iterating,
     register_access_relation,
+    relations_of,
     shape_from_relation,
 )
 from tilefoundry.visitor_registry.isl_utility import to_domain
@@ -99,14 +99,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         reject_partials(ctx, call, name, type_.layout)
 
     try:
-        relation = coordinates_of(call, ctx)
+        relation = relations_of(call, ctx)
         out_shape = shape_from_relation(
             relation, _broadcast_all((condition.shape, input_.shape, other.shape))
         )
         data_relation = _data_relation(relation)
-        data_shard = derive_output_shard_layout(
-            (input_, other), data_relation, out_shape
-        )
+        data_shard = derive_output_shard_layout((input_, other), data_relation, out_shape)
         layout = (
             data_shard
             if data_shard is not None
@@ -121,9 +119,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         if condition_shard is not None and any(
             not isinstance(attr, Broadcast) for attr in condition_shard.attrs
         ):
-            combined = derive_output_shard_layout(
-                (condition, input_, other), relation, out_shape
-            )
+            combined = derive_output_shard_layout((condition, input_, other), relation, out_shape)
             if combined != layout:
                 ctx.error(
                     call,

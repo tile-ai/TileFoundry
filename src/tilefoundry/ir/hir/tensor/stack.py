@@ -28,10 +28,10 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     AffineAccess,
     BoundaryRelation,
-    coordinates_of,
     identity_access,
     iterating,
     register_access_relation,
+    relations_of,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
@@ -70,7 +70,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     reject_dynamic_shards(ctx, call, types, "Stack")
     require_compatible_meshes(ctx, call, types, "Stack")
     try:
-        relation = coordinates_of(call, ctx)
+        relation = relations_of(call, ctx)
         layout = derive_output_shard_layout(tuple(types), relation, new_shape, fresh_strides=True)
     except ValueError as error:
         ctx.error(
@@ -130,10 +130,7 @@ def _stack_access(call: "Call", ctx) -> AccessRelations:
     return iterating(
         out_shape,
         AccessRelations(
-            inputs=tuple(
-                BoundaryRelation(item)
-                for item, arg in zip(inputs, call.args)
-            ),
+            inputs=tuple(BoundaryRelation(item) for item, arg in zip(inputs, call.args)),
             outputs=(BoundaryRelation(identity_access(rank)),),
         ),
     )

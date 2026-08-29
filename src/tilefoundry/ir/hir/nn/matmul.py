@@ -20,9 +20,9 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     AffineAccess,
     BoundaryRelation,
-    coordinates_of,
     iterating,
     register_access_relation,
+    relations_of,
     shape_from_relation,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
@@ -34,12 +34,8 @@ class MatMul(Op):
 
     lhs = ParamDef(kind="input", pattern=Tensor)
     rhs = ParamDef(kind="input", pattern=Tensor)
-    a_layout = ParamDef(
-        kind="attribute", annotation=Literal["MK", "KM"], default="MK"
-    )
-    b_layout = ParamDef(
-        kind="attribute", annotation=Literal["NK", "KN"], default="KN"
-    )
+    a_layout = ParamDef(kind="attribute", annotation=Literal["MK", "KM"], default="MK")
+    b_layout = ParamDef(kind="attribute", annotation=Literal["NK", "KN"], default="KN")
 
 
 def matmul_axes(op: MatMul) -> tuple[int, int, int, int]:
@@ -189,13 +185,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     if lhs.shape[a_k] != rhs.shape[b_k]:
         ctx.error(
             call,
-            f"MatMul contraction-dim mismatch: lhs K={lhs.shape[a_k]} vs "
-            f"rhs K={rhs.shape[b_k]}",
+            f"MatMul contraction-dim mismatch: lhs K={lhs.shape[a_k]} vs rhs K={rhs.shape[b_k]}",
         )
 
-    if _k_split_axes(lhs, a_k % len(lhs.shape)) != _k_split_axes(
-        rhs, b_k % len(rhs.shape)
-    ):
+    if _k_split_axes(lhs, a_k % len(lhs.shape)) != _k_split_axes(rhs, b_k % len(rhs.shape)):
         ctx.error(
             call,
             "MatMul contraction dim K must be split on the same mesh axes for both operands",
@@ -203,7 +196,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
     check_multilinear_partials(ctx, call, (("lhs", lhs), ("rhs", rhs)))
 
-    relation = coordinates_of(call, ctx)
+    relation = relations_of(call, ctx)
 
     out_batch = _broadcast_batch(lhs.shape[:-2], rhs.shape[:-2])
     out_shape = shape_from_relation(

@@ -19,8 +19,10 @@ from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.ir.visitor import expr_children
 from tilefoundry.visitor_registry.access_relation import (
+    AccessRelations,
     access_relation_registry,
     index_set,
+    projected,
     relation_of,
     relations_of,
     renaming_relation,
@@ -51,11 +53,20 @@ class Scope:
     children: tuple["Scope", ...]
     depth: int
     domain: isl.set
-    accesses: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(
-        default_factory=dict
-    )
+    accesses: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(default_factory=dict)
+    relations: dict[int, tuple[Call, AccessRelations]] = field(default_factory=dict)
     refused: dict[str, frozenset[Call]] = field(default_factory=dict)
     _variance: dict[int, frozenset[int]] = field(default_factory=dict, repr=False)
+
+    def stated_relations(self, call: Call, ctx: TypeInferContext) -> AccessRelations:
+        """Return the Op-declared relations recorded in this scope chain."""
+        cursor: Scope | None = self
+        while cursor is not None:
+            stored = cursor.relations.get(id(call))
+            if stored is not None and stored[0] is call:
+                return stored[1]
+            cursor = cursor.parent
+        return relations_of(call, ctx)
 
     def is_variant(self, value: Expr) -> bool:
         """Whether *value* depends on this loop's induction or carry values."""
@@ -264,7 +275,9 @@ def _bind_access(
                 relation = relation.project_out(isl.dim_type.PARAM, 0, 1)
                 continue
         else:
-            term = type("Term", (), {"loop_axis": None, "stride": 0, "low": number, "high": number})()
+            term = type(
+                "Term", (), {"loop_axis": None, "stride": 0, "low": number, "high": number}
+            )()
         local = isl.local_space.from_space(relation.get_space())
 
         def placed(kind: str, sign: int, constant: int) -> isl.constraint:
@@ -290,7 +303,7 @@ def _bind_access(
     if box is not None:
         relation = relation.intersect_range(box)
     while isinstance(operand, Call) and isinstance(operand.target, (Slice, Reshape)):
-        folded = renaming_relation(operand, ctx)
+        folded = renaming_relation(operand, ctx, stated=scope.stated_relations(operand, ctx))
         relation = relation.apply_range(relation_of(folded))
         operand = operand.args[0]
     return Access(relation, operand)
@@ -303,6 +316,7 @@ def build_scopes(
     views: Sequence[str] = ("narrow", "device"),
 ) -> Scope:
     """Build the scope tree and both access views in one normalized walk."""
+
     def empty_accesses() -> dict[str, dict[int, tuple[Call, tuple[Access, ...]]]]:
         return {view: {} for view in views}
 
@@ -312,10 +326,15 @@ def build_scopes(
     seen: set[int] = set()
 
     def record_accesses(expr: Call, scope: Scope) -> None:
-        if isinstance(expr.target, Function) or access_relation_registry.lookup(type(expr.target)) is None:
+        if (
+            isinstance(expr.target, Function)
+            or access_relation_registry.lookup(type(expr.target)) is None
+        ):
             return
         try:
-            relations = relations_of(expr, type_ctx)
+            stated = relations_of(expr, type_ctx)
+            scope.relations[id(expr)] = (expr, stated)
+            local_relations = projected(stated, expr, type_ctx)
         except (NotImplementedError, TypeError, ValueError, isl.Error):
             for view in views:
                 scope.refused[view] = scope.refused.get(view, frozenset()) | {expr}
@@ -323,7 +342,7 @@ def build_scopes(
         for view in views:
             narrow = view == "narrow"
             built: list[Access] = []
-            for index, boundary in enumerate(relations.inputs):
+            for index, boundary in enumerate(local_relations.inputs):
                 if index >= len(expr.args):
                     continue
                 access = _bind_access(
@@ -348,7 +367,9 @@ def build_scopes(
         if isinstance(expr, GridRegionExpr):
             for operand in expr.init_args:
                 visit(operand, scope)
-            child = Scope(expr, scope, (), scope.depth + 1, _domain_for(expr, scope), empty_accesses())
+            child = Scope(
+                expr, scope, (), scope.depth + 1, _domain_for(expr, scope), empty_accesses()
+            )
             scope.children = (*scope.children, child)
             seeds[id(expr.induction_var)] = child
             for carried in expr.carried_args:
@@ -358,11 +379,11 @@ def build_scopes(
                 visit(operand, child)
             record_variance(expr, expr_children(expr))
             return
-        if isinstance(expr, Call):
-            record_accesses(expr, scope)
         operands = expr_children(expr)
         for operand in operands:
             visit(operand, scope)
+        if isinstance(expr, Call):
+            record_accesses(expr, scope)
         record_variance(expr, operands)
 
     root = Scope(graph, None, (), 0, _domain_for(graph, None), empty_accesses())

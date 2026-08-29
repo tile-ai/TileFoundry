@@ -29,10 +29,10 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     AffineAccess,
     BoundaryRelation,
-    coordinates_of,
     identity_access,
     iterating,
     register_access_relation,
+    relations_of,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
@@ -75,7 +75,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         else Layout(shape=out_shape, strides=try_c_order_strides(out_shape))
     )
     if source_shard is not None:
-        relation = coordinates_of(call, ctx)
+        relation = relations_of(call, ctx)
         derived = derive_output_shard_layout(
             (x_ty,),
             relation,

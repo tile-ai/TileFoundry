@@ -33,9 +33,9 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     AffineAccess,
     BoundaryRelation,
-    coordinates_of,
     iterating,
     register_access_relation,
+    relations_of,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
@@ -64,8 +64,6 @@ def _axis(call: "Call", ctx: "TypeInferContext", rank: int) -> int:
     if not (0 <= axis < rank):
         ctx.error(call, f"axis {raw_axis} out of range for input rank {rank}")
     return axis
-
-
 
 
 @register_access_relation(Concat)
@@ -106,13 +104,12 @@ def _concat_access(call: "Call", ctx) -> AccessRelations:
     )
     return iterating(
         out_shape,
-    AccessRelations(
-            inputs=tuple(
-                BoundaryRelation(item)
-                for item, type_ in zip(inputs, types)
-            ),
+        AccessRelations(
+            inputs=tuple(BoundaryRelation(item) for item, type_ in zip(inputs, types)),
             outputs=(
-                BoundaryRelation(AffineAccess(isl.multi_aff(f"{{ [{domain_text}] -> [{domain_text}] }}"))),
+                BoundaryRelation(
+                    AffineAccess(isl.multi_aff(f"{{ [{domain_text}] -> [{domain_text}] }}"))
+                ),
             ),
         ),
     )
@@ -162,7 +159,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     require_compatible_meshes(ctx, call, types, "Concat")
     _reject_concat_axis_splits(call, ctx, types, axis)
     try:
-        relation = coordinates_of(call, ctx)
+        relation = relations_of(call, ctx)
         layout = derive_output_shard_layout(tuple(types), relation, new_shape, fresh_strides=True)
     except ValueError as error:
         ctx.error(

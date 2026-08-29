@@ -29,10 +29,10 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     BoundaryRelation,
     broadcast_access,
-    coordinates_of,
     identity_access,
     iterating,
     register_access_relation,
+    relations_of,
     shape_from_relation,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
@@ -160,10 +160,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         commutes_jointly=commutes_jointly,
     )
     try:
-        relation = coordinates_of(call, ctx)
-        out_shape = shape_from_relation(
-            relation, broadcast_shapes(lhs_ty.shape, rhs_ty.shape)
-        )
+        relation = relations_of(call, ctx)
+        out_shape = shape_from_relation(relation, broadcast_shapes(lhs_ty.shape, rhs_ty.shape))
         shard = None
         if shard_layout_of(la) is not None or shard_layout_of(lb) is not None:
             shard = derive_output_shard_layout((lhs_ty, rhs_ty), relation, out_shape)

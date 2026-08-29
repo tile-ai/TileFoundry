@@ -10,9 +10,9 @@ from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
-    coordinates_of,
     identity_relations,
     register_access_relation,
+    relations_of,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
@@ -31,7 +31,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     x_ty = ctx.type_of(call.args[0])
     new_layout = x_ty.layout
     if shard_layout_of(x_ty.layout) is not None:
-        relation = coordinates_of(call, ctx)
+        relation = relations_of(call, ctx)
         derived = derive_output_shard_layout((x_ty,), relation, x_ty.shape)
         if derived is not None:
             new_layout = derived

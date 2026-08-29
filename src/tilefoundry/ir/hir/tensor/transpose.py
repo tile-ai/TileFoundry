@@ -15,9 +15,9 @@ from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AffineAccess,
-    coordinates_of,
     identity_access,
     register_access_relation,
+    relations_of,
     view_relations,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
@@ -40,8 +40,6 @@ def _strides(type_: TensorType) -> tuple | None:
     if layout.strides is not None:
         return tuple(layout.strides)
     return try_c_order_strides(tuple(layout.shape))
-
-
 
 
 def _transpose_view(call: "Call", ctx) -> tuple:
@@ -82,7 +80,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_layout = x_ty.layout
     source_shard = shard_layout_of(x_ty.layout)
     if source_shard is not None:
-        relation = coordinates_of(call, ctx)
+        relation = relations_of(call, ctx)
         derived = derive_output_shard_layout((x_ty,), relation, new_shape, fresh_strides=False)
         if derived is not None:
             new_layout = derived

@@ -6,6 +6,7 @@ dimensions preserve carried dependencies, and registered relations supply all
 access maps without guessed fallbacks. ISL flow analysis derives dependencies;
 scheduling consumes the result but owns its own schedule tree and decisions.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -32,8 +33,8 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     BoundaryRelation,
     access_relation_registry,
+    local_relations_of,
     relation_of,
-    relations_of,
     renaming_relation,
 )
 
@@ -140,9 +141,7 @@ def _buffer_namer():
         than rebuilt here per Op.
         """
         ctx = _RankPreserving()
-        while isinstance(expr, Call) and isinstance(
-            expr.target, (Reshape, IndexSelect, Slice)
-        ):
+        while isinstance(expr, Call) and isinstance(expr.target, (Reshape, IndexSelect, Slice)):
             try:
                 folded = renaming_relation(expr, ctx)
                 m = m.apply_range(relation_of(folded))
@@ -158,8 +157,6 @@ def _buffer_namer():
     name_for.alias = alias
     name_for.pierce = pierce
     return name_for
-
-
 
 
 def _assign_statement_names(ops: list[object]) -> list[str]:
@@ -194,9 +191,7 @@ def _static_loop_bound(dim, what: str) -> int:
     )
 
 
-def _loop_domain(
-    inner: "isl.set", loops: tuple[GridRegionExpr, ...]
-) -> tuple["isl.set", dict]:
+def _loop_domain(inner: "isl.set", loops: tuple[GridRegionExpr, ...]) -> tuple["isl.set", dict]:
     """Prefix ``inner`` with outermost-first enclosing loop dimensions.
 
     Each dimension spans ``[start, extent)`` by ``step`` and carries the raw
@@ -229,14 +224,10 @@ def _loop_domain(
 
 def _renaming(expr) -> bool:
     """Whether a value is another name for a buffer, with coordinates to fold."""
-    return isinstance(expr, Call) and isinstance(
-        expr.target, (Reshape, IndexSelect, Slice)
-    )
+    return isinstance(expr, Call) and isinstance(expr.target, (Reshape, IndexSelect, Slice))
 
 
-def _whole_views(
-    prefixed: "isl.set", read_maps, args: tuple, namer, loops, within
-) -> "isl.set":
+def _whole_views(prefixed: "isl.set", read_maps, args: tuple, namer, loops, within) -> "isl.set":
     """The trips whose views are whole, read off the folded relations themselves.
 
     A window placed by the trip runs past its source on the last few, and the
@@ -252,8 +243,6 @@ def _whole_views(
             continue
         held = held.intersect(namer.pierce(reached, arg, loops).domain())
     return held
-
-
 
 
 def _lift(m: "isl.map", depth: int) -> "isl.map":
@@ -280,7 +269,12 @@ def _bind_map(m: "isl.map", stmt_name: str, domain: "isl.set", buffer_name: str)
 
 
 def _read_map(
-    m: "isl.map", stmt_name: str, domain: "isl.set", arg, namer, loops=(),
+    m: "isl.map",
+    stmt_name: str,
+    domain: "isl.set",
+    arg,
+    namer,
+    loops=(),
 ) -> "isl.map":
     """Read map.
 
@@ -336,9 +330,7 @@ def _placed_value(value, loops: tuple[GridRegionExpr, ...]):
     return term.loop_axis, term.stride, term.low
 
 
-def _place_parameters(
-    access: "isl.map", boundary, loops: tuple[GridRegionExpr, ...]
-) -> "isl.map":
+def _place_parameters(access: "isl.map", boundary, loops: tuple[GridRegionExpr, ...]) -> "isl.map":
     """Say what a relation's parameters are, in this loop nest's terms.
 
     A window's offset is bound to the operand that states it, and that operand
@@ -371,9 +363,7 @@ def _place_parameters(
             isl.dim_type.PARAM, position, 1
         )
         if loop_position is not None:
-            equality = equality.set_coefficient_si(
-                isl.dim_type.IN, loop_position, -stride
-            )
+            equality = equality.set_coefficient_si(isl.dim_type.IN, loop_position, -stride)
         access = access.add_constraint(equality.set_constant_si(-number))
         access = access.project_out(isl.dim_type.PARAM, position, 1)
     return access
@@ -398,9 +388,7 @@ def _under_its_own_name(access: "isl.map", position: int, name: str) -> "isl.map
         .set_coefficient_si(isl.dim_type.PARAM, position, 1)
         .set_coefficient_si(isl.dim_type.PARAM, held.index(name), -1)
     )
-    return access.add_constraint(equality).project_out(
-        isl.dim_type.PARAM, position, 1
-    )
+    return access.add_constraint(equality).project_out(isl.dim_type.PARAM, position, 1)
 
 
 def _named(access: "isl.map") -> list:
@@ -411,9 +399,7 @@ def _named(access: "isl.map") -> list:
     ]
 
 
-def _walked(
-    call: Call, relations: AccessRelations, walked: "isl.set"
-) -> tuple["isl.set", dict]:
+def _walked(call: Call, relations: AccessRelations, walked: "isl.set") -> tuple["isl.set", dict]:
     """One statement's own space, and the values its isl parameters name.
 
     An access map's domain is the Op's iteration space, so the space a statement
@@ -440,7 +426,12 @@ def _walked(
 
 
 def _registered_access(
-    call: Call, stmt_name: str, relations: AccessRelations, ctx, namer, prefix: str,
+    call: Call,
+    stmt_name: str,
+    relations: AccessRelations,
+    ctx,
+    namer,
+    prefix: str,
     loops: tuple[GridRegionExpr, ...] = (),
 ) -> list[_StatementAccess]:
     """Statement extraction from the Op's own registered boundary relations.
@@ -456,9 +447,7 @@ def _registered_access(
     depth = len(loops)
 
     def placed(boundary) -> "isl.map":
-        return _place_parameters(
-            _lift(relation_of(boundary.pattern), depth), boundary, loops
-        )
+        return _place_parameters(_lift(relation_of(boundary.pattern), depth), boundary, loops)
 
     written = tuple(placed(boundary) for boundary in relations.outputs)
     if not written:
@@ -466,9 +455,7 @@ def _registered_access(
             f"extract: {type(call.target).__name__} states no output boundary; "
             "a compute-op statement must write at least one value"
         )
-    walks = tuple(
-        raw_map.domain().project_out(isl.dim_type.SET, 0, depth) for raw_map in written
-    )
+    walks = tuple(raw_map.domain().project_out(isl.dim_type.SET, 0, depth) for raw_map in written)
     whole = walks[0]
     for own in walks[1:]:
         whole = whole.union(own)
@@ -569,9 +556,7 @@ def _one_statement(
         reads.append(read)
         dtypes[read.get_tuple_name(isl.dim_type.OUT)] = getattr(arg.type, "dtype", None)
 
-    out_buf = (
-        namer(call, prefix) if outputs == 1 else f"{namer(call, prefix)}_{out_idx}"
-    )
+    out_buf = namer(call, prefix) if outputs == 1 else f"{namer(call, prefix)}_{out_idx}"
     bound = _bind_map(
         within(
             _place_parameters(
@@ -590,9 +575,14 @@ def _one_statement(
         reads.append(bound)
 
     return _StatementAccess(
-        name=stmt_name, domain=domain, op=call,
-        reads=tuple(reads), writes=tuple(writes),
-        params={**shape_params, **loop_params}, dtypes=dtypes, loops=loops,
+        name=stmt_name,
+        domain=domain,
+        op=call,
+        reads=tuple(reads),
+        writes=tuple(writes),
+        params={**shape_params, **loop_params},
+        dtypes=dtypes,
+        loops=loops,
     )
 
 
@@ -612,7 +602,7 @@ def _extract_statement(
         )
     ctx = _RankPreserving()
     try:
-        relations = relations_of(call, ctx)
+        relations = local_relations_of(call, ctx)
     except (NotImplementedError, TypeError, ValueError, isl.Error) as error:
         raise ExtractError(
             f"extract: {type(call.target).__name__} cannot state its boundary "
@@ -634,9 +624,7 @@ def _initial_schedule(accesses: list[_StatementAccess]) -> "isl.union_map":
         for loop in acc.loops:
             if not any(loop is seen for seen in slots):
                 slots.append(loop)
-    own_rank = max(
-        (a.domain.dim(isl.dim_type.SET) - len(a.loops) for a in accesses), default=0
-    )
+    own_rank = max((a.domain.dim(isl.dim_type.SET) - len(a.loops) for a in accesses), default=0)
     sched = isl.union_map("{}")
     for stage, acc in enumerate(accesses):
         rank = acc.domain.dim(isl.dim_type.SET)
@@ -759,6 +747,7 @@ def _loop_axes(root):
     axis_of: dict[int, GridRegionExpr] = {}
     seed: dict[int, tuple] = {}
     depth: dict[int, int] = {}
+
     class _LoopAxisVisitor(ExprVisitor[None]):
         def __init__(self) -> None:
             super().__init__()
@@ -842,9 +831,13 @@ def _loop_scopes(root) -> dict[int, tuple[GridRegionExpr, ...]]:
 
 
 def _walk_calls(
-    body, prefix: str, active: tuple[int, ...],
-    site_counter: dict[str, int], table: dict[int, object],
-    loops: tuple[GridRegionExpr, ...] = (), carries: list | None = None,
+    body,
+    prefix: str,
+    active: tuple[int, ...],
+    site_counter: dict[str, int],
+    table: dict[int, object],
+    loops: tuple[GridRegionExpr, ...] = (),
+    carries: list | None = None,
 ) -> list["_Gathered"]:
     """Walk a body in collect_exprs while penetrating nested function calls.
 
@@ -880,8 +873,6 @@ def _walk_calls(
 
         target = e.target
         if isinstance(target, TupleGetItem) and id(e.args[0]) in grid_yields:
-
-
             table[id(e)] = _resolve(grid_yields[id(e.args[0])][target.index], table)
             continue
         resolved_args = tuple(_resolve(a, table) for a in e.args)
@@ -912,8 +903,13 @@ def _walk_calls(
             idx = site_counter.get(callee.name, 0)
             site_counter[callee.name] = idx + 1
             nested = _walk_calls(
-                callee.body, f"{prefix}{callee.name}{idx}_",
-                active + (id(callee),), site_counter, table, own_loops, carries,
+                callee.body,
+                f"{prefix}{callee.name}{idx}_",
+                active + (id(callee),),
+                site_counter,
+                table,
+                own_loops,
+                carries,
             )
             pending.extend(nested)
             table[id(e)] = _resolve(callee.body, table)
@@ -924,18 +920,10 @@ def _walk_calls(
             continue
 
         if is_dim_op_call(e):
-
-
-
             table[id(e)] = _maybe_replace_args(e, resolved_args)
             continue
 
         if isinstance(target, (Zeros, FullLike)):
-
-
-
-
-
             table[id(e)] = _maybe_replace_args(e, resolved_args)
             continue
 
@@ -953,8 +941,10 @@ def _walk_calls(
             call, own_loops = item
             gathered.append(
                 _Gathered(
-                    call=call, stmt_name=f"{prefix}{next(own_names)}",
-                    prefix=prefix, loops=own_loops,
+                    call=call,
+                    stmt_name=f"{prefix}{next(own_names)}",
+                    prefix=prefix,
+                    loops=own_loops,
                 )
             )
     return gathered
@@ -977,19 +967,14 @@ def extract(hir: Function) -> TileGraph:
     carries: list[tuple[Var, object]] = []
     gathered = _walk_calls(hir.body, "", (id(hir),), {}, {}, (), carries)
     if not gathered:
-        raise ExtractError(
-            f"extract: hir Function {hir.name!r} body has no "
-            "compute ops to extract"
-        )
+        raise ExtractError(f"extract: hir Function {hir.name!r} body has no compute ops to extract")
 
     namer = _buffer_namer()
     for phi, yielded in carries:
         namer.alias(phi, yielded)
     accesses: list[_StatementAccess] = []
     for g in gathered:
-        accesses.extend(
-            _extract_statement(g.call, g.stmt_name, namer, g.prefix, g.loops)
-        )
+        accesses.extend(_extract_statement(g.call, g.stmt_name, namer, g.prefix, g.loops))
 
     domain = isl.union_set("{}")
     reads = isl.union_map("{}")
@@ -1021,16 +1006,15 @@ def extract(hir: Function) -> TileGraph:
 
     units = tuple(TileUnit(name=acc.name, op=acc.op) for acc in accesses)
     return TileGraph(
-        domain=domain, deps=deps, reads=reads, writes=writes, units=units, params=params,
-        buffer_dtypes=buffer_dtypes, parallel_dims=_parallel_dims(domain, deps),
+        domain=domain,
+        deps=deps,
+        reads=reads,
+        writes=writes,
+        units=units,
+        params=params,
+        buffer_dtypes=buffer_dtypes,
+        parallel_dims=_parallel_dims(domain, deps),
     )
-
-
-
-
-
-
-
 
 
 def _as_map(value) -> "isl.map":
@@ -1064,8 +1048,7 @@ def _travels_with(m: "isl.map", pos: int) -> tuple[int, ...]:
     """
     coupled = _only_out_dim(m.drop_constraints_not_involving_dims(isl.dim_type.OUT, pos, 1), pos)
     return tuple(
-        i for i in range(m.dim(isl.dim_type.IN))
-        if coupled.involves_dims(isl.dim_type.IN, i, 1)
+        i for i in range(m.dim(isl.dim_type.IN)) if coupled.involves_dims(isl.dim_type.IN, i, 1)
     )
 
 
