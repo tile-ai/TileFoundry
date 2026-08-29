@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-from tilefoundry.target.services import AnalysisCallable, Analyzer
+from tilefoundry.target.services import AnalysisCallable, AnalysisChecker, Analyzer
+
+
+class _PerformanceAnalyzer(Analyzer):
+    """The performance service and the program requirements it owns."""
+
+    def get_checker(self) -> AnalysisChecker:
+        """Return a fresh visitor so one checked program cannot memoize another."""
+        from tilefoundry.analysis.check import PerformanceChecker  # noqa: PLC0415
+
+        return PerformanceChecker()
 
 
 def builtin_analyzer(selector: str) -> Analyzer | None:
@@ -40,19 +50,17 @@ def builtin_analyzer(selector: str) -> Analyzer | None:
             produces=(RooflineMetadata,),
         )
     if selector == "performance":
-        from tilefoundry.analysis.check import PerformanceInputChecker  # noqa: PLC0415
         from tilefoundry.analysis.metadata import (  # noqa: PLC0415
             PerformanceMetadata,
             PerformanceSummaryMetadata,
         )
         from tilefoundry.analysis.performance import analyze_performance  # noqa: PLC0415
 
-        return Analyzer(
+        return _PerformanceAnalyzer(
             "performance",
             analyze_performance,
             requires=("compute-cost", "memory"),
             produces=(PerformanceMetadata, PerformanceSummaryMetadata),
-            input_checker=PerformanceInputChecker(),
         )
     return None
 

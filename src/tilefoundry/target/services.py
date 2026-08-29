@@ -14,36 +14,17 @@ AnalysisCallable = Callable[
 
 
 @runtime_checkable
-class AnalysisInputChecker(Protocol):
+class AnalysisChecker(Protocol):
     """What one analysis needs of a program before any analysis writes.
 
-    The three hooks are the three questions that can be asked without reading a
-    record: what the target must state, what each call must carry, and what the
-    function as a whole must hold. A checker states requirements; it never
-    attaches Metadata, and never stands in for what an analysis concludes.
+    A checker states requirements; it never attaches Metadata, and never stands
+    in for what an analysis concludes. It asks target-wide questions once and
+    visits the program for any occurrence-wide requirements of its own.
     """
 
-    def check_target(self, ctx: "AnalysisCheckContext") -> None: ...
+    def check_target_facts(self, ctx: "AnalysisCheckContext") -> None: ...
 
-    def check_call(self, call: "Call", ctx: "AnalysisCheckContext") -> None: ...
-
-    def finish(self, function: "Function", ctx: "AnalysisCheckContext") -> None: ...
-
-
-class _NoInputCheck:
-    """The requirement an analysis states by saying nothing."""
-
-    def check_target(self, ctx: "AnalysisCheckContext") -> None:
-        return None
-
-    def check_call(self, call: "Call", ctx: "AnalysisCheckContext") -> None:
-        return None
-
-    def finish(self, function: "Function", ctx: "AnalysisCheckContext") -> None:
-        return None
-
-
-NO_INPUT_CHECK = _NoInputCheck()
+    def visit(self, expr: "Expr", ctx: "AnalysisCheckContext") -> None: ...
 
 
 @dataclass(frozen=True)
@@ -54,7 +35,6 @@ class Analyzer:
     run: AnalysisCallable
     requires: tuple[str, ...] = ()
     produces: tuple[type[IRMetadata], ...] = field(default=())
-    input_checker: AnalysisInputChecker = NO_INPUT_CHECK
 
     def __post_init__(self) -> None:
         if not self.selector:
@@ -75,6 +55,10 @@ class Analyzer:
             raise ValueError(
                 f"{self.selector}: the same Metadata type is produced twice"
             )
+
+    def get_checker(self) -> AnalysisChecker | None:
+        """Return this analysis's program requirements, if it states any."""
+        return None
 
 
 ScheduleCallable = Callable[
@@ -105,9 +89,8 @@ class CodeGenerator:
 
 
 __all__ = [
-    "NO_INPUT_CHECK",
     "AnalysisCallable",
-    "AnalysisInputChecker",
+    "AnalysisChecker",
     "Analyzer",
     "CodeGenerator",
     "ScheduleCallable",

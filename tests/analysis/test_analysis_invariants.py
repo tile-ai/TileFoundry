@@ -15,7 +15,7 @@ from typing import get_args, get_origin
 import isl
 import pytest
 
-from tilefoundry.analysis.movement import (
+from tilefoundry.analysis.memory import (
     _bytes_for,
     _reached_bytes,
     call_traffic,

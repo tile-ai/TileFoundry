@@ -63,12 +63,11 @@ from tilefoundry.ir.types.substitute import (
 )
 from tilefoundry.ir.visitor import BindingSubstitutionCloner, ExprVisitor, collect_exprs
 from tilefoundry.target import UnsupportedCapabilityError
-from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.visitors import inference_type
 
-from .compute_cost import _call_cost_record, _is_structural_occurrence
 from .errors import AnalysisError
-from .facts import ParallelCapacityFacts, PerformanceServiceFacts, ThroughputFacts
+from .facts import ParallelCapacityFacts, PerformanceServiceFacts
 from .metadata import (
     ComputeCostMetadata,
     MemoryMetadata,
@@ -77,7 +76,6 @@ from .metadata import (
     RooflineMetadata,
     TrafficMetadata,
 )
-from .movement import call_traffic
 
 _INLINE_NODES = 10_000
 _DERIVED_METADATA = {
@@ -254,19 +252,6 @@ def _result_placement(type_: Type, selected: Topology) -> Placement:
     return next(iter(unique))
 
 
-def _timed_level(target: object) -> str | None:
-    """The one storage level this target publishes a bandwidth for, if any.
-
-    A machine that states no throughputs times nothing, which is a different
-    answer from timing zero: with no level to price, only the work an occurrence
-    computes can put it on a clock.
-    """
-    try:
-        return target.get_facts(ThroughputFacts).bandwidth_level
-    except (UnsupportedCapabilityError, AttributeError):
-        return None
-
-
 def _execution_placement(expr: Call, selected: Topology) -> Placement:
     """Which participants run one occurrence, from where it was authored.
 
@@ -298,52 +283,19 @@ def _execution_placement(expr: Call, selected: Topology) -> Placement:
     return running
 
 
-def _call_placements(
-    module: Module,
-    function: Function,
-    level: str,
-) -> dict[int, Placement]:
-    """Validate and prepare every primitive Call placement for performance."""
-    selected = module.resolve_topology(level)
-    timed = _timed_level(module.resolve_target())
-    scope = FunctionScope(module, function)
-    whole = CostContext(scope=scope)
-    local = CostContext(
-        scope=scope,
-        level=level,
-        topologies=module.effective_topologies(),
-    )
-    result: dict[int, Placement] = {}
-    for expr in collect_exprs(function.body):
-        if not isinstance(expr, Call) or isinstance(expr.target, Function):
-            continue
-        try:
-            result[id(expr)] = _execution_placement(expr, selected)
-        except AnalysisError as error:
-            cost = _call_cost_record(expr, whole, local)
-            moved = call_traffic(expr, whole, local)
-            if _is_structural_occurrence(cost, moved, bandwidth_level=timed):
-                result[id(expr)] = frozenset()
-                continue
-            raise AnalysisError(f"performance: {describe_expr(expr)}: {error}") from None
-    return result
-
-
 @dataclass
 class AnalysisCheckContext:
     """What every input check reads: the program, the machine, and the level.
 
-    The cost contexts are bound to the derived Function the analyses will read, so
-    a check answers about the same program they do. Costing here is a question,
-    not a record: nothing this context computes is attached.
+    The context is bound to the derived Function the analyses will read, so a
+    check answers about the same program they do. Nothing a check reads is a
+    derived analysis record.
     """
 
     module: Module
     function: Function
     target: object
     level: str | None
-    whole: CostContext
-    local: CostContext
 
     @property
     def selected_topology(self) -> Topology:
@@ -360,22 +312,15 @@ def analysis_check_context(
     module: Module, function: Function, level: str | None
 ) -> AnalysisCheckContext:
     """Bind one context to the derived Function the analyses will read."""
-    scope = FunctionScope(module, function)
-    whole = CostContext(scope=scope)
-    local = CostContext(
-        scope=scope, level=level, topologies=module.effective_topologies()
-    )
     return AnalysisCheckContext(
         module=module,
         function=function,
         target=module.resolve_target(),
         level=level,
-        whole=whole,
-        local=local,
     )
 
 
-class PerformanceInputChecker:
+class PerformanceChecker(ExprVisitor[None]):
     """What `performance` needs before anything measures the program.
 
     Two things, and nothing about storage: rates it can put on a clock, and a
@@ -383,7 +328,7 @@ class PerformanceInputChecker:
     the solver's question, answered against the schedule it is choosing.
     """
 
-    def check_target(self, ctx: AnalysisCheckContext) -> None:
+    def check_target_facts(self, ctx: AnalysisCheckContext) -> None:
         """Require a machine whose stated capacity and rates fit the question."""
         try:
             capacity = ctx.target.get_facts(ParallelCapacityFacts)
@@ -412,22 +357,16 @@ class PerformanceInputChecker:
                 f"target's one-unit throughputs are stated for {services.unit!r}"
             )
 
-    def check_call(self, call: Call, ctx: AnalysisCheckContext) -> None:
-        """Require a placement for every occurrence that will take time."""
-        cost = _call_cost_record(call, ctx.whole, ctx.local)
-        moved = call_traffic(call, ctx.whole, ctx.local)
-        if _is_structural_occurrence(
-            cost, moved, bandwidth_level=_timed_level(ctx.target)
-        ):
+    def default_visit_leaf(
+        self, expr: Expr, _operands: tuple[None, ...], ctx: AnalysisCheckContext
+    ) -> None:
+        """Require every primitive occurrence's result to match where it ran."""
+        if not isinstance(expr, Call) or isinstance(expr.target, Function):
             return
         try:
-            _execution_placement(call, ctx.selected_topology)
+            _execution_placement(expr, ctx.selected_topology)
         except AnalysisError as error:
-            raise AnalysisError(f"performance: {describe_expr(call)}: {error}") from None
-
-    def finish(self, function: Function, ctx: AnalysisCheckContext) -> None:
-        """Nothing further: where the buffers go is decided with the schedule."""
-        return None
+            raise AnalysisError(f"performance: {describe_expr(expr)}: {error}") from None
 
 
 def _program_dim_vars(module: Module, function: Function) -> dict[str, object]:
@@ -832,68 +771,6 @@ class InlineCloner:
         return _inline_view(self.module, self.function, self.budget)
 
 
-class ValidateVisitor(ExprVisitor[None]):
-    """Answer every authored-program requirement in one validation pass."""
-
-    def __init__(
-        self,
-        module: Module,
-        function: Function,
-        level: str | None,
-        analyzers: tuple[object, ...],
-        source_function: Function | None = None,
-    ) -> None:
-        super().__init__(root_function=function)
-        self.module = module
-        self.function = function
-        self.level = level
-        self.analyzers = analyzers
-        self.source_function = source_function or function
-
-    def run(self) -> None:
-        """Validate non-expression inputs, then visit every derived expression once."""
-        _require_concrete_geometry(self.module, self.function, error_type=AnalysisError)
-        target = self.module.resolve_target()
-        for topology in self.module.effective_topologies():
-            try:
-                target.validate_program_topology(topology)
-            except ValueError as error:
-                raise AnalysisError(
-                    f"program topology level {topology.name!r} with extent "
-                    f"{topology.size!r} is invalid: {error}"
-                ) from None
-        if self.level is not None:
-            try:
-                self.module.resolve_topology(self.level)
-            except ValueError as error:
-                raise AnalysisError(
-                    f"program topology level {self.level!r} is invalid: {error}"
-                ) from None
-
-        validate_call_context(self.module, reachable_functions(self.source_function))
-        checkers = tuple(analyzer.input_checker for analyzer in self.analyzers)
-        if not checkers:
-            return
-        self._checkers = checkers
-        ctx = analysis_check_context(self.module, self.function, self.level)
-        for checker in checkers:
-            checker.check_target(ctx)
-        self.visit(self.function.body, ctx)
-        for checker in checkers:
-            checker.finish(self.function, ctx)
-
-    def default_visit_leaf(
-        self, expr: Expr, _operands: tuple[None, ...], ctx: AnalysisCheckContext
-    ) -> None:
-        self._check_expr(expr, ctx)
-
-    def _check_expr(self, expr: Expr, ctx: AnalysisCheckContext) -> None:
-        if not isinstance(expr, Call) or isinstance(expr.target, Function):
-            return
-        for checker in self._checkers:
-            checker.check_call(expr, ctx)
-
-
 def check_program(
     module: Module,
     function: Function,
@@ -908,8 +785,8 @@ def check_program(
     unchanged: a loop stays a loop. The authored Module and Function are untouched.
 
     Each analysis states what it needs of the program through its own checker,
-    and every one of them answers before any of them writes. One traversal of
-    the derived calls serves them all, so a program is walked for this once.
+    and every one of them answers before any of them writes. A checker that
+    needs the program walks it itself.
     """
     if isinstance(budget, bool) or not isinstance(budget, int) or budget < 0:
         raise AnalysisError(
@@ -918,7 +795,32 @@ def check_program(
         )
     derived = InlineCloner(module, function, budget).clone()
     inference_type(derived.body, TypeInferContext(scope=FunctionScope(module, derived)))
-    ValidateVisitor(module, derived, level, analyzers, source_function=function).run()
+    _require_concrete_geometry(module, derived, error_type=AnalysisError)
+    target = module.resolve_target()
+    for topology in module.effective_topologies():
+        try:
+            target.validate_program_topology(topology)
+        except ValueError as error:
+            raise AnalysisError(
+                f"program topology level {topology.name!r} with extent "
+                f"{topology.size!r} is invalid: {error}"
+            ) from None
+    if level is not None:
+        try:
+            module.resolve_topology(level)
+        except ValueError as error:
+            raise AnalysisError(
+                f"program topology level {level!r} is invalid: {error}"
+            ) from None
+
+    validate_call_context(module, reachable_functions(function))
+    ctx = analysis_check_context(module, derived, level)
+    for analyzer in analyzers:
+        checker = analyzer.get_checker()
+        if checker is None:
+            continue
+        checker.check_target_facts(ctx)
+        checker.visit(derived.body, ctx)
     return derived
 
 
@@ -955,8 +857,7 @@ def validate_call_context(module: Module, functions: Iterable[Function]) -> None
 __all__ = [
     "AnalysisCheckContext",
     "InlineCloner",
-    "PerformanceInputChecker",
-    "ValidateVisitor",
+    "PerformanceChecker",
     "check_program",
     "validate_call_context",
 ]
