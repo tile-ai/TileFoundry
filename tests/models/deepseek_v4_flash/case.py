@@ -1,5 +1,5 @@
-"""DeepSeek-V4-Flash as one corpus case: what runs, what is analysed, what is
-scheduled, and at what context length.
+"""DeepSeek-V4-Flash as one corpus case: what runs, what is analysed, and at
+what context length.
 
 The boundary this model states is the sliding-window MLA attention submodule of
 its first sliding layer, named as that -- ``DeepseekV4Flash.layer0.attention``,
@@ -8,8 +8,8 @@ corpus reports is a Module the published model really holds. The tree above it -
 embedding, 43 decoder layers, MoE, final norm, head -- is a real end-to-end path
 with a real checkpoint pipeline behind it (`test_causal_lm_e2e.py`), and it is a
 tree of Modules walked by orchestration methods rather than a Module of Functions:
-a `ModelCase` names one Module and analysis and scheduling select Functions of
-that one Module, so naming the root would put every kernel that does arithmetic
+a `ModelCase` names one Module and analysis selects Functions of that one
+Module, so naming the root would put every kernel that does arithmetic
 out of reach and report the model as three norms and an add.
 
 `ctx_len` is bounded by the window rather than by the position embedding, so the
@@ -69,14 +69,6 @@ CASE = ModelCase(
         FunctionCase(
             id="deepseek_v4_flash/analyze/mla_attend",
             selector="mla_attend",
-            dims=ANALYZED_AT,
-        ),
-    ),
-    schedule=(
-        FunctionCase(
-            id="deepseek_v4_flash/schedule/mla_attend",
-            selector="mla_attend",
-            topology="cta",
             dims=ANALYZED_AT,
         ),
     ),

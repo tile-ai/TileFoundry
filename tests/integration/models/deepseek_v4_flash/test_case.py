@@ -17,15 +17,13 @@ from tilefoundry.ir.types.substitute import DimSubstitutionError
 
 
 def test_the_case_selects_every_function_the_description_defines():
-    """Analyze has no reason to leave a function out, and schedule admits only the entry function.
+    """Analyze has no reason to leave a function out.
 
-    Analyze has no reason to leave a function out, and schedule admits only
-    the entry function -- so the other one is untested rather than blocked.
+    Every function this Module defines is selected, so the model's own inventory
+    and the case's selection agree and nothing escapes the report.
     """
     module = CASE.build()
     assert CASE.untested("analyze", module) == ()
-    assert CASE.selected("schedule") == (module.entry_function().name,)
-    assert CASE.untested("schedule", module) == ("mla_kv_update",)
 
 
 def test_the_context_lengths_the_case_names_are_ones_the_model_has():

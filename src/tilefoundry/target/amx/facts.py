@@ -7,8 +7,6 @@ happens to inherit from something.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from tilefoundry.analysis.facts import (
     ExplicitMemoryLevelFacts,
     ImplicitMemoryLevelFacts,
@@ -19,15 +17,10 @@ from tilefoundry.analysis.facts import (
     ThroughputFacts,
 )
 from tilefoundry.ir.types import DType
-from tilefoundry.schedule.facts import AtomFact
 
-from .atoms import candidate_atoms
 from .target import AmxTarget
 
 _ROOFLINE_UNIT = "amx"
-
-
-_PIPELINE_TOPOLOGY = "core"
 
 
 def memory_hierarchy(target: AmxTarget, query: object = None) -> MemoryHierarchyFacts:
@@ -122,54 +115,8 @@ def parallel_capacity(
     )
 
 
-def pipeline_facts(target: AmxTarget, query: object) -> object:
-    """Project the finite AMX instruction catalogue before solving.
-
-    An AMX core both runs the work and owns the L1d the tile lives in, so here
-    the level asked about and the level the capacity belongs to are the same one.
-    """
-    from tilefoundry.schedule.pipeline.facts import (  # noqa: PLC0415
-        PipelineFacts,
-        PipelineFactsQuery,
-        PipelineInstructionFacts,
-    )
-
-    if not isinstance(query, PipelineFactsQuery):
-        raise TypeError("AMX pipeline facts need a PipelineFactsQuery")
-    if query.topology != _PIPELINE_TOPOLOGY:
-        raise ValueError(f"AMX states no pipeline facts for {query.topology!r}")
-    instructions: list[PipelineInstructionFacts] = []
-    for statement_id, op in query.statements:
-        try:
-            candidates = tuple(candidate_atoms(op, target))
-        except NotImplementedError:
-            candidates = ()
-        if not candidates:
-            candidates = (
-                AtomFact(
-                    shape=(1, 1, 1),
-                    dtype=(DType.f32, DType.f32, DType.f32),
-                    duration=1.0,
-                    compute_duration=1.0,
-                    storage={},
-                    resource={"core": 1},
-                    is_async=False,
-                    atom=SimpleNamespace(op=SimpleNamespace(name="amx.scalar")),
-                ),
-            )
-        instructions.append(PipelineInstructionFacts(statement_id, candidates))
-    return PipelineFacts(
-        topology=query.topology,
-        tile_capacity_scope=_PIPELINE_TOPOLOGY,
-        tile_capacity_bytes=target.device.l1d_bytes_per_performance_core,
-        max_threads_per_warp=1,
-        instructions=tuple(instructions),
-    )
-
-
 __all__ = [
     "memory_hierarchy",
     "parallel_capacity",
-    "pipeline_facts",
     "throughput",
 ]

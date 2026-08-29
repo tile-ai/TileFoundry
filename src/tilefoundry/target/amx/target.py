@@ -27,7 +27,6 @@ from tilefoundry.target.base import (
 )
 from tilefoundry.target.facts import TopologyLimitFacts, facts_result
 from tilefoundry.target.hardware.envelope import HardwareDocument
-from tilefoundry.target.services import Scheduler
 from tilefoundry.utils.python_source import PythonExpr
 
 
@@ -145,23 +144,7 @@ class AmxTarget(Target):
             return facts_result(self, facts_type, throughput(self, query))
         if facts_type is ParallelCapacityFacts:
             return facts_result(self, facts_type, parallel_capacity(self, query))
-
-        from tilefoundry.schedule.pipeline import PipelineFacts  # noqa: PLC0415
-
-        if facts_type is PipelineFacts:
-            from tilefoundry.target.amx.facts import pipeline_facts  # noqa: PLC0415
-
-            return facts_result(self, facts_type, pipeline_facts(self, query))
         return super().get_facts(facts_type, query)
-
-    def get_scheduler(self, topology: str) -> Scheduler:
-        """Select the AMX core scheduler."""
-        from tilefoundry.target.amx.schedule import amx_scheduler  # noqa: PLC0415
-
-        scheduler = amx_scheduler(topology)
-        if scheduler is not None:
-            return scheduler
-        return super().get_scheduler(topology)
 
     def _python_import_module(self) -> str:
         if type(self) is AmxTarget:

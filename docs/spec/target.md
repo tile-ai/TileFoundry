@@ -26,7 +26,6 @@ class Target:
     def available(cls) -> tuple[Target, ...]: ...
 
     def get_analyzer(self, selector: str) -> Analyzer: ...
-    def get_scheduler(self, topology: str) -> Scheduler: ...
     def get_code_generator(self) -> CodeGenerator: ...
     def validate_program_topology(self, topology: Topology) -> None: ...
     def get_facts(
@@ -88,13 +87,13 @@ def registered_targets() -> Mapping[str, type[Target]]: ...
     and any resolved static extent that is not positive or exceeds the finite
     `TopologyLimitFacts` bound for that level. The shared program check MUST use
     this method rather than reproduce a backend's topology limits.
-  - A provider MAY import `Analyzer` and `Scheduler` from `tilefoundry.target`
-    to construct getter results. That package MUST NOT expose `CodeGenerator`
+  - A provider MAY import `Analyzer` from `tilefoundry.target` to construct
+    getter results. That package MUST NOT expose `CodeGenerator`
     or `LinkableModule` as provider API.
   - A missing getter capability MUST fail and name the concrete Target class,
     its registration name, and the requested selector, topology, or Facts type.
   - Target values MUST NOT own code emission, linking, loading, or the public
-    Analyze, Schedule, compile, build, or jit orchestration.
+    Analyze, compile, build, or jit orchestration.
 
 ### 1.1 `Architecture`
 
@@ -175,7 +174,6 @@ class CudaTarget(Target):
     def validate_program_topology(self, topology: Topology) -> None: ...
     def topology_limit(self, name: str) -> int: ...
     def get_analyzer(self, selector: str) -> Analyzer: ...
-    def get_scheduler(self, topology: str) -> Scheduler: ...
     def get_code_generator(self) -> CodeGenerator: ...
     def get_facts(self, facts_type: type[FactsT], query=None) -> FactsT: ...
     def __repr__(self) -> str: ...
@@ -209,11 +207,6 @@ class CudaTarget(Target):
   - `CudaTarget.available()` MUST contain one value per device document whose
     sole compatible architecture document is available. Its `identity` MUST be
     that device document's ID.
-  - CUDA MUST select the pipeline Scheduler at `thread` and the partition
-    Scheduler at `cta` through `get_scheduler`. A CUDA subclass MUST inherit
-    those services through ordinary Python inheritance unless it overrides or
-    refuses one. The algorithms and their Plan types are not part of the public
-    `schedule` package.
   - CUDA MUST select its standard Analyzer, Facts, and CodeGenerator services
     through the corresponding getters. These selections MUST NOT use
     `Target.name`, an exact-concrete-type table, or a second extension
@@ -237,21 +230,12 @@ class CudaTarget(Target):
     override `__repr__`.
   - The store the threads of one CTA cooperate in MUST be projected as
     `architecture.shared_memory_per_cta_bytes`, and MUST be reported as belonging
-    to the `cta` scope even when the level being scheduled is `thread`
-    ([schedule §5](./schedule.md#5-scheduling-facts)).
+    to the `cta` scope even when the level being asked about is `thread`.
   - The tensor-memory level MUST be projected with
     `architecture.tensor_memory_per_cta_bytes` only where the architecture states
     a capacity, and MUST be absent from `explicit_levels` where it states `None`.
     A level on hardware that has no such store would offer a plan somewhere to
     hold accumulators that does not exist.
-  - The partition projection MUST state the device's SM count as the parallel
-    units, its HBM bandwidth and capacity, and its dense peak rate per DType
-    ([schedule §5.2](./schedule.md#52-partitionfacts)). Every one of those MUST be
-    a hardware fact as the installed documents state it. How much of the machine an
-    algorithm chooses to occupy is a compiler policy and belongs in
-    `ScheduleOptions` ([schedule §2.1](./schedule.md#21-scheduleoptions)); it MUST
-    NOT be projected here, because a Facts value that already encodes a policy
-    cannot be read as what the hardware is.
 
 #### Topology levels
 
@@ -271,8 +255,6 @@ thread mesh layouts.
     `architecture.max_threads_per_cta`.
   - `Topology.size` MUST be an explicit `ShapeDim`; construction with `None`
     MUST fail for every topology level.
-  - An unresolved symbolic topology extent MUST NOT be scheduled, because
-    scheduling requires a static extent.
   - Static declared topology extents MUST be positive integers within their
     target resource limits.
   - Unsupported topology levels MUST fail at the generic lowering boundary.
@@ -484,15 +466,14 @@ class CpuTarget(Target):
 - A `Target` belongs to a `Module` rather than an authored HIR `Function`.
   Target inheritance and its declaration rules are defined by
   [core-ir `target-inheritance`](./core-ir.md#target-inheritance).
-- Analyze and Schedule MUST obtain the Target from `Module.resolve_target()`
-  and from nowhere else. Neither accepts a bare `Function`, and neither
-  resolves an undeclared Target to a default: both report hardware-dependent
-  results, so measuring or scheduling against a device the author never
-  declared is a silent wrong answer. In particular neither reads a Target out
-  of `Module.metadata`; the `metadata["target"]` the compile pipeline carries
-  is the codegen boundary's own record
-  ([passes §6](./passes.md#6-top-level-api)), not a Target source
-  for Analyze or Schedule.
+- Analyze MUST obtain the Target from `Module.resolve_target()` and from
+  nowhere else. It does not accept a bare `Function`, and it does not resolve
+  an undeclared Target to a default: it reports hardware-dependent results, so
+  measuring against a device the author never declared is a silent wrong
+  answer. In particular it does not read a Target out of `Module.metadata`; the
+  `metadata["target"]` the compile pipeline carries is the codegen boundary's
+  own record ([passes §6](./passes.md#6-top-level-api)), not a Target source
+  for Analyze.
 - The compile boundary MAY resolve an omitted Module Target to
   `default_target()` for lowering, because `jit(fn)` on a plain Function is a
   documented entry point ([runtime §1.3](./runtime.md#13-jit-api)). It MUST
@@ -611,7 +592,6 @@ class AmxTarget(Target):
 
     def validate_program_topology(self, topology: Topology) -> None: ...
     def get_analyzer(self, selector: str) -> Analyzer: ...
-    def get_scheduler(self, topology: str) -> Scheduler: ...
     def get_facts(self, facts_type: type[FactsT], query=None) -> FactsT: ...
 ```
 
@@ -635,25 +615,6 @@ class AmxTarget(Target):
     MUST NOT be admitted at either level.
   - Unsupported topology levels MUST raise an actionable error naming the
     supported levels, from both the limit lookup and topology validation.
-  - AMX MUST select exactly one Scheduler, for the `core` level, through
-    `get_scheduler`. A core both runs the work and owns the store its tile lives
-    in, so the level asked about and the capacity's scope are the same one. The
-    `amx` level issues one atom at a time, so there is nothing to place across it
-    and no Scheduler for it. The algorithm and its Plan type are not part of the
-    public `schedule` package.
-  - The core atom-candidate projection MUST list an op's candidates by hard
-    filtering the registered catalogue, and MUST NOT rank them. The filter is
-    shape divisibility, operand DType, operand layout, and the storage level
-    the atom's operand roles need — the last is what separates a
-    register-resident atom from one streaming through cache, so an op too wide
-    for the register files lists only the streaming atom.
-  - An op that clears no filter MUST report an empty candidate list, which is a
-    covered op with no usable atom rather than an error. Only an op kind or a
-    target the bridge does not model at all MUST raise.
-  - The core-level algorithm MUST decide resources over the schedule tree
-    extracted from the Module's entry function and report the objective in ns. It
-    MUST NOT rewrite the program it decided about, and its Plan MUST carry no
-    program.
 
 ## 10. Installed hardware resources
 
@@ -711,9 +672,9 @@ conditions = "No validated number."
     recorded as `estimated`. `derived` and `estimated` MUST state how in
     `conditions`.
   - Compiler policy and a program's Topology extents MUST NOT appear in a
-    hardware document. They are inputs to scheduling, not immutable hardware
-    truth: a fixed-wave parallel capacity is a scheduling policy even when its
-    current value equals a device count. An explicit memory level's `owner` is
+    hardware document. They are compiler inputs, not immutable hardware truth:
+    a fixed-wave parallel capacity is a policy even when its current value
+    equals a device count. An explicit memory level's `owner` is
     different: it MUST name one topology from the Target's hardware vocabulary,
     or the reserved word `target` for an allocation shared by the whole device.
     The document states that ownership directly and MUST NOT encode it as an

@@ -374,7 +374,7 @@ class KdaReferenceUnavailable(RuntimeError):
 #: Why the KDA reference is blocked, as measured on 2026-07-28.
 #:
 #: It is the *reference* that is blocked, not the model: `model.py`
-#: describes `kda_attention` completely, and it analyses and schedules. What is
+#: describes `kda_attention` completely, and it analyses. What is
 #: missing is anything to check its values against.
 #:
 #: `transformers` 5.14.1 has no `kimi_linear` implementation: `KimiLinearForCausalLM`

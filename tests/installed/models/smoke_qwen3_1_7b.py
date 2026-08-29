@@ -23,7 +23,7 @@ CASES = contract.model_cases(MODEL)
 ANALYSED = [
     pytest.param(case, selected, id=selected.id) for case in CASES for selected in case.analyze
 ]
-JSON_CASES = [pytest.param(case, case.schedule[0], id=case.id) for case in CASES]
+JSON_CASES = [pytest.param(case, case.analyze[0], id=case.id) for case in CASES]
 SIZED = [pytest.param(case, sized, id=sized.id) for case in CASES for sized in case.sized]
 
 

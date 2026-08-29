@@ -8,29 +8,22 @@ across two.
 
 Analyse selects every function the model defines -- what is not selected here is
 untested, and the report derives that from the model's own function inventory.
-Schedule admits only the module entry function, because the device-wide partition
-algorithm decides the launch and a leaf is not something it has an answer to.
-``sized`` is a third question: whether the model can be analysed at a context
+``sized`` is a second question: whether the model can be analysed at a context
 length of the caller's choosing.
 
-Every case below is declared as passing, and two of the analyse cases, the
-schedule case and the sized case do not pass yet -- not for a reason in this
-package. ``Gelu`` has an evaluation handler and no *cost* evaluator, so anything
-that costs ``mlp`` or ``decoder_layer`` stops at
-``no cost evaluator registered for Gelu``: all four analysis families, the
-partition, and the sized question alike. It is one registration next to
+Every case below is declared as passing, and two of the analyse cases and the
+sized case do not pass yet -- not for a reason in this package. ``Gelu`` has an
+evaluation handler and no *cost* evaluator, so anything that costs ``mlp`` or
+``decoder_layer`` stops at ``no cost evaluator registered for Gelu``: all four
+analysis families and the sized question alike. It is one registration next to
 ``Sigmoid`` / ``Softplus`` / ``Tanh`` / ``ReLU`` in
 ``src/tilefoundry/visitor_registry/op_cost.py`` (``_elementwise``, as those are),
 and it is deliberately not made here -- this package's boundary is
 ``tests/models/gemma2_2b/``.
 
-They are not recorded as ``BLOCKED`` because a gate could not carry the claim
-honestly: the analyse and sized gates would absorb it, but ``schedule`` fails
-with ``PartitionProblemError`` -- a ``ValueError``, not a ``ScheduleError`` --
-which ``CapabilityGate.expected_failure`` cannot express, and the schedule case
-cannot be dropped either (the harness requires each model to select its module
-entry). Half a matrix of blocks around one missing registration would describe a
-limit of this model, which this is not.
+They are not recorded as ``BLOCKED`` because a block would describe a limit of
+this model, which this is not: it is one missing cost registration, shared by
+every case that touches ``Gelu``.
 """
 from __future__ import annotations
 
@@ -81,14 +74,6 @@ CASE = ModelCase(
         FunctionCase(
             id="gemma2_2b/analyze/decoder_layer",
             selector="decoder_layer",
-            dims=ANALYZED_AT,
-        ),
-    ),
-    schedule=(
-        FunctionCase(
-            id="gemma2_2b/schedule/decoder_layer",
-            selector="decoder_layer",
-            topology="cta",
             dims=ANALYZED_AT,
         ),
     ),

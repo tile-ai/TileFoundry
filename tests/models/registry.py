@@ -19,15 +19,12 @@ expected. A gate is a claim about today: if the limit it names is lifted and the
 case starts passing, the case fails until the package is corrected, so the matrix
 cannot quietly drift into describing a system nobody has.
 
-Analyze selects every function a model defines. Schedule cannot: the device-wide
-partition algorithm decides the launch, so it admits only the module entry
-function, and selecting a leaf for it would be selecting something the algorithm
-has no answer to rather than something it answers badly.
+Analyze selects every function a model defines.
 
-`sized` is a third question, asked separately because a model can answer the
-others without answering it: whether it can be analysed at a context length of
-the caller's choosing. A model authored as one fixed shape analyses and schedules
-perfectly well and has no context length to state, and the two facts must not be
+`sized` is a second question, asked separately because a model can answer the
+other without answering it: whether it can be analysed at a context length of
+the caller's choosing. A model authored as one fixed shape analyses perfectly
+well and has no context length to state, and the two facts must not be
 collapsed -- a working analysis recorded as broken, or a missing capability
 recorded as nothing at all. It stays its own row once a model answers both, so
 there is somewhere to record the next model that answers only one.

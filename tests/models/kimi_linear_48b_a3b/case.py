@@ -90,24 +90,6 @@ CASE = ModelCase(
             selector="moe.shared_expert",
         ),
     ),
-    schedule=(
-        FunctionCase(
-            id="kimi_linear_48b_a3b/schedule/kda_attention",
-            selector="kda.kda_attention",
-            topology="cta",
-        ),
-        FunctionCase(
-            id="kimi_linear_48b_a3b/schedule/mla_attention",
-            selector="mla.mla_attention",
-            topology="cta",
-            dims=ANALYZED_AT,
-        ),
-        FunctionCase(
-            id="kimi_linear_48b_a3b/schedule/moe",
-            selector="moe.moe",
-            topology="cta",
-        ),
-    ),
     #: Only MLA leaves a dimension open. KDA's state is fixed-size and the MoE's
     #: expert count is a constant of the published model, so neither has a size to
     #: be asked at -- which is what those shapes mean, not a capability they lack.

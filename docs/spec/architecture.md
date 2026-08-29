@@ -19,7 +19,6 @@ graph TD
         hir["<b>hir</b>"]
         tir["<b>tir</b>"]
         analysis["<b>analysis</b>"]
-        schedule["<b>schedule</b>"]
         passes["<b>passes</b>"]
         target["<b>target</b>"]
         runtime["<b>runtime</b>"]
@@ -46,15 +45,11 @@ graph TD
     coreir --> hir
     coreir --> tir
     hir --> analysis
-    hir --> schedule
-    schedule --> passes
     hir --> passes
     tir --> passes
     passes --> target
     target --> runtime
-    analysis -. facts read by .-> schedule
     target -. projects declared Facts .-> analysis
-    target -. projects declared Facts .-> schedule
 
     types -. carried by Expr type .-> coreir
     shard -. layout sublayer .-> types
@@ -69,14 +64,11 @@ graph TD
     evaluator -. reference oracle .-> hir
     cli -. user entry surface .-> parser
     cli -. reports .-> analysis
-    cli -. reports .-> schedule
 ```
 
 A TileFoundry compilation flows left to right along the **pipeline**:
-`parser → core-ir → {hir, tir} → passes → target → runtime`. Typed HIR MAY
-first pass through the public `schedule` operation before pass sequencing; the
-algorithm it selects decides over the facts the `analysis` layer states about the
-same HIR, and the direction is one-way. The
+`parser → core-ir → {hir, tir} → passes → target → runtime`. The `analysis`
+layer states facts about the same typed HIR without joining that flow. The
 **type system** (types + shard) and the **IR framework**
 (visitor-mutator + visitor-registry) cut across every pipeline stage:
 they are co-designed with the IR, not standalone modules. Auxiliary
@@ -148,26 +140,13 @@ This stage layers two concerns on top of the same IR:
    peer IR layer.
 3. **Fact layer** — the polyhedral model of one HIR `Function` body and
    the authored-HIR metrics ([analysis](./analysis.md)). It is neither a
-   pass nor an IR layer: it measures, and the scheduling algorithms below
-   decide over what it measures. The facts a scheduling decision is made
-   *over* — the atom catalogue and the store a tile lives in — belong to
-   the scheduling layer that decides, not here
-   ([schedule](./schedule.md)).
+   pass nor an IR layer: it measures, and it decides nothing over what it
+   measures.
 
 IR traversal / rewrite utilities (`ExprVisitor` / `ExprCloner` /
 `StmtVisitor` / `StmtMutator` / mixed stmt-expr rewriters) are shared
 infrastructure used by both passes and codegen walkers; the framework
 contract lives in [visitor-mutator](./visitor-mutator.md).
-
-Scheduling is one explicit public operation, not a pass-manager stage and not a
-Target-owned service. A caller names the program and one level of the hierarchy
-that program declares; the algorithm registered for that exact hardware and level
-answers with a Plan it owns entirely. What a Plan states is a decision about a
-program, never a rewritten one: no scheduling algorithm materializes its selection
-into HIR, and applying a decision is a separate operation a caller asks for. The
-invocation contract, the result boundary, and the Plan base are owned by
-[schedule](./schedule.md). An algorithm reads the hardware it decides over by
-projecting the same Target for the aggregates it declares.
 
 ## 6. Target / codegen
 
@@ -232,11 +211,10 @@ This table is the authoritative spec-to-box map. Each row lists the
 | **[analysis](./analysis.md)** | Fact layer: the polyhedral model of one HIR Function body (`TileGraph` / `extract`, authored-loop modelling, and the facts measured over a time relation), and the composed authored-HIR measurement — its analysis families, their owned Metadata records, and the narrow Target Facts each family declares |
 | **[visitor-mutator](./visitor-mutator.md)** | IR traversal / rewrite infrastructure: expr / stmt visitors, mutators, identity-preserving rewrite invariants, mixed stmt-expr traversal |
 | **[passes](./passes.md)** | Pass framework + implemented passes: `Pass` / `PassManager`, three pass granularities, per-pass subsections (lowering / optimization rules) |
-| **[schedule](./schedule.md)** | The public scheduling operation: invocation contract, exact algorithm registration, shared options, result boundary, the extensible Plan base, the typed plan each algorithm family exports, the schedule-tree construction and scaffold emission stages an algorithm composes its solve from, and the facts it projects (`AtomFact`, plus each family's own closed facts) |
 | **[target](./target.md)** | Target capability descriptors, architecture/device facts, Facts projection, and admitted program topology levels |
 | **[codegen](./codegen.md)** | Target-selected CodeGenerator services, emit / link products (`LinkableFunction` / `LinkableModule` / `LinkedModule`), dispatch + shape-scalar ABI, program-shape / dynamic-CTA source contract, ShardLayout emission |
 | **[runtime](./runtime.md)** | `RuntimeModule` / launcher ABI, C++ runtime surface, `runtime.h` umbrella header, runtime op free-function contract |
-| **[cli](./cli.md)** | Command-line grammar and behavior for models, spec, tutorial, check, analyze, schedule, and inspect |
+| **[cli](./cli.md)** | Command-line grammar and behavior for models, spec, tutorial, check, analyze, and inspect |
 | **[code-organization](./code-organization.md)** | Implementation guide (not architectural): Python source tree layout |
 
 **Cross-spec sync.** Downstream specs link back to the relevant § of

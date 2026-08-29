@@ -444,7 +444,7 @@ interface that claims to list every Facts projection it supports.
     already occupied by any other importable module MUST likewise be rejected
     without replacing that module in `sys.modules`.
   - Every command MUST replay the registry before doing its own work, so an
-    added Target is equally available to inspection, analysis, and scheduling.
+    added Target is equally available to inspection and analysis.
     A missing or changed source MUST produce a warning naming that entry while
     valid entries continue to load and the requested command continues.
   - The default writable registry MUST be

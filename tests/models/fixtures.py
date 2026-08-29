@@ -36,7 +36,7 @@ def _parallel_units(target: Target, level: str) -> int:
 
 
 def h200_sxm(*, threads_per_cta: int = 512) -> TargetFixture:
-    """One H200 SXM, at both levels CUDA schedules.
+    """One H200 SXM, at both of its topology levels.
 
     The CTA extent is the device's own SM count, so the fixture divides work over
     exactly as much machine as the documents say exists. The thread extent is a

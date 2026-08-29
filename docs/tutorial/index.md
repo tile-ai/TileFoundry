@@ -6,9 +6,9 @@ as `ConstTensor` parameters. That is the *reference*. It is finished when it agr
 with the published implementation on real weights.
 
 **Step two — make it fast.** The authored HIR stays the reference. Write a runtime
-twin beside it and `check` the two against each other. `analyze` and `schedule`
-report what the program costs and what a plan for it looks like; you decide what to
-do with that, including changing the authored HIR.
+twin beside it and `check` the two against each other. `analyze` reports what the
+program costs; you decide what to do with that, including changing the authored
+HIR.
 
 TileFoundry is **source to source**. The reference is source code, the fast
 implementation is source code, and either can be pointed at any command.
@@ -20,8 +20,6 @@ implementation is source code, and either can be pointed at any command.
 - `tilefoundry check --help` — the comparison predicates and their bounds, with the
   arithmetic for choosing a tolerance.
 - `tilefoundry analyze --help` — flops, traffic, roofline bounds, a predicted time.
-- `tilefoundry schedule --help` — placement, resharding and timing for one topology
-  level.
 - `tilefoundry models` — the models already described, and their authored source to
   copy from.
 - `tilefoundry tutorial orchestrator causal_lm` — the shipped autoregressive decode

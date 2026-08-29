@@ -27,7 +27,7 @@ from tilefoundry.target.cuda.spec import (
 )
 from tilefoundry.target.facts import TopologyLimitFacts, facts_result
 from tilefoundry.target.hardware.envelope import HardwareDocument
-from tilefoundry.target.services import CodeGenerator, Scheduler
+from tilefoundry.target.services import CodeGenerator
 from tilefoundry.utils.python_source import PythonExpr
 
 
@@ -145,30 +145,7 @@ class CudaTarget(Target):
             return facts_result(self, facts_type, parallel_capacity(self, query))
         if facts_type is PerformanceServiceFacts:
             return facts_result(self, facts_type, performance_service(self, query))
-
-        from tilefoundry.schedule.pipeline import PipelineFacts  # noqa: PLC0415
-
-        if facts_type is PipelineFacts:
-            from tilefoundry.target.cuda.facts import pipeline_facts  # noqa: PLC0415
-
-            return facts_result(self, facts_type, pipeline_facts(self, query))
-
-        from tilefoundry.schedule.partition import PartitionFacts  # noqa: PLC0415
-
-        if facts_type is PartitionFacts:
-            from tilefoundry.target.cuda.facts import partition_facts  # noqa: PLC0415
-
-            return facts_result(self, facts_type, partition_facts(self, query))
         return super().get_facts(facts_type, query)
-
-    def get_scheduler(self, topology: str) -> Scheduler:
-        """Select a CUDA scheduler; subclasses inherit these solvers."""
-        from tilefoundry.target.cuda.schedule import cuda_scheduler  # noqa: PLC0415
-
-        scheduler = cuda_scheduler(topology)
-        if scheduler is not None:
-            return scheduler
-        return super().get_scheduler(topology)
 
     def get_code_generator(self) -> CodeGenerator:
         from tilefoundry.codegen.cuda.module import (  # noqa: PLC0415

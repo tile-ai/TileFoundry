@@ -21,7 +21,7 @@ from tilefoundry.target.hardware.envelope import (
     UnknownSchemaError,
     parse_document,
 )
-from tilefoundry.target.services import Analyzer, CodeGenerator, Scheduler
+from tilefoundry.target.services import Analyzer, CodeGenerator
 from tilefoundry.utils.python_source import PythonExpr, dataclass_to_python
 
 FactsT = TypeVar("FactsT")
@@ -201,12 +201,6 @@ class Target:
             return analyzer
         raise UnsupportedCapabilityError(
             f"{_target_summary(self)}: no analyzer for {selector!r}"
-        )
-
-    def get_scheduler(self, topology: str) -> Scheduler:
-        """Return the scheduler selected by this concrete Target."""
-        raise UnsupportedCapabilityError(
-            f"{_target_summary(self)}: no scheduler for {topology!r}"
         )
 
     def get_code_generator(self) -> CodeGenerator:

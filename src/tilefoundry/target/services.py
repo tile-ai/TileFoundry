@@ -61,24 +61,6 @@ class Analyzer:
         return None
 
 
-ScheduleCallable = Callable[
-    ["Module", "Function", "Target", "Topology", object | None],
-    "SchedulePlan",
-]
-
-
-@dataclass(frozen=True)
-class Scheduler:
-    """One scheduler service: the level it solves for, and the solve."""
-
-    topology: str
-    solve: ScheduleCallable
-
-    def __post_init__(self) -> None:
-        if not self.topology:
-            raise ValueError("a schedule algorithm needs a non-empty topology name")
-
-
 @dataclass(frozen=True)
 class CodeGenerator:
     """One immutable Target-owned code-generation service."""
@@ -93,6 +75,4 @@ __all__ = [
     "AnalysisChecker",
     "Analyzer",
     "CodeGenerator",
-    "ScheduleCallable",
-    "Scheduler",
 ]

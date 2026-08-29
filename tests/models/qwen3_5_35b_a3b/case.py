@@ -1,5 +1,5 @@
-"""Qwen3.5-35B-A3B as corpus cases: what runs, what is analysed, what is
-scheduled, and at what context length.
+"""Qwen3.5-35B-A3B as corpus cases: what runs, what is analysed, and at what
+context length.
 
 Three Modules, three cases. The published stack is a hybrid -- three linear
 attention layers to every full attention one, each ending in the same 256-expert
@@ -96,13 +96,6 @@ CASE = ModelCase(
             id="qwen3_5_35b_a3b/analyze/l2_normalise", selector="l2_normalise"
         ),
     ),
-    schedule=(
-        FunctionCase(
-            id="qwen3_5_35b_a3b/schedule/linear_attention",
-            selector="linear_attention",
-            topology="cta",
-        ),
-    ),
     #: The Gated DeltaNet's state is fixed-size, so no extent in this Module is
     #: left open and there is no context length to ask it about. That is what a
     #: recurrent state means rather than a missing capability, so `sized` is empty
@@ -145,14 +138,6 @@ FULL_ATTENTION_CASE = ModelCase(
             id="qwen3_5_35b_a3b/analyze/partial_rope_kv", selector="partial_rope_kv"
         ),
     ),
-    schedule=(
-        FunctionCase(
-            id="qwen3_5_35b_a3b/schedule/full_attention",
-            selector="full_attention",
-            topology="cta",
-            dims=ANALYZED_AT,
-        ),
-    ),
     sized=(
         SizedCase(
             id="qwen3_5_35b_a3b/sized/full_attention",
@@ -182,8 +167,8 @@ MOE_CASE = ModelCase(
     #: through a command: one read the selected experts back as a *set*, and every
     #: predicate `check` offers compares positionally; the other required the routed
     #: branch and the shared branch to sum to the whole block, which is two commands'
-    #: outputs added together. What this case contributes here is the block's analysis
-    #: and schedule coverage and its function inventory.
+    #: outputs added together. What this case contributes here is the block's
+    #: analysis coverage and its function inventory.
     analyze=(
         FunctionCase(id="qwen3_5_35b_a3b/analyze/experts", selector="experts"),
         FunctionCase(id="qwen3_5_35b_a3b/analyze/post_norm", selector="post_norm"),
@@ -195,11 +180,6 @@ MOE_CASE = ModelCase(
         ),
         FunctionCase(
             id="qwen3_5_35b_a3b/analyze/shared_expert", selector="shared_expert"
-        ),
-    ),
-    schedule=(
-        FunctionCase(
-            id="qwen3_5_35b_a3b/schedule/experts", selector="experts", topology="cta"
         ),
     ),
     #: One token through a router; nothing here is authored over a context.

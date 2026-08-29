@@ -20,13 +20,12 @@ truth for the directory's structure and invariants.
 | `ir/core/` | [core-ir](./core-ir.md) | Shared node algebra: `Module` / `Expr` / `Var` / `Constant` / `Tuple` / `Op` / `Call` / `Stmt` (base class) / `OpSchema` / `ParamDef` / call-graph and ownership queries / typed metadata attach-detach and diagnostics / `@register_op` / `@register_alias` / `op_registry` / `errors`. |
 | `ir/types/` | [types](./types.md) | Type-system root: `Type` / `TensorType` / `TupleType` / `UnitType` / `CallableType` / `DType` / `StorageKind` / `resolve_storage` / local projections (`local_type_of`) / tensor-leaf, byte-by-storage, and topology-extent queries / `dim.*` (with their typeinfer). |
 | `ir/types/shard/` | [shard](./shard.md) | Shard / layout sublayer: `Topology` / `Mesh` / `Layout` / `ComposedLayout` / `ShardLayout` / `ShardAttr` (`Split` / `Broadcast` / `Dynamic` / `Partial`). The physical nesting reflects the spec's "sublayer" relationship. |
-| `ir/constraints/` | [schedule](./schedule.md) | Authored scheduling constraints: the shared base plus layout, mesh, and storage constraint records. |
+| `ir/constraints/` | [parser](./parser.md) | Authored `where(layout=..., mesh=..., storage=...)` constraint records: the shared base plus layout, mesh, and storage constraints, attached by the parser and read back by the Python printer. |
 | `ir/visitor.py` | [visitor-mutator](./visitor-mutator.md) | `ExprFunctor` / `ExprVisitor` / `ExprWalker` / `ExprCollector` / `ExprCloner` / `BindingSubstitutionCloner` / `StmtVisitor` / `StmtMutator` / `StmtExprMutator`, plus `collect_exprs`, value-operand/function-value queries, and the canonical `PrimFunction` walk and rewrite entries. |
 | `ir/hir/` | [hir](./hir.md) | HIR Op layer; one subdirectory per category (`math/` / `tensor/` / `nn/` / `shape/` / `sharding/`). One real Op per `.py` ([§2](#2-file-naming-and-content-rules) rule 1); surface-alias schemas have no per-name file and live in each category's `aliases.py` ([§2](#2-file-naming-and-content-rules) rule 5). |
 | `ir/tir/` | [tir](./tir.md) | TIR layer: `stmt.py` re-exports the `Stmt` base from `ir/core/stmt.py`; `stmts.py` hosts the general TIR `Stmt` subclasses (`LetStmt` / `Evaluate` / `Sequential` / `MeshScope` / …), while specialized statement families such as `DispatchCall` may live in their own file; `prim_function.py`; effect Ops and TIR-owned Expr Ops by category (`memory/` / `nn/` / …); `launch.py` owns `Launch` and its authored launch-attribute descriptors; `arith.py` / `reduce.py` for tag-dispatched `Binary` / `Unary` / `Reduce`; `intrinsic.py` for the `@intrinsic` decorator. Target-specific nodes nest under `ir/tir/<target>/<category>/` (e.g. `ir/tir/cuda/nn/mma.py`) per [§2](#2-file-naming-and-content-rules) Rule 1c. |
 | `parser/` | [parser](./parser.md) | DSL → IR parsing: `base.py` (shared visitor base + dispatch), `hir_parser.py` (`@func` body), `tir_parser.py` (`@prim_func` body), layout sugar / range-slice / dispatch modules. **Not under `ir/`** — the parser is a producer of IR, not an IR sublayer. |
-| `analysis/` | [analysis](./analysis.md) | Fact layer over typed HIR: `poly/` (the polyhedral model — `extract` / `TileGraph` and the facts measured over a time relation), and one module per analysis family. The compact public surface lives in `analysis/__init__.py`; per-target atom catalogues and Facts projections live with their owning Target. |
-| `schedule/` | [schedule](./schedule.md) | The public Schedule boundary in `schedule/__init__.py` -- the `schedule()` operation, immutable options, result, and plan base. One directory per algorithm family: `pipeline/` for asynchronous overlap within a cooperating unit, `partition/` for spatial division across a device. Each owns its private program view, projected Facts, closed problem, solve, and typed plan export; concrete Target packages register which families serve which exact levels. |
+| `analysis/` | [analysis](./analysis.md) | Fact layer over typed HIR: `poly/` (the polyhedral model — `extract` / `TileGraph` and the facts measured over a time relation), and one module per analysis family. The compact public surface lives in `analysis/__init__.py`; per-target Facts projections live with their owning Target. |
 | `passes/` | [passes](./passes.md) | Pass framework (`pass_base.py` / `pass_manager.py`) plus concrete transforms (`transforms/<pass_name>.py`, [§2](#2-file-naming-and-content-rules) rule 6). |
 | `target/` | [target](./target.md) | Compilation Target classes, class registration, service selection, and architecture/device facts: `base.py` owns `Architecture` / `Device` / `Target` / `register_target` / `registered_targets`; `services.py` owns the immutable service descriptors; each backend owns its concrete Target. Authored code constructs Target values; there is no string resolver. |
 | `target/cpu.py` | [target](./target.md) | The `CpuTarget` backend and its CPU code-generation service selection. |
@@ -39,9 +38,9 @@ truth for the directory's structure and invariants.
 | `analysis/scope.py` | [analysis](./analysis.md) | The shared `Scope` tree and `Access` relations built once from normalized HIR; families query these views instead of constructing parallel structure. |
 | `analysis/poly/` | [analysis](./analysis.md) | The polyhedral subpackage: `model.py` owns `TileUnit` / `TileGraph`, `extract.py` builds that graph from normalized HIR, `access.py` owns its time/access queries, and `errors.py` owns `ExtractError`; `__init__.py` is the retained public import surface. |
 | `analysis/poly/affine.py` | [analysis](./analysis.md) | The shared loop-affine term parser used by poly extraction and authored-loop footprint binding, including constant loop strides and bounded invariant offsets. It does not introduce a second affine graph representation. |
-| `analysis/footprint.py` | [analysis](./analysis.md) | Target-independent authored-loop access images, buffer-view folding, and deduplicated versus repeated byte readings. Requires neither a `TileGraph` nor a scheduled time map. |
+| `analysis/footprint.py` | [analysis](./analysis.md) | Target-independent authored-loop access images, buffer-view folding, and deduplicated versus repeated byte readings. Requires neither a `TileGraph` nor a time map. |
 | `analysis/report.py` | [analysis](./analysis.md) | Structured analysis report data, including record-family registration, field serialization, and target-aware report-only projections. It depends only on analysis/core modules; inspection consumes it to produce text and source annotations. |
-| `analysis/check.py` | [analysis](./analysis.md) | The shared authored-program gate for analysis and scheduling: authored-type re-derivation, authored validation, call-context validation, and checker-specific input checks. Established once per public call rather than per family, before analysis or scheduling makes placement decisions. |
+| `analysis/check.py` | [analysis](./analysis.md) | The shared authored-program gate for analysis: authored-type re-derivation, authored validation, call-context validation, and checker-specific input checks. Established once per public call rather than per family. |
 | `analysis/facts.py` | [analysis](./analysis.md) | The narrow Facts aggregates the analysis families declare — the memory hierarchy graph, the throughput rates, and the parallel capacity. It is the record of how much hardware each measurement rests on, and names no backend; a Fact shared across consumer families belongs in `target/facts.py`. |
 | `analysis/metadata.py` | [analysis](./analysis.md) | The typed records the families leave on the IR, split by what each number depends on rather than by convenience. |
 | `analysis/compute_cost.py` | [analysis](./analysis.md) | The `compute-cost` family: logical flops per DType and bytes per storage level, from the authored program alone. |
@@ -49,15 +48,7 @@ truth for the directory's structure and invariants.
 | `analysis/roofline.py` | [analysis](./analysis.md) | The `roofline` family: the recorded work divided by the target's published rates, per Call and aggregated per Function. Adds no count of its own. |
 | `analysis/performance.py` | [analysis](./analysis.md) | The `performance` family: occurrences projected from the shared `Scope` tree into flat timeline records and one function envelope, scaled by parallel capacity. It introduces no second scope tree. |
 | `visitor_registry/` | [visitor-registry](./visitor-registry.md) | Shared registry instances and derived visitors: access-relation construction, contexts, ISL helpers, relation building, shard propagation, type inference, verification, code generation, and cost evaluation. |
-| `schedule/api.py` | [schedule](./schedule.md) | The public `schedule()` operation and `ScheduleResult`: resolve the Target and the requested level from the Module, dispatch once on the exact pair, and verify the returned Plan. Generic -- it names no concrete target. |
-| `schedule/plan.py` | [schedule](./schedule.md) | `SchedulePlan`, the extensible semantic base every algorithm's result derives from, and `PlanVerificationError`. It fixes three operations and no shape: there is no shared schema, version, deserializer, or renderer registry. |
-| `schedule/errors.py` | [schedule](./schedule.md) | `ScheduleError`, the one diagnostic the schedule layer raises for a request it cannot serve or a solve that failed. Distinct from `PlanVerificationError`, which says a plan was produced and does not hold together. |
-| `schedule/kernel_schedule.py` | [schedule](./schedule.md) | ISL schedule-tree construction, band discovery, tiling, and kernel-schedule validation. |
-| `schedule/render.py` | [schedule](./schedule.md) | Scaffold emission from a graph, its independently built schedule tree, and selected ring depths. |
-| `target/<backend>/schedule.py` | [target](./target.md) | One backend's scheduling algorithms and immutable Scheduler values. This is where that backend's private problem construction, solve, and Plan export are composed; its Target class selects them. |
-| `schedule/partition/` | [schedule](./schedule.md) | The spatial partition family: program extraction, `PartitionFacts`, the closed candidate problem, the CP-SAT solve, and the `PartitionSchedulePlan` export. Every hardware number enters through the Facts, so no module below the family entry holds a Target, and nothing in it rewrites the program it decided about. |
 | `visitor_registry/op_cost.py` | [analysis](./analysis.md) | Each operation's per-instance flops and bytes, registered into the shared cost-evaluator registry. Owned here rather than by any target package, because the work an operation asks for follows from its own semantics and operand types on every backend. |
-| `schedule/facts.py` | [schedule](./schedule.md) | `AtomFact`, the one instruction fact every algorithm family reads the same way. Everything else a family needs from a target is declared by that family, so no aggregate here becomes a vocabulary another family has to satisfy. |
 | `inspection/analysis_report.py` | [inspection](./inspection.md) | Presentation of analysis-owned report data as text and annotated source. Analysis owns the structured report data and JSON dump; inspection owns how a human reads it. |
 | `target/<backend>/facts.py` | [target](./target.md) | One backend's Facts projections selected by its Target's `get_facts`. They restate installed documents in the shape a family declared and measure nothing. |
 | `target/facts.py` | [target](./target.md) | Facts used across consumer families, such as topology limits, plus validation for values returned by `Target.get_facts`: the requested frozen-dataclass shape and returned type. A Fact used by one family stays with that family; this module holds no projection registry. |
@@ -74,10 +65,9 @@ truth for the directory's structure and invariants.
 | `utils/` | [code-organization](./code-organization.md) | Shared leaf machinery: a module here MUST import nothing from `ir/`, `parser/`, `passes/`, `codegen/`, `runtime/` or `cli/`, and MUST name no layer. It is depended on and depends on nothing, which is what lets a consumer outside the package — a pre-commit hook under an interpreter with nothing installed — load one of these modules by path and get the same implementation the package uses. A helper that needs to know a layer belongs in that layer; this is not a home for anything that did not fit. |
 
 **Stage boundary.** The pipeline picture in
-[architecture §1](./architecture.md#1-spec-relationship-map) places
-`parser/`, `schedule/`, and `codegen/` outside `ir/` (front-end producer,
-decision service over typed HIR, and back-end consumer); the physical directory
-layout reflects that boundary directly.
+[architecture §1](./architecture.md#1-spec-relationship-map) places `parser/`
+and `codegen/` outside `ir/` (front-end producer and back-end consumer); the
+physical directory layout reflects that boundary directly.
 
 **Reading notes:**
 
@@ -94,14 +84,9 @@ layout reflects that boundary directly.
   [architecture §1](./architecture.md#1-spec-relationship-map)
   pipeline they are the front-end producer and back-end consumer of
   IR, not IR sublayers.
-- `schedule/` sits outside `ir/` because it defines an operation over typed HIR,
-  not a new IR layer. `schedule/__init__.py` contains only the public operation
-  and its shared value structures; the construction stages are imported from
-  their own modules, and each algorithm family's candidate graph, solver model,
-  and decoded solution stay private to that family.
-- `analysis/` sits outside `ir/` for the same reason: it derives facts about
-  typed HIR rather than defining an IR layer. It reads the IR and the `Target`,
-  and never `schedule/` — the dependency between the two runs one way
+- `analysis/` sits outside `ir/` because it derives facts about typed HIR
+  rather than defining an IR layer. It reads the IR and the `Target` and
+  decides nothing over what it measures
   ([architecture §5](./architecture.md#5-analysis--optimization)).
 - `codegen/<target>/` consumes only TIR. The subtree mirrors
   `ir/tir/`: `prim_function` lives in `tir/`, Stmt emitters in
@@ -116,7 +101,7 @@ layout reflects that boundary directly.
   boundary.
 
 `ir/constraints/`, `visitor_registry/`, and `dump/` are cross-cutting packages;
-their stable responsibilities are owned by [schedule](./schedule.md),
+their stable responsibilities are owned by [parser](./parser.md),
 [visitor-registry](./visitor-registry.md), and [inspection](./inspection.md),
 respectively. Their internal file layout is not a per-Op contract.
 

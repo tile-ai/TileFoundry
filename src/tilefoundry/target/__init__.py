@@ -19,7 +19,7 @@ from tilefoundry.target.facts import (
     TopologyLimitFacts,
     facts_result,
 )
-from tilefoundry.target.services import Analyzer, Scheduler
+from tilefoundry.target.services import Analyzer
 
 _ANALYSIS_FACTS = {
     "MemoryHierarchyFacts",
@@ -74,7 +74,6 @@ __all__ = [
     "MemoryHierarchyFacts",
     "ParallelCapacityFacts",
     "PerformanceServiceFacts",
-    "Scheduler",
     "Target",
     "TargetFactsError",
     "TopologyLimitFacts",

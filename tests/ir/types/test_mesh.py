@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import (
     Layout,
     Mesh,
-    Split,
     Topology,
     make_mesh,
     product,
@@ -16,8 +14,6 @@ from tilefoundry.ir.types.shard.scope_match import (
     mesh_scope_matches_required_scope,
     states_consistent_positions,
 )
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
-from tilefoundry.schedule.partition.problem import _placement_relation
 
 
 def test_mesh_position_consistency_is_an_explicit_predicate() -> None:
@@ -67,17 +63,9 @@ def test_mesh_slice_keeps_the_parent_topologies() -> None:
     assert sliced.layout.shape == (1, 32)
 
 
-def test_mesh_value_equality_is_usable_by_partition() -> None:
+def test_mesh_value_equality_is_by_value() -> None:
     left = make_mesh((8,), topology="thread")
     right = make_mesh((8,), topology="thread")
-    layout = Layout(shape=(8,), strides=(1,))
-    consumer = TensorType(
-        shape=(8,),
-        dtype=DType.f32,
-        layout=ShardLayout(layout, (Split(0),), right),
-        storage="rmem",
-    )
 
     assert left == right
     assert hash(left) == hash(right)
-    assert _placement_relation(consumer, left) == "SAME_INTERVAL"

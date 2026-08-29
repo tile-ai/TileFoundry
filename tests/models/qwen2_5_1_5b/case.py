@@ -58,14 +58,6 @@ CASE = ModelCase(
             dims=ANALYZED_AT,
         ),
     ),
-    schedule=(
-        FunctionCase(
-            id="qwen2_5_1_5b/schedule/decoder_layer",
-            selector="decoder_layer",
-            topology="cta",
-            dims=ANALYZED_AT,
-        ),
-    ),
     sized=(
         SizedCase(
             id="qwen2_5_1_5b/sized/decoder_layer",

@@ -1,7 +1,6 @@
-"""What a Target validates about a program, which scheduler it reaches.
+"""What a Target validates about a program, and how codegen groups by one.
 
-What a Target validates about a program, which scheduler it reaches, and how
-codegen groups by one.
+What a Target validates about a program, and how codegen groups by one.
 
 The composed hardware facts themselves -- which documents a default target
 resolves, and which limits belong to the architecture rather than the device --
@@ -12,14 +11,13 @@ is asked during a compilation.
 from __future__ import annotations
 
 import typing
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 import pytest
 
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tests.fixtures.placed.square_cuda import Model as SquareCudaModel
-from tests.fixtures.shapes.matmul_programs import scheduling_gemm
 from tests.installed.smoke_target.vendor_npu import VendorNpuTarget
 from tilefoundry import CompilerOptions, DType, build, jit, lower, module
 from tilefoundry.analysis import AnalysisError, analyze
@@ -29,10 +27,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.schedule import ScheduleError, schedule
-from tilefoundry.schedule.plan import SchedulePlan
 from tilefoundry.target import (
-    AmxTarget,
     CpuTarget,
     CudaTarget,
     MemoryHierarchyFacts,
@@ -49,7 +44,7 @@ from tilefoundry.target import (
     validate_cuda_topology_levels,
 )
 from tilefoundry.target.cuda.spec import SM90_ID
-from tilefoundry.target.services import CodeGenerator, Scheduler
+from tilefoundry.target.services import CodeGenerator
 
 
 class ExternalCudaTarget(CudaTarget):
@@ -76,52 +71,14 @@ class _NoBandwidthUnitRateCudaTarget(CudaTarget):
         return facts
 
 
-@dataclass(frozen=True)
-class _CustomSchedulePlan(SchedulePlan):
-    topology: str
-
-    def verify(self, module, function, topology) -> None:
-        assert topology.name == self.topology
-
-    def to_json(self) -> str:
-        return self.topology
-
-    def render(self) -> str:
-        return self.topology
-
-
-_CUSTOM_SOLVES: list[str] = []
-
-
-def _solve_custom_topology(module, function, target, topology, options):
-    _CUSTOM_SOLVES.append(topology.name)
-    return _CustomSchedulePlan(topology.name)
-
-
-class CustomSchedulerCudaTarget(CudaTarget):
-    name = "tests.target.custom_scheduler_cuda"
+class ExtraTopologyCudaTarget(CudaTarget):
+    name = "tests.target.extra_topology_cuda"
     topology_levels = (*CudaTarget.topology_levels, "custom", "unknown")
 
     def get_facts(self, facts_type: type, query: object | None = None):
         if facts_type is TopologyLimitFacts and query in {"custom", "unknown"}:
             return TopologyLimitFacts(query, 1)
         return super().get_facts(facts_type, query)
-
-    def get_scheduler(self, topology: str) -> Scheduler:
-        if topology == "custom":
-            return Scheduler("custom", _solve_custom_topology)
-        return super().get_scheduler(topology)
-
-
-class RefusingCudaTarget(CustomSchedulerCudaTarget):
-    name = "tests.target.refusing_cuda"
-
-    def get_scheduler(self, topology: str) -> Scheduler:
-        if topology == "thread":
-            raise UnsupportedCapabilityError(
-                f"{type(self).__name__} ({type(self).name}): no scheduler for {topology!r}"
-            )
-        return super().get_scheduler(topology)
 
 
 def _provider_target(module_name: str, provider_name: str, registered_name: str):
@@ -155,7 +112,6 @@ def test_target_registration_and_service_annotations_resolve() -> None:
     assert typing.get_type_hints(PrimFunction)
     for getter in (
         Target.get_analyzer,
-        Target.get_scheduler,
         Target.get_code_generator,
     ):
         assert typing.get_type_hints(getter)
@@ -241,7 +197,7 @@ def test_document_free_target_enforces_projection_and_capability_boundaries() ->
 
 
 def test_cuda_mesh_topology_validation_uses_the_emission_target() -> None:
-    custom = CustomSchedulerCudaTarget("nvidia.h200_sxm")
+    custom = ExtraTopologyCudaTarget("nvidia.h200_sxm")
 
     validate_cuda_topology_levels(custom, ("custom",))
     with pytest.raises(ValueError, match=r"supports \{cta, thread, custom, unknown\}"):
@@ -321,78 +277,6 @@ def test_lower_rejects_a_topology_level_unsupported_by_the_target() -> None:
 
     with pytest.raises(ValueError, match="unsupported topology level 'warp'"):
         lower(unsupported)
-
-
-@pytest.mark.parametrize(
-    ("target", "topology", "extent"),
-    (
-        (ExternalCudaTarget("nvidia.h200_sxm"), "thread", 128),
-        (AmxTarget(), "core", 1),
-    ),
-)
-def test_public_schedule_uses_inherited_target_schedulers(
-    target: Target, topology: str, extent: int
-) -> None:
-    scheduled = Module(
-        "inherited_scheduler",
-        (scheduling_gemm,),
-        scheduling_gemm.name,
-        target=target,
-        topologies=(Topology(topology, extent),),
-    )
-
-    result = schedule(scheduled, scheduling_gemm, topology=topology)
-
-    assert result.module is scheduled
-    assert result.function is scheduling_gemm
-    assert result.topology == Topology(topology, extent)
-    assert isinstance(result.plan, SchedulePlan)
-
-
-def test_public_schedule_overrides_refuses_and_rejects_unknown_topologies(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def scheduled(target: Target, topology: str) -> Module:
-        return Module(
-            "custom_scheduler",
-            (scheduling_gemm,),
-            scheduling_gemm.name,
-            target=target,
-            topologies=(Topology(topology, 1),),
-        )
-
-    _CUSTOM_SOLVES.clear()
-    overridden = scheduled(CustomSchedulerCudaTarget("nvidia.h200_sxm"), "custom")
-    result = schedule(overridden, scheduling_gemm, topology="custom")
-    assert result.plan == _CustomSchedulePlan("custom")
-    assert _CUSTOM_SOLVES == ["custom"]
-
-    solver_calls: list[str] = []
-
-    def unexpected_thread_solver(*args):
-        solver_calls.append("thread")
-        raise AssertionError("refused topology reached a solver")
-
-    monkeypatch.setattr(
-        "tilefoundry.target.cuda.schedule.schedule_thread",
-        unexpected_thread_solver,
-    )
-    refused = scheduled(RefusingCudaTarget("nvidia.h200_sxm"), "thread")
-    with pytest.raises(ScheduleError) as refusal:
-        schedule(refused, scheduling_gemm, topology="thread")
-    assert str(refusal.value) == (
-        "schedule: RefusingCudaTarget (tests.target.refusing_cuda): no scheduler for 'thread'"
-    )
-    assert solver_calls == []
-
-    unknown = scheduled(CustomSchedulerCudaTarget("nvidia.h200_sxm"), "unknown")
-    with pytest.raises(ScheduleError) as unknown_error:
-        schedule(unknown, scheduling_gemm, topology="unknown")
-    assert str(unknown_error.value) == (
-        "schedule: CustomSchedulerCudaTarget "
-        "(tests.target.custom_scheduler_cuda): no scheduler for 'unknown'"
-    )
-    assert solver_calls == []
 
 
 def test_program_topologies_use_target_resource_facts() -> None:

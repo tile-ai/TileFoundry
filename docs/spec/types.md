@@ -135,7 +135,7 @@ def local_type_of(
     rather than assign one of its layout axes to a guessed level
     ([shard §5](./shard.md#5-mesh)).
   - The result MUST remain an ordinary IR Type and MUST NOT introduce a
-    schedule-specific tensor type.
+    consumer-specific tensor type.
   - Unresolved layouts and local extents that are not concrete non-negative
     integers MUST raise at the projection boundary.
 

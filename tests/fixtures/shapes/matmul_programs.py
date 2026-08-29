@@ -1,4 +1,4 @@
-"""Matmul programs spanning analysis, CUDA scheduling, and AMX target boundaries."""
+"""Matmul programs spanning analysis, CUDA, and AMX target boundaries."""
 
 from __future__ import annotations
 
@@ -45,13 +45,6 @@ def cuda_f32_gemm(
 def cuda_odd_m_bf16_gemm(
     x: Tensor[(15, 128), "bf16"], w: Tensor[(128, 64), "bf16"]
 ) -> Tensor[(15, 64), "bf16"]:
-    return tf.matmul(x, w)
-
-
-@func
-def scheduling_gemm(
-    x: Tensor[(64, 128), "f32"], w: Tensor[(128, 64), "f32"]
-) -> Tensor[(64, 64), "f32"]:
     return tf.matmul(x, w)
 
 

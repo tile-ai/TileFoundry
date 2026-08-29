@@ -1,9 +1,8 @@
-"""Analysing and scheduling a function authored for a range of sizes.
+"""Analysing a function authored for a range of sizes.
 
-An analysis counts elements and holds them against a machine; a solver lays
-work across a level by counting it. Neither has an answer for a dimension that
-is still a range, so the size is stated at the call and the program that gets
-measured is the one at that size.
+An analysis counts elements and holds them against a machine. It has no answer
+for a dimension that is still a range, so the size is stated at the call and the
+program that gets measured is the one at that size.
 
 What the call accepts stays narrow: a function this Module owns. Choosing the
 size happens after that, so nothing here widens which programs a Module will
@@ -48,7 +47,6 @@ from tilefoundry.ir.types.shard import (
     Topology,
 )
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.schedule import ScheduleError, ScheduleOptions, schedule
 from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFacts
 
 CONTEXT = 32
@@ -57,7 +55,6 @@ FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 INVENTORY = [pytest.param(case, id=case.id) for case in placed_cases()]
 
 
-SOLVER = ScheduleOptions(timeout_seconds=60, workers=4, random_seed=0, stop_at_first_solution=True)
 
 
 def _aimed():
@@ -369,21 +366,12 @@ def test_a_size_states_nothing_about_a_function_from_elsewhere() -> None:
 
 
 def test_the_entry_at_a_chosen_size_is_still_the_entry() -> None:
-    """The device-wide solver admits only the entry, and it decides that by name.
+    """Choosing a size does not rename the entry.
 
-    The device-wide solver admits only the entry, and it decides that by
-    name: a function specialised from the entry is a different object and the
-    same program.
+    A function specialised from the entry is a different object and the same
+    program, so anything that identifies the entry by name still finds it.
     """
     module = _aimed()
     variant = variant_for(module.entry_function(), DIMS)
 
     assert variant.name == module.entry_function().name
-    with pytest.raises(ScheduleError, match="requires the module entry"):
-        schedule(
-            module,
-            module.lookup("_ctx_partials"),
-            topology="cta",
-            options=SOLVER,
-            dims=DIMS,
-        )

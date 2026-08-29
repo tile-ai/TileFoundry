@@ -9,17 +9,10 @@ points are uneven (``qk_nope_head_dim=64`` against ``qk_rope_head_dim=32``,
 makes equal parts, so the model states them with ``tf.slice`` -- and no analysis
 has a cost evaluator for ``Slice``. Measured per (function, family): the two
 Slice-free functions analyse under all four families; the two that carry a Slice
-fail under all four with ``no cost evaluator registered for Slice``, and the
-partition path fails on the same op.
+fail under all four with ``no cost evaluator registered for Slice``.
 
-One caveat about the schedule gate, which nothing in this package can fix: the
-partition path raises ``PartitionProblemError``, which is a ``ValueError`` and not
-a ``ScheduleError``, while ``test_schedule_coverage.py`` holds a blocked schedule
-case to ``expect=ScheduleError``. So the gate below states the right reason and
-would still be recorded as a plain failure rather than as the expected block. A
-``Slice`` cost evaluator retires both problems at once; until one exists, adding
-this case to ``registry.CORPUS`` needs that or a harness that sees the error the
-partitioner actually raises.
+A ``Slice`` cost evaluator retires the problem; until one exists, this case is
+not in ``registry.CORPUS``.
 """
 
 from __future__ import annotations
@@ -73,14 +66,6 @@ CASE = ModelCase(
         FunctionCase(
             id="minicpm3_4b/analyze/decoder_layer",
             selector="decoder_layer",
-            dims=ANALYZED_AT,
-        ),
-    ),
-    schedule=(
-        FunctionCase(
-            id="minicpm3_4b/schedule/decoder_layer",
-            selector="decoder_layer",
-            topology="cta",
             dims=ANALYZED_AT,
         ),
     ),

@@ -1,8 +1,8 @@
 """DeepSeek-V4-Flash as IR Modules: the sliding-window MLA attention submodule,
 the two MoE blocks, the decoder layer that composes them, and the causal-LM root.
 
-One authored source at two configurations: the corpus analyses and schedules the
-attention submodule at the real checkpoint's dimensions, and
+One authored source at two configurations: the corpus analyses the attention
+submodule at the real checkpoint's dimensions, and
 `test_causal_lm_e2e.py` runs the whole tree at a shape small enough to be
 affordable. The class bodies sit inside functions rather than at file scope, so
 each is evaluated once per configuration, and ``build_deepseek_v4_flash`` is how a

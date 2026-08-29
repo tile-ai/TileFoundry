@@ -16,13 +16,6 @@ polyhedral model consumes the forward relation
 ([visitor-registry §4.1](./visitor-registry.md#41-access-relation-service--access_relation))
 rather than restating it.
 
-**Layering.** The decisions taken over these facts are owned by
-[schedule](./schedule.md#4-kernel-schedule-construction). The dependency is
-one-way: the schedule layer reads this layer's facts, and this layer MUST NOT
-import or otherwise depend on the schedule layer. The atom catalogue and the
-store a tile lives in are the schedule layer's own inputs and are owned there
-([schedule §5](./schedule.md#5-scheduling-facts)).
-
 ## 1. Polyhedral model
 
 One extraction models one HIR `Function` body as a set of *statements* at
@@ -90,8 +83,8 @@ class TileGraph:
   - `domain`, `reads` and `writes` MUST be unions of per-statement pieces with
     one isl tuple name per statement (the domain, and the input side of the
     access relations) or per accessed buffer (their output side). The domain
-    MUST NOT be a single unnamed set: the schedule tree needs one named tuple
-    per statement.
+    MUST NOT be a single unnamed set: a consumer needs one named tuple per
+    statement.
   - `deps` MUST relate statement *instances* and MUST be derived from
     `reads` / `writes` by the extraction itself ([§1.3](#13-extract)), never supplied by a
     caller.
@@ -106,11 +99,10 @@ class TileGraph:
     walk of the HIR.
   - `parallel_dims` MUST carry exactly one flag per own domain dimension of
     every statement, and MUST be measured from `domain` + `deps` ([§1.7](#17-parallel-dimensions)) rather
-    than reported by a scheduler.
-  - Schedule trees, ring depths, and decisions MUST remain schedule-owned state
-    outside `TileGraph`; schedule program views pair those values with the
-    immutable analysis graph without mutating it
-    ([schedule §4](./schedule.md#4-kernel-schedule-construction)).
+    than reported by a consumer.
+  - A decision taken over this graph MUST remain the deciding consumer's own
+    state outside `TileGraph`; a consumer pairs its values with the immutable
+    analysis graph without mutating it.
 
 ### 1.3 `extract`
 
@@ -211,8 +203,8 @@ It is modelled as a domain dimension, not as a statement.
 ### 1.5 Facts over a time relation
 
 Four measurements take the time relation as data — one `isl.union_map` from
-statement coordinates to a common time space, which the schedule layer owns and
-this layer only reads.
+statement coordinates to a common time space, which the calling consumer owns
+and this layer only reads.
 
 ```python
 def time_extents(tg: TileGraph, time_map: "isl.union_map") -> tuple[int, ...]: ...
@@ -292,11 +284,11 @@ class AccessFootprint:
 ### 1.7 Parallel dimensions
 
 `TileGraph.parallel_dims` is the fact isl names `coincident`, measured here
-rather than obtained from a scheduler.
+rather than obtained from a consumer.
 
 - constraints:
-  - Only a statement's **self**-dependence MAY constrain its own dimensions: the
-    schedule layer sequences statements, so every cross-statement dependence is
+  - Only a statement's **self**-dependence MAY constrain its own dimensions:
+    `units` order sequences statements, so every cross-statement dependence is
     already satisfied by that order.
   - A dimension MUST be reported parallel when every self-dependence has
     distance `0` there, and MUST NOT be otherwise. A statement with no
@@ -411,8 +403,8 @@ layer settles is which type a field holds and what its keys name:
     metadata-free traversal of the derived program answers all of them.
     Performance readiness requires a positive `ParallelCapacityFacts` value for
     the selected topology, rates stated for that same level, and one valid
-    execution placement for every occurrence that will take time. Where the buffers
-    go is not a readiness question: it is decided with the schedule.
+    execution placement for every occurrence that will take time. Where the
+    buffers go is not a readiness question: nothing here decides it.
     Failing performance readiness MUST NOT make the same unplaced program invalid
     for `compute-cost`, `memory`, or `roofline`.
   - Global logical work, per-unit work, and lifetime order MUST remain
@@ -1025,7 +1017,7 @@ as defined in that family's section.
 
 `performance` places compute-cost-priced occurrences on a CTA-local nominal
 timeline, holds the buffers they keep live to the levels this model addresses,
-and scales the root schedule by a fixed physical parallel capacity. The records
+and scales the root timeline by a fixed physical parallel capacity. The records
 it owns are named for the prediction they carry rather than for the selector, so
 that the interval stays one nested value with one meaning wherever it appears.
 
@@ -1075,7 +1067,7 @@ Occurrence fields are:
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `start_ns` | Start of one occurrence in the authored-order local schedule, after its producers end and after the last occurrence sharing any of its participants. | No |
+| `start_ns` | Start of one occurrence on the authored-order local timeline, after its producers end and after the last occurrence sharing any of its participants. | No |
 | `end_ns` | End of that occurrence's first execution. | No |
 | `trips` | One outside a loop; within a loop, the enclosing loop trip count represented by the interval. | No |
 | `stride_ns` | Zero outside a loop; within a loop, the makespan of one body execution. | No |
@@ -1084,7 +1076,7 @@ Function summary fields are:
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `timeline` | `[0, local makespan * waves)`, where the local makespan is the end of the CTA-local schedule, or zero with no work. Its duration is the prediction. | Through `waves` |
+| `timeline` | `[0, local makespan * waves)`, where the local makespan is the end of the CTA-local timeline, or zero with no work. Its duration is the prediction. | Through `waves` |
 | `waves` | `ceil(N / P)`, where `N` is the static extent of the root topology selected by `ParallelCapacityFacts.topology` and `P` is `parallel_units`. | `ParallelCapacityFacts` |
 
 Occurrence intervals remain CTA-local. They are not copied once per wave, and
@@ -1100,7 +1092,7 @@ class ParallelCapacityFacts:
     """Carry the parallel capacity assumed by performance analysis.
 
     Attributes:
-        topology: attribute; Topology level being scheduled.
+        topology: attribute; Topology level being measured over.
         parallel_units: attribute; Instances admitted concurrently.
     """
 
@@ -1192,7 +1184,7 @@ model.
     bytes is a plan's decision and no plan has been made -- and no occurrence is
     held back for a write nobody proved happens in place.
   - Occurrences MUST be laid out in inline occurrence order. Reordering
-    independent work is a schedule's decision, not an analysis's: what overlaps
+    independent work is a later decision, not an analysis's: what overlaps
     is what the program's own placement made independent, and the reported time
     is the time of the program as written. On a `Function`, the summary's
     `timeline` MUST start at zero and span the whole local plan, scaled by
@@ -1213,7 +1205,7 @@ model.
 ## 3. Composed analysis
 
 `tilefoundry.analysis.check_program` is the shared, reusable gate before an
-analysis or schedule algorithm runs.
+analysis runs.
 
 ```python
 def check_program(
@@ -1245,19 +1237,19 @@ class AnalysisCheckContext:
 - constraints:
   - The operation MUST infer types over the full reachable Function graph and
     validate its caller/callee execution context, and MUST NOT run an analysis
-    or schedule algorithm or attach derived Metadata to the authored IR.
+    or attach derived Metadata to the authored IR.
   - The reachable Function and Mesh geometry and every effective Module
-    topology extent MUST be concrete before this operation runs. Public Analyze
-    and Schedule calls with `dims` MUST resolve all three through one binding
-    pass before calling this gate; a residual dimension expression MUST fail
-    before any consuming algorithm runs.
+    topology extent MUST be concrete before this operation runs. A public
+    Analyze call with `dims` MUST resolve all three through one binding pass
+    before calling this gate; a residual dimension expression MUST fail before
+    any consuming algorithm runs.
   - Every effective Module topology MUST name a level the resolved Target
     supports. A resolved static extent MUST be positive and within that level's
     finite hardware limit. A rejection MUST name the level, its extent, and the
     reason.
   - A non-`None` `level` MUST name exactly one effective Module topology.
-  - Analyze and Schedule MUST call this operation before any consuming
-    algorithm. Analyze MUST pass the whole resolved dependency closure as
+  - Analyze MUST call this operation before any consuming algorithm, and
+    MUST pass the whole resolved dependency closure as
     `analyzers`, so every analysis about to run states its input contract here.
   - The `analyzers` checkers MUST be bound to the derived Function and run in
     closure order: every `check_target`, then every `check_call` over one
@@ -1282,12 +1274,11 @@ class AnalysisCheckContext:
     expression nodes after inlining. An oversized view MUST fail with both its
     size and the limit and MUST NOT return a partial Function.
   - Authored-analysis readiness is not a program-level rejection. Analyze MUST
-    NOT reject a schedule constraint: `where(...)` is a scheduling input, and a
-    program carrying one is measured as written. A value whose placement is
-    deferred contributes its whole-program figures to the per-unit total,
-    because a deferred layout states no distribution to project through;
-    values with a resolved layout still project. Schedule MAY consume or
-    diagnose those inputs under its own algorithm contract.
+    NOT reject an authored `where(...)` constraint: it is an input to a later
+    decision, and a program carrying one is measured as written. A value whose
+    placement is deferred contributes its whole-program figures to the per-unit
+    total, because a deferred layout states no distribution to project through;
+    values with a resolved layout still project.
 
 `tilefoundry.analysis.api.analyze` is the dependency-composed measurement
 operation. One call selects one or more root analyses by name; the operation

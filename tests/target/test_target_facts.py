@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -107,22 +105,6 @@ def test_topology_limits_are_target_facts_and_base_validation_is_inherited() -> 
     _DirectTarget().validate_program_topology(Topology("unit", 4))
     with pytest.raises(ValueError, match="1 <= extent <= 4"):
         _DirectTarget().validate_program_topology(Topology("unit", 5))
-
-
-def test_cuda_throughput_projection_leaves_scheduler_families_unloaded() -> None:
-    source = """
-import sys
-from tilefoundry.analysis.facts import ThroughputFacts
-from tilefoundry.target import CudaTarget
-
-CudaTarget(\"nvidia.h200_sxm\").get_facts(ThroughputFacts)
-assert \"tilefoundry.schedule.partition\" not in sys.modules
-assert \"tilefoundry.schedule.pipeline\" not in sys.modules
-"""
-    completed = subprocess.run(
-        (sys.executable, "-c", source), text=True, capture_output=True, check=False
-    )
-    assert completed.returncode == 0, completed.stderr
 
 
 def test_projection_results_are_still_immutable_aggregates_of_the_requested_type() -> None:

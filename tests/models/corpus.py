@@ -1,7 +1,7 @@
 """The shared vocabulary every model-driven test is written against.
 
 One model is described once, as a `ModelCase`, and every kind of test reads that
-one description: the reference run, the analyses, the schedules, the CLI, and the
+one description: the reference run, the analyses, the CLI, and the
 end-to-end witnesses. Nothing here copies a model into a smaller graph for one
 subsystem's convenience, because a result measured on a copy says nothing about
 the program a user would actually hand us.
@@ -206,7 +206,7 @@ class ReferenceCase:
 
 @dataclass(frozen=True)
 class FunctionCase:
-    """One function of one model, selected to be analysed or scheduled.
+    """One function of one model, selected to be analysed.
 
     `selector` names it root-relative to the case's Module: a bare function name
     for a Module that owns the kernel itself, or a dotted path through the child
@@ -282,7 +282,6 @@ class ModelCase:
     prototype: Module
     reference: ReferenceCase | None = None
     analyze: tuple[FunctionCase, ...] = ()
-    schedule: tuple[FunctionCase, ...] = ()
     sized: tuple[SizedCase, ...] = ()
     model: str = ""
     scope: str = ""
@@ -332,12 +331,12 @@ class ModelCase:
         built = self.build() if module is None else module
         return tuple(selector for selector, _ in function_selectors(built))
 
-    def selected(self, kind: Literal["analyze", "schedule"]) -> tuple[str, ...]:
-        cases = self.analyze if kind == "analyze" else self.schedule
+    def selected(self, kind: Literal["analyze"]) -> tuple[str, ...]:
+        cases = self.analyze
         return tuple(dict.fromkeys(case.selector for case in cases))
 
     def untested(
-        self, kind: Literal["analyze", "schedule"], module: Module | None = None
+        self, kind: Literal["analyze"], module: Module | None = None
     ) -> tuple[str, ...]:
         """The model's own functions that no case of *kind* selected."""
         chosen = set(self.selected(kind))
