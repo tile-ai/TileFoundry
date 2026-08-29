@@ -1,9 +1,8 @@
-"""The shared authored-program gate for analysis and scheduling.
+"""The shared authored-program gate for analysis.
 
 An analysis reads inferred types and assumes the authored program holds
 together. Both conditions are established once per public call rather than
-per algorithm, so no family can be the one that forgot. The same gate is used
-by scheduling before it makes placement decisions.
+per family, so no family can be the one that forgot.
 """
 
 from __future__ import annotations
@@ -325,7 +324,7 @@ class PerformanceChecker(ExprVisitor[None]):
 
     Two things, and nothing about storage: rates it can put on a clock, and a
     placement for every occurrence that will take time. Where the buffers go is
-    the solver's question, answered against the schedule it is choosing.
+    not this question, and nothing here decides it.
     """
 
     def check_target_facts(self, ctx: AnalysisCheckContext) -> None:
@@ -514,7 +513,7 @@ def _require_concrete_geometry(
                 raise error_type(
                     f"program topology level {topology.name!r} still states "
                     f"symbolic extent {topology.size!r}; bind every dimension "
-                    "before analysis or scheduling"
+                    "before analysis"
                 )
     _require_concrete_function_geometry(function, error_type=error_type)
 
@@ -527,7 +526,7 @@ def _require_concrete_function_geometry(
     if not is_concrete(function):
         raise error_type(
             f"{function.name!r} still states symbolic dimensions in its reachable "
-            "Function or Mesh geometry; bind every dimension before analysis or scheduling"
+            "Function or Mesh geometry; bind every dimension before analysis"
         )
 
 
