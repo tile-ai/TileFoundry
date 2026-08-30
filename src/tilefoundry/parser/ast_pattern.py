@@ -166,15 +166,14 @@ def authored_source_range(
     column = getattr(node, "col_offset", None)
     if not isinstance(line, int) or not isinstance(column, int):
         return None
-    column_offset = context.function.source_column_offset if context.function else 0
     end_line = getattr(node, "end_lineno", None)
     end_column = getattr(node, "end_col_offset", None)
     return (
         source_filename,
         line,
-        column + column_offset,
+        column,
         end_line if isinstance(end_line, int) else None,
-        end_column + column_offset if isinstance(end_column, int) else None,
+        end_column if isinstance(end_column, int) else None,
     )
 
 
@@ -789,7 +788,6 @@ class FuncParserContext:
     closure: Mapping[str, object] = field(default_factory=dict)
     topologies: Mapping[str, object] = field(default_factory=dict)
     source_filename: str = "<string>"
-    source_column_offset: int = 0
     module_scope: object | None = None
     module: ModuleBuildContext | None = None
     base: object | None = None
