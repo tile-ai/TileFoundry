@@ -1351,7 +1351,9 @@ class AstMatch(Generic[T]):
         pattern_constructor = getattr(self.pattern, "construct", None)
         if not callable(pattern_constructor):
             raise TypeError(f"Pattern {type(self.pattern).__name__} has no construct method")
-        value = pattern_constructor(self, children, context)
+        value = attach_authored_metadata(
+            pattern_constructor(self, children, context), self.node, context
+        )
         for rule in self.pattern.RULES:
             value = rule.apply(value, match=self, context=context)
         return attach_authored_metadata(value, self.node, context)
