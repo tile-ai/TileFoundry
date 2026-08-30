@@ -318,6 +318,9 @@ class SourceSpanMetadata(IRMetadata):
     `loc=` syntax and inferred assignment names to this metadata; there is no
     parallel `Expr.loc` field.
   - `SourceSpanMetadata` records the parser source range before type inference.
+    Its file, line, and start column identify the physical authored file position;
+    the start column is one-based. `end_column`, when present, is the physical
+    source-file offset using Python AST's exclusive-end convention.
   - `ExecutionDomainMetadata` records the `with Mesh(...)` scopes a `Call` was
     written inside, outermost first
     ([parser §2.1](./parser.md#21-syntax)). `at(level)` returns the
@@ -355,7 +358,6 @@ class Expr:
 
 ```python
 def get_metadata(expr: "Expr", cls: type[T]) -> T | None: ...
-def replace_metadata(expr: "Expr", value: IRMetadata) -> "Expr": ...
 def remove_metadata(expr: "Expr", cls: type[IRMetadata]) -> "Expr": ...
 def attach_metadata(expr: "Expr", value: IRMetadata) -> None: ...
 def detach_metadata(expr: "Expr", cls: type[IRMetadata]) -> None: ...
@@ -366,12 +368,9 @@ def source_metadata(expr: "Expr") -> tuple[IRMetadata, ...]: ...
 ```
 
 - constraints:
-  - `get_metadata`, `replace_metadata`, and `remove_metadata` match an exact
-    concrete class, not subclasses, and never mutate the input expression.
+  - `get_metadata` and `remove_metadata` match an exact concrete class, not
+    subclasses, and never mutate the input expression.
   - `get_metadata` returns the unique matching value or `None`.
-  - `replace_metadata` returns a copy with the matching value replaced in its
-    existing position; every other value keeps its relative order, and a value
-    whose class is absent is appended.
   - `remove_metadata` returns a copy without the matching value; when the class
     is absent it returns the input expression unchanged.
   - `attach_metadata` and `detach_metadata` perform those exact-class updates

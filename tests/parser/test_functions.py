@@ -3,15 +3,46 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 
 from tilefoundry import func, module
+from tilefoundry.cli.source import load_namespace
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.inspection import as_script
+from tilefoundry.ir.core import Call, SourceSpanMetadata, get_metadata
+from tilefoundry.ir.core.module import Module, subtree
+from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.parser import ParseError
 from tilefoundry.target import CudaTarget
+
+_FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures"
+_FIXTURE_SOURCES = tuple(
+    path for path in sorted(_FIXTURE_ROOT.rglob("*.py")) if path.name != "__init__.py"
+)
+
+
+def _functions_defined_by(namespace: dict[str, object]) -> tuple[Function, ...]:
+    found: list[Function] = []
+    seen: set[int] = set()
+
+    def add(function: Function) -> None:
+        if id(function) not in seen:
+            seen.add(id(function))
+            found.append(function)
+
+    for value in namespace.values():
+        if isinstance(value, Function):
+            add(value)
+        elif isinstance(value, Module):
+            for module_value in subtree(value):
+                for function in module_value.functions:
+                    if isinstance(function, Function):
+                        add(function)
+    return tuple(found)
 
 
 def test_a_lying_return_annotation_is_ignored_not_rejected() -> None:
@@ -88,6 +119,20 @@ def test_a_nested_block_does_not_gain_function_docstring_semantics() -> None:
             with Mesh(("cta",), layout=(1,), names=("unit",)) as _mesh:
                 """A string in a with body remains an ordinary statement."""
                 return x
+
+
+@pytest.mark.parametrize(
+    "source",
+    _FIXTURE_SOURCES,
+    ids=lambda source: str(source.relative_to(_FIXTURE_ROOT)),
+)
+def test_every_parsed_call_knows_where_it_came_from(source: Path) -> None:
+    """Every parser-authored Call reachable from fixture source has a source span."""
+    namespace, _ = load_namespace(str(source))
+    for function in _functions_defined_by(namespace):
+        for expr in collect_exprs(function.body):
+            if isinstance(expr, Call):
+                assert get_metadata(expr, SourceSpanMetadata) is not None
 
 
 @pytest.mark.parametrize(

@@ -20,6 +20,8 @@ _ARGS = (
     "1e-6",
 )
 
+_MESH_CHECK_ARGS = ("--inputs", "random", "--out", "output", "--fn", "nan_inf")
+
 
 def test_check_reports_grid_loop_parser_errors_from_the_installed_wheel(
     tf, tmp_path
@@ -45,6 +47,30 @@ def test_check_reports_grid_loop_parser_errors_from_the_installed_wheel(
 
         assert done.returncode == 1
         assert message in done.stderr
+
+
+def test_check_points_at_the_line_when_the_program_is_wrong(
+    tf, mesh_slice_start
+) -> None:
+    done = tf("check", f"{mesh_slice_start}:OutOfWindow", *_MESH_CHECK_ARGS)
+
+    assert done.returncode == 1
+    assert "op=Slice" in done.stderr
+    assert "mesh_slice_start.py:" in done.stderr
+    assert "Slice window exceeds axis 1" in done.stderr
+    assert "not modelled" not in done.stderr
+
+
+def test_check_never_leaks_a_backend_error(tf, mesh_slice_start) -> None:
+    done = tf("check", f"{mesh_slice_start}:Strided", *_MESH_CHECK_ARGS)
+
+    assert "invalid for input of size" not in done.stderr
+    assert done.stderr == "" or "mesh_slice_start.py:" in done.stderr
+
+
+def test_check_runs_a_mesh_program_that_reads_no_coordinate(tf, mesh_slice_start) -> None:
+    done = tf("check", f"{mesh_slice_start}:Fixed", *_MESH_CHECK_ARGS)
+    assert done.returncode == 0, done.stderr
 
 
 def test_check_help_explains_input_and_output_positions(tf) -> None:

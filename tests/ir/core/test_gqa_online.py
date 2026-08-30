@@ -24,6 +24,7 @@ from tests.fixtures.placed.gqa_decode import (
     gqa_online_attend,
 )
 from tilefoundry.evaluator import evaluate
+from tilefoundry.evaluator.value import EvalError
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Tuple
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -80,7 +81,7 @@ def test_context_variant_fails_closed_on_unaligned_ctx():
     ctx = NUM_SPLITS + 1
     assert ctx % NUM_SPLITS != 0
     step = _inputs(ctx)
-    with pytest.raises(RuntimeError, match="invalid for input of size"):
+    with pytest.raises(EvalError, match=r"op=Reshape: shape .*invalid for input of size"):
         evaluate(_CTX_VARIANT, *step, device="cpu")
 
 

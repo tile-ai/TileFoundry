@@ -20,6 +20,7 @@ from tests.ops.typeinfer_utils import (
     run_typeinfer_case,
 )
 from tilefoundry.evaluator import evaluate
+from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
@@ -191,7 +192,7 @@ def test_insert_slice_rankn_eval_runtime_oob_raises():
     """
     dst = torch.zeros(1, 8, 4)
     upd = torch.zeros(1, 3, 4)
-    with pytest.raises(ValueError, match="out of bounds"):
+    with pytest.raises(EvalError, match=r"op=InsertSlice: insert_slice: window .* out of bounds"):
         _eval_rankn(dst, upd, (0, 6, 0), runtime_axis=1)
 
 

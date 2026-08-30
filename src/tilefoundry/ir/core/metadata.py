@@ -93,22 +93,6 @@ def detach_metadata(expr: "Expr", cls: type[IRMetadata]) -> None:
     expr.metadata = tuple(item for item in expr.metadata if type(item) is not cls)
 
 
-def replace_metadata(expr: "Expr", value: IRMetadata) -> "Expr":
-    """Return ``expr`` with metadata of ``value``'s concrete class replaced."""
-    value_cls = type(value)
-    found = False
-    updated = []
-    for current in expr.metadata:
-        if type(current) is value_cls:
-            updated.append(value)
-            found = True
-        else:
-            updated.append(current)
-    if not found:
-        updated.append(value)
-    return replace(expr, metadata=tuple(updated))
-
-
 def remove_metadata(expr: "Expr", cls: type[IRMetadata]) -> "Expr":
     """Return ``expr`` without metadata whose concrete class is ``cls``."""
     updated = tuple(value for value in expr.metadata if type(value) is not cls)
@@ -129,6 +113,5 @@ __all__ = [
     "detach_metadata",
     "get_metadata",
     "remove_metadata",
-    "replace_metadata",
     "source_metadata",
 ]

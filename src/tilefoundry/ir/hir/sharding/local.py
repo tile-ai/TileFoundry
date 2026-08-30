@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from tilefoundry.evaluator.registry import register_eval
+from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
@@ -48,6 +49,12 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 @register_eval(Local)
 def _eval_local(ctx):
+    layout = ctx.args[0].type.layout
+    if isinstance(layout, ShardLayout) and any(isinstance(attr, Split) for attr in layout.attrs):
+        raise EvalError(
+            "Local on a Split axis is not modelled: evaluation runs one mesh participant "
+            "(docs/spec/evaluator.md section 6)."
+        )
 
     return ctx.args[0]
 

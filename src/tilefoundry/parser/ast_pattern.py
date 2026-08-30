@@ -28,7 +28,8 @@ from tilefoundry.ir.core import (
     SourceSpanMetadata,
     Var,
     VerifyError,
-    replace_metadata,
+    attach_metadata,
+    get_metadata,
 )
 from tilefoundry.ir.core.expr import Tuple as IrTuple
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
@@ -155,27 +156,67 @@ def is_matched(result: object) -> bool:
     return isinstance(result, AstMatch)
 
 
-def attach_authored_metadata(value: object, node: ast.AST, context: "MatchContext") -> object:
-    """Attach source identity without copying lexical values such as parameter Vars."""
-    if not isinstance(value, Expr):
-        return value
+def authored_source_range(
+    node: ast.AST, context: "MatchContext"
+) -> tuple[str, int, int, int | None, int | None] | None:
+    """The source-file range for *node*, using zero-based AST columns."""
     owner = context.function or context.module
     source_filename = owner.source_filename if owner is not None else "<string>"
     line = getattr(node, "lineno", None)
     column = getattr(node, "col_offset", None)
-    if isinstance(line, int) and isinstance(column, int):
-        value = replace_metadata(
-            value,
-            SourceSpanMetadata(
-                source_filename,
-                line,
-                column + 1,
-                getattr(node, "end_lineno", None),
-                getattr(node, "end_col_offset", None),
-            ),
-        )
-    if context.binding_name:
-        value = replace_metadata(value, BindingMetadata(context.binding_name))
+    if not isinstance(line, int) or not isinstance(column, int):
+        return None
+    column_offset = context.function.source_column_offset if context.function else 0
+    end_line = getattr(node, "end_lineno", None)
+    end_column = getattr(node, "end_col_offset", None)
+    return (
+        source_filename,
+        line,
+        column + column_offset,
+        end_line if isinstance(end_line, int) else None,
+        end_column + column_offset if isinstance(end_column, int) else None,
+    )
+
+
+def _unsourced_calls(value: Call) -> tuple[Call, ...]:
+    """Calls reachable through Call operands and IR Tuples without a source span."""
+    found: list[Call] = []
+    pending: list[Expr] = [value]
+    seen: set[int] = set()
+    while pending:
+        expr = pending.pop()
+        if id(expr) in seen:
+            continue
+        seen.add(id(expr))
+        if isinstance(expr, Call):
+            if get_metadata(expr, SourceSpanMetadata) is not None:
+                continue
+            found.append(expr)
+            pending.extend(reversed(expr.args))
+        elif isinstance(expr, IrTuple):
+            pending.extend(reversed(expr.elements))
+    return tuple(found)
+
+
+def attach_authored_metadata(value: object, node: ast.AST, context: "MatchContext") -> object:
+    """Attach *node*'s source identity to each unmarked Call it constructs."""
+    if not isinstance(value, Call):
+        return value
+    source_range = authored_source_range(node, context)
+    if source_range is None:
+        return value
+    source_filename, line, column, end_line, end_column = source_range
+    span = SourceSpanMetadata(
+        source_filename,
+        line,
+        column + 1,
+        end_line,
+        end_column,
+    )
+    for call in _unsourced_calls(value):
+        attach_metadata(call, span)
+        if context.binding_name:
+            attach_metadata(call, BindingMetadata(context.binding_name))
     return value
 
 
@@ -748,6 +789,7 @@ class FuncParserContext:
     closure: Mapping[str, object] = field(default_factory=dict)
     topologies: Mapping[str, object] = field(default_factory=dict)
     source_filename: str = "<string>"
+    source_column_offset: int = 0
     module_scope: object | None = None
     module: ModuleBuildContext | None = None
     base: object | None = None
@@ -1312,7 +1354,7 @@ class AstMatch(Generic[T]):
         value = pattern_constructor(self, children, context)
         for rule in self.pattern.RULES:
             value = rule.apply(value, match=self, context=context)
-        return value
+        return attach_authored_metadata(value, self.node, context)
 
 
 class ParseError(VerifyError):
@@ -1325,15 +1367,12 @@ class ParseError(VerifyError):
         context: MatchContext,
         detail: str | None = None,
     ):
-        line = getattr(node, "lineno", None)
-        column = getattr(node, "col_offset", None)
         location = ""
-        owner = context.function or context.module
-        source_filename = owner.source_filename if owner is not None else "<string>"
-        if isinstance(line, int):
+        source_range = authored_source_range(node, context)
+        if source_range is not None:
+            source_filename, line, column, _end_line, _end_column = source_range
             location = f" at {source_filename}:{line}"
-            if isinstance(column, int):
-                location += f":{column + 1}"
+            location += f":{column + 1}"
         message = detail or f"no AST pattern matched situation {context.situation!r}"
         if context.role:
             message += f" (role {context.role!r})"

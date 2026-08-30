@@ -16,7 +16,6 @@ from .metadata import (
     diagnostic_location,
     get_metadata,
     remove_metadata,
-    replace_metadata,
     source_metadata,
 )
 from .op import Op, ParameterInfo
@@ -49,7 +48,6 @@ __all__ = [
     "diagnostic_location",
     "source_metadata",
     "get_metadata",
-    "replace_metadata",
     "remove_metadata",
     "Op",
     "ParameterInfo",

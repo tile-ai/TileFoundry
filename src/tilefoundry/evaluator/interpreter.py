@@ -18,7 +18,7 @@ from tilefoundry.evaluator.value import (
     Value,
     to_torch_dtype,
 )
-from tilefoundry.ir.core import Call, Constant, Tuple, Var
+from tilefoundry.ir.core import Call, Constant, Tuple, Var, describe_expr
 from tilefoundry.ir.core.pattern import locate_dim_var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -101,13 +101,13 @@ class EvaluatorVisitor(ExprVisitor):
         target = call.target
         if isinstance(target, Function):
             return self._call_function(target, args, ctx)
-        handler = eval_registry.lookup(type(target))
-        if handler is None:
-            raise EvalError(
-                f"evaluator: no @register_eval handler for "
-                f"{type(target).__name__}"
-            )
-        return handler(ctx.for_op(target, args, call.type))
+        try:
+            handler = eval_registry.lookup(type(target))
+            if handler is None:
+                raise EvalError(f"no @register_eval handler for {type(target).__name__}")
+            return handler(ctx.for_op(target, args, call.type))
+        except Exception as error:
+            raise EvalError(f"evaluator: {describe_expr(call)}: {error}") from error
 
     def _call_function(
         self, callee: Function, arg_values, ctx: EvaluateContext

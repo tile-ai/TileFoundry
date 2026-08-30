@@ -22,6 +22,22 @@ optional base/key for one parse. `FunctionRole` is `ROOT`, `VARIANT`, or `CONVER
 `ParseError` is the single authored-source diagnostic type and includes source location and
 recursive parse situation. These are the only public parser symbols.
 
+### 1.1 Authored provenance
+
+Every parser-authored `Call` reachable from a Function body MUST carry
+`SourceSpanMetadata` for the AST expression that constructed it. A parent AST match fills only
+Calls without a span, so an enclosing expression MUST NOT replace a more precise child span.
+The traversal follows `Call` operands and IR `Tuple` values; it does not assign source identity
+to shared lexical `Var` values. Source spans use physical source-file coordinates: their start
+column is one-based, and parser-only `dedent` MUST NOT turn it into a function-relative column.
+
+Tuple assignment creates an exception to return-graph traversal: for
+`a, b = producer(...)`, the parser creates detached `TupleGetItem(index=0)` and
+`TupleGetItem(index=1)` values in lexical scope. Those values MUST carry the spans of the
+corresponding target Names (`a` and `b`) and matching `BindingMetadata`; later reads of either
+Name MUST NOT replace that identity. A multi-carry loop's derived projections instead carry the
+`for` statement span plus their carry binding name.
+
 ## 2. Syntax and Rules
 
 ### 2.1 Syntax

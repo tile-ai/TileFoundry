@@ -26,8 +26,8 @@ from tilefoundry.ir.constraints.layout import _LAYOUT_WILDCARD
 from tilefoundry.ir.core import (
     BindingMetadata,
     ExecutionDomainMetadata,
+    attach_metadata,
     get_metadata,
-    replace_metadata,
 )
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.tir.launch import launch_call
@@ -79,6 +79,7 @@ from .ast_pattern import (
     _resolve_reference,
     _slice_size,
     attach_authored_metadata,
+    authored_source_range,
     parse_node,
     runtime,
 )
@@ -1090,14 +1091,8 @@ class WhereAnnotationPattern(ElementPattern):
     @staticmethod
     def construct(match, children, context):
         node = match.node
-        source = context.function.source_filename if context.function else "<string>"
-        location = SourceLocation(
-            filename=source,
-            line=getattr(node, "lineno", 0),
-            column=getattr(node, "col_offset", 0),
-            end_line=getattr(node, "end_lineno", None),
-            end_column=getattr(node, "end_col_offset", None),
-        )
+        source_range = authored_source_range(node, context)
+        location = SourceLocation(*source_range) if source_range is not None else SourceLocation()
         if node.args:
             raise ParseError.from_node(node, context, "where(...) accepts keyword arguments only")
         if not node.keywords:
@@ -1800,7 +1795,7 @@ class CallBindingRule:
         if not isinstance(value.args, tuple):
             raise ParseError.from_node(match.node, context, "call arguments are not a tuple")
         if context.function is not None and context.function.state.mesh_stack:
-            value = replace_metadata(
+            attach_metadata(
                 value,
                 ExecutionDomainMetadata(tuple(context.function.state.mesh_stack)),
             )
@@ -1814,7 +1809,6 @@ class CallTypeInferenceRule:
     def apply(self, value, *, match, context):
         if not isinstance(value, runtime.Call):
             return value
-        value = attach_authored_metadata(value, match.node, context)
         infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
         if not isinstance(infer_context, runtime.TypeInferContext):
             infer_context = runtime.TypeInferContext()
@@ -3700,6 +3694,11 @@ class ForPattern(ElementPattern):
         else:
             for index, name in enumerate(frame.carry_names):
                 projection = _infer_call(runtime.TupleGetItem(index=index), (grid,), context)
+                attach_authored_metadata(
+                    projection,
+                    match.node,
+                    dataclasses.replace(context, binding_name=name),
+                )
                 context.lexical_scope.define(name, projection)
         return grid
 
@@ -3729,6 +3728,10 @@ class TupleAssignmentPattern(ElementPattern):
                     "names",
                     lambda node, context: tuple(item.id for item in node.targets[0].elts),
                 ),
+                CapturePattern(
+                    "target_nodes",
+                    lambda node, context: tuple(node.targets[0].elts),
+                ),
                 FieldPattern(
                     "value",
                     ChildPattern(
@@ -3747,6 +3750,7 @@ class TupleAssignmentPattern(ElementPattern):
     def construct(match, children, context):
         value = children["value"]
         names = match.captures["names"]
+        target_nodes = match.captures["target_nodes"]
         if not isinstance(value.type, runtime.TupleType):
             raise ParseError.from_node(
                 match.node, context, "tuple assignment requires a TupleType value"
@@ -3761,10 +3765,15 @@ class TupleAssignmentPattern(ElementPattern):
             else None
         )
         parent_name = getattr(schema, "name", None) or ", ".join(names)
-        value = replace_metadata(value, BindingMetadata(parent_name))
-        for index, name in enumerate(names):
+        attach_metadata(value, BindingMetadata(parent_name))
+        for index, (name, target_node) in enumerate(zip(names, target_nodes)):
+            assert isinstance(target_node, ast.Name)
             projection = _infer_call(runtime.TupleGetItem(index=index), (value,), context)
-            projection = replace_metadata(projection, BindingMetadata(name))
+            attach_authored_metadata(
+                projection,
+                target_node,
+                dataclasses.replace(context, binding_name=name),
+            )
             context.lexical_scope.define(name, projection)
         return value
 
@@ -3907,7 +3916,7 @@ class StatementPattern(ElementPattern):
                         context,
                         f"duplicate where annotation for Expr {label!r}",
                     )
-                value = replace_metadata(value, BindingMetadata(match.captures["name"]))
+                attach_metadata(value, BindingMetadata(match.captures["name"]))
                 value.metadata = (*value.metadata, annotation)
             elif annotation is not None and value.type != annotation:
                 raise ParseError.from_node(
@@ -3916,7 +3925,7 @@ class StatementPattern(ElementPattern):
             name = match.captures["name"]
             if context.function.dialect == "hir":
                 if isinstance(value, runtime.Call) and get_metadata(value, BindingMetadata) is None:
-                    value = replace_metadata(value, BindingMetadata(name))
+                    attach_metadata(value, BindingMetadata(name))
                 context.lexical_scope.define(name, value)
                 return value
             variable = runtime.Var(type=value.type, name=name)

@@ -164,6 +164,12 @@ A `Call` whose op class has no registered handler raises an error that
 names the op class. Backend dtype promotion follows the backend's own
 rules; a handler MUST NOT depend on type inference having run.
 
+Every failed `Op` dispatch, including a missing handler and an exception from
+the handler, MUST surface as `EvalError` prefixed by `describe_expr(call)`.
+When parser provenance is available, that prefix identifies the authored
+physical source location, binding, and op. Function-call, `GridRegionExpr`,
+and `Var` failures retain their own contracts.
+
 ## 4. Node evaluation
 
 Evaluation is an `ExprVisitor[Value]`
@@ -243,5 +249,8 @@ values:
 - `Reshard` ([hir §1.3](./hir.md#13-op)) preserves the logical value and MAY
   reshape it into the target layout's shape; it performs no
   cross-participant data movement.
-- `Local` ([hir §1.3](./hir.md#13-op)) returns its operand's value for the
-  single modelled participant.
+- `Local` ([hir §1.3](./hir.md#13-op)) returns its operand's value only when
+  its input `ShardLayout` has no `Split` attribute. For a split axis it MUST
+  raise `EvalError` saying that the evaluator models one mesh participant and
+  linking to this section, until the mesh evaluator models that path. An
+  unmodelled path MUST identify itself rather than leaking a backend exception.

@@ -179,6 +179,11 @@ def weighted_twin() -> Path:
 
 
 @pytest.fixture(scope="module")
+def mesh_slice_start() -> Path:
+    return _fixture_path("placed", "mesh_slice_start.py")
+
+
+@pytest.fixture(scope="module")
 def derived_prefill() -> Path:
     return _fixture_path("placed", "derived_prefill.py")
 
