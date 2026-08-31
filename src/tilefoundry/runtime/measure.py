@@ -261,7 +261,7 @@ class Report:
         return all(output.passed for output in self.outputs)
 
 
-def _flatten(x, path: str = "output") -> list[tuple[str, torch.Tensor]]:
+def flatten_outputs(x, path: str = "output") -> list[tuple[str, torch.Tensor]]:
     """Flatten a tensor or nested tuple-of-tensors into ``[(path, tensor), ...]``.
 
     Flatten a tensor or nested tuple-of-tensors into ``[(path, tensor), ...]``;
@@ -272,7 +272,7 @@ def _flatten(x, path: str = "output") -> list[tuple[str, torch.Tensor]]:
     if isinstance(x, tuple):
         leaves: list[tuple[str, torch.Tensor]] = []
         for i, item in enumerate(x):
-            leaves.extend(_flatten(item, f"{path}[{i}]"))
+            leaves.extend(flatten_outputs(item, f"{path}[{i}]"))
         return leaves
     raise TypeError(f"check: {path} must be a torch.Tensor or tuple thereof, got {type(x).__name__}")
 
@@ -337,7 +337,7 @@ def check(
     A result may be a bare tensor or an arbitrarily nested tuple of tensors. With
     a reference, the two must flatten to the same structure, shapes and dtypes.
     """
-    produced = _flatten(candidate(*inputs))
+    produced = flatten_outputs(candidate(*inputs))
     if not produced:
         raise ValueError("check: the candidate produced no tensor, so nothing was compared")
     paths = [path for path, _ in produced]
@@ -345,7 +345,7 @@ def check(
 
     expected: dict[str, torch.Tensor] = {}
     if reference is not None:
-        reference_leaves = _flatten(reference(*inputs))
+        reference_leaves = flatten_outputs(reference(*inputs))
         reference_paths = [path for path, _ in reference_leaves]
         if paths != reference_paths:
             raise ValueError(
@@ -393,4 +393,5 @@ __all__ = [
     "Report",
     "Ulp",
     "check",
+    "flatten_outputs",
 ]

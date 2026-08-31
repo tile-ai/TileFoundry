@@ -26,7 +26,7 @@ from tilefoundry.ir.hir.specialize import (
 )
 from tilefoundry.ir.types.substitute import substitute_dims
 from tilefoundry.runtime import PREDICATES, RuntimeModule
-from tilefoundry.runtime.measure import Predicate, _flatten, check
+from tilefoundry.runtime.measure import Predicate, check, flatten_outputs
 from tilefoundry.runtime.resource import (
     DrawnResource,
     RuntimeResource,
@@ -408,7 +408,7 @@ def _input_files(paths: Sequence[str], activations: Sequence[Any]) -> list[dict[
     """Describe the tensor count and structure supplied by each file."""
     files = []
     for path, activation in zip(paths, activations, strict=True):
-        leaves = _flatten(activation)
+        leaves = flatten_outputs(activation)
         files.append(
             {
                 "path": path,
@@ -675,7 +675,7 @@ def run_check(arguments: argparse.Namespace) -> int:
                     "source": f"{arguments.inputs} (seed {SEED})" if arguments.inputs == "random" else arguments.inputs,
                     "actual_dtypes": [
                         from_torch_dtype(tensor.dtype).name
-                        for _path, tensor in _flatten(inputs)
+                        for _path, tensor in flatten_outputs(inputs)
                     ],
                     "declared_dtypes": list(declared),
                     "files": _input_files(arguments.inputs[6:].split(","), inputs)

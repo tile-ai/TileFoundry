@@ -422,10 +422,14 @@ class Module:
     def _prepare_into(self, raw, prefix: str, flat: dict, device: str) -> "LoadedModule":
         """Stage this node's canonical weights, children before their owner.
 
-        Converters are HIR bodies on this offline path, making the evaluator
-        call the one intentional Module-to-evaluator execution dependency.
+        Converters are HIR bodies on this offline path, making the local
+        evaluator import the one intentional Module-to-evaluator execution dependency.
         """
         import torch  # noqa: PLC0415 -- optional runtime dep
+
+        from tilefoundry.runtime.resource import (  # noqa: PLC0415 -- runtime depends on Module
+            DictResource,
+        )
 
         children = tuple(
             child._prepare_into(raw.subtree(child.name), f"{prefix}{child.name}.", flat, device)
@@ -551,11 +555,6 @@ class LoadedModule:
     def __call__(self, *args):
         """Evaluate this loading's declared entry with activation arguments."""
         return evaluator.evaluate(self, *args)
-
-
-from tilefoundry.runtime.resource import (  # noqa: E402, PLC0415 -- runtime imports Module
-    DictResource,
-)
 
 
 def _reentered(module: Module, entry: str) -> Module:
