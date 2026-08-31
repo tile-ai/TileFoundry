@@ -92,7 +92,7 @@ from the caller's `--dim` bindings and rebuilds through that implementation.
 `check` and `analyze` can therefore both reach a dispatch prototype from the
 entry.
 
-**Fixed in this PR** — `ToCallee` now passes both commands shown in its repro.
+**Fixed in `#145`** — `ToCallee` now passes both commands shown in its repro.
 
 **b. Moving it to the entry does not work either.** The shape
 `tilefoundry tutorial authoring` demonstrates is variants hung on the entry — but
