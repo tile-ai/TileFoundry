@@ -1,0 +1,6 @@
+ctx       0    288.92 tok/s    3.461 ms/token   sm 1500/1500 MHz
+ctx      32    287.63 tok/s    3.477 ms/token   sm 1500/1500 MHz
+ctx    1024    282.65 tok/s    3.538 ms/token   sm 1500/1500 MHz
+ctx    4096    283.14 tok/s    3.532 ms/token   sm 1500/1500 MHz
+ctx   16384    277.69 tok/s    3.601 ms/token   sm 1500/1500 MHz
+ctx   32768    273.69 tok/s    3.654 ms/token   sm 1500/1500 MHz

@@ -1,0 +1,12 @@
+ctx     1  rel_l2 3.585e-02  argmax mega   1044 ops   1044  top-2 gap  0.8750  OK
+ctx     2  rel_l2 5.113e-02  argmax mega   1010 ops   1010  top-2 gap  0.7812  OK
+ctx     3  rel_l2 8.553e-02  argmax mega   1115 ops   1115  top-2 gap  2.0625  OK
+ctx   127  rel_l2 2.589e-02  argmax mega   1032 ops   1046  top-2 gap  0.0312  DIFF
+ctx   128  rel_l2 6.096e-02  argmax mega   2185 ops   2106  top-2 gap  0.0312  DIFF
+ctx   129  rel_l2 3.698e-02  argmax mega   1163 ops   1163  top-2 gap  1.0000  OK
+ctx   130  rel_l2 2.855e-02  argmax mega   1046 ops   1046  top-2 gap  0.2500  OK
+ctx   256  rel_l2 2.199e-02  argmax mega   2435 ops   2435  top-2 gap  0.0938  OK
+ctx   257  rel_l2 2.050e-02  argmax mega  10927 ops  10927  top-2 gap  0.4062  OK
+ctx   258  rel_l2 9.267e-03  argmax mega   1046 ops   1046  top-2 gap  0.3125  OK
+ctx   300  rel_l2 1.297e-02  argmax mega     11 ops     11  top-2 gap  0.9375  OK
+2 disagree

@@ -1,0 +1,2439 @@
+{
+  "target": "runtime_model.py:Nemotron35Lightning30BA3BRuntime.decode_step",
+  "runs": [
+    {
+      "dims": {
+        "ctx_full": 0,
+        "ctx_tail": 128
+      },
+      "pinned": [],
+      "variant": null,
+      "inputs": {
+        "activations": {
+          "source": "random, seed 0",
+          "actual_dtypes": [
+            "torch.int64",
+            "torch.int32",
+            "torch.int32",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.float32"
+          ],
+          "declared_dtypes": [
+            "i64",
+            "i32",
+            "i32",
+            "bf16",
+            "f32",
+            "bf16",
+            "f32",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "f32",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "f32",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "f32",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "f32",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "f32",
+            "bf16",
+            "f32",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "f32",
+            "bf16",
+            "f32",
+            "bf16",
+            "f32"
+          ],
+          "files": []
+        },
+        "weights": {
+          "source": "the checkpoint",
+          "actual_dtypes": [
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.bfloat16",
+            "torch.float32",
+            "torch.bfloat16",
+            "torch.bfloat16"
+          ],
+          "declared_dtypes": [
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "bf16",
+            "f32",
+            "bf16",
+            "bf16"
+          ]
+        }
+      },
+      "reference": "evaluator on Nemotron35Lightning30BA3B.decode_step",
+      "outputs": [
+        {
+          "path": "output[0]",
+          "shape": [
+            1,
+            131072
+          ],
+          "dtype": "f32",
+          "ref_norm": 1847.9049072265625,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.05018,
+              "rel_l2": 0.004943769191309282,
+              "passed": true
+            },
+            {
+              "fn": "cosine",
+              "min": 0.999,
+              "cosine": 0.9999887347221375,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[1]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 142.14378356933594,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.003383,
+              "rel_l2": 5.6681250654568554e-05,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[2]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 1151.5045166015625,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.005167,
+              "rel_l2": 0.0016248951293646062,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[3]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 159.0347900390625,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.0107,
+              "rel_l2": 0.0035500518577397523,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[4]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 677.5035400390625,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.01139,
+              "rel_l2": 0.00040344523667237885,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[5]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 151.27992248535156,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.01475,
+              "rel_l2": 0.005477844992617216,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[6]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 663.8867797851562,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.01525,
+              "rel_l2": 0.00031061793890589244,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[7]",
+          "shape": [
+            1,
+            1,
+            2,
+            128
+          ],
+          "dtype": "bf16",
+          "ref_norm": 22.2509765625,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.01657,
+              "rel_l2": 0.009353790383655983,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[8]",
+          "shape": [
+            1,
+            1,
+            2,
+            128
+          ],
+          "dtype": "bf16",
+          "ref_norm": 3.19277024269104,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.01657,
+              "rel_l2": 0.009338530948928678,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[9]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 150.59689331054688,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.01853,
+              "rel_l2": 0.005945543088451736,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[10]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 655.8741455078125,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.01894,
+              "rel_l2": 0.0004893574747766392,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[11]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 139.29229736328125,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.02113,
+              "rel_l2": 0.006239170011672031,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[12]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 667.8267211914062,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.02148,
+              "rel_l2": 0.0011059949924362572,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[13]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 153.1731414794922,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.02344,
+              "rel_l2": 0.007138462614143453,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[14]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 635.878662109375,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.02376,
+              "rel_l2": 0.0020337436668141323,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[15]",
+          "shape": [
+            1,
+            1,
+            2,
+            128
+          ],
+          "dtype": "bf16",
+          "ref_norm": 27.153438568115234,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.02463,
+              "rel_l2": 0.013073919383246481,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[16]",
+          "shape": [
+            1,
+            1,
+            2,
+            128
+          ],
+          "dtype": "bf16",
+          "ref_norm": 4.4075236320495605,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.02463,
+              "rel_l2": 0.01040987595457527,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[17]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 141.5664825439453,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.02598,
+              "rel_l2": 0.006951592099028628,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[18]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 630.5062255859375,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.02628,
+              "rel_l2": 0.002595524756009411,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[19]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 129.4622039794922,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.0279,
+              "rel_l2": 0.006252582394260784,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[20]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 639.6014404296875,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.02817,
+              "rel_l2": 0.0013273538689746289,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[21]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 128.9411163330078,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.02968,
+              "rel_l2": 0.006310165777692705,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[22]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 679.8864135742188,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.02994,
+              "rel_l2": 0.0004975347075375481,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[23]",
+          "shape": [
+            1,
+            1,
+            2,
+            128
+          ],
+          "dtype": "bf16",
+          "ref_norm": 24.53671646118164,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.03063,
+              "rel_l2": 0.01310761050771025,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[24]",
+          "shape": [
+            1,
+            1,
+            2,
+            128
+          ],
+          "dtype": "bf16",
+          "ref_norm": 8.588229179382324,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.03063,
+              "rel_l2": 0.012991523408814988,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[25]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 129.04869079589844,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.03173,
+              "rel_l2": 0.010108366731363958,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[26]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 647.065185546875,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.03197,
+              "rel_l2": 0.0011230665508416438,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[27]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 128.8570098876953,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.03332,
+              "rel_l2": 0.0092329357905772,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[28]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 669.2796630859375,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.03355,
+              "rel_l2": 0.0005352684234188195,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[29]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 127.02953338623047,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.03483,
+              "rel_l2": 0.00898327456461751,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[30]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 628.83251953125,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.03505,
+              "rel_l2": 0.0012770626201980006,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[31]",
+          "shape": [
+            1,
+            1,
+            2,
+            128
+          ],
+          "dtype": "bf16",
+          "ref_norm": 22.486127853393555,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.03564,
+              "rel_l2": 0.019693404738758087,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[32]",
+          "shape": [
+            1,
+            1,
+            2,
+            128
+          ],
+          "dtype": "bf16",
+          "ref_norm": 11.908926963806152,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.03564,
+              "rel_l2": 0.0234682152991632,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[33]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 124.2369384765625,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.03659,
+              "rel_l2": 0.009365274761692225,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[34]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 661.078857421875,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.0368,
+              "rel_l2": 0.0022868441459541196,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[35]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 129.65333557128906,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.03797,
+              "rel_l2": 0.010280177303979622,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[36]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 668.27197265625,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.03817,
+              "rel_l2": 0.0018815113371301296,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[37]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 136.89291381835938,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.03931,
+              "rel_l2": 0.01017350254095954,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[38]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 661.568359375,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.0395,
+              "rel_l2": 0.0012679735987490147,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[39]",
+          "shape": [
+            1,
+            1,
+            2,
+            128
+          ],
+          "dtype": "bf16",
+          "ref_norm": 18.098119735717773,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.04003,
+              "rel_l2": 0.019264429339987756,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[40]",
+          "shape": [
+            1,
+            1,
+            2,
+            128
+          ],
+          "dtype": "bf16",
+          "ref_norm": 17.617786407470703,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.04003,
+              "rel_l2": 0.022015737075548075,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[41]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 137.4868621826172,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.04088,
+              "rel_l2": 0.009637465152531997,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[42]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 646.2203979492188,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.04106,
+              "rel_l2": 0.0015185830384739803,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[43]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 129.0933837890625,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.04212,
+              "rel_l2": 0.007266246914694388,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[44]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 638.648193359375,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.0423,
+              "rel_l2": 0.0023321412427897746,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[45]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 164.36048889160156,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.04332,
+              "rel_l2": 0.009019889376893476,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[46]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 668.336669921875,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.0435,
+              "rel_l2": 0.001194403338512011,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[47]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 173.70152282714844,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.0445,
+              "rel_l2": 0.007050571961294141,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[48]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 670.582763671875,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.04467,
+              "rel_l2": 0.0007570991521904685,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[49]",
+          "shape": [
+            1,
+            1,
+            2,
+            128
+          ],
+          "dtype": "bf16",
+          "ref_norm": 25.049165725708008,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.04513,
+              "rel_l2": 0.010955803280550937,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[50]",
+          "shape": [
+            1,
+            1,
+            2,
+            128
+          ],
+          "dtype": "bf16",
+          "ref_norm": 26.170818328857422,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.04513,
+              "rel_l2": 0.017846547331376923,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[51]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 157.1038818359375,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.04589,
+              "rel_l2": 0.006460536918121282,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[52]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 684.3341064453125,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.04605,
+              "rel_l2": 0.0006126719385054401,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[53]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 185.68052673339844,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.047,
+              "rel_l2": 0.005909838977828388,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[54]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 680.9705200195312,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.04716,
+              "rel_l2": 0.000571162514435417,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[55]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 239.88168334960938,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.04808,
+              "rel_l2": 0.005644709588091918,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[56]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 664.6034545898438,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.04824,
+              "rel_l2": 0.0011517031029490866,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[57]",
+          "shape": [
+            1,
+            6144,
+            3
+          ],
+          "dtype": "bf16",
+          "ref_norm": 231.23068237304688,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.04914,
+              "rel_l2": 0.004989163416245577,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "path": "output[58]",
+          "shape": [
+            1,
+            64,
+            64,
+            128
+          ],
+          "dtype": "f32",
+          "ref_norm": 639.5947875976562,
+          "fns": [
+            {
+              "fn": "nan_inf",
+              "nan": 0.0,
+              "inf": 0.0,
+              "passed": true
+            },
+            {
+              "fn": "rel_l2",
+              "max": 0.04929,
+              "rel_l2": 0.0026460972668890833,
+              "passed": true
+            }
+          ]
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "passed": true
+}

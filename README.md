@@ -31,8 +31,9 @@
 
 ## Latest News
 
-- 08/2026 🎉: **TileFoundry 0.0.1 is on PyPI** — the first public release.
+- 08/2026 ⚡: [Nemotron-3.5-Lightning-30B-A3B](https://github.com/tile-ai/TileFoundry/tree/main/examples/nemotron_3_5_lightning_30b_a3b-tilelang) — a 52-layer Mamba2 / attention / MoE hybrid in a **single mega decode kernel**, one launch a step with no CUDA graph, reaching **97.5% of SGLang** at short context and **83.2%** at 262144.
 - 08/2026 📦: Four [worked examples](https://github.com/tile-ai/TileFoundry/tree/main/examples) added — Qwen3-1.7B (tilelang), Qwen3.5-35B-A3B (tilelang), MiniCPM3-4B (CuTeDSL) and granite-4.0-h-small (CUDA C) — each one a real agent run kept whole, with the decode throughput it measured.
+- 08/2026 🎉: **TileFoundry 0.0.1 is on PyPI** — the first public release.
 
 ## Quick Start
 
