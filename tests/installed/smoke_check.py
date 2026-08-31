@@ -26,6 +26,9 @@ _MESH_CHECK_ARGS = (
     "--inputs", "random", "--weights", "random", "--out", "output", "--fn", "nan_inf"
 )
 
+_JUDGE = ("--inputs", "random", "--out", "output", "--fn", "nan_inf")
+
+
 def test_check_on_a_leaf_does_not_materialise_its_siblings_weights(tf, leaf_weights):
     """A leaf check must not allocate its siblings' 96 GiB weight union."""
     done = tf(
@@ -62,20 +65,54 @@ def test_check_specialises_through_a_dispatching_callee(tf, specialize_through_c
     assert done.returncode == 0, done.stderr
 
 
-def test_analyze_through_a_dispatching_callee_is_still_blocked(
+def test_analyze_specialises_through_a_dispatching_callee(
     tf, specialize_through_call, tmp_path
 ):
-    """Keep the analyze boundary visible until callee specialization is fixed."""
+    """Analyze picks the callee's variant from --dim instead of refusing the rebuild."""
+    costs = {}
+    for extent in ("n=64", "n=512"):
+        report = tmp_path / f"{extent}.md"
+        done = tf(
+            "analyze",
+            f"{specialize_through_call}:ToCallee",
+            str(report),
+            "--dim",
+            extent,
+            "--compute-cost",
+        )
+        assert done.returncode == 0, done.stderr
+        assert "out of memory" not in done.stderr
+        costs[extent] = next(
+            line
+            for line in report.read_text().splitlines()
+            if line.startswith("# compute-cost")
+        )
+    assert costs["n=64"] != costs["n=512"]
+
+
+def test_weights_are_needed_only_where_one_is_reached(tf, square_cpu, hir_composition):
+    """A run reaching no weight needs no source; a reached weight reads from one."""
+    for extra in ((), ("--weights", "random")):
+        done = tf("check", f"{square_cpu}:Mine", *_JUDGE, *extra)
+        assert done.returncode == 0, done.stderr
+
     done = tf(
-        "analyze",
-        f"{specialize_through_call}:ToCallee",
-        str(tmp_path / "out.md"),
-        "--dim",
-        "n=64",
+        "check",
+        f"{hir_composition}:CrossModule",
+        *_JUDGE,
+        "--weights",
+        "random",
     )
+    assert done.returncode == 0, done.stderr
+
+
+def test_a_reached_weight_with_no_source_is_named_where_it_is_first_asked_for(
+    tf, hir_composition
+):
+    """The first use names a missing child weight and the Module declaring it."""
+    done = tf("check", f"{hir_composition}:CrossModule", *_JUDGE)
     assert done.returncode != 0
-    assert "does not choose" in done.stderr
-    assert "out of memory" not in done.stderr
+    assert "'expert'" in done.stderr and "'w'" in done.stderr
 
 
 def test_check_reports_grid_loop_parser_errors_from_the_installed_wheel(
@@ -262,24 +299,19 @@ def test_an_orchestration_method_names_the_files_its_inputs_need(tf, orchestrate
     assert "add_pair, affine_pair" in done.stderr
 
 
-def test_both_input_axes_are_required(tf, square_twin, tmp_path) -> None:
-    torch.save(torch.arange(168, dtype=torch.float32), tmp_path / "x.pt")
-
-    for omitted, expected in (("inputs", "no inputs stated"), ("weights", "needs weights")):
-        argv = ["check", f"{square_twin}:Twin.main"]
-        if omitted != "inputs":
-            argv += ["--inputs", f"files:{tmp_path / 'x.pt'}"]
-        if omitted != "weights":
-            argv += ["--weights", "random"]
-        done = tf(
-            *argv,
-            "--out",
-            "output",
-            "--fn",
-            "nan_inf",
-        )
-        assert done.returncode == 1
-        assert expected in done.stderr
+def test_inputs_are_required(tf, square_twin) -> None:
+    done = tf(
+        "check",
+        f"{square_twin}:Twin.main",
+        "--weights",
+        "random",
+        "--out",
+        "output",
+        "--fn",
+        "nan_inf",
+    )
+    assert done.returncode == 1
+    assert "no inputs stated" in done.stderr
 
 
 def test_two_entirely_zero_sides_are_a_match_not_a_total_mismatch(tf, square_twin) -> None:
@@ -335,12 +367,6 @@ def test_real_weights_come_from_the_checkpoint_and_activations_are_drawn(
     assert "random (seed " in done.stdout
     assert "activations actual f32 (declared f32)" in done.stdout
     assert "max_violation 0" in done.stdout
-
-    refused = tf(
-        "check", f"{weighted_twin}:WeightedRootTwin.scaled", "--inputs", "random", *_ARGS[4:]
-    )
-    assert refused.returncode == 1
-    assert "needs weights" in refused.stderr
 
 
 def test_a_nested_twin_is_reached_through_the_child_it_is_declared_under(tf, nested_twin) -> None:

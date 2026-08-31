@@ -203,17 +203,14 @@ def attn_body(i, var):
         # `attend` is the prototype the two `DimVarRangePat` variants hang off,
         # and it is what the runtime keys its own two bodies on.
         #
-        # The step calls the long placement rather than the prototype, and not
-        # because it wants only that one. Specialising a caller at a bound
-        # dimension refuses to rebuild through a callee that has variants of its
-        # own ("the callee dispatches on its own variants, which this rebuild
-        # does not choose"), and the other way round -- putting the variants on
-        # the entry, which is the shape the authoring tutorial shows -- needs a
-        # return annotation on the prototype, which a step that returns 59
-        # tensors has no way to write. So the dispatch stands where it can be
-        # read and checked (`check model.py:attend --dim ctx_full=0,4096`), and
-        # the body the step names is the one that runs at the lengths this is
-        # about. See ISSUES.md; both limits have a repro under repro/.
+        # The step still calls the long placement rather than the prototype.
+        # The specialization limit that originally required this has been
+        # removed in this PR: a caller can now rebuild through a callee's
+        # variants. Switching this generated call back to the prototype is a
+        # separate model change. Putting the variants on the entry, which is the
+        # shape the authoring tutorial shows, still needs a return annotation on
+        # the prototype, which a step that returns 59 tensors has no way to
+        # write. See ISSUES.md; both shapes have a repro under repro/.
         out += [f"{p}_ctx = attend_by_context({p}_qg, {p}_k_cache, {p}_v_cache,"
                 f" {p}_kta, {p}_vta)"]
         out += proj(var, f"{p}_mx", f"{p}_ctx", f"{p}_w_o", "H", kdim="QP")

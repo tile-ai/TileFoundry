@@ -304,10 +304,12 @@ executable bodies. There is no base body to fall back to.
 
 *Dispatch resolution.* A `Call` whose target is a dispatch prototype
 (`variants != ()`) is a dispatch call: the variant whose `DimVarRangePat`
-matches the call's concrete argument shapes is selected and is the call's
-result. A shape outside the envelope matches no variant and is an error;
-there is no base body to fall back to (the prototype body is `None`). A
-`Call` whose target has `variants == ()` is a direct call to that body.
+matches is selected and is the call's result. Evaluation selects from the
+call's concrete argument shapes; specialization selects from the caller's
+stated dimension bindings. Both use the same variant table. A shape outside
+the envelope matches no variant and is an error; there is no base body to fall
+back to (the prototype body is `None`). A `Call` whose target has
+`variants == ()` is a direct call to that body.
 
 *Authoring freeze.* Variants accumulate during authoring, before the
 base `Function` enters a `Module` ([core-ir §1](./core-ir.md#1-module)). A
@@ -1620,8 +1622,11 @@ def is_concrete(fn: Function) -> bool:
   - `specialize_function` MUST reject an empty binding, an unknown dimension,
     or a selected implementation with no body. It MUST record the chosen
     implementation and sorted bindings on a rebuilt function so `origin_of`
-    and `bound_dims_of` can recover them. Function calls do not rebuild their
-    targets and therefore do not create provenance records.
+    and `bound_dims_of` can recover them. Specialization MUST rebuild called
+    functions affected by the caller's bindings and record their provenance.
+    When a called function is a dispatch prototype, specialization MUST select
+    its implementation from the same bindings by the `variant_for` rule; an
+    unstated dispatch dimension MUST raise `SpecializationError` and name it.
   - `specialize_concretely` MUST require a non-empty string-to-integer mapping
     and MUST reject any residual dimension after specialization.
   - Provenance and bound-dimension records MUST NOT participate in structural

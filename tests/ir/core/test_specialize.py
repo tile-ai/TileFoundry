@@ -11,13 +11,15 @@ from tests.fixtures.placed.gqa_decode import (
     SMALL_CONTEXT_T,
     GqaOnline,
 )
+from tests.fixtures.placed.specialize_through_call import ToCallee
 from tilefoundry import func, module
-from tilefoundry.dsl import Tensor, Topology, tf
+from tilefoundry.dsl import DimVarRangePat, Tensor, Topology, tf
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- names resolved dynamically
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.hir.specialize import (
     SpecializationError,
     bound_dims_of,
+    display_name,
     is_concrete,
     origin_of,
     residual_dims,
@@ -30,6 +32,66 @@ from tilefoundry.target import CudaTarget
 ENTRY = GqaOnline.entry_function()
 STEADY = {"ctx_len": SMALL_CONTEXT_T}
 _LOOP_CTX = DimVar("loop_ctx", 1, 4097)
+_CALL_M = DimVar("call_m", 1, 17)
+_CALL_N = DimVar("call_n", 1, 1024)
+_NESTED_N = DimVar("nested_n", 1, 1024)
+_DISPATCH_BOUND = 128
+
+
+@module(entry="run")
+class _MissingCalleeDimension:
+    """A caller dimension independent of the dimension its callee dispatches on."""
+
+    @func
+    def pick(x: Tensor[(_CALL_N,), "f32"]) -> Tensor[(_CALL_N,), "f32"]:
+        pass
+
+    @pick.specialize(DimVarRangePat("call_n", 1, _DISPATCH_BOUND))
+    def pick_small(x: Tensor[(_CALL_N,), "f32"]) -> Tensor[(_CALL_N,), "f32"]:
+        return tf.add(x, x)
+
+    @pick.specialize(DimVarRangePat("call_n", _DISPATCH_BOUND, 1024))
+    def pick_big(x: Tensor[(_CALL_N,), "f32"]) -> Tensor[(_CALL_N,), "f32"]:
+        return tf.add(tf.add(x, x), x)
+
+    @func
+    def run(
+        x: Tensor[(_CALL_M,), "f32"], k: Tensor[(_CALL_N,), "f32"]
+    ) -> Tensor[(_CALL_N,), "f32"]:
+        return pick(k)  # noqa: F821
+
+
+@module(entry="run")
+class _NestedDispatch:
+    """A dispatch variant whose body calls a second dispatch prototype."""
+
+    @func
+    def inner(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
+        pass
+
+    @inner.specialize(DimVarRangePat("nested_n", 1, _DISPATCH_BOUND))
+    def inner_small(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
+        return tf.add(x, x)
+
+    @inner.specialize(DimVarRangePat("nested_n", _DISPATCH_BOUND, 1024))
+    def inner_big(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
+        return tf.add(tf.add(x, x), x)
+
+    @func
+    def mid(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
+        pass
+
+    @mid.specialize(DimVarRangePat("nested_n", 1, _DISPATCH_BOUND))
+    def mid_small(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
+        return inner(x)  # noqa: F821
+
+    @mid.specialize(DimVarRangePat("nested_n", _DISPATCH_BOUND, 1024))
+    def mid_big(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
+        return inner(x)  # noqa: F821
+
+    @func
+    def run(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
+        return mid(x)  # noqa: F821
 
 
 def test_the_model_is_dynamic_in_its_context_length_alone() -> None:
@@ -77,6 +139,37 @@ def test_a_dimension_the_function_does_not_have_is_refused() -> None:
 def test_specialising_nothing_is_refused() -> None:
     with pytest.raises(SpecializationError, match="at least one dimension"):
         specialize_function(ENTRY, {})
+
+
+def test_a_call_through_a_prototype_selects_by_the_callers_dimensions() -> None:
+    """The rebuilt call records which variant it chose, not the prototype."""
+    run = ToCallee.entry_function()
+
+    for extent, expected in ((64, "pick_small"), (512, "pick_big")):
+        rebuilt = specialize_function(run, {"n": extent}).body.target
+        assert display_name(origin_of(rebuilt)) == expected
+
+
+def test_specialising_through_a_call_says_which_dimension_is_missing() -> None:
+    """A callee dispatching on an unbound dimension names that dimension."""
+    caller = _MissingCalleeDimension.entry_function()
+
+    with pytest.raises(SpecializationError, match="'call_n'.*was not given a size"):
+        specialize_function(caller, {"call_m": 4})
+
+
+def test_specialising_follows_dispatch_variants_into_nested_dispatches() -> None:
+    """Selecting a variant keeps rebuilding through dispatches in its body."""
+    run = _NestedDispatch.entry_function()
+
+    for extent, suffix in ((64, "small"), (512, "big")):
+        concrete = specialize_function(run, {"nested_n": extent})
+        middle = concrete.body.target
+        inner = middle.body.target
+
+        assert display_name(origin_of(middle)) == f"mid_{suffix}"
+        assert display_name(origin_of(inner)) == f"inner_{suffix}"
+        assert residual_dims(concrete) == ()
 
 
 def test_a_specialised_function_states_extents_everywhere() -> None:

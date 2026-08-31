@@ -376,25 +376,8 @@ def test_check_refuses_what_it_cannot_answer(routing, capsys, comparison, refuse
     assert refused in capsys.readouterr().err
 
 
-def test_inputs_must_be_stated_and_weights_must_come_from_somewhere(routing, capsys) -> None:
-    """Neither the inputs nor the weights have a default form."""
-    assert (
-        cli.main(
-            [
-                "check",
-                ROUTING,
-                "--inputs",
-                "random",
-                "--out",
-                "output[0]",
-                "--fn",
-                "nan_inf",
-            ]
-        )
-        == 1
-    )
-    assert "needs weights ['w_router']" in capsys.readouterr().err
-
+def test_inputs_must_be_stated(capsys) -> None:
+    """Activations have no default form."""
     assert (
         cli.main(
             [

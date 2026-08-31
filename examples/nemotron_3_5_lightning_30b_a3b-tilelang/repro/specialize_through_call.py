@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Two ways to state a dispatch, and neither is reachable from a real entry.
+"""Two ways to state a dispatch; callee dispatch now works through a real entry.
 
 `tilefoundry tutorial authoring` puts the variants on the module's entry. That
 works when the entry returns one tensor. A decode step that returns its logits
@@ -7,20 +7,17 @@ works when the entry returns one tensor. A decode step that returns its logits
 needs a return annotation, whose grammar is `tensor | scalar-type` -- so the
 entry of such a model cannot carry variants at all (`ToEntry` below).
 
-The other placement -- variants on a callee, entry calls it -- parses and types,
-and then fails the moment anything binds a dimension:
-
-    specialising through 'pick': the callee dispatches on its own variants,
-    which this rebuild does not choose
-
-which is every `check --dim` and every `analyze --dim`. `ToCallee` below is the
-smallest program that shows it; `Direct` is the same module with the entry
-calling one variant's body instead of the prototype, and it runs.
+The other placement -- variants on a callee, entry calls it -- parses, types,
+and now specializes through that call. `ToCallee` below is the smallest program
+that exercises it; `Direct` is the same module with the entry calling one
+variant's body instead of the prototype.
 
     $ tilefoundry check repro/specialize_through_call.py:Direct   --inputs random \\
           --dim n=64 --out output --fn nan_inf          # PASS
     $ tilefoundry check repro/specialize_through_call.py:ToCallee --inputs random \\
-          --dim n=64 --out output --fn nan_inf          # the rebuild error
+          --dim n=64 --out output --fn nan_inf          # PASS
+    $ tilefoundry analyze repro/specialize_through_call.py:ToCallee out.md \\
+          --dim n=64 --compute-cost                     # PASS
     $ python repro/specialize_through_call.py           # the return-annotation one
 """
 from __future__ import annotations

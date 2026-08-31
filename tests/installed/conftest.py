@@ -229,5 +229,15 @@ def leaf_weights() -> Path:
 
 
 @pytest.fixture(scope="module")
+def square_cpu() -> Path:
+    return _fixture_path("placed", "square_cpu.py")
+
+
+@pytest.fixture(scope="module")
+def hir_composition() -> Path:
+    return _fixture_path("logical", "hir_composition.py")
+
+
+@pytest.fixture(scope="module")
 def specialize_through_call() -> Path:
     return _fixture_path("placed", "specialize_through_call.py")

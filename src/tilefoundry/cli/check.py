@@ -28,6 +28,7 @@ from tilefoundry.ir.types.substitute import substitute_dims
 from tilefoundry.runtime import PREDICATES, RuntimeModule
 from tilefoundry.runtime.measure import Predicate, check, flatten_outputs
 from tilefoundry.runtime.resource import (
+    DictResource,
     DrawnResource,
     RuntimeResource,
     SafetensorsResource,
@@ -283,7 +284,11 @@ def draw_inputs(module: Module, dims: dict[str, int], seed: int, device: str):
     return _random_activations(concrete, generator, device)
 
 
-def build_resource(spec: str, module: Module, device: str, generator=None) -> RuntimeResource:
+def build_resource(
+    spec: str | None, module: Module, device: str, generator=None
+) -> RuntimeResource:
+    if spec is None:
+        return DictResource({})
     if spec == "random":
         generator = generator or torch.Generator(device=device).manual_seed(SEED)
         return DrawnResource(module, generator, device)
@@ -579,8 +584,6 @@ def run_check(arguments: argparse.Namespace) -> int:
     stated = parse_dims(arguments.dim) or {}
     if arguments.inputs is None:
         raise ValueError("no inputs stated")
-    if arguments.weights is None:
-        raise ValueError(f"needs weights {list(selection.module.weights)!r}")
     device = arguments.device or _device(selection.module)
     runs = []
     for dims in _combinations(stated):

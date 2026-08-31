@@ -10,7 +10,7 @@ Repro files are under `repro/` (TileFoundry) and `kbench/` (TileLang).
 | # | in one line | repro | what it blocked |
 |---|---|---|---|
 | **TF-1** | a slice start carrying a mesh index will not evaluate | `repro/mesh_slice_start.py` | **long-context attention cannot be `check`ed** |
-| TF-2 | dispatch on the callee does not pass `--dim`; on the entry it needs a tuple return annotation | `repro/specialize_through_call.py` | the entry never reaches the dispatch |
+| TF-2 | callee dispatch now passes `--dim`; entry dispatch still needs a tuple return annotation | `repro/specialize_through_call.py` | the entry cannot carry the dispatch; the callee route is fixed |
 | TF-3 | TF-1's error carried no file, line or op | same | locating it |
 | TF-4 | checking one leaf materialises the whole Module's weights | `repro/leaf_weights.py` | no leaf of this model can be checked |
 | TF-5 | `--inputs random` builds states the model cannot be in, and reports an out-of-range first | — | had to dump real activations |
@@ -84,13 +84,15 @@ python repro/specialize_through_call.py
 | where it is put | result |
 |---|---|
 | `Direct`: the entry calls one variant's body directly | PASS |
-| `ToCallee`: variants on the callee, entry calls the prototype | `specialising through 'pick': the callee dispatches on its own variants, which this rebuild does not choose` |
+| `ToCallee`: variants on the callee, entry calls the prototype | PASS |
 | `ToEntry`: variants on the entry, but the entry returns several tensors | `HIR pass prototype requires a return annotation` |
 
-**a. It does not pass through.** `_specialize_callee`
-(`ir/hir/specialize.py:344`) refuses outright to rebuild a callee that carries
-variants of its own. `--dim` is ordinary usage for `check` and `analyze`, so as
-soon as the entry calls a dispatch prototype, both commands are unusable.
+**a. It now passes through — fixed.** Specialization selects a callee's variant
+from the caller's `--dim` bindings and rebuilds through that implementation.
+`check` and `analyze` can therefore both reach a dispatch prototype from the
+entry.
+
+**Fixed in this PR** — `ToCallee` now passes both commands shown in its repro.
 
 **b. Moving it to the entry does not work either.** The shape
 `tilefoundry tutorial authoring` demonstrates is variants hung on the entry — but

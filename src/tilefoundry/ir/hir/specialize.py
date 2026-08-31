@@ -220,7 +220,7 @@ class DimensionInstantiator(ExprCloner):
         new_target = call.target
         if isinstance(new_target, Function):
             new_target = _specialize_callee(
-                new_target, ctx.dims, ctx.type_ctx, call
+                new_target, ctx.dims, ctx.type_ctx
             )
         new_target = _substitute_op_dims(new_target, ctx.dims)
         new_metadata = _substitute_authored_dims(call.metadata, ctx.dims)
@@ -335,18 +335,23 @@ def _specialize_callee(
     callee: Function,
     dims: Mapping[str, int],
     ctx: TypeInferContext,
-    call: Call,
 ) -> Function:
-    """Rebuild a nested callee at the dimensions its caller was given."""
-    if callee.variants:
-        raise ValueError(
-            f"specialising through {call and callee.name!r}: the callee "
-            "dispatches on its own variants, which this rebuild does not choose"
-        )
+    """Rebuild a nested callee at the dimensions its caller was given.
+
+    A dispatching callee picks from the same dims through variant_for. A
+    dimension the caller never bound is still refused and named.
+
+    The dispatch guard on the identity shortcut is defensive: verified variants
+    anchor dispatch dimensions in their parameter types. The guard states that
+    cross-file invariant where the shortcut relies on it.
+    """
+    dispatched = bool(callee.variants)
+    if dispatched:
+        callee = variant_for(callee, dims)
     if callee.body is None:
         return callee
     bound = tuple(substitute_dims(param.type, dims) for param in callee.params)
-    if all(new is param.type for new, param in zip(bound, callee.params)):
+    if not dispatched and all(new is param.type for new, param in zip(bound, callee.params)):
         return callee
     return instantiate_dimensions(callee, bound, ctx, dims)
 

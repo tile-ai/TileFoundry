@@ -130,6 +130,14 @@ bounds the caller stated.
     parameter in that same order. Output names MUST come from return position: one tensor is
     `output`; a tuple's tensors are `output[0]`, `output[1]`, and so on in return
     order. These are positions, not names authored in the function.
+  - `--weights` states where weights come from: `random` MUST draw each weight
+    the first time it is asked for, and `ckpt:DIR` MUST read them from a
+    safetensors checkpoint. It is OPTIONAL: omitted, the run has no weight
+    source. A weight reached with no source MUST be refused where it is first
+    asked for, naming the Module that declares it and the weight. It MUST NOT be
+    refused ahead of the run from what the selected Module declares: a Module
+    declares only its own functions' weights, so what a run reaches is not that
+    set.
   - One input file MUST bind one parameter. Its value MAY be a bare tensor or
     an arbitrarily nested tuple or list of tensors; every leaf MUST be a tensor.
   - A target whose step is an orchestration method rather than a `@func` MUST
@@ -157,12 +165,11 @@ bounds the caller stated.
   - Each output MUST report the norm of its reference. Near zero, a relative
     measure divides by nothing, so the report MUST state what it measured instead
     rather than a number with no scale to read it against.
-  - Inputs MUST be stated: random, real weights from a checkpoint, or files, and
-    no form MAY be the default. Weights MUST come from the same draw on both
-    sides, and the report MUST say which form was used and what seed drew it.
-    It MUST also say the actual and declared dtype of every activation, plus the
-    tensor count and shape tree each input
-    file supplied.
+  - Activations MUST be stated -- random or files -- and no form MAY be the
+    default. Weights MUST come from the same draw on both sides, and the report
+    MUST say which form was used and what seed drew it. It MUST also say the
+    actual and declared dtype of every activation, plus the tensor count and
+    shape tree each input file supplied.
   - `--device DEVICE` names where inputs and weights are built, and so where the
     run happens. Omitted, it is the device the selection's Target declares. Given,
     it is honoured as stated: a Target declaring CUDA no longer refuses a machine
