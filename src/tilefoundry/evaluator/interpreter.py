@@ -4,7 +4,6 @@ Walks a HIR ``Function`` body and returns concrete torch values.
 """
 from __future__ import annotations
 
-import types
 from typing import Any
 
 import torch
@@ -89,82 +88,6 @@ def child_module_instance(loaded_module, callee: Function):
             f"{callee.name!r}; one call reaches one child"
         )
     return matches[0] if matches else None
-
-
-class Reading:
-    """Evaluator-side view of one frozen ``LoadedModule`` reading.
-
-    Functions resolve to activation-only runners whose constants are loaded on
-    first use; children resolve to child readings, and methods are bound with
-    ``types.MethodType`` so orchestration ``self.<fn>(...)`` returns here.
-    """
-
-    def __init__(self, loaded_module, device: str) -> None:
-        self.loaded_module = loaded_module
-        self.module = loaded_module.module
-        self.resource = loaded_module.resource
-        self.modules = tuple(Reading(child, device) for child in loaded_module.modules)
-        self.device = device
-
-    @property
-    def name(self) -> str:
-        return self.module.name
-
-    def _weight(self, param):
-        return _read_weight(self, param, self.device)
-
-    def _run_function(self, fn: Function, *activations):
-        activation_params = tuple(param for param in fn.params if not param.is_const)
-        if len(activations) != len(activation_params):
-            raise EvalError(
-                f"evaluator: call to {fn.name!r} expects {len(activation_params)} "
-                f"activation(s), got {len(activations)}"
-            )
-        expected_device = torch.device(self.device)
-        for index, value in enumerate(activations):
-            actual_device = getattr(value, "device", None)
-            if actual_device is not None and not _devices_match(actual_device, expected_device):
-                raise ValueError(
-                    f"evaluator: activation {index} is on {actual_device}, "
-                    f"but evaluation requested {expected_device}; this runner moves nothing"
-                )
-        supplied = iter(activations)
-        args = [self._weight(param) if param.is_const else next(supplied) for param in fn.params]
-        return _run_bound(fn, args, device=self.device, reading=self)
-
-    def __getattr__(self, name: str):
-        if name.startswith("_"):
-            raise AttributeError(name)
-        functions = tuple(fn for fn in self.module.functions if fn.name == name)
-        if len(functions) == 1:
-            fn = functions[0]
-            return lambda *acts: self._run_function(fn, *acts)
-        if len(functions) > 1:
-            raise AttributeError(f"Reading {self.name!r}: duplicate function {name!r}")
-        children = tuple(child for child in self.modules if child.name == name)
-        if len(children) == 1:
-            return children[0]
-        method = self.module.methods.get(name)
-        if method is not None:
-            return types.MethodType(method, self)
-        raise AttributeError(
-            f"Reading {self.name!r} has no function, child module, or method {name!r}"
-        )
-
-    def __call__(self, *activations):
-        """Run a child reading as a twin call: forward, then entry fallback."""
-        method = self.module.methods.get("forward")
-        if method is not None:
-            return types.MethodType(method, self)(*activations)
-        from tilefoundry.ir.core.module import _refuse_bare_call  # noqa: PLC0415
-
-        _refuse_bare_call(self.module, "Reading")
-        return self._run_function(self.module.entry_function(), *activations)
-
-
-def reading(loaded_module, *, device: str) -> Reading:
-    """Expose the evaluator-side orchestration view for host Python methods."""
-    return Reading(loaded_module, device)
 
 
 class EvaluatorVisitor(ExprVisitor):
@@ -353,6 +276,32 @@ def _child_constant(loaded_module, callee: Function, param, device: str) -> Tens
     return TensorValue(data=value, type=param.type)
 
 
+def _run_selected(loaded_module, fn: Function, *activations, device: str):
+    """Run one loaded function, reading constants lazily at first use."""
+    activation_params = tuple(param for param in fn.params if not param.is_const)
+    if len(activations) != len(activation_params):
+        raise EvalError(
+            f"evaluator: call to {fn.name!r} expects {len(activation_params)} "
+            f"activation(s), got {len(activations)}"
+        )
+    expected_device = torch.device(device)
+    for index, value in enumerate(activations):
+        actual_device = getattr(value, "device", None)
+        if actual_device is not None and not _devices_match(actual_device, expected_device):
+            raise ValueError(
+                f"evaluator: activation {index} is on {actual_device}, "
+                f"but evaluation requested {expected_device}; this runner moves nothing"
+            )
+    supplied = iter(activations)
+    args = [
+        _read_weight(loaded_module, param, device)
+        if param.is_const
+        else next(supplied)
+        for param in fn.params
+    ]
+    return _run_bound(fn, args, device=device, reading=loaded_module)
+
+
 def _unwrap(value: Value) -> Any:
     if isinstance(value, TensorValue):
         return value.data
@@ -436,7 +385,6 @@ def _run_bound(fn: Function, args, *, device: str | None = None, reading=None):
 
 def evaluate(
     fn_or_call, *inputs, backend: str = "torch", device: str | None = None,
-    function: str | None = None,
 ):
     """Evaluate a HIR ``Function``, ``Call``, or loaded module.
 
@@ -450,22 +398,13 @@ def evaluate(
     from tilefoundry.ir.core.module import LoadedModule, _refuse_bare_call  # noqa: PLC0415
 
     if isinstance(fn_or_call, LoadedModule):
-        reading = Reading(fn_or_call, device)
-        if function is None:
-            _refuse_bare_call(reading.module, "LoadedModule")
-            target = reading._run_function(reading.module.entry_function(), *inputs)
-        else:
-            selected = getattr(reading, function)
-            if isinstance(selected, Reading):
-                _refuse_bare_call(selected.module, "LoadedModule")
-                target = selected._run_function(selected.module.entry_function(), *inputs)
-            elif callable(selected):
-                target = selected(*inputs)
-            else:
-                raise EvalError(
-                    f"evaluator: selected {function!r} on {reading.name!r} is not callable"
-                )
-        result = target
+        _refuse_bare_call(fn_or_call.module, "LoadedModule")
+        result = _run_selected(
+            fn_or_call,
+            fn_or_call.module.entry_function(),
+            *inputs,
+            device=device,
+        )
     elif isinstance(fn_or_call, Function):
         fn = fn_or_call
         if len(inputs) != len(fn.params):

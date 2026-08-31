@@ -19,7 +19,6 @@ from tests.models.deepseek_v4_flash.model import build_deepseek_v4_flash
 from tests.models.deepseek_v4_flash.reference import small
 from tests.models.deepseek_v4_flash.runtime import build_runtime_causal_lm
 from tests.models.orchestrator.causal_lm import generation
-from tilefoundry.evaluator import evaluate, reading
 from tilefoundry.evaluator.value import to_torch_dtype
 from tilefoundry.ir.core.module import Module
 from tilefoundry.runtime import (
@@ -193,7 +192,6 @@ def twins(config, semantic, prepared):
 
 
 def _node_inputs(semantic, config):
-    semantic = reading(semantic, device="cuda")
     ids = torch.tensor([1, 2, 3], dtype=torch.int64, device="cuda")
     caches = semantic.init_caches(device="cuda")
     root_args = semantic.prepare_inputs_for_generation(ids, 0, caches, device="cuda")
@@ -314,11 +312,7 @@ def test_prepare_and_parity(config, raw_tensors, prepared, twins):
         ),
     }
     for name, (candidate, reference, expect) in nodes.items():
-        reference_runner = (
-            (lambda *args: evaluate(reference, *args, function="forward", device="cuda"))
-            if hasattr(reference, "module")
-            else reference.forward
-        )
+        reference_runner = reference.forward
         report = check(candidate.forward, reference_runner, inputs[name], expect=expect)
         assert report.passed, f"{name}: {report}"
         assert "forward" not in vars(type(candidate)), name
@@ -336,7 +330,7 @@ def test_the_decode_loop_threads_state_across_both_twins(config, twins):
     semantic, runtime = twins
     steps = config.window + 2
     ids = torch.arange(steps, dtype=torch.int64, device="cuda") % config.vocab
-    semantic_view = reading(semantic, device="cuda")
+    semantic_view = semantic
     seed_ctx = semantic_view.init_caches(device="cuda")[0].shape[1]
     tokenizer = _Tokeniser(ids.cpu().tolist())
 
@@ -361,7 +355,7 @@ def test_the_decode_loop_threads_state_across_both_twins(config, twins):
             prior = caches
             args = view.prepare_inputs_for_generation(ids[: step + 1], step, caches, device="cuda")
             output, fresh = (
-                evaluate(semantic, *args, function="forward", device="cuda")
+                semantic.forward(*args)
                 if model is semantic
                 else model(*args)
             )

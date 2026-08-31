@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from time import perf_counter
 
 import torch
-from tilefoundry.evaluator import reading
 
 
 @dataclass(frozen=True)
@@ -52,7 +51,7 @@ def decode(loaded, tokenizer, prompt: str, *, max_new: int, sampler=greedy, eos=
     prompt_steps = prompt_ids.numel()
     input_ids = torch.empty(prompt_steps + max_new, dtype=torch.int64, device=device)
     input_ids[:prompt_steps] = prompt_ids
-    view = reading(loaded, device=device) if hasattr(loaded, "resource") else loaded
+    view = loaded
     caches = view.init_caches(device=device)
 
     for step in range(prompt_steps):

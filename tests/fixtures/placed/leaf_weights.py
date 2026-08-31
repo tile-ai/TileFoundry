@@ -1,4 +1,4 @@
-"""Modules with sibling-only weights for the check-surface refactor tests."""
+"""Modules whose sibling-only weights must stay lazy when one leaf runs."""
 
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, Mesh, Tensor, Topology, tf

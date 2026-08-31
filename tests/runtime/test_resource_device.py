@@ -15,7 +15,7 @@ import torch
 from safetensors.torch import save_file
 
 from tilefoundry.runtime import Preprocessed
-from tilefoundry.runtime.resource import SafetensorsResource, _resolved_device
+from tilefoundry.runtime.resource import DrawnResource, SafetensorsResource, _resolved_device
 
 
 def cpu_gen() -> torch.Generator:
@@ -30,7 +30,6 @@ def _unsharded(directory, tensors) -> str:
 
 def test_drawn_resource_never_redraws():
     from tests.fixtures.placed.leaf_weights import Small  # noqa: PLC0415 -- test fixture import
-    from tilefoundry.runtime.resource import DrawnResource  # noqa: PLC0415 -- added in M2
 
     resource = DrawnResource(Small, cpu_gen(), "cpu")
     assert resource.load("w") is resource.load("w")

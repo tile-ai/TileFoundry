@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import inspect
 import json
 import sys
 import textwrap
@@ -13,21 +12,21 @@ from typing import Any, Sequence
 
 import torch
 
-from tilefoundry.cli.source import load_namespace, parse_dims, suggested_extents
+from tilefoundry.cli.source import load_namespace, parse_dims
 from tilefoundry.evaluator import evaluate
+from tilefoundry.evaluator.value import from_torch_dtype
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.module import select as select_module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.specialize import (
     canonical_specialization_signature,
-    dim_vars_reached,
     display_name,
     residual_dims,
     variant_for,
 )
 from tilefoundry.ir.types.substitute import substitute_dims
 from tilefoundry.runtime import PREDICATES, RuntimeModule
-from tilefoundry.runtime.measure import Predicate, check
+from tilefoundry.runtime.measure import Predicate, _flatten, check
 from tilefoundry.runtime.resource import (
     DrawnResource,
     RuntimeResource,
@@ -191,7 +190,6 @@ class Selection:
     module: Module
     twin: RuntimeModule | None
     children: tuple[str, ...]
-    method: str | None
     root: Module
     source: str
 
@@ -205,10 +203,17 @@ class CheckRequest:
     expected: tuple[Any, ...] | None
     device: str
     expectations: dict[str, tuple[Predicate, ...]]
-    function: str | None = None
 
 
-def _module_selection(root: Module, path: Sequence[str]) -> tuple[Module, tuple[str, ...], str | None]:
+def _refuse_orchestration(module: Module, method: str) -> None:
+    functions = ", ".join(fn.name for fn in module.functions) or "none"
+    raise ValueError(
+        f"check targets HIR functions, not orchestration method "
+        f"{module.name}.{method}; select one of its HIR functions instead: {functions}"
+    )
+
+
+def _module_selection(root: Module, path: Sequence[str]) -> tuple[Module, tuple[str, ...]]:
     node = root
     children: list[str] = []
     for index, segment in enumerate(path):
@@ -220,10 +225,10 @@ def _module_selection(root: Module, path: Sequence[str]) -> tuple[Module, tuple[
         if index != len(path) - 1:
             raise ValueError(f"selector {'.'.join(path)!r}: {segment!r} is not a child module")
         if segment in node.methods:
-            return node, tuple(children), segment
+            _refuse_orchestration(node, segment)
         node.lookup(segment)
-        return select_module(root, ".".join(path)), tuple(children), None
-    return node, tuple(children), None
+        return select_module(root, ".".join(path)), tuple(children)
+    return node, tuple(children)
 
 
 def select(source: str) -> Selection:
@@ -233,12 +238,12 @@ def select(source: str) -> Selection:
     if segments:
         root = namespace.get(segments[0])
         if isinstance(root, type) and issubclass(root, RuntimeModule):
-            twin, _top, module, children, method = _walk_twin(root, segments)
-            return Selection(module, twin, children, method, _top, source)
+            twin, _top, module, children = _walk_twin(root, segments)
+            return Selection(module, twin, children, _top, source)
         if not isinstance(root, Module):
             raise TypeError(f"selector {segments[0]!r} is not a Module or runtime twin")
-        chosen, children, method = _module_selection(root, segments[1:])
-        return Selection(chosen, None, children, method, root, source)
+        chosen, children = _module_selection(root, segments[1:])
+        return Selection(chosen, None, children, root, source)
 
     modules = tuple(value for value in namespace.values() if isinstance(value, Module))
     twins = tuple(
@@ -246,10 +251,10 @@ def select(source: str) -> Selection:
         if isinstance(value, type) and issubclass(value, RuntimeModule) and value is not RuntimeModule
     )
     if len(modules) == 1:
-        return Selection(modules[0], None, (), None, modules[0], source)
+        return Selection(modules[0], None, (), modules[0], source)
     if len(twins) == 1:
-        twin, _top, module, children, method = _walk_twin(twins[0], (twins[0].__name__,))
-        return Selection(module, twin, children, None, module, source)
+        twin, top, module, children = _walk_twin(twins[0], (twins[0].__name__,))
+        return Selection(module, twin, children, top, source)
     raise ValueError("source must identify exactly one Module or runtime twin")
 
 
@@ -287,12 +292,8 @@ def _scope(resource: RuntimeResource, children: Sequence[str]) -> RuntimeResourc
 
 def check_concrete(request: CheckRequest):
     loaded = request.module.load(request.weights)
-    if request.function is None:
-        def reference_run(*args):
-            return evaluate(loaded, *args, device=request.device)
-    else:
-        def reference_run(*args):
-            return evaluate(loaded, *args, device=request.device, function=request.function)
+    def reference_run(*args):
+        return evaluate(loaded, *args, device=request.device)
     if request.expected is not None:
         expected = request.expected[0] if len(request.expected) == 1 else request.expected
         def expected_run(*_args):
@@ -302,18 +303,15 @@ def check_concrete(request: CheckRequest):
         reference = reference_run if request.twin is not None else None
     if request.twin is None:
         candidate = reference_run
-    elif request.function is None:
-        request.twin.load(request.weights)
-        candidate = request.twin.forward
     else:
         request.twin.load(request.weights)
-        candidate = getattr(request.twin, request.function)
+        candidate = getattr(request.twin, request.module.entry_function().name)
     return check(candidate, reference, request.inputs, expect=request.expectations)
 
 
 def _walk_twin(
     root: type, segments: Sequence[str]
-) -> tuple[RuntimeModule, Module, Module, tuple[str, ...], str | None]:
+) -> tuple[RuntimeModule, Module, Module, tuple[str, ...]]:
     """Resolve a runtime twin and a dotted path into it."""
     top = root()
     node = top
@@ -334,10 +332,13 @@ def _walk_twin(
             )
         module = _authored(node)
         if segment in module.methods:
-            return node, _authored(top), module, tuple(children), segment
+            _refuse_orchestration(module, segment)
         chosen = select_module(module, segment)
-        return type(node)(ir=chosen), _authored(top), chosen, tuple(children), None
-    return node, _authored(top), _authored(node), tuple(children), None
+        return type(node)(ir=chosen), _authored(top), chosen, tuple(children)
+    module = _authored(node)
+    if module.methods.get("forward") is not None:
+        _refuse_orchestration(module, "forward")
+    return node, _authored(top), module, tuple(children)
 
 
 def _authored(node: RuntimeModule) -> Module:
@@ -403,37 +404,26 @@ def _read(path: str, device: str):
     return visit(loaded, path)
 
 
-def _tensor_leaves(value):
-    """Yield every tensor in one activation tree, in written order."""
-    if isinstance(value, torch.Tensor):
-        yield value
-        return
-    for item in value:
-        yield from _tensor_leaves(item)
-
-
-def _tensor_structure(value):
-    """Build the JSON-safe shape tree supplied by an activation file."""
-    if isinstance(value, torch.Tensor):
-        return {"dtype": str(value.dtype), "shape": list(value.shape)}
-    return [_tensor_structure(item) for item in value]
-
-
-def _dtype_names(values: Sequence[Any]) -> list[str]:
-    """Return the torch dtype of every tensor across supplied values."""
-    return [str(tensor.dtype) for value in values for tensor in _tensor_leaves(value)]
-
-
 def _input_files(paths: Sequence[str], activations: Sequence[Any]) -> list[dict[str, Any]]:
     """Describe the tensor count and structure supplied by each file."""
-    return [
-        {
-            "path": path,
-            "tensor_count": sum(1 for _ in _tensor_leaves(activation)),
-            "structure": _tensor_structure(activation),
-        }
-        for path, activation in zip(paths, activations, strict=True)
-    ]
+    files = []
+    for path, activation in zip(paths, activations, strict=True):
+        leaves = _flatten(activation)
+        files.append(
+            {
+                "path": path,
+                "tensor_count": len(leaves),
+                "structure": [
+                    {
+                        "path": position,
+                        "dtype": from_torch_dtype(tensor.dtype).name,
+                        "shape": list(tensor.shape),
+                    }
+                    for position, tensor in leaves
+                ],
+            }
+        )
+    return files
 
 
 def _variant(function: Function, dims: dict[str, int]) -> dict[str, Any] | None:
@@ -453,55 +443,18 @@ def _variant(function: Function, dims: dict[str, int]) -> dict[str, Any] | None:
     }
 
 
-def _pin(function: Function, stated: dict[str, int]) -> tuple[dict[str, int], list[dict[str, Any]]]:
-    """Bind each declared dimension, pinning unstated ranges to their lower bound."""
-    declared = dim_vars_reached(function)
-    bound: dict[str, int] = {}
-    unstated: list[dict[str, Any]] = []
-    for name, dim_var in declared.items():
-        if name in stated:
-            if not (dim_var.lo <= stated[name] < dim_var.hi):
-                covered = ", ".join(
-                    f"[{pattern.lo}, {pattern.hi})"
-                    for variant in function.variants
-                    for pattern in variant.specializations
-                    if pattern.dim_var == name
-                ) or f"[{dim_var.lo}, {dim_var.hi})"
-                raise ValueError(
-                    f"{function.name} declares no variant covering {name}={stated[name]}; "
-                    f"declared ranges are {covered}"
-                )
-            bound[name] = stated[name]
-            continue
-        bound[name] = dim_var.lo
-        unstated.append(
-            {
-                "dim": name,
-                "pinned": dim_var.lo,
-                "lo": dim_var.lo,
-                "hi": dim_var.hi,
-                "spread": suggested_extents(dim_var.lo, dim_var.hi),
-            }
-        )
-    unknown = sorted(set(stated) - set(declared))
-    if unknown:
-        raise ValueError(
-            f"--dim {unknown} name no dimension of {function.name!r}; it states "
-            f"{sorted(declared)}"
-        )
-    return bound, unstated
-
-
 def _shown_dtypes(dtypes: Sequence[str]) -> str:
     """Dtypes as one readable field, including an honest empty declaration."""
     return ", ".join(dtypes) if dtypes else "none"
 
 
 def _shown_structure(structure) -> str:
-    """Render one recursively-loaded input tree compactly."""
-    if isinstance(structure, dict):
-        return f"{structure['dtype']}[{', '.join(str(extent) for extent in structure['shape'])}]"
-    return "(" + ", ".join(_shown_structure(item) for item in structure) + ")"
+    """Render one flattened input tree compactly."""
+    shown = [
+        f"{item['dtype']}[{', '.join(str(extent) for extent in item['shape'])}]"
+        for item in structure
+    ]
+    return shown[0] if len(shown) == 1 else "(" + ", ".join(shown) + ")"
 
 
 def _shown_files(files: Sequence[dict[str, Any]]) -> str:
@@ -607,17 +560,6 @@ def _render(source: str, runs: Sequence[dict[str, Any]], warnings: Sequence[str]
             label = variant.get("display_name")
             shown = variant["signature"]
             lines.append(f"  variant:   {shown if label is None else f'{label}  {shown}'}  ({ranges})")
-        for pinned in run.get("pinned", []):
-            lines.append(
-                f"  note: {pinned['dim']} is a range [{pinned['lo']}, {pinned['hi']}) that "
-                f"nothing bound; this run pinned it to {pinned['pinned']}."
-            )
-            spread = ",".join(str(value) for value in pinned["spread"])
-            lines.append(f"        tilefoundry check ... --dim {pinned['dim']}={spread}")
-            lines.append(
-                "        to make the size a declared variant instead of a pin, see "
-                "`tilefoundry spec parser 1.1`"
-            )
         lines.append("")
         for output in run["outputs"]:
             output = output if isinstance(output, dict) else _output_dict(output)
@@ -658,27 +600,26 @@ def run_check(arguments: argparse.Namespace) -> int:
     if arguments.weights is None:
         raise ValueError(f"needs weights {list(selection.module.weights)!r}")
     device = _device(selection.module)
-    function = selection.method
-    if function is None and selection.module.methods.get("forward") is not None:
-        function = "forward"
     runs = []
     for dims in _combinations(stated):
-        pinned_notes = []
         concrete = None
+        selected_variant = None
         if arguments.inputs == "random":
-            if function == "forward":
-                method = selection.module.methods["forward"]
-                names = [name for name in inspect.signature(method).parameters if name != "self"]
-                raise ValueError(
-                    f"--inputs random cannot make activations for {selection.module.name!r}: "
-                    "it runs an orchestration method whose parameters have no declared "
-                    f"shapes or dtypes. It takes {len(names)} activation parameters in "
-                    f"order: {', '.join(names)}. Give one input file per parameter."
-                )
             fn = selection.module.entry_function()
-            pinned, pinned_notes = _pin(fn, dims)
-            concrete = replace(fn, params=tuple(replace(p, type=substitute_dims(p.type, pinned)) for p in fn.params))
-            inputs = draw_inputs(selection.module, pinned, SEED, device)
+            variant_dims = {
+                pattern.dim_var
+                for variant in fn.variants
+                for pattern in variant.specializations
+            }
+            if variant_dims and variant_dims <= dims.keys():
+                selected_variant = _variant(fn, dims)
+            concrete = replace(
+                fn,
+                params=tuple(
+                    replace(p, type=substitute_dims(p.type, dims)) for p in fn.params
+                ),
+            )
+            inputs = draw_inputs(selection.module, dims, SEED, device)
         elif arguments.inputs.startswith("files:"):
             inputs = read_inputs(arguments.inputs[6:].split(","), device)
         else:
@@ -693,7 +634,15 @@ def run_check(arguments: argparse.Namespace) -> int:
             expected_values = read_inputs(arguments.expected, device)
             expected = expected_values
         report = check_concrete(
-            CheckRequest(selection.module, selection.twin, inputs, resource, expected, device, expect, function)
+            CheckRequest(
+                selection.module,
+                selection.twin,
+                inputs,
+                resource,
+                expected,
+                device,
+                expect,
+            )
         )
         declared = tuple(
             param.type.dtype.name
@@ -720,19 +669,23 @@ def run_check(arguments: argparse.Namespace) -> int:
             "outputs": [_output_dict(output) for output in report.outputs],
             "dims": dims,
             "reference": reference,
-            "pinned": pinned_notes,
-            "variant": None if concrete is None else _variant(selection.module.entry_function(), pinned),
+            "variant": selected_variant,
             "inputs": {
                 "activations": {
                     "source": f"{arguments.inputs} (seed {SEED})" if arguments.inputs == "random" else arguments.inputs,
-                    "actual_dtypes": _dtype_names(inputs),
+                    "actual_dtypes": [
+                        from_torch_dtype(tensor.dtype).name
+                        for _path, tensor in _flatten(inputs)
+                    ],
                     "declared_dtypes": list(declared),
                     "files": _input_files(arguments.inputs[6:].split(","), inputs)
                     if arguments.inputs.startswith("files:") else [],
                 },
                 "weights": {
                     "source": arguments.weights,
-                    "actual_dtypes": [str(value.dtype) for _, value in asked],
+                    "actual_dtypes": [
+                        from_torch_dtype(value.dtype).name for _, value in asked
+                    ],
                     "declared_dtypes": list(declared_weights),
                 },
             },

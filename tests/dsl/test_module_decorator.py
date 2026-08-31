@@ -11,15 +11,20 @@ targeting the sibling); forward references stay unresolved and fail loudly.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 
 import pytest
+import torch
 
 from tilefoundry import func, module, prim_func
-from tilefoundry.dsl import T, Tensor, tf  # noqa: F401 — tf/T used by bodies
+from tilefoundry.dsl import ConstTensor, T, Tensor, tf  # noqa: F401 — tf/T used by bodies
+from tilefoundry.evaluator import evaluate
+from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.types.shard import Layout, Mesh, Topology
+from tilefoundry.runtime.resource import DictResource
 from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
 
@@ -156,7 +161,7 @@ def test_a_module_without_a_default_step_says_so_rather_than_blaming_entry():
         def helper(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
             return tf.rms_norm(x, g)
 
-    with pytest.raises(TypeError, match=r"not callable"):
+    with pytest.raises(ValueError, match=r"declares no entry"):
         _NoStep()
 
     with pytest.raises(ValueError, match=r"declares no entry, so it has no default step"):
@@ -173,11 +178,6 @@ def test_the_runner_on_an_authored_module_takes_the_weights_too():
     list is refused naming the runner it wanted, and neither is sent to the
     other's.
     """
-    import torch  # noqa: PLC0415 — only this test needs a real tensor
-
-    from tilefoundry.dsl import ConstTensor  # noqa: PLC0415
-    from tilefoundry.runtime.resource import DictResource  # noqa: PLC0415
-
     @module(entry="scale")
     class _Weighted:
         @func
@@ -187,22 +187,18 @@ def test_the_runner_on_an_authored_module_takes_the_weights_too():
     ones = torch.ones(2, dtype=torch.float32)
     weight = torch.full((2,), 3.0)
 
-    from tilefoundry.evaluator import evaluate  # noqa: PLC0415
-
     assert evaluate(_Weighted.scale, ones, weight, device="cpu").float().cpu().tolist() == [3.0, 3.0]
-
-    from tilefoundry.evaluator.value import EvalError  # noqa: PLC0415
 
     with pytest.raises(EvalError, match=r"expects 2 inputs, got 1"):
         evaluate(_Weighted.scale, ones, device="cpu")
 
     loaded = _Weighted.load(DictResource({"w": weight}))
     with pytest.raises(EvalError, match=r"expects 1 activation") as excinfo:
-        evaluate(loaded, ones, weight, function="scale", device="cpu")
+        evaluate(loaded.scale, ones, weight, device="cpu")
     assert "load(resource)" not in str(excinfo.value)
 
     with pytest.raises(KeyError) as excinfo:
-        evaluate(_Weighted.load(DictResource({})), ones, function="scale", device="cpu")
+        evaluate(_Weighted.load(DictResource({})).scale, ones, device="cpu")
     refused = str(excinfo.value)
     assert "missing declared weight 'w'" in refused
     assert "prepare produces it" in refused
@@ -220,13 +216,6 @@ def test_one_shared_child_binds_once_per_owner():
     Two owners over one child IR read their own subtrees rather than the last
     one loaded winning.
     """
-    import copy  # noqa: PLC0415
-
-    import torch  # noqa: PLC0415
-
-    from tilefoundry.dsl import ConstTensor  # noqa: PLC0415
-    from tilefoundry.runtime.resource import DictResource  # noqa: PLC0415
-
     @module(entry="scale")
     class _Leaf:
         @func
@@ -255,10 +244,8 @@ def test_one_shared_child_binds_once_per_owner():
     loaded_right = right.load(DictResource({"leaf.w": torch.full((2,), 10.0)}))
 
     assert loaded_left.modules[0].module is loaded_right.modules[0].module
-    from tilefoundry.evaluator import evaluate  # noqa: PLC0415
-
-    assert evaluate(loaded_left, ones, function="leaf", device="cpu").float().cpu().tolist() == [3.0, 3.0]
-    assert evaluate(loaded_right, ones, function="leaf", device="cpu").float().cpu().tolist() == [10.0, 10.0]
+    assert evaluate(loaded_left.leaf, ones, device="cpu").float().cpu().tolist() == [3.0, 3.0]
+    assert evaluate(loaded_right.leaf, ones, device="cpu").float().cpu().tolist() == [10.0, 10.0]
 
 
 def test_forward_reference_sibling_fails_loudly():

@@ -18,7 +18,6 @@ from tilefoundry.evaluator.value import (
 
 __all__ = [
     "evaluate",
-    "reading",
     "register_eval",
     "eval_registry",
     "Value",
@@ -38,7 +37,7 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:
-    if name in {"evaluate", "reading"}:
+    if name == "evaluate":
         import importlib  # noqa: PLC0415 — lazy to avoid an IR import cycle
 
         return getattr(importlib.import_module("tilefoundry.evaluator.interpreter"), name)

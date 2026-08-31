@@ -109,8 +109,8 @@ class Attention:
     runtime side: inside them, `self.<fn>` / `self.<child>` resolve to the
     runtime twin's own kernels / children. Absent an own `forward`, the generated
     class runs `sem.methods["forward"]` if present, else calls the entry function
-    by name. The semantic side uses the evaluator's reading view for the
-    corresponding dispatch ([§1.1.2](#112-weight-converter-and-prepare--forward)).
+    by name. A loaded semantic Module resolves the same named functions,
+    children, and methods ([§1.1.2](#112-weight-converter-and-prepare--forward)).
 
 ### 1.1.1 `RuntimeFunction`
 
@@ -184,9 +184,11 @@ class LoadedModule:
     modules: tuple["LoadedModule", ...]
 ```
 
-`LoadedModule` is frozen data only. The evaluator creates a transient reading
-view for execution; that view resolves functions to activation-only runners,
-children to child views, and orchestration methods with `types.MethodType`.
+`LoadedModule` is a frozen resource binding: it stores no tensors. Attribute
+access resolves a function to another callable `LoadedModule` whose `entry`
+names that function, a child to its child reading, and an orchestration method
+with `types.MethodType`. Calling a loaded module enters `evaluate` once and
+passes only activations; constants come from its resource at first use.
 
 - constraints:
   - A reading covers its own Module's declared weights and holds one child
@@ -228,16 +230,15 @@ children to child views, and orchestration methods with `types.MethodType`.
     mechanism as for any other — its own `TensorType.layout` — rather than a
     second description for an opaque state object.
   - The runtime twin's `forward` runs a registered `forward` orchestration
-    method (`Module.methods`) when present, else its entry `@func`, and mirrors
-    those branches. `check` compares the semantic and runtime forwards
-    ([§1.6](#16-check)). A multi-node composition is chained by the caller, one
-    `forward` per node.
+    method (`Module.methods`) when present, else its entry `@func`. A multi-node
+    composition is chained by the caller, one `forward` per node.
     On the runtime twin, a bare step MUST be refused when neither a `forward`
     method nor an entry is present, naming the functions and methods to call
     instead of reporting `entry` as wrong.
-    On the semantic side, `evaluate(loaded)` runs `entry` when one is declared;
-    it never treats a `forward` method as an implicit default. A caller that
-    wants an orchestration method or another function passes `function="..."`.
+    On the semantic side, `evaluate(loaded)` and `loaded(...)` run `entry` when
+    one is declared; neither treats a `forward` method as an implicit default.
+    A caller selects another HIR function or child through `loaded.<name>` and
+    calls it, while a named orchestration method remains ordinary host Python.
   - Python entry into an HIR `Function` through the runtime twin's `forward`
     is the runtime event governed by [hir §1.1](./hir.md#11-function). A
     registered plain Python orchestration method stays on the host; every

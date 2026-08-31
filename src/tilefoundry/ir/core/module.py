@@ -12,11 +12,15 @@ from dataclasses import dataclass, field
 from dataclasses import replace as _replace
 from typing import Mapping, Union
 
+from tilefoundry import evaluator
+from tilefoundry.evaluator.interpreter import _run_bound
+from tilefoundry.evaluator.value import tensor_type_of
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types.shard.mesh import Topology
 from tilefoundry.ir.types.substitute import canonicalize_topology_dims
 from tilefoundry.ir.types.tensor_type import TensorType
+from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.target.base import Target, target_instance
 
 ModuleFunction = Union[HirFunction, PrimFunction]
@@ -378,6 +382,10 @@ class Module:
             )
         return matches[0]
 
+    def __call__(self, *args):
+        """Evaluate the declared entry with every parameter supplied."""
+        return evaluator.evaluate(self.entry_function(), *args)
+
     def load(self, resource) -> "LoadedModule":
         """Remember *resource* for this Module and its children.
 
@@ -414,15 +422,10 @@ class Module:
     def _prepare_into(self, raw, prefix: str, flat: dict, device: str) -> "LoadedModule":
         """Stage this node's canonical weights, children before their owner.
 
-        Converters are HIR bodies on this offline path, making the local evaluator
-        import the one intentional Module-to-evaluator execution dependency.
+        Converters are HIR bodies on this offline path, making the evaluator
+        call the one intentional Module-to-evaluator execution dependency.
         """
         import torch  # noqa: PLC0415 -- optional runtime dep
-
-        from tilefoundry.evaluator.interpreter import _run_bound  # noqa: PLC0415
-        from tilefoundry.evaluator.value import tensor_type_of  # noqa: PLC0415
-        from tilefoundry.ir.types.utils import types_compatible  # noqa: PLC0415
-        from tilefoundry.runtime.resource import DictResource  # noqa: PLC0415
 
         children = tuple(
             child._prepare_into(raw.subtree(child.name), f"{prefix}{child.name}.", flat, device)
@@ -516,6 +519,43 @@ class LoadedModule:
     @property
     def name(self) -> str:
         return self.module.name
+
+    def __getattr__(self, name: str):
+        """Resolve a function, child module, or method against this loading."""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        module = self.module
+        matches = tuple(fn for fn in module.functions if fn.name == name)
+        if len(matches) == 1:
+            return _replace(self, module=_reentered(module, name))
+        if len(matches) > 1:
+            raise AttributeError(
+                f"LoadedModule {self.name!r}: {name!r} resolves to "
+                f"{len(matches)} entries; one name must map to one function"
+            )
+        children = tuple(child for child in self.modules if child.name == name)
+        if len(children) == 1:
+            return children[0]
+        if len(children) > 1:
+            raise AttributeError(
+                f"LoadedModule {self.name!r}: {name!r} resolves to "
+                f"{len(children)} child modules; one name must map to one module"
+            )
+        method = module.methods.get(name)
+        if method is not None:
+            return types.MethodType(method, self)
+        raise AttributeError(
+            f"LoadedModule {self.name!r} has no function, child module, or method {name!r}"
+        )
+
+    def __call__(self, *args):
+        """Evaluate this loading's declared entry with activation arguments."""
+        return evaluator.evaluate(self, *args)
+
+
+from tilefoundry.runtime.resource import (  # noqa: E402, PLC0415 -- runtime imports Module
+    DictResource,
+)
 
 
 def _reentered(module: Module, entry: str) -> Module:

@@ -30,30 +30,21 @@ def evaluate(
     *inputs: "torch.Tensor",
     backend: str = "torch",
     device: str | None = None,
-    function: str | None = None,
 ) -> "torch.Tensor | tuple[torch.Tensor, ...]":
-    ...
-
-def reading(loaded: "LoadedModule", *, device: str) -> "Reading":
     ...
 ```
 
 `evaluate` binds `inputs` to the selected `Function`'s parameters in
 order, walks the body, and returns the logical tensor for a single
 output or a tuple for a `TupleType` result. When passed a `LoadedModule`,
-it builds an evaluator-side reading view and binds only activation inputs;
-declared constants are loaded lazily from that reading at first use. With
-`function=None`, a loaded module runs its declared `entry`; callers select a
-function, child, or orchestration method explicitly with `function="..."`.
+it binds only activation inputs; declared constants are loaded lazily from
+that reading at first use. A loaded module runs its declared `entry`; callers
+select another function or child on the `LoadedModule` before calling
+`evaluate`.
 `backend` selects the
 tensor engine; `"torch"` is the defined backend.
 `device` selects the torch device; when omitted it chooses CUDA when available
 and otherwise CPU.
-
-`reading(loaded, device=...)` returns the public evaluator-side view used by
-host orchestration methods. Its function and child attributes are executable
-views; methods remain ordinary Python methods and may return application state
-containers without evaluator unwrapping.
 
 ## 1. `Value`
 
@@ -125,10 +116,11 @@ corresponding positional input:
 - constraints:
   - A `Function` or `Call` entry takes no resource context and requires one
     input per declared parameter. A `LoadedModule` entry takes activation inputs
-    only; its evaluator-side reading supplies each `ConstTensor` lazily by name.
-    With `function=None`, a loaded module MUST have an `entry`; otherwise the
-    evaluator refuses the call as having no default step. An explicit
-    `function="..."` selects a function, child, or orchestration method by name.
+    only and supplies each `ConstTensor` lazily by name. A loaded module MUST
+    have an `entry`; otherwise the evaluator refuses the call as having no
+    default step. Another function or child is selected as a `LoadedModule`
+    value before evaluation; orchestration methods are host Python and are not
+    evaluator targets.
   - `device` is supplied by the caller. For a loaded reading, every activation
     and every weight must already be on that device; a mismatch is rejected at
     the binding or first-use point, naming the activation position or weight.

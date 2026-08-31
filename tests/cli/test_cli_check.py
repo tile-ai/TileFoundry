@@ -19,8 +19,11 @@ from tests.fixtures.shapes.composed_leaf_source import composed_leaf_source
 from tests.models.corpus import MODELS_ROOT
 from tilefoundry import cli
 from tilefoundry.cli.source import load_namespace, select_ir
+from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import to_torch_dtype
+from tilefoundry.ir.core.module import select
 from tilefoundry.runtime import DictResource
+from tilefoundry.runtime.resource import DrawnResource
 
 ROUTING = f"{MODELS_ROOT / 'qwen3_5_35b_a3b' / 'model.py'}:Qwen3_5MoE.router.routing"
 
@@ -48,8 +51,6 @@ class RecordingResource:
 
 
 def test_load_asks_the_resource_for_nothing():
-    from tilefoundry.runtime.resource import DrawnResource  # noqa: PLC0415 -- added in M2
-
     for mod, mk in (
         (leaf_weights.Mod, leaf_weights.Mod.load),
         (leaf_weights.Small, leaf_weights.Small.load),
@@ -61,10 +62,6 @@ def test_load_asks_the_resource_for_nothing():
 
 
 def test_a_run_asks_for_exactly_the_functions_own_consts():
-    from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- added in M3
-    from tilefoundry.ir.core.module import select  # noqa: PLC0415 -- added in M4
-    from tilefoundry.runtime.resource import DrawnResource  # noqa: PLC0415 -- added in M2
-
     rec = RecordingResource(DrawnResource(leaf_weights.Small, cpu_gen(), "cpu"))
     evaluate(select(leaf_weights.Small, "leaf").load(rec), torch.zeros(1, leaf_weights.D), device="cpu")
     assert rec.asked == []
@@ -74,9 +71,6 @@ def test_a_run_asks_for_exactly_the_functions_own_consts():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a second device")
 def test_a_weight_on_another_device_is_named_at_first_use():
-    from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- added in M3
-    from tilefoundry.runtime.resource import DrawnResource  # noqa: PLC0415 -- added in M2
-
     rec = RecordingResource(DrawnResource(leaf_weights.Small, cpu_gen(), "cpu"))
     with pytest.raises(ValueError, match=r"'w'"):
         evaluate(
@@ -87,16 +81,12 @@ def test_a_weight_on_another_device_is_named_at_first_use():
 
 
 def test_a_missing_weight_is_named_at_first_use():
-    from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- added in M3
-
     loaded = leaf_weights.Small.load(DictResource({}))
     with pytest.raises(KeyError, match=r"missing declared weight 'w'"):
         evaluate(loaded, torch.zeros(1, leaf_weights.D), device="cpu")
 
 
 def test_a_twin_binds_once_and_keeps_it():
-    from tilefoundry.runtime.resource import DrawnResource  # noqa: PLC0415 -- added in M2
-
     rec = RecordingResource(DrawnResource(leaf_weights.Small, cpu_gen(), "cpu"))
     twin = leaf_weights.SmallTwin()
     twin.load(rec)
@@ -152,12 +142,9 @@ def routing(tmp_path_factory) -> dict[str, Path]:
         for param in declared.params
     ]
     tokens, w_router = drawn
-    from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- selected function execution
-
     weights, indices = evaluate(
-        leaf.load(DictResource({"w_router": w_router})),
+        leaf.load(DictResource({"w_router": w_router})).routing,
         tokens,
-        function="routing",
         device=device,
     )
 
@@ -439,6 +426,8 @@ def test_without_a_reference_only_a_one_sided_predicate_is_admitted(capsys) -> N
                 "random",
                 "--weights",
                 "random",
+                "--dim",
+                "ctx_len=64",
                 "--out",
                 "output",
                 "--fn",
@@ -460,6 +449,8 @@ def test_without_a_reference_only_a_one_sided_predicate_is_admitted(capsys) -> N
                 "random",
                 "--weights",
                 "random",
+                "--dim",
+                "ctx_len=64",
                 "--out",
                 "output",
                 "--fn",
@@ -473,10 +464,8 @@ def test_without_a_reference_only_a_one_sided_predicate_is_admitted(capsys) -> N
     assert "nan 0 inf 0" in reported
 
 
-def test_a_dimension_left_as_a_range_is_reported_with_what_it_was_pinned_to(
-    capsys, tmp_path
-) -> None:
-    """The pin is a decision this run made, so it is said out loud, in both forms."""
+def test_a_dimension_left_as_a_range_is_refused(capsys) -> None:
+    """An unstated range remains the caller's decision."""
     assert (
         cli.main(
             [
@@ -492,36 +481,11 @@ def test_a_dimension_left_as_a_range_is_reported_with_what_it_was_pinned_to(
                 "nan_inf",
             ]
         )
-        == 0
+        == 1
     )
-    reported = capsys.readouterr().out
-    assert "ctx_len is a range [0, 262144) that nothing bound; this run pinned it to 0" in reported
-
-    assert "--dim ctx_len=" in reported
-    assert "`tilefoundry spec parser 1.1`" in reported
-
-    assert (
-        cli.main(
-            [
-                "check",
-                DISPATCHING,
-                "--inputs",
-                "random",
-                "--weights",
-                "random",
-                "--out",
-                "output",
-                "--fn",
-                "nan_inf",
-                "--json",
-                str(tmp_path / "pinned.json"),
-            ]
-        )
-        == 0
-    )
-    assert capsys.readouterr().out == ""
-    pinned = json.loads((tmp_path / "pinned.json").read_text(encoding="utf-8"))["runs"][0]["pinned"]
-    assert {entry["dim"]: entry["pinned"] for entry in pinned} == {"ctx_len": 0}
+    refused = capsys.readouterr().err
+    assert "still states DimVar(name='ctx_len'" in refused
+    assert "bind it with --dim" in refused
 
 
 def test_several_extents_check_the_dispatch_and_name_the_implementation(capsys, tmp_path) -> None:

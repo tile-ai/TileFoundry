@@ -133,9 +133,9 @@ bounds the caller stated.
   - One input file MUST bind one parameter. Its value MAY be a bare tensor or
     an arbitrarily nested tuple or list of tensors; every leaf MUST be a tensor.
   - A target whose step is an orchestration method rather than a `@func` MUST
-    refuse `--inputs random`, because its activation shapes
-    and dtypes are not declared. The refusal MUST name the parameter count and
-    names in order, and say that one input file binds each parameter.
+    be refused, naming the method and the HIR functions that may be checked
+    instead. Orchestration is host Python reused verbatim on both sides; `check`
+    compares HIR, not one Python function object against itself.
   - Every output MUST be judged by at least one predicate the caller states, and
     there MUST be no default predicate and no default bound. A bound nobody can
     meet is worse than none: a single `f32`→`bf16` rounding already measures
@@ -180,14 +180,12 @@ bounds the caller stated.
     subset the selected function names; the selector's child segments MUST scope
     the checkpoint by the same names they resolve the Module by, so the two cannot
     be addressed differently.
-  - A dimension the target states as a range MUST be reported, along with the
-    extent this run pinned it to; several extents MAY be stated for one dimension,
-    and each MUST be run and reported. Where the extents select an implementation,
+  - A dimension the target states as a range MUST be bound by `--dim`; a run
+    MUST NOT choose an extent on the caller's behalf. Several extents MAY be
+    stated for one dimension, and each MUST be run and reported. Where the extents select an implementation,
     the report MUST name the one selected and the range it covers. Naming it is what
     separates "it ran" from "it ran the intended program", so a run that only passed
     is not evidence that dispatch landed where the author meant.
-  - Reporting a pin MUST also state both ways out of it: binding the dimension, and
-    declaring a variant that covers the size.
   - An extent no declared variant covers MUST fail, naming the ranges that are
     covered. Choosing a neighbouring implementation instead would answer about a
     program nobody selected, and the failure is only actionable if the reader can

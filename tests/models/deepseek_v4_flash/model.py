@@ -1285,12 +1285,12 @@ def build_deepseek_v4_flash(config: DSV4Config):
 
         def forward(self, hidden, cos_pos, sin_pos, kv_cache, scale, ones_head_dim, token_ids):
             attn_in = self.pre_attn_rms_norm(hidden)
-            attn_out, kv_new = self.attention(
+            attn_out, kv_new = self.attention.forward(
                 attn_in, cos_pos, sin_pos, kv_cache, scale, ones_head_dim,
             )
             h1 = self.residual_add(hidden, attn_out)
             moe_in = self.pre_moe_rms_norm(h1)
-            moe_out = self.moe(moe_in, token_ids)
+            moe_out = self.moe.forward(moe_in, token_ids)
             out = self.residual_add(h1, moe_out)
             return out, kv_new
 
@@ -1344,7 +1344,7 @@ def build_deepseek_v4_flash(config: DSV4Config):
             fresh = []
             for i in range(config.n_layers):
                 layer = getattr(self, f"layer{i}")
-                hidden, kv_new = layer(
+                hidden, kv_new = layer.forward(
                     hidden, cos_pos, sin_pos, past_key_values[i], scale, ones_head_dim, token_ids,
                 )
                 fresh.append(kv_new)

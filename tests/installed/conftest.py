@@ -226,3 +226,8 @@ def cwide() -> Path:
 @pytest.fixture(scope="module")
 def leaf_weights() -> Path:
     return _fixture_path("placed", "leaf_weights.py")
+
+
+@pytest.fixture(scope="module")
+def specialize_through_call() -> Path:
+    return _fixture_path("placed", "specialize_through_call.py")

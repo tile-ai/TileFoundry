@@ -136,9 +136,7 @@ def run_attention_step(inputs: DecodeStepInputs):
     into, not a second copy that takes its weights positionally.
     """
     loaded = DeepseekV4Attention.cloned().load(DictResource(inputs.weights))
-    from tilefoundry.evaluator import evaluate  # noqa: PLC0415
-
-    return evaluate(loaded, *inputs.args, function="forward", device=inputs.args[0].device)
+    return loaded.forward(*inputs.args)
 
 
 def attention_step_oracle(inputs: DecodeStepInputs) -> torch.Tensor:

@@ -83,10 +83,10 @@ def _entry(step):
 
 
 def _asked(tf, work, source, step, *, out_held):
-    """One `check` of the attention step, judging both of its returns.
+    """Run the host attention step and judge both returns with ``runtime.check``.
 
-    No `--dim`: an orchestration method has no single signature to bind an extent
-    against, so the context length is the one the supplied cache actually has.
+    The test invokes ``forward`` explicitly because orchestration is not a CLI
+    check target. The supplied cache carries the concrete context length.
     """
     _grown, entry = _entry(step)
     return contract.compared(

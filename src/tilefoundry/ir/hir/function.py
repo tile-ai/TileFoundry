@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from tilefoundry import evaluator
 from tilefoundry.ir.core import Expr, Var
 from tilefoundry.ir.core.pattern import Pattern
 from tilefoundry.ir.types import Type, callable_type_for
@@ -74,6 +75,10 @@ class Function(Expr):
                 f"variant after the function has entered a Module (sealed)"
             )
         self.variants = (*self.variants, variant)
+
+    def __call__(self, *args):
+        """Evaluate with one argument for every declared parameter."""
+        return evaluator.evaluate(self, *args)
 
     def add_converter(self, weight_name: str, fn: "Function") -> None:
         """Register a per-weight offline converter for ``weight_name``."""

@@ -126,8 +126,10 @@ def test_the_moe_block_matches_hugging_face(tf, shipped_source, tmp_path) -> Non
     The whole block -- post_attention_layernorm plus `Qwen3_5MoeSparseMoeBlock`,
     routed experts and the shared expert together -- against Hugging Face's own.
 
-    Named as a Module so `check` compares the block's own orchestration rather than
-    one of its functions: the routed and shared halves are summed inside it.
+    The test runs the block's host orchestration explicitly, then uses
+    ``runtime.check`` against the Hugging Face result. The routed and shared
+    halves are summed inside that orchestration, so no single HIR function is
+    an equivalent boundary.
     """
     step = reference.linear_step(device="cpu", whole_layer=True)
     loaded = reference.load_moe(step.layer)
