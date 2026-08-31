@@ -19,7 +19,7 @@ def test_body_local_integer_arithmetic_is_normalized_before_layout_construction(
         @func
         def f(
             x: Tensor[(1, 16, 8192), "f32"],
-        ) -> Tensor[(1, 16, 8192), "f32"]:
+        ):
             with Mesh(("cta",), layout=(128,), names=("unit",)) as mesh:
                 width = 4096 + 4096
                 return tf.reshard(

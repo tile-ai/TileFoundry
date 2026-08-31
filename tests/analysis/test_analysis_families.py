@@ -268,7 +268,7 @@ class _SplitLastAxis:
     def last_axis(
         x: Tensor[(1, _SPLIT_BLOCK, _SPLIT_HIDDEN), "bf16"],
         w: ConstTensor[(_SPLIT_HIDDEN, _SPLIT_OUT), "bf16"],
-    ) -> Tensor[(1, _SPLIT_BLOCK, _SPLIT_OUT), "bf16"]:
+    ):
         with Mesh(("cta",), layout=(_SPLIT_GRID,), names=("unit",)) as mesh:
             rows = tf.reshard(
                 x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem"
@@ -287,7 +287,7 @@ class _SplitStripMajor:
     def strip_major(
         x: Tensor[(1, _SPLIT_BLOCK, _SPLIT_HIDDEN), "bf16"],
         w: ConstTensor[(_SPLIT_GRID, _SPLIT_HIDDEN, _SPLIT_PER), "bf16"],
-    ) -> Tensor[(_SPLIT_GRID, _SPLIT_BLOCK, _SPLIT_PER), "bf16"]:
+    ):
         with Mesh(("cta",), layout=(_SPLIT_GRID,), names=("unit",)) as mesh:
             rows = tf.reshard(
                 x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem"

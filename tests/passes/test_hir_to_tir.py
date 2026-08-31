@@ -51,7 +51,7 @@ def test_umat_param_rejected_at_lowering() -> None:
     """
 
     @func
-    def f(x: Tensor[(8,), "f32", None, StorageKind.UMAT]) -> Tensor[(8,), "f32"]:
+    def f(x: Tensor[(8,), "f32", None, StorageKind.UMAT]):
         return x
 
     fn = f

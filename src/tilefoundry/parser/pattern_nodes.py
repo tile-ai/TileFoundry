@@ -34,6 +34,8 @@ from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Broadcast, Layout, Partial, Split
+from tilefoundry.ir.types.substitute import canonicalize_dims
+from tilefoundry.ir.types.utils import types_compatible
 
 from .ast_pattern import (
     _BINARY_OPERATORS,
@@ -963,11 +965,94 @@ class ScalarTypePattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
+class TupleTypePattern(ElementPattern):
+    """Parse ``tuple[T, U, ...]`` as a parser-only type annotation value."""
+
+    element_name = "tuple_type"
+    syntax = LazyPattern(
+        lambda: ChoicePattern(
+            BranchPattern(
+                "tuple",
+                AstNodePattern(
+                    ast.Subscript,
+                    FieldPattern(
+                        "value",
+                        AstNodePattern(
+                            ast.Name,
+                            FieldPattern("id", LiteralPattern("tuple")),
+                        ),
+                    ),
+                    FieldPattern(
+                        "slice",
+                        AstNodePattern(
+                            ast.Tuple,
+                            CapturePattern("field_count", lambda node, context: len(node.elts)),
+                            FieldPattern(
+                                "elts",
+                                RepeatPattern(
+                                    ChildPattern(
+                                        "field_{index}",
+                                        lambda: TypeAnnotationPattern(),
+                                        "type_annotation",
+                                        "tuple_field",
+                                    ),
+                                    minimum=1,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                pattern_id="tuple.annotation",
+            ),
+            BranchPattern(
+                "tuple_single",
+                AstNodePattern(
+                    ast.Subscript,
+                    FieldPattern(
+                        "value",
+                        AstNodePattern(
+                            ast.Name,
+                            FieldPattern("id", LiteralPattern("tuple")),
+                        ),
+                    ),
+                    FieldPattern(
+                        "slice",
+                        ChildPattern(
+                            "field_0",
+                            lambda: TypeAnnotationPattern(),
+                            "type_annotation",
+                            "tuple_field",
+                        ),
+                    ),
+                ),
+                pattern_id="tuple.annotation",
+            ),
+        )
+    )
+
+    @staticmethod
+    def construct(match, children, context):
+        fields = tuple(
+            children[f"field_{index}"]
+            for index in range(match.captures.get("field_count", 1))
+        )
+        if not all(isinstance(field, (runtime.TensorType, runtime.TupleType)) for field in fields):
+            raise ParseError.from_node(
+                match.node,
+                context,
+                "tuple annotation fields must resolve to Tensor or tuple types",
+            )
+        return runtime.TupleType(fields=fields)
+
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+
 class TypeAnnotationPattern(ElementPattern):
     element_name = "type_annotation"
     syntax = LazyPattern(
         lambda: ChoicePattern(
             TensorPattern(),
+            TupleTypePattern(),
             ScalarTypePattern(),
         )
     )
@@ -4062,6 +4147,60 @@ class FunctionDialectRule:
         return value
 
 
+_AUTHORED_RETURN_ANNOTATION = "_tilefoundry_authored_return_annotation"
+_AUTHORED_BODY_TYPE = "_tilefoundry_authored_body_type"
+
+
+@dataclass(frozen=True)
+class FunctionReturnCompatibilityRule:
+    STATEMENT: ClassVar[str] = (
+        "A HIR body with a return annotation must satisfy that annotation; a "
+        "dispatch prototype must declare one, and each variant body must "
+        "satisfy the prototype return contract."
+    )
+
+    def apply(self, value, *, match, context):
+        if context.function is None:
+            raise ParseError.from_node(match.node, context, "function lacks parser context")
+        if context.function.dialect != "hir":
+            return value
+        declared = getattr(value, _AUTHORED_RETURN_ANNOTATION, None)
+        body_type = getattr(value, _AUTHORED_BODY_TYPE, None)
+        try:
+            if body_type is None:
+                if context.function.role is FunctionRole.ROOT and declared is None:
+                    raise ParseError.from_node(
+                        match.node,
+                        context,
+                        "HIR pass prototype requires a return annotation",
+                    )
+                return value
+            if declared is not None and not types_compatible(declared, body_type):
+                raise ParseError.from_node(
+                    match.node,
+                    context,
+                    "return annotation is not compatible with the inferred body type: "
+                    f"annotation {declared!r}, body {body_type!r}",
+                )
+            if context.function.role is FunctionRole.VARIANT:
+                base = context.function.base
+                if not isinstance(base, runtime.Function):
+                    raise ParseError.from_node(
+                        match.node, context, "variant lacks a HIR dispatch prototype"
+                    )
+                if not types_compatible(base.return_type, body_type):
+                    raise ParseError.from_node(
+                        match.node,
+                        context,
+                        f"variant body type {body_type!r} is not compatible with "
+                        f"dispatch return contract {base.return_type!r}",
+                    )
+            return value
+        finally:
+            delattr(value, _AUTHORED_RETURN_ANNOTATION)
+            delattr(value, _AUTHORED_BODY_TYPE)
+
+
 @dataclass(frozen=True)
 class FunctionRoleValidationRule:
     STATEMENT: ClassVar[str] = (
@@ -4196,14 +4335,11 @@ class FunctionPattern(ElementPattern):
         specializations = context.function.specializations
         converter = context.function.converter
         if context.function.dialect == "hir":
+            declared_return = (
+                None if declared_return is None else canonicalize_dims(declared_return)
+            )
             if body is None:
-                if declared_return is None:
-                    raise ParseError.from_node(
-                        match.node,
-                        context,
-                        "HIR pass prototype requires a return annotation",
-                    )
-                return_type = declared_return
+                return_type = declared_return or runtime.UnitType()
             elif context.function.role is FunctionRole.VARIANT:
                 base = context.function.base
                 assert isinstance(base, runtime.Function)
@@ -4222,6 +4358,8 @@ class FunctionPattern(ElementPattern):
                 return_type=return_type,
                 specializations=specializations,
             )
+            setattr(function, _AUTHORED_RETURN_ANNOTATION, declared_return)
+            setattr(function, _AUTHORED_BODY_TYPE, None if body is None else body.type)
             if context.function.role is FunctionRole.VARIANT:
                 setattr(function, runtime.DISPLAY_NAME, match.captures["name"])
                 function.name = function_name
@@ -4252,6 +4390,7 @@ class FunctionPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         FunctionSignatureRule(),
         FunctionDialectRule(),
+        FunctionReturnCompatibilityRule(),
         FunctionRoleValidationRule(),
         FunctionRegistrationRule(),
     )
@@ -4286,6 +4425,7 @@ __all__ = [
     "FunctionDialectRule",
     "FunctionPattern",
     "FunctionRegistrationRule",
+    "FunctionReturnCompatibilityRule",
     "FunctionRoleValidationRule",
     "FunctionSignatureRule",
     "IndexEndpointPattern",
@@ -4324,6 +4464,7 @@ __all__ = [
     "TensorShapeLayoutPattern",
     "TupleAssignmentPattern",
     "TupleExpressionPattern",
+    "TupleTypePattern",
     "TypeAnnotationPattern",
     "UnaryExpressionPattern",
     "CallVariadicInputFormRule",

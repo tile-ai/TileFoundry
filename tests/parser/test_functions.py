@@ -13,7 +13,10 @@ from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, SourceSpanMetadata, get_metadata
 from tilefoundry.ir.core.module import Module, subtree
+from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.types import TupleType
+from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.parser import ParseError
@@ -45,19 +48,40 @@ def _functions_defined_by(namespace: dict[str, object]) -> tuple[Function, ...]:
     return tuple(found)
 
 
-def test_a_lying_return_annotation_is_ignored_not_rejected() -> None:
-    @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+def test_a_return_annotation_validates_a_layout_inferred_from_the_body() -> None:
+    @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 2),))
     def annotated(
         x: Tensor[(8, 16), "f32"],
-    ) -> Tensor[(8, 16), "f32", None, "smem"]:
-        return tf.mul(x, x)
+    ) -> Tensor[(8, 16), "f32"]:
+        with Mesh(("cta",), layout=(2,), names=("lane",)) as cta:
+            return tf.reshard(x, (8 @ cta.lane, 16), "gmem")
 
     fn = annotated.entry_function()
     assert fn.return_type == fn.body.type
     assert fn.return_type.storage is StorageKind.GMEM
+    assert fn.return_type.layout is not None
 
 
-def test_a_dispatch_prototype_still_requires_a_return_annotation() -> None:
+def test_an_incompatible_return_annotation_reports_annotation_and_body_types() -> None:
+    with pytest.raises(ParseError) as raised:
+
+        @func(target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
+        def annotated(
+            x: Tensor[(8, 16), "f32"],
+        ) -> Tensor[(8, 16), "f32", None, "smem"]:
+            return tf.mul(x, x)
+
+    message = str(raised.value)
+    assert "return annotation is not compatible with the inferred body type" in message
+    assert "annotation TensorType" in message
+    assert "body TensorType" in message
+    assert "StorageKind.SMEM" in message
+    assert "StorageKind.GMEM" in message
+    assert "(role 'func')" in message
+    assert "tests/parser/test_functions.py:" in message
+
+
+def test_a_dispatch_prototype_requires_a_return_annotation() -> None:
     with pytest.raises(ParseError, match="prototype requires a return annotation"):
 
         @module(
@@ -69,6 +93,55 @@ def test_a_dispatch_prototype_still_requires_a_return_annotation() -> None:
             @func
             def root(x: Tensor[(8, 16), "f32"]):
                 pass
+
+
+def test_a_dispatch_prototype_uses_its_tuple_annotation_as_a_variant_contract() -> None:
+    size = DimVar("prototype_size", 1, 9)
+
+    @module(
+        entry="root",
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 1),),
+    )
+    class TupleDispatch:
+        @func
+        def root(
+            x: Tensor[(size,), "f32"],
+        ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
+            pass
+
+        @root.specialize(DimVarRangePat("prototype_size", 1, 9))
+        def both(
+            x: Tensor[(size,), "f32"],
+        ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
+            return x, x
+
+    prototype = TupleDispatch.entry_function()
+    assert isinstance(prototype.return_type, TupleType)
+    assert prototype.return_type == prototype.variants[0].return_type
+    assert prototype.type.return_type == prototype.return_type
+
+
+def test_a_variant_body_must_satisfy_its_dispatch_return_contract() -> None:
+    size = DimVar("prototype_mismatch_size", 1, 9)
+
+    with pytest.raises(ParseError, match="variant body type .*dispatch return contract"):
+
+        @module(
+            entry="root",
+            target=CudaTarget("nvidia.h200_sxm"),
+            topologies=(Topology("cta", 1),),
+        )
+        class IncompatibleVariant:
+            @func
+            def root(
+                x: Tensor[(size,), "f32"],
+            ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
+                pass
+
+            @root.specialize(DimVarRangePat("prototype_mismatch_size", 1, 9))
+            def scalar(x: Tensor[(size,), "f32"]):
+                return x
 
 
 def test_a_storage_the_target_does_not_have_is_refused() -> None:

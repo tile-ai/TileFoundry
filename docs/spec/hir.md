@@ -116,6 +116,16 @@ declares, but it MUST NOT create a level or change one's extent.
 `return_type`. The projection is fixed at construction and stays
 consistent across construction sites.
 
+**Parser return contract.** At the DSL boundary, a body with an authored return
+annotation MUST satisfy `types_compatible(annotation, body.type)`. A normal
+function keeps its inferred `body.type` as `return_type` after that check. A
+`pass` dispatch prototype MUST declare its return type; it becomes the base
+return type and every variant body MUST satisfy it before the variant receives
+that exact base `return_type`. `Tensor[...]` without a storage slot is a GMEM
+annotation, including here: it is not an unconstrained storage spelling. The
+parser accepts `tuple[...]` and applies the same compatibility relation
+recursively to its fields. See [parser §3.1](./parser.md#31-hir-return-contracts).
+
 **Call typing — visitor-scoped inference.** A `Call` keeps its authored
 `Function` template as `target`. Its result type is inferred by seeding a new
 visitor memo with the actual argument types bound to the callee's formal

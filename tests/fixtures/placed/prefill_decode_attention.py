@@ -106,7 +106,11 @@ class PrefillDecodeAttention:
                 running_out = next_out
 
             normalized = running_out / running_sum
-            return tf.transpose(tf.cast(normalized, dtype="bf16"), perm=(0, 2, 1, 3))
+            return tf.reshard(
+                tf.transpose(tf.cast(normalized, dtype="bf16"), perm=(0, 2, 1, 3)),
+                (1, SEQ, HEADS, HEAD_DIM),
+                "gmem",
+            )
 
     @attend.specialize(DimVarRangePat("seq", 2, 4097))
     def prefill(

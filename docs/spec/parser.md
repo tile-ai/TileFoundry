@@ -105,8 +105,11 @@ tensor-optional-slot  ::= layout
 tensor                ::= tensor-head '[' '(' (tensor-shape-layout ',' dtype | tensor-shape-layout
                           ',' dtype ',' tensor-optional-slot | tensor-shape-layout ',' dtype ','
                           tensor-optional-slot ',' tensor-optional-slot) ')' ']'
+tuple-type            ::= 'tuple' '[' '(' type-annotation (',' type-annotation)* ')' ']'
+                          | 'tuple' '[' type-annotation ']'
 scalar-type           ::= primary
 type-annotation       ::= tensor
+                          | tuple-type
                           | scalar-type
 signature             ::= (name ':' type-annotation (',' name ':' type-annotation)*)?
 return-type           ::= type-annotation
@@ -194,6 +197,7 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | explicit_layout, layout, placed_layout, plain_layout | layout_shape, tensor_optional_slot, tensor_shape | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
 | function | function | FunctionDialectRule | A function kind and constructed value must agree with the active dialect. | src/tilefoundry/parser/pattern_nodes.py |
 | function | function | FunctionRegistrationRule | A validated function must be registered exactly once in its owning scope. | src/tilefoundry/parser/pattern_nodes.py |
+| function | function | FunctionReturnCompatibilityRule | A HIR body with a return annotation must satisfy that annotation; a dispatch prototype must declare one, and each variant body must satisfy the prototype return contract. | src/tilefoundry/parser/pattern_nodes.py |
 | function | function | FunctionRoleValidationRule | A root, variant, or converter must satisfy its role before registration. | src/tilefoundry/parser/pattern_nodes.py |
 | function | function | FunctionSignatureRule | A function must construct an ordered parameter tuple. | src/tilefoundry/parser/pattern_nodes.py |
 | index_slice | subscript_index | TileWindowSliceBoundRule | A tile window cannot be used as a slice bound. | src/tilefoundry/parser/pattern_nodes.py |
@@ -218,6 +222,27 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | Module Build | Lets Python execute the class body, collects declarations, resolves child Modules first, then parses Functions in source order and finalizes the Module. |
 | Pattern Visitor | Traverses the same graph to render this section's generated grammar and constraints. |
 | Refusal | Carries the reason from the pattern that claimed a node and then refused it, so a report names a cause rather than the absence of a match. |
+
+### 3.1 HIR Return Contracts
+
+An ordinary HIR function and a specialization variant MAY omit `-> return-type`;
+an ordinary function then records its inferred `body.type` as `Function.return_type`.
+When either declares an annotation, the parser MUST require
+`types_compatible(annotation, body.type)`. This is directional compatibility,
+not a parser-only equality relation: an annotation with `layout=None` leaves
+layout unconstrained according to the shared type rule.
+
+A `pass` HIR function is a dispatch prototype and MUST declare `-> return-type`.
+That annotation is its `Function.return_type` and callable return type. Every
+variant body MUST be compatible with that base return type; its own IR return
+type remains the exact base type so all variants share one dispatch signature.
+
+`Tensor[...]` without a storage slot constructs `storage=GMEM`, including in a
+return annotation. It is not an unspecified-storage spelling. Consequently an
+SMEM body under `-> Tensor[...]` must explicitly return a GMEM result; the
+parser reports both the annotation and inferred body type, with the authored
+function location, when they are incompatible. `tuple[...]` annotations are
+accepted and apply this same compatibility rule recursively to every field.
 
 ```mermaid
 classDiagram

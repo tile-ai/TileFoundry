@@ -61,6 +61,15 @@ def types_compatible(declared: Type, actual: Type) -> bool:
             )
             and layout_compatible(declared.layout, actual.layout)
         )
+    if isinstance(declared, TupleType):
+        return (
+            isinstance(actual, TupleType)
+            and len(declared.fields) == len(actual.fields)
+            and all(
+                types_compatible(declared_field, actual_field)
+                for declared_field, actual_field in zip(declared.fields, actual.fields)
+            )
+        )
     return actual == declared
 
 
