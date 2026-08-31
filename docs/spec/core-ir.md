@@ -65,7 +65,6 @@ class Module:
     def resolve_topology(self, name: str) -> Topology: ...
     def owns(self, function: object, *, derived: bool = False) -> bool: ...
     def load(self, resource) -> "LoadedModule": ...
-    def forward(self, *args): ...
     def prepare(
         self, raw, out_dir: str, *, device: str = "cpu"
     ) -> None: ...
@@ -189,10 +188,11 @@ step.
     and the emitter MUST start there. Other functions enter the output only when
     reachable from `entry`.
   - When `entry` is omitted (`None`), the Module MUST have no default step.
-    `entry_function()` and a bare call MUST be refused, naming the Module's
-    functions and explaining that one is selected with `lookup('<name>')`.
+    `entry_function()` and an unqualified evaluator call MUST be refused,
+    naming the Module's functions and explaining that one is selected by name.
     Each function remains reachable by name. A Module that composes children in
-    an orchestration method has no single step to nominate.
+    an orchestration method has no single step to nominate; callers select that
+    method explicitly through the evaluator.
   - A bare `@func` / `@prim_func` MUST become an implicit single-function
     Module whose `entry` names that function.
 
@@ -234,18 +234,14 @@ shape-specialization variants live inside that entry's `Function.variants`
   - Python attribute access `mod.<name>` resolves, in order, a function, a
   child module, or a method named `<name>`, and MUST raise `AttributeError`
   when none match or when more than one same-kind entry shares the name. A
-  **function** name resolves to a callable that runs it — not to the
-  `Function` / `PrimFunction` node itself (reach that with `lookup` /
-  `function_named` above). A `Module` holds no constants, so that callable
-  takes **one argument per declared param**, a `ConstTensor` one included; the
-  callable that fills constants from bindings instead belongs to
-  `LoadedModule`, which runs on the one device its bindings and activations
-  agree on ([runtime §1.1.2](./runtime.md#112-weight-converter-and-prepare--forward)). A **child module** name
-  resolves to that child `Module`. A **method** name resolves to the
-  class-body function bound like an instance method (`m.forward(...)`). Names
-  beginning with `_` are never functions, modules, or methods and resolve by
-  normal attribute rules. This lets a module read like the model it mirrors —
-  `decoder.layer0.attention(...)`.
+  **function** name resolves to the `Function` / `PrimFunction` node itself,
+  like `lookup` and `function_named`; execution is through
+  `evaluator.evaluate`. A **child module** name resolves to that child
+  `Module`. A **method** name
+  resolves to the class-body function bound like an instance method
+  (`m.forward(...)`). Names beginning with `_` are never functions, modules, or
+  methods and resolve by normal attribute rules. This lets a module read like
+  the model it mirrors — `decoder.layer0.attention`.
 
 ### 1.2 Selecting a node by path
 

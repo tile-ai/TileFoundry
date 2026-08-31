@@ -277,8 +277,8 @@ def split_by_declaration(case: ModelCase, selector: str, args: Sequence):
     """One positional argument list, split the way the command takes it.
 
     An in-process call may hand every parameter over positionally, weights and all.
-    ``check`` does not: ``--input`` names the non-const parameters in declared order
-    and the rest arrive as a checkpoint. Split here from the declaration itself, so
+    ``check`` does not: ``--inputs files:...`` names the non-const parameters in
+    declared order and the rest arrive as a checkpoint. Split here from the declaration itself, so
     a parameter that changes kind moves sides on its own.
     """
     _module, function = case.resolve(case.build(), selector)
@@ -297,11 +297,9 @@ def nested_constants(loaded, prefix: str = "") -> dict:
     A Module names only its own; a checkpoint has to carry the children's too, keyed
     by the path they are reached through, or the child is loaded with nothing.
     """
-    found = {f"{prefix}{name}": value for name, value in loaded.constants.items()}
-    for child in getattr(loaded, "modules", ()) or ():
-        inner = getattr(loaded, child.name, None)
-        if inner is not None and hasattr(inner, "constants"):
-            found.update(nested_constants(inner, f"{prefix}{child.name}."))
+    found = {f"{prefix}{name}": loaded.resource.load(name) for name in loaded.module.weights}
+    for child in loaded.modules:
+        found.update(nested_constants(child, f"{prefix}{child.module.name}."))
     return found
 
 
@@ -326,15 +324,17 @@ def compared(
     by an artifact somebody recorded once.
 
     The weights travel as a checkpoint rather than as activations, because that is
-    the only door ``check`` has for them -- ``--input`` names the non-const
+    the only door ``check`` has for them -- ``--inputs files:...`` names the non-const
     parameters, in the order the function declares them.
     """
     room = Path(tempfile.mkdtemp(dir=work))
     argv = ["check", static(source, case, selector)]
+    input_paths = []
     for position, tensor in enumerate(activations):
         path = room / f"in{position}.pt"
         torch.save(tensor, path)
-        argv += ["--input", str(path)]
+        input_paths.append(str(path))
+    argv += ["--inputs", f"files:{','.join(input_paths)}"]
 
     if weights:
         save_file(
@@ -344,7 +344,9 @@ def compared(
             },
             str(room / "model.safetensors"),
         )
-        argv += ["--ckpt", str(room)]
+        argv += ["--weights", f"ckpt:{room}"]
+    else:
+        argv += ["--weights", "random"]
     argv += dim_args(dims)
     for position, tensor in enumerate(expected):
         path = room / f"want{position}.pt"

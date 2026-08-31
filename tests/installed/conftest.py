@@ -221,3 +221,8 @@ def mislabelled_twin() -> Path:
 @pytest.fixture
 def cwide() -> Path:
     return _fixture_path("placed", "square_cuda.py")
+
+
+@pytest.fixture(scope="module")
+def leaf_weights() -> Path:
+    return _fixture_path("placed", "leaf_weights.py")

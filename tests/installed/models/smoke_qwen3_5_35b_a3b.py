@@ -73,7 +73,7 @@ def test_full_attention_matches_hugging_face(tf, shipped_source, tmp_path, ctx_l
         FULL,
         "full_attention",
         activations=(step.hidden_new, *step.mixer_acts),
-        weights=loaded.constants,
+        weights={name: loaded.resource.load(name) for name in loaded.module.weights},
         expected=(want, entry_key, entry_value),
         held=(
             contract.three_roundings(want),
@@ -107,7 +107,7 @@ def test_linear_attention_matches_hugging_face(tf, shipped_source, tmp_path, ctx
         LINEAR,
         "linear_attention",
         activations=(step.hidden_new, *step.mixer_acts),
-        weights=loaded.constants,
+        weights={name: loaded.resource.load(name) for name in loaded.module.weights},
         expected=(want, entry, want_state),
         held=(
             contract.three_roundings(want),
@@ -207,14 +207,14 @@ def test_the_output_gate_is_applied(tf, shipped_source, tmp_path) -> None:
     want = reference.full_mixer_oracle(step)
     want_key, want_value = reference.appended_cache_oracle(step)
 
-    neutral = dict(loaded.constants)
+    neutral = {name: loaded.resource.load(name) for name in loaded.module.weights}
     gated = (
         neutral["w_qg"]
         .clone()
         .reshape(1, shape.hidden_size, shape.num_attention_heads, 2 * shape.head_dim)
     )
     gated[..., shape.head_dim :] = 0.0
-    neutral["w_qg"] = gated.reshape(loaded.constants["w_qg"].shape)
+    neutral["w_qg"] = gated.reshape(loaded.resource.load("w_qg").shape)
 
     contract.disagreed(
         tf,

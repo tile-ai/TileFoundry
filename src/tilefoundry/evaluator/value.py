@@ -1,7 +1,7 @@
 """Evaluator value model."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import torch
 
@@ -61,6 +61,11 @@ def from_torch_dtype(dtype: torch.dtype) -> DType:
         if torch_dtype == dtype:
             return declared
     raise EvalError(f"evaluator: no declared dtype for {dtype}")
+
+
+def tensor_type_of(data: torch.Tensor, *, like: TensorType) -> TensorType:
+    """Describe a concrete tensor using the declaration's non-shape fields."""
+    return replace(like, shape=tuple(data.shape), dtype=from_torch_dtype(data.dtype))
 
 
 def _flatten_ints(shape) -> tuple[int, ...]:

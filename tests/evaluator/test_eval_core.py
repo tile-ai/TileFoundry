@@ -127,7 +127,7 @@ def test_a_child_module_call_runs_against_that_child_reading() -> None:
     w = torch.tensor([2.0, 3.0, 4.0, 5.0])
     reading = FusedScaledParent.load(_Weights({"scaled.w": w}))
 
-    assert torch.equal(reading.fused(x), x * w)
+    assert torch.equal(evaluate(reading, x, function="fused", device=_DEV), x * w)
 
 
 def test_one_module_read_twice_yields_two_independent_readings() -> None:
@@ -135,8 +135,8 @@ def test_one_module_read_twice_yields_two_independent_readings() -> None:
     first = FusedScaledParent.load(_Weights({"scaled.w": torch.full((4,), 2.0)}))
     second = FusedScaledParent.load(_Weights({"scaled.w": torch.full((4,), 5.0)}))
 
-    assert torch.equal(second.fused(x), torch.full((4,), 5.0))
-    assert torch.equal(first.fused(x), torch.full((4,), 2.0))
+    assert torch.equal(evaluate(second, x, function="fused", device=_DEV), torch.full((4,), 5.0))
+    assert torch.equal(evaluate(first, x, function="fused", device=_DEV), torch.full((4,), 2.0))
 
 
 def test_two_bindings_of_one_child_read_their_own_constants() -> None:
@@ -145,7 +145,7 @@ def test_two_bindings_of_one_child_read_their_own_constants() -> None:
         _Weights({"left.w": torch.full((4,), 2.0), "right.w": torch.full((4,), 7.0)})
     )
 
-    assert torch.equal(reading.both(x), torch.full((4,), 9.0))
+    assert torch.equal(evaluate(reading, x, function="both", device=_DEV), torch.full((4,), 9.0))
 
 
 def test_a_child_call_inside_a_loop_keeps_its_reading_on_every_trip() -> None:
@@ -164,7 +164,7 @@ def test_a_child_call_inside_a_loop_keeps_its_reading_on_every_trip() -> None:
     w = torch.full((4,), 2.0)
     reading = _Looped.load(_Weights({"scaled.w": w}))
 
-    assert torch.equal(reading.looped(x), x * w * w * w)
+    assert torch.equal(evaluate(reading, x, function="looped", device=_DEV), x * w * w * w)
 
 
 def test_a_variant_body_reaches_its_child_the_same_way() -> None:

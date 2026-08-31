@@ -10,6 +10,8 @@ from safetensors.torch import save_file
 _ARGS = (
     "--inputs",
     "random",
+    "--weights",
+    "random",
     "--out",
     "output",
     "--fn",
@@ -20,7 +22,26 @@ _ARGS = (
     "1e-6",
 )
 
-_MESH_CHECK_ARGS = ("--inputs", "random", "--out", "output", "--fn", "nan_inf")
+_MESH_CHECK_ARGS = (
+    "--inputs", "random", "--weights", "random", "--out", "output", "--fn", "nan_inf"
+)
+
+def test_check_on_a_leaf_does_not_materialise_its_siblings_weights(tf, leaf_weights):
+    """A leaf check must not allocate its siblings' 96 GiB weight union."""
+    done = tf(
+        "check",
+        f"{leaf_weights}:Mod.leaf",
+        "--inputs",
+        "random",
+        "--weights",
+        "random",
+        "--out",
+        "output",
+        "--fn",
+        "nan_inf",
+    )
+    assert done.returncode == 0, done.stderr
+    assert "out of memory" not in done.stderr
 
 
 def test_check_reports_grid_loop_parser_errors_from_the_installed_wheel(
@@ -77,8 +98,8 @@ def test_check_help_explains_input_and_output_positions(tf) -> None:
     done = tf("check", "--help")
     assert done.returncode == 0, done.stderr
 
-    assert "--input PATH" in done.stdout
-    assert "parameter's declared order" in done.stdout
+    assert "--inputs random|files:A.pt,B.pt" in done.stdout
+    assert "declared order" in done.stdout
     assert "--out OUTPUT" in done.stdout
     assert "`output[0]`" in done.stdout
     assert "return order" in done.stdout
@@ -121,8 +142,10 @@ def test_a_whole_module_is_checked_against_an_expected_output_file(
     done = tf(
         "check",
         f"{square_twin}:Model",
-        "--input",
-        str(tmp_path / "x.pt"),
+        "--inputs",
+        f"files:{tmp_path / 'x.pt'}",
+        "--weights",
+        "random",
         "--expected",
         str(tmp_path / "expected.pt"),
         "--out",
@@ -156,10 +179,10 @@ def test_a_nested_activation_file_supplies_one_orchestration_parameter(
     compared = tf(
         "check",
         f"{orchestrated_twin}:OrchestratedTwin",
-        "--input",
-        str(tmp_path / "hidden.pt"),
-        "--input",
-        str(tmp_path / "mixer_args.pt"),
+        "--inputs",
+        f"files:{tmp_path / 'hidden.pt'},{tmp_path / 'mixer_args.pt'}",
+        "--weights",
+        "random",
         "--out",
         "output[0]",
         "--fn",
@@ -180,10 +203,10 @@ def test_a_nested_activation_file_supplies_one_orchestration_parameter(
     expected = tf(
         "check",
         f"{orchestrated_twin}:Orchestrated",
-        "--input",
-        str(tmp_path / "hidden.pt"),
-        "--input",
-        str(tmp_path / "mixer_args.pt"),
+        "--inputs",
+        f"files:{tmp_path / 'hidden.pt'},{tmp_path / 'mixer_args.pt'}",
+        "--weights",
+        "random",
         "--expected",
         str(tmp_path / "expected.pt"),
         "--out",
@@ -210,10 +233,10 @@ def test_a_non_tensor_nested_activation_leaf_names_its_position(
     done = tf(
         "check",
         f"{orchestrated_twin}:OrchestratedTwin",
-        "--input",
-        str(tmp_path / "hidden.pt"),
-        "--input",
-        str(tmp_path / "mixer_args.pt"),
+        "--inputs",
+        f"files:{tmp_path / 'hidden.pt'},{tmp_path / 'mixer_args.pt'}",
+        "--weights",
+        "random",
         "--out",
         "output[0]",
         "--fn",
@@ -233,6 +256,8 @@ def test_an_orchestration_method_names_the_files_its_inputs_need(tf, orchestrate
         f"{orchestrated_twin}:OrchestratedTwin",
         "--inputs",
         "random",
+        "--weights",
+        "random",
         "--out",
         "output",
         "--fn",
@@ -242,28 +267,27 @@ def test_an_orchestration_method_names_the_files_its_inputs_need(tf, orchestrate
     assert "orchestration method" in done.stderr
     assert "2 activation parameters" in done.stderr
     assert "x, pair" in done.stderr
-    assert "one --input=PATH per parameter" in done.stderr
-    assert 'torch.save((...), "mixer_args.pt")' in done.stderr
+    assert "one input file per parameter" in done.stderr
 
 
-def test_the_inputs_are_exactly_one_form(tf, square_twin, tmp_path) -> None:
+def test_both_input_axes_are_required(tf, square_twin, tmp_path) -> None:
     torch.save(torch.arange(168, dtype=torch.float32), tmp_path / "x.pt")
 
-    for form in ("random", "real"):
+    for omitted, expected in (("inputs", "no inputs stated"), ("weights", "needs weights")):
+        argv = ["check", f"{square_twin}:Twin.main"]
+        if omitted != "inputs":
+            argv += ["--inputs", f"files:{tmp_path / 'x.pt'}"]
+        if omitted != "weights":
+            argv += ["--weights", "random"]
         done = tf(
-            "check",
-            f"{square_twin}:Twin.main",
-            "--input",
-            str(tmp_path / "x.pt"),
-            "--inputs",
-            form,
+            *argv,
             "--out",
             "output",
             "--fn",
             "nan_inf",
         )
         assert done.returncode == 1
-        assert "give exactly one form" in done.stderr
+        assert expected in done.stderr
 
 
 def test_two_entirely_zero_sides_are_a_match_not_a_total_mismatch(tf, square_twin) -> None:
@@ -271,6 +295,8 @@ def test_two_entirely_zero_sides_are_a_match_not_a_total_mismatch(tf, square_twi
         "check",
         f"{square_twin}:Twin.zeroed",
         "--inputs",
+        "random",
+        "--weights",
         "random",
         "--out",
         "output",
@@ -300,9 +326,9 @@ def test_real_weights_come_from_the_checkpoint_and_activations_are_drawn(
         "check",
         f"{weighted_twin}:WeightedRootTwin.scaled",
         "--inputs",
-        "real",
-        "--ckpt",
-        str(tmp_path),
+        "random",
+        "--weights",
+        f"ckpt:{tmp_path}",
         "--out",
         "output",
         "--fn",
@@ -314,17 +340,17 @@ def test_real_weights_come_from_the_checkpoint_and_activations_are_drawn(
     )
     assert done.returncode == 0, done.stderr
 
-    assert "weights the checkpoint" in done.stdout
-    assert "random, seed " in done.stdout
+    assert "weights ckpt:" in done.stdout
+    assert "random (seed " in done.stdout
     assert "activations actual torch.float32 (declared f32)" in done.stdout
-    assert "weights the checkpoint actual torch.float32 (declared f32)" in done.stdout
+    assert "actual torch.float32 (declared f32)" in done.stdout
     assert "max_violation 0" in done.stdout
 
     refused = tf(
-        "check", f"{weighted_twin}:WeightedRootTwin.scaled", "--inputs", "real", *_ARGS[2:]
+        "check", f"{weighted_twin}:WeightedRootTwin.scaled", "--inputs", "random", *_ARGS[4:]
     )
     assert refused.returncode == 1
-    assert "needs --ckpt DIR" in refused.stderr
+    assert "needs weights" in refused.stderr
 
 
 def test_a_nested_twin_is_reached_through_the_child_it_is_declared_under(tf, nested_twin) -> None:
@@ -347,6 +373,8 @@ def test_a_runtime_module_that_names_no_authored_module_is_refused(
             f"{source}:{target}",
             "--inputs",
             "random",
+            "--weights",
+            "random",
             "--out",
             "output",
             "--fn",
@@ -365,13 +393,13 @@ def test_check_reports_the_same_verdict_as_json(tf, mine, tmp_path) -> None:
     assert payload["target"].endswith("runtime_model.py:MineTwin.main")
     assert payload["runs"][0]["inputs"] == {
         "activations": {
-            "source": "random, seed 0",
+            "source": "random (seed 0)",
             "actual_dtypes": ["torch.float32"],
             "declared_dtypes": ["f32"],
             "files": [],
         },
         "weights": {
-            "source": "none declared",
+            "source": "random",
             "actual_dtypes": [],
             "declared_dtypes": [],
         },
@@ -380,7 +408,8 @@ def test_check_reports_the_same_verdict_as_json(tf, mine, tmp_path) -> None:
 
 def test_check_refuses_a_criterion_it_does_not_have(tf, mine) -> None:
     done = tf(
-        "check", f"{mine}:MineTwin.main", "--inputs", "random", "--out", "output", "--fn", "nope"
+        "check", f"{mine}:MineTwin.main", "--inputs", "random", "--weights", "random",
+        "--out", "output", "--fn", "nope"
     )
     assert done.returncode != 0
     assert "nope" in done.stderr

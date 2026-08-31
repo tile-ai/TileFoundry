@@ -247,7 +247,14 @@ def run_stack(spec: DenseDecode, drawn: StackStep):
     state, and the root's ``forward`` is the whole decode step from token ids. The
     weights are already bound, so what is passed is activations.
     """
-    return drawn.loaded.decode_hidden(*drawn.args)
+    from tilefoundry.evaluator import evaluate  # noqa: PLC0415
+
+    return evaluate(
+        drawn.loaded,
+        *drawn.args,
+        function="decode_hidden",
+        device=drawn.args[0].device,
+    )
 
 
 def stack_oracle(spec: DenseDecode, drawn: StackStep) -> torch.Tensor:

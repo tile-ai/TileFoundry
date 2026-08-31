@@ -12,11 +12,13 @@ from tilefoundry.evaluator.value import (
     Value,
     as_layout_view,
     from_layout_view,
+    tensor_type_of,
     to_torch_dtype,
 )
 
 __all__ = [
     "evaluate",
+    "reading",
     "register_eval",
     "eval_registry",
     "Value",
@@ -27,6 +29,7 @@ __all__ = [
     "to_torch_dtype",
     "as_layout_view",
     "from_layout_view",
+    "tensor_type_of",
 ]
 
 
@@ -35,8 +38,8 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:
-    if name == "evaluate":
+    if name in {"evaluate", "reading"}:
         import importlib  # noqa: PLC0415 — lazy to avoid an IR import cycle
 
-        return importlib.import_module("tilefoundry.evaluator.interpreter").evaluate
+        return getattr(importlib.import_module("tilefoundry.evaluator.interpreter"), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

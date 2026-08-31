@@ -54,7 +54,7 @@ def test_the_decode_step_and_the_cache_entry_it_hands_back(tf, shipped_source, t
         case,
         "decoder_layer",
         activations=drawn.args,
-        weights=drawn.loaded.constants,
+        weights={name: drawn.loaded.resource.load(name) for name in drawn.loaded.module.weights},
         expected=(want_out, entry_k, entry_v),
         held=(
             contract.one_rounding(want_out),

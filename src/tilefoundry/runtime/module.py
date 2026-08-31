@@ -48,9 +48,8 @@ class RuntimeModule:
     def load(self, resource: RuntimeResource) -> None:
         """Recurse ``load`` into every child under its own name prefix.
 
-        Recurse ``load`` into every child under its own name prefix; a
-        subclass resolves its own tensors first, then calls
-        ``super().load(resource)`` (the base itself owns nothing).
+        Recurse ``load`` into every child under its own name prefix. Weight
+        values are read lazily by each runtime function on first use.
         """
         for child in self.modules:
             child.load(resource.subtree(child.name))

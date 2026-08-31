@@ -9,7 +9,7 @@ import inspect
 import types
 from typing import Callable
 
-from tilefoundry.ir.core.module import Module, _refuse_bare_call, _validate_declared
+from tilefoundry.ir.core.module import Module, _refuse_bare_call
 from tilefoundry.runtime.function import RuntimeFunction
 from tilefoundry.runtime.module import RuntimeModule
 from tilefoundry.runtime.resource import RuntimeResource
@@ -63,13 +63,7 @@ def _make_kernel_caller(instance: RuntimeModule, ir_fn, body: Callable) -> Calla
         remaining = iter(acts)
         for param in ir_fn.params:
             if param.is_const:
-                try:
-                    args.append(instance._bound[param.name])
-                except KeyError:
-                    raise KeyError(
-                        f"RuntimeModule {instance.name!r}: weight {param.name!r} "
-                        f"of {ir_fn.name!r} is not bound; call load(resource) first"
-                    ) from None
+                args.append(instance._weight(param.name))
             else:
                 args.append(next(remaining))
         return body(*args) if is_kernel_obj else body(instance, *args)
@@ -92,17 +86,46 @@ class _Twin(RuntimeModule):
         return self._ir
 
     def load(self, resource: RuntimeResource) -> None:
-        for name, decl_type in self._ir.weights.items():
-            try:
-                value = resource.load(name)
-            except KeyError as e:
-                raise KeyError(
-                    f"RuntimeModule {self.name!r}: missing weight {name!r}"
-                ) from e
-            _validate_declared(self.name, f"weight {name!r}", value, decl_type)
-            self._bound[name] = value
+        self._resource = resource
+        self._bound.clear()
         for child in self.modules:
             child.load(resource.subtree(child.name))
+
+    def _weight(self, name: str):
+        """Read and strongly memoize one declared weight for this twin."""
+        try:
+            return self._bound[name]
+        except KeyError:
+            pass
+        if self._resource is None:
+            raise KeyError(
+                f"RuntimeModule {self.name!r}: weight {name!r} "
+                f"is not bound; call load(resource) first"
+            )
+        try:
+            value = self._resource.load(name)
+        except KeyError as error:
+            raise KeyError(
+                f"RuntimeModule {self.name!r}: missing weight {name!r}"
+            ) from error
+        from tilefoundry.evaluator.value import tensor_type_of  # noqa: PLC0415
+        from tilefoundry.ir.types.utils import types_compatible  # noqa: PLC0415
+
+        declared = self._ir.weights[name]
+        actual = tensor_type_of(value, like=declared)
+        if actual.shape != declared.shape:
+            raise ValueError(
+                f"RuntimeModule {self.name!r}: weight {name!r} has shape "
+                f"{actual.shape}, declared {declared.shape}"
+            )
+        if not types_compatible(declared, actual):
+            raise ValueError(
+                f"RuntimeModule {self.name!r}: weight {name!r} has dtype "
+                f"{value.dtype}, declared {declared.dtype}; the way out is a weight "
+                "converter on the model, not a flag on the read side"
+            )
+        self._bound[name] = value
+        return value
 
     def forward(self, *acts):
         """Forward.
@@ -195,6 +218,7 @@ def runtime_module(sem: Module) -> Callable[[type], type]:
             ir = sem if ir is None else ir
             self._ir = ir
             self._bound: dict[str, object] = {}
+            self._resource: RuntimeResource | None = None
 
             children = []
             for child_ir in ir.modules:

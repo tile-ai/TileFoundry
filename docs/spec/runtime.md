@@ -31,7 +31,7 @@ class RuntimeModule:
     def __init__(self, name, entry=None, modules=()): ...
     def forward(self, *args): ...                # subclass-written orchestration — forward IS the step
     def __call__(self, *args): ...               # delegates to forward
-    def load(self, resource): ...                # weight resolution, recursive over children
+    def load(self, resource): ...                # remember the source, recursive over children
 ```
 
 - constraints:
@@ -45,12 +45,12 @@ class RuntimeModule:
   - `load(resource)` (base class): recurses into each child with
     `resource.subtree(child.name)`; the base class itself resolves nothing.
     Weight prefixes follow module paths, matching ir attribute addressing.
-    Lifecycle: construct (structure) → `load` (materialize) → call. A
+    Lifecycle: construct (structure) → `load` (remember source) → call. A
     `RuntimeModule` does **not** run `prepare`; it loads straight from the
     directory the semantic side prepared ([§1.1.2](#112-weight-converter-and-prepare--forward)).
-  - correspondence contract: the twin `RuntimeModule` and the semantic
-    `Module` both have a `forward`, and on the same inputs the two must agree
-    — `measure.check` comparing them against stated bounds ([§1.6](#16-check)) is that
+  - correspondence contract: the runtime twin's `forward` and the semantic
+    evaluator's `evaluate(LoadedModule, ...)` must agree on the same inputs —
+    `measure.check` comparing them against stated bounds ([§1.6](#16-check)) is that
     contract.
   - `module` names the authored `Module` a twin was generated from, so a
     caller holding an implementation can reach what it is judged against. A
@@ -103,18 +103,14 @@ class Attention:
     child's ir Module>)`, so a child class MUST accept the `ir=` constructor
     keyword (every `@runtime_module` result already does).
   - weights are filled by name at call time from what `load` bound, so a
-    kernel method's caller passes only activations — the same call shape the
-    semantic side answers with once it has been read, i.e. `LoadedModule`'s
-    attribute-access callable rather than the `Module`'s, which takes every
-    declared param ([§1.1.2](#112-weight-converter-and-prepare--forward), [core-ir §1.1](./core-ir.md#11-function-access)).
+    kernel method's caller passes only activations.
   - orchestration methods (`forward` / `init_caches` / …) are reused from the
     semantic `Module.methods` verbatim and are never rewritten on the
     runtime side: inside them, `self.<fn>` / `self.<child>` resolve to the
-    runtime twin's own kernels / children, which is what lets one method
-    body serve both sides. Absent an own `forward`, the generated class runs
-    `sem.methods["forward"]` if present, else calls the entry function by
-    name — the same dispatch both semantic-side `forward`s make, on the
-    activations-alone convention `LoadedModule.forward` uses ([§1.1.2](#112-weight-converter-and-prepare--forward)).
+    runtime twin's own kernels / children. Absent an own `forward`, the generated
+    class runs `sem.methods["forward"]` if present, else calls the entry function
+    by name. The semantic side uses the evaluator's reading view for the
+    corresponding dispatch ([§1.1.2](#112-weight-converter-and-prepare--forward)).
 
 ### 1.1.1 `RuntimeFunction`
 
@@ -172,56 +168,36 @@ exactly the one declared `ConstTensor`'s shape / dtype. A weight needing no
 transform has no converter. Two converters registered for the same weight
 name is an error.
 
-A converter is an HIR body like any other and MAY reach another node's function,
-so `prepare` MUST stage a node's children before evaluating that node's
-converters and hand the converter the reading holding them. The staged values
-stay on the requested preparation device while the output shard takes CPU copies;
-the tree is strictly downward, so nothing here is circular and no prepared value
-becomes part of the IR.
+A converter is an HIR body like any other and MAY reach another node's function.
 
-`load`, `forward`, and `prepare` are methods on the IR `Module` owned by
-[core-ir §1](./core-ir.md#1-module). This section defines their runtime-facing
-behavior and the distinct loaded view:
+`load` and `prepare` are methods on the IR `Module` owned by
+[core-ir §1](./core-ir.md#1-module). Execution of a loaded reading is entered
+through `evaluator.evaluate`; this section defines that runtime-facing behavior
+and the distinct loaded view:
 
 ```python
 class LoadedModule:
-    """Bind one reading of an IR Module to loaded constants.
-
-    Attributes:
-        module: attribute; Source IR Module.
-        constants: attribute; Loaded constants by declared weight name.
-        modules: attribute; Recursively loaded children.
-    """
+    """Bind one reading of an IR Module to its resource."""
 
     module: Module
-    constants: Mapping[str, torch.Tensor]
+    resource: RuntimeResource
     modules: tuple["LoadedModule", ...]
-
-    def forward(self, *acts): ...
 ```
 
+`LoadedModule` is frozen data only. The evaluator creates a transient reading
+view for execution; that view resolves functions to activation-only runners,
+children to child views, and orchestration methods with `types.MethodType`.
+
 - constraints:
-  - A reading covers its own Module's declared weights, and holds one child
+  - A reading covers its own Module's declared weights and holds one child
     reading per attached child ([core-ir §1](./core-ir.md#1-module)). A call is
     read in the reading of the Module owning the callee, so the parameters the
     call does not supply ([hir §1.1](./hir.md#11-function)) are filled by name
-    from that Module's own constants. Which reading applies follows the callee's
+    from that Module's resource. Which reading applies follows the callee's
     owner and not the walk's depth, so every sub-evaluation of a body — a called
     body, one trip of a loop — is read in the reading its call resolved. One
     Module read twice yields two independent readings, and two attachments of one
-    source Module do not borrow each other's constants.
-  - Before anything runs, `forward` MUST walk the readings its call graph
-    actually reaches and refuse one that has no binding for a declared
-    `ConstTensor`, naming the child's path and the missing names. What is
-    reached is what runs: the walk follows bodies, resolving each dispatch at
-    the extents this run was given, so an attached child no call reaches, a
-    variant no dispatch selects, and an offline converter's callees are all
-    outside it. A dispatch the walk cannot resolve stops the walk there rather
-    than claiming a branch.
-  - The one device is chosen from the activations and the constants of exactly
-    those reached readings; a spread MUST be refused, naming each device and
-    what sits on it, and nothing is moved to resolve it. An attached child no
-    call reaches has no say in it.
+    source Module do not borrow each other's resource.
   - `Module.prepare` (semantic side, offline, once): walk the tree; for each
     declared weight, fetch its converter's parameters from `raw` by their
     own (raw) names — a one-to-many alias is assembled here via
@@ -234,67 +210,40 @@ class LoadedModule:
     (e.g. `layer0.attention.w_kv`). Plain directory — no content-hash cache /
     manifest. The runtime twin never prepares; both twins `load` straight
     from the directory this writes.
-  - `Module.load(resource)`: read this node's `weights`
-    ([core-ir §1](./core-ir.md#1-module)) by name from `resource` and recurse
-    into each child under `resource.subtree(child.name)`, strictly validating
-    every read tensor's shape and dtype against its declared `ConstTensor`
-    type, **returning a `LoadedModule` tree**. It MUST NOT write bindings onto
-    the `Module`, which stays pure IR: one `Module` may be read any number of
-    times — two checkpoints, two devices — and each reading is independent of
-    the others. A child reached from two owners therefore yields one
-    `LoadedModule` per owner rather than one binding the last owner wins. This
-    is the semantic-side counterpart of the `RuntimeModule` twin's own `load`
-    ([§1.1](#11-runtimemodule)), which validates against the same declarations before binding in
-    place.
-  - `LoadedModule` attribute access mirrors the `Module`'s
-    ([core-ir §1.1](./core-ir.md#11-function-access)) against that reading: a
-    function resolves to a callable taking **activations alone**, its
-    `ConstTensor` params filled by name from these constants; a child name
-    resolves to the child `LoadedModule`; a method is bound to the
-    `LoadedModule`, so an orchestration method's own `self.<function>(...)`
-    reaches the bound callable. The `Module` behind a reading is
-    `loaded.module` — what a decorator or an analysis that wants the IR takes.
-  - **execution placement is agreed, never implied.** Before evaluating, a
-    `LoadedModule`'s function runner inspects this reading's bound constants and
-    the tensor activations it was given. They MUST all be on exactly one device,
-    and that device is where the run happens; a disagreement — including two
-    constants of one reading on different devices — MUST be refused there,
-    naming what sits where, rather than moved silently or left to fail as a
-    torch error inside the evaluator. A function with no tensor activation runs
-    where its constants are; a reading holding no constants leaves the
-    evaluator's own default in place. The runner still takes **activations
-    alone**: this is not an argument, and the evaluator infers nothing. So a
-    caller builds its activations on the device its resource loaded the weights
-    onto — a `DictResource` of CPU tensors runs on CPU,
-    `SafetensorsResource(device="cuda:2")` on `cuda:2`.
+  - `Module.load(resource)`: bind this node to `resource` and recurse into
+    each child under `resource.subtree(child.name)`, returning a frozen
+    `LoadedModule` tree. It MUST NOT write bindings onto the `Module`, which
+    stays pure IR: one `Module` may be read any number of times — two
+    checkpoints, two devices — and each reading is independent of the others.
+    A child reached from two owners therefore yields one `LoadedModule` per
+    owner rather than one binding the last owner wins. This is the semantic-side
+    counterpart of the `RuntimeModule` twin's own `load` ([§1.1](#11-runtimemodule)).
+  - The caller supplies `evaluate(..., device=...)`. Every activation and every
+    weight used by the reading MUST already be on that device; a mismatch is
+    rejected at the activation binding or weight's first-use point, naming the
+    offending position or weight. Neither side moves tensors implicitly.
   - state is the caller's: a tensor that must survive across steps (e.g. a KV
     cache) is an ordinary `Tensor` param passed in and returned, and a step MUST
     NOT mutate one it was given. Sharding such a tensor is therefore the same
     mechanism as for any other — its own `TensorType.layout` — rather than a
     second description for an opaque state object.
-  - `forward` (`__call__` is `forward`) exists on both, and each runs a
-    registered `forward` orchestration method (`Module.methods`) if the class
-    body defined one, else the entry `@func`, and MUST be refused when there is
-    neither — naming the functions and methods to call instead, rather than
-    reporting `entry` as wrong. The runtime twin's `forward` mirrors all three
-    branches. They differ in exactly what the
-    function's `ConstTensor` params come from: `Module.forward(*args)` takes one
-    argument per declared param because a `Module` holds no constants, while
-    `LoadedModule.forward(*acts)` takes activations alone and fills the
-    constants from that reading. Reaching one function directly (rather than
-    the whole step) is `mod.<function_name>(...)` on either
-    ([core-ir §1.1](./core-ir.md#11-function-access)). Calling one with the
-    other's argument list MUST be rejected naming the runner it wanted, not
-    left to fail as a shape error inside the evaluator. `check` compares the
-    semantic and runtime forwards ([§1.6](#16-check)). A multi-node composition is chained
-    by the caller, one `forward` (or one named function call) per node.
-  - Python entry into an HIR `Function`, whether through `forward`'s entry
-    fallback or a named function runner, is the runtime event governed by
-    [hir §1.1](./hir.md#11-function). A registered plain Python orchestration
-    method stays on the host; every function runner it calls is a separate
-    Python-to-HIR entry. An HIR-to-HIR `Call` remains inside the invocation and
-    MUST NOT be surfaced as another runtime launch merely because its callee has
-    a different Module owner.
+  - The runtime twin's `forward` runs a registered `forward` orchestration
+    method (`Module.methods`) when present, else its entry `@func`, and mirrors
+    those branches. `check` compares the semantic and runtime forwards
+    ([§1.6](#16-check)). A multi-node composition is chained by the caller, one
+    `forward` per node.
+    On the runtime twin, a bare step MUST be refused when neither a `forward`
+    method nor an entry is present, naming the functions and methods to call
+    instead of reporting `entry` as wrong.
+    On the semantic side, `evaluate(loaded)` runs `entry` when one is declared;
+    it never treats a `forward` method as an implicit default. A caller that
+    wants an orchestration method or another function passes `function="..."`.
+  - Python entry into an HIR `Function` through the runtime twin's `forward`
+    is the runtime event governed by [hir §1.1](./hir.md#11-function). A
+    registered plain Python orchestration method stays on the host; every
+    function it calls is a separate Python-to-HIR entry. An HIR-to-HIR `Call`
+    remains inside the invocation and MUST NOT be surfaced as another runtime
+    launch merely because its callee has a different Module owner.
   - a causal-LM root MAY define `init_caches`,
     `prepare_inputs_for_generation`, and `append_cache` orchestration methods.
     `prepare_inputs_for_generation(input_ids, step, caches, *, device)` receives
@@ -304,8 +253,8 @@ class LoadedModule:
     the cache and expands only the token-ID tensor; it MUST NOT reconstruct a
     model's positional, rotary, scaling, or state inputs. It passes the active
     token-ID prefix as a view; a method MUST NOT mutate that view or retain it
-    across steps. These methods bind on a `LoadedModule` and its runtime twin in
-    the same way as `forward`.
+    across steps. These methods bind on the runtime twin in the same way as
+    `forward`.
 
 ### 1.1.3 Internal Pipeline (compiled origin)
 
@@ -506,7 +455,7 @@ it as the one-to-one case and returns `None`, and `subtree` MUST reject it in
 the same shape as a tuple-valued hit, because a subtree segment must resolve
 to one relative name.
 
-Two implementations:
+Three implementations:
 
 ```python
 class DictResource:
@@ -520,6 +469,14 @@ class SafetensorsResource:
         self, ckpt_dir: str, prefix: str = "", device: str = "cuda",
         alias: "Mapping[str, AliasValue] | None" = None,
     ) -> None: ...
+
+class DrawnResource:
+    def __init__(
+        self, module: Module, generator, device: str,
+        drawn: "dict[str, torch.Tensor] | None" = None, prefix: str = "",
+    ) -> None: ...
+
+def draw_tensor(declared: TensorType, generator, device: str) -> torch.Tensor: ...
 ```
 
 - constraints:
@@ -537,6 +494,15 @@ class SafetensorsResource:
     published checkpoint is only sharded once it outgrows the writer's limit,
     so requiring an index would refuse the small ones. A directory with
     neither MUST be reported as such rather than as a missing index.
+    A raw key is cached weakly: repeated reads return the same tensor while a
+    caller holds it, and the entry may disappear after the last reference is
+    collected; scoped views share the index, shard handles, and tensor cache.
+  - `DrawnResource` draws a declared weight lazily with `draw_tensor`, keeps
+    the result strongly, and shares its generator and drawing ledger across
+    `subtree` views without reseeding. The strong ledger is a contract: drawing
+    the same name again would produce another random tensor, so the two sides
+    of a comparison would no longer receive the same value. It has no alias
+    groups, so `load_group` always returns `None`.
   - every read tensor keeps the element type the checkpoint stores. A
     declaration requiring a different precision uses a weight converter
     ([§1.1.2](#112-weight-converter-and-prepare--forward)), and `load` validates the converted or raw result against that

@@ -8,9 +8,14 @@ directory. See [runtime §1.5](docs/spec/runtime.md#15-runtimeresource).
 from __future__ import annotations
 
 import dataclasses
+import weakref
 from typing import Any, Callable, Mapping, Protocol, Union
 
 import torch
+
+from tilefoundry.evaluator.value import to_torch_dtype
+from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.types.tensor_type import TensorType
 
 
 @dataclasses.dataclass(frozen=True)
@@ -186,7 +191,9 @@ class SafetensorsResource:
     Reads a safetensors checkpoint directory via mmap'd ``safe_open``: either
     N shards plus ``model.safetensors.index.json``, or a single unsharded
     ``model.safetensors`` with no index. One shard handle is opened at most once
-    and reused across ``subtree`` views.
+    and reused across ``subtree`` views. The tensor cache is also shared across
+    those views. Reads are idempotent, so that cache is weak: overlapping users
+    hit it, and an entry disappears after the last user releases its tensor.
     """
 
     def __init__(
@@ -197,11 +204,14 @@ class SafetensorsResource:
         self._prefix = prefix
         self._device = device
         self._alias = alias or {}
-        self._handles: dict[str, Any] = {}
-        self._weight_map: dict[str, str] | None = None
+        self._open_shards: dict[str, Any] = {}
+        self._shard_of_key: dict[str, str] | None = None
+        self._read_tensors: weakref.WeakValueDictionary[str, torch.Tensor] = (
+            weakref.WeakValueDictionary()
+        )
 
     def _index(self) -> dict[str, str]:
-        if self._weight_map is None:
+        if self._shard_of_key is None:
             import json  # noqa: PLC0415
             from pathlib import Path  # noqa: PLC0415
 
@@ -209,10 +219,10 @@ class SafetensorsResource:
             index_path = directory / "model.safetensors.index.json"
             if index_path.is_file():
                 with open(index_path, encoding="utf-8") as fh:
-                    self._weight_map = dict(json.load(fh)["weight_map"])
+                    self._shard_of_key = dict(json.load(fh)["weight_map"])
             else:
-                self._weight_map = self._unsharded_map(directory)
-        return self._weight_map
+                self._shard_of_key = self._unsharded_map(directory)
+        return self._shard_of_key
 
     @staticmethod
     def _unsharded_map(directory: "Path") -> dict[str, str]:
@@ -234,16 +244,21 @@ class SafetensorsResource:
 
         from safetensors import safe_open  # noqa: PLC0415
 
+        hit = self._read_tensors.get(raw_key)
+        if hit is not None:
+            return hit
         shard = self._index()[raw_key]
-        handle = self._handles.get(shard)
+        handle = self._open_shards.get(shard)
         if handle is None:
             handle = safe_open(
                 str(Path(self._ckpt_dir) / shard),
                 framework="pt",
                 device=_resolved_device(self._device),
             )
-            self._handles[shard] = handle
-        return handle.get_tensor(raw_key)
+            self._open_shards[shard] = handle
+        value = handle.get_tensor(raw_key)
+        self._read_tensors[raw_key] = value
+        return value
 
     def load(self, name: str) -> torch.Tensor:
         resolved, read = _resolve_key(self._alias, self._prefix, name)
@@ -278,9 +293,87 @@ class SafetensorsResource:
             self._ckpt_dir, f"{self._prefix}{resolved}.", self._device,
             alias=self._alias,
         )
-        child._weight_map = self._weight_map
-        child._handles = self._handles
+        child._shard_of_key = self._shard_of_key
+        child._open_shards = self._open_shards
+        child._read_tensors = self._read_tensors
         return child
 
 
-__all__ = ["Absolute", "DictResource", "Preprocessed", "RuntimeResource", "SafetensorsResource"]
+class DrawnResource:
+    """Each weight drawn the first time it is asked for, from its declared type.
+
+    Drawn rather than pre-built so a leaf never materialises the tensors its
+    siblings declare, and cached so the two sides of a comparison are handed
+    the same draw rather than two draws of the same shape.
+    """
+
+    def __init__(
+        self,
+        module: Module,
+        generator: torch.Generator,
+        device: str,
+        drawn: dict[str, torch.Tensor] | None = None,
+        prefix: str = "",
+    ) -> None:
+        self._module, self._generator = module, generator
+        self._device, self._prefix = device, prefix
+        self._drawn = {} if drawn is None else drawn
+
+    def load(self, name: str) -> torch.Tensor:
+        """Draw a declared weight on first use and retain it strongly."""
+        key = f"{self._prefix}{name}"
+        if key not in self._drawn:
+            declared: TensorType = self._module.weights[name]
+            self._drawn[key] = draw_tensor(declared, self._generator, self._device)
+        return self._drawn[key]
+
+    def load_group(self, name: str) -> None:
+        """Drawn tensors have no one-to-many alias map."""
+        return None
+
+    def subtree(self, seg: str) -> "DrawnResource":
+        for child in self._module.modules:
+            if child.name == seg:
+                return DrawnResource(
+                    child,
+                    self._generator,
+                    self._device,
+                    drawn=self._drawn,
+                    prefix=f"{self._prefix}{seg}.",
+                )
+        raise KeyError(seg)
+
+
+def _extents(type_) -> tuple[int, ...]:
+    """Return concrete extents, refusing a shape that still contains a range."""
+    shape = []
+    for extent in type_.shape:
+        if not isinstance(extent, int):
+            raise ValueError(
+                f"shape {type_.shape} still states {extent} as a range; bind it with --dim"
+            )
+        shape.append(extent)
+    return tuple(shape)
+
+
+def draw_tensor(declared: TensorType, generator: torch.Generator, device: str) -> torch.Tensor:
+    """Draw one tensor of *dtype* from *generator*."""
+    shape = _extents(declared)
+    dtype = declared.dtype
+    torch_dtype = to_torch_dtype(dtype)
+    if torch_dtype.is_floating_point:
+        return torch.randn(shape, generator=generator, device=device).to(torch_dtype)
+    if torch_dtype == torch.bool:
+        return torch.randint(0, 2, shape, generator=generator, device=device).to(torch_dtype)
+    return torch.randint(0, 8, shape, generator=generator, device=device).to(torch_dtype)
+
+
+__all__ = [
+    "Absolute",
+    "DictResource",
+    "DrawnResource",
+    "Preprocessed",
+    "RuntimeResource",
+    "SafetensorsResource",
+    "draw_tensor",
+]

@@ -156,7 +156,7 @@ def test_a_module_without_a_default_step_says_so_rather_than_blaming_entry():
         def helper(x: Tensor[(2, 4), "f32"], g: Tensor[(4,), "f32"]) -> Tensor[(2, 4), "f32"]:
             return tf.rms_norm(x, g)
 
-    with pytest.raises(TypeError, match=r"no forward method and no entry.*helper"):
+    with pytest.raises(TypeError, match=r"not callable"):
         _NoStep()
 
     with pytest.raises(ValueError, match=r"declares no entry, so it has no default step"):
@@ -187,18 +187,22 @@ def test_the_runner_on_an_authored_module_takes_the_weights_too():
     ones = torch.ones(2, dtype=torch.float32)
     weight = torch.full((2,), 3.0)
 
-    assert _Weighted.scale(ones, weight).float().cpu().tolist() == [3.0, 3.0]
+    from tilefoundry.evaluator import evaluate  # noqa: PLC0415
 
-    with pytest.raises(TypeError, match=r"declares 2 parameters but got 1.*load\(resource\)"):
-        _Weighted.scale(ones)
+    assert evaluate(_Weighted.scale, ones, weight, device="cpu").float().cpu().tolist() == [3.0, 3.0]
+
+    from tilefoundry.evaluator.value import EvalError  # noqa: PLC0415
+
+    with pytest.raises(EvalError, match=r"expects 2 inputs, got 1"):
+        evaluate(_Weighted.scale, ones, device="cpu")
 
     loaded = _Weighted.load(DictResource({"w": weight}))
-    with pytest.raises(TypeError, match=r"takes 1 activation") as excinfo:
-        loaded.scale(ones, weight)
+    with pytest.raises(EvalError, match=r"expects 1 activation") as excinfo:
+        evaluate(loaded, ones, weight, function="scale", device="cpu")
     assert "load(resource)" not in str(excinfo.value)
 
     with pytest.raises(KeyError) as excinfo:
-        _Weighted.load(DictResource({}))
+        evaluate(_Weighted.load(DictResource({})), ones, function="scale", device="cpu")
     refused = str(excinfo.value)
     assert "missing declared weight 'w'" in refused
     assert "prepare produces it" in refused
@@ -250,9 +254,11 @@ def test_one_shared_child_binds_once_per_owner():
     loaded_left = left.load(DictResource({"leaf.w": torch.full((2,), 3.0)}))
     loaded_right = right.load(DictResource({"leaf.w": torch.full((2,), 10.0)}))
 
-    assert loaded_left.leaf.module is loaded_right.leaf.module
-    assert loaded_left.leaf.scale(ones).float().cpu().tolist() == [3.0, 3.0]
-    assert loaded_right.leaf.scale(ones).float().cpu().tolist() == [10.0, 10.0]
+    assert loaded_left.modules[0].module is loaded_right.modules[0].module
+    from tilefoundry.evaluator import evaluate  # noqa: PLC0415
+
+    assert evaluate(loaded_left, ones, function="leaf", device="cpu").float().cpu().tolist() == [3.0, 3.0]
+    assert evaluate(loaded_right, ones, function="leaf", device="cpu").float().cpu().tolist() == [10.0, 10.0]
 
 
 def test_forward_reference_sibling_fails_loudly():

@@ -8,6 +8,8 @@ computations share a device.
 
 from __future__ import annotations
 
+import gc
+
 import pytest
 import torch
 from safetensors.torch import save_file
@@ -16,10 +18,32 @@ from tilefoundry.runtime import Preprocessed
 from tilefoundry.runtime.resource import SafetensorsResource, _resolved_device
 
 
+def cpu_gen() -> torch.Generator:
+    return torch.Generator(device="cpu").manual_seed(0)
+
+
 def _unsharded(directory, tensors) -> str:
     """A checkpoint directory of one ``model.safetensors`` and no index file."""
     save_file(tensors, str(directory / "model.safetensors"))
     return str(directory)
+
+
+def test_drawn_resource_never_redraws():
+    from tests.fixtures.placed.leaf_weights import Small  # noqa: PLC0415 -- test fixture import
+    from tilefoundry.runtime.resource import DrawnResource  # noqa: PLC0415 -- added in M2
+
+    resource = DrawnResource(Small, cpu_gen(), "cpu")
+    assert resource.load("w") is resource.load("w")
+
+
+def test_safetensors_cache_hits_while_held_and_drops_after(tmp_path):
+    ckpt = _unsharded(tmp_path, {"w": torch.ones(4)})
+    resource = SafetensorsResource(ckpt, device="cpu")
+    held = resource.load("w")
+    assert resource.load("w") is held
+    del held
+    gc.collect()
+    assert not resource._read_tensors
 
 
 def test_a_bare_cuda_resolves_to_the_device_the_process_selected() -> None:

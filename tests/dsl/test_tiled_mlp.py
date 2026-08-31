@@ -174,4 +174,9 @@ def test_the_tiled_mlp_computes_what_the_naive_one_does() -> None:
     """The blocked K walk reassociates the reduction and changes nothing else."""
     loaded, x = _drawn()
 
-    agrees_to_one_rounding(loaded.tiled_mlp(x), loaded.naive_mlp(x))
+    from tilefoundry.evaluator import evaluate  # noqa: PLC0415
+
+    agrees_to_one_rounding(
+        evaluate(loaded, x, function="tiled_mlp", device="cpu"),
+        evaluate(loaded, x, function="naive_mlp", device="cpu"),
+    )

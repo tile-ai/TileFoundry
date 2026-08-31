@@ -14,7 +14,7 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-from tests.fixtures.placed import gqa_decode
+from tests.fixtures.placed import gqa_decode, leaf_weights
 from tests.fixtures.shapes.composed_leaf_source import composed_leaf_source
 from tests.models.corpus import MODELS_ROOT
 from tilefoundry import cli
@@ -25,6 +25,109 @@ from tilefoundry.runtime import DictResource
 ROUTING = f"{MODELS_ROOT / 'qwen3_5_35b_a3b' / 'model.py'}:Qwen3_5MoE.router.routing"
 
 DISPATCHING = f"{gqa_decode.__file__}:GqaOnline.gqa_online_attend"
+
+
+
+def cpu_gen() -> torch.Generator:
+    return torch.Generator(device="cpu").manual_seed(0)
+
+
+class RecordingResource:
+    def __init__(self, inner):
+        self.inner, self.asked = inner, []
+
+    def load(self, name):
+        self.asked.append(name)
+        return self.inner.load(name)
+
+    def load_group(self, name):
+        return self.inner.load_group(name)
+
+    def subtree(self, seg):
+        return RecordingResource(self.inner.subtree(seg))
+
+
+def test_load_asks_the_resource_for_nothing():
+    from tilefoundry.runtime.resource import DrawnResource  # noqa: PLC0415 -- added in M2
+
+    for mod, mk in (
+        (leaf_weights.Mod, leaf_weights.Mod.load),
+        (leaf_weights.Small, leaf_weights.Small.load),
+        (leaf_weights.Small, leaf_weights.SmallTwin().load),
+    ):
+        rec = RecordingResource(DrawnResource(mod, cpu_gen(), "cpu"))
+        mk(rec)
+        assert rec.asked == []
+
+
+def test_a_run_asks_for_exactly_the_functions_own_consts():
+    from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- added in M3
+    from tilefoundry.ir.core.module import select  # noqa: PLC0415 -- added in M4
+    from tilefoundry.runtime.resource import DrawnResource  # noqa: PLC0415 -- added in M2
+
+    rec = RecordingResource(DrawnResource(leaf_weights.Small, cpu_gen(), "cpu"))
+    evaluate(select(leaf_weights.Small, "leaf").load(rec), torch.zeros(1, leaf_weights.D), device="cpu")
+    assert rec.asked == []
+    evaluate(leaf_weights.Small.load(rec), torch.zeros(1, leaf_weights.D), device="cpu")
+    assert rec.asked == ["w"]
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a second device")
+def test_a_weight_on_another_device_is_named_at_first_use():
+    from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- added in M3
+    from tilefoundry.runtime.resource import DrawnResource  # noqa: PLC0415 -- added in M2
+
+    rec = RecordingResource(DrawnResource(leaf_weights.Small, cpu_gen(), "cpu"))
+    with pytest.raises(ValueError, match=r"'w'"):
+        evaluate(
+            leaf_weights.Small.load(rec),
+            torch.zeros(1, leaf_weights.D, device="cuda"),
+            device="cuda",
+        )
+
+
+def test_a_missing_weight_is_named_at_first_use():
+    from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- added in M3
+
+    loaded = leaf_weights.Small.load(DictResource({}))
+    with pytest.raises(KeyError, match=r"missing declared weight 'w'"):
+        evaluate(loaded, torch.zeros(1, leaf_weights.D), device="cpu")
+
+
+def test_a_twin_binds_once_and_keeps_it():
+    from tilefoundry.runtime.resource import DrawnResource  # noqa: PLC0415 -- added in M2
+
+    rec = RecordingResource(DrawnResource(leaf_weights.Small, cpu_gen(), "cpu"))
+    twin = leaf_weights.SmallTwin()
+    twin.load(rec)
+    twin.entry(torch.zeros(1, leaf_weights.D))
+    twin.entry(torch.zeros(1, leaf_weights.D))
+    assert rec.asked == ["w"]
+
+
+def test_the_two_input_axes_are_independent(tmp_path):
+    from tilefoundry.cli import build_parser  # noqa: PLC0415 -- existing parser shape changes in M4
+
+    source = f"{leaf_weights.__file__}:Small.entry"
+    a, b = tmp_path / "a.pt", tmp_path / "b.pt"
+    for path in (a, b):
+        torch.save(torch.zeros(1, leaf_weights.D), path)
+    for inputs in ("random", f"files:{a},{b}"):
+        for weights in ("random", f"ckpt:{tmp_path}"):
+            build_parser().parse_args(
+                [
+                    "check",
+                    source,
+                    "--out",
+                    "output",
+                    "--fn",
+                    "nan_inf",
+                    "--inputs",
+                    inputs,
+                    "--weights",
+                    weights,
+                ]
+            )
 
 
 @pytest.fixture(scope="module")
@@ -49,7 +152,14 @@ def routing(tmp_path_factory) -> dict[str, Path]:
         for param in declared.params
     ]
     tokens, w_router = drawn
-    weights, indices = leaf.load(DictResource({"w_router": w_router})).routing(tokens)
+    from tilefoundry.evaluator import evaluate  # noqa: PLC0415 -- selected function execution
+
+    weights, indices = evaluate(
+        leaf.load(DictResource({"w_router": w_router})),
+        tokens,
+        function="routing",
+        device=device,
+    )
 
     torch.save(tokens.cpu(), where / "tokens.pt")
     torch.save(weights.cpu(), where / "weights.pt")
@@ -74,10 +184,10 @@ def _routing_argv(routing: dict[str, Path], indices: str, *comparison: str) -> l
     return [
         "check",
         ROUTING,
-        "--input",
-        str(routing["tokens"]),
-        "--ckpt",
-        str(routing["dir"]),
+        "--inputs",
+        f"files:{routing['tokens']}",
+        "--weights",
+        f"ckpt:{routing['dir']}",
         "--expected",
         str(routing["weights"]),
         "--expected",
@@ -153,10 +263,10 @@ def test_a_zero_reference_is_reported_rather_than_divided_by(routing, capsys) ->
             [
                 "check",
                 ROUTING,
-                "--input",
-                str(routing["tokens"]),
-                "--ckpt",
-                str(routing["dir"]),
+                    "--inputs",
+                    f"files:{routing['tokens']}",
+                    "--weights",
+                    f"ckpt:{routing['dir']}",
                 "--expected",
                 str(routing["zeros"]),
                 "--expected",
@@ -288,6 +398,8 @@ def test_inputs_must_be_stated_and_weights_must_come_from_somewhere(routing, cap
             [
                 "check",
                 ROUTING,
+                "--inputs",
+                "random",
                 "--out",
                 "output[0]",
                 "--fn",
@@ -303,6 +415,8 @@ def test_inputs_must_be_stated_and_weights_must_come_from_somewhere(routing, cap
             [
                 "check",
                 DISPATCHING,
+                "--weights",
+                "random",
                 "--out",
                 "output",
                 "--fn",
@@ -323,6 +437,8 @@ def test_without_a_reference_only_a_one_sided_predicate_is_admitted(capsys) -> N
                 DISPATCHING,
                 "--inputs",
                 "random",
+                "--weights",
+                "random",
                 "--out",
                 "output",
                 "--fn",
@@ -341,6 +457,8 @@ def test_without_a_reference_only_a_one_sided_predicate_is_admitted(capsys) -> N
                 "check",
                 DISPATCHING,
                 "--inputs",
+                "random",
+                "--weights",
                 "random",
                 "--out",
                 "output",
@@ -366,6 +484,8 @@ def test_a_dimension_left_as_a_range_is_reported_with_what_it_was_pinned_to(
                 DISPATCHING,
                 "--inputs",
                 "random",
+                "--weights",
+                "random",
                 "--out",
                 "output",
                 "--fn",
@@ -386,6 +506,8 @@ def test_a_dimension_left_as_a_range_is_reported_with_what_it_was_pinned_to(
                 "check",
                 DISPATCHING,
                 "--inputs",
+                "random",
+                "--weights",
                 "random",
                 "--out",
                 "output",
@@ -414,6 +536,8 @@ def test_several_extents_check_the_dispatch_and_name_the_implementation(capsys, 
                 "check",
                 DISPATCHING,
                 "--inputs",
+                "random",
+                "--weights",
                 "random",
                 "--dim",
                 "ctx_len=0,64,4096,32768",
@@ -451,6 +575,8 @@ def test_several_extents_check_the_dispatch_and_name_the_implementation(capsys, 
                 DISPATCHING,
                 "--inputs",
                 "random",
+                "--weights",
+                "random",
                 "--dim",
                 "ctx_len=4096",
                 "--out",
@@ -476,6 +602,8 @@ def test_an_extent_outside_the_envelope_is_a_dispatch_hole_not_a_pass(capsys) ->
                 "check",
                 DISPATCHING,
                 "--inputs",
+                "random",
+                "--weights",
                 "random",
                 "--dim",
                 "ctx_len=262144",
@@ -537,6 +665,8 @@ def test_a_random_input_fail_against_a_reference_states_its_limits(
         ROUTING,
         "--inputs",
         "random",
+        "--weights",
+        "random",
         "--expected",
         str(routing["zeros"]),
         "--expected",
@@ -560,7 +690,7 @@ def test_a_random_input_fail_against_a_reference_states_its_limits(
     assert captured.err == ""
     reported = captured.out
     assert "--inputs random makes each activation independently" in reported
-    assert "Rerun with --inputs real" in reported
+    assert "Rerun with --inputs files:" in reported
     assert "FAIL says the candidate and reference differ" in reported
     assert "Establishing accuracy needs an independent high-precision" in reported
     assert "reference, which check does not run" in reported
@@ -572,7 +702,7 @@ def test_a_random_input_fail_against_a_reference_states_its_limits(
     assert warnings == [
         "--inputs random makes each activation independently. A target that relies on "
         "semantic relationships between activations can differ at ulp scale without either "
-        "implementation being wrong. Rerun with --inputs real to decide the comparison.",
+        "implementation being wrong. Rerun with --inputs files:... to decide the comparison.",
         "FAIL says the candidate and reference differ, not which side is closer to truth. "
         "The reference may carry its own rounding; check compares only against it. "
         "Establishing accuracy needs an independent high-precision reference, which check "
@@ -603,7 +733,7 @@ def test_a_nested_child_reads_only_its_own_part_of_the_checkpoint(routing, capsy
         )
         == 0
     )
-    assert "weights the checkpoint" in capsys.readouterr().out
+    assert "weights ckpt:" in capsys.readouterr().out
 
 
 def test_a_pinned_extent_on_a_root_that_reaches_a_child(tmp_path, capsys) -> None:
@@ -616,6 +746,8 @@ def test_a_pinned_extent_on_a_root_that_reaches_a_child(tmp_path, capsys) -> Non
                 "check",
                 f"{source}:Composed.root",
                 "--inputs",
+                "random",
+                "--weights",
                 "random",
                 "--out",
                 "output",

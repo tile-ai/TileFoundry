@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from time import perf_counter
 
 import torch
+from tilefoundry.evaluator import reading
 
 
 @dataclass(frozen=True)
@@ -51,14 +52,15 @@ def decode(loaded, tokenizer, prompt: str, *, max_new: int, sampler=greedy, eos=
     prompt_steps = prompt_ids.numel()
     input_ids = torch.empty(prompt_steps + max_new, dtype=torch.int64, device=device)
     input_ids[:prompt_steps] = prompt_ids
-    caches = loaded.init_caches(device=device)
+    view = reading(loaded, device=device) if hasattr(loaded, "resource") else loaded
+    caches = view.init_caches(device=device)
 
     for step in range(prompt_steps):
-        args = loaded.prepare_inputs_for_generation(
+        args = view.prepare_inputs_for_generation(
             input_ids[: step + 1], step, caches, device=device
         )
-        logits, fresh = loaded.forward(*args)
-        caches = loaded.append_cache(caches, fresh)
+        logits, fresh = view.forward(*args)
+        caches = view.append_cache(caches, fresh)
 
     sampler(logits)
     _sync(device)
@@ -70,11 +72,11 @@ def decode(loaded, tokenizer, prompt: str, *, max_new: int, sampler=greedy, eos=
             break
         output.append(token)
         input_ids[prompt_steps + step] = token
-        args = loaded.prepare_inputs_for_generation(
+        args = view.prepare_inputs_for_generation(
             input_ids[: prompt_steps + step + 1], prompt_steps + step, caches, device=device
         )
-        logits, fresh = loaded.forward(*args)
-        caches = loaded.append_cache(caches, fresh)
+        logits, fresh = view.forward(*args)
+        caches = view.append_cache(caches, fresh)
     _sync(device)
     elapsed = perf_counter() - started
     return Decoded(
