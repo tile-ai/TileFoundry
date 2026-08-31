@@ -17,6 +17,27 @@ def parse_function(
 ) -> hir.Function | tir.PrimFunction: ...
 ```
 
+### 1.1 HIR Return Contracts
+
+An ordinary HIR function and a specialization variant MAY omit `-> return-type`;
+an ordinary function then records its inferred `body.type` as `Function.return_type`.
+When either declares an annotation, the parser MUST require
+`types_compatible(annotation, body.type)`. This is directional compatibility,
+not a parser-only equality relation: an annotation with `layout=None` leaves
+layout unconstrained according to the shared type rule.
+
+A `pass` HIR function is a dispatch prototype and MUST declare `-> return-type`.
+That annotation is its `Function.return_type` and callable return type. Every
+variant body MUST be compatible with that base return type; its own IR return
+type remains the exact base type so all variants share one dispatch signature.
+
+`Tensor[...]` without a storage slot constructs `storage=GMEM`, including in a
+return annotation. It is not an unspecified-storage spelling. Consequently an
+SMEM body under `-> Tensor[...]` must explicitly return a GMEM result; the
+parser reports both the annotation and inferred body type, with the authored
+function location, when they are incompatible. `tuple[...]` annotations are
+accepted and apply this same compatibility rule recursively to every field.
+
 - Every parser-authored `Call` reachable from a Function body carries `SourceSpanMetadata` for
   the AST expression that constructed it. A parent match fills only Calls without a span, so it
   cannot replace a more precise child span. Traversal follows `Call` operands and IR `Tuple`
@@ -222,27 +243,6 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | Module Build | Lets Python execute the class body, collects declarations, resolves child Modules first, then parses Functions in source order and finalizes the Module. |
 | Pattern Visitor | Traverses the same graph to render this section's generated grammar and constraints. |
 | Refusal | Carries the reason from the pattern that claimed a node and then refused it, so a report names a cause rather than the absence of a match. |
-
-### 3.1 HIR Return Contracts
-
-An ordinary HIR function and a specialization variant MAY omit `-> return-type`;
-an ordinary function then records its inferred `body.type` as `Function.return_type`.
-When either declares an annotation, the parser MUST require
-`types_compatible(annotation, body.type)`. This is directional compatibility,
-not a parser-only equality relation: an annotation with `layout=None` leaves
-layout unconstrained according to the shared type rule.
-
-A `pass` HIR function is a dispatch prototype and MUST declare `-> return-type`.
-That annotation is its `Function.return_type` and callable return type. Every
-variant body MUST be compatible with that base return type; its own IR return
-type remains the exact base type so all variants share one dispatch signature.
-
-`Tensor[...]` without a storage slot constructs `storage=GMEM`, including in a
-return annotation. It is not an unspecified-storage spelling. Consequently an
-SMEM body under `-> Tensor[...]` must explicitly return a GMEM result; the
-parser reports both the annotation and inferred body type, with the authored
-function location, when they are incompatible. `tuple[...]` annotations are
-accepted and apply this same compatibility rule recursively to every field.
 
 ```mermaid
 classDiagram
