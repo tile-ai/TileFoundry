@@ -56,7 +56,7 @@ def test_arange_symbolic_extent_resolves_from_runtime_shape():
     assert call.type.shape == (normalize_dim(ceildiv(_N - 1, 2)),)
     assert call.type.dtype == DType.i32
 
-    actual = evaluate(_symbolic_arange, torch.zeros(8), device="cpu")
+    actual = evaluate(_symbolic_arange, torch.zeros(8))
     torch.testing.assert_close(actual, torch.tensor([1, 3, 5, 7], dtype=torch.int32))
 
     concrete = specialize_concretely(_symbolic_arange, {"arange_n": 8})

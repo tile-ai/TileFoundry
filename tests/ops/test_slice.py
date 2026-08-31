@@ -315,7 +315,7 @@ def _moved_reference(gu):
 def test_a_moved_window_reads_the_far_half_of_one_tensor():
     gu = torch.arange(2 * _HALF * _COLS, dtype=torch.float32).reshape(2 * _HALF, _COLS)
 
-    actual = evaluate(_MovedWindow.lookup("moved_copy"), gu, device="cpu")
+    actual = evaluate(_MovedWindow.lookup("moved_copy"), gu)
 
     torch.testing.assert_close(actual, _moved_reference(gu))
 

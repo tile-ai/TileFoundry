@@ -556,6 +556,10 @@ class LoadedModule:
         """Evaluate this loading's declared entry with activation arguments."""
         return evaluator.evaluate(self, *args)
 
+    def evaluation_target(self):
+        """Run my declared entry, its constants read from this loading."""
+        return self.module.entry_function(), self
+
 
 def _reentered(module: Module, entry: str) -> Module:
     """*module* re-entried at *entry*.

@@ -41,7 +41,7 @@ def _add_scalar(x: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
 
 def test_python_scalar_constant_operand():
     x = torch.randn(4)
-    assert torch.allclose(evaluate(_add_scalar, x, device=_DEV), x + 2.0)
+    assert torch.allclose(evaluate(_add_scalar, x), x + 2.0)
 
 
 @func
@@ -56,7 +56,7 @@ def _caller(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32
 
 def test_function_call_binds_callee_params():
     a, b = torch.randn(4), torch.randn(4)
-    assert torch.allclose(evaluate(_caller, a, b, device=_DEV), (a + b) * b)
+    assert torch.allclose(evaluate(_caller, a, b), (a + b) * b)
 
 
 def test_structurally_equal_params_keep_distinct_ssa_bindings():
@@ -70,7 +70,7 @@ def test_structurally_equal_params_keep_distinct_ssa_bindings():
         return_type=tensor_type,
     )
 
-    result = evaluate(function, torch.tensor([1.0]), torch.tensor([2.0]), device=_DEV)
+    result = evaluate(function, torch.tensor([1.0]), torch.tensor([2.0]))
 
     assert torch.equal(result, torch.tensor([1.0]))
 
@@ -86,7 +86,7 @@ def _carry_sum(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "
 def test_single_carry_accumulator():
     """Carry init comes from the IR's init_args (the param ``a``), looped 3×."""
     a, b = torch.randn(4), torch.randn(4)
-    assert torch.allclose(evaluate(_carry_sum, a, b, device=_DEV), a + 3 * b)
+    assert torch.allclose(evaluate(_carry_sum, a, b), a + 3 * b)
 
 
 @func
@@ -102,7 +102,7 @@ def _carry_two(a: Tensor[(4,), "f32"], b: Tensor[(4,), "f32"]) -> Tensor[(4,), "
 def test_multi_carry_accumulator():
     """Two carries projected through TupleGetItem (a TupleValue)."""
     a, b = torch.randn(4), torch.randn(4)
-    out = evaluate(_carry_two, a, b, device=_DEV)
+    out = evaluate(_carry_two, a, b)
     assert torch.allclose(out, (a + 2 * b) + (b + 2 * a))
 
 
@@ -127,7 +127,7 @@ def test_a_child_module_call_runs_against_that_child_reading() -> None:
     w = torch.tensor([2.0, 3.0, 4.0, 5.0])
     reading = FusedScaledParent.load(_Weights({"scaled.w": w}))
 
-    assert torch.equal(evaluate(reading.fused, x, device=_DEV), x * w)
+    assert torch.equal(evaluate(reading.fused, x), x * w)
 
 
 def test_one_module_read_twice_yields_two_independent_readings() -> None:
@@ -135,8 +135,8 @@ def test_one_module_read_twice_yields_two_independent_readings() -> None:
     first = FusedScaledParent.load(_Weights({"scaled.w": torch.full((4,), 2.0)}))
     second = FusedScaledParent.load(_Weights({"scaled.w": torch.full((4,), 5.0)}))
 
-    assert torch.equal(evaluate(second.fused, x, device=_DEV), torch.full((4,), 5.0))
-    assert torch.equal(evaluate(first.fused, x, device=_DEV), torch.full((4,), 2.0))
+    assert torch.equal(evaluate(second.fused, x), torch.full((4,), 5.0))
+    assert torch.equal(evaluate(first.fused, x), torch.full((4,), 2.0))
 
 
 def test_two_bindings_of_one_child_read_their_own_constants() -> None:
@@ -145,7 +145,7 @@ def test_two_bindings_of_one_child_read_their_own_constants() -> None:
         _Weights({"left.w": torch.full((4,), 2.0), "right.w": torch.full((4,), 7.0)})
     )
 
-    assert torch.equal(evaluate(reading.both, x, device=_DEV), torch.full((4,), 9.0))
+    assert torch.equal(evaluate(reading.both, x), torch.full((4,), 9.0))
 
 
 def test_a_child_call_inside_a_loop_keeps_its_reading_on_every_trip() -> None:
@@ -164,7 +164,7 @@ def test_a_child_call_inside_a_loop_keeps_its_reading_on_every_trip() -> None:
     w = torch.full((4,), 2.0)
     reading = _Looped.load(_Weights({"scaled.w": w}))
 
-    assert torch.equal(evaluate(reading.looped, x, device=_DEV), x * w * w * w)
+    assert torch.equal(evaluate(reading.looped, x), x * w * w * w)
 
 
 def test_a_variant_body_reaches_its_child_the_same_way() -> None:

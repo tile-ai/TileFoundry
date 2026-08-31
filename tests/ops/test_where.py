@@ -147,7 +147,6 @@ def test_prefill_matches_full_causal_attention_with_and_without_a_tail(sequence)
         query,
         empty_cache,
         empty_cache,
-        device="cpu",
     )
     transposed = query.float().transpose(1, 2)
     scores = transposed @ transposed.transpose(-1, -2) / HEAD_DIM**0.5
@@ -175,7 +174,6 @@ def test_decode_matches_full_cache_attention_with_and_without_a_tail(context):
         query,
         key,
         value,
-        device="cpu",
     )
     queries = query.float().transpose(1, 2)
     keys = key.float().transpose(1, 2).transpose(-1, -2)

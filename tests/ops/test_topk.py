@@ -79,7 +79,7 @@ def _run_topk(x: torch.Tensor, **attrs):
     result_type = TypeInferVisitor().visit(call, TypeInferContext())
     call = replace(call, type=result_type)
     fn = Function.build(name="topk_case", params=(param,), body=call, return_type=result_type)
-    return evaluate(fn, x, device="cpu")
+    return evaluate(fn, x)
 
 
 def test_topk_unsorted_selects_same_set():
@@ -240,7 +240,7 @@ def test_topk_dynamic_k_evaluates_at_two_ctx_bindings():
     torch.manual_seed(0)
     for pos, expected_k in ((100, 25), (4096, 512)):
         scores = torch.randn(4, pos)
-        vals, idx = evaluate(fn, scores, device="cpu")
+        vals, idx = evaluate(fn, scores)
         assert vals.shape == (4, expected_k)
         assert idx.shape == (4, expected_k)
         ref_v, ref_i = torch.topk(scores, expected_k, dim=-1, largest=True, sorted=True)
@@ -297,7 +297,7 @@ def test_topk_dynamic_k_downstream_index_select_shape_consistent():
     for pos, expected_k in ((100, 25), (4096, 512)):
         scores_data = torch.randn(1, pos)
         table_data = torch.randn(pos, _D)
-        out = evaluate(fn, scores_data, table_data, device="cpu")
+        out = evaluate(fn, scores_data, table_data)
         assert out.shape == (1, expected_k, _D)
         _, ref_idx = torch.topk(scores_data, expected_k, dim=-1, largest=True, sorted=True)
         ref_out = table_data.index_select(0, ref_idx.reshape(-1)).reshape(1, expected_k, _D)

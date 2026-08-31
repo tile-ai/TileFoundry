@@ -41,7 +41,7 @@ class _Weights:
 def test_reading_a_resource_without_a_child_weight_is_refused() -> None:
     loaded = FusedScaledParent.load(_Weights({}))
     with pytest.raises(KeyError, match="missing declared weight 'w'"):
-        evaluate(loaded.fused, torch.ones(4), device="cpu")
+        evaluate(loaded.fused, torch.ones(4))
 
 
 def test_a_child_weight_elsewhere_is_refused_before_anything_runs() -> None:
@@ -49,7 +49,7 @@ def test_a_child_weight_elsewhere_is_refused_before_anything_runs() -> None:
     reading = FusedScaledParent.load(_Weights({"scaled.w": elsewhere}))
 
     with pytest.raises(ValueError, match="weight 'w' is on meta"):
-        evaluate(reading.fused, torch.ones(4), device="cpu")
+        evaluate(reading.fused, torch.ones(4))
     assert str(reading.resource.subtree("scaled").load("w").device) == "meta"
 
 

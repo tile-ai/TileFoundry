@@ -187,18 +187,18 @@ def test_the_runner_on_an_authored_module_takes_the_weights_too():
     ones = torch.ones(2, dtype=torch.float32)
     weight = torch.full((2,), 3.0)
 
-    assert evaluate(_Weighted.scale, ones, weight, device="cpu").float().cpu().tolist() == [3.0, 3.0]
+    assert evaluate(_Weighted.scale, ones, weight).float().cpu().tolist() == [3.0, 3.0]
 
     with pytest.raises(EvalError, match=r"expects 2 inputs, got 1"):
-        evaluate(_Weighted.scale, ones, device="cpu")
+        evaluate(_Weighted.scale, ones)
 
     loaded = _Weighted.load(DictResource({"w": weight}))
     with pytest.raises(EvalError, match=r"expects 1 activation") as excinfo:
-        evaluate(loaded.scale, ones, weight, device="cpu")
+        evaluate(loaded.scale, ones, weight)
     assert "load(resource)" not in str(excinfo.value)
 
     with pytest.raises(KeyError) as excinfo:
-        evaluate(_Weighted.load(DictResource({})).scale, ones, device="cpu")
+        evaluate(_Weighted.load(DictResource({})).scale, ones)
     refused = str(excinfo.value)
     assert "missing declared weight 'w'" in refused
     assert "prepare produces it" in refused
@@ -244,8 +244,8 @@ def test_one_shared_child_binds_once_per_owner():
     loaded_right = right.load(DictResource({"leaf.w": torch.full((2,), 10.0)}))
 
     assert loaded_left.modules[0].module is loaded_right.modules[0].module
-    assert evaluate(loaded_left.leaf, ones, device="cpu").float().cpu().tolist() == [3.0, 3.0]
-    assert evaluate(loaded_right.leaf, ones, device="cpu").float().cpu().tolist() == [10.0, 10.0]
+    assert evaluate(loaded_left.leaf, ones).float().cpu().tolist() == [3.0, 3.0]
+    assert evaluate(loaded_right.leaf, ones).float().cpu().tolist() == [10.0, 10.0]
 
 
 def test_forward_reference_sibling_fails_loudly():

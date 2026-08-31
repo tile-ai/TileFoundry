@@ -14,7 +14,7 @@ class EvaluateContext:
     args: tuple[Any, ...] = ()
     result_type: Any = None
     loaded_module: Any | None = None
-    device: str = "cpu"
+    device: str | None = None
     dim_bindings: Mapping[str, int] = field(default_factory=dict)
 
     def for_op(self, op: Any, args: tuple[Any, ...], result_type: Any) -> EvaluateContext:

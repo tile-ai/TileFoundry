@@ -93,7 +93,7 @@ def _eval_rankn(dst: torch.Tensor, upd: torch.Tensor, lit_offsets, runtime_axis=
         f'def ins(dst: Tensor[({d}), "f32"], upd: Tensor[({u}), "f32"]{extra}) -> Tensor[({d}), "f32"]:\n'
         f"    return tf.insert_slice(dst, upd, ({', '.join(elems)}))\n"
     )
-    return evaluate(import_dsl(src), *inputs, device="cpu")
+    return evaluate(import_dsl(src), *inputs)
 
 
 def _ref_scatter(dst, upd, offsets):
@@ -392,7 +392,7 @@ def test_tile_window_scan_evaluates_to_the_input() -> None:
     x = torch.arange(_SCAN_ROWS * _SCAN_COLS, dtype=torch.float32).reshape(
         _SCAN_ROWS, _SCAN_COLS
     )
-    actual = evaluate(_ScanCopy.lookup("scan_copy"), x, device="cpu")
+    actual = evaluate(_ScanCopy.lookup("scan_copy"), x)
     torch.testing.assert_close(actual, x)
 
 

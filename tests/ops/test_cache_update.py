@@ -115,7 +115,7 @@ def _run(cur_pos, s):
     result_type = TypeInferVisitor().visit(call, TypeInferContext())
     call = replace(call, type=result_type)
     fn = Function.build(name="cu", params=params, body=call, return_type=result_type)
-    return evaluate(fn, *inputs, device="cpu")
+    return evaluate(fn, *inputs)
 
 
 @pytest.mark.parametrize(

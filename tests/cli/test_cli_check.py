@@ -63,9 +63,9 @@ def test_load_asks_the_resource_for_nothing():
 
 def test_a_run_asks_for_exactly_the_functions_own_consts():
     rec = RecordingResource(DrawnResource(leaf_weights.Small, cpu_gen(), "cpu"))
-    evaluate(select(leaf_weights.Small, "leaf").load(rec), torch.zeros(1, leaf_weights.D), device="cpu")
+    evaluate(select(leaf_weights.Small, "leaf").load(rec), torch.zeros(1, leaf_weights.D))
     assert rec.asked == []
-    evaluate(leaf_weights.Small.load(rec), torch.zeros(1, leaf_weights.D), device="cpu")
+    evaluate(leaf_weights.Small.load(rec), torch.zeros(1, leaf_weights.D))
     assert rec.asked == ["w"]
 
 
@@ -76,14 +76,13 @@ def test_a_weight_on_another_device_is_named_at_first_use():
         evaluate(
             leaf_weights.Small.load(rec),
             torch.zeros(1, leaf_weights.D, device="cuda"),
-            device="cuda",
         )
 
 
 def test_a_missing_weight_is_named_at_first_use():
     loaded = leaf_weights.Small.load(DictResource({}))
     with pytest.raises(KeyError, match=r"missing declared weight 'w'"):
-        evaluate(loaded, torch.zeros(1, leaf_weights.D), device="cpu")
+        evaluate(loaded, torch.zeros(1, leaf_weights.D))
 
 
 def test_a_twin_binds_once_and_keeps_it():
@@ -145,7 +144,6 @@ def routing(tmp_path_factory) -> dict[str, Path]:
     weights, indices = evaluate(
         leaf.load(DictResource({"w_router": w_router})).routing,
         tokens,
-        device=device,
     )
 
     torch.save(tokens.cpu(), where / "tokens.pt")
@@ -674,7 +672,7 @@ def test_a_random_input_fail_against_a_reference_states_its_limits(
     ]
 
 
-def test_a_nested_child_reads_only_its_own_part_of_the_checkpoint(routing, capsys) -> None:
+def test_a_nested_child_reads_only_its_own_part_of_the_checkpoint(routing) -> None:
     """Reaching `router.routing` reads `router.w_router`.
 
     Reaching `router.routing` reads `router.w_router`: the checkpoint holds
@@ -697,7 +695,6 @@ def test_a_nested_child_reads_only_its_own_part_of_the_checkpoint(routing, capsy
         )
         == 0
     )
-    assert "weights ckpt:" in capsys.readouterr().out
 
 
 def test_a_pinned_extent_on_a_root_that_reaches_a_child(tmp_path, capsys) -> None:

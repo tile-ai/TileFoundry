@@ -68,20 +68,20 @@ def test_range_start_step():
     """
     n = 7
     x = torch.arange(n, dtype=torch.float32)
-    out = evaluate(_range_start_step, x, device="cpu")
+    out = evaluate(_range_start_step, x)
     assert torch.allclose(out.reshape(()), x[1:n:2].sum()), (n, out)
 
 
 def test_nested_grid_region_outer_carry_in_inner():
     x = torch.randn(4, 5)
-    out = evaluate(_nested_sum, x, device="cpu")
+    out = evaluate(_nested_sum, x)
     assert torch.allclose(out.reshape(()), x.sum(), atol=1e-4), out
 
 
 def test_dim_expression_extent():
     n = 8
     x = torch.arange(n, dtype=torch.float32)
-    out = evaluate(_dim_expr_half_sum, x, device="cpu")
+    out = evaluate(_dim_expr_half_sum, x)
     assert torch.allclose(out.reshape(()), x[: n // 2].sum()), (n, out)
 
 
@@ -106,5 +106,5 @@ def _interleaved_two_partial_sum(x: Tensor[(_M,), "f32"]) -> Tensor[(), "f32"]:
 def test_interleaved_partial_reduction_equals_flat():
     n = 6
     x = torch.randn(n)
-    out = evaluate(_interleaved_two_partial_sum, x, device="cpu")
+    out = evaluate(_interleaved_two_partial_sum, x)
     assert torch.allclose(out.reshape(()), x.sum(), atol=1e-4), (n, out)

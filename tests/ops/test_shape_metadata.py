@@ -42,7 +42,7 @@ def test_shape_metadata_cost(case):
 
 
 def test_shape_metadata_uses_runtime_shape_and_host_types() -> None:
-    actual_shape, actual_rank = evaluate(_shape_metadata, torch.zeros(3, 4), device="cpu")
+    actual_shape, actual_rank = evaluate(_shape_metadata, torch.zeros(3, 4))
 
     torch.testing.assert_close(actual_shape, torch.tensor([3, 4], dtype=torch.int64))
     torch.testing.assert_close(actual_rank, torch.tensor(2, dtype=torch.int64))
@@ -64,5 +64,5 @@ def _shape_element_paths(x: Tensor[(_S, 4), "f32"]):
 
 def test_shape_element_path_has_the_canonical_type() -> None:
     assert _shape_element_paths.body.type == TensorType.umat_scalar()
-    actual = evaluate(_shape_element_paths, torch.zeros(3, 4), device="cpu")
+    actual = evaluate(_shape_element_paths, torch.zeros(3, 4))
     torch.testing.assert_close(actual, torch.tensor(4, dtype=torch.int64))

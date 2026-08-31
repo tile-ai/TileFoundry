@@ -332,10 +332,8 @@ def test_real_weights_come_from_the_checkpoint_and_activations_are_drawn(
     )
     assert done.returncode == 0, done.stderr
 
-    assert "weights ckpt:" in done.stdout
     assert "random (seed " in done.stdout
     assert "activations actual f32 (declared f32)" in done.stdout
-    assert "actual f32 (declared f32)" in done.stdout
     assert "max_violation 0" in done.stdout
 
     refused = tf(
@@ -389,11 +387,6 @@ def test_check_reports_the_same_verdict_as_json(tf, mine, tmp_path) -> None:
             "actual_dtypes": ["f32"],
             "declared_dtypes": ["f32"],
             "files": [],
-        },
-        "weights": {
-            "source": "random",
-            "actual_dtypes": [],
-            "declared_dtypes": [],
         },
     }
 

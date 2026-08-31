@@ -82,14 +82,14 @@ def test_dynamic_extent_and_step_resolve_from_the_argument_shapes():
     assert resolve_dim(5, {}) == 5
 
     x = torch.randn(5)
-    assert torch.allclose(evaluate(_sum_loop_fn(N), x, device="cpu"), x.sum())
+    assert torch.allclose(evaluate(_sum_loop_fn(N), x), x.sum())
 
     blk = 2
     B = DimVar("blk", 1, 16)
     stride_hint = Var(type=_f32((B,)), name="stride_hint")
     fn = _sum_loop_fn(N, step=B, extra_params=(stride_hint,))
     xv = torch.randn(8)
-    out = evaluate(fn, xv, torch.zeros(blk), device="cpu")
+    out = evaluate(fn, xv, torch.zeros(blk))
     assert torch.allclose(out, xv[::blk].sum())
 
 
@@ -97,10 +97,10 @@ def test_dynamic_bounds_fail_closed():
     N = DimVar("seq_len", 1, 100)
 
     with pytest.raises(EvalError, match="unbound DimVar"):
-        evaluate(_sum_loop_fn(DimVar("not_a_param_dim", 1, 100)), torch.randn(5), device="cpu")
+        evaluate(_sum_loop_fn(DimVar("not_a_param_dim", 1, 100)), torch.randn(5))
 
     with pytest.raises(EvalError, match="non-negative"):
-        evaluate(_sum_loop_fn(simplify_dim(DimSub, (N, 100))), torch.randn(5), device="cpu")
+        evaluate(_sum_loop_fn(simplify_dim(DimSub, (N, 100))), torch.randn(5))
 
     with pytest.raises(EvalError, match="step must be positive"):
-        evaluate(_sum_loop_fn(N, step=0), torch.randn(5), device="cpu")
+        evaluate(_sum_loop_fn(N, step=0), torch.randn(5))

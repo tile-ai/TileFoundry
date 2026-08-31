@@ -223,8 +223,8 @@ def test_a_specialised_function_computes_what_the_prototype_computes() -> None:
     assert len(admitted) == 1
     assert variant_for(ENTRY, dims) is admitted[0]
 
-    expected = evaluate(ENTRY, q, k, v, k_new, v_new, device="cpu")
-    got = evaluate(specialize_function(ENTRY, dims), q, k, v, k_new, v_new, device="cpu")
+    expected = evaluate(ENTRY, q, k, v, k_new, v_new)
+    got = evaluate(specialize_function(ENTRY, dims), q, k, v, k_new, v_new)
 
     assert got.shape == expected.shape
     assert got.dtype == expected.dtype

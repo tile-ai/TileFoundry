@@ -80,7 +80,7 @@ ROUNDTRIPS = [
 def test_a_double_roundtrip_matches_torch(io_dtype, mid_dtype, io_torch, mid_torch, values):
     x = torch.tensor(values, dtype=io_torch)
 
-    out = evaluate(_double_cast_fn(len(values), io_dtype, mid_dtype), x, device="cpu")
+    out = evaluate(_double_cast_fn(len(values), io_dtype, mid_dtype), x)
 
     torch.testing.assert_close(out, x.to(mid_torch).to(io_torch))
 
@@ -93,4 +93,4 @@ def test_cast_f4e2m1_has_no_evaluator_support():
     )
     fn = import_dsl(src)
     with pytest.raises(EvalError, match=r"unsupported dtype.*f4e2m1"):
-        evaluate(fn, torch.randn(4), device="cpu")
+        evaluate(fn, torch.randn(4))

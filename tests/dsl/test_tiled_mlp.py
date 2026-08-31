@@ -176,6 +176,6 @@ def test_the_tiled_mlp_computes_what_the_naive_one_does() -> None:
     loaded, x = _drawn()
 
     agrees_to_one_rounding(
-        evaluate(loaded.tiled_mlp, x, device="cpu"),
-        evaluate(loaded.naive_mlp, x, device="cpu"),
+        evaluate(loaded.tiled_mlp, x),
+        evaluate(loaded.naive_mlp, x),
     )

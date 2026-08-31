@@ -33,8 +33,25 @@ _MISSING_PREPARED_WEIGHT = (
 )
 
 
-def _default_device() -> str:
-    return "cuda" if torch.cuda.is_available() else "cpu"
+def _device_of(values) -> str | None:
+    """The one device *values* already live on, or ``None`` when none is a tensor.
+
+    The evaluator picks no device of its own: it computes where its inputs are.
+    ``None`` leaves the choice to torch, which is what a run with no tensor input
+    has to fall back on.
+    """
+    seen: dict[str, int] = {}
+    for index, value in enumerate(values):
+        device = getattr(value, "device", None)
+        if device is not None:
+            seen.setdefault(str(device), index)
+    if len(seen) > 1:
+        spread = ", ".join(f"input {index} on {device}" for device, index in sorted(seen.items()))
+        raise EvalError(
+            f"evaluator: inputs are on more than one device -- {spread}. "
+            "Build them on one device; evaluation moves nothing."
+        )
+    return next(iter(seen), None)
 
 
 def _devices_match(actual, expected: torch.device) -> bool:
@@ -256,6 +273,8 @@ def _read_weight(loaded_module, param, device: str, *, callee: Function | None =
             f"Module {loaded_module.name!r}: weight {param.name!r} has shape "
             f"{actual.shape}, declared {param.type.shape}"
         )
+    if device is None:
+        return value
     expected = torch.device(device)
     if not _devices_match(value.device, expected):
         raise ValueError(
@@ -276,22 +295,18 @@ def _child_constant(loaded_module, callee: Function, param, device: str) -> Tens
     return TensorValue(data=value, type=param.type)
 
 
-def _run_selected(loaded_module, fn: Function, *activations, device: str):
-    """Run one loaded function, reading constants lazily at first use."""
+def _run_selected(loaded_module, fn: Function, *activations, device: str | None):
+    """Run one loaded function, reading constants lazily at first use.
+
+    *device* is where the activations already are; a weight somewhere else is
+    refused at its first use rather than moved.
+    """
     activation_params = tuple(param for param in fn.params if not param.is_const)
     if len(activations) != len(activation_params):
         raise EvalError(
             f"evaluator: call to {fn.name!r} expects {len(activation_params)} "
             f"activation(s), got {len(activations)}"
         )
-    expected_device = torch.device(device)
-    for index, value in enumerate(activations):
-        actual_device = getattr(value, "device", None)
-        if actual_device is not None and not _devices_match(actual_device, expected_device):
-            raise ValueError(
-                f"evaluator: activation {index} is on {actual_device}, "
-                f"but evaluation requested {expected_device}; this runner moves nothing"
-            )
     supplied = iter(activations)
     args = [
         _read_weight(loaded_module, param, device)
@@ -364,9 +379,8 @@ def _run_bound(fn: Function, args, *, device: str | None = None, reading=None):
 
     The entry a resource reading runs through: every child call reached from
     here fills its ``ConstTensor`` parameters from the child that owns the
-    callee. It is internal; the public ``evaluate`` uses it only through a Reading.
+    callee. It is internal; *device* is the caller's, and ``None`` leaves it to torch.
     """
-    device = device or _default_device()
     values = _bound_values(fn, args)
     target = _select_variant(fn, values) if fn.variants else fn
     memo = {id(param): (param, value) for param, value in zip(target.params, values)}
@@ -383,62 +397,20 @@ def _run_bound(fn: Function, args, *, device: str | None = None, reading=None):
     )
 
 
-def evaluate(
-    fn_or_call, *inputs, backend: str = "torch", device: str | None = None,
-):
-    """Evaluate a HIR ``Function``, ``Call``, or loaded module.
+def evaluate(target, *inputs):
+    """Evaluate a HIR ``Function`` or a loaded module and return torch value(s).
 
-    ``inputs`` bind positionally to a ``Function``'s parameters; the result is
-    a ``torch.Tensor`` for a single output or a tuple for a ``TupleType``.
+    *target* answers which function to run and which reading, if any, supplies
+    its ``ConstTensor`` parameters. The run happens where *inputs* already are:
+    the evaluator selects no device and no tensor engine of its own.
     """
-    if backend != "torch":
-        raise EvalError(f"evaluator: unsupported backend {backend!r}")
-    device = device or _default_device()
+    fn, reading = target.evaluation_target()
+    device = _device_of(inputs)
+    if reading is not None:
+        return _run_selected(reading, fn, *inputs, device=device)
 
-    from tilefoundry.ir.core.module import LoadedModule, _refuse_bare_call  # noqa: PLC0415
-
-    if isinstance(fn_or_call, LoadedModule):
-        _refuse_bare_call(fn_or_call.module, "LoadedModule")
-        result = _run_selected(
-            fn_or_call,
-            fn_or_call.module.entry_function(),
-            *inputs,
-            device=device,
-        )
-    elif isinstance(fn_or_call, Function):
-        fn = fn_or_call
-        if len(inputs) != len(fn.params):
-            raise EvalError(
-                f"evaluator: {fn.name!r} expects {len(fn.params)} inputs, "
-                f"got {len(inputs)}"
-            )
-        values = [
-            TensorValue(
-                data=torch.as_tensor(
-                    arg, dtype=to_torch_dtype(param.type.dtype), device=device
-                ),
-                type=param.type,
-            )
-            for param, arg in zip(fn.params, inputs)
-        ]
-
-
-        target = _select_variant(fn, values) if fn.variants else fn
-        memo = {id(param): (param, value) for param, value in zip(target.params, values)}
-        dim_env = _bind_dim_vars(target.params, values)
-        result = EvaluatorVisitor(memo=memo).visit(
-            target.body,
-            EvaluateContext(device=device, dim_bindings=dim_env),
-        )
-    elif isinstance(fn_or_call, Call):
-        if inputs:
-            raise EvalError("evaluator: a Call entry takes no positional inputs")
-        result = EvaluatorVisitor(memo={}).visit(
-            fn_or_call, EvaluateContext(device=device)
-        )
-    else:
+    if len(inputs) != len(fn.params):
         raise EvalError(
-            f"evaluator: expected a Function, Call, or LoadedModule, got "
-            f"{type(fn_or_call).__name__}"
+            f"evaluator: {fn.name!r} expects {len(fn.params)} inputs, got {len(inputs)}"
         )
-    return _unwrap(result)
+    return _run_bound(fn, inputs, device=device)

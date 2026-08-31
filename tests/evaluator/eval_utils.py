@@ -84,5 +84,5 @@ def run_eval_case(case: EvalCase) -> None:
     from tilefoundry.ir.hir.function import Function  # noqa: PLC0415 — avoid IR import cycle
 
     fn = Function.build(name="eval_case", params=params, body=call, return_type=result_type)
-    out = evaluate(fn, *case.inputs, device="cpu")
+    out = evaluate(fn, *case.inputs)
     _assert_value(out, case.expected, atol=case.atol, rtol=case.rtol)

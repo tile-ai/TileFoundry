@@ -189,7 +189,7 @@ def _quant_function(shape, group: int) -> tuple[Function, TupleType]:
 )
 def test_quant_matches_exact_fp8e4m3_reference(source) -> None:
     function, _ = _quant_function(tuple(source.shape), 4)
-    quantized, scale = evaluate(function, source, device="cpu")
+    quantized, scale = evaluate(function, source)
     expected_q, expected_scale = _reference(source, 4)
 
     assert quantized.dtype == torch.float8_e4m3fn
@@ -278,10 +278,10 @@ def test_quant_symbolic_scale_extent_and_runtime_divisibility() -> None:
     assert scale_last.args[1].value == 4
 
     source = torch.arange(-12, 12, dtype=torch.float32).reshape(2, 12)
-    quantized, scale = evaluate(function, source, device="cpu")
+    quantized, scale = evaluate(function, source)
     expected_q, expected_scale = _reference(source, 4)
     torch.testing.assert_close(quantized.float(), expected_q.float(), atol=0, rtol=0)
     torch.testing.assert_close(scale, expected_scale, atol=0, rtol=0)
 
     with pytest.raises(EvalError, match="runtime last dim 10.*group=4"):
-        evaluate(function, torch.zeros((2, 10)), device="cpu")
+        evaluate(function, torch.zeros((2, 10)))

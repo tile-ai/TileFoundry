@@ -110,8 +110,7 @@ def test_kda_state_and_window_shapes_are_the_published_ones():
     reads `linear_attn_config.head_dim`, which is 128.
     """
     out, state, conv_q, conv_k, conv_v = evaluate(
-        KimiLinear48BA3B.kda.lookup("kda_attention"), *_kda_args(), device=DEV
-    )
+        KimiLinear48BA3B.kda.lookup("kda_attention"), *_kda_args())
 
     assert tuple(out.shape) == (1, SEQ_LEN, CONFIG.hidden_size)
     assert tuple(state.shape) == (1, KDA_NUM_HEADS, KDA_HEAD_DIM, KDA_HEAD_DIM)
@@ -129,8 +128,7 @@ def test_kda_executes_and_stays_finite():
     inputs -- without pretending to check what the numbers are.
     """
     out, state, *windows = evaluate(
-        KimiLinear48BA3B.kda.lookup("kda_attention"), *_kda_args(), device=DEV
-    )
+        KimiLinear48BA3B.kda.lookup("kda_attention"), *_kda_args())
 
     assert torch.isfinite(out).all()
     assert torch.isfinite(state).all()
@@ -153,8 +151,7 @@ def test_short_conv_window_shifts_by_exactly_one_position():
     state = (torch.randn(1, window, KDA_PROJ) * 0.05).to(reference.DTYPE)
 
     _out, next_state = evaluate(
-        KimiLinear48BA3B.kda.lookup("short_conv"), x, conv_w, state, device=DEV
-    )
+        KimiLinear48BA3B.kda.lookup("short_conv"), x, conv_w, state)
 
     want = torch.cat([state, x], dim=1)[:, 1:].to(next_state.dtype)
     assert (next_state - want).abs().max().item() == 0.0
@@ -170,14 +167,12 @@ def test_kda_state_is_load_bearing():
     """
     args = _kda_args()
     base_out, base_state, *_ = evaluate(
-        KimiLinear48BA3B.kda.lookup("kda_attention"), *args, device=DEV
-    )
+        KimiLinear48BA3B.kda.lookup("kda_attention"), *args)
 
     perturbed = list(args)
     perturbed[20] = args[20] + 1.0
     other_out, other_state, *_ = evaluate(
-        KimiLinear48BA3B.kda.lookup("kda_attention"), *perturbed, device=DEV
-    )
+        KimiLinear48BA3B.kda.lookup("kda_attention"), *perturbed)
 
     assert (other_out - base_out).abs().max().item() > 1e-3
     assert (other_state - base_state).abs().max().item() > 1e-3

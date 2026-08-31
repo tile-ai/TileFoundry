@@ -1,6 +1,6 @@
 # TileFoundry Spec — evaluator (HIR reference interpreter)
 
-The evaluator executes a HIR `Function`'s SSA-DAG on a tensor backend
+The evaluator executes a HIR `Function`'s SSA-DAG on torch tensors
 and returns concrete values. It is a codegen-independent reference
 oracle for parser output, type inference, and op value semantics; it
 does not lower to TIR or invoke codegen / runtime.
@@ -26,10 +26,8 @@ flowchart TB
 
 ```python
 def evaluate(
-    fn_or_call: "Function | Call | LoadedModule",
+    target: "Function | LoadedModule",
     *inputs: "torch.Tensor",
-    backend: str = "torch",
-    device: str | None = None,
 ) -> "torch.Tensor | tuple[torch.Tensor, ...]":
     ...
 ```
@@ -41,10 +39,10 @@ it binds only activation inputs; declared constants are loaded lazily from
 that reading at first use. A loaded module runs its declared `entry`; callers
 select another function or child on the `LoadedModule` before calling
 `evaluate`.
-`backend` selects the
-tensor engine; `"torch"` is the defined backend.
-`device` selects the torch device; when omitted it chooses CUDA when available
-and otherwise CPU.
+The evaluator selects nothing on the caller's behalf: no tensor engine, and no
+device. It computes where its inputs already are, so what torch supports is what
+it supports. A run whose inputs carry no tensor leaves the device to torch's own
+default.
 
 ## 1. `Value`
 
@@ -104,7 +102,7 @@ class TupleValue(Value):
 `evaluate` binds each entry-`Function` parameter `Var` to the
 corresponding positional input:
 
-- An input MUST be convertible to a backend tensor; it is cast to the
+- An input MUST be convertible to a torch tensor; it is cast to the
   parameter `TensorType`'s dtype.
 - Weights and activations are bound identically — a weight is an
   ordinary `Function` parameter, not a distinct constant carrier.
@@ -121,10 +119,11 @@ corresponding positional input:
     default step. Another function or child is selected as a `LoadedModule`
     value before evaluation; orchestration methods are host Python and are not
     evaluator targets.
-  - `device` is supplied by the caller. For a loaded reading, every activation
-    and every weight must already be on that device; a mismatch is rejected at
-    the binding or first-use point, naming the activation position or weight.
-    Evaluation never moves either kind of tensor implicitly.
+  - the run happens where the inputs already are. Inputs on more than one device
+    MUST be refused, naming which input is where. For a loaded reading, a weight
+    somewhere other than the inputs MUST be refused at its first use, naming the
+    weight. Evaluation moves neither kind of tensor implicitly, and it never
+    picks a device the caller did not express.
 
 ## 3. `register_eval` and the eval context
 
@@ -153,7 +152,7 @@ class EvaluateContext:
         args: attribute; Evaluated operands in Call-argument order.
         result_type: attribute; Call result type.
         loaded_module: attribute; Runtime module reading, when one is active.
-        device: attribute; Backend device name.
+        device: attribute; Where the inputs are, or None to leave it to torch.
         dim_bindings: attribute; concrete values for symbolic ShapeDims.
     """
 
@@ -161,7 +160,7 @@ class EvaluateContext:
     args: tuple[Any, ...] = ()
     result_type: Any = None
     loaded_module: Any | None = None
-    device: str = "cpu"
+    device: str | None = None
     dim_bindings: Mapping[str, int] = field(default_factory=dict)
 
     def for_op(self, op: Any, args: tuple[Any, ...], result_type: Any) -> EvaluateContext: ...
@@ -172,7 +171,7 @@ def handler(ctx: EvaluateContext) -> Value:
 ```
 
 A `Call` whose op class has no registered handler raises an error that
-names the op class. Backend dtype promotion follows the backend's own
+names the op class. Dtype promotion follows torch's own
 rules; a handler MUST NOT depend on type inference having run.
 
 Every failed `Op` dispatch, including a missing handler and an exception from
@@ -196,7 +195,7 @@ class EvaluatorVisitor(ExprVisitor):
 ```
 
 - A `Var` resolves to its binding in the current environment; a
-  `Constant` ([core-ir §2](./core-ir.md#2-expr)) materialises to a backend
+  `Constant` ([core-ir §2](./core-ir.md#2-expr)) materialises to a torch
   tensor of its `TensorType` (a scalar becomes a rank-0 tensor).
 - A `Call` whose `target` is an `Op` evaluates its operands, then
   dispatches through `eval_registry`
@@ -264,4 +263,4 @@ values:
   its input `ShardLayout` has no `Split` attribute. For a split axis it MUST
   raise `EvalError` saying that the evaluator models one mesh participant and
   linking to this section, until the mesh evaluator models that path. An
-  unmodelled path MUST identify itself rather than leaking a backend exception.
+  unmodelled path MUST identify itself rather than leaking a torch exception.

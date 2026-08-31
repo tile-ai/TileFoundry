@@ -350,7 +350,7 @@ def run_kda_step(inputs: KdaStepInputs):
     # evaluator's default: this boundary is small and CPU-sized, and inheriting a
     # default of "cuda" would make a blocked reference depend on a free GPU.
     device = inputs.args[0].device.type
-    out, state, *windows = evaluate(KimiLinear48BA3B.kda.lookup("kda_attention"), *inputs.args, device=device)
+    out, state, *windows = evaluate(KimiLinear48BA3B.kda.lookup("kda_attention"), *inputs.args)
     assert torch.isfinite(out).all(), "KDA produced non-finite output"
     assert torch.isfinite(state).all(), "KDA produced a non-finite state"
     for window in windows:

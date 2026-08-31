@@ -96,6 +96,14 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="NAME=V[,V...]",
         help="bind a dimension; several values check dispatch",
     )
+    parser.add_argument(
+        "--device",
+        metavar="DEVICE",
+        help=(
+            "where inputs and weights are built, and so where the run happens; "
+            "defaults to the device the selection's Target declares"
+        ),
+    )
     parser.add_argument("--json", metavar="PATH", help="write the machine-readable report to PATH")
 
 
@@ -293,7 +301,7 @@ def _scope(resource: RuntimeResource, children: Sequence[str]) -> RuntimeResourc
 def check_concrete(request: CheckRequest):
     loaded = request.module.load(request.weights)
     def reference_run(*args):
-        return evaluate(loaded, *args, device=request.device)
+        return evaluate(loaded, *args)
     if request.expected is not None:
         expected = request.expected[0] if len(request.expected) == 1 else request.expected
         def expected_run(*_args):
@@ -469,29 +477,6 @@ def _shown_files(files: Sequence[dict[str, Any]]) -> str:
     return "; files " + "; ".join(descriptions)
 
 
-class _TrackedResource:
-    """Record the tensors a check actually asks its resource to provide."""
-
-    def __init__(self, inner: RuntimeResource, asked: list[tuple[str, Any]], prefix: str = ""):
-        self.inner = inner
-        self.asked = asked
-        self.prefix = prefix
-
-    def load(self, name: str):
-        value = self.inner.load(name)
-        self.asked.append((f"{self.prefix}{name}", value))
-        return value
-
-    def load_group(self, name: str):
-        values = self.inner.load_group(name)
-        if values is not None:
-            self.asked.extend((f"{self.prefix}{name}", value) for value in values)
-        return values
-
-    def subtree(self, seg: str):
-        return _TrackedResource(self.inner.subtree(seg), self.asked, f"{self.prefix}{seg}.")
-
-
 def _output_dict(output) -> dict[str, Any]:
     """Make a Report output JSON-safe while retaining every measured fact."""
     results = []
@@ -543,13 +528,10 @@ def _render(source: str, runs: Sequence[dict[str, Any]], warnings: Sequence[str]
             lines += ["", "  " + ", ".join(f"{k}={v}" for k, v in run["dims"].items())]
         lines.append(f"  reference: {run.get('reference', 'none')}")
         activations = run["inputs"]["activations"]
-        weights = run["inputs"]["weights"]
         lines.append(
             f"  inputs:    {activations['source']}; activations actual "
             f"{_shown_dtypes(activations['actual_dtypes'])} (declared "
-            f"{_shown_dtypes(activations['declared_dtypes'])}); weights "
-            f"{weights['source']} actual {_shown_dtypes(weights['actual_dtypes'])} "
-            f"(declared {_shown_dtypes(weights['declared_dtypes'])})"
+            f"{_shown_dtypes(activations['declared_dtypes'])})"
             f"{_shown_files(activations.get('files', []))}"
         )
         if run.get("variant") is not None:
@@ -599,7 +581,7 @@ def run_check(arguments: argparse.Namespace) -> int:
         raise ValueError("no inputs stated")
     if arguments.weights is None:
         raise ValueError(f"needs weights {list(selection.module.weights)!r}")
-    device = _device(selection.module)
+    device = arguments.device or _device(selection.module)
     runs = []
     for dims in _combinations(stated):
         concrete = None
@@ -627,8 +609,6 @@ def run_check(arguments: argparse.Namespace) -> int:
         generator = torch.Generator(device=device).manual_seed(SEED)
         resource = build_resource(arguments.weights, selection.root, device, generator)
         resource = _scope(resource, selection.children)
-        asked: list[tuple[str, Any]] = []
-        resource = _TrackedResource(resource, asked)
         expected = None
         if arguments.expected:
             expected_values = read_inputs(arguments.expected, device)
@@ -648,11 +628,6 @@ def run_check(arguments: argparse.Namespace) -> int:
             param.type.dtype.name
             for param in (concrete.params if concrete is not None else ())
             if not param.is_const
-        )
-        declared_weights = tuple(
-            param.type.dtype.name
-            for param in (concrete.params if concrete is not None else ())
-            if param.is_const
         )
         if arguments.expected:
             reference = ", ".join(arguments.expected)
@@ -680,13 +655,6 @@ def run_check(arguments: argparse.Namespace) -> int:
                     "declared_dtypes": list(declared),
                     "files": _input_files(arguments.inputs[6:].split(","), inputs)
                     if arguments.inputs.startswith("files:") else [],
-                },
-                "weights": {
-                    "source": arguments.weights,
-                    "actual_dtypes": [
-                        from_torch_dtype(value.dtype).name for _, value in asked
-                    ],
-                    "declared_dtypes": list(declared_weights),
                 },
             },
         })

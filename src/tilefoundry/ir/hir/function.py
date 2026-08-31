@@ -80,6 +80,10 @@ class Function(Expr):
         """Evaluate with one argument for every declared parameter."""
         return evaluator.evaluate(self, *args)
 
+    def evaluation_target(self):
+        """Run me, with one argument per declared parameter and no reading."""
+        return self, None
+
     def add_converter(self, weight_name: str, fn: "Function") -> None:
         """Register a per-weight offline converter for ``weight_name``."""
         if getattr(self, "_sealed", False):
