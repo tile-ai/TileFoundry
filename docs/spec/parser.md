@@ -38,15 +38,22 @@ parser reports both the annotation and inferred body type, with the authored
 function location, when they are incompatible. `tuple[...]` annotations are
 accepted and apply this same compatibility rule recursively to every field.
 
-- Every parser-authored `Call` reachable from a Function body carries `SourceSpanMetadata` for
-  the AST expression that constructed it. A parent match fills only Calls without a span, so it
-  cannot replace a more precise child span. Traversal follows `Call` operands and IR `Tuple`
-  values, but does not assign source identity to shared lexical `Var` values. Source spans use
-  physical source-file coordinates with a one-based start column.
-- For `a, b = producer(...)`, detached `TupleGetItem(index=0)` and
-  `TupleGetItem(index=1)` lexical values carry the respective target Name spans (`a` and `b`) and
-  matching `BindingMetadata`; later reads do not replace that identity. A multi-carry loop's
-  derived projections carry the `for` statement span and their carry binding name.
+### 1.2 Source Span Metadata
+
+Every parser-authored `Call` reachable from a Function body carries `SourceSpanMetadata` for
+the AST expression that constructed it. A parent match fills only Calls without a span, so it
+cannot replace a more precise child span. Traversal follows `Call` operands and IR `Tuple`
+values, but does not assign source identity to shared lexical `Var` values. Source spans use
+physical source-file coordinates with a one-based start column.
+
+### 1.3 Tuple Binding Metadata
+
+For `a, b = producer(...)`, detached `TupleGetItem(index=0)` and
+`TupleGetItem(index=1)` lexical values carry the respective target Name spans (`a` and `b`) and
+matching `BindingMetadata`; later reads do not replace that identity. A multi-carry loop's
+derived projections carry the `for` statement span and their carry binding name.
+
+### 1.4 Context and Diagnostics
 
 `FuncParserContext` carries the dialect, Function role, closure, topology scope, target, and
 optional base/key for one parse. `FunctionRole` is `ROOT`, `VARIANT`, or `CONVERTER`.
