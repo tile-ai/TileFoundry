@@ -216,17 +216,11 @@ class VerifyVisitor(StmtVisitor[None]):
         super().generic_visit(stmt)
 
     def visit_MeshScope(self, stmt: MeshScope) -> None:
-        self.ctx.mesh_stack.append(stmt.mesh)
-        try:
-
-
-            fn = self.registry.lookup(MeshScope)
-            if fn is not None:
-                fn(stmt, self.ctx)
-            for child in stmt.body:
-                self.visit(child)
-        finally:
-            self.ctx.mesh_stack.pop()
+        fn = self.registry.lookup(MeshScope)
+        if fn is not None:
+            fn(stmt, self.ctx)
+        for child in stmt.body:
+            self.visit(child)
 
 
 class CodegenVisitor:

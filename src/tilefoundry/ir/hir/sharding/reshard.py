@@ -201,8 +201,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             "Reshard: destination storage cannot be unmaterialized (umat); "
             "reshard targets a concrete residency",
         )
-    if op.layout is not None and not isinstance(op.layout, ShardLayout):
-        ctx.error(call, "Reshard.layout must be a ShardLayout (or None to preserve)")
     storage_changed = op.storage is not None and op.storage != x_ty.storage
     if op.layout is None:
         if storage_changed:

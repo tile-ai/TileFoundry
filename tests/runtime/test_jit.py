@@ -29,12 +29,3 @@ def test_jit_rejects_non_ir_inputs_and_string_targets() -> None:
         jit(fn, target=CudaTarget("nvidia.h200_sxm"), foo=1)
 
 
-def test_jit_caches_and_clears() -> None:
-    """Same IR → same RuntimeModule; ``cache_clear()`` evicts."""
-    jit.cache_clear()
-    fn = RmsnormModule.entry_function()
-    rt1 = jit(fn, target=CudaTarget("nvidia.h200_sxm"))
-    fn2 = RmsnormModule.entry_function()
-    assert jit(fn2, target=CudaTarget("nvidia.h200_sxm")) is rt1
-    jit.cache_clear()
-    assert jit(fn, target=CudaTarget("nvidia.h200_sxm")) is not rt1

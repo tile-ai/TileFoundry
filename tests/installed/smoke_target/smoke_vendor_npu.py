@@ -50,4 +50,3 @@ def test_document_free_target_analyzes_with_its_declared_target(
     rejected = tf("analyze", f"{model}:CMine.root", str(tmp_path / "rejected.py"), "--performance")
     assert rejected.returncode == 1
     assert "performance:" in rejected.stderr
-    assert "has no core execution domain" in rejected.stderr

@@ -1048,13 +1048,15 @@ def _emit_def(
         ``<HirFunction>(...)`` special forms, else ``op_name(args, attr=val,
         ...)``. Shared by the inline (tile-loop body) emitter and the
         top-level emit loop so an attribute-rendering rule (``ShardLayout``,
-        ``DType``, ...) only needs one edit.
+        ``DType``, ...) only needs one edit. A reshard that gathers back to the
+        whole names no mesh, so its target is a plain ``Layout`` and there is no
+        mesh reference to abbreviate.
         """
         target = expr.target
         args_str = ", ".join(_arg_ref(arg) for arg in expr.args)
         if isinstance(target, Reshard):
             layout_kw = ""
-            if target.layout is not None:
+            if isinstance(target.layout, ShardLayout):
                 layout_text = _shard_layout_str(
                     target.layout,
                     indent=indent_here + "    ",
@@ -1065,6 +1067,8 @@ def _emit_def(
                     ),
                 )
                 layout_kw = ", layout=" + layout_text
+            elif target.layout is not None:
+                layout_kw = ", layout=" + _layout_str(target.layout, indent_here + "    ")
             storage = (
                 f", storage={target.storage.name.lower()}"
                 if target.storage is not None

@@ -58,7 +58,6 @@ from tilefoundry.ir.tir.stmts import (
     Evaluate,
     For,
     LetStmt,
-    MeshScope,
     Return,
     Sequential,
 )
@@ -74,7 +73,6 @@ from tilefoundry.ir.types.dim import DimMul, is_dim_op_call, simplify_dim
 from tilefoundry.ir.types.shape_helpers import shape_numel_upper_bound
 from tilefoundry.ir.types.shard import c_order_strides
 from tilefoundry.ir.types.shard.layout import Layout as _Layout
-from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import (
     ShardLayout,
     Split,
@@ -1558,10 +1556,6 @@ def _lower_function(
     fn: HirFunction,
     *,
     target: Target,
-    cta_mesh: Mesh | None,
-    thread_mesh: Mesh | None,
-    cta_var_name: str = "block",
-    thread_var_name: str = "thread",
     out_var_name: str = "out",
     override_name: str | None = None,
     dispatch_groups: "dict[str, tuple[HirFunction, ...]] | None" = None,
@@ -1635,26 +1629,7 @@ def _lower_function(
 
 
 
-    scoped: Stmt = inner_seq
-    if thread_mesh is not None:
-        thread_binding = Var(type=fn.body.type, name=thread_var_name)
-        scoped = MeshScope(
-            mesh=thread_mesh, binding=thread_binding, body=scoped
-        )
-        scoped = Sequential(body=(scoped,))
-    if cta_mesh is not None:
-        cta_binding = Var(type=fn.body.type, name=cta_var_name)
-        scoped = MeshScope(
-            mesh=cta_mesh, binding=cta_binding, body=scoped
-        )
-        body = Sequential(body=(scoped, Return()))
-    elif thread_mesh is not None:
-
-
-        body = Sequential(body=(scoped, Return()))
-    else:
-
-        body = Sequential(body=(*inner_seq.body, Return()))
+    body = Sequential(body=(*inner_seq.body, Return()))
 
 
 
@@ -1788,56 +1763,6 @@ def _build_dispatch_entry(
     )
 
 
-class _MeshDeriver(ExprWalker[None]):
-    """Walk a HIR expression to find meshes, keyed by topology name.
-
-    ``cta_mesh`` / ``thread_mesh`` hold the first mesh found for each
-    topology after ``visit`` returns; each stays ``None`` if its topology
-    is never referenced.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.cta_mesh: Mesh | None = None
-        self.thread_mesh: Mesh | None = None
-
-    def visit(self, expr, ctx=None):
-
-
-        if self.cta_mesh is not None and self.thread_mesh is not None:
-            return
-        super().visit(expr, ctx)
-
-    def visit_Call(self, call: Call, ctx=None) -> None:
-        ty = call.type
-        sl = getattr(ty, "layout", None)
-        if isinstance(sl, ShardLayout):
-            m = sl.mesh
-            primary_name = m.topologies[0].name
-            if primary_name == "cta":
-                if self.cta_mesh is None:
-                    self.cta_mesh = m
-            elif self.thread_mesh is None:
-
-
-
-
-
-                self.thread_mesh = m
-        self.visit_operands(call, ctx)
-
-
-def _derive_meshes_from_body(expr) -> tuple[Mesh | None, Mesh | None]:
-    """Walk a HIR expression to find meshes, keyed by topology name.
-
-    Returns ``(cta_mesh, thread_mesh)`` — the first mesh found for each
-    topology.  Returns ``None`` for any topology not found.
-    """
-    deriver = _MeshDeriver()
-    deriver.visit(expr)
-    return deriver.cta_mesh, deriver.thread_mesh
-
-
 def _collect_hir_callee_names(expr) -> set[str]:
     """Return the set of HIR function names called anywhere in ``expr``."""
     found: set[str] = set()
@@ -1897,18 +1822,10 @@ def _topo_order_dispatch_groups(
 class HirToTirPass(ModulePass):
     """Replace every ``hir.Function`` with a ``tir.PrimFunction``.
 
-    Meshes are auto-derived from the HIR function body (``ShardLayout.mesh``
-    attributes), keyed by topology name ``"cta"`` / ``"thread"``.
-
-    ``_cta`` / ``_thread`` are optional fallbacks for functions whose
-    body does not contain mesh info (internal compat only; the public
-    ``lower()`` / ``compile()`` / ``jit()`` APIs do not accept mesh kwargs).
+    Where the work runs is a fact the HIR states, not one this reads back off
+    the ``ShardLayout.mesh`` a result happens to carry, so nothing here derives
+    a mesh and the lowered body carries no ``MeshScope``.
     """
-
-    cta_var_name: str = "block"
-    thread_var_name: str = "thread"
-    _cta: Mesh | None = None
-    _thread: Mesh | None = None
 
     name: str = "hir_to_tir"
     requires: tuple[str, ...] = ()
@@ -1948,19 +1865,10 @@ class HirToTirPass(ModulePass):
             group = dispatch_view[group_name]
             lowered: list[PrimFunction] = []
             for variant in group:
-                cta_mesh, thread_mesh = _derive_meshes_from_body(variant.body)
-                if cta_mesh is None:
-                    cta_mesh = self._cta
-                if thread_mesh is None:
-                    thread_mesh = self._thread
                 mangled_name = _mangle_variant_name(variant)
                 pf = _lower_function(
                     variant,
                     target=target,
-                    cta_mesh=cta_mesh,
-                    thread_mesh=thread_mesh,
-                    cta_var_name=self.cta_var_name,
-                    thread_var_name=self.thread_var_name,
                     override_name=mangled_name,
                     dispatch_groups=dispatch_view,
                     mangled_registry=mangled_registry,
@@ -1999,19 +1907,10 @@ class HirToTirPass(ModulePass):
                 )
                 continue
 
-            cta_mesh, thread_mesh = _derive_meshes_from_body(fn.body)
-            if cta_mesh is None:
-                cta_mesh = self._cta
-            if thread_mesh is None:
-                thread_mesh = self._thread
             new_fns.append(
                 _lower_function(
                     fn,
                     target=target,
-                    cta_mesh=cta_mesh,
-                    thread_mesh=thread_mesh,
-                    cta_var_name=self.cta_var_name,
-                    thread_var_name=self.thread_var_name,
                     dispatch_groups=dispatch_view,
                     mangled_registry=mangled_registry,
                 )

@@ -485,6 +485,18 @@ class MeshAxisPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
+def _meshes_outermost_first(meshes, context):
+    """Order placement meshes according to the module's topology declaration."""
+    declared = tuple(context.function.topologies) if context.function is not None else ()
+    order = {name: index for index, name in enumerate(declared)}
+
+    def rank(mesh):
+        levels = tuple(getattr(topology, "name", topology) for topology in mesh.topologies)
+        return min((order.get(level, len(order)) for level in levels), default=len(order))
+
+    return tuple(sorted(meshes, key=rank))
+
+
 @dataclasses.dataclass(frozen=True)
 class PlacedLayout:
     """A placement written as sugar: the shape the author wrote, and where it goes.

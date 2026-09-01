@@ -24,12 +24,8 @@ class FuncParserVisitor:
         self.root_pattern = FunctionPattern()
 
     def visit(self, node: ast.AST) -> Any:
-        initial_mesh_depth = len(self.context.state.mesh_stack)
         context = MatchContext.from_function(self.context)
-        try:
-            return parse_node(self.root_pattern, node, context)
-        finally:
-            del self.context.state.mesh_stack[initial_mesh_depth:]
+        return parse_node(self.root_pattern, node, context)
 
     def visit_function(self, node: ast.FunctionDef) -> Any:
         return self.visit(node)

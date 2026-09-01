@@ -109,14 +109,12 @@ class TypeInferContext:
 
 @dataclass
 class VerifyContext(TypeInferContext):
-    """Extends TypeInferContext with a mesh scope stack.
+    """The context a per-stmt verify handler is annotated against.
 
-    VerifyVisitor pushes/pops the enclosing `MeshScope.mesh` as it traverses,
-    so per-stmt verify handlers can check that any `ShardLayout.mesh`
-    referenced at the current point is in scope (see [tir §1.3](docs/spec/tir.md#13-primfunction)).
+    It adds nothing of its own to ``TypeInferContext``: the enclosing scope a
+    handler asks about is the inherited ``mesh_scope``, set by whoever walks the
+    statements (see [tir §1.3](docs/spec/tir.md#13-primfunction)).
     """
-
-    mesh_stack: list = field(default_factory=list)
 
 
 @dataclass

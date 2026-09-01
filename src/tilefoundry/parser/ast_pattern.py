@@ -23,7 +23,6 @@ from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
     Constant,
-    ExecutionDomainMetadata,
     Expr,
     SourceSpanMetadata,
     Var,
@@ -234,7 +233,6 @@ runtime = SimpleNamespace(
     DimVar=DimVar,
     Evaluate=Evaluate,
     Expr=Expr,
-    ExecutionDomainMetadata=ExecutionDomainMetadata,
     Function=Function,
     GridRegionExpr=GridRegionExpr,
     Arange=Arange,
@@ -762,7 +760,6 @@ class FunctionRole(StrEnum):
 class ParserState:
     """Mutable state owned by one Function parse."""
 
-    mesh_stack: list[object] = field(default_factory=list)
     mesh_coordinates: dict[tuple[int, int], object] = field(default_factory=dict)
 
 
@@ -1251,7 +1248,6 @@ class MatchContext:
                 ) from error
             mesh = dataclasses.replace(function.mesh, topologies=topologies)
             scope.define("mesh", mesh)
-            function.state.mesh_stack.append(mesh)
         return context
 
     def child(
@@ -1692,12 +1688,7 @@ def _infer_call(operation, args, context):
         placeholder_type = args[0].type
     if placeholder_type is None:
         placeholder_type = runtime.TensorType.scalar(runtime.DType.f32)
-    metadata = ()
-    if context.function is not None and context.function.state.mesh_stack:
-        metadata = (runtime.ExecutionDomainMetadata(tuple(context.function.state.mesh_stack)),)
-    placeholder = runtime.Call(
-        type=placeholder_type, target=operation, args=tuple(args), metadata=metadata
-    )
+    placeholder = runtime.Call(type=placeholder_type, target=operation, args=tuple(args))
     infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
     if not isinstance(infer_context, runtime.TypeInferContext):
         infer_context = runtime.TypeInferContext()

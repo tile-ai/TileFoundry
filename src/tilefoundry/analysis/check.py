@@ -13,11 +13,8 @@ from dataclasses import dataclass, replace
 from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
-    ExecutionDomainMetadata,
     Expr,
     Var,
-    describe_expr,
-    get_metadata,
 )
 from tilefoundry.ir.core.module import (
     Module,
@@ -36,23 +33,10 @@ from tilefoundry.ir.hir.specialize import (
     is_concrete,
     specialize_concretely,
 )
-from tilefoundry.ir.types import Type, callable_type_for, tensor_types
+from tilefoundry.ir.types import callable_type_for
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import (
-    ComposedLayout,
-    Layout,
-    Mesh,
-    ShardLayout,
     Topology,
-    level_projection,
-)
-from tilefoundry.ir.types.shard.layout_algebra import (
-    NotProjectable,
-    apply,
-    image,
-    is_inverse_projectable,
-    project,
-    size,
 )
 from tilefoundry.ir.types.substitute import (
     DimSubstitutionError,
@@ -60,7 +44,7 @@ from tilefoundry.ir.types.substitute import (
     substitute_shape_dim,
     substitute_topology_dims,
 )
-from tilefoundry.ir.visitor import BindingSubstitutionCloner, ExprVisitor, collect_exprs
+from tilefoundry.ir.visitor import BindingSubstitutionCloner, collect_exprs
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.visitors import inference_type
@@ -86,200 +70,6 @@ _DERIVED_METADATA = {
     TrafficMetadata,
 }
 _ResourceKey = tuple[str, str]
-Placement = frozenset[int]
-
-
-def _layout_shards(layout: object) -> tuple[ShardLayout, ...]:
-    """Every ShardLayout nested in one tensor layout, outside first."""
-    if isinstance(layout, ShardLayout):
-        return (layout, *_layout_shards(layout.layout))
-    if isinstance(layout, ComposedLayout):
-        return (*_layout_shards(layout.inner), *_layout_shards(layout.outer))
-    return ()
-
-
-def _mesh_image(mesh: Mesh, selected: Topology) -> Placement:
-    """The exact selected-topology positions named by one Mesh.
-
-    A Mesh may name more than one level, and then its axes are that many
-    consecutive segments: the positions of one level are the axes up to and
-    including its own, with the positions below it divided out. A thread is a
-    position within its CTA, and asking where the CTA is means asking that
-    question of the part of the mesh that says so.
-    """
-    actual = tuple(topology.name for topology in mesh.topologies)
-    named = [topology for topology in mesh.topologies if topology.name == selected.name]
-    if not named:
-        levels = ", ".join(repr(name) for name in actual)
-        raise AnalysisError(
-            f"selected topology level {selected.name!r}, but the result Mesh is "
-            f"placed at level(s) {levels}"
-        )
-    (mesh_topology,) = named
-    selected_size = static_dim_value(selected.size)
-    mesh_size = static_dim_value(mesh_topology.size)
-    if selected_size is None or selected_size <= 0:
-        raise AnalysisError(
-            f"selected topology level {selected.name!r} has unresolved or invalid "
-            f"extent {selected.size!r}"
-        )
-    if mesh_size != selected_size:
-        raise AnalysisError(
-            f"the result Mesh declares {selected.name!r} extent "
-            f"{mesh_topology.size!r}, but the selected topology has extent "
-            f"{selected.size!r}"
-        )
-
-    if len(mesh.topologies) == 1:
-        layout = mesh.layout
-    else:
-        try:
-            layout = level_projection(mesh, selected.name)
-        except ValueError as error:
-            raise AnalysisError(
-                f"the {selected.name!r} result Mesh is not projectable: {error}"
-            ) from None
-    try:
-        if isinstance(layout, Layout):
-            count = size(layout)
-            if not is_inverse_projectable(layout):
-                raise NotProjectable("plain layout is not inverse-projectable")
-            positions = tuple(apply(layout, coord) for coord in range(count))
-        elif isinstance(layout, ComposedLayout):
-            if not isinstance(layout.outer, Layout):
-                raise NotProjectable("sliced layout has no resolved plain outer layout")
-            count = size(layout.outer)
-            positions = tuple(image(layout, coord) for coord in range(count))
-            if any(project(layout, position) is None for position in positions):
-                raise NotProjectable("sliced layout does not round-trip")
-        else:  # pragma: no cover - Mesh's annotation excludes this shape
-            raise NotProjectable(f"unsupported mesh layout {type(layout).__name__}")
-    except (ArithmeticError, NotProjectable, TypeError, ValueError) as error:
-        raise AnalysisError(
-            f"the {selected.name!r} result Mesh is not projectable: {error}"
-        ) from None
-
-    if (
-        isinstance(count, bool)
-        or not isinstance(count, int)
-        or count <= 0
-        or any(
-            isinstance(position, bool) or not isinstance(position, int) for position in positions
-        )
-    ):
-        raise AnalysisError(
-            f"the {selected.name!r} result Mesh needs a positive static position image"
-        )
-    if len(set(positions)) != len(positions):
-        raise AnalysisError(
-            f"the {selected.name!r} result Mesh maps multiple coordinates to the "
-            f"same position: {positions}"
-        )
-    outside = sorted(position for position in positions if not 0 <= position < selected_size)
-    if outside:
-        raise AnalysisError(
-            f"the {selected.name!r} result Mesh positions {outside} fall outside "
-            f"the selected domain [0, {selected_size})"
-        )
-    placement = frozenset(positions)
-    if isinstance(layout, Layout) and placement != frozenset(range(selected_size)):
-        raise AnalysisError(
-            f"an unsliced {selected.name!r} Mesh must describe the full selected "
-            "domain; use a sliced Mesh so a strict subdomain retains its offset"
-        )
-    return placement
-
-
-def _result_placement(type_: Type, selected: Topology) -> Placement:
-    """The unique execution placement carried by every result tensor leaf."""
-    leaves = tensor_types(type_)
-    if not leaves:
-        raise AnalysisError("the result has no tensor leaf that can carry placement")
-
-    placements: list[tuple[Placement, Mesh]] = []
-    missing: list[str] = []
-    wrong_levels: set[str] = set()
-    for leaf in leaves:
-        shards = _layout_shards(leaf.layout)
-        selected_shards = []
-        leaf_levels: set[str] = set()
-        for shard in shards:
-            names = tuple(topology.name for topology in shard.mesh.topologies)
-            if len(names) != 1:
-                raise AnalysisError(
-                    f"one result Mesh names topology levels {names}; selected level "
-                    f"{selected.name!r} requires one projectable level"
-                )
-            if names[0] == selected.name:
-                selected_shards.append(shard)
-            else:
-                leaf_levels.add(names[0])
-        if not selected_shards:
-            wrong_levels.update(leaf_levels)
-            missing.append(type(leaf.layout).__name__ if leaf.layout is not None else "no layout")
-            continue
-        leaf_placements = [
-            (_mesh_image(shard.mesh, selected), shard.mesh) for shard in selected_shards
-        ]
-        unique = {placement for placement, _mesh in leaf_placements}
-        if len(unique) != 1:
-            raise AnalysisError(
-                f"one result tensor carries conflicting {selected.name!r} "
-                f"placements {sorted(tuple(sorted(item)) for item in unique)}"
-            )
-        placements.append(leaf_placements[0])
-
-    if missing:
-        if wrong_levels:
-            actual = ", ".join(repr(name) for name in sorted(wrong_levels))
-            raise AnalysisError(
-                f"selected topology level {selected.name!r}, but the result is "
-                f"placed at level(s) {actual}"
-            )
-        carried = ", ".join(dict.fromkeys(missing))
-        raise AnalysisError(
-            f"has no {selected.name} placement; its result type carries {carried}, "
-            "not a ShardLayout on the selected level. Reshard it onto a Mesh of "
-            "the selected level, or analyse a family that does not require placement"
-        )
-    unique = {placement for placement, _mesh in placements}
-    if len(unique) != 1:
-        described = [f"{mesh!r} -> {sorted(placement)}" for placement, mesh in placements]
-        raise AnalysisError(
-            "tuple result leaves carry different execution placements: " + "; ".join(described)
-        )
-    return next(iter(unique))
-
-
-def _execution_placement(expr: Call, selected: Topology) -> Placement:
-    """Which participants run one occurrence, from where it was authored.
-
-    An occurrence runs on the participants of the Mesh it was written inside.
-    The layout its result carries says where that result's bytes were put, which
-    is a different question: a value laid out across threads may well have been
-    produced by work one CTA did. Where both answer, they MUST agree -- a result
-    placed somewhere its own work never ran is a program this cannot read.
-    """
-    domain = get_metadata(expr, ExecutionDomainMetadata)
-    lexical = domain.at(selected.name) if domain is not None else None
-    if lexical is None:
-        raise AnalysisError(
-            f"has no {selected.name} execution domain; it was authored outside "
-            f"any {selected.name} Mesh, and where its result was laid out does "
-            "not say where the work ran. Write it inside a Mesh of that level"
-        )
-    running = _mesh_image(lexical, selected)
-    try:
-        carried = _result_placement(expr.type, selected)
-    except AnalysisError:
-        return running
-    if carried != running:
-        raise AnalysisError(
-            f"runs on {selected.name} positions {sorted(running)} but its result "
-            f"is laid out on {sorted(carried)}; a result cannot be placed where "
-            "the work that made it never ran"
-        )
-    return running
 
 
 @dataclass
@@ -319,12 +109,13 @@ def analysis_check_context(
     )
 
 
-class PerformanceChecker(ExprVisitor[None]):
+class PerformanceChecker:
     """What `performance` needs before anything measures the program.
 
-    Two things, and nothing about storage: rates it can put on a clock, and a
-    placement for every occurrence that will take time. Where the buffers go is
-    not this question, and nothing here decides it.
+    Rates it can put on a clock, and nothing about storage: where the buffers go
+    is not this question, and nothing here decides it. Where an occurrence runs
+    is a fact the program states, so there is nothing left to establish
+    occurrence by occurrence and this walks nothing.
     """
 
     def check_target_facts(self, ctx: AnalysisCheckContext) -> None:
@@ -336,8 +127,8 @@ class PerformanceChecker(ExprVisitor[None]):
             raise AnalysisError(f"performance: {error}") from None
         if ctx.level is None:
             raise AnalysisError(
-                "performance: no topology level was selected, so results cannot "
-                "carry an execution placement"
+                "performance: no topology level was selected, so there is no "
+                "unit for a rate to be stated per"
             )
         if capacity.topology != ctx.level:
             raise AnalysisError(
@@ -356,16 +147,8 @@ class PerformanceChecker(ExprVisitor[None]):
                 f"target's one-unit throughputs are stated for {services.unit!r}"
             )
 
-    def default_visit_leaf(
-        self, expr: Expr, _operands: tuple[None, ...], ctx: AnalysisCheckContext
-    ) -> None:
-        """Require every primitive occurrence's result to match where it ran."""
-        if not isinstance(expr, Call) or isinstance(expr.target, Function):
-            return
-        try:
-            _execution_placement(expr, ctx.selected_topology)
-        except AnalysisError as error:
-            raise AnalysisError(f"performance: {describe_expr(expr)}: {error}") from None
+    def visit(self, expr: Expr, ctx: AnalysisCheckContext) -> None:
+        """Ask nothing of any single occurrence."""
 
 
 def _program_dim_vars(module: Module, function: Function) -> dict[str, object]:

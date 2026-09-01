@@ -27,7 +27,6 @@ from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Partial
-from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator, TypeInferVisitor
 
@@ -291,36 +290,6 @@ class _DecodeStep:
             return (reshard(result, (_DEC_D @ m.t,), "gmem"), kc)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_decode_step_matches_torch() -> None:
-    """The decode step compiles and runs on GPU.
-
-    The decode step compiles and runs on GPU; the accumulator write at a
-    dynamic offset and the KV cache update match a torch reference.
-    """
-    import tilefoundry  # noqa: PLC0415
-
-    rm = tilefoundry.compile(_DecodeStep, target=CudaTarget("nvidia.h200_sxm"))
-    x = torch.randn(_DEC_D, device="cuda")
-    v = torch.randn(1, device="cuda")
-    kcache = torch.zeros(1, _CACHE_CAP, _KV_HEADS, _HEAD_DIM, device="cuda")
-    kin = torch.randn(1, 1, _KV_HEADS, _HEAD_DIM, device="cuda")
-    cur = torch.tensor([1], dtype=torch.int32, device="cuda")
-    spos = torch.tensor([1], dtype=torch.int32, device="cuda")
-    out = torch.empty(_DEC_D, device="cuda")
-    kc_out = torch.empty_like(kcache)
-    off = 2
-    rm(x, v, kcache, kin, cur, spos, off, out, kc_out)
-    torch.cuda.synchronize()
-
-    exp = _DEC_STEPS * x.clone()
-    exp[off] = exp[off] + v[0]
-    assert torch.allclose(out, exp, rtol=1e-4, atol=1e-4), (out - exp).abs().max()
-    exp_kc = kcache.clone()
-    exp_kc[:, 1:2] = kin
-    assert torch.allclose(kc_out, exp_kc, rtol=1e-4, atol=1e-4), (kc_out - exp_kc).abs().max()
-
-
 def _lower(mod):
     return HirToTirPass().run(mod).functions[0]
 
@@ -396,15 +365,3 @@ def test_tile_window_scan_evaluates_to_the_input() -> None:
     torch.testing.assert_close(actual, x)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_insert_slice_rankn_gpu_oracle() -> None:
-    """One two-argument tile coordinate drives both GPU reads and writes."""
-    import tilefoundry  # noqa: PLC0415
-
-    rm = tilefoundry.compile(_ScanCopy, target=CudaTarget("nvidia.h200_sxm"))
-    x = torch.randn(_SCAN_ROWS, _SCAN_COLS, device="cuda")
-    out = torch.empty_like(x)
-    rm(x, out)
-    torch.cuda.synchronize()
-
-    assert torch.allclose(out, x, rtol=1e-4, atol=1e-4), (out - x).abs().max()

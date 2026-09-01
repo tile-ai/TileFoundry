@@ -223,19 +223,12 @@ class DimensionInstantiator(ExprCloner):
                 new_target, ctx.dims, ctx.type_ctx
             )
         new_target = _substitute_op_dims(new_target, ctx.dims)
-        new_metadata = _substitute_authored_dims(call.metadata, ctx.dims)
         if (
             all(new is old for new, old in zip(new_args, call.args))
             and new_target is call.target
-            and new_metadata is call.metadata
         ):
             return call
-        rebuilt = dataclasses.replace(
-            call,
-            args=new_args,
-            target=new_target,
-            metadata=new_metadata,
-        )
+        rebuilt = dataclasses.replace(call, args=new_args, target=new_target)
         return self._retyped(rebuilt, ctx)
 
     def visit_GridRegionExpr(
@@ -354,29 +347,6 @@ def _specialize_callee(
     if not dispatched and all(new is param.type for new, param in zip(bound, callee.params)):
         return callee
     return instantiate_dimensions(callee, bound, ctx, dims)
-
-
-def _substitute_authored_dims(
-    metadata: tuple, dims: Mapping[str, int]
-) -> tuple:
-    """Substitute dimension bindings in authored execution-domain metadata."""
-    if not metadata:
-        return metadata
-    from tilefoundry.ir.core.metadata import ExecutionDomainMetadata  # noqa: PLC0415
-    from tilefoundry.ir.types.substitute import substitute_mesh_dims  # noqa: PLC0415
-
-    rebuilt = tuple(
-        dataclasses.replace(
-            item,
-            scopes=tuple(substitute_mesh_dims(mesh, dims) for mesh in item.scopes),
-        )
-        if isinstance(item, ExecutionDomainMetadata)
-        else item
-        for item in metadata
-    )
-    if all(new is old for new, old in zip(rebuilt, metadata)):
-        return metadata
-    return rebuilt
 
 
 def _substitute_op_dims(target: object, dims: Mapping[str, int]) -> object:

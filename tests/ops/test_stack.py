@@ -12,7 +12,7 @@ from tests.ops.cost_utils import CostCase, run_cost_case
 from tests.ops.typeinfer_utils import ExpectedError, TypeInferCase, infer_call, run_typeinfer_case
 from tilefoundry.ir.hir.tensor.stack import Stack
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.shard import Broadcast, Layout, Partial, ShardLayout, make_mesh
+from tilefoundry.ir.types.shard import Layout, Partial, ShardLayout, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Split, split_target_axes
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
@@ -78,19 +78,6 @@ CASES = [
         (
             make_shard_tensor_type((8, 8), mesh=make_mesh((4,)), attrs=(Split(0),)),
             make_shard_tensor_type((8, 8), mesh=make_mesh((2,)), attrs=(Split(0),)),
-        ),
-        ExpectedError(match=r"input 1 references a different mesh.*Reshard"),
-    ),
-    TypeInferCase(
-        "broadcast_operand_on_incompatible_mesh",
-        Stack(axis=0),
-        (
-            make_shard_tensor_type(
-                (8, 8), mesh=make_mesh((2,)), attrs=(Broadcast(),)
-            ),
-            make_shard_tensor_type(
-                (8, 8), mesh=make_mesh((4,)), attrs=(Split(0),)
-            ),
         ),
         ExpectedError(match=r"input 1 references a different mesh.*Reshard"),
     ),

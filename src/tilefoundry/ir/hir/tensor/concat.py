@@ -15,7 +15,6 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import (
     reject_dynamic_shards,
-    require_compatible_meshes,
     require_uniform_partial_slices,
 )
 from tilefoundry.ir.types import TensorType
@@ -156,7 +155,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_shape = normalize_dim_entries(tuple(new_shape))
 
     reject_dynamic_shards(ctx, call, types, "Concat")
-    require_compatible_meshes(ctx, call, types, "Concat")
     _reject_concat_axis_splits(call, ctx, types, axis)
     try:
         relation = relations_of(call, ctx)
