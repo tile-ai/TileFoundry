@@ -17,6 +17,25 @@ def test_the_overview_names_the_pages_and_the_commands_it_delegates_to(tf) -> No
     assert "tilefoundry check --help" in done.stdout
 
 
+def test_cli_overviews_and_version_are_parser_surfaces(tf) -> None:
+    help_page = tf("--help")
+    bare = tf()
+    assert help_page.returncode == bare.returncode == 0
+    assert bare.stdout == help_page.stdout
+    assert "TileFoundry — A tile-based, agentic platform" in help_page.stdout
+    assert help_page.stdout.index("models") < help_page.stdout.index("spec")
+    assert help_page.stdout.index("spec") < help_page.stdout.index("tutorial")
+
+    target_help = tf("target", "--help")
+    target_bare = tf("target")
+    assert target_help.returncode == target_bare.returncode == 0
+    assert target_bare.stdout == target_help.stdout
+
+    version = tf("--version")
+    assert version.returncode == 0
+    assert version.stdout.startswith("tilefoundry ")
+
+
 @pytest.mark.parametrize("page", ("migrate", "optimize"))
 def test_each_page_renders_from_the_installation(tf, page) -> None:
     """A rendered page has no unresolved source directive."""

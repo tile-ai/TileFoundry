@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from importlib.metadata import metadata, version
 from typing import Sequence
 
 from tilefoundry.analysis import AnalysisError
@@ -25,17 +26,11 @@ from tilefoundry.cli.tutorial import PAGES, run_tutorial
 from tilefoundry.ir.core import VerifyError
 
 _ANALYSES = ANALYSES
-
-
-
-
 _COMMANDS = {
     "models": "list the described models, or show one of them",
     "spec": "read one specification: its sections, or one of them",
     "tutorial": "learn the two-step workflow: its pages, or one of them",
     "check": "compare an implementation against its reference, output by output",
-
-
     "analyze": "report what a program costs: flops, traffic, bounds, timing",
     "target": "list, show, add, or remove compilation targets",
 }
@@ -48,64 +43,13 @@ _TARGET_COMMANDS = {
 }
 
 
-class _Parser(argparse.ArgumentParser):
-    def error(self, message: str) -> None:
-        self._print_message(f"{self.prog}: error: {message}\n\n", sys.stderr)
-        self.print_help(sys.stderr)
-        self.exit(2)
-
-
 def _project_summary() -> str:
     """The packaged one-line description of the project.
 
     Read from installed metadata rather than restated here, so there is one copy
     of the sentence and no second one to drift.
     """
-    from importlib.metadata import metadata  # noqa: PLC0415
-
     return metadata("tilefoundry")["Summary"].rstrip(".")
-
-
-def overview() -> str:
-    """What a bare invocation prints: what this is, and how to ask it something."""
-    width = max(len(name) for name in _COMMANDS)
-    commands = "\n".join(
-        f"  {name:<{width}}  {description}" for name, description in _COMMANDS.items()
-    )
-    return (
-        f"TileFoundry — {_project_summary()}\n"
-        f"\n"
-        f"Usage:\n"
-        f"  tilefoundry [--registry PATH] <command> [options]\n"
-        f"\n"
-        f"Common commands:\n"
-        f"{commands}\n"
-        f"\n"
-        f"Options:\n"
-        f"  --registry PATH  use this installation registry instead\n"
-        f"  -h, --help  print this, or a command's own help after the command\n"
-    )
-
-
-def _target_overview() -> str:
-    """What ``tilefoundry target`` prints without a subcommand."""
-    width = max(len(name) for name in _TARGET_COMMANDS)
-    commands = "\n".join(
-        f"  {name:<{width}}  {description}" for name, description in _TARGET_COMMANDS.items()
-    )
-    return (
-        f"tilefoundry target — {_COMMANDS['target']}\n"
-        f"\n"
-        f"Usage:\n"
-        f"  tilefoundry [--registry PATH] target <command> [options]\n"
-        f"\n"
-        f"Commands:\n"
-        f"{commands}\n"
-        f"\n"
-        f"Options:\n"
-        f"  --registry PATH  use this installation registry instead\n"
-        f"  -h, --help  print this, or a command's own help after the command\n"
-    )
 
 
 def _add_source_argument(parser: argparse.ArgumentParser) -> None:
@@ -117,15 +61,27 @@ def _add_source_argument(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = _Parser(prog="tilefoundry")
+    parser = argparse.ArgumentParser(
+        prog="tilefoundry",
+        description=f"TileFoundry — {_project_summary()}",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument(
         "--registry",
         metavar="PATH",
-        help="override this installation's target registry",
+        help="use this installation registry instead",
     )
-    commands = parser.add_subparsers(dest="command", parser_class=_Parser)
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"tilefoundry {version('tilefoundry')}",
+        help="print the installed version and exit",
+    )
+    commands = parser.add_subparsers(dest="command", title="Common commands", metavar="<command>")
 
-    models = commands.add_parser("models", help=_COMMANDS["models"])
+    models = commands.add_parser(
+        "models", help=_COMMANDS["models"], description=_COMMANDS["models"]
+    )
     models.add_argument(
         "name",
         nargs="?",
@@ -136,7 +92,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--source", action="store_true", help="print the model's authored source instead"
     )
 
-    tutorial = commands.add_parser("tutorial", help=_COMMANDS["tutorial"])
+    spec = commands.add_parser("spec", help=_COMMANDS["spec"], description=_COMMANDS["spec"])
+    spec.add_argument(
+        "topic",
+        nargs="?",
+        metavar="TOPIC",
+        help="which document; with none, list the documents there are",
+    )
+    spec.add_argument(
+        "section",
+        nargs="?",
+        metavar="SECTION",
+        help="one section's key, as the outline prints it; with none, print the outline",
+    )
+
+    tutorial = commands.add_parser(
+        "tutorial", help=_COMMANDS["tutorial"], description=_COMMANDS["tutorial"]
+    )
     tutorial.add_argument(
         "page",
         nargs="?",
@@ -151,23 +123,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="which orchestrator family to show",
     )
 
-    spec = commands.add_parser("spec", help=_COMMANDS["spec"])
-    spec.add_argument(
-        "topic",
-        nargs="?",
-        metavar="TOPIC",
-        help="which document; with none, list the documents there are",
-    )
-    spec.add_argument(
-        "section",
-        nargs="?",
-        metavar="SECTION",
-        help="one section's key, as the outline prints it; with none, print the outline",
-    )
-
     check = commands.add_parser(
         "check",
         help=_COMMANDS["check"],
+        description=_COMMANDS["check"],
         epilog=check_guidance(),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -176,6 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze = commands.add_parser(
         "analyze",
         help=_COMMANDS["analyze"],
+        description=_COMMANDS["analyze"],
         epilog=analyze_guidance(),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -212,8 +172,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     analyze.set_defaults(_command_parser=analyze)
 
-    target = commands.add_parser("target", help=_COMMANDS["target"])
-    target_commands = target.add_subparsers(dest="target_command", parser_class=_Parser)
+    target = commands.add_parser(
+        "target",
+        help=_COMMANDS["target"],
+        description=f"tilefoundry target — {_COMMANDS['target']}",
+    )
+    target.set_defaults(_command_parser=target)
+    target_commands = target.add_subparsers(dest="target_command", title="Commands", metavar="<command>")
     target_commands.add_parser("list", help=_TARGET_COMMANDS["list"])
     target_show = target_commands.add_parser("show", help=_TARGET_COMMANDS["show"])
     target_show.add_argument("identity", metavar="IDENTITY")
@@ -231,9 +196,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if args.command is None:
-        sys.stdout.write(overview())
+        parser.print_help()
+        return 0
+    if args.command == "target" and args.target_command is None:
+        args._command_parser.print_help()
         return 0
     analyses: tuple[str, ...] = ()
     if args.command == "analyze":
@@ -277,9 +246,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"tilefoundry check: error: {error}", file=sys.stderr)
             return 1
     if args.command == "target":
-        if args.target_command is None:
-            sys.stdout.write(_target_overview())
-            return 0
         try:
             if args.target_command == "list":
                 return run_target_list(registrations)
@@ -312,7 +278,6 @@ __all__ = [
     "build_parser",
     "load_authored_ir",
     "main",
-    "overview",
     "parse_dims",
     "read_spec",
     "spec_path",

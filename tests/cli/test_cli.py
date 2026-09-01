@@ -181,10 +181,11 @@ def test_analyze_json_without_a_requested_root_is_a_usage_error(capsys, tmp_path
     assert stopped.value.code == 2
     refused = capsys.readouterr()
     assert refused.out == ""
-    assert refused.err.startswith(
+    assert refused.err.startswith("usage: tilefoundry analyze")
+    assert (
         "tilefoundry analyze: error: --json requires at least one analysis flag:"
+        in refused.err
     )
-    assert "usage: tilefoundry analyze" in refused.err
     assert "source file not found" not in refused.err
 
 

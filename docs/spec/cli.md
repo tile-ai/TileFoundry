@@ -17,8 +17,16 @@ description, usage form, subcommands, and options, and its description MUST be
 the one shown by the command above it. The project summary MUST NOT be restated
 in the command surface, so there is one copy of it.
 
-A command usage error MUST print the error followed by that command's complete
-help to standard error and exit with status 2.
+An overview MUST be the page `--help` prints at that level, byte for byte: one
+text, rendered from the parser's own description and per-option help, so no
+second copy exists to drift from it.
+
+A command usage error MUST print that command's usage form followed by the error
+to standard error and exit with status 2.
+
+`--version` MUST print the installed distribution's version and exit. Building
+the public `build_parser()` API also reads that installed metadata; when the
+distribution metadata is unavailable, it raises `PackageNotFoundError`.
 
 ## Commands
 
