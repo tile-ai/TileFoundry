@@ -40,14 +40,15 @@ HEADINGS: dict[int, set[str]] = {
     5: {"Delivered", "Accepted by"},
 }
 CODE_LANGS = frozenset(
-    "bash c c++ cc cpp cs csharp go java javascript js kotlin py python rs rust "
-    "sh shell swift ts typescript zsh".split()
+    "bash c c++ cc cpp cs csharp diff go java javascript js kotlin py python rs "
+    "rust sh shell swift ts typescript zsh".split()
 )
 
 CHECKBOX_RE = re.compile(r"^\s*-\s+\[([ xX])\].*<!--\s+policy_(?:ac|final):\s+([\w\-]+)\s+-->")
 COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 CITATION_RE = re.compile(r"`[^`\s]*/[^`\s]*\.[^`\s]*`")
 DECISION_RE = re.compile(r"^D(\d+)\s+.*?\s--\s+\S")
+DIFF_HEADER_RE = re.compile(r"^#\s+\S+\s*$")
 SUPERSEDES_RE = re.compile(r"\bSupersedes\s+D(\d+)\b")
 
 
@@ -137,8 +138,19 @@ class Plan:
             if t.type == kind and t.map is not None and section.head < t.map[0] < section.end
         ]
 
+    def fences(self, section: Section) -> list[tuple[str, str, int]]:
+        """Each fenced block in *section* as ``(language, body, first line)``."""
+        return [
+            (
+                t.info.strip().split()[0].lower() if t.info.strip() else "",
+                t.content,
+                t.map[0] + 1,
+            )
+            for t in self._tokens_in(section, "fence")
+        ]
+
     def fence_languages(self, section: Section) -> list[str]:
-        return [t.info.strip().split()[0].lower() if t.info.strip() else "" for t in self._tokens_in(section, "fence")]
+        return [language for language, _, _ in self.fences(section)]
 
     def bullets(self, section: Section) -> list[str]:
         """One entry per list item in *section*, comments and markup stripped.
@@ -288,6 +300,60 @@ def check_delivered_shape(plan: Plan) -> None:
         )
 
 
+def check_delivered_diff(plan: Plan) -> None:
+    """A milestone shows its change as a diff, not as the code it ends up with.
+
+    Plain code states the end state but not which lines are new, which are the
+    context around them, and which go away -- so each reader reconstructs the
+    change, and two readers reconstruct it differently. The `+` and `-` say it
+    once. Blocks that are not diffs stay welcome beside it: a whole new file, the
+    shape a caller sees, a `text` block of the output it produces.
+    """
+    for milestone in plan.milestones():
+        design = plan.find(4, "Target State Design", milestone)
+        delivered = None if design is None else plan.find(5, "Delivered", design)
+        if delivered is None:
+            continue
+        diffs = [entry for entry in plan.fences(delivered) if entry[0] == "diff"]
+        if not diffs:
+            raise FinalizeError(
+                f"{plan.path}:{delivered.head + 1}: milestone {milestone.title!r} states its "
+                f"`##### Delivered` without one ```diff block. Show the change itself: a "
+                f"`# <path>` header, then `+` for what is added, `-` for what goes away, and "
+                f"a leading space for the context that locates them."
+            )
+        for _, body, first_line in diffs:
+            _read_diff(plan.path, milestone.title, body, first_line)
+
+
+def _read_diff(path: Path, milestone: str, body: str, first_line: int) -> None:
+    """One ```diff block: a path heads it, and at least one line changes."""
+    headed = False
+    changed = False
+    for line, text in enumerate(body.split("\n"), start=first_line + 1):
+        if not text.strip():
+            continue
+        if DIFF_HEADER_RE.match(text):
+            headed = True
+        elif not headed:
+            raise FinalizeError(
+                f"{path}:{line}: milestone {milestone!r} opens a ```diff block with {text[:60]!r} "
+                f"rather than a `# <path>` header naming the file it changes."
+            )
+        elif text[0] not in "+- ":
+            raise FinalizeError(
+                f"{path}:{line}: milestone {milestone!r} has a ```diff line that is neither "
+                f"added (`+`), removed (`-`), nor context (a leading space): {text[:60]!r}"
+            )
+        else:
+            changed = changed or text[0] != " "
+    if not changed:
+        raise FinalizeError(
+            f"{path}:{first_line}: milestone {milestone!r} has a ```diff block of context only. "
+            f"A block with no `+` and no `-` states no change."
+        )
+
+
 def check_current_state(plan: Plan) -> None:
     """The state the plan is built on is stated, and every claim points somewhere.
 
@@ -408,6 +474,7 @@ def finalize_plan(
     check_skeleton(plan)
     check_acceptance(plan, policies)
     check_delivered_shape(plan)
+    check_delivered_diff(plan)
     check_current_state(plan)
     check_decisions(plan)
 
