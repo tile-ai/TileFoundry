@@ -18,6 +18,7 @@ import pytest
 from tests.fixtures.placed.gqa_decode import GqaOnline
 from tests.fixtures.placed.mha_decode_paged import LongerCache, ShorterCache
 from tests.fixtures.placed.qwen3_1_7b_pd import PrefillLayer
+from tests.models.corpus import ConcreteCase, placed_cases
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry.analysis import (
     AnalysisResult,
@@ -30,8 +31,12 @@ from tilefoundry.analysis import (
     TrafficMetadata,
     analyze,
 )
+from tilefoundry.analysis.compute_cost import _local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.ir.core import describe_expr, get_metadata
+from tilefoundry.analysis.scope import build_scopes, walk_scopes
+from tilefoundry.ir.core import Call, describe_expr, get_metadata
+from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.specialize import (
     origin_of,
     residual_dims,
@@ -41,11 +46,12 @@ from tilefoundry.ir.types.shard import (
     Topology,
 )
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.target import CudaTarget
+from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFacts
 
 CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT}
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
+INVENTORY = [pytest.param(case, id=case.id) for case in placed_cases()]
 
 
 
@@ -61,6 +67,90 @@ def _subject(family: str):
     """A concrete query that satisfies the selected family's readiness."""
     module = _aimed()
     return module, module.entry_function(), DIMS
+
+
+def assert_performance_contract(result: AnalysisResult) -> None:
+    """Every performance conclusion traces back to what it was derived from.
+
+    The prediction contains each occurrence it timed and is no faster than the
+    ideal bound. An occurrence's duration is its own compute-cost record priced
+    at the target's rates, and a solve that proved nothing says so. One a loop
+    repeats is written once, so its interval is that many of its own durations
+    and its last trip still lands inside the prediction that contains it.
+    A loop is not an occurrence and carries no timeline of its own, and still
+    states the buffers it touches.
+    """
+    fn = result.function
+    summary = get_metadata(fn, PerformanceSummaryMetadata)
+    assert summary is not None
+    assert 0 <= summary.timeline.start_ns <= summary.timeline.end_ns
+    placement = get_metadata(fn, MemoryMetadata)
+    assert placement is not None and placement.allocation is not None
+    assert placement.allocation.solver_status in ("optimal", "feasible")
+    predicted_ns = summary.timeline.end_ns - summary.timeline.start_ns
+    assert summary.waves > 0 and predicted_ns % summary.waves == 0
+    bound = get_metadata(fn, RooflineMetadata)
+    assert bound is not None and bound.ideal_ns <= predicted_ns
+
+    module_target = result.module.resolve_target()
+    throughput = module_target.get_facts(ThroughputFacts)
+    services = module_target.get_facts(PerformanceServiceFacts)
+    scopes = tuple(walk_scopes(build_scopes(result.module, fn)))
+    timed = 0
+    for expr in collect_exprs(fn.body):
+        if not isinstance(expr, Call) or isinstance(expr.target, Function):
+            continue
+        cost = get_metadata(expr, ComputeCostMetadata)
+        assert cost is not None
+        duration = _local_duration_ns(
+            cost,
+            throughput,
+            services,
+            moved=get_metadata(expr, TrafficMetadata),
+            level=result.level,
+        )
+        record = get_metadata(expr, PerformanceMetadata)
+        if not duration:
+            assert record is None
+            continue
+        timed += 1
+        assert record is not None
+        assert summary.timeline.start_ns <= record.timeline.start_ns
+        assert record.timeline.end_ns <= summary.timeline.end_ns
+
+        span = record.timeline.end_ns - record.timeline.start_ns
+        assert span % duration == 0, describe_expr(expr)
+        runs = span // duration
+        available = 1
+        owner = next(
+            (
+                scope
+                for scope in scopes
+                if id(expr) in scope.accesses.get("narrow", {})
+            ),
+            None,
+        )
+        if owner is not None:
+            cursor = owner
+            while cursor.parent is not None:
+                if cursor.is_variant(expr):
+                    available *= max(1, cursor.trips())
+                cursor = cursor.parent
+        assert 1 <= runs <= available and available % runs == 0, describe_expr(expr)
+        trips, stride = record.timeline.trips, record.timeline.stride_ns
+        assert 1 <= trips <= available and available % trips == 0, describe_expr(expr)
+        assert (stride == 0) if trips == 1 else (stride >= span), describe_expr(expr)
+        assert (
+            record.timeline.end_ns + (trips - 1) * stride <= summary.timeline.end_ns
+        ), describe_expr(expr)
+    assert bool(timed) is bool(predicted_ns)
+    _every_number_counts_something(result)
+    for expr in collect_exprs(fn.body):
+        if not isinstance(expr, GridRegionExpr):
+            continue
+        assert get_metadata(expr, PerformanceMetadata) is None, describe_expr(expr)
+        assert get_metadata(expr, PerformanceSummaryMetadata) is None, describe_expr(expr)
+        assert get_metadata(expr, LoopFootprintMetadata) is not None, describe_expr(expr)
 
 
 @pytest.mark.parametrize(
@@ -145,6 +235,24 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
         for item in record.footprints:
             assert item.bytes >= 0 and item.device_bytes >= 0 and item.repeated_bytes >= 0
             assert "<buffer " not in item.buffer, describe_expr(expr)
+
+
+@pytest.mark.parametrize("case", INVENTORY)
+def test_every_concrete_program_predicts_coherently(case: ConcreteCase) -> None:
+    """Every placed program, at every size and selector it exposes.
+
+    This inventory is the whole of what these four analyses are held to: it is
+    read off the directory rather than from a list beside it, so a program added
+    there is asked the same questions without anyone choosing to ask. Each of
+    them is asked for all four families and has to answer with a coherent
+    prediction.
+    """
+    owner, function = case.program()
+    result = analyze(owner, function, analysis=FAMILIES, dims=case.dims)
+
+    assert result.module is owner
+    assert set(result.executed) == set(FAMILIES)
+    assert_performance_contract(result)
 
 
 @pytest.mark.parametrize("family", FAMILIES)
