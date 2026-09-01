@@ -20,7 +20,7 @@ awk -v tag="<!-- tilefoundry-source: step.py -->" '
   in_python && /^```$/ { in_python=0; block=0; next }
   in_python { print }
 ' migrate.md > step.py
-published=$(tilefoundry models deepseek_v4_flash --source | awk 'NR==1 {print $1}')
+published=$(tilefoundry models deepseek_v4_flash --source 2>/dev/null | sed -n '1p')
 cp "$published/config.json" .
 ```
 
