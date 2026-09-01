@@ -46,6 +46,11 @@ there is no other mechanism for it. The installed directory named by `models
 because an installation is not where anybody edits — no verb enforces that, and
 none should.
 
+Reading a shipped document by a name that has none MUST be refused the same way
+at every kind: name what was asked for and what there is, in the vocabulary the
+command takes. An internal filename, or the word "installed" where a checkout is
+what is running, is neither.
+
 A command MUST load `SOURCE` as a Python module. While loading it, the directory
 containing `SOURCE` MUST be first on the Python module search path, so a file beside
 it MAY be imported by its module name. A command MUST capture and suppress standard
@@ -287,10 +292,6 @@ that runs before it can be read is a reference that decides what it describes.
     `hf_alias.py` MUST NOT create an implicit requirement to ship `run.py` or
     `generation.py`.
   - A `NAME` the catalog does not have MUST be refused naming the models it does.
-  - Reading a shipped document by a name that has none MUST be refused the same way
-    at every kind: name what was asked for and what there is, in the vocabulary the
-    command takes. An internal filename, or the word "installed" where a checkout is
-    what is running, is neither.
   - The forest and the counts MUST be generated from the models themselves rather
     than maintained beside them, because a hand-kept inventory of trees and numbers
     drifts silently from what it claims to describe.
