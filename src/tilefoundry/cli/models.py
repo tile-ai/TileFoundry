@@ -86,10 +86,13 @@ def source_summary(path: Path) -> str:
     return docstring.splitlines()[0] if docstring else "-"
 
 
-def render_source_directory(directory: Path, files: tuple[Path, ...]) -> str:
+def render_source_directory(
+    directory: Path, files: tuple[Path, ...], *, manifest: bool = False
+) -> str:
     """One source directory followed by aligned leading file descriptions."""
     width = max(len(path.name) for path in files)
-    lines = [str(directory)]
+    note = "  (files below: the package data manifest's, not this directory's)"
+    lines = [str(directory) + (note if manifest else "")]
     lines += [f"{path.name:<{width}}  {source_summary(path)}" for path in files]
     return "\n".join(lines) + "\n"
 
@@ -99,7 +102,7 @@ def model_source(name: str) -> str:
     _find(name)
     files = data.model_files(name)
     directory = data.directory("models") / name
-    return render_source_directory(directory, files)
+    return render_source_directory(directory, files, manifest=not data.is_installed())
 
 
 def run_models(name: str | None, *, source: bool = False) -> int:

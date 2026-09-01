@@ -273,7 +273,10 @@ that runs before it can be read is a reference that decides what it describes.
     a stable filename order. Each file line MUST give its filename and the first line of
     its own docstring, or `-` when it has none. A checkout MUST read that manifest;
     an installation MUST read its model directory, and both MUST name the same
-    files.
+    files. A checkout's directory line MUST also say that the files below are the
+    manifest's rather than that directory's, because the manifest may name files
+    that live elsewhere in the tree. An installation's line MUST NOT say it: there
+    the two are the same directory.
   - `--source` MUST parse a file's text to read its docstring and MUST NOT import
     or execute model source. It MUST NOT reformat, regenerate, or copy a shipped
     file: the installed directory is the reference, and a rendered copy is a
@@ -284,6 +287,10 @@ that runs before it can be read is a reference that decides what it describes.
     `hf_alias.py` MUST NOT create an implicit requirement to ship `run.py` or
     `generation.py`.
   - A `NAME` the catalog does not have MUST be refused naming the models it does.
+  - Reading a shipped document by a name that has none MUST be refused the same way
+    at every kind: name what was asked for and what there is, in the vocabulary the
+    command takes. An internal filename, or the word "installed" where a checkout is
+    what is running, is neither.
   - The forest and the counts MUST be generated from the models themselves rather
     than maintained beside them, because a hand-kept inventory of trees and numbers
     drifts silently from what it claims to describe.
