@@ -50,6 +50,7 @@ def test_models_source_names_the_shipped_directory_and_its_files(
 ) -> None:
     done = tf("models", "qwen3_1_7b", "--source")
     assert done.returncode == 0, done.stderr
+    assert not done.stderr
     lines = done.stdout.splitlines()
     source = Path(lines[0])
     assert source.is_absolute()

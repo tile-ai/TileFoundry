@@ -86,13 +86,10 @@ def source_summary(path: Path) -> str:
     return docstring.splitlines()[0] if docstring else "-"
 
 
-def render_source_directory(
-    directory: Path, files: tuple[Path, ...], *, manifest: bool = False
-) -> str:
+def render_source_directory(directory: Path, files: tuple[Path, ...]) -> str:
     """One source directory followed by aligned leading file descriptions."""
     width = max(len(path.name) for path in files)
-    note = "  (files below: the package data manifest's, not this directory's)"
-    lines = [str(directory) + (note if manifest else "")]
+    lines = [str(directory)]
     lines += [f"{path.name:<{width}}  {source_summary(path)}" for path in files]
     return "\n".join(lines) + "\n"
 
@@ -102,7 +99,19 @@ def model_source(name: str) -> str:
     _find(name)
     files = data.model_files(name)
     directory = data.directory("models") / name
-    return render_source_directory(directory, files, manifest=not data.is_installed())
+    return render_source_directory(directory, files)
+
+
+def source_provenance() -> str | None:
+    """Where a checkout's file list came from, for the stream prose belongs on.
+
+    Standard output is one path and one line per file, so a caller may read the
+    first line as a path in either world. Saying where the list came from is for
+    whoever is reading, not for whatever is parsing.
+    """
+    if data.is_installed():
+        return None
+    return "the files listed are the package data manifest's, not that directory's"
 
 
 def run_models(name: str | None, *, source: bool = False) -> int:
@@ -113,6 +122,9 @@ def run_models(name: str | None, *, source: bool = False) -> int:
         sys.stdout.write(render_models())
     elif source:
         sys.stdout.write(model_source(name))
+        stated = source_provenance()
+        if stated is not None:
+            print(f"tilefoundry: note: {stated}", file=sys.stderr)
     else:
         sys.stdout.write(render_model(name))
     return 0
@@ -125,5 +137,6 @@ __all__ = [
     "render_models",
     "render_source_directory",
     "run_models",
+    "source_provenance",
     "source_summary",
 ]

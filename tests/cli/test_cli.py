@@ -218,9 +218,9 @@ def test_cli_overviews_and_version_are_parser_surfaces(capsys) -> None:
 def test_models_source_labels_checkout_manifest(capsys) -> None:
     assert cli.main(["models", "qwen3_1_7b", "--source"]) == 0
     source = capsys.readouterr()
-    assert source.out.splitlines()[0].endswith(
-        "  (files below: the package data manifest's, not this directory's)"
-    )
+    assert Path(source.out.splitlines()[0]).is_dir()
+    assert "manifest" in source.err
+    assert "manifest" not in source.out
 
 
 def test_spec_names_unknown_topic_and_available_aliases(capsys) -> None:

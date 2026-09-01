@@ -282,9 +282,10 @@ that runs before it can be read is a reference that decides what it describes.
     a stable filename order. Each file line MUST give its filename and the first line of
     its own docstring, or `-` when it has none. A checkout MUST read that manifest;
     an installation MUST read its model directory, and both MUST name the same
-    files. A checkout's directory line MUST also say that the files below are the
-    manifest's rather than that directory's, because the manifest may name files
-    that live elsewhere in the tree. An installation's line MUST NOT say it: there
+    files. That first line MUST be the path alone, in either world, so a caller may
+    read it as one. A checkout MUST say on standard error that the list came from
+    the manifest rather than from that directory, because the manifest may name
+    files that live elsewhere in the tree; an installation MUST NOT, because there
     the two are the same directory.
   - `--source` MUST parse a file's text to read its docstring and MUST NOT import
     or execute model source. It MUST NOT reformat, regenerate, or copy a shipped
