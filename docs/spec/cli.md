@@ -223,17 +223,21 @@ granularity.
   - Its pages ship as data beside the specifications and MUST be read from the
     same installed lookup, so a page is available to an installed wheel and not
     only to a checkout.
-  - Where a page teaches by example, the example MUST be the shipped model source
-    itself, selected by what a declaration is called rather than by where it sits.
-    A copy pasted into prose is a second source that drifts, and a line range
-    silently quotes the wrong lines as soon as the model above it changes.
+  - Where a page teaches by example, the example MUST be source the page executes.
+    A page carrying programs MUST open with the command that extracts them from the
+    page itself, and every later command on the page MUST run against what that
+    command produced. A copy pasted into prose is a second source that drifts.
+  - A rendered page MUST be the output of executing its own blocks in order against
+    the current tree, extraction command first, so a command whose flags changed
+    cannot stay in a page unnoticed.
   - `tutorial orchestrator` MUST list the shipped orchestrator families, and
     `tutorial orchestrator FAMILY` MUST show that family's shipped directory and
     every source file's leading docstring without importing or executing it. An
     unknown family MUST name the available families. Checkout and installed
     lookups MUST report the same shipped families and files.
-  - Its workflow pages are `index`, `migrate`, and `optimize`; causal-LM decode
-    sources are listed through `tutorial orchestrator`.
+  - Its pages are `index`, `migrate`, `optimize`, and `authoring`; the first three
+    are the workflow and `authoring` is one kernel taken through six analyze-driven
+    stages. Causal-LM decode sources are listed through `tutorial orchestrator`.
   - A family's list description MUST be the leading docstring of the first file
     in stable filename order.
 
