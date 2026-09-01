@@ -189,6 +189,15 @@ def test_cli_overviews_and_version_are_parser_surfaces(capsys) -> None:
     assert help_page.out.index("spec") < help_page.out.index("tutorial")
 
     with pytest.raises(SystemExit) as stopped:
+        cli.main(["nope"])
+    assert stopped.value.code == 2
+    refused = capsys.readouterr()
+    assert refused.out == ""
+    assert refused.err.startswith("usage: tilefoundry")
+    assert "argument <command>: invalid choice: 'nope'" in refused.err
+    assert "TileFoundry — " not in refused.err
+
+    with pytest.raises(SystemExit) as stopped:
         cli.main(["-h"])
     assert stopped.value.code == 0
     assert capsys.readouterr().out == help_page.out
