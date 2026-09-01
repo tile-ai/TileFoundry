@@ -15,9 +15,11 @@ from dataclasses import replace
 from tilefoundry.ir.core.expr import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.mesh_scope import MeshScope as HirMeshScope
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope
+from tilefoundry.ir.types.shard.mesh import composed
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TupleType, Type, UnitType
 from tilefoundry.ir.types.utils import types_compatible
@@ -154,6 +156,19 @@ class TypeInferVisitor(ExprVisitor[Type]):
         if len(grid.carried_args) == 1:
             return inner.visit(grid.carried_args[0], ctx)
         return TupleType(fields=tuple(inner.visit(phi, ctx) for phi in grid.carried_args))
+
+    def visit_MeshScope(self, expr: HirMeshScope, ctx: TypeInferContext) -> Type:
+        """Type a region against the participants in force inside it.
+
+        Entering a scope composes it onto the chain in force, so the mesh the
+        body reads is the whole nesting rather than its innermost turn; composing
+        is also what refuses a nesting that says nothing new. That mesh goes down
+        on a child context, so the caller's own scope survives the recursion. The
+        region types as its body does: who runs the work is not a fact about the
+        shape of what it produced, and what one unit costs is cost's question.
+        """
+        mesh = composed((ctx.mesh_scope, expr.mesh)) if ctx.mesh_scope else expr.mesh
+        return self.visit(expr.body, replace(ctx, mesh_scope=mesh))
 
     def visit_leaf_ShapeOf(
         self, shape_of: ShapeOf, _operands, ctx: TypeInferContext

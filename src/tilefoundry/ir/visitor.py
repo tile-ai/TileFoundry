@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.mesh_scope import MeshScope as HirMeshScope
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
@@ -65,6 +66,8 @@ def expr_children(expr: Expr) -> tuple[Expr, ...]:
             return ()
         case Call(args=args):
             return args
+        case HirMeshScope(body=body):
+            return (body,)
         case GridRegionExpr(init_args=init_args, body=body, yield_values=yield_values):
             return (*init_args, body, *yield_values)
         case HirFunction(body=body):
@@ -85,6 +88,9 @@ def _rebuild_expr(expr: Expr, new_children: tuple[Expr, ...]) -> Expr:
             return expr
         case Call():
             return replace(expr, args=new_children)
+        case HirMeshScope():
+            (body,) = new_children
+            return replace(expr, body=body)
         case GridRegionExpr(init_args=init_args):
             n_init = len(init_args)
             init = new_children[:n_init]

@@ -165,13 +165,15 @@ def level_axes(mesh: "Mesh") -> tuple[tuple[int, ...], ...]:
 
 
 def composed(meshes: "tuple[Mesh, ...]") -> "Mesh":
-    """One Mesh naming what a stack of nested single-level Meshes names together.
+    """One Mesh naming what a stack of nested Meshes names together.
 
     A value distributed at two levels at once is distributed by one thing: the
-    lane owns part of what its CTA owns, so the positions are the pair. The
-    axes join outermost first and the outer strides are scaled by the positions
-    below them, which is the same shape a mesh naming both levels itself has --
-    so nesting the scopes and naming both on one mesh state the one fact one way.
+    lane owns part of what its CTA owns, so the positions are the pair. The axes
+    join outermost first and the outer strides scale by the positions below
+    them, the same shape a mesh naming both levels itself has. Only the first
+    argument may name several -- that is where an already-folded chain sits,
+    scopes being entered one at a time; anywhere else, argument order is what
+    says where a mesh sits, so each of them names one level.
     """
     if len(meshes) == 1:
         return meshes[0]
@@ -180,33 +182,45 @@ def composed(meshes: "tuple[Mesh, ...]") -> "Mesh":
     shape: list[object] = []
     strides: list[int] = []
     names: list[str] = []
-    for mesh in reversed(meshes):
-        if len(mesh.topologies) != 1:
+    seen: set[str] = set()
+    outermost = len(meshes) - 1
+    for index, mesh in enumerate(reversed(meshes)):
+        levels = tuple(topology.name for topology in mesh.topologies)
+        if len(mesh.topologies) != 1 and index != outermost:
             raise ValueError(
-                f"mesh names levels {tuple(t.name for t in mesh.topologies)}; scopes "
-                "are composed one level at a time, so a scope naming several has "
-                "already said how they nest"
+                f"mesh names levels {levels}; scopes are composed one level at a "
+                "time, and only the outermost argument may be a chain that has "
+                "already been folded up, so a scope naming several belongs there"
             )
         if not isinstance(mesh.layout, Layout):
             raise ValueError(
                 "a sliced mesh cannot be composed with another: the slice and the "
                 "level boundary would both be deciding which positions these are"
             )
-        (topology,) = mesh.topologies
+        repeated = tuple(name for name in levels if name in seen)
+        if repeated:
+            raise ValueError(
+                f"two meshes both name topology {repeated[0]!r}; one level is "
+                "divided once, so nesting two scopes on it says nothing new"
+            )
         own = flatten(mesh.layout.strides)
         if any(not isinstance(item, int) or isinstance(item, bool) for item in own):
-            raise ValueError(f"mesh level {topology.name!r} has no concrete strides to compose")
-        topologies.insert(0, topology)
+            raise ValueError(f"mesh level {levels} has no concrete strides to compose")
+        positions = 1
+        for topology in mesh.topologies:
+            size = topology.size
+            if not isinstance(size, int) or isinstance(size, bool) or size < 1:
+                raise ValueError(
+                    f"mesh level {topology.name!r} states extent {size!r}; composing "
+                    "scopes needs each of their position counts"
+                )
+            positions *= size
+        seen.update(levels)
+        topologies[:0] = list(mesh.topologies)
         shape[:0] = list(flatten(mesh.layout.shape))
         strides[:0] = [item * below for item in own]
         names[:0] = list(mesh.names)
-        size = topology.size
-        if not isinstance(size, int) or isinstance(size, bool) or size < 1:
-            raise ValueError(
-                f"mesh level {topology.name!r} states extent {size!r}; composing "
-                "scopes needs each of their position counts"
-            )
-        below *= size
+        below *= positions
     return Mesh(
         topologies=tuple(topologies),
         layout=Layout(shape=tuple(shape), strides=tuple(strides)),

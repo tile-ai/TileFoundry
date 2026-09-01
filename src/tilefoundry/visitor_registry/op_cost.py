@@ -29,6 +29,7 @@ from tilefoundry.ir.hir.nn.silu import Silu
 from tilefoundry.ir.hir.nn.softmax import SoftMax
 from tilefoundry.ir.hir.nn.tanh import Tanh
 from tilefoundry.ir.hir.sharding.local import Local
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.argmax import ArgMax
@@ -489,6 +490,12 @@ def _full_like(call: Call, ctx: CostContext) -> Cost:
 @register_cost_evaluator(Arange)
 def _arange(call: Call, ctx: CostContext) -> Cost:
     """Coordinates are synthesized metadata until a consumer materializes them."""
+    return Cost({}, _idle(call))
+
+
+@register_cost_evaluator(MeshCoord)
+def _mesh_coord(call: Call, ctx: CostContext) -> Cost:
+    """Which unit this is costs nothing: the machine already knows."""
     return Cost({}, _idle(call))
 
 
