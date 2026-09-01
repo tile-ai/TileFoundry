@@ -1,4 +1,4 @@
-"""The tutorial pages, and the shipped source they splice from."""
+"""The tutorial pages, reproduced the way a reader reproduces them."""
 
 from __future__ import annotations
 
@@ -73,26 +73,25 @@ def _reproduce(match: re.Match[str], region: str, *, python: Path, cwd: Path) ->
     assert ahead.startswith(shown), f"{block}\n{_difference(shown, ahead)}"
 
 
-def test_the_overview_names_the_pages_and_the_commands_it_delegates_to(tf) -> None:
+NOTEBOOK_PAGES = ("migrate", "optimize", "authoring")
+
+
+def test_the_index_points_at_the_pages_and_the_commands_it_delegates_to(tf) -> None:
+    """The index names every page and hands the reference questions on."""
     done = tf("tutorial")
     assert done.returncode == 0, done.stderr
     assert "source to source" in done.stdout
-    for page in ("migrate", "optimize"):
+    for page in NOTEBOOK_PAGES:
         assert page in done.stdout, page
     assert "tilefoundry spec" in done.stdout
     assert "tilefoundry check --help" in done.stdout
 
 
-@pytest.mark.parametrize("page", ("migrate", "optimize"))
+@pytest.mark.parametrize("page", NOTEBOOK_PAGES)
 def test_each_page_renders_from_the_installation(tf, page) -> None:
-    """A rendered page has no unresolved source directive."""
     done = tf("tutorial", page)
     assert done.returncode == 0, done.stderr
     assert done.stdout.startswith("# ")
-    assert "{{fixture:" not in done.stdout
-
-
-NOTEBOOK_PAGES = ("authoring",)
 
 
 @pytest.mark.parametrize("page", NOTEBOOK_PAGES)
@@ -116,20 +115,6 @@ def test_a_reader_reproduces_the_page_from_the_page(installation, tf, page, tmp_
             python=installation / "bin" / "python",
             cwd=tmp_path,
         )
-
-
-def test_migrate_splices_the_shipped_model_source_verbatim(tf, shipped) -> None:
-    """A parameter only the packaged source declares proves which file was read."""
-    done = tf("tutorial", "migrate")
-    assert done.returncode == 0, done.stderr
-    assert "w_router: ConstTensor" in done.stdout
-    assert "Prepare real weights first" in done.stdout
-    assert "../spec/runtime.md#112-weight-converter-and-prepare--forward" in done.stdout
-
-    authored = (Path(shipped["models"]) / "qwen3_5_35b_a3b" / "model.py").read_text(
-        encoding="utf-8"
-    )
-    assert "w_router: ConstTensor" in authored
 
 
 def test_orchestrator_lists_and_describes_its_shipped_family(tf) -> None:

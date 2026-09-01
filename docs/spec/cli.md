@@ -223,8 +223,8 @@ granularity.
   - Its pages ship as data beside the specifications and MUST be read from the
     same installed lookup, so a page is available to an installed wheel and not
     only to a checkout.
-  - Where a page teaches by example, the example MUST be source the page executes.
-    A page carrying programs MUST open with the command that extracts them from the
+  - Where a page teaches by example, the example MUST be source the page executes:
+    a page carrying programs MUST open with the command that extracts them from the
     page itself, and every later command on the page MUST run against what that
     command produced. A copy pasted into prose is a second source that drifts.
   - A rendered page MUST be the output of executing its own blocks in order against
