@@ -43,6 +43,7 @@ from .metadata import (
     TrafficMetadata,
     ValueLifetime,
 )
+from .scope import Scope
 from .visitor import AnalyzeContext
 
 SELECTOR = "memory"
@@ -247,33 +248,148 @@ def add_traffic(
             )
 
 
-def _lifetimes(values: list[Expr], facts: MemoryHierarchyFacts) -> tuple[ValueLifetime, ...]:
-    index_by_id = {id(expr): index for index, expr in enumerate(values)}
-    last_by_id = dict(index_by_id)
-    for index, consumer in enumerate(values):
+@dataclass(frozen=True)
+class _Residency:
+    """One lexical scope's own residencies and where its loops sit among them.
+
+    ``points`` are the positions occupancy is asked about: this scope's own
+    value positions plus one past them, so a value whose last reader is a loop
+    written after every other value still has a point that holds it. ``nested``
+    pairs each child scope with the point of this scope it occupies.
+    """
+
+    rows: tuple[ValueLifetime, ...]
+    points: tuple[int, ...]
+    nested: tuple[tuple[int, "_Residency"], ...]
+
+
+def _read_below(scope: Scope, values: dict[int, list[Expr]]) -> set[int]:
+    """Ids of every value read at or below *scope*, its loop's operands included.
+
+    A loop reads its own init and yield operands, so an enclosing value the body
+    never touches is still resident for as long as the loop carries it.
+    """
+    reached = {id(operand) for expr in values[id(scope)] for operand in expr_children(expr)}
+    if isinstance(scope.owner, GridRegionExpr):
+        reached |= {id(operand) for operand in expr_children(scope.owner)}
+    for child in scope.children:
+        reached |= _read_below(child, values)
+    return reached
+
+
+def _rows(
+    scope: Scope,
+    values: dict[int, list[Expr]],
+    sites: dict[int, int],
+    facts: MemoryHierarchyFacts,
+    local: CostContext,
+    base: int,
+) -> tuple[ValueLifetime, ...]:
+    """This scope's residencies, positioned from *base* in its own order.
+
+    How much one value holds comes from the same projection the traffic family
+    reads, so both halves of one report answer for the same unit. Taking the
+    whole tensor here and dividing by a per-level constant outside was a second
+    account of the same quantity, and the two disagreed by the ratio between a
+    value's own shard factor and the topology's declared unit count. A value a
+    nested scope reads is resident until the point that scope sits at.
+    """
+    own = values[id(scope)]
+    last_by_id = {id(expr): index for index, expr in enumerate(own)}
+    for index, consumer in enumerate(own):
         for operand in expr_children(consumer):
             if id(operand) in last_by_id and index > last_by_id[id(operand)]:
                 last_by_id[id(operand)] = index
+    for child in scope.children:
+        site = sites[id(child)]
+        for key in _read_below(child, values):
+            if key in last_by_id and site > last_by_id[key]:
+                last_by_id[key] = site
     result: list[ValueLifetime] = []
-    for index, expr in enumerate(values):
-        for level, amount in bytes_by_storage(expr.type).items():
+    for index, expr in enumerate(own):
+        for level, amount in bytes_by_storage(local.local_type_of(expr)).items():
             if facts.explicit(level) is None:
                 continue
+            position = base + index
             result.append(
                 ValueLifetime(
                     binding=(
-                        getattr(expr, "name", None) or binding_name(expr) or f"<value {index}>"
+                        getattr(expr, "name", None) or binding_name(expr) or f"<value {position}>"
                     ),
                     level=level,
                     bytes=amount,
-                    defined_at=index,
-                    last_used_at=(
-                        len(values) - 1 if isinstance(expr, Var) else last_by_id[id(expr)]
+                    defined_at=position,
+                    last_used_at=base
+                    + (
+                        max(len(own) - 1, last_by_id[id(expr)])
+                        if isinstance(expr, Var)
+                        else last_by_id[id(expr)]
                     ),
                     persistent=isinstance(expr, Var),
                 )
             )
     return tuple(result)
+
+
+def _residency(
+    scope: Scope,
+    values: dict[int, list[Expr]],
+    sites: dict[int, int],
+    facts: MemoryHierarchyFacts,
+    local: CostContext,
+    base: int,
+) -> tuple[_Residency, int]:
+    """Build the residency tree, numbering scopes depth-first from *base*.
+
+    Positions stay unique across the report: a scope owns ``base`` through
+    ``base + len(own)``, the last of them reserved as the point its loops sit
+    at, and its children are numbered after that.
+    """
+    own = values[id(scope)]
+    rows = _rows(scope, values, sites, facts, local, base)
+    cursor = base + len(own) + 1
+    nested: list[tuple[int, _Residency]] = []
+    for child in scope.children:
+        below, cursor = _residency(child, values, sites, facts, local, cursor)
+        nested.append((base + sites[id(child)], below))
+    return _Residency(rows, tuple(range(base, base + len(own) + 1)), tuple(nested)), cursor
+
+
+def _lifetimes(record: _Residency) -> tuple[ValueLifetime, ...]:
+    """Every residency below *record*, outer scope before the loops it holds."""
+    return (
+        *record.rows,
+        *(item for _site, below in record.nested for item in _lifetimes(below)),
+    )
+
+
+def _peak(record: _Residency, level: str, carried: int) -> int:
+    """One level's worst simultaneous residency at or below *record*.
+
+    A scope's own worst point, on top of what every enclosing scope holds at the
+    point this one sits. Sequential siblings are separate branches and take the
+    greater, not the sum, and a loop body counts once rather than once per trip:
+    residency is a stock, not a flow. Persistent bytes are resident at every
+    point of the function, so they are added rather than read off an interval. A
+    loop sits between two of its scope's positions, so a value defined at that
+    position is the loop's reader and not yet resident while it runs.
+    """
+    rows = tuple(item for item in record.rows if item.level == level)
+    resident = sum(item.bytes for item in rows if item.persistent)
+    transient = tuple(item for item in rows if not item.persistent)
+
+    def held(point: int) -> int:
+        return sum(
+            item.bytes for item in transient if item.defined_at <= point <= item.last_used_at
+        )
+
+    def across(site: int) -> int:
+        return sum(item.bytes for item in transient if item.defined_at < site <= item.last_used_at)
+
+    peak = carried + resident + max((held(point) for point in record.points), default=0)
+    for site, below in record.nested:
+        peak = max(peak, _peak(below, level, carried + resident + across(site)))
+    return peak
 
 
 @dataclass
@@ -285,16 +401,27 @@ class MemoryContext(AnalyzeContext):
     totals: dict[str, TrafficBytes] = field(default_factory=dict)
     shares: dict[str, TrafficBytes] = field(default_factory=dict)
     values: list[Expr] = field(default_factory=list)
+    by_scope: dict[int, list[Expr]] = field(default_factory=dict)
+    sites: dict[int, int] = field(default_factory=dict)
 
 
 class MemoryVisitor(ExprVisitor[None]):
     """Attach per-Call traffic while collecting lifetime order and loop footprints."""
 
     def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx: MemoryContext) -> None:
+        """Walk one loop with its own value sequence, and record where it sits.
+
+        A fresh list, not the same one: ``replace`` passes the field by
+        reference, so a loop body used to append into its parent's sequence and
+        the nesting the scope tree already records was lost before the residency
+        tree could read it. The two dicts are shared for the same reason.
+        """
         child = next(item for item in ctx.current.children if item.owner is expr)
-        inner = replace(ctx, current=child)
         for operand in expr.init_args:
             self.visit(operand, ctx)
+        inner = replace(ctx, current=child, values=[])
+        ctx.by_scope[id(child)] = inner.values
+        ctx.sites[id(child)] = len(ctx.values)
         self.visit(expr.body, inner)
         for operand in expr.yield_values:
             self.visit(operand, inner)
@@ -333,7 +460,16 @@ class MemoryVisitor(ExprVisitor[None]):
 
 
 def analyze_memory(function: Function, context: AnalyzeContext) -> None:
-    """Attach traffic and per-loop footprints from the shared Scope tree."""
+    """Attach traffic and per-loop footprints from the shared Scope tree.
+
+    The peak is nesting-aware and needs no solver: a value is live from its
+    definition to its last use in its own scope, a loop body's values sit on top
+    of what the enclosing scopes hold at the point the loop occupies, and a loop
+    counts once rather than once per trip. What is refused is one value against
+    its level's capacity, not the working set: a shared budget spent whole on one
+    buffer is a program the sum would refuse and the machine can still run, and
+    the wording is the one the authoring tutorial prints.
+    """
     module = context.module
     level = context.level
     facts = context.target.get_facts(MemoryHierarchyFacts)
@@ -351,6 +487,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         local=local,
         values=list(function.params),
     )
+    memory_context.by_scope[id(context.current)] = memory_context.values
     MemoryVisitor().visit(function.body, memory_context)
     attach(
         function,
@@ -359,39 +496,31 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             per_unit=tuple(sorted(memory_context.shares.items())),
         ),
     )
-    lifetimes = _lifetimes(memory_context.values, facts)
-    topology_size = 1
-    if topologies and isinstance(topologies[0].size, int):
-        topology_size = max(1, topologies[0].size)
+    residency, _end = _residency(
+        context.current, memory_context.by_scope, memory_context.sites, facts, local, 0
+    )
+    lifetimes = _lifetimes(residency)
     levels_list: list[LevelFootprint] = []
     for name in sorted({item.level for item in lifetimes} | set(memory_context.shares)):
         declared = facts.explicit(name)
-        divisor = topology_size if declared is not None and declared.owner != "target" else 1
         rows = [item for item in lifetimes if item.level == name]
-        peak = 0
-        for point in range(len(lifetimes) + 1):
-            peak = max(
-                peak,
-                sum(
-                    item.bytes // divisor
-                    for item in rows
-                    if item.defined_at <= point <= item.last_used_at
-                ),
-            )
         levels_list.append(
             LevelFootprint(
                 level=name,
-                peak_bytes=peak,
-                persistent_bytes=sum(item.bytes // divisor for item in rows if item.persistent),
+                peak_bytes=_peak(residency, name, 0),
+                persistent_bytes=sum(item.bytes for item in rows if item.persistent),
                 capacity_bytes=declared.capacity_bytes if declared is not None else None,
             )
         )
     levels = tuple(levels_list)
-    for level in levels:
-        if level.capacity_bytes is not None and level.peak_bytes > level.capacity_bytes:
+    for item in lifetimes:
+        declared = facts.explicit(item.level)
+        capacity = None if declared is None else declared.capacity_bytes
+        if capacity is not None and item.bytes > capacity:
             raise AnalysisError(
-                f"{level.level!r} holds {level.peak_bytes} B at one point of this program, "
-                f"more than the {level.capacity_bytes} B the target states for that level"
+                f"function {function.name!r}: value {item.binding!r} needs "
+                f"{item.bytes} B in {item.level}, which exceeds the "
+                f"{capacity} B the target states for that level"
             )
     attach(
         function,

@@ -78,6 +78,11 @@ class _RestatedCapacity(CudaTarget):
         )
 
 
+class _TightShared(_RestatedCapacity):
+    name = "test.tight_shared"
+    levels = {"smem": 105_600}
+
+
 class _RoomyShared(_RestatedCapacity):
     name = "test.roomy_shared"
     levels = {"smem": 422_400}
@@ -333,20 +338,29 @@ def test_a_matmul_counts_its_rows_once_whichever_axis_the_mesh_split() -> None:
 def test_a_program_whose_buffers_have_nowhere_to_sit_is_refused() -> None:
     """Placing the buffers is what makes the rest of the answer worth having.
 
-    The two shared tiles this program keeps live at once do not both fit the
-    machine's shared memory, and no ordering makes them: the second is computed
-    from the first. Whoever asks is refused, because memory is the family that
-    decides this and everything downstream reads what it decided. Restating the
-    capacity is what changes the answer, and it changes only the answer: the
-    lifetimes are the same either way.
+    One shared tile of this program is twice what the machine states for that
+    level, and no ordering makes room for it: a value that cannot be placed at
+    all is refused, because memory decides this and everything downstream reads
+    what it decided. Restating the capacity changes only the answer: the
+    lifetimes are the same either way. What is refused is one value against the
+    capacity and not the working set, so the same program on the unrestated
+    machine keeps two tiles that each fit live at once and is answered.
     """
-    split = next(function for function in _SharedTile.functions if function.name == "split")
+    tight = replace(_SharedTile, target=_TightShared("nvidia.h200_sxm"))
+    split = next(function for function in tight.functions if function.name == "split")
     roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))
 
-    with pytest.raises(AnalysisError, match=r"'smem' holds 422400 B at one point"):
-        analyze(_SharedTile, split, analysis="memory")
-    with pytest.raises(AnalysisError, match=r"'smem' holds 422400 B at one point"):
-        analyze(_SharedTile, split, analysis="performance")
+    refusal = r"value 'v\d+' needs 211200 B in smem, which exceeds the 105600 B"
+    with pytest.raises(AnalysisError, match=refusal):
+        analyze(tight, split, analysis="memory")
+    with pytest.raises(AnalysisError, match=refusal):
+        analyze(tight, split, analysis="performance")
+
+    unrestated = next(item for item in _SharedTile.functions if item.name == "split")
+    held = get_metadata(
+        analyze(_SharedTile, unrestated, analysis="memory").function, MemoryMetadata
+    ).footprint
+    assert next(item.peak_bytes for item in held if item.level == "smem") == 422_400
 
     fits = analyze(
         roomy,
