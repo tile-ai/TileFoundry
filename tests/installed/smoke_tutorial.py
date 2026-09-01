@@ -76,13 +76,24 @@ def _reproduce(match: re.Match[str], region: str, *, python: Path, cwd: Path) ->
 NOTEBOOK_PAGES = ("migrate", "optimize", "authoring")
 
 
-def test_the_index_points_at_the_pages_and_the_commands_it_delegates_to(tf) -> None:
-    """The index names every page and hands the reference questions on."""
+def test_the_index_names_the_pages_there_are(tf) -> None:
+    """The index says what the project is and which page answers what."""
     done = tf("tutorial")
     assert done.returncode == 0, done.stderr
     assert "source to source" in done.stdout
     for page in NOTEBOOK_PAGES:
         assert page in done.stdout, page
+
+
+@pytest.mark.parametrize("page", ("migrate", "optimize"))
+def test_a_workflow_page_hands_the_reference_questions_on(tf, page) -> None:
+    """The tutorial MUST point at `spec` and `check --help`; the pages are where.
+
+    The index lists the pages it has and nothing else, so this obligation lands on
+    each page that teaches a step rather than on the front door.
+    """
+    done = tf("tutorial", page)
+    assert done.returncode == 0, done.stderr
     assert "tilefoundry spec" in done.stdout
     assert "tilefoundry check --help" in done.stdout
 

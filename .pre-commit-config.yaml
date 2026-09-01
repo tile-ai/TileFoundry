@@ -21,7 +21,7 @@ repos:
         name: spec-rules-lint
         entry: python scripts/spec_rules_lint.py
         language: system
-        files: ^docs/spec/.*\.md$
+        files: ^docs/(spec|tutorial)/.*\.md$
       # Every place a reference is written. Kept off `docs/SPEC-RULES.md`, which
       # states the forbidden forms as examples and would report itself.
       - id: spec-refs-lint

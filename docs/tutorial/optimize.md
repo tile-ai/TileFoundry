@@ -5,14 +5,15 @@ be priced before anyone writes a kernel for it. This page takes the step from
 `tilefoundry tutorial migrate` and makes it fast, measuring after each change instead of
 guessing which change was the good one.
 
-Nothing here launches a CUDA kernel. Every number below is static analysis of the authored
-program against the rates the target publishes.
+Every `analyze` number below is static analysis of the authored program against the
+rates the target publishes -- no kernel has to exist for it. The one kernel this page does
+write is the Triton twin at the end, and what it is held to is agreement, not a number.
 
 To run this installed page, extract its programs into files:
 
 ```bash
 set -euo pipefail
-for name in step.py twin.py; do
+for name in rms_norm_quant.py twin.py; do
   awk -v tag="<!-- tilefoundry-source: $name -->" '
     $0 == tag { block=1; next }
     block && /^```python$/ { in_python=1; next }
@@ -25,10 +26,10 @@ done
 ## 1. Where the middle result lives
 
 `Naive` splits the work at a `@func` boundary: `norm` produces the normalized rows and
-`step` quantizes them. A `@func` boundary is a real handover, so those rows are written
-where the next function can read them.
+`rms_norm_quant` quantizes them. A `@func` boundary is a real handover, so those rows are
+written where the next function can read them.
 
-<!-- tilefoundry-source: step.py -->
+<!-- tilefoundry-source: rms_norm_quant.py -->
 
 ```python
 #!/usr/bin/env python3
@@ -50,37 +51,39 @@ _CTA = Topology("cta", 1)
 _THREAD = Topology("thread", ROWS * 4 * 32)
 
 
-@module(entry="step", target=_H200, topologies=(_CTA, _THREAD))
+@module(entry="rms_norm_quant", target=_H200, topologies=(_CTA, _THREAD))
 class Naive:
     """Normalize, hand the rows on, quantize them: two funcs, one boundary."""
 
     @func
     def norm(a: Tensor[(ROWS, H), "bf16"], gamma: ConstTensor[(1, H), "bf16"]):
-        with Mesh(("thread",), (ROWS, 4, 32), ("x", "y", "t")) as m:
-            held = tf.reshard(a, (ROWS @ m.x, BLOCKS @ m.y, BLOCK @ m.t), "rmem")
-            scaling = tf.reshard(gamma, (1, BLOCKS @ m.y, BLOCK @ m.t), "rmem")
-            rows = tf.cast(held, "f32")
-            mean = tf.reduce(tf.square(rows), (-1,), True, ReduceKind.MEAN)
-            normed = tf.cast(rows * tf.rsqrt(mean + EPS), "bf16") * scaling
-            return tf.reshard(normed, (ROWS, H), "gmem")
+        with Mesh(("cta",), (1,), ("tile",)) as _cta:
+            with Mesh(("thread",), (ROWS, 4, 32), ("x", "y", "t")) as m:
+                held = tf.reshard(a, (ROWS @ m.x, BLOCKS @ m.y, BLOCK @ m.t), "rmem")
+                scaling = tf.reshard(gamma, (1, BLOCKS @ m.y, BLOCK @ m.t), "rmem")
+                rows = tf.cast(held, "f32")
+                mean = tf.reduce(tf.square(rows), (-1,), True, ReduceKind.MEAN)
+                normed = tf.cast(rows * tf.rsqrt(mean + EPS), "bf16") * scaling
+                return tf.reshard(normed, (ROWS, H), "gmem")
 
     @func
-    def step(a: Tensor[(ROWS, H), "bf16"], gamma: ConstTensor[(1, H), "bf16"]):
+    def rms_norm_quant(a: Tensor[(ROWS, H), "bf16"], gamma: ConstTensor[(1, H), "bf16"]):
         normed = norm(a, gamma)  # noqa: F821
-        with Mesh(("thread",), (ROWS, 4, 32), ("x", "y", "t")) as m:
-            held = tf.reshard(normed, (ROWS @ m.x, BLOCKS @ m.y, BLOCK @ m.t), "rmem")
-            blocks = tf.reshape(tf.cast(held, "f32"), (ROWS, BLOCKS, BLOCK))
-            scale = tf.reduce(blocks, (-1,), True, ReduceKind.ABS_MAX) * (1.0 / FP8_MAX)
-            quant = tf.cast(tf.clamp(blocks / scale, -FP8_MAX, FP8_MAX), "fp8e4m3")
-            return (
-                tf.reshard(tf.reshape(quant, (ROWS, H)), (ROWS, H), "gmem"),
-                tf.reshard(tf.reshape(scale, (ROWS, BLOCKS)), (ROWS, BLOCKS), "gmem"),
-            )
+        with Mesh(("cta",), (1,), ("tile",)) as _cta:
+            with Mesh(("thread",), (ROWS, 4, 32), ("x", "y", "t")) as m:
+                held = tf.reshard(normed, (ROWS @ m.x, BLOCKS @ m.y, BLOCK @ m.t), "rmem")
+                blocks = tf.reshape(tf.cast(held, "f32"), (ROWS, BLOCKS, BLOCK))
+                scale = tf.reduce(blocks, (-1,), True, ReduceKind.ABS_MAX) * (1.0 / FP8_MAX)
+                quant = tf.cast(tf.clamp(blocks / scale, -FP8_MAX, FP8_MAX), "fp8e4m3")
+                return (
+                    tf.reshard(tf.reshape(quant, (ROWS, H)), (ROWS, H), "gmem"),
+                    tf.reshard(tf.reshape(scale, (ROWS, BLOCKS)), (ROWS, BLOCKS), "gmem"),
+                )
 ```
 
 ```bash
 set -euo pipefail
-tilefoundry analyze step.py:Naive Naive.txt --compute-cost --memory --roofline
+tilefoundry analyze rms_norm_quant.py:Naive Naive.txt --compute-cost --memory --roofline
 grep -E '^# (traffic|roofline) ' Naive.txt
 ```
 
@@ -97,33 +100,34 @@ back once.
 `Fused` is the same arithmetic in one `@func`, so the normalized rows never leave a
 register.
 
-<!-- tilefoundry-source: step.py -->
+<!-- tilefoundry-source: rms_norm_quant.py -->
 
 ```python
-@module(entry="step", target=_H200, topologies=(_CTA, _THREAD))
+@module(entry="rms_norm_quant", target=_H200, topologies=(_CTA, _THREAD))
 class Fused:
     """One func: the normalized rows never leave a register."""
 
     @func
-    def step(a: Tensor[(ROWS, H), "bf16"], gamma: ConstTensor[(1, H), "bf16"]):
-        with Mesh(("thread",), (ROWS, 4, 32), ("x", "y", "t")) as m:
-            held = tf.reshard(a, (ROWS @ m.x, BLOCKS @ m.y, BLOCK @ m.t), "rmem")
-            scaling = tf.reshard(gamma, (1, BLOCKS @ m.y, BLOCK @ m.t), "rmem")
-            rows = tf.cast(held, "f32")
-            mean = tf.reduce(tf.square(rows), (-1,), True, ReduceKind.MEAN)
-            normed = tf.cast(rows * tf.rsqrt(mean + EPS), "bf16") * scaling
-            blocks = tf.reshape(tf.cast(normed, "f32"), (ROWS, BLOCKS, BLOCK))
-            scale = tf.reduce(blocks, (-1,), True, ReduceKind.ABS_MAX) * (1.0 / FP8_MAX)
-            quant = tf.cast(tf.clamp(blocks / scale, -FP8_MAX, FP8_MAX), "fp8e4m3")
-            return (
-                tf.reshard(tf.reshape(quant, (ROWS, H)), (ROWS, H), "gmem"),
-                tf.reshard(tf.reshape(scale, (ROWS, BLOCKS)), (ROWS, BLOCKS), "gmem"),
-            )
+    def rms_norm_quant(a: Tensor[(ROWS, H), "bf16"], gamma: ConstTensor[(1, H), "bf16"]):
+        with Mesh(("cta",), (1,), ("tile",)) as _cta:
+            with Mesh(("thread",), (ROWS, 4, 32), ("x", "y", "t")) as m:
+                held = tf.reshard(a, (ROWS @ m.x, BLOCKS @ m.y, BLOCK @ m.t), "rmem")
+                scaling = tf.reshard(gamma, (1, BLOCKS @ m.y, BLOCK @ m.t), "rmem")
+                rows = tf.cast(held, "f32")
+                mean = tf.reduce(tf.square(rows), (-1,), True, ReduceKind.MEAN)
+                normed = tf.cast(rows * tf.rsqrt(mean + EPS), "bf16") * scaling
+                blocks = tf.reshape(tf.cast(normed, "f32"), (ROWS, BLOCKS, BLOCK))
+                scale = tf.reduce(blocks, (-1,), True, ReduceKind.ABS_MAX) * (1.0 / FP8_MAX)
+                quant = tf.cast(tf.clamp(blocks / scale, -FP8_MAX, FP8_MAX), "fp8e4m3")
+                return (
+                    tf.reshard(tf.reshape(quant, (ROWS, H)), (ROWS, H), "gmem"),
+                    tf.reshard(tf.reshape(scale, (ROWS, BLOCKS)), (ROWS, BLOCKS), "gmem"),
+                )
 ```
 
 ```bash
 set -euo pipefail
-tilefoundry analyze step.py:Fused Fused.txt --compute-cost --memory --roofline
+tilefoundry analyze rms_norm_quant.py:Fused Fused.txt --compute-cost --memory --roofline
 grep -E '^# (traffic|roofline) ' Fused.txt
 ```
 
@@ -138,36 +142,69 @@ are still computed, they are just not spilled on the way.
 
 ## 2. A twin, and whether it still agrees
 
-`analyze` predicts a cost; it says nothing about whether an implementation is correct. A
-runtime twin is the hand-written implementation, and `check` compares it against the
-authored program run by the interpreter -- with no `--expected`, the authored HIR *is* the
-reference. Every output needs at least one predicate: the quantized tensor is discrete, so
-one wrong value is a total failure and `equal` is the honest test, while the scale is f32
-and takes a tolerance.
+`analyze` prices a program; it says nothing about whether an implementation of it is
+correct. The twin below is that implementation -- one Triton kernel, one row per program,
+the whole step fused into it -- and `check` holds it to the authored program run by the
+interpreter: with no `--expected`, the authored HIR *is* the reference.
+
+Every output needs at least one predicate. The quantized tensor is discrete, so one wrong
+value is a total failure and `equal` is the honest test; the scale is f32 and takes a
+tolerance. `equal` on fp8 is a demanding thing to ask of a hand-written kernel -- a
+different reduction order in the row sum would move the normalized values by one bf16 step
+and some of them across an fp8 code. It passes here, and that is the claim the page is
+making.
 
 <!-- tilefoundry-source: twin.py -->
 
 ```python
 #!/usr/bin/env python3
-"""The runtime twin of the fused step: the same arithmetic, written in torch."""
+"""The runtime twin of the fused step, as one Triton kernel."""
 
 import torch
-from step import BLOCK, BLOCKS, EPS, FP8_MAX, H, ROWS, Fused
+import triton
+import triton.language as tl
+from rms_norm_quant import BLOCK, BLOCKS, EPS, FP8_MAX, H, ROWS, Fused
 
 from tilefoundry.runtime import runtime_func, runtime_module
+
+_TILE = triton.next_power_of_2(BLOCKS)
+
+
+@triton.jit
+def _rms_norm_quant(
+    a_ptr, gamma_ptr, q_ptr, s_ptr, eps, fp8_max,
+    H: tl.constexpr, BLOCK: tl.constexpr, BLOCKS: tl.constexpr, TILE: tl.constexpr,
+):
+    """One row per program: normalize it, then quantize it block by block."""
+    row = tl.program_id(0)
+    blocks = tl.arange(0, TILE)[:, None]
+    lanes = tl.arange(0, BLOCK)[None, :]
+    offsets = blocks * BLOCK + lanes
+    live = blocks < BLOCKS
+
+    a = tl.load(a_ptr + row * H + offsets, mask=live, other=0.0).to(tl.float32)
+    gamma = tl.load(gamma_ptr + offsets, mask=live, other=0.0)
+    normed = (a * tl.rsqrt(tl.sum(a * a) / H + eps)).to(tl.bfloat16) * gamma
+
+    held = normed.to(tl.float32)
+    scale = tl.max(tl.abs(held), axis=1, keep_dims=True) * (1.0 / fp8_max)
+    quant = tl.clamp(held / scale, -fp8_max, fp8_max).to(tl.float8e4nv)
+
+    tl.store(q_ptr + row * H + offsets, quant, mask=live)
+    tl.store(s_ptr + row * BLOCKS + blocks, scale, mask=live)
 
 
 @runtime_module(Fused)
 class Fast:
     @runtime_func
-    def step(self, a, gamma):
-        rows = a.float()
-        mean = rows.pow(2).mean(-1, keepdim=True)
-        normed = (rows * torch.rsqrt(mean + EPS)).to(torch.bfloat16) * gamma
-        blocks = normed.float().reshape(ROWS, BLOCKS, BLOCK)
-        scale = blocks.abs().amax(-1, keepdim=True) * (1.0 / FP8_MAX)
-        quant = (blocks / scale).clamp(-FP8_MAX, FP8_MAX).to(torch.float8_e4m3fn)
-        return quant.reshape(ROWS, H), scale.reshape(ROWS, BLOCKS)
+    def rms_norm_quant(self, a, gamma):
+        quant = torch.empty((ROWS, H), dtype=torch.float8_e4m3fn, device=a.device)
+        scale = torch.empty((ROWS, BLOCKS), dtype=torch.float32, device=a.device)
+        _rms_norm_quant[(ROWS,)](
+            a, gamma, quant, scale, EPS, FP8_MAX,
+            H=H, BLOCK=BLOCK, BLOCKS=BLOCKS, TILE=_TILE,
+        )
+        return quant, scale
 ```
 
 ```bash
@@ -179,7 +216,7 @@ tilefoundry check twin.py:Fast --inputs random --weights random \
 
 ```text
 twin.py:Fast
-  reference: evaluator on Fused.step
+  reference: evaluator on Fused.rms_norm_quant
   inputs:    random (seed 0); activations actual bf16 (declared bf16)
 
   output[0]   fp8e4m3[2,7168]   ref_norm 12548.9

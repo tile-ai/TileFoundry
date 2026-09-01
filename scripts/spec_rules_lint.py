@@ -1,9 +1,10 @@
 #!/usr/bin/env python
-"""Lint spec Markdown under ``docs/SPEC-RULES.md``.
+"""Lint documentation Markdown under ``docs/SPEC-RULES.md``.
 
-Checks cover forbidden tokens and headings plus unified Python/C++ interface
-blocks. Example blocks are exempt and ``docs/SPEC-RULES.md`` is not linted.
-Each finding reports ``file:line`` and produces a nonzero exit status.
+Checks cover forbidden tokens and headings everywhere, plus unified Python/C++
+interface blocks on specification pages. Example blocks are exempt and
+``docs/SPEC-RULES.md`` is not linted. Each finding reports ``file:line`` and
+produces a nonzero exit status.
 """
 
 from __future__ import annotations
@@ -203,6 +204,7 @@ def _lint_cpp_block(lines: list[str]) -> list[tuple[int, str]]:
 
 
 _MACHINERY_OWNERS = ("core-ir.md", "visitor-registry.md")
+_INTERFACE_SCOPE = "docs/spec/"
 
 
 def lint_entry_format(text: str, path: str) -> list[tuple[int, str]]:
@@ -224,9 +226,18 @@ def lint_entry_format(text: str, path: str) -> list[tuple[int, str]]:
 
 
 def lint_file(path: str) -> list[str]:
+    """Every rule for a specification page, and the token rules anywhere else.
+
+    The Entry Format rules describe a concise interface block, which is what a
+    specification's Python fences are. Another page's fences may be programs that
+    run, where a decorator and a module docstring are correct; the token rules --
+    the annotation marker among them -- still apply to those.
+    """
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
-    found = lint_text(text) + lint_entry_format(text, path)
+    found = lint_text(text)
+    if _INTERFACE_SCOPE in path.replace("\\", "/"):
+        found += lint_entry_format(text, path)
     return [f"{path}:{ln}: {msg}" for ln, msg in sorted(found)]
 
 
@@ -235,7 +246,7 @@ def main(argv: list[str]) -> int:
     for path in argv:
         failures.extend(lint_file(path))
     if failures:
-        sys.stderr.write("spec_rules_lint: docs/spec violates docs/SPEC-RULES.md:\n")
+        sys.stderr.write("spec_rules_lint: violations of docs/SPEC-RULES.md:\n")
         for f in failures:
             sys.stderr.write(f"  {f}\n")
         return 1

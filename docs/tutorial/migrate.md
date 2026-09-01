@@ -14,12 +14,12 @@ measured against:
 
 ```bash
 set -euo pipefail
-awk -v tag="<!-- tilefoundry-source: step.py -->" '
+awk -v tag="<!-- tilefoundry-source: rms_norm_quant.py -->" '
   $0 == tag { block=1; next }
   block && /^```python$/ { in_python=1; next }
   in_python && /^```$/ { in_python=0; block=0; next }
   in_python { print }
-' migrate.md > step.py
+' migrate.md > rms_norm_quant.py
 published=$(tilefoundry models deepseek_v4_flash --source 2>/dev/null | sed -n '1p')
 cp "$published/config.json" .
 ```
@@ -78,7 +78,7 @@ One thing no field tells you: *where* the result lands in bf16. That is in the c
 last line of `LlamaRMSNorm.forward` -- `self.weight * hidden_states.to(input_dtype)`, which
 casts first and scales second. The version below scales first.
 
-<!-- tilefoundry-source: step.py -->
+<!-- tilefoundry-source: rms_norm_quant.py -->
 
 ```python
 #!/usr/bin/env python3
@@ -96,12 +96,16 @@ FP8_MAX = 448.0  # the largest finite fp8e4m3, because fmt says e4m3
 EPS = 1e-6  # config.json: rms_norm_eps
 
 
-@module(entry="step", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
-class Step:
+@module(
+    entry="rms_norm_quant",
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", 1),),
+)
+class RmsNormQuant:
     """The step as I remember it: scale by gamma, then land in bf16."""
 
     @func
-    def step(a: Tensor[(ROWS, H), "bf16"], gamma: ConstTensor[(1, H), "bf16"]):
+    def rms_norm_quant(a: Tensor[(ROWS, H), "bf16"], gamma: ConstTensor[(1, H), "bf16"]):
         rows = tf.cast(a, "f32")
         mean = tf.reduce(tf.square(rows), (-1,), True, ReduceKind.MEAN)
         normed = tf.cast(rows * tf.rsqrt(mean + EPS) * tf.cast(gamma, "f32"), "bf16")
@@ -114,7 +118,7 @@ class Step:
 ```bash
 set -euo pipefail
 set +e
-tilefoundry check step.py:Step --inputs files:x.pt --weights ckpt:. \
+tilefoundry check rms_norm_quant.py:RmsNormQuant --inputs files:x.pt --weights ckpt:. \
   --expected expected.pt \
   --out 'output[0]' --fn equal \
   --out 'output[1]' --fn allclose --atol 1e-6 --rtol 1e-6
@@ -124,7 +128,7 @@ set -e
 ```
 
 ```text
-step.py:Step
+rms_norm_quant.py:RmsNormQuant
   reference: expected.pt
   inputs:    files:x.pt; activations actual bf16 (declared none); files x.pt: 1 tensor(s) bf16[2, 7168]
 
@@ -152,11 +156,12 @@ warning itself, because the reference carries its own rounding. Here the publish
 right by definition -- it is what a user of this model runs.
 
 The fix is one line: land in bf16, then scale. The block below is tagged as a second
-source for the same file, so the extraction command after it writes over `step.py`, and the
+source for the same file, so the extraction command after it writes over
+`rms_norm_quant.py`, and the
 `check` that follows is the *same command*, character for character, as the one that
 failed.
 
-<!-- tilefoundry-source: step-fixed -->
+<!-- tilefoundry-source: rms_norm_quant-fixed -->
 
 ```python
 #!/usr/bin/env python3
@@ -174,12 +179,16 @@ FP8_MAX = 448.0  # the largest finite fp8e4m3, because fmt says e4m3
 EPS = 1e-6  # config.json: rms_norm_eps
 
 
-@module(entry="step", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 1),))
-class Step:
+@module(
+    entry="rms_norm_quant",
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", 1),),
+)
+class RmsNormQuant:
     """The step as the published class writes it: land in bf16, then scale by gamma."""
 
     @func
-    def step(a: Tensor[(ROWS, H), "bf16"], gamma: ConstTensor[(1, H), "bf16"]):
+    def rms_norm_quant(a: Tensor[(ROWS, H), "bf16"], gamma: ConstTensor[(1, H), "bf16"]):
         rows = tf.cast(a, "f32")
         mean = tf.reduce(tf.square(rows), (-1,), True, ReduceKind.MEAN)
         normed = tf.cast(rows * tf.rsqrt(mean + EPS), "bf16") * gamma
@@ -191,24 +200,24 @@ class Step:
 
 ```bash
 set -euo pipefail
-awk -v tag="<!-- tilefoundry-source: step-fixed -->" '
+awk -v tag="<!-- tilefoundry-source: rms_norm_quant-fixed -->" '
   $0 == tag { block=1; next }
   block && /^```python$/ { in_python=1; next }
   in_python && /^```$/ { in_python=0; block=0; next }
   in_python { print }
-' migrate.md > step.py
+' migrate.md > rms_norm_quant.py
 ```
 
 ```bash
 set -euo pipefail
-tilefoundry check step.py:Step --inputs files:x.pt --weights ckpt:. \
+tilefoundry check rms_norm_quant.py:RmsNormQuant --inputs files:x.pt --weights ckpt:. \
   --expected expected.pt \
   --out 'output[0]' --fn equal \
   --out 'output[1]' --fn allclose --atol 1e-6 --rtol 1e-6
 ```
 
 ```text
-step.py:Step
+rms_norm_quant.py:RmsNormQuant
   reference: expected.pt
   inputs:    files:x.pt; activations actual bf16 (declared none); files x.pt: 1 tensor(s) bf16[2, 7168]
 
