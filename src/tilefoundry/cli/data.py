@@ -81,13 +81,7 @@ def path(kind: str, name: str) -> Path:
     """One shipped file by name, from wherever that kind is read from."""
     found = directory(kind) / name
     if not found.is_file():
-        names = (
-            ", ".join(sorted(path.stem for path in found.parent.glob("*.md")))
-            if kind in {"spec", "tutorial"}
-            else ", ".join(path.name for path in directories(kind))
-        )
-        display = Path(name).stem if name.endswith(".md") else name
-        raise FileNotFoundError(f"no {kind} named {display!r}; there are {names}")
+        raise FileNotFoundError(f"TileFoundry {kind} file {name} was not found")
     return found
 
 
@@ -112,8 +106,7 @@ def directories(kind: str) -> tuple[Path, ...]:
     """The shipped directories of *kind*, in the checkout or an installation."""
     known = _KINDS[kind]
     root = directory(kind)
-    source = _REPOSITORY_ROOT.joinpath(*known.source)
-    if root != source:
+    if is_installed(kind):
         return tuple(sorted(path for path in root.iterdir() if path.is_dir()))
 
     prefix = f"share/tilefoundry/{known.installed}/"

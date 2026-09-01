@@ -215,18 +215,21 @@ def test_cli_overviews_and_version_are_parser_surfaces(capsys) -> None:
     assert capsys.readouterr().out.startswith("tilefoundry ")
 
 
-def test_models_source_labels_checkout_manifest_and_spec_names_unknown_topic(capsys) -> None:
+def test_models_source_labels_checkout_manifest(capsys) -> None:
     assert cli.main(["models", "qwen3_1_7b", "--source"]) == 0
     source = capsys.readouterr()
     assert source.out.splitlines()[0].endswith(
         "  (files below: the package data manifest's, not this directory's)"
     )
 
+
+def test_spec_names_unknown_topic_and_available_aliases(capsys) -> None:
     assert cli.main(["spec", "nope"]) == 1
     refused = capsys.readouterr()
     assert "no spec named 'nope'; there are " in refused.err
-    assert "installed" not in refused.err
     assert ".md" not in refused.err
+    assert "TileFoundry" not in refused.err
+    assert "dsl" in refused.err
 
 
 def test_analyze_json_without_a_requested_root_is_a_usage_error(capsys, tmp_path) -> None:
