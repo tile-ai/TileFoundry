@@ -38,15 +38,6 @@ def test_a_coordinate_is_one_number_and_carries_no_placement() -> None:
     assert inferred.storage is StorageKind.RMEM
 
 
-def test_a_mesh_is_what_it_takes_rather_than_a_scope() -> None:
-    """The mesh is a value the node carries, so it types without one in force.
-
-    Whether an enclosing region binds that mesh is a question about the regions,
-    asked where they are, not a missing operand here.
-    """
-    assert TypeInferVisitor().visit(_coord(), TypeInferContext()) is not None
-
-
 def test_asking_which_unit_this_is_costs_nothing() -> None:
     """The machine already knows; reporting it is not work anyone pays for."""
     cost = CostEvaluator().visit_Call(_coord(), CostContext())

@@ -58,7 +58,38 @@ def test_a_region_is_an_expression_the_generic_walks_already_know() -> None:
     assert leaf in collect_exprs(outer)
 
     rebuilt = ExprCloner().visit(outer, None)
-    assert rebuilt == outer
+    assert rebuilt is outer
+
+
+class _SwapLeaf(ExprCloner):
+    """Rewrite the one variable, so every region above it must be rebuilt."""
+
+    def __init__(self, replacement: Var) -> None:
+        super().__init__()
+        self.replacement = replacement
+
+    def visit_leaf_Var(self, _var: Var, _operands, _ctx) -> Var:
+        return self.replacement
+
+
+def test_rewriting_what_a_region_holds_rebuilds_the_region_around_it() -> None:
+    """A region carries its body, so replacing the body replaces the regions.
+
+    What the regions themselves say is not the rewrite's business: the mesh each
+    one names comes through untouched, and so does the type, which is the body's
+    -- who runs the work says nothing about the shape of what it produced.
+    """
+    outer, _leaf = _scoped(CTA, THREAD)
+    fresh = Var(name="y", type=_TY)
+
+    rebuilt = _SwapLeaf(fresh).visit(outer, None)
+
+    assert rebuilt is not outer
+    assert isinstance(rebuilt, MeshScope) and rebuilt.mesh == CTA
+    inner = rebuilt.body
+    assert isinstance(inner, MeshScope) and inner.mesh == THREAD
+    assert inner.body is fresh
+    assert rebuilt.type == rebuilt.body.type == inner.body.type
 
 
 def test_the_scope_inside_a_region_is_the_whole_nesting() -> None:

@@ -1,4 +1,4 @@
-"""HIR the coordinate of the unit a region is running on."""
+"""The coordinate of the unit a region is running on."""
 
 from __future__ import annotations
 
