@@ -174,6 +174,64 @@ def test_analyze_help_explains_topology_effects_and_assumptions(capsys) -> None:
     assert "is an observation, not a bound" in help_text
 
 
+def test_cli_overviews_and_version_are_parser_surfaces(capsys) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["--help"])
+    assert stopped.value.code == 0
+    help_page = capsys.readouterr()
+
+    assert cli.main([]) == 0
+    bare = capsys.readouterr()
+    assert bare.out == help_page.out
+    assert bare.err == help_page.err == ""
+    assert "TileFoundry — A tile-based, agentic platform" in help_page.out
+
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["nope"])
+    assert stopped.value.code == 2
+    refused = capsys.readouterr()
+    assert refused.out == ""
+    assert refused.err.startswith("usage: tilefoundry")
+    assert "argument <command>: invalid choice: 'nope'" in refused.err
+    assert "TileFoundry — " not in refused.err
+
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["-h"])
+    assert stopped.value.code == 0
+    assert capsys.readouterr().out == help_page.out
+
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["target", "--help"])
+    assert stopped.value.code == 0
+    target_help = capsys.readouterr()
+    assert cli.main(["target"]) == 0
+    target_bare = capsys.readouterr()
+    assert target_bare.out == target_help.out
+    assert target_bare.err == target_help.err == ""
+
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["--version"])
+    assert stopped.value.code == 0
+    assert capsys.readouterr().out.startswith("tilefoundry ")
+
+
+def test_models_source_labels_checkout_manifest(capsys) -> None:
+    assert cli.main(["models", "qwen3_1_7b", "--source"]) == 0
+    source = capsys.readouterr()
+    assert Path(source.out.splitlines()[0]).is_dir()
+    assert "manifest" in source.err
+    assert "manifest" not in source.out
+
+
+def test_spec_names_unknown_topic_and_available_aliases(capsys) -> None:
+    assert cli.main(["spec", "nope"]) == 1
+    refused = capsys.readouterr()
+    assert "no spec named 'nope'; there are " in refused.err
+    assert ".md" not in refused.err
+    assert "TileFoundry" not in refused.err
+    assert "dsl" in refused.err
+
+
 def test_analyze_json_without_a_requested_root_is_a_usage_error(capsys, tmp_path) -> None:
     with pytest.raises(SystemExit) as stopped:
         cli.main(["analyze", "missing.py", str(tmp_path / "report.json"), "--json"])
@@ -181,10 +239,11 @@ def test_analyze_json_without_a_requested_root_is_a_usage_error(capsys, tmp_path
     assert stopped.value.code == 2
     refused = capsys.readouterr()
     assert refused.out == ""
-    assert refused.err.startswith(
+    assert refused.err.startswith("usage: tilefoundry analyze")
+    assert (
         "tilefoundry analyze: error: --json requires at least one analysis flag:"
+        in refused.err
     )
-    assert "usage: tilefoundry analyze" in refused.err
     assert "source file not found" not in refused.err
 
 

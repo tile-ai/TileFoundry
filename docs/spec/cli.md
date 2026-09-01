@@ -9,16 +9,17 @@ reference, and what an authored program costs. Python authoring syntax and
 grammar productions remain in the [parser specification](./parser.md); the
 authored IR itself is the [HIR specification](./hir.md).
 
-Naming no command at any command level MUST print that level's overview rather
-than an error. The top-level overview MUST include a one-line project summary
-taken from installed package metadata, the usage form, the commands in the order
-the work is done, and the options. A command overview MUST include its
-description, usage form, subcommands, and options, and its description MUST be
-the one shown by the command above it. The project summary MUST NOT be restated
-in the command surface, so there is one copy of it.
+Naming no command at any command level MUST print that level's `--help` page, byte
+for byte, and MUST exit 0. What that page contains is the parser's to render;
+stating it again here would be a second copy to drift from it.
 
-A command usage error MUST print the error followed by that command's complete
-help to standard error and exit with status 2.
+A command usage error MUST print that command's usage form followed by the error
+to standard error and exit with status 2.
+
+`--version` MUST print the installed distribution's version and exit. Both it
+and the project summary MUST come from installed distribution metadata; with
+none available the command surface MUST fail rather than fall back to a version
+or summary restated in this project's source.
 
 ## Commands
 
@@ -44,6 +45,11 @@ there is no other mechanism for it. The installed directory named by `models
 <name> --source` stays the reference to compare against, and it stays intact
 because an installation is not where anybody edits — no verb enforces that, and
 none should.
+
+Reading a shipped document by a name that has none MUST be refused the same way
+at every kind: name what was asked for and what there is, in the vocabulary the
+command takes. An internal filename, or the word "installed" where a checkout is
+what is running, is neither.
 
 A command MUST load `SOURCE` as a Python module. While loading it, the directory
 containing `SOURCE` MUST be first on the Python module search path, so a file beside
@@ -217,17 +223,21 @@ granularity.
   - Its pages ship as data beside the specifications and MUST be read from the
     same installed lookup, so a page is available to an installed wheel and not
     only to a checkout.
-  - Where a page teaches by example, the example MUST be the shipped model source
-    itself, selected by what a declaration is called rather than by where it sits.
-    A copy pasted into prose is a second source that drifts, and a line range
-    silently quotes the wrong lines as soon as the model above it changes.
+  - Where a page teaches by example, the example MUST be source the page executes:
+    a page carrying programs MUST open with the command that extracts them from the
+    page itself, and every later command on the page MUST run against what that
+    command produced. A copy pasted into prose is a second source that drifts.
+  - A rendered page MUST be the output of executing its own blocks in order against
+    the current tree, extraction command first, so a command whose flags changed
+    cannot stay in a page unnoticed.
   - `tutorial orchestrator` MUST list the shipped orchestrator families, and
     `tutorial orchestrator FAMILY` MUST show that family's shipped directory and
     every source file's leading docstring without importing or executing it. An
     unknown family MUST name the available families. Checkout and installed
     lookups MUST report the same shipped families and files.
-  - Its workflow pages are `index`, `migrate`, and `optimize`; causal-LM decode
-    sources are listed through `tutorial orchestrator`.
+  - Its pages are `index`, `migrate`, `optimize`, and `authoring`; the first three
+    are the workflow and `authoring` is one kernel taken through six analyze-driven
+    stages. Causal-LM decode sources are listed through `tutorial orchestrator`.
   - A family's list description MUST be the leading docstring of the first file
     in stable filename order.
 
@@ -272,7 +282,11 @@ that runs before it can be read is a reference that decides what it describes.
     a stable filename order. Each file line MUST give its filename and the first line of
     its own docstring, or `-` when it has none. A checkout MUST read that manifest;
     an installation MUST read its model directory, and both MUST name the same
-    files.
+    files. That first line MUST be the path alone, in either world, so a caller may
+    read it as one. A checkout MUST say on standard error that the list came from
+    the manifest rather than from that directory, because the manifest may name
+    files that live elsewhere in the tree; an installation MUST NOT, because there
+    the two are the same directory.
   - `--source` MUST parse a file's text to read its docstring and MUST NOT import
     or execute model source. It MUST NOT reformat, regenerate, or copy a shipped
     file: the installed directory is the reference, and a rendered copy is a

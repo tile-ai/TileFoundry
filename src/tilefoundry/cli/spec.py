@@ -20,7 +20,12 @@ _ADDRESSABLE = 2
 
 def spec_path(topic: str) -> Path:
     """The document a topic names, from this checkout or from the installation."""
-    return data.path("spec", f"{_SPEC_TOPICS.get(topic, topic)}.md")
+    try:
+        return data.path("spec", f"{_SPEC_TOPICS.get(topic, topic)}.md")
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"no spec named {topic!r}; there are {', '.join(sorted(topics()))}"
+        ) from None
 
 
 def read_spec(topic: str) -> str:

@@ -63,9 +63,24 @@ target_repo: tilefoundry
 ##### Delivered
 <!-- The surface this milestone designs, the behaviour it executes, and its
      output, in delivered form. Use code or compact pseudocode, in a fenced
-     block tagged with a programming language. -->
-```python
-# <delivered code shape>
+     block tagged with a programming language.
+
+     At least one block MUST be a ```diff, because plain code states the end
+     state but not which lines are new, which are context, and which go away --
+     leaving the reader to reconstruct the change, and two readers reconstruct
+     it differently. Head each ```diff with `# <path>` naming the file it
+     changes; a `+` with no path says what to write and not where. After a
+     header every line is `+` (added), `-` (removed), or a leading space
+     (context that locates them), until the next header. A block of context
+     only states no change and fails.
+
+     Blocks that are not diffs stay welcome beside it: a whole new file, the
+     shape a caller sees, a ```text of the output it produces. -->
+```diff
+# src/module.py
+ def <the function this lands in>(...):
+-    <the line that goes away>
++    <the line that replaces it>
 ```
 
 ##### Accepted by

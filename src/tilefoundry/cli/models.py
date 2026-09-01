@@ -102,6 +102,18 @@ def model_source(name: str) -> str:
     return render_source_directory(directory, files)
 
 
+def source_provenance() -> str | None:
+    """Where a checkout's file list came from, for the stream prose belongs on.
+
+    Standard output is one path and one line per file, so a caller may read the
+    first line as a path in either world. Saying where the list came from is for
+    whoever is reading, not for whatever is parsing.
+    """
+    if data.is_installed():
+        return None
+    return "the files listed are the package data manifest's, not that directory's"
+
+
 def run_models(name: str | None, *, source: bool = False) -> int:
     """Print the inventory, one model's forest, or one shipped model directory."""
     if name is None:
@@ -110,6 +122,9 @@ def run_models(name: str | None, *, source: bool = False) -> int:
         sys.stdout.write(render_models())
     elif source:
         sys.stdout.write(model_source(name))
+        stated = source_provenance()
+        if stated is not None:
+            print(f"tilefoundry: note: {stated}", file=sys.stderr)
     else:
         sys.stdout.write(render_model(name))
     return 0
@@ -122,5 +137,6 @@ __all__ = [
     "render_models",
     "render_source_directory",
     "run_models",
+    "source_provenance",
     "source_summary",
 ]

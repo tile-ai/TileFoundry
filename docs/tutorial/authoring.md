@@ -43,8 +43,9 @@ The page does not repeat the complete source in a second heredoc.
 To run this installed page, extract its Python cells into one executable file:
 
 ```bash
+set -euo pipefail
 awk '
-  /^<!-- tilefoundry-source -->$/ { source_block=1; next }
+  /^<!-- tilefoundry-source: attn_layer.py -->$/ { source_block=1; next }
   source_block && /^```python$/ { in_python=1; next }
   in_python && /^```$/ { in_python=0; source_block=0; next }
   in_python { print }
@@ -54,7 +55,7 @@ chmod +x attn_layer.py
 
 ### Setup cell
 
-<!-- tilefoundry-source -->
+<!-- tilefoundry-source: attn_layer.py -->
 
 ```python
 #!/usr/bin/env python3
@@ -66,7 +67,7 @@ the GQA shape used by the published Qwen attention model.
 """
 ```
 
-<!-- tilefoundry-source -->
+<!-- tilefoundry-source: attn_layer.py -->
 
 ```python
 from __future__ import annotations
@@ -117,7 +118,7 @@ The entry includes q/k/v projection, RoPE, one cache append, an attention scan,
 and the output projection. The weights are `ConstTensor` parameters. The starting
 point has no explicit mesh and no storage transition.
 
-<!-- tilefoundry-source -->
+<!-- tilefoundry-source: attn_layer.py -->
 
 ```python
 @module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
@@ -188,7 +189,7 @@ report = Path("tutorial-reports/stage0-128.txt").read_text(encoding="utf-8")
 header, separator, annotated = report.partition("\n\n")
 print(header.rstrip())
 print()
-for needle in ("matmul(hidden, w_q)", "cache_update(k_cache", "matmul(v33, w_o)"):
+for needle in ("matmul(hidden, w_q", "cache_update(k_cache", "matmul(v33, w_o"):
     line = next(line for line in annotated.splitlines() if needle in line)
     print(line.rstrip())
 ```
@@ -201,9 +202,9 @@ for needle in ("matmul(hidden, w_q)", "cache_update(k_cache", "matmul(v33, w_o)"
 # peak-footprint=gmem:1675788
 # roofline ideal-ns=632 bound-by=memory
 
-    v0 = matmul(hidden, w_q)  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072@131072; traffic traffic=gmem:r131584/w512@r131584/w512 operands=0:r512/w0,1:r131072/w0,result:r0/w512; roofline ideal-ns=28 bound-by=memory
+    v0 = matmul(hidden, w_q, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072@131072; traffic traffic=gmem:r131584/w512@r131584/w512 operands=0:r512/w0,1:r131072/w0,result:r0/w512; roofline ideal-ns=28 bound-by=memory
     v11 = cache_update(k_cache, cur_pos, write_len, v10)  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost; traffic traffic=gmem:r136/w128@r136/w128 operands=0:r0/w0,1:r4/w0,2:r4/w0,3:r128/w0,result:r0/w128; roofline ideal-ns=1 bound-by=memory
-    v34 = matmul(v33, w_o)  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072@131072; traffic traffic=gmem:r131584/w512@r131584/w512 operands=0:r512/w0,1:r131072/w0,result:r0/w512; roofline ideal-ns=28 bound-by=memory
+    v34 = matmul(v33, w_o, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072@131072; traffic traffic=gmem:r131584/w512@r131584/w512 operands=0:r512/w0,1:r131072/w0,result:r0/w512; roofline ideal-ns=28 bound-by=memory
 ```
 
 The first number before `@` is global work or traffic. The number after `@` is the
@@ -287,7 +288,7 @@ T = floor(232448 B / 128 B)
 
 `Stage1_Specialized` expresses the dispatch as two half-open `DimVarRangePat` variants: `[1, 1816)` and `[1816, 8193)`. The Stage1 body is deliberately the unsplit baseline, so the dispatch contract can be read independently from the later implementations.
 
-<!-- tilefoundry-source -->
+<!-- tilefoundry-source: attn_layer.py -->
 
 ```python
 SMEM_BUDGET = 232448
@@ -425,9 +426,7 @@ print(report.partition("\n\n")[0].rstrip())
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@328672,f32:2833728@354216 service=special:14528@1816
 # traffic traffic=gmem:r5563796/w3721856@r3936212/w3721408,smem:r9597248/w9480000@r1199656/w1185000
-# peak-footprint=gmem:3003916,smem:355936
-# advisory="smem peak is 355936 B under this walk's value order, exceeding its 232448 B capacity; the peak is order-dependent and is not a bound over schedules"
-# advisory="smem claims 355936 B of the 262144 B block it divides with l1, leaving l1 -93792 B"
+# peak-footprint=gmem:3701260,smem:472160
 # roofline ideal-ns=1935 bound-by=memory
 ```
 
@@ -467,7 +466,7 @@ The formula chooses the dispatch boundary. It is not a benchmark-tuned magic num
 
 The next change is `Stage2_Sharded`: one `cta.head` owns one query head. The same-size comparison isolates placement from context growth.
 
-<!-- tilefoundry-source -->
+<!-- tilefoundry-source: attn_layer.py -->
 
 ```python
 @module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
@@ -582,7 +581,7 @@ for line in report.splitlines():
 ```text
 # compute-cost flops=bf16:328896@328672,f32:200448@25056 service=special:1024@128
 # traffic traffic=gmem:r1674644/w264832@r1559508/w264384,smem:r684608/w675392@r85576/w84424
-# peak-footprint=gmem:1491468,smem:25088
+# peak-footprint=gmem:1540620,smem:33280
 # roofline ideal-ns=405 bound-by=memory
 ```
 
@@ -594,7 +593,7 @@ the authored storage choices change the traffic seen by the roofline calculation
 
 At long context, the full-cache form is the wrong residency choice. `Stage3_Fused` uses a two-dimensional CTA mesh. The head axis owns query heads and the worker axis owns disjoint cache blocks. Each worker keeps online `(m, l, acc)` state, then the worker axis is combined with an explicit log-sum-exp merge.
 
-<!-- tilefoundry-source -->
+<!-- tilefoundry-source: attn_layer.py -->
 
 ```python
 @module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
@@ -729,8 +728,7 @@ print(next(line.rstrip() for line in annotated.splitlines() if "cache_update(k_c
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@328672,f32:3239808@200592 service=integer:9@9,special:33056@1036
 # traffic traffic=gmem:r3476916/w4196992@r2558940/w4196544,rmem:r656/w104@r656/w80,smem:r5839296/w5662784@r682464/w672676
-# peak-footprint=gmem:5046796,rmem:16,smem:25216
-# advisory="smem claims 25216 B of the 262144 B block it divides with l1, leaving l1 236928 B"
+# peak-footprint=gmem:5046796,rmem:16,smem:33408
 # roofline ideal-ns=1599 bound-by=memory
 
         v17 = cache_update(k_cache, cur_pos, write_len, v16)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; traffic traffic=gmem:r136/w128@r136/w128 operands=0:r0/w0,1:r4/w0,2:r4/w0,3:r128/w0,result:r0/w128; roofline ideal-ns=1 bound-by=memory
@@ -745,7 +743,7 @@ algorithm and a `Partial` shard attribute are related ideas, not interchangeable
 
 `Stage4_WeightPrepared` moves each projection weight's output slice to smem before the matmul. The q and o weight lines show the per-CTA read:
 
-<!-- tilefoundry-source -->
+<!-- tilefoundry-source: attn_layer.py -->
 
 ```python
 @module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
@@ -868,7 +866,6 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 # compute-cost flops=bf16:328896@42176,f32:6390528@6390528 service=special:32768@32768
 # traffic traffic=gmem:r28254676/w25566912@r27967956/w25565792,smem:r331008/w329984@r43168/w42144
 # peak-footprint=gmem:10945036,smem:16960
-# advisory="smem claims 16960 B of the 262144 B block it divides with l1, leaving l1 245184 B"
 # roofline ideal-ns=11213 bound-by=memory
 
     v1 = reshard(w_q, layout=ShardLayout(
@@ -888,7 +885,7 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 
 `Stage5_CachePrepared` leaves the static projection weights in their ordinary form and changes only the cache scan. `BLOCK=128` rows move through smem while `(m, l, acc)` stays resident. The updated cache is read at `cur_pos` once, so append and scan are separate traffic events.
 
-<!-- tilefoundry-source -->
+<!-- tilefoundry-source: attn_layer.py -->
 
 ```python
 @module(entry="gqa_decode", target=_H200, topologies=(_CTA,))
@@ -1026,8 +1023,7 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@328672,f32:6410280@801285 service=integer:32@32,special:33040@4130
 # traffic traffic=gmem:r7672476/w4198272@r4001116/w4197824,rmem:r2560/w0@r2560/w0,smem:r21788704/w21486432@r2723588/w2685804
-# peak-footprint=gmem:2949772,smem:25344
-# advisory="smem claims 25344 B of the 262144 B block it divides with l1, leaving l1 236800 B"
+# peak-footprint=gmem:2949772,rmem:0,smem:33536
 # roofline ideal-ns=2474 bound-by=memory
 
         v16 = slice(k_cache, (0, v15, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost; traffic traffic=rmem:r32/w0@r32/w0 operands=0:r0/w0,1:r32/w0,result:r0/w0; roofline

@@ -118,17 +118,15 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf, tmp_path)
         assert conclusion in text
 
 
-def test_usage_errors_include_the_command_help(tf) -> None:
+def test_usage_errors_print_usage_before_error(tf) -> None:
     done = tf("analyze")
     assert done.returncode == 2
 
     assert done.stdout == ""
-    assert done.stderr.startswith(
-        "tilefoundry analyze: error: the following arguments are required: SOURCE, PATH\n\n"
-    )
-    assert "usage: tilefoundry analyze" in done.stderr
+    assert done.stderr.startswith("usage: tilefoundry analyze")
+    assert "tilefoundry analyze: error: the following arguments are required: SOURCE, PATH" in done.stderr
     assert "SOURCE" in done.stderr
-    assert "model.py[:Module[.child_module...][.function]]" in done.stderr
+    assert "model.py[:Module[.child_module...][.function]]" not in done.stderr
 
 
 def test_a_bare_analyze_typechecks_and_prints_only_typed_hir(tf, cmine, tmp_path) -> None:
@@ -155,10 +153,8 @@ def test_analyze_json_needs_an_explicit_analysis(tf, cmine, tmp_path) -> None:
     done = tf("analyze", f"{cmine}:CMine.root", str(tmp_path / "report.json"), "--json")
     assert done.returncode == 2
     assert done.stdout == ""
-    assert done.stderr.startswith(
-        "tilefoundry analyze: error: --json requires at least one analysis flag:"
-    )
-    assert "usage: tilefoundry analyze" in done.stderr
+    assert done.stderr.startswith("usage: tilefoundry analyze")
+    assert "tilefoundry analyze: error: --json requires at least one analysis flag:" in done.stderr
 
 
 def test_a_bare_analyze_binds_every_open_dimension(tf, tmp_path) -> None:

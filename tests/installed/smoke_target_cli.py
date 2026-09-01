@@ -3,23 +3,6 @@
 from __future__ import annotations
 
 
-def test_target_describes_its_commands(tf) -> None:
-    done = tf("target")
-    assert done.returncode == 0, done.stderr
-    assert done.stdout.startswith(
-        "tilefoundry target — list, show, add, or remove compilation targets\n"
-    )
-    assert (
-        "Usage:\n  tilefoundry [--registry PATH] target <command> [options]\n"
-        in done.stdout
-    )
-    assert "list    list every available target" in done.stdout
-    assert "show    show the documents retained" in done.stdout
-    assert "add     add one Target provider or hardware document" in done.stdout
-    assert "remove  remove one entry shown by target list" in done.stdout
-    assert done.stderr == ""
-
-
 def test_target_list_prints_reconstructing_values(tf) -> None:
     done = tf("target", "list")
     assert done.returncode == 0, done.stderr

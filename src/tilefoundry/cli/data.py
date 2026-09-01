@@ -81,7 +81,7 @@ def path(kind: str, name: str) -> Path:
     """One shipped file by name, from wherever that kind is read from."""
     found = directory(kind) / name
     if not found.is_file():
-        raise FileNotFoundError(f"installed TileFoundry {name} was not found")
+        raise FileNotFoundError(f"TileFoundry {kind} file {name} was not found")
     return found
 
 
@@ -106,8 +106,7 @@ def directories(kind: str) -> tuple[Path, ...]:
     """The shipped directories of *kind*, in the checkout or an installation."""
     known = _KINDS[kind]
     root = directory(kind)
-    source = _REPOSITORY_ROOT.joinpath(*known.source)
-    if root != source:
+    if is_installed(kind):
         return tuple(sorted(path for path in root.iterdir() if path.is_dir()))
 
     prefix = f"share/tilefoundry/{known.installed}/"
@@ -121,16 +120,22 @@ def directories(kind: str) -> tuple[Path, ...]:
     return tuple(root / name for name in sorted(names))
 
 
+def is_installed(kind: str = "models") -> bool:
+    """Whether lookup reads a real directory rather than the checkout manifest."""
+    return directory(kind) != _REPOSITORY_ROOT.joinpath(*_KINDS[kind].source)
+
+
 def files(kind: str, name: str) -> tuple[Path, ...]:
     """The files a shipped *kind* directory carries, sorted by filename."""
     known = _KINDS[kind]
     root = directory(kind)
     found = root / name
-    if root == _REPOSITORY_ROOT.joinpath(*known.source):
+    if not found.is_dir():
+        names = ", ".join(path.name for path in directories(kind))
+        raise FileNotFoundError(f"no {kind} named {name!r}; there are {names}")
+    if not is_installed(kind):
         destination = f"share/tilefoundry/{known.installed}/{name}"
         return _manifest_files(destination)
-    if not found.is_dir():
-        raise FileNotFoundError(f"installed TileFoundry {kind} {name} was not found")
     return tuple(sorted((entry for entry in found.iterdir() if entry.is_file()), key=lambda path: path.name))
 
 
@@ -139,4 +144,12 @@ def model_files(name: str) -> tuple[Path, ...]:
     return files("models", name)
 
 
-__all__ = ["Kind", "directories", "directory", "files", "model_files", "path"]
+__all__ = [
+    "Kind",
+    "directories",
+    "directory",
+    "files",
+    "is_installed",
+    "model_files",
+    "path",
+]

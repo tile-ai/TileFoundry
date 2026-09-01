@@ -247,7 +247,15 @@ def add_traffic(
             )
 
 
-def _lifetimes(values: list[Expr], facts: MemoryHierarchyFacts) -> tuple[ValueLifetime, ...]:
+def _lifetimes(
+    values: list[Expr], facts: MemoryHierarchyFacts, local: CostContext
+) -> tuple[ValueLifetime, ...]:
+    """Each value's residency, its bytes taken in the analysed level's window.
+
+    The projection is the one the traffic family reads, so both halves of a report
+    answer for the same unit. Dividing the whole tensor by a per-level constant
+    outside was a second account of it, and the two disagreed.
+    """
     index_by_id = {id(expr): index for index, expr in enumerate(values)}
     last_by_id = dict(index_by_id)
     for index, consumer in enumerate(values):
@@ -256,7 +264,7 @@ def _lifetimes(values: list[Expr], facts: MemoryHierarchyFacts) -> tuple[ValueLi
                 last_by_id[id(operand)] = index
     result: list[ValueLifetime] = []
     for index, expr in enumerate(values):
-        for level, amount in bytes_by_storage(expr.type).items():
+        for level, amount in bytes_by_storage(local.local_type_of(expr)).items():
             if facts.explicit(level) is None:
                 continue
             result.append(
@@ -359,39 +367,34 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             per_unit=tuple(sorted(memory_context.shares.items())),
         ),
     )
-    lifetimes = _lifetimes(memory_context.values, facts)
-    topology_size = 1
-    if topologies and isinstance(topologies[0].size, int):
-        topology_size = max(1, topologies[0].size)
+    lifetimes = _lifetimes(memory_context.values, facts, local)
     levels_list: list[LevelFootprint] = []
     for name in sorted({item.level for item in lifetimes} | set(memory_context.shares)):
         declared = facts.explicit(name)
-        divisor = topology_size if declared is not None and declared.owner != "target" else 1
         rows = [item for item in lifetimes if item.level == name]
         peak = 0
         for point in range(len(lifetimes) + 1):
             peak = max(
                 peak,
-                sum(
-                    item.bytes // divisor
-                    for item in rows
-                    if item.defined_at <= point <= item.last_used_at
-                ),
+                sum(item.bytes for item in rows if item.defined_at <= point <= item.last_used_at),
             )
         levels_list.append(
             LevelFootprint(
                 level=name,
                 peak_bytes=peak,
-                persistent_bytes=sum(item.bytes // divisor for item in rows if item.persistent),
+                persistent_bytes=sum(item.bytes for item in rows if item.persistent),
                 capacity_bytes=declared.capacity_bytes if declared is not None else None,
             )
         )
     levels = tuple(levels_list)
-    for level in levels:
-        if level.capacity_bytes is not None and level.peak_bytes > level.capacity_bytes:
+    for item in lifetimes:
+        declared = facts.explicit(item.level)
+        capacity = None if declared is None else declared.capacity_bytes
+        if capacity is not None and item.bytes > capacity:
             raise AnalysisError(
-                f"{level.level!r} holds {level.peak_bytes} B at one point of this program, "
-                f"more than the {level.capacity_bytes} B the target states for that level"
+                f"function {function.name!r}: value {item.binding!r} needs "
+                f"{item.bytes} B in {item.level}, which exceeds the "
+                f"{capacity} B the target states for that level"
             )
     attach(
         function,
