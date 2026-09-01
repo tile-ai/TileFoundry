@@ -9,17 +9,9 @@ reference, and what an authored program costs. Python authoring syntax and
 grammar productions remain in the [parser specification](./parser.md); the
 authored IR itself is the [HIR specification](./hir.md).
 
-Naming no command at any command level MUST print that level's overview rather
-than an error, and MUST exit 0. The top-level overview MUST include a one-line
-project summary taken from installed package metadata, the usage form, the
-commands in the order the work is done, and the options. A command overview MUST
-include its description, usage form, subcommands, and options, and its
-description MUST be the one shown by the command above it. The project summary
-MUST NOT be restated in the command surface, so there is one copy of it.
-
-An overview MUST be the page `--help` prints at that level, byte for byte: one
-text, rendered from the parser's own description and per-option help, so no
-second copy exists to drift from it.
+Naming no command at any command level MUST print that level's `--help` page, byte
+for byte, and MUST exit 0. What that page contains is the parser's to render;
+stating it again here would be a second copy to drift from it.
 
 A command usage error MUST print that command's usage form followed by the error
 to standard error and exit with status 2.

@@ -3,21 +3,6 @@
 from __future__ import annotations
 
 
-def test_target_describes_its_commands(tf) -> None:
-    done = tf("target")
-    assert done.returncode == 0, done.stderr
-    assert "tilefoundry target — list, show, add, or remove compilation targets" in done.stdout
-    for name, description in (
-        ("list", "list every available target as reconstructing Python"),
-        ("show", "show the documents retained by one target identity"),
-        ("add", "add one Target provider or hardware document"),
-        ("remove", "remove one entry shown by target list"),
-    ):
-        assert name in done.stdout
-        assert description in done.stdout
-    assert done.stderr == ""
-
-
 def test_target_list_prints_reconstructing_values(tf) -> None:
     done = tf("target", "list")
     assert done.returncode == 0, done.stderr

@@ -185,8 +185,6 @@ def test_cli_overviews_and_version_are_parser_surfaces(capsys) -> None:
     assert bare.out == help_page.out
     assert bare.err == help_page.err == ""
     assert "TileFoundry — A tile-based, agentic platform" in help_page.out
-    assert help_page.out.index("models") < help_page.out.index("spec")
-    assert help_page.out.index("spec") < help_page.out.index("tutorial")
 
     with pytest.raises(SystemExit) as stopped:
         cli.main(["nope"])
