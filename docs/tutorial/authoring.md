@@ -728,7 +728,7 @@ print(next(line.rstrip() for line in annotated.splitlines() if "cache_update(k_c
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@328672,f32:3239808@200592 service=integer:9@9,special:33056@1036
 # traffic traffic=gmem:r3476916/w4196992@r2558940/w4196544,rmem:r656/w104@r656/w80,smem:r5839296/w5662784@r682464/w672676
-# peak-footprint=gmem:5046796,rmem:16,smem:33544
+# peak-footprint=gmem:5046796,rmem:16,smem:33408
 # roofline ideal-ns=1599 bound-by=memory
 
         v17 = cache_update(k_cache, cur_pos, write_len, v16)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; traffic traffic=gmem:r136/w128@r136/w128 operands=0:r0/w0,1:r4/w0,2:r4/w0,3:r128/w0,result:r0/w128; roofline ideal-ns=1 bound-by=memory
@@ -1023,7 +1023,7 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@328672,f32:6410280@801285 service=integer:32@32,special:33040@4130
 # traffic traffic=gmem:r7672476/w4198272@r4001116/w4197824,rmem:r2560/w0@r2560/w0,smem:r21788704/w21486432@r2723588/w2685804
-# peak-footprint=gmem:2949772,rmem:0,smem:33672
+# peak-footprint=gmem:2949772,rmem:0,smem:33536
 # roofline ideal-ns=2474 bound-by=memory
 
         v16 = slice(k_cache, (0, v15, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost; traffic traffic=rmem:r32/w0@r32/w0 operands=0:r0/w0,1:r32/w0,result:r0/w0; roofline

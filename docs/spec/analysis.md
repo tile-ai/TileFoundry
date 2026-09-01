@@ -397,11 +397,11 @@ of this analysis.
 | `ValueLifetime.binding` | Use the parameter or authored binding name, or `<value N>` when unnamed; repeated names take the printer's numeric suffix in definition order. | No |
 | `ValueLifetime.level` | Emit one lifetime per storage level occupied by the value's Type. | No |
 | `ValueLifetime.bytes` | Project the Type through every authored split at or coarser than the explicit level's `owner`, then take its logical bytes; a target-owned or undeclared level remains global. | `MemoryHierarchyFacts.explicit_levels[].owner` |
-| `ValueLifetime.defined_at` | Position in the order of parameters followed by body Calls and Constants in SSA postorder, numbered per lexical scope: a scope owns one contiguous run, the position past that run stands for the loops it holds, and the scopes below it are numbered after. | No |
-| `ValueLifetime.last_used_at` | Greatest recorded consumer position; the last position for a parameter, and also for the Function body when that body is itself a recorded value. A nested loop is a consumer, at the position it occupies, of every value it or a scope below it reads. | No |
+| `ValueLifetime.defined_at` | Position in the order of parameters followed by body Calls and Constants in SSA postorder. | No |
+| `ValueLifetime.last_used_at` | Greatest recorded consumer position; the last position for a parameter, and also for the Function body when that body is itself a recorded value. | No |
 | `ValueLifetime.persistent` | True for parameters and false for body allocations. | No |
 | `LevelFootprint.level` | Each storage level with at least one lifetime, sorted by name. | No |
-| `LevelFootprint.peak_bytes` | Largest sum of simultaneously live bytes at that level, taken over the scope tree: one scope over its own positions, and a nested scope on top of what its enclosing scopes hold at the position it occupies. Sequential scopes take the greater rather than the sum, and a loop body counts once rather than once per trip. | No |
+| `LevelFootprint.peak_bytes` | Largest sum of simultaneously live bytes at that level over the value order. | No |
 | `LevelFootprint.persistent_bytes` | Sum of persistent lifetimes at that level. | No |
 | `LevelFootprint.capacity_bytes` | Capacity of the matching explicit level, or `None` when it is unknown or undeclared. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
 | `MemoryMetadata.footprint` | One `LevelFootprint` per occupied storage level. | As above |
