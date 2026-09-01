@@ -48,7 +48,7 @@ CHECKBOX_RE = re.compile(r"^\s*-\s+\[([ xX])\].*<!--\s+policy_(?:ac|final):\s+([
 COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 CITATION_RE = re.compile(r"`[^`\s]*/[^`\s]*\.[^`\s]*`")
 DECISION_RE = re.compile(r"^D(\d+)\s+.*?\s--\s+\S")
-DIFF_HEADER_RE = re.compile(r"^#\s+\S+\s*$")
+DIFF_HEADER_RE = re.compile(r"^#\s+[A-Za-z0-9._/-]+\s*$")
 SUPERSEDES_RE = re.compile(r"\bSupersedes\s+D(\d+)\b")
 
 

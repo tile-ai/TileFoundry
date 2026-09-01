@@ -77,7 +77,7 @@ target_repo: tilefoundry
      Blocks that are not diffs stay welcome beside it: a whole new file, the
      shape a caller sees, a ```text of the output it produces. -->
 ```diff
-# <dir>/<file>.py
+# src/module.py
  def <the function this lands in>(...):
 -    <the line that goes away>
 +    <the line that replaces it>
