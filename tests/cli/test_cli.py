@@ -174,6 +174,40 @@ def test_analyze_help_explains_topology_effects_and_assumptions(capsys) -> None:
     assert "is an observation, not a bound" in help_text
 
 
+def test_cli_overviews_and_version_are_parser_surfaces(capsys) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["--help"])
+    assert stopped.value.code == 0
+    help_page = capsys.readouterr()
+
+    assert cli.main([]) == 0
+    bare = capsys.readouterr()
+    assert bare.out == help_page.out
+    assert bare.err == help_page.err == ""
+    assert "TileFoundry — A tile-based, agentic platform" in help_page.out
+    assert help_page.out.index("models") < help_page.out.index("spec")
+    assert help_page.out.index("spec") < help_page.out.index("tutorial")
+
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["-h"])
+    assert stopped.value.code == 0
+    assert capsys.readouterr().out == help_page.out
+
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["target", "--help"])
+    assert stopped.value.code == 0
+    target_help = capsys.readouterr()
+    assert cli.main(["target"]) == 0
+    target_bare = capsys.readouterr()
+    assert target_bare.out == target_help.out
+    assert target_bare.err == target_help.err == ""
+
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["--version"])
+    assert stopped.value.code == 0
+    assert capsys.readouterr().out.startswith("tilefoundry ")
+
+
 def test_analyze_json_without_a_requested_root_is_a_usage_error(capsys, tmp_path) -> None:
     with pytest.raises(SystemExit) as stopped:
         cli.main(["analyze", "missing.py", str(tmp_path / "report.json"), "--json"])

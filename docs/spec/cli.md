@@ -10,7 +10,7 @@ grammar productions remain in the [parser specification](./parser.md); the
 authored IR itself is the [HIR specification](./hir.md).
 
 Naming no command at any command level MUST print that level's overview rather
-than an error. The top-level overview MUST include a one-line project summary
+than an error, and MUST exit 0. The top-level overview MUST include a one-line project summary
 taken from installed package metadata, the usage form, the commands in the order
 the work is done, and the options. A command overview MUST include its
 description, usage form, subcommands, and options, and its description MUST be
@@ -24,9 +24,10 @@ second copy exists to drift from it.
 A command usage error MUST print that command's usage form followed by the error
 to standard error and exit with status 2.
 
-`--version` MUST print the installed distribution's version and exit. Building
-the public `build_parser()` API also reads that installed metadata; when the
-distribution metadata is unavailable, it raises `PackageNotFoundError`.
+`--version` MUST print the installed distribution's version and exit. Both it
+and the project summary MUST come from installed distribution metadata; with
+none available the command surface MUST fail rather than fall back to a version
+or summary restated in this project's source.
 
 ## Commands
 
