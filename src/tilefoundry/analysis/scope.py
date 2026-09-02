@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 import isl
 
-from tilefoundry.ir.core import Call, Expr, value_labels
+from tilefoundry.ir.core import Call, Expr, value_label, value_labels
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -214,6 +214,11 @@ class Scope:
         )
 
 
+def _induction_of(loop: GridRegionExpr) -> str:
+    """How a diagnostic names one loop: by the variable the author bound it to."""
+    return getattr(loop.induction_var, "name", None) or "<unnamed>"
+
+
 def _domain_for(owner: Function | GridRegionExpr, parent: Scope | None) -> isl.set:
     if isinstance(owner, Function):
         return isl.set("{ [] }")
@@ -230,7 +235,13 @@ def _domain_for(owner: Function | GridRegionExpr, parent: Scope | None) -> isl.s
         start = static_dim_value(loop.start)
         step = static_dim_value(loop.step)
         if start is None or step is None:
-            raise AnalysisError(f"scope {loop!r}: loop bounds must be static")
+            which = "start" if start is None else "step"
+            culprit = value_label(loop.start if start is None else loop.step)
+            raise AnalysisError(
+                f"loop {_induction_of(loop)!r} takes its {which} from "
+                f"{culprit or 'a value'!r}, which the program computes at run time; "
+                f"analysis needs a literal {which}"
+            )
         extent = loop.extent
         if isinstance(extent, DimVar):
             params[extent.name] = extent
@@ -238,7 +249,12 @@ def _domain_for(owner: Function | GridRegionExpr, parent: Scope | None) -> isl.s
         else:
             value = static_dim_value(extent)
             if value is None:
-                raise AnalysisError(f"scope {loop!r}: loop extent is not bounded")
+                raise AnalysisError(
+                    f"loop {_induction_of(loop)!r} has a trip count the program computes "
+                    f"at run time from {value_label(extent) or 'a value'!r}, so no "
+                    f"per-occurrence total can be scaled by it; bind the extent to a "
+                    f"literal, or state it as an open dimension"
+                )
             stop = str(value)
         bounds.append(f"{start} <= p{index} < {stop}")
         if step != 1:

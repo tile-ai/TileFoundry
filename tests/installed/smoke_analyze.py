@@ -33,6 +33,28 @@ class Open:
 '''
 
 
+_DYNAMIC_TRIP_MODULE = '''
+from tilefoundry import module
+from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf
+from tilefoundry.target import CudaTarget
+
+CTAS = 132
+N = CTAS * 128
+
+@module(entry="kernel", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", CTAS),))
+class DynTrip:
+    @func
+    def kernel(x: Tensor[(N,), "f32"], reps: Tensor[(), "i64"]) -> Tensor[(N,), "f32"]:
+        with Mesh(("cta",), layout=(CTAS,), names=("block",)) as m:
+            placed = tf.reshard(x, (N @ m.block,), "gmem")
+            acc = placed
+            bound = reps + 0
+            for _step in range(bound):
+                acc = tf.square(acc)
+            return tf.reshard(acc, (N @ m.block,), "gmem")
+'''
+
+
 def test_logical_analyses_run_and_performance_requires_an_execution_domain(
     tf, cmine, tmp_path
 ) -> None:
@@ -239,6 +261,23 @@ def test_analyze_failure_reports_line_variable_and_reason(tf, tmp_path) -> None:
     assert f"{bad}:9:" in done.stderr
     assert "variable 'wrong'" in done.stderr
     assert "dtype mismatch" in done.stderr
+
+    dynamic = tmp_path / "dynamic_trip.py"
+    dynamic.write_text(_DYNAMIC_TRIP_MODULE, encoding="utf-8")
+    report = tmp_path / "dynamic_report.py"
+
+    refused = tf("analyze", f"{dynamic}:DynTrip", str(report), "--memory")
+    assert refused.returncode == 1
+    assert refused.stdout == ""
+    assert "loop '_step'" in refused.stderr
+    assert "'reps'" in refused.stderr
+    assert "computes at run time" in refused.stderr
+    assert not any(
+        leak in refused.stderr
+        for leak in ("TensorType(", "ShardLayout(", "GridRegionExpr(", "FloatDType(")
+    )
+    assert len(refused.stderr.strip()) < 300
+    assert not report.exists()
 
 
 def test_analyze_points_at_a_detached_tuple_projection(
