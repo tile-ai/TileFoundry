@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 import isl
 
-from tilefoundry.ir.core import Call, Expr, binding_name
+from tilefoundry.ir.core import Call, Expr, value_labels
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -166,8 +166,14 @@ class Scope:
         return all(child.known(view) for child in self.children)
 
     def footprint(self) -> LoopFootprintMetadata:
-        """Summarize device and per-unit access bytes for this scope."""
-        rows: dict[tuple[int, str], tuple[Expr, int, int]] = {}
+        """Summarize device and per-unit access bytes for this scope.
+
+        Two structurally equal buffers are distinct allocations, so identity
+        groups the rows. It does not order or name them: an address is whatever
+        the allocator handed out this run, and a report exists to be compared
+        against another run.
+        """
+        rows: dict[tuple[int, str], tuple[Expr, int, int, int]] = {}
         for view, scale in (("narrow", "bytes"), ("device", "device_bytes")):
             for access in self.reaching(view):
                 try:
@@ -179,21 +185,28 @@ class Scope:
                     continue
                 device_amount = amount * max(1, self.trips())
                 key = (id(access.buffer), str(getattr(access.buffer.type, "storage", "unknown")))
-                current = rows.get(key, (access.buffer, 0, 0))
+                current = rows.get(key, (access.buffer, len(rows), 0, 0))
                 rows[key] = (
                     current[0],
-                    current[1] + (amount * size if scale == "bytes" else 0),
-                    current[2] + (device_amount * size if scale == "device_bytes" else 0),
+                    current[1],
+                    current[2] + (amount * size if scale == "bytes" else 0),
+                    current[3] + (device_amount * size if scale == "device_bytes" else 0),
                 )
+        entries = list(rows.items())
+        labels = value_labels(buffer for _, (buffer, _, _, _) in entries)
+        ordered = sorted(
+            (label, level, local, device)
+            for label, ((_, level), (_, _, local, device)) in zip(labels, entries)
+        )
         footprints = tuple(
             BufferFootprint(
-                buffer=binding_name(values[0]) or f"<buffer {buffer_id}>",
+                buffer=label,
                 level=level,
-                bytes=values[1],
-                device_bytes=values[2],
-                repeated_bytes=values[1] * self.trips(),
+                bytes=local,
+                device_bytes=device,
+                repeated_bytes=local * self.trips(),
             )
-            for (buffer_id, level), values in sorted(rows.items())
+            for label, level, local, device in ordered
         )
         return LoopFootprintMetadata(
             footprints=footprints,

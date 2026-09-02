@@ -221,6 +221,7 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
                     assert level.peak_bytes >= 0 and level.persistent_bytes >= 0
                 for item in held.lifetimes:
                     assert item.bytes >= 0 and 0 <= item.defined_at <= item.last_used_at
+                    assert "<buffer " not in item.binding, describe_expr(expr)
             if record is RooflineMetadata:
                 assert held.ideal_ns >= 0 and held.compute_ns >= 0 and held.memory_ns >= 0
             if record is PerformanceMetadata:
@@ -229,8 +230,12 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
         record = get_metadata(expr, LoopFootprintMetadata)
         if record is None:
             continue
+        rows = [(item.buffer, item.level) for item in record.footprints]
+        assert rows == sorted(rows), describe_expr(expr)
+        assert len(rows) == len(set(rows)), describe_expr(expr)
         for item in record.footprints:
             assert item.bytes >= 0 and item.device_bytes >= 0 and item.repeated_bytes >= 0
+            assert "<buffer " not in item.buffer, describe_expr(expr)
 
 
 @pytest.mark.parametrize("case", INVENTORY)

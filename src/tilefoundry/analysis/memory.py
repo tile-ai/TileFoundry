@@ -10,8 +10,8 @@ from tilefoundry.ir.core import (
     Expr,
     Var,
     VerifyError,
-    binding_name,
     describe_expr,
+    value_labels,
 )
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
@@ -263,15 +263,14 @@ def _lifetimes(
             if id(operand) in last_by_id and index > last_by_id[id(operand)]:
                 last_by_id[id(operand)] = index
     result: list[ValueLifetime] = []
+    labels = value_labels(values)
     for index, expr in enumerate(values):
         for level, amount in bytes_by_storage(local.local_type_of(expr)).items():
             if facts.explicit(level) is None:
                 continue
             result.append(
                 ValueLifetime(
-                    binding=(
-                        getattr(expr, "name", None) or binding_name(expr) or f"<value {index}>"
-                    ),
+                    binding=labels[index],
                     level=level,
                     bytes=amount,
                     defined_at=index,

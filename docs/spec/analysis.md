@@ -387,14 +387,14 @@ of this analysis.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `BufferFootprint.buffer` | Use the source parameter or authored binding name, with the same definition-order suffixing as value lifetimes. | No |
+| `BufferFootprint.buffer` | The label value lifetimes use for that value, from the same derivation. Grouping stays by buffer identity, because two structurally equal buffers are distinct allocations; the label never reads an address. | No |
 | `BufferFootprint.level` | Read the source buffer's declared storage level. | No |
 | `BufferFootprint.bytes` | Build relations from rank-preserving per-position Types, union the loop-prefixed access images, count the union's integer points, multiply by the dtype bit width, then round the whole buffer reading up to bytes. If the count is not an integer or exceeds `repeated_bytes`, that buffer reading is unavailable. | No |
 | `BufferFootprint.device_bytes` | Repeat the same exact union measurement from authored Types without shard narrowing, giving the union across logical positions in bytes. | No |
 | `BufferFootprint.repeated_bytes` | Multiply each operand's per-position element count by its enclosing trip counts, sum accesses to the same buffer, multiply by dtype bit width, then round the whole buffer reading up to bytes. | No |
 | `LoopFootprintMetadata.footprints` | One `BufferFootprint` per known source buffer and storage level, sorted by buffer then level. When `known` is false these rows are the available lower bound rather than an empty replacement. | No |
 | `LoopFootprintMetadata.known` | False when an access in the loop or a descendant loop lacks a representable forward relation, marking `footprints` as a lower bound; true otherwise. | No |
-| `ValueLifetime.binding` | Use the parameter or authored binding name, or `<value N>` when unnamed; repeated names take the printer's numeric suffix in definition order. | No |
+| `ValueLifetime.binding` | Use the parameter or binding name, suffixed with `:` and the line of the value's source span when it has one. Repeated names already differ by the printer's numeric suffix in definition order; the line locates the row in authored source, which a suffix cannot. A value with neither name nor span is `<value N>` in definition order. | No |
 | `ValueLifetime.level` | Emit one lifetime per storage level occupied by the value's Type. | No |
 | `ValueLifetime.bytes` | Project the Type through every authored split at or coarser than the explicit level's `owner`, then take its logical bytes; a target-owned or undeclared level remains global. | `MemoryHierarchyFacts.explicit_levels[].owner` |
 | `ValueLifetime.defined_at` | Position in the order of parameters followed by body Calls and Constants in SSA postorder. | No |
