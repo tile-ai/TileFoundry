@@ -7,7 +7,7 @@ import math
 import isl
 
 from tilefoundry.ir.types import TensorType
-from tilefoundry.visitor_registry.access_relation import index_set
+from tilefoundry.visitor_registry.access_relation import index_set, point_count
 
 from .affine import LoopAffineTerm
 
@@ -50,11 +50,11 @@ def _widest_allowed(
         reach = access.intersect_params(
             isl.set(f"{space}{{ : {name} = {value} }}")
         ).range().intersect(box)
-        amount = reach.coalesce().count_val()
-        if not amount.is_int():
+        amount = point_count(reach)
+        if amount is None:
             return None
-        if best is None or amount.get_num_si() > best[0]:
-            best = (amount.get_num_si(), value)
+        if best is None or amount > best[0]:
+            best = (amount, value)
     return None if best is None else LoopAffineTerm(None, 0, best[1], best[1])
 
 

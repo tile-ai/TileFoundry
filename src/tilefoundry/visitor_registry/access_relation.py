@@ -784,6 +784,32 @@ def _reached_image(
     return image
 
 
+def point_count(image: "isl.set") -> int | None:
+    """How many points *image* holds, or None when that is not a finite number.
+
+    A box is counted from its bounds: every axis is an independent bounded
+    interval, so the product of their lengths is the answer and ISL never has to
+    enumerate. Enumeration costs one step per point, which a reshaped dimension
+    of a million elements makes unusable, and the reshape and transpose chains a
+    real model is written as reach this with exactly that shape. Anything that is
+    not a box falls back to enumerating.
+    """
+    image = image.coalesce()
+    if image.is_box():
+        product = 1
+        for axis in range(image.tuple_dim()):
+            if not image.dim_is_bounded(isl.dim_type.SET, axis):
+                break
+            low, high = image.dim_min_val(axis), image.dim_max_val(axis)
+            if not (low.is_int() and high.is_int()):
+                break
+            product *= high.get_num_si() - low.get_num_si() + 1
+        else:
+            return product
+    amount = image.count_val()
+    return amount.get_num_si() if amount.is_int() else None
+
+
 def reached_elements(
     pattern: "AffineAccess", box: "isl.set | None" = None, within: "isl.set | None" = None
 ) -> int | None:
@@ -798,10 +824,7 @@ def reached_elements(
     image = _reached_image(pattern, box, within)
     if image.dim(isl.dim_type.PARAM):
         return None
-    try:
-        return int(str(image.coalesce().count_val()))
-    except ValueError:
-        return None
+    return point_count(image)
 
 
 def control_leaves(type_: "Type") -> int:
@@ -1236,6 +1259,7 @@ __all__ = [
     "logical_coordinates",
     "local_relations_of",
     "placed_window",
+    "point_count",
     "boundary_maps",
     "projected",
     "leaves_of",

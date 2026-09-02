@@ -22,6 +22,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     access_relation_registry,
     index_set,
+    point_count,
     projected,
     relation_of,
     relations_of,
@@ -94,11 +95,11 @@ class Scope:
                 result = 1 if step <= 0 or extent <= start else -(-(extent - start) // step)
                 self._trips_cache = result
                 return result
-        count = self.domain.count_val()
-        parent_count = self.parent.domain.count_val()
-        if not count.is_int() or not parent_count.is_int() or not parent_count.get_num_si():
+        count = point_count(self.domain)
+        parent_count = point_count(self.parent.domain)
+        if count is None or not parent_count:
             return 1
-        result = max(1, count.get_num_si() // parent_count.get_num_si())
+        result = max(1, count // parent_count)
         self._trips_cache = result
         return result
 
@@ -122,10 +123,10 @@ class Scope:
         reached = access.relation.intersect_domain(standing).range()
         if reached.dim(isl.dim_type.PARAM):
             raise AnalysisError("scope access still has an unbound parameter")
-        amount = reached.coalesce().count_val()
-        if not amount.is_int():
+        amount = point_count(reached)
+        if amount is None:
             raise AnalysisError("scope access has no finite one-pass extent")
-        result = amount.get_num_si()
+        result = amount
         cache[id(access)] = result
         self._one_pass_cache = cache
         return result
