@@ -19,11 +19,6 @@ from tilefoundry.ir.types.tensor_type import DType, Type
 from tilefoundry.ir.types.utils import local_type_of
 
 
-def call_operand_context(ctx):
-    """Clear region inheritance while preserving the Call's execution scope."""
-    return replace(ctx, inherited=None) if ctx.inherited is not None else ctx
-
-
 @dataclass(frozen=True)
 class FunctionScope:
     """Where a walk is reading: one Module tree, and whose body it is in.
@@ -43,15 +38,12 @@ class TypeInferContext:
     """Track walk location and route type-inference queries.
 
     Derivation lives in ``TypeInferVisitor``. ``scope`` says where the walk is
-    reading. ``mesh_scope`` is the composed HIR execution domain. ``inherited``
-    is what a nested ``MeshScope`` may compose onto its own mesh; Call operands
-    clear it while preserving ``mesh_scope`` for visibility checks.
+    reading. ``current_mesh`` is the composed HIR execution domain.
     See [visitor-registry §4](docs/spec/visitor-registry.md#4-instance-1--typeinfer).
     """
 
     scope: FunctionScope | None = None
-    mesh_scope: Mesh | None = None
-    inherited: Mesh | None = None
+    current_mesh: Mesh | None = None
     memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
     instantiated_memo: dict[tuple[int, tuple[Type, ...]], Type] = field(
         default_factory=dict, repr=False, compare=False
@@ -84,8 +76,7 @@ class TypeInferContext:
             self,
             scope=self.scope_for(callee),
             memo={},
-            mesh_scope=None,
-            inherited=None,
+            current_mesh=None,
         )
 
     def type_of(self, expr: Expr) -> Type:
@@ -120,12 +111,12 @@ class TypeInferContext:
 class VerifyContext(TypeInferContext):
     """The context a per-stmt verify handler is annotated against.
 
-    The enclosing scope a handler asks about is the inherited
-    ``tir_mesh_scope``, set by whoever walks the statements
+    The enclosing scope a handler asks about is the TIR ``mesh_scope``
+    tuple, set by whoever walks the statements
     (see [tir §1.3](docs/spec/tir.md#13-primfunction)).
     """
 
-    tir_mesh_scope: tuple = ()
+    mesh_scope: tuple = ()
 
 
 @dataclass

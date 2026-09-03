@@ -242,9 +242,24 @@ class Qwen3_1_7B_DecoderLayer:
         w_up: ConstTensor[(1, config.hidden_size, config.intermediate_size), _DT],
         w_down: ConstTensor[(1, config.intermediate_size, config.hidden_size), _DT],
     ) -> Tensor[(1, S, config.hidden_size), _DT]:
-        # The same MLP with every result explicitly placed for performance.
-        with Mesh(("cta",), layout=(132,), names=("tile",)) as _cta:
+        # The same MLP with work split across a 128-CTA slice.
+        with Mesh(("cta",), layout=(128,), names=("tile",)) as cta:
             placed = tf.reshard(hidden, (1, S, config.hidden_size), "gmem")
+            gate_weight = tf.reshard(
+                w_gate,
+                (1, config.hidden_size, config.intermediate_size @ cta.tile),
+                "gmem",
+            )
+            up_weight = tf.reshard(
+                w_up,
+                (1, config.hidden_size, config.intermediate_size @ cta.tile),
+                "gmem",
+            )
+            down_weight = tf.reshard(
+                w_down,
+                (1, config.intermediate_size @ cta.tile, config.hidden_size),
+                "gmem",
+            )
             hidden_norm32 = tf.cast(placed, dtype="f32")
             hidden_norm_var = tf.reduce(
                 hidden_norm32 * hidden_norm32,
@@ -258,11 +273,13 @@ class Qwen3_1_7B_DecoderLayer:
                 )
                 * gamma_post
             )
-            gate = tf.matmul(hidden_norm, w_gate)
-            up = tf.matmul(hidden_norm, w_up)
+            gate = tf.matmul(hidden_norm, gate_weight)
+            up = tf.matmul(hidden_norm, up_weight)
             act = tf.silu(gate)
             h = act * up
-            return tf.matmul(h, w_down)
+            return tf.reshard(
+                tf.matmul(h, down_weight), (1, S, config.hidden_size), "gmem"
+            )
 
     @func
     def decoder_layer(

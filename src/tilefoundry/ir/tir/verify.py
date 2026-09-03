@@ -167,7 +167,7 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
                 if fn_verify is None:
                     raise VerifyError(f"no verify_stmt registered for Op {op_cls.__name__}")
 
-                ctx.tir_mesh_scope = tuple(scope)
+                ctx.mesh_scope = tuple(scope)
                 call = Call(type=UnitType(), target=op, args=stmt.args)
                 fn_verify(call, ctx)
 

@@ -81,9 +81,14 @@ def test_external_v100_documents_analyse_a_copied_installed_model(
         for call in call_records
     )
     assert all(call["end_ns"] > call["start_ns"] for call in call_records)
+    per_wave_end = max(
+        call["end_ns"] + (call["trips"] - 1) * call["stride_ns"]
+        for call in call_records
+    )
+    per_wave_end = max(per_wave_end, report["function_records"]["roofline"]["ideal_ns"])
     assert record["timeline"] == {
         "start_ns": 0,
-        "end_ns": 2 * max(call["end_ns"] for call in call_records),
+        "end_ns": record["waves"] * per_wave_end,
         "trips": 1,
         "stride_ns": 0,
     }

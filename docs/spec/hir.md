@@ -423,13 +423,18 @@ class MeshScope(Expr):
     """Represent the execution domain of one structured HIR region."""
 
     mesh: Mesh
+    params: tuple[Var, ...]
+    args: tuple[Expr, ...]
     body: Expr
 ```
 
 - constraints:
-  - `mesh` is the composed execution domain for this region. Nested scopes
-    compose before the body is typed; a same-level mesh replaces that level,
-    while non-overlapping levels are appended below it ([shard §5](./shard.md#5-mesh)).
+  - `mesh` is the mesh opened by this region. Visitors compose it with the
+    enclosing execution mesh at the body edge; the `args` edge is evaluated
+    outside the region.
+  - `params` and `args` have equal length. The body may reference each captured
+    value only through its corresponding parameter; an argument is never read
+    directly from the body. This is the same binding boundary as `Function`.
   - The region result is reachable through the values that escape its lexical
     body. A single escaping value is the region's `body`; multiple escaping
     values are carried by a `Tuple` and read through `TupleGetItem` projections.
@@ -1446,11 +1451,20 @@ class RoPE(Op):
 
 ##### MeshCoord
 
-`MeshCoord(mesh, axis)` is a value-form Op that returns the coordinate of the
-current participant along one mesh axis. Its result is an `i64` scalar with
-`layout=None`; it carries no placement. Type inference MUST reject a Mesh that
-is not bound by the current `MeshScope`. Evaluation MUST raise `EvalError`,
-because the evaluator models values without selecting one physical participant.
+```python
+class MeshCoord(Op):
+    """Return the current participant's coordinate along one mesh axis."""
+
+    mesh: Mesh
+    axis: Expr
+```
+
+- constraints:
+  - The result is an `i64` scalar with `layout=None` and no placement.
+  - Type inference MUST reject a mesh that is not bound by the current
+    `MeshScope`.
+  - Evaluation MUST raise `EvalError`, because the evaluator models values
+    without selecting one physical participant.
 
 ##### Reshard
 ```python

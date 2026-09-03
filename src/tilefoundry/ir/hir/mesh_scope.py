@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.core import Expr
+from tilefoundry.ir.core import Expr, Var
 from tilefoundry.ir.types.shard.mesh import Mesh
 
 
@@ -20,6 +20,8 @@ class MeshScope(Expr):
 
     mesh: Mesh
     body: Expr
+    params: tuple[Var, ...] = ()
+    args: tuple[Expr, ...] = ()
 
 
 __all__ = ["MeshScope"]

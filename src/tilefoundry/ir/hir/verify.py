@@ -3,14 +3,37 @@ from __future__ import annotations
 from tilefoundry.ir.core import Expr, VerifyError
 from tilefoundry.ir.core.expr import Call, Var
 from tilefoundry.ir.core.pattern import DimVarRangePat
+from tilefoundry.ir.hir.mesh_scope import MeshScope
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.tensor_type import TupleType
-from tilefoundry.ir.visitor import ExprVisitor
+from tilefoundry.ir.visitor import ExprVisitor, collect_exprs
 
 from .function import Function
 from .specialize import canonical_specialization_signature
+
+
+def _verify_isolated(scope: MeshScope, ctx=None) -> None:
+    """Ensure a region body reaches captured values only through its params."""
+    if len(scope.params) != len(scope.args):
+        message = (
+            f"region has {len(scope.params)} params but {len(scope.args)} args"
+        )
+        if ctx is not None:
+            ctx.error(scope, message)
+        raise VerifyError(f"MeshScope: {message}")
+    arg_ids = {id(arg) for arg in scope.args}
+    leaked = arg_ids.intersection(id(expr) for expr in collect_exprs(scope.body))
+    if not leaked:
+        return
+    message = (
+        "region is not isolated: body reads an args value directly; "
+        "reference its param instead"
+    )
+    if ctx is not None:
+        ctx.error(scope, message)
+    raise VerifyError(f"MeshScope: {message}")
 
 
 def verify_function(fn: Function, *, module=None) -> None:
@@ -213,6 +236,12 @@ def _verify_signature_dim_vars(fn: Function) -> None:
 
 
 class _StmtRejectingVisitor(ExprVisitor[None]):
+    def visit_MeshScope(self, expr: MeshScope, ctx=None) -> None:
+        _verify_isolated(expr)
+        for arg in expr.args:
+            self.visit(arg, ctx)
+        self.visit(expr.body, ctx)
+
     def visit_Call(self, expr: Call, ctx=None) -> None:
         for arg in expr.args:
             if isinstance(arg, Stmt):

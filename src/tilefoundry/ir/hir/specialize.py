@@ -18,7 +18,7 @@ from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.mesh_scope import MeshScope as HirMeshScope
 from tilefoundry.ir.types.dim import is_dim_expr
-from tilefoundry.ir.types.shard.mesh import entered
+from tilefoundry.ir.types.shard.mesh import composed
 from tilefoundry.ir.types.substitute import (
     dim_vars_by_name,
     has_symbolic_dims,
@@ -28,7 +28,7 @@ from tilefoundry.ir.types.substitute import (
 )
 from tilefoundry.ir.types.tensor_type import TensorType, Type
 from tilefoundry.ir.visitor import ExprCloner, ExprVisitor, ExprWalker
-from tilefoundry.visitor_registry.contexts import TypeInferContext, call_operand_context
+from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 from .function import Function
@@ -219,27 +219,45 @@ class DimensionInstantiator(ExprCloner):
         return const
 
     def visit_MeshScope(self, expr: HirMeshScope, ctx: InstantiateContext) -> Expr:
-        """Instantiate a region body under the participants that enclose it."""
+        """Instantiate a region's boundary values and body independently."""
         mesh = substitute_mesh_dims(expr.mesh, ctx.dims)
-        mesh_scope = entered(ctx.type_ctx.inherited, mesh)
+        new_args = tuple(self.visit(arg, ctx) for arg in expr.args)
+        new_params = tuple(
+            param
+            if new_arg.type == param.type
+            else Var(type=new_arg.type, name=param.name)
+            for param, new_arg in zip(expr.params, new_args, strict=True)
+        )
+        for old, new in zip(expr.params, new_params, strict=True):
+            if old is not new:
+                ctx.subst[id(old)] = new
+        current_mesh = (
+            composed((ctx.type_ctx.current_mesh, mesh))
+            if ctx.type_ctx.current_mesh
+            else mesh
+        )
         body_ctx = dataclasses.replace(
             ctx,
             type_ctx=dataclasses.replace(
                 ctx.type_ctx,
-                mesh_scope=mesh_scope,
-                inherited=mesh_scope,
+                current_mesh=current_mesh,
             ),
         )
         body = self.visit(expr.body, body_ctx)
-        if mesh == expr.mesh and body is expr.body:
+        if (
+            mesh == expr.mesh
+            and new_args == expr.args
+            and new_params == expr.params
+            and body is expr.body
+        ):
             return expr
-        return self._retyped(dataclasses.replace(expr, mesh=mesh, body=body), ctx)
+        return self._retyped(
+            dataclasses.replace(expr, mesh=mesh, params=new_params, args=new_args, body=body),
+            ctx,
+        )
 
     def visit_Call(self, call: Call, ctx: InstantiateContext) -> Expr:
-        operand_ctx = dataclasses.replace(
-            ctx, type_ctx=call_operand_context(ctx.type_ctx)
-        )
-        new_args = tuple(self.visit(arg, operand_ctx) for arg in call.args)
+        new_args = tuple(self.visit(arg, ctx) for arg in call.args)
         new_target = call.target
         if isinstance(new_target, Function):
             new_target = _specialize_callee(

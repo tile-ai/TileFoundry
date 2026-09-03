@@ -66,8 +66,8 @@ def expr_children(expr: Expr) -> tuple[Expr, ...]:
             return ()
         case Call(args=args):
             return args
-        case HirMeshScope(body=body):
-            return (body,)
+        case HirMeshScope(args=args, body=body):
+            return (*args, body)
         case GridRegionExpr(init_args=init_args, body=body, yield_values=yield_values):
             return (*init_args, body, *yield_values)
         case HirFunction(body=body):
@@ -88,9 +88,9 @@ def _rebuild_expr(expr: Expr, new_children: tuple[Expr, ...]) -> Expr:
             return expr
         case Call():
             return replace(expr, args=new_children)
-        case HirMeshScope():
-            (body,) = new_children
-            return replace(expr, body=body)
+        case HirMeshScope(args=args):
+            n_args = len(args)
+            return replace(expr, args=new_children[:n_args], body=new_children[n_args])
         case GridRegionExpr(init_args=init_args):
             n_init = len(init_args)
             init = new_children[:n_init]
@@ -386,6 +386,18 @@ class BindingSubstitutionCloner(ExprCloner):
         return replace(
             expr,
             elements=tuple(self.visit(item, ctx) for item in expr.elements),
+            metadata=self._cloned_metadata(expr),
+        )
+
+    def visit_MeshScope(self, expr: HirMeshScope, ctx: Mapping[int, Expr]) -> Expr:
+        params = tuple(replace(param, metadata=self._cloned_metadata(param)) for param in expr.params)
+        inner = dict(ctx)
+        inner.update((id(old), new) for old, new in zip(expr.params, params, strict=True))
+        return replace(
+            expr,
+            params=params,
+            args=tuple(self.visit(arg, ctx) for arg in expr.args),
+            body=self.visit(expr.body, inner),
             metadata=self._cloned_metadata(expr),
         )
 

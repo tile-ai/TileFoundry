@@ -432,11 +432,21 @@ class _AnalysisViewCloner(BindingSubstitutionCloner):
 
     def visit_MeshScope(self, expr: MeshScope, ctx: Mapping[int, Expr]) -> MeshScope:
         """Inline through a HIR execution region while preserving its boundary."""
-        return replace(
+        params = tuple(
+            replace(param, metadata=_view_metadata(param)) for param in expr.params
+        )
+        body_ctx = {**ctx, **{id(old): new for old, new in zip(expr.params, params)}}
+        rebuilt = replace(
             expr,
-            body=self.visit(expr.body, ctx),
+            params=params,
+            args=tuple(self.visit(arg, ctx) for arg in expr.args),
+            body=self.visit(expr.body, body_ctx),
             metadata=_view_metadata(expr),
         )
+        from tilefoundry.ir.hir.verify import _verify_isolated  # noqa: PLC0415
+
+        _verify_isolated(rebuilt)
+        return rebuilt
 
     def default_visit(self, expr: Expr, ctx: Mapping[int, Expr]) -> Expr:
         raise AnalysisError(f"cannot inline unsupported HIR node {type(expr).__name__}")

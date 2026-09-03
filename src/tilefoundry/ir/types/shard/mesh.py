@@ -165,7 +165,7 @@ def level_axes(mesh: "Mesh") -> tuple[tuple[int, ...], ...]:
     return tuple(found)
 
 
-def layout_parts(mesh: Mesh) -> tuple[tuple, tuple, int]:
+def _positions_layout(mesh: Mesh) -> tuple[tuple, tuple, int]:
     """Return flattened shape, strides, and offset for a supported mesh layout."""
     if isinstance(mesh.layout, Layout):
         return flatten(mesh.layout.shape), flatten(mesh.layout.strides), 0
@@ -184,7 +184,7 @@ def positions_at(mesh: Mesh, level: str) -> tuple[tuple, tuple]:
     names = tuple(topology.name for topology in mesh.topologies)
     if level not in names:
         raise ValueError(f"mesh names levels {names}, not {level!r}")
-    shape, strides, _offset = layout_parts(mesh)
+    shape, strides, _offset = _positions_layout(mesh)
     if any(stride is None for stride in strides):
         strides = c_order_strides(shape)
     index = names.index(level)
@@ -204,6 +204,7 @@ def positions_at(mesh: Mesh, level: str) -> tuple[tuple, tuple]:
 def composed(meshes: "tuple[Mesh, ...]") -> "Mesh":
     """Compose scopes, replacing an existing level when the inner names it."""
     if len(meshes) == 1:
+        check_topology(meshes[0])
         return meshes[0]
 
     def positions(mesh: Mesh) -> int:
@@ -219,8 +220,8 @@ def composed(meshes: "tuple[Mesh, ...]") -> "Mesh":
         return count
 
     def concatenate(outer: Mesh, inner: Mesh) -> Mesh:
-        outer_shape, outer_strides, outer_offset = layout_parts(outer)
-        inner_shape, inner_strides, inner_offset = layout_parts(inner)
+        outer_shape, outer_strides, outer_offset = _positions_layout(outer)
+        inner_shape, inner_strides, inner_offset = _positions_layout(inner)
         for mesh, strides in ((outer, outer_strides), (inner, inner_strides)):
             if any(
                 not isinstance(stride, int) or isinstance(stride, bool)
@@ -261,12 +262,19 @@ def composed(meshes: "tuple[Mesh, ...]") -> "Mesh":
             f"{sorted(current_names - inner_names)} is not; a scope either "
             "replaces the levels in force or adds levels below them"
         )
+    check_topology(result)
     return result
 
 
 def check_topology(mesh: Mesh) -> None:
-    """Reject static mesh positions beyond their declared topology extents."""
-    shape, _strides, _offset = layout_parts(mesh)
+    """Reject static mesh positions beyond their declared topology extents.
+
+    A constant slice is already bounded by ``Mesh.__getitem__``; its shortened
+    axes no longer land on full topology boundaries and are therefore accepted.
+    """
+    if isinstance(mesh.layout, ComposedLayout):
+        return
+    shape, _strides, _offset = _positions_layout(mesh)
     for topology, axes in zip(mesh.topologies, level_axes(mesh)):
         if not isinstance(topology.size, int) or isinstance(topology.size, bool):
             continue
@@ -281,13 +289,6 @@ def check_topology(mesh: Mesh) -> None:
             raise ValueError(
                 f"mesh level {topology.name!r} has {count} positions, exceeding declared extent {topology.size}"
             )
-
-
-def entered(current: Mesh | None, mesh: Mesh) -> Mesh:
-    """Return the checked execution mesh in force after entering *mesh*."""
-    result = composed((current, mesh)) if current else mesh
-    check_topology(result)
-    return result
 
 
 def level_projection(mesh: "Mesh", level: str) -> Layout:
@@ -333,8 +334,6 @@ def level_projection(mesh: "Mesh", level: str) -> Layout:
 __all__ = [
     "Mesh",
     "Topology",
-    "entered",
-    "layout_parts",
     "composed",
     "level_axes",
     "level_projection",

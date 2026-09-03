@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tests.fixtures.placed.region_boundaries import RegionBoundaries
 from tilefoundry import func, module
 from tilefoundry.analysis import ComputeCostMetadata, analyze
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
-from tilefoundry.ir.core import Call, get_metadata
+from tilefoundry.ir.core import Call, Var, VerifyError, get_metadata
 from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir.hir.mesh_scope import MeshScope
+from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shard import Layout
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 _TARGET = CudaTarget("nvidia.h200_sxm")
 _TOPOLOGIES = (Topology("cta", 1), Topology("thread", 4))
@@ -90,3 +98,21 @@ def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
     ]
     binary_flops = sorted(dict(item.flops)["f32"] for item in binaries)
     assert binary_flops == [8, helper_flops * 2, 16]
+
+
+def test_analysis_rejects_a_region_body_that_embeds_its_raw_argument() -> None:
+    """The isolation invariant is checked on hand-built HIR as an analysis consumer."""
+    value_type = TensorType(
+        shape=(8,), dtype=DType.f32, layout=None, storage=StorageKind.GMEM
+    )
+    value = Var(name="value", type=value_type)
+    scope = MeshScope(
+        mesh=Mesh((Topology("cta", 1),), Layout((1,), (1,)), ("cta",)),
+        params=(Var(name="param", type=value_type),),
+        args=(value,),
+        body=value,
+        type=value_type,
+    )
+
+    with pytest.raises(VerifyError, match="region is not isolated"):
+        TypeInferVisitor().visit(scope, TypeInferContext())

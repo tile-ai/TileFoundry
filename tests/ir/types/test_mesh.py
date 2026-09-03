@@ -6,6 +6,7 @@ from tilefoundry.ir.types.shard import (
     Layout,
     Mesh,
     Topology,
+    check_topology,
     make_mesh,
     product,
 )
@@ -61,6 +62,16 @@ def test_mesh_slice_keeps_the_parent_topologies() -> None:
 
     assert sliced.topologies is mesh.topologies
     assert sliced.layout.shape == (1, 32)
+
+
+def test_check_topology_rejects_positions_beyond_a_declared_extent() -> None:
+    oversized = Mesh((Topology("cta", 128),), Layout((256,), (1,)), ("cta",))
+
+    with pytest.raises(
+        ValueError,
+        match="mesh level 'cta' has 256 positions, exceeding declared extent 128",
+    ):
+        check_topology(oversized)
 
 
 def test_mesh_value_equality_is_by_value() -> None:

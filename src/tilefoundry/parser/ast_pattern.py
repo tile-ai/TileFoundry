@@ -71,10 +71,10 @@ from tilefoundry.ir.types.shard import (
     c_order_strides,
     canonical_shard_layout,
     composed,
-    entered,
 )
 from tilefoundry.ir.types.shard.layout import LayoutBase
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
+from tilefoundry.ir.visitor import BindingSubstitutionCloner
 from tilefoundry.target import MemoryHierarchyFacts, Target, UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
@@ -223,6 +223,7 @@ def attach_authored_metadata(value: object, node: ast.AST, context: "MatchContex
 
 runtime = SimpleNamespace(
     Call=Call,
+    BindingSubstitutionCloner=BindingSubstitutionCloner,
     Broadcast=Broadcast,
     Binary=Binary,
     BinaryKind=BinaryKind,
@@ -273,7 +274,6 @@ runtime = SimpleNamespace(
     c_order_strides=c_order_strides,
     canonical_shard_layout=canonical_shard_layout,
     composed=composed,
-    entered=entered,
     dim_expr=dim_expr,
     normalize_dim=normalize_dim,
     slice_size=slice_size,
@@ -766,6 +766,7 @@ class FunctionRole(StrEnum):
 class ParserState:
     """Mutable state owned by one Function parse."""
 
+    mesh_stack: list[object] = field(default_factory=list)
     mesh_coordinates: dict[tuple[int, int], object] = field(default_factory=dict)
 
 
@@ -1246,7 +1247,7 @@ class MatchContext:
             scope.define("mesh", resolved_mesh)
         scope.define(
             _TYPE_INFER_CONTEXT,
-            ParserTypeInferContext(child_resolver=provider, mesh_scope=resolved_mesh),
+            ParserTypeInferContext(child_resolver=provider, current_mesh=resolved_mesh),
         )
         return context
 

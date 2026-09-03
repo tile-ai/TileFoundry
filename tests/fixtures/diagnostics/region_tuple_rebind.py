@@ -1,4 +1,4 @@
-"""A tuple cannot carry an outer region directly into another region body."""
+"""A tuple-valued sibling region can carry an outer region through its args."""
 
 from tilefoundry import module
 from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf

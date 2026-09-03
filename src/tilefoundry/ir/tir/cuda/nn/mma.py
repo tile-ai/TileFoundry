@@ -91,7 +91,7 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
 
         if not any(
             mesh_scope_matches_required_scope(s, atom.required_scope)
-            for s in ctx.tir_mesh_scope
+            for s in ctx.mesh_scope
         ):
             raise VerifyError(
                 "T.mma: no enclosing mesh scope hosts the atom's required thread "

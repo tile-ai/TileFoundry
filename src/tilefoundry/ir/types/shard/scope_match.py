@@ -1,4 +1,10 @@
-"""Match an enclosing mesh scope against an op's required thread scope."""
+"""Match TIR scope declarations against required hardware participation.
+
+The TIR verifier keeps its own tuple of enclosing mesh values. CUDA MMA uses
+these structural predicates to decide whether an atom's required thread scope
+is hosted by one of them; HIR execution-domain visibility is checked separately
+by ``covered_by_scope`` and ``storage_reaches``.
+"""
 
 from __future__ import annotations
 

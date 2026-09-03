@@ -115,8 +115,14 @@ class EvaluatorVisitor(ExprVisitor):
         super().__init__(memo=memo)
 
     def visit_MeshScope(self, scope: HirMeshScope, ctx: EvaluateContext) -> Value:
-        """Evaluate the scoped region body; its mesh is compile-time structure."""
-        return self.visit(scope.body, ctx)
+        """Evaluate boundary arguments outside, then the isolated body."""
+        args = tuple(self.visit(arg, ctx) for arg in scope.args)
+        if len(args) != len(scope.params):
+            raise EvalError(
+                f"evaluator: MeshScope expects {len(scope.params)} args, got {len(args)}"
+            )
+        memo = {id(param): (param, value) for param, value in zip(scope.params, args)}
+        return EvaluatorVisitor(memo=memo).visit(scope.body, ctx)
 
     def visit_leaf_Var(self, var: Var, _operands, ctx: EvaluateContext) -> Value:
         raise EvalError(f"evaluator: unbound variable {var.name!r}")

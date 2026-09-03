@@ -883,6 +883,9 @@ model.
     performed independently by every position and therefore contributes once
     per position to the total. The per-unit quantity already includes work
     projected through finer levels.
+  - A `MeshScope` evaluates its boundary arguments outside the region and
+    executes its body once per enclosing position. Argument work is charged at
+    its defining site; body work is charged per enclosing position.
   - The participant set MUST be the exact image of that Mesh's layout under
     [shard §5](./shard.md#5-mesh), not an extent inferred from a topology or an
     operand. A `Broadcast` shard attribute still names placement: attributes

@@ -206,22 +206,6 @@ domain, so the composition inherits them from `inner`. Therefore, when an
 outer `ShardLayout` binds a `ComposedLayout`, a `Split(k)` attr still
 references the composition's stable `shape` / `domain_rank` contract.
 
-Mesh composition uses the following rules:
-
-- `composed(meshes)` MUST replace all levels in force when the inner mesh names
-  every current level, and MUST concatenate meshes whose level-name sets are
-  disjoint. For concatenation, each outer stride and offset is scaled by the
-  product of positions in the levels below it:
-  `offset = outer_offset * below + inner_offset`.
-- A sliced mesh is composable; its slice offset remains a
-  `ComposedLayout` offset after composition. A mesh whose level names partially
-  overlap the levels in force MUST be rejected rather than decomposed.
-- `check_topology(mesh)` is a separate validation. For each named level with a
-  concrete declared extent, its projected position count MUST NOT exceed that
-  extent; symbolic extents are deferred until dimensions are bound. This check
-  does not reject same-level nesting, because replacement determines the final
-  position count.
-
 ---
 
 ## 5. `Mesh`
@@ -268,6 +252,26 @@ Field meanings:
 
 `Mesh` describes the parallel device domain; it is not a tensor layout
 object.
+
+Mesh composition uses the following rules:
+
+- `composed(meshes)` MUST replace all levels in force when the inner mesh names
+  every current level, and MUST concatenate meshes whose level-name sets are
+  disjoint. For concatenation, each outer stride and offset is scaled by the
+  product of positions in the levels below it:
+  `offset = outer_offset * below + inner_offset`.
+- A sliced mesh is composable; its slice offset remains a
+  `ComposedLayout` offset after composition. A mesh whose level names partially
+  overlap the levels in force MUST be rejected rather than decomposed.
+- `composed(meshes)` invokes `check_topology` on its result. For each named
+  level with a concrete declared extent, its projected position count MUST NOT
+  exceed that extent; symbolic extents are deferred until dimensions are bound.
+  This check does not reject same-level nesting, because replacement determines
+  the final position count.
+
+HIR `MeshScope` applies this composition only at its body boundary. Its `args`
+are evaluated in the enclosing scope and are not recomposed merely because the
+value is consumed by a region.
 
 `Mesh` MAY carry more than one `Topology` (e.g. `warp(4) x thread(32)`); the
 full sequence is always `topologies`.

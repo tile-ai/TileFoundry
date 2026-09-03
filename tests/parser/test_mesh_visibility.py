@@ -16,7 +16,6 @@ from tilefoundry.ir.core import Call, VerifyError, binding_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.mesh_scope import MeshScope
 from tilefoundry.ir.visitor import collect_exprs, expr_children
-from tilefoundry.parser import ParseError
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
@@ -79,8 +78,8 @@ def test_an_inner_level_layout_is_covered_by_the_whole_running_scope() -> None:
     TypeInferVisitor().visit(body, TypeInferContext())
 
 
-def test_region_boundaries_parse_and_reject_external_region_rebinding() -> None:
-    """Legal region edges parse, while a bare external region rebind is rejected."""
+def test_region_boundaries_capture_external_regions_through_args() -> None:
+    """A sibling region receives an earlier region value through its boundary."""
     body = RegionBoundaries.entry_function().body
     scopes = [expr for expr in collect_exprs(body) if isinstance(expr, MeshScope)]
     helper_call = next(
@@ -101,16 +100,8 @@ def test_region_boundaries_parse_and_reject_external_region_rebinding() -> None:
         for expr in collect_exprs(body)
         if producer in expr_children(expr)
     ]
-    assert len(parents) == 2 and all(isinstance(parent, Call) for parent in parents)
+    assert len(parents) == 2
+    assert any(isinstance(parent, MeshScope) and producer in parent.args for parent in parents)
 
-    source = _diagnostic("region_rebind")
-    with pytest.raises(
-        ParseError,
-        match="re-binds a region value made outside this scope",
-    ):
-        import_dsl(source, "RegionRebind")
-    bare_return = source.replace("            t = v2\n        return t", "            return v2")
-    with pytest.raises(ParseError, match="'v2' re-binds a region value"):
-        import_dsl(bare_return, "RegionRebind")
-    with pytest.raises(ParseError, match="'v2' re-binds a region value"):
-        import_dsl(_diagnostic("region_tuple_rebind"), "RegionTupleRebind")
+    import_dsl(_diagnostic("region_rebind"), "RegionRebind")
+    import_dsl(_diagnostic("region_tuple_rebind"), "RegionTupleRebind")

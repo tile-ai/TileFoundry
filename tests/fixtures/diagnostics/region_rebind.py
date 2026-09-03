@@ -1,4 +1,4 @@
-"""A region value made outside a scope cannot escape it unchanged."""
+"""A sibling region captures an earlier region value through its args edge."""
 
 from tilefoundry import module
 from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf

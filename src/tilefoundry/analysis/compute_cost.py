@@ -17,12 +17,12 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.mesh_scope import MeshScope
 from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard import Mesh, entered, layout_parts, level_axes
+from tilefoundry.ir.types.shard import Mesh, composed, level_axes
+from tilefoundry.ir.types.shard.mesh import _positions_layout
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry.contexts import (
     CostContext,
     FunctionScope,
-    call_operand_context,
 )
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
@@ -135,7 +135,7 @@ def _flops(flops: dict) -> tuple[tuple[str, int], ...]:
 
 
 def _call_cost_record(
-    expr: Call, local: CostContext, scope_positions: int
+    expr: Call, local: CostContext, executing_positions: int
 ) -> ComputeCostMetadata:
     """Measure the work one Call asks for, without attaching the record.
 
@@ -150,12 +150,12 @@ def _call_cost_record(
         raise AnalysisError(str(error)) from None
     return ComputeCostMetadata(
         flops=_flops(
-            {dtype: value * scope_positions for dtype, value in local_cost.flops.items()}
+            {dtype: value * executing_positions for dtype, value in local_cost.flops.items()}
         ),
         flops_per_unit=_flops(local_cost.flops),
         service=tuple(
             sorted(
-                (kind, value * scope_positions)
+                (kind, value * executing_positions)
                 for kind, value in local_cost.service.items()
             )
         ),
@@ -171,7 +171,7 @@ def _scope_position_count(
         return 1
     declared = {topology.name: index for index, topology in enumerate(topologies)}
     selected = declared[level]
-    shape, _strides, _offset = layout_parts(mesh)
+    shape, _strides, _offset = _positions_layout(mesh)
     positions = 1
     for topology, axes in zip(mesh.topologies, level_axes(mesh)):
         if declared[topology.name] > selected:
@@ -207,11 +207,16 @@ def _accumulate(
 
 @dataclass
 class ComputeCostContext(AnalyzeContext):
-    """State carried through the compute-cost expression walk."""
+    """State carried through the compute-cost expression walk.
+
+    ``executing_positions`` is the number of positions in the enclosing scope
+    through the selected topology level; it is the D68 multiplier that turns
+    per-unit work into total replicated work.
+    """
 
     local: CostContext | None = None
-    inherited: Mesh | None = None
-    scope_positions: int = 1
+    current_mesh: Mesh | None = None
+    executing_positions: int = 1
     flops: dict[str, int] = field(default_factory=dict)
     flops_per_unit: dict[str, int] = field(default_factory=dict)
     service: dict[str, int] = field(default_factory=dict)
@@ -222,21 +227,17 @@ class ComputeCostContext(AnalyzeContext):
 class ComputeCostVisitor(ExprVisitor[None]):
     """Attach per-Call work and accumulate multiplicity-aware totals."""
 
-    def visit(self, expr: Expr, ctx: ComputeCostContext):
-        """Clear inherited scope state when entering a Call's operand graph."""
-        if isinstance(expr, Call):
-            ctx = call_operand_context(ctx)
-        return super().visit(expr, ctx)
-
     def visit_MeshScope(self, expr: MeshScope, ctx: ComputeCostContext) -> None:
         """Carry the region's execution multiplicity into each contained Call."""
-        mesh = entered(ctx.inherited, expr.mesh)
+        for arg in expr.args:
+            self.visit(arg, ctx)
+        mesh = composed((ctx.current_mesh, expr.mesh)) if ctx.current_mesh else expr.mesh
         positions = _scope_position_count(
             mesh, ctx.level, ctx.module.effective_topologies()
         )
         self.visit(
             expr.body,
-            replace(ctx, scope_positions=positions, inherited=mesh),
+            replace(ctx, executing_positions=positions, current_mesh=mesh),
         )
 
     def visit_GridRegionExpr(
@@ -258,7 +259,7 @@ class ComputeCostVisitor(ExprVisitor[None]):
         ctx.call_count[0] += 1
         if ctx.local is None:
             raise AnalysisError("compute-cost: visitor context is missing its cost context")
-        record = _call_cost_record(expr, ctx.local, ctx.scope_positions)
+        record = _call_cost_record(expr, ctx.local, ctx.executing_positions)
         attach(expr, record)
         owner = ctx.current if id(expr) in ctx.current.accesses["narrow"] else ctx.root
         repeats = 1

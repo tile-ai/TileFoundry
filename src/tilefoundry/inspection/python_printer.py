@@ -720,15 +720,16 @@ def _collect_meshes(
     *,
     include_node_types: bool = False,
 ) -> tuple[dict[int, Mesh], dict[int, Mesh]]:
-    """Collect unique Mesh objects referenced anywhere in *fn* — params, return type.
+    """Collect meshes needed before emitting a function header.
 
-    Collect unique Mesh objects referenced anywhere in *fn* — params,
-    return type, and every ``Reshard`` layout in the body.
+    The function header declares every mesh and builds the name map used by
+    parameter annotations and region bodies, so collection must precede body
+    emission. It walks params, return type, and body references once; the
+    optional node-type scan is used by the viewer for intermediate annotations.
 
     With ``include_node_types=True`` (the viewer's wider scan, via
     ``viewer.builder._collect_view_meshes``) every node's own result type is
-    also walked, since the viewer renders shard sugar on intermediate types
-    too, not just params/return.
+    also walked, since the viewer renders shard sugar on intermediate types too.
     """
     type_meshes: dict[int, Mesh] = {}
     scope_meshes: dict[int, Mesh] = {}
@@ -841,6 +842,14 @@ def _emit_def(
     _order: list[Expr] = list(iter_exprs(fn.body, _seen))
     for p in fn.params:
         _order.extend(iter_exprs(p, _seen))
+    for scope in tuple(expr for expr in _order if isinstance(expr, MeshScope)):
+        for param in scope.params:
+            _order.extend(iter_exprs(param, _seen))
+    _param_alias = {
+        id(param): arg
+        for scope in tuple(expr for expr in _order if isinstance(expr, MeshScope))
+        for param, arg in zip(scope.params, scope.args, strict=True)
+    }
 
 
     _op_names_set: set[str] = set()
@@ -866,14 +875,6 @@ def _emit_def(
     _grid_internal_ids: set[int] = set()
     _mesh_scope_internal_ids: set[int] = set()
     _nested_grid_ids: set[int] = set()
-    _detached_mesh_scope_ids = {
-        id(child)
-        for parent in _order
-        if not isinstance(parent, MeshScope)
-        for child in expr_children(parent)
-        if isinstance(child, MeshScope) and child is not fn.body
-    }
-
     for expr in _order:
         if not isinstance(expr, GridRegionExpr):
             continue
@@ -930,8 +931,6 @@ def _emit_def(
         if isinstance(expr, MeshScope):
             for _ in iter_exprs(expr.body, _mesh_scope_internal_ids):
                 pass
-    _mesh_scope_internal_ids.difference_update(_detached_mesh_scope_ids)
-
     def _moved_window(start, size, stride):
         """The tile window and offset *start* moves it by, else ``None``."""
         window, offset = window_base(start)
@@ -1002,6 +1001,8 @@ def _emit_def(
         return f"({inner})"
 
     def _expr_ref(expr: Expr) -> str:
+        if id(expr) in _param_alias:
+            return _expr_ref(_param_alias[id(expr)])
         projection = _region_projection(expr)
         if isinstance(projection, GridRegionExpr):
             return _names[id(projection.carried_args[expr.target.index])]
@@ -1313,6 +1314,8 @@ def _emit_def(
         key = id(scope)
         if key in printed:
             return
+        for arg in scope.args:
+            _emit_expr(arg, level)
         mesh_name = mesh_map[id(scope.mesh)]
         lines.append(
             f"{level}with {mesh_name} as _{mesh_name}:"
@@ -1701,10 +1704,9 @@ def _module_to_python(
     type_meshes: dict[int, Mesh] = {}
     scope_meshes: dict[int, Mesh] = {}
     for fn in functions:
-        for variant in (fn, *fn.variants):
-            types, scopes = _collect_meshes(variant)
-            type_meshes.update(types)
-            scope_meshes.update(scopes)
+        types, scopes = _collect_all_meshes(fn)
+        type_meshes.update(types)
+        scope_meshes.update(scopes)
     meshes = {**type_meshes, **scope_meshes}
     mesh_map = _mesh_name_map(meshes)
 

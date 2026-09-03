@@ -26,7 +26,8 @@ class RegionBoundaries:
             v2 = tf.reshard(r * 2.0, (8,), "gmem")
         with Mesh(("cta",), (2,), names=("c",)) as _c:
             a = helper(x)
-            b = tf.reshard(v2, (8,), "smem")
+            t = v2
+            b = tf.reshard(t, (8,), "smem")
         with Mesh(("cta",), (2,), names=("c2",)) as _c2:
             with Mesh(("thread",), (4,), names=("t2",)) as m2:
                 held = tf.reshard(v2, (8 @ m2.t2,), "rmem")

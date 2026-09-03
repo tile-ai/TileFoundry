@@ -25,7 +25,6 @@ from tilefoundry.ir.constraints import (
 from tilefoundry.ir.constraints.layout import _LAYOUT_WILDCARD
 from tilefoundry.ir.core import (
     BindingMetadata,
-    ExecutionDomainMetadata,
     attach_metadata,
     get_metadata,
 )
@@ -36,7 +35,6 @@ from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Broadcast, Layout, Partial, Split
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.utils import types_compatible
-from tilefoundry.ir.visitor import expr_children
 
 from .ast_pattern import (
     _BINARY_OPERATORS,
@@ -1966,11 +1964,6 @@ class CallBindingRule:
             raise ParseError.from_node(match.node, context, "call did not construct Call")
         if not isinstance(value.args, tuple):
             raise ParseError.from_node(match.node, context, "call arguments are not a tuple")
-        if context.function is not None and context.function.state.mesh_stack:
-            attach_metadata(
-                value,
-                ExecutionDomainMetadata(tuple(context.function.state.mesh_stack)),
-            )
         return value
 
 
@@ -3220,21 +3213,16 @@ class MeshContextPattern(ElementPattern):
                     context,
                     "Mesh topologies must be a tuple",
                 )
-            topologies = _resolve_mesh_topologies_at(
-                topology_names,
-                context.function.topologies,
-                match.node,
-                context,
-            )
             names = children.get("names", ())
             try:
                 mesh = runtime.Mesh(
-                    topologies=topologies,
+                    topologies=topology_names,
                     layout=children["layout"],
                     names=names,
                 )
             except (TypeError, ValueError) as error:
                 raise ParseError.from_node(match.node, context, str(error)) from error
+            mesh = _resolved_mesh(mesh, match, context)
         elif match.branch_id == "mesh_reference":
             mesh = children["value"]
             if not isinstance(mesh, runtime.Mesh):
@@ -3315,45 +3303,91 @@ def _enter_mesh_scope(context, mesh, match):
     """
     infer = _parser_infer_context(context)
     try:
-        entered_mesh = runtime.entered(infer.mesh_scope, mesh)
+        entered_mesh = (
+            runtime.composed((infer.current_mesh, mesh))
+            if infer.current_mesh
+            else mesh
+        )
     except ValueError as error:
         raise ParseError.from_node(match.node, context, str(error)) from error
     context.lexical_scope.push_frame()
     context.lexical_scope.define(
         _TYPE_INFER_CONTEXT,
-        dataclasses.replace(infer, mesh_scope=entered_mesh),
+        dataclasses.replace(infer, current_mesh=entered_mesh),
     )
 
 
-def _name_bound_to(scope, value):
-    """Return the active name bound to *value* by identity, if one exists."""
-    return next((name for name, bound in scope.items() if bound is value), None)
-
-
-def _reject_outer_region_value(context, value, node):
-    """Reject an outer region embedded without crossing an operation boundary."""
-
-    def visit(expr):
-        if isinstance(expr, runtime.Call):
-            return
-        if isinstance(expr, runtime.HirMeshScope):
-            if (rejected_name := _name_bound_to(context.lexical_scope, expr)) is not None:
-                raise ParseError.from_node(
-                    node,
-                    context,
-                    f"'{rejected_name}' re-binds a region value made outside this scope; "
-                    "consume it through an operation, or move the `with`",
-                )
-            return
-        for child in expr_children(expr):
-            visit(child)
-
-    visit(value)
-
-
-def _scoped_region(mesh, body):
+def _scoped_region(mesh, body, params=(), args=()):
     """Build a type-transparent HIR mesh region."""
-    return runtime.HirMeshScope(mesh=mesh, body=body, type=body.type)
+    return runtime.HirMeshScope(
+        mesh=mesh,
+        params=tuple(params),
+        args=tuple(args),
+        body=body,
+        type=body.type,
+    )
+
+
+def _mesh_scope_captures(node, context):
+    """Capture outer expression bindings for one region boundary."""
+    def free_names(statements, outer_bound=frozenset()):
+        local = _directly_bound_names(statements)
+        visible = outer_bound | local
+        found = set()
+
+        def visit(statement, bound):
+            if isinstance(statement, ast.With):
+                for item in statement.items:
+                    found.update(
+                        name.id
+                        for name in ast.walk(item.context_expr)
+                        if (
+                            isinstance(name, ast.Name)
+                            and isinstance(name.ctx, ast.Load)
+                            and name.id not in bound
+                        )
+                    )
+                nested_bound = set(bound)
+                for item in statement.items:
+                    if isinstance(item.optional_vars, ast.Name):
+                        nested_bound.add(item.optional_vars.id)
+                nested_bound.update(_directly_bound_names(statement.body))
+                for child in statement.body:
+                    visit(child, frozenset(nested_bound))
+                return
+            if isinstance(statement, (ast.For, ast.AsyncFor)):
+                for child in ast.iter_child_nodes(statement):
+                    if child is statement.target:
+                        continue
+                    if isinstance(child, ast.expr):
+                        for name in ast.walk(child):
+                            if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Load):
+                                if name.id not in bound:
+                                    found.add(name.id)
+                    elif isinstance(child, ast.stmt):
+                        visit(child, bound)
+                return
+            for name in ast.walk(statement):
+                if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Load):
+                    if name.id not in bound:
+                        found.add(name.id)
+
+        for statement in statements:
+            visit(statement, visible)
+        return found
+
+    free = free_names(node.body)
+    params = []
+    args = []
+    for name in sorted(free):
+        value = context.lexical_scope.lookup(name)
+        if isinstance(value, (bool, int, float)):
+            value = _constant(value)
+        if not isinstance(value, runtime.Expr):
+            continue
+        params.append(runtime.Var(type=value.type, name=name))
+        args.append(value)
+    return tuple(params), tuple(args)
 
 
 def _bind_region_results(context, region, names, node):
@@ -3371,7 +3405,7 @@ def _bind_region_results(context, region, names, node):
         context.lexical_scope.define(name, projection)
 
 
-def _rebind_through_region(context, mesh, names, frame, node):
+def _rebind_through_region(context, mesh, names, frame, node, params=(), args=()):
     """Point escaped names at a region result, whether or not it has a body value.
 
     A region's computed values are named, and those names are how code after it
@@ -3383,8 +3417,6 @@ def _rebind_through_region(context, mesh, names, frame, node):
         for name in frame
         if name in names and isinstance(frame[name], runtime.Expr)
     ]
-    for _name, value in values:
-        _reject_outer_region_value(context, value, node)
     missing = set(names) - {name for name, _value in values}
     if missing:
         missing_names = ", ".join(sorted(missing))
@@ -3394,14 +3426,14 @@ def _rebind_through_region(context, mesh, names, frame, node):
             f"mesh scope escaping values are not frame-local Expr bindings: {missing_names}",
         )
     if len(values) == 1:
-        scoped = _scoped_region(mesh, values[0][1])
+        scoped = _scoped_region(mesh, values[0][1], params, args)
         _bind_region_results(context, scoped, [values[0][0]], node)
         return
     tuple_type = runtime.TupleType(fields=tuple(value.type for _name, value in values))
     tuple_body = runtime.IrTuple(
         type=tuple_type, elements=tuple(value for _name, value in values)
     )
-    scoped = _scoped_region(mesh, tuple_body)
+    scoped = _scoped_region(mesh, tuple_body, params, args)
     _bind_region_results(context, scoped, [name for name, _value in values], node)
 
 
@@ -3450,11 +3482,17 @@ class WithPattern(ElementPattern):
         item = node.items[0]
         assert isinstance(item.optional_vars, ast.Name)
         binding = item.optional_vars.id
+        params, args = _mesh_scope_captures(node, context)
         return dataclasses.replace(
             matched,
             pattern_id="statement.with_mesh",
             branch_id="with_mesh",
-            captures={**matched.captures, "binding": binding},
+            captures={
+                **matched.captures,
+                "binding": binding,
+                "region_params": params,
+                "region_args": args,
+            },
             children=(
                 AstChild(
                     "mesh",
@@ -3470,6 +3508,11 @@ class WithPattern(ElementPattern):
                     _body_as_ast_module(node.body),
                     "block",
                     "with_body",
+                    lexical_bindings=(
+                        {param.name: param for param in params}
+                        if context.function.dialect == "hir"
+                        else None
+                    ),
                 ),
             ),
         )
@@ -3488,15 +3531,15 @@ class WithPattern(ElementPattern):
             raise ParseError.from_node(match.node, context, "Mesh stack is unbalanced")
         if context.function.dialect == "hir":
             body = children["body"]
-            if isinstance(body, runtime.Expr):
-                _reject_outer_region_value(context, body, match.node)
             escaping = context.values.get("escaping_names", frozenset())
+            params = match.captures.get("region_params", ())
+            args = match.captures.get("region_args", ())
             if escaping:
-                _rebind_through_region(context, mesh, escaping, frame, match.node)
+                _rebind_through_region(
+                    context, mesh, escaping, frame, match.node, params, args
+                )
             if body is not None:
-                return _scoped_region(mesh, body)
-            if not escaping:
-                raise ParseError.from_node(match.node, context, "mesh scope has no escaping values")
+                return _scoped_region(mesh, body, params, args)
             return None
         binding = runtime.Var(
             type=runtime.TensorType.scalar(runtime.DType.i64, storage=runtime.StorageKind.RMEM),
@@ -4596,12 +4639,22 @@ class FunctionPattern(ElementPattern):
         converter = context.function.converter
         if context.function.dialect == "hir":
             if body is not None and context.function.mesh is not None:
-                outer_mesh = _parser_infer_context(context).mesh_scope
+                outer_mesh = _parser_infer_context(context).current_mesh
                 if not isinstance(outer_mesh, runtime.Mesh):
                     raise ParseError.from_node(
                         match.node, context, "function mesh could not be resolved"
                     )
-                body = _scoped_region(outer_mesh, body)
+                region_params = tuple(
+                    runtime.Var(type=param.type, name=param.name)
+                    for param in params
+                )
+                body = runtime.BindingSubstitutionCloner().visit(
+                    body,
+                    {id(old): new for old, new in zip(params, region_params, strict=True)},
+                )
+                body = _scoped_region(
+                    outer_mesh, body, params=region_params, args=params
+                )
             declared_return = (
                 None if declared_return is None else canonicalize_dims(declared_return)
             )

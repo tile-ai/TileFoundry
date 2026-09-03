@@ -792,8 +792,8 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
     annotated_types = [
         line.split("  # ", 1)[1].split("; ", 1)[0] for line in lines if "  # Tensor[" in line
     ]
-    assert 'Tensor[(120, 64), "f32", (120 @ cta.tile, 64)]' in annotated_types
-    assert 'Tensor[(120, 64), "f32", (12 @ cta_2.tile, 10, 64)]' in annotated_types
+    assert 'Tensor[(120, 64), "f32", (120 @ cta_2.tile, 64)]' in annotated_types
+    assert 'Tensor[(120, 64), "f32", (12 @ cta_3.tile, 10, 64)]' in annotated_types
 
     rows = payload["calls"]
     assert len(rows) == 7
@@ -821,8 +821,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         annotated_meshes = set(re.findall(r"@ (\w+)\.", statement.split("  # ", 1)[1]))
         assert annotated_meshes <= hoisted
         placed_meshes = set(re.findall(r"mesh=(\w+),", statement))
-        if annotated_meshes and placed_meshes:
-            assert annotated_meshes == placed_meshes
+        assert placed_meshes <= hoisted
     assert len([line for line in lines if "; performance=" in line]) == len(timed)
     assert len({row["value"] for row in rows}) == len(rows)
     assert "units=" not in annotated
