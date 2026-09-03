@@ -16,16 +16,25 @@ from tilefoundry.ir.core.expr import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.mesh_scope import MeshScope as HirMeshScope
+from tilefoundry.ir.hir.sharding.reshard import Reshard as HirReshard
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope
-from tilefoundry.ir.types.shard.mesh import composed
+from tilefoundry.ir.types.shard.mesh import entered
+from tilefoundry.ir.types.shard.scope_match import covered_by_scope, storage_reaches
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TupleType, Type, UnitType
 from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.ir.visitor import ExprVisitor, ExprWalker, StmtVisitor
 
-from .contexts import Cost, CostContext, TypeInferContext, VerifyContext
+from .contexts import (
+    Cost,
+    CostContext,
+    TypeInferContext,
+    VerifyContext,
+    call_operand_context,
+)
 from .registries import (
     AnalysisRegistry,
     cost_evaluator_registry,
@@ -52,6 +61,9 @@ class TypeInferVisitor(ExprVisitor[Type]):
         self._owns_body = owns_body
 
     def visit(self, expr: Expr, ctx: TypeInferContext) -> Type:
+        """Clear inherited scope state when entering a Call's operand graph."""
+        if isinstance(expr, Call):
+            ctx = call_operand_context(ctx)
         outermost = self._visit_depth == 0
         if outermost:
             if self._memo_supplied:
@@ -75,6 +87,24 @@ class TypeInferVisitor(ExprVisitor[Type]):
 
     def visit_leaf_Call(self, call: Call, arg_types, ctx: TypeInferContext) -> Type:
         target = call.target
+        if ctx.mesh_scope is not None and not isinstance(target, HirReshard):
+            for index, arg_type in enumerate(arg_types):
+                layout = getattr(arg_type, "layout", None)
+                if not isinstance(layout, ShardLayout):
+                    continue
+                if not covered_by_scope(layout.mesh, ctx.mesh_scope):
+                    ctx.error(
+                        call,
+                        f"input {index} is laid out more finely than the scope it "
+                        "runs in; write it inside that scope, or reshard it back first",
+                    )
+                if not storage_reaches(arg_type.storage, layout.mesh, ctx.mesh_scope):
+                    ctx.error(
+                        call,
+                        f"input {index} is laid out more coarsely and kept in "
+                        f"{arg_type.storage.name.lower()}, which does not reach the units "
+                        "this runs on; reshard it to smem or gmem first",
+                    )
         if isinstance(target, Function):
             return self._call_function(call, target, arg_types, ctx)
         op_cls = type(target)
@@ -160,15 +190,14 @@ class TypeInferVisitor(ExprVisitor[Type]):
     def visit_MeshScope(self, expr: HirMeshScope, ctx: TypeInferContext) -> Type:
         """Type a region against the participants in force inside it.
 
-        Entering a scope composes it onto the chain in force, so the mesh the
-        body reads is the whole nesting rather than its innermost turn; composing
-        is also what refuses a nesting that says nothing new. That mesh goes down
-        on a child context, so the caller's own scope survives the recursion. The
-        region types as its body does: who runs the work is not a fact about the
-        shape of what it produced, and what one unit costs is cost's question.
+        Entering a scope composes it onto the mesh in force, so the body reads
+        the whole nesting. The resulting mesh goes down on a child context, so
+        the caller's own scope survives the recursion. The region types as its
+        body does: who runs the work is not a fact about the shape of what it
+        produced, and what one unit costs is cost's question.
         """
-        mesh = composed((ctx.mesh_scope, expr.mesh)) if ctx.mesh_scope else expr.mesh
-        return self.visit(expr.body, replace(ctx, mesh_scope=mesh))
+        mesh = entered(ctx.inherited, expr.mesh)
+        return self.visit(expr.body, replace(ctx, mesh_scope=mesh, inherited=mesh))
 
     def visit_leaf_ShapeOf(
         self, shape_of: ShapeOf, _operands, ctx: TypeInferContext

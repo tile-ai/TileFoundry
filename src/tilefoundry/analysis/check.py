@@ -26,6 +26,7 @@ from tilefoundry.ir.core.module import (
 )
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.mesh_scope import MeshScope
 from tilefoundry.ir.hir.specialize import (
     SpecializationError,
     _record_complete_bindings,
@@ -428,6 +429,14 @@ class _AnalysisViewCloner(BindingSubstitutionCloner):
             return rebuilt
         metadata = (*_view_metadata(expr), BindingMetadata(self.owner._binding()))
         return replace(expr, args=new_args, metadata=metadata)
+
+    def visit_MeshScope(self, expr: MeshScope, ctx: Mapping[int, Expr]) -> MeshScope:
+        """Inline through a HIR execution region while preserving its boundary."""
+        return replace(
+            expr,
+            body=self.visit(expr.body, ctx),
+            metadata=_view_metadata(expr),
+        )
 
     def default_visit(self, expr: Expr, ctx: Mapping[int, Expr]) -> Expr:
         raise AnalysisError(f"cannot inline unsupported HIR node {type(expr).__name__}")

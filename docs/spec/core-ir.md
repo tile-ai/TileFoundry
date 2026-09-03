@@ -276,17 +276,6 @@ class BindingMetadata(IRMetadata):
 
     name: str
 
-class ExecutionDomainMetadata(IRMetadata):
-    """Describe the Mesh scopes an occurrence was authored inside.
-
-    Attributes:
-        scopes: attribute; Enclosing Mesh scopes, outermost first.
-    """
-
-    scopes: tuple["Mesh", ...] = ()
-
-    def at(self, level: str) -> "Mesh | None": ...
-
 class SourceSpanMetadata(IRMetadata):
     """Describe an authored source range.
 
@@ -318,16 +307,6 @@ class SourceSpanMetadata(IRMetadata):
     Its file, line, and start column identify the physical authored file position;
     the start column is one-based. `end_column`, when present, is the physical
     source-file offset using Python AST's exclusive-end convention.
-  - `ExecutionDomainMetadata` records the `with Mesh(...)` scopes a `Call` was
-    written inside, outermost first
-    ([parser §2.1](./parser.md#21-syntax)). `at(level)` returns the
-    innermost scope naming *level*, or `None` when none does. It states where
-    the work ran, which is not what the result's layout states -- a value laid
-    out across threads may have been produced by work one CTA did -- so the two
-    MUST NOT be derived from each other. A rebuild that binds a dimension MUST
-    restate these scopes at the bound extents, exactly as it restates types: a
-    concrete program whose own execution domain is still a range has no
-    positions to count.
 
 ```python
 class Expr:
@@ -391,7 +370,8 @@ field through the `tuple_get_item` Op (a regular registered Op; no
 dedicated `Expr` subclass).
 
 Dialect-specific `Expr` subclasses are owned by their dialect specs, not
-here: HIR owns `Function` and `GridRegionExpr` ([hir §1](./hir.md#1-hir-expr-constructs)),
+here: HIR owns `Function`, `GridRegionExpr`, and `MeshScope`
+([hir §1](./hir.md#1-hir-expr-constructs)),
 and TIR owns `SymbolRef` and other TIR-specific `Expr` constructs
 ([tir](./tir.md)).
 

@@ -183,8 +183,8 @@ class ComputeCostMetadata(IRMetadata):
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written, then multiply by the enclosing recomputation factor. For a Function Call, take the callee's summed `flops` and multiply by the call site's factor. | No |
-| `service` | For a primitive Call, take its cost evaluator's service counts -- the results it asks a machine for that are not floating point -- and multiply by the same factor. A Function Call takes the callee's summed `service`. | No |
+| `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written, then multiply by the enclosing recomputation factor and the number of positions in its execution scope. For a Function Call, take the callee's summed `flops` and multiply by the call site's factor. | No |
+| `service` | For a primitive Call, take its cost evaluator's service counts -- the results it asks a machine for that are not floating point -- and multiply by the same factor and execution-scope position count. A Function Call takes the callee's summed `service`. | No |
 | `service_per_unit` | The same evaluator over the same projected Types, multiplied by the same factor. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `flops_per_unit` | Use the same evaluator over Types projected through authored `Split`s at or coarser than the analysed level, then multiply by the same factor. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
 
@@ -862,15 +862,11 @@ utilization, traffic volume, and other execution effects that this family does n
 model.
 
 - constraints:
-  - A primitive Call is eligible for performance only when it was authored
-    inside a `Mesh` naming the selected topology level, recorded as
-    `ExecutionDomainMetadata` ([core-ir §2](./core-ir.md#2-expr)). That Mesh is
-    where the work ran. The layout its result carries says where that result's
-    bytes were put, which is a different question, so a result carrying no
-    `ShardLayout` at the selected level MUST NOT unplace the occurrence that
-    produced it. Where the result type does carry that level on every tensor
-    leaf, the two MUST name the same participant set: a result placed where the
-    work that made it never ran is a program this MUST refuse. An occurrence
+  - A primitive Call is eligible for performance when it is reachable in the
+    authored HIR. Its execution region is represented structurally by
+    `MeshScope`; the result layout remains an independent property. A result
+    carrying no `ShardLayout` MUST NOT unplace the occurrence that produced it.
+    An occurrence
     with no nonzero
     `flops_per_unit`, no nonzero `service_per_unit` and no nonzero
     `TrafficMetadata.per_unit` at `bandwidth_level` is structural to this
@@ -881,6 +877,12 @@ model.
     `TrafficMetadata` because of it -- structural here means nothing to time,
     not nothing done. It still carries its producers' precedence to its
     consumers. Inputs MUST NOT supply placement for an unplaced occurrence.
+  - The global total for an occurrence is its per-unit quantity multiplied by
+    the number of positions in the enclosing execution scope. This multiplier
+    counts copied or replicated work: an unsharded operation inside a scope is
+    performed independently by every position and therefore contributes once
+    per position to the total. The per-unit quantity already includes work
+    projected through finer levels.
   - The participant set MUST be the exact image of that Mesh's layout under
     [shard §5](./shard.md#5-mesh), not an extent inferred from a topology or an
     operand. A `Broadcast` shard attribute still names placement: attributes

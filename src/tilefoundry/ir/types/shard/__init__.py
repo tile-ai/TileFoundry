@@ -5,7 +5,18 @@ from __future__ import annotations
 from .int_tuple import IntTuple, flatten, product
 from .layout import ComposedLayout, Layout, LayoutBase
 from .layout_algebra import c_order_strides, prefix_product, try_c_order_strides
-from .mesh import Mesh, Topology, composed, level_axes, level_projection
+from .mesh import (
+    Mesh,
+    Topology,
+    check_topology,
+    composed,
+    entered,
+    layout_parts,
+    level_axes,
+    level_projection,
+    positions_at,
+)
+from .scope_match import covered_by_scope, storage_reaches
 from .shard_layout import (
     B,
     Broadcast,
@@ -32,9 +43,15 @@ __all__ = [
     "Layout",
     "ComposedLayout",
     "Topology",
+    "check_topology",
     "composed",
+    "entered",
+    "layout_parts",
     "level_axes",
     "level_projection",
+    "positions_at",
+    "covered_by_scope",
+    "storage_reaches",
     "Mesh",
     "make_mesh",
     "ShardAttr",

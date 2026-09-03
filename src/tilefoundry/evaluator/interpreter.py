@@ -23,6 +23,7 @@ from tilefoundry.ir.core import Call, Constant, Tuple, Var, describe_expr
 from tilefoundry.ir.core.pattern import locate_dim_var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.mesh_scope import MeshScope as HirMeshScope
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.ir.visitor import ExprVisitor
@@ -112,6 +113,10 @@ class EvaluatorVisitor(ExprVisitor):
 
     def __init__(self, *, memo=None) -> None:
         super().__init__(memo=memo)
+
+    def visit_MeshScope(self, scope: HirMeshScope, ctx: EvaluateContext) -> Value:
+        """Evaluate the scoped region body; its mesh is compile-time structure."""
+        return self.visit(scope.body, ctx)
 
     def visit_leaf_Var(self, var: Var, _operands, ctx: EvaluateContext) -> Value:
         raise EvalError(f"evaluator: unbound variable {var.name!r}")

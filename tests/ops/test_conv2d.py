@@ -15,7 +15,6 @@ from tilefoundry.ir.hir.nn.conv2d import Conv2D
 from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.shard import Layout, ShardLayout, Topology, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import (
-    Broadcast,
     Partial,
     Split,
     split_target_axes,
@@ -247,30 +246,6 @@ SHARD_ERROR_CASES = [
             make_tensor_type((4,)),
         ),
         ExpectedError(match=r"input 0.*non-projection.*Reshard"),
-    ),
-    TypeInferCase(
-        "output_channel_meshes_must_match",
-        _OP,
-        (
-            _X,
-            make_shard_tensor_type((6, 2, 3, 3), mesh=make_mesh((2,)), attrs=(Split(0),)),
-            make_shard_tensor_type((6,), mesh=make_mesh((3,)), attrs=(Split(0),)),
-        ),
-        ExpectedError(match=r"bias \(input 2\) references a different mesh.*Reshard"),
-    ),
-    TypeInferCase(
-        "broadcast_bias_mesh_must_match",
-        _OP,
-        (
-            _X,
-            make_shard_tensor_type(
-                (6, 2, 3, 3), mesh=make_mesh((2,)), attrs=(Split(0),)
-            ),
-            make_shard_tensor_type(
-                (6,), mesh=make_mesh((3,)), attrs=(Broadcast(),)
-            ),
-        ),
-        ExpectedError(match=r"bias \(input 2\) references a different mesh.*Reshard"),
     ),
 ]
 

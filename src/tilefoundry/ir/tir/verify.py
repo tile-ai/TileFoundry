@@ -9,7 +9,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Iterable
 
-from tilefoundry.ir.core import Expr, TypeInferContext, Var, VerifyError
+from tilefoundry.ir.core import Expr, Var, VerifyError
 from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import (
@@ -38,6 +38,7 @@ from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target import CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
 from tilefoundry.visitor_registry import verify_stmt_registry
+from tilefoundry.visitor_registry.contexts import VerifyContext
 
 from .dispatch import DispatchCall
 from .launch import Launch
@@ -63,7 +64,7 @@ _PRIM_FUNCTION = "[tir §1.3](docs/spec/tir.md#13-primfunction)"
 def verify_prim_function(fn: PrimFunction, *, module_fns: Iterable[PrimFunction] = ()) -> None:
     """Per [tir §1.3](docs/spec/tir.md#13-primfunction)'s rule list."""
     _check_param_homogeneity(fn)
-    ctx = TypeInferContext()
+    ctx = VerifyContext()
     scope: list[Mesh] = []
 
     module_fn_map: dict[str, tuple[PrimFunction, ...]] = {}
@@ -166,7 +167,7 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
                 if fn_verify is None:
                     raise VerifyError(f"no verify_stmt registered for Op {op_cls.__name__}")
 
-                ctx.mesh_scope = tuple(scope)
+                ctx.tir_mesh_scope = tuple(scope)
                 call = Call(type=UnitType(), target=op, args=stmt.args)
                 fn_verify(call, ctx)
 

@@ -11,12 +11,15 @@ from tilefoundry import func, module, prim_func
 from tilefoundry.dsl import Mesh, Tensor, tf
 from tilefoundry.ir.core import Call, Constant, Tuple, VerifyError
 from tilefoundry.ir.core.pattern import Tensor as TensorPattern
+from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.mesh_scope import MeshScope
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.concat import Concat
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.stack import Stack
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.parser import ParseError
@@ -278,10 +281,84 @@ def test_placement_at_and_matmul_at_coexist_in_one_function() -> None:
                 b_local = tf.reshard(b, (4, 3), "rmem")
                 return x_local @ b_local
 
-    body = PlacedMatMul.entry_function().body
+    scope = PlacedMatMul.entry_function().body
+    assert isinstance(scope, MeshScope)
+    body = scope.body
     assert isinstance(body, Call)
     assert isinstance(body.target, MatMul)
     assert any(isinstance(argument.target, Reshard) for argument in body.args)
+
+
+def test_value_less_mesh_scope_exposes_multiple_values_through_a_tuple() -> None:
+    """A value-less with exports only its live values through one region result."""
+
+    @module(
+        entry="multi_escape",
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 2),),
+    )
+    class MultiEscape:
+        @func
+        def multi_escape(x: Tensor[(2,), "f32"]):
+            with Mesh(("cta",), layout=(2,), names=("tile",)) as _mesh:
+                first = tf.relu(x)
+                second = tf.relu(first)
+            return tf.add(first, second)
+
+    body = MultiEscape.entry_function().body
+    assert isinstance(body, Call)
+    first, second = body.args
+    assert isinstance(first, Call) and isinstance(second, Call)
+    assert isinstance(first.target, TupleGetItem)
+    assert isinstance(second.target, TupleGetItem)
+    scope = first.args[0]
+    assert isinstance(scope, MeshScope)
+    assert isinstance(scope.body, Tuple)
+    assert len(scope.body.elements) == 2
+    assert first.target.index == 0
+    assert second.target.index == 1
+
+
+def test_valueful_mesh_scope_also_wraps_escaping_bindings() -> None:
+    """A with result and an escaping assignment keep both region edges."""
+
+    @module(
+        entry="valueful_escape",
+        target=CudaTarget("nvidia.h200_sxm"),
+        topologies=(Topology("cta", 2),),
+    )
+    class ValuefulEscape:
+        @func
+        def valueful_escape(x: Tensor[(2,), "f32"]):
+            with Mesh(("cta",), layout=(2,), names=("tile",)) as _mesh:
+                value = tf.relu(x)
+                for _index in tile(2, 1):  # noqa: F821
+                    value = tf.relu(value)
+            return tf.add(value, x)
+
+    body = ValuefulEscape.entry_function().body
+    assert isinstance(body, Call)
+    scoped = body.args[0]
+    assert isinstance(scoped, MeshScope)
+    assert isinstance(scoped.body, GridRegionExpr)
+    assert isinstance(scoped.body.body, Call)
+
+
+def test_mesh_binding_does_not_escape_its_with_scope() -> None:
+    """A mesh alias is removed with its lexical frame after the with body."""
+    with pytest.raises(ParseError, match="'mesh' is not an active Mesh"):
+
+        @module(
+            entry="escaped_mesh",
+            target=CudaTarget("nvidia.h200_sxm"),
+            topologies=(Topology("cta", 2),),
+        )
+        class EscapedMesh:
+            @func
+            def escaped_mesh(x: Tensor[(2,), "f32"]):
+                with Mesh(("cta",), layout=(2,), names=("tile",)) as mesh:
+                    value = tf.relu(x)
+                return tf.reshard(value, (2 @ mesh.tile,), "gmem")
 
 
 @pytest.mark.parametrize(

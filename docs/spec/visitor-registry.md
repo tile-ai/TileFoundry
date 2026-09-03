@@ -181,7 +181,7 @@ class TypeInferContext:
     """Walk location and type-inference memo state."""
 
     scope: FunctionScope | None = None
-    mesh_scope: tuple = ()
+    mesh_scope: Mesh | None = None
     memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
     instantiated_memo: dict[tuple[int, tuple[Type, ...]], Type] = field(
         default_factory=dict, repr=False, compare=False
@@ -250,6 +250,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
     def visit_leaf_Call(self, call: Call, arg_types, ctx): ...
     def visit_leaf_Tuple(self, tup: Tuple, field_types, ctx): ...
     def visit_GridRegionExpr(self, grid, ctx): ...
+    def visit_MeshScope(self, scope, ctx): ...
     def visit_leaf_ShapeOf(self, shape_of: ShapeOf, operands, ctx) -> Type: ...
 
 def inference_type(expr: Expr, ctx: TypeInferContext | None = None) -> Type: ...
@@ -272,6 +273,9 @@ def inference_type(expr: Expr, ctx: TypeInferContext | None = None) -> Type: ...
     new visitor with induction and phi bindings before body/yields are visited
     ([hir §1.2](./hir.md#12-gridregionexpr)). It overrides the complete node
     visit; the base has no per-kind operand hook.
+  - `visit_MeshScope` composes the region mesh with the enclosing HIR
+    `mesh_scope`, checks the resulting topology, and visits the body in a
+    replaced child context. The region result type is the body's type.
   - `visit_leaf_ShapeOf` returns the node's declared rank-0 i32 type.
   - `inference_type` creates a fresh non-owning visitor and returns the inferred
     type without writing it to `expr.type`; traversal-wide inference continues
@@ -372,23 +376,25 @@ def register_access_relation(op_cls: type): ...
 
 ## 5. Instance 2 — `verify`
 
-Context (extends `TypeInferContext` with the active mesh stack):
+Context (extends `TypeInferContext` with the TIR traversal scope cache):
 
 ```python
 @dataclass
 class VerifyContext(TypeInferContext):   # inherits scope / mesh_scope / child_for
-    """Type inference context extended with the active mesh stack.
+    """TIR verification context with its statement-walk scope cache.
 
     Attributes:
-        mesh_stack: attribute; active mesh-scope stack maintained during the
-            verification walk.
+        tir_mesh_scope: attribute; active TIR mesh-scope tuple maintained during
+            the verification walk.
     """
 
-    mesh_stack: list = field(default_factory=list)
+    tir_mesh_scope: tuple = ()
 ```
 
 - constraints:
-  - adds a mesh-scope stack for verification traversal.
+  - `mesh_scope` is the HIR execution region used by type inference and is a
+    single composed `Mesh | None` value. TIR verification uses the independent
+    `tir_mesh_scope` tuple as a traversal cache; it MUST NOT write the HIR field.
 
 Registry + decorator:
 
@@ -431,7 +437,7 @@ Visitor:
 class VerifyVisitor(StmtVisitor[None]):
     def __init__(self, ctx: VerifyContext, registry: AnalysisRegistry = verify_stmt_registry): ...   # ctx + injected verify registry
     def generic_visit(self, stmt: Stmt) -> None: ...   # try the registry, fall back to base recursion on a miss
-    def visit_MeshScope(self, stmt): ...               # push/pop the mesh-scope stack around recursion
+    def visit_MeshScope(self, stmt): ...               # push/pop tir_mesh_scope around recursion
 ```
 
 - constraints:

@@ -783,7 +783,12 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
     hoisted = {
         line.split(" = ", 1)[0] for line in lines if " = Mesh((Topology(" in line
     }
-    assert hoisted == {"cta", "cta_2"}
+    scoped = {
+        line.lstrip().split()[1]
+        for line in lines
+        if line.lstrip().startswith("with ")
+    }
+    assert hoisted == {"cta", "cta_2"} | scoped
     annotated_types = [
         line.split("  # ", 1)[1].split("; ", 1)[0] for line in lines if "  # Tensor[" in line
     ]

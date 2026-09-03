@@ -424,7 +424,7 @@ print(report.partition("\n\n")[0].rstrip())
 ```text
 # analysis target=nvidia.h200_sxm module=Stage2_Sharded function=gqa_decode topology=cta
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
-# compute-cost flops=bf16:328896@328672,f32:2833728@354216 service=special:14528@1816
+# compute-cost flops=bf16:2629376@328672,f32:2833728@354216 service=special:14528@1816
 # traffic traffic=gmem:r5563796/w3721856@r3936212/w3721408,smem:r9597248/w9480000@r1199656/w1185000
 # peak-footprint=gmem:3701260,smem:472160
 # roofline ideal-ns=1935 bound-by=memory
@@ -579,7 +579,7 @@ for line in report.splitlines():
 ```
 
 ```text
-# compute-cost flops=bf16:328896@328672,f32:200448@25056 service=special:1024@128
+# compute-cost flops=bf16:2629376@328672,f32:200448@25056 service=special:1024@128
 # traffic traffic=gmem:r1674644/w264832@r1559508/w264384,smem:r684608/w675392@r85576/w84424
 # peak-footprint=gmem:1540620,smem:33280
 # roofline ideal-ns=405 bound-by=memory
@@ -726,12 +726,12 @@ print(next(line.rstrip() for line in annotated.splitlines() if "cache_update(k_c
 ```text
 # analysis target=nvidia.h200_sxm module=Stage3_Fused function=gqa_decode topology=cta
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
-# compute-cost flops=bf16:328896@328672,f32:3239808@200592 service=integer:9@9,special:33056@1036
-# traffic traffic=gmem:r3476916/w4196992@r2558940/w4196544,rmem:r656/w104@r656/w80,smem:r5839296/w5662784@r682464/w672676
+# compute-cost flops=bf16:10517504@328672,f32:6418944@200592 service=integer:288@9,special:33152@1036
+# traffic traffic=gmem:r3476884/w4196992@r2558932/w4196544,rmem:r656/w72@r656/w72,smem:r5839296/w5662784@r682464/w672676
 # peak-footprint=gmem:5046796,rmem:16,smem:33408
 # roofline ideal-ns=1599 bound-by=memory
 
-        v17 = cache_update(k_cache, cur_pos, write_len, v16)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; traffic traffic=gmem:r136/w128@r136/w128 operands=0:r0/w0,1:r4/w0,2:r4/w0,3:r128/w0,result:r0/w128; roofline ideal-ns=1 bound-by=memory
+            v17 = cache_update(k_cache, cur_pos, write_len, v16)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; traffic traffic=gmem:r136/w128@r136/w128 operands=0:r0/w0,1:r4/w0,2:r4/w0,3:r128/w0,result:r0/w128; roofline ideal-ns=1 bound-by=memory
 ```
 
 The embedded `Stage3_Fused` program is the split-K example for this page.
@@ -863,22 +863,22 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 ```text
 # analysis target=nvidia.h200_sxm module=Stage4_WeightPrepared function=gqa_decode topology=cta
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
-# compute-cost flops=bf16:328896@42176,f32:6390528@6390528 service=special:32768@32768
+# compute-cost flops=bf16:337408@42176,f32:51124224@6390528 service=special:262144@32768
 # traffic traffic=gmem:r28254676/w25566912@r27967956/w25565792,smem:r331008/w329984@r43168/w42144
 # peak-footprint=gmem:10945036,smem:16960
 # roofline ideal-ns=11213 bound-by=memory
 
-    v1 = reshard(w_q, layout=ShardLayout(
-            layout=Layout((1, 256, 8, 32), None),
-            attrs=(S(2),),
-            mesh=cta,
-        ), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ cta.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; traffic traffic=gmem:r131072/w0@r16384/w0,smem:r0/w131072@r0/w16384 operands=0:r131072/w0,result:r0/w131072; roofline ideal-ns=28 bound-by=memory
+        v1 = reshard(w_q, layout=ShardLayout(
+                layout=Layout((1, 256, 8, 32), None),
+                attrs=(S(2),),
+                mesh=cta,
+            ), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ cta.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; traffic traffic=gmem:r131072/w0@r16384/w0,smem:r0/w131072@r0/w16384 operands=0:r131072/w0,result:r0/w131072; roofline ideal-ns=28 bound-by=memory
 
-    v42 = reshard(w_o, layout=ShardLayout(
-            layout=Layout((1, 256, 8, 32), None),
-            attrs=(S(2),),
-            mesh=cta,
-        ), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ cta.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; traffic traffic=gmem:r131072/w0@r16384/w0,smem:r0/w131072@r0/w16384 operands=0:r131072/w0,result:r0/w131072; roofline ideal-ns=28 bound-by=memory
+        v42 = reshard(w_o, layout=ShardLayout(
+                layout=Layout((1, 256, 8, 32), None),
+                attrs=(S(2),),
+                mesh=cta,
+            ), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ cta.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; traffic traffic=gmem:r131072/w0@r16384/w0,smem:r0/w131072@r0/w16384 operands=0:r131072/w0,result:r0/w131072; roofline ideal-ns=28 bound-by=memory
 ```
 
 ## 6. Stream the KV cache
@@ -1021,13 +1021,13 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 ```text
 # analysis target=nvidia.h200_sxm module=Stage5_CachePrepared function=gqa_decode topology=cta
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
-# compute-cost flops=bf16:328896@328672,f32:6410280@801285 service=integer:32@32,special:33040@4130
+# compute-cost flops=bf16:2629376@328672,f32:6410280@801285 service=integer:256@32,special:33040@4130
 # traffic traffic=gmem:r7672476/w4198272@r4001116/w4197824,rmem:r2560/w0@r2560/w0,smem:r21788704/w21486432@r2723588/w2685804
 # peak-footprint=gmem:2949772,rmem:0,smem:33536
 # roofline ideal-ns=2474 bound-by=memory
 
-        v16 = slice(k_cache, (0, v15, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost; traffic traffic=rmem:r32/w0@r32/w0 operands=0:r0/w0,1:r32/w0,result:r0/w0; roofline
-    v42 = cache_update(k_cache, cur_pos, write_len, v41)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; traffic traffic=gmem:r136/w128@r136/w128 operands=0:r0/w0,1:r4/w0,2:r4/w0,3:r128/w0,result:r0/w128; roofline ideal-ns=1 bound-by=memory
+            v16 = slice(k_cache, (0, v15, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost; traffic traffic=rmem:r32/w0@r32/w0 operands=0:r0/w0,1:r32/w0,result:r0/w0; roofline
+        v42 = cache_update(k_cache, cur_pos, write_len, v41)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; traffic traffic=gmem:r136/w128@r136/w128 operands=0:r0/w0,1:r4/w0,2:r4/w0,3:r128/w0,result:r0/w128; roofline ideal-ns=1 bound-by=memory
 ```
 
 ```text

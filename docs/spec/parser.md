@@ -212,6 +212,16 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 ```
 <!-- parser-grammar:end -->
 
+Mesh declarations are values. `Mesh(...)` constructs the compile-time domain
+object used by layout sugar and by a `MeshScope`; it is not itself a runtime
+expression in the HIR value graph. A `with Mesh(...)` statement uses that value
+to delimit an execution domain and does not describe the placement of its
+result. An `as name` binding is lexical: it is available inside the `with`
+body and expires when the statement ends. When a body binds names that are read
+after the `with`, each escaping name is rebound to the enclosing `MeshScope`
+result (a tuple region with `TupleGetItem` projections when several names
+escape); names used only inside the body remain local to the scope.
+
 ### 2.2 Rules
 
 <!-- parser-constraints:start -->

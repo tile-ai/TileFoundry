@@ -38,7 +38,9 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
+from tilefoundry.ir.hir.mesh_scope import MeshScope as HirMeshScope
 from tilefoundry.ir.hir.sharding.local import Local
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.specialize import DISPLAY_NAME
 from tilefoundry.ir.hir.tensor.arange import Arange
@@ -69,6 +71,7 @@ from tilefoundry.ir.types.shard import (
     c_order_strides,
     canonical_shard_layout,
     composed,
+    entered,
 )
 from tilefoundry.ir.types.shard.layout import LayoutBase
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
@@ -242,6 +245,8 @@ runtime = SimpleNamespace(
     Local=Local,
     LetStmt=LetStmt,
     MeshScope=MeshScope,
+    HirMeshScope=HirMeshScope,
+    MeshCoord=MeshCoord,
     Mesh=Mesh,
     Module=Module,
     OpSchema=OpSchema,
@@ -268,6 +273,7 @@ runtime = SimpleNamespace(
     c_order_strides=c_order_strides,
     canonical_shard_layout=canonical_shard_layout,
     composed=composed,
+    entered=entered,
     dim_expr=dim_expr,
     normalize_dim=normalize_dim,
     slice_size=slice_size,
@@ -845,7 +851,7 @@ class ParserChildModuleResolver:
 
 @dataclass
 class ParserTypeInferContext(TypeInferContext):
-    """Type inference state with parser-local child-module resolution."""
+    """Type inference state bound alongside names in parser lexical frames."""
 
     child_resolver: ParserChildModuleResolver | None = None
 
@@ -853,6 +859,7 @@ class ParserTypeInferContext(TypeInferContext):
         if self.child_resolver is not None:
             return self.child_resolver.child_for(callee)
         return super().child_for(callee)
+
 
 @dataclass(frozen=True)
 class ModuleFunctionValidationRule:
@@ -1219,10 +1226,7 @@ class MatchContext:
             if function.module_scope is not None
             else None
         )
-        scope.define(
-            _TYPE_INFER_CONTEXT,
-            ParserTypeInferContext(child_resolver=provider),
-        )
+        resolved_mesh = None
         context = cls(
             function=function,
             module=None,
@@ -1232,22 +1236,18 @@ class MatchContext:
             values=function.hardware_context,
         )
         if function.mesh is not None:
-            try:
-                topologies = _resolve_mesh_topologies(
-                    function.mesh.topologies, function.topologies
-                )
-            except KeyError as error:
-                raise ParseError.from_node(
-                    ast.Name(id=error.args[0]),
-                    context,
-                    f"topology {error.args[0]!r} not declared by @module",
-                ) from error
-            except TypeError as error:
-                raise ParseError.from_node(
-                    ast.Name(id="mesh"), context, str(error)
-                ) from error
-            mesh = dataclasses.replace(function.mesh, topologies=topologies)
-            scope.define("mesh", mesh)
+            topologies = _resolve_mesh_topologies_at(
+                function.mesh.topologies,
+                function.topologies,
+                ast.Name(id="mesh"),
+                context,
+            )
+            resolved_mesh = dataclasses.replace(function.mesh, topologies=topologies)
+            scope.define("mesh", resolved_mesh)
+        scope.define(
+            _TYPE_INFER_CONTEXT,
+            ParserTypeInferContext(child_resolver=provider, mesh_scope=resolved_mesh),
+        )
         return context
 
     def child(
@@ -1382,6 +1382,20 @@ class ParseError(VerifyError):
         cls, node: ast.AST, context: MatchContext, detail: str | None = None
     ) -> ParseError:
         return cls(node=node, context=context, detail=detail)
+
+
+def _resolve_mesh_topologies_at(topologies, declared, node, context):
+    """Resolve mesh levels and anchor declaration errors to *node*."""
+    try:
+        return _resolve_mesh_topologies(topologies, declared)
+    except KeyError as error:
+        raise ParseError.from_node(
+            node,
+            context,
+            f"topology {error.args[0]!r} not declared by @module",
+        ) from error
+    except TypeError as error:
+        raise ParseError.from_node(node, context, str(error)) from error
 
 
 def _unclaimed_detail(node: ast.AST) -> str | None:

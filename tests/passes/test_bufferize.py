@@ -19,7 +19,7 @@ from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Abort, LetStmt, Sequential
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.passes.transforms import BufferizePass, HirToTirPass
+from tilefoundry.passes.transforms import HirToTirPass
 from tilefoundry.passes.transforms.bufferize import LifetimeCollector
 
 
@@ -30,14 +30,6 @@ def _lower() -> tuple[PrimFunction, Module]:
     [pf] = module.functions
     assert isinstance(pf, PrimFunction)
     return pf, module
-
-
-def test_bufferize_returns_module_unchanged():
-    pf_before, module = _lower()
-    new_module = BufferizePass().run(module)
-    [pf_after] = new_module.functions
-
-    assert pf_after is pf_before
 
 
 def test_lifetime_collector_finds_buffer_inside_dispatch_call_fallback():

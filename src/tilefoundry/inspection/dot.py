@@ -42,7 +42,8 @@ def hir_function_to_dot(fn: HirFunction) -> str:
     Returns:
         A Graphviz DOT format string.
     """
-    mesh_map = _mesh_name_map(_collect_meshes(fn, include_node_types=True))
+    type_meshes, scope_meshes = _collect_meshes(fn, include_node_types=True)
+    mesh_map = _mesh_name_map({**type_meshes, **scope_meshes})
     lines = [f"digraph {fn.name} {{", '  rankdir=TB;',
              '  node [shape=box, style=filled, fillcolor="#f0f0f0"];',
              '  edge [fontsize=10, fontcolor="#555555"];', '']

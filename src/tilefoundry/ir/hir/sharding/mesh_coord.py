@@ -10,6 +10,7 @@ from tilefoundry.ir.core.pattern import Scalar
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.mesh import Mesh
+from tilefoundry.ir.types.shard.scope_match import covered_by_scope
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -40,6 +41,8 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     """A coordinate is one number about this unit, so it carries no placement."""
     if not isinstance(call.target.mesh, Mesh):
         ctx.error(call, "MeshCoord.mesh must be a Mesh")
+    if ctx.mesh_scope is None or not covered_by_scope(call.target.mesh, ctx.mesh_scope):
+        ctx.error(call, "MeshCoord.mesh must be bound by the current mesh scope")
     if not call.args:
         ctx.error(call, "missing required input 'axis'")
     return TensorType(shape=(), dtype=DType.i64, layout=None, storage=StorageKind.RMEM)

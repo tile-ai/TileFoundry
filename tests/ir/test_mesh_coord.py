@@ -10,7 +10,7 @@ from tilefoundry.ir.core import Call, Constant
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.mesh import Mesh, Topology
+from tilefoundry.ir.types.shard.mesh import Mesh, Topology, composed
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import CostContext, TypeInferContext
 from tilefoundry.visitor_registry.visitors import CostEvaluator, TypeInferVisitor
@@ -24,18 +24,36 @@ def _coord(mesh: Mesh = _MESH) -> Call:
     return Call(type=_INDEX, target=MeshCoord(mesh=mesh), args=(axis,))
 
 
-def test_a_coordinate_is_one_number_and_carries_no_placement() -> None:
+def test_a_bound_coordinate_is_one_number_and_carries_no_placement() -> None:
     """It says which unit this is, which is not a piece of anybody's data.
 
     A ShardLayout would claim the answer is spread over the participants, when
     each of them holds the whole of its own.
     """
-    inferred = TypeInferVisitor().visit(_coord(), TypeInferContext())
+    inferred = TypeInferVisitor().visit(
+        _coord(), TypeInferContext(mesh_scope=_MESH)
+    )
 
     assert inferred.shape == ()
     assert inferred.dtype == DType.i64
     assert inferred.layout is None
     assert inferred.storage is StorageKind.RMEM
+
+
+def test_an_unbound_coordinate_is_rejected() -> None:
+    with pytest.raises(ValueError, match="must be bound by the current mesh scope"):
+        TypeInferVisitor().visit(_coord(), TypeInferContext())
+
+
+def test_an_inner_level_coordinate_is_bound_by_a_multilevel_scope() -> None:
+    cta = Mesh((Topology("cta", 2),), Layout((2,), (1,)), ("c",))
+    current = composed((cta, _MESH))
+
+    inferred = TypeInferVisitor().visit(
+        _coord(), TypeInferContext(mesh_scope=current)
+    )
+
+    assert inferred == _INDEX
 
 
 def test_asking_which_unit_this_is_costs_nothing() -> None:

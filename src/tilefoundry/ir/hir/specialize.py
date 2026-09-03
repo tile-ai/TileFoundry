@@ -16,16 +16,19 @@ from collections.abc import Mapping
 from tilefoundry.ir.core import Call, Constant, Expr, Op, Tuple, Var
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.mesh_scope import MeshScope as HirMeshScope
 from tilefoundry.ir.types.dim import is_dim_expr
+from tilefoundry.ir.types.shard.mesh import entered
 from tilefoundry.ir.types.substitute import (
     dim_vars_by_name,
     has_symbolic_dims,
     substitute_dims,
+    substitute_mesh_dims,
     substitute_shape_dim,
 )
 from tilefoundry.ir.types.tensor_type import TensorType, Type
 from tilefoundry.ir.visitor import ExprCloner, ExprVisitor, ExprWalker
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import TypeInferContext, call_operand_context
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 from .function import Function
@@ -215,8 +218,28 @@ class DimensionInstantiator(ExprCloner):
     def visit_Constant(self, const: Constant, ctx: InstantiateContext) -> Expr:
         return const
 
+    def visit_MeshScope(self, expr: HirMeshScope, ctx: InstantiateContext) -> Expr:
+        """Instantiate a region body under the participants that enclose it."""
+        mesh = substitute_mesh_dims(expr.mesh, ctx.dims)
+        mesh_scope = entered(ctx.type_ctx.inherited, mesh)
+        body_ctx = dataclasses.replace(
+            ctx,
+            type_ctx=dataclasses.replace(
+                ctx.type_ctx,
+                mesh_scope=mesh_scope,
+                inherited=mesh_scope,
+            ),
+        )
+        body = self.visit(expr.body, body_ctx)
+        if mesh == expr.mesh and body is expr.body:
+            return expr
+        return self._retyped(dataclasses.replace(expr, mesh=mesh, body=body), ctx)
+
     def visit_Call(self, call: Call, ctx: InstantiateContext) -> Expr:
-        new_args = tuple(self.visit(arg, ctx) for arg in call.args)
+        operand_ctx = dataclasses.replace(
+            ctx, type_ctx=call_operand_context(ctx.type_ctx)
+        )
+        new_args = tuple(self.visit(arg, operand_ctx) for arg in call.args)
         new_target = call.target
         if isinstance(new_target, Function):
             new_target = _specialize_callee(
@@ -604,6 +627,9 @@ class _SymbolicDimVisitor(ExprVisitor[bool]):
         return self._expr_has_symbolic(expr) or self._children_have_symbolic(expr, ctx)
 
     def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx=None) -> bool:
+        return self._expr_has_symbolic(expr) or self._children_have_symbolic(expr, ctx)
+
+    def visit_MeshScope(self, expr: HirMeshScope, ctx=None) -> bool:
         return self._expr_has_symbolic(expr) or self._children_have_symbolic(expr, ctx)
 
     def visit_Function(self, expr: Function, ctx=None) -> bool:

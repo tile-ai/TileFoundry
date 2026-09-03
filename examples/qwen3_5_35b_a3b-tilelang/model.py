@@ -778,9 +778,12 @@ def build(config):
             token_ids: Tensor[(1,), "i64"],
         ) -> Tensor[(1, S, config.hidden), config.dt]:
             # HF `Qwen3_5MoeModel.embed_tokens`: the decoded token's own row.
-            return tf.reshape(
-                tf.index_select(table, token_ids, dim=0),
-                new_shape=(1, S, config.hidden),
+            return tf.cast(
+                tf.reshape(
+                    tf.index_select(table, token_ids, dim=0),
+                    new_shape=(1, S, config.hidden),
+                ),
+                dtype=config.dt,
             )
 
         @func

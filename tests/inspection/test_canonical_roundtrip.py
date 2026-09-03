@@ -7,6 +7,7 @@ from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.mesh_scope import MeshScope
 from tilefoundry.ir.types import TensorType
 
 
@@ -25,6 +26,12 @@ def _structural_equal(a, b) -> bool:
         return a.name == b.name and _structural_equal(a.type, b.type)
     if isinstance(a, Constant):
         return a.value == b.value
+    if isinstance(a, MeshScope):
+        return (
+            _attr_equal(a.mesh, b.mesh)
+            and _structural_equal(a.body, b.body)
+            and _structural_equal(a.type, b.type)
+        )
     if isinstance(a, Call):
         if type(a.target) is not type(b.target) or len(a.args) != len(b.args):
             return False

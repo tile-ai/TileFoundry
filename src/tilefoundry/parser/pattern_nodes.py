@@ -36,6 +36,7 @@ from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Broadcast, Layout, Partial, Split
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.utils import types_compatible
+from tilefoundry.ir.visitor import expr_children
 
 from .ast_pattern import (
     _BINARY_OPERATORS,
@@ -66,6 +67,7 @@ from .ast_pattern import (
     MatchFailure,
     OptionalPattern,
     ParseError,
+    ParserTypeInferContext,
     PatternFailure,
     PlacedShapeRule,
     PredicatePattern,
@@ -79,6 +81,7 @@ from .ast_pattern import (
     TensorPositionRule,
     _constant,
     _infer_call,
+    _resolve_mesh_topologies_at,
     _resolve_reference,
     _slice_size,
     attach_authored_metadata,
@@ -642,6 +645,14 @@ class PlacedLayoutPattern(ElementPattern):
                 raise ParseError.from_node(
                     match.node, context, "placement references an inactive Mesh"
                 )
+        levels = [topology.name for mesh in meshes for topology in mesh.topologies]
+        if len(levels) != len(set(levels)):
+            duplicates = sorted(name for name in set(levels) if levels.count(name) > 1)
+            raise ParseError.from_node(
+                match.node,
+                context,
+                f"a layout can split one level once; two of these meshes name {duplicates}",
+            )
         mesh = meshes[0] if len(meshes) == 1 else runtime.composed(meshes)
         source_offsets: dict[int, int] = {}
         offset = 0
@@ -3034,29 +3045,8 @@ class MeshCoordinatePattern(ElementPattern):
         cached = context.function.state.mesh_coordinates.get(cache_key)
         if cached is not None:
             return cached
-        vector_type = runtime.TensorType(
-            shape=(extent,),
-            dtype=runtime.DType.i64,
-            layout=None,
-            storage=runtime.StorageKind.GMEM,
-        )
-        vector = _infer_call(runtime.Arange(type=vector_type), (), context)
-        attrs = tuple(
-            runtime.Split(axis=0) if mesh_axis == axis else runtime.Broadcast()
-            for mesh_axis in range(len(mesh.layout.shape))
-        )
-        layout = runtime.ShardLayout(
-            layout=runtime.Layout(shape=(extent,), strides=(1,)),
-            attrs=attrs,
-            mesh=mesh,
-        )
-        placed = _infer_call(
-            runtime.Reshard(layout=layout, storage=runtime.StorageKind.RMEM),
-            (vector,),
-            context,
-        )
-        local = _infer_call(runtime.Local(), (placed,), context)
-        coordinate = _infer_call(runtime.Reshape(new_shape=()), (local,), context)
+        index = _constant(axis)
+        coordinate = _infer_call(runtime.MeshCoord(mesh=mesh), (index,), context)
         context.function.state.mesh_coordinates[cache_key] = coordinate
         return coordinate
 
@@ -3220,9 +3210,9 @@ class MeshContextPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
+        if context.function is None:
+            raise ParseError.from_node(match.node, context, "Mesh requires function context")
         if match.branch_id == "mesh_context":
-            if context.function is None:
-                raise ParseError.from_node(match.node, context, "Mesh requires function context")
             topology_names = children["topology_names"]
             if not isinstance(topology_names, tuple):
                 raise ParseError.from_node(
@@ -3230,18 +3220,12 @@ class MeshContextPattern(ElementPattern):
                     context,
                     "Mesh topologies must be a tuple",
                 )
-            try:
-                topologies = runtime.resolve_mesh_topologies(
-                    topology_names, context.function.topologies
-                )
-            except KeyError as error:
-                raise ParseError.from_node(
-                    match.node,
-                    context,
-                    f"topology {error.args[0]!r} not declared by @module",
-                ) from error
-            except TypeError as error:
-                raise ParseError.from_node(match.node, context, str(error)) from error
+            topologies = _resolve_mesh_topologies_at(
+                topology_names,
+                context.function.topologies,
+                match.node,
+                context,
+            )
             names = children.get("names", ())
             try:
                 mesh = runtime.Mesh(
@@ -3251,25 +3235,174 @@ class MeshContextPattern(ElementPattern):
                 )
             except (TypeError, ValueError) as error:
                 raise ParseError.from_node(match.node, context, str(error)) from error
-            binding = context.values.get("mesh_binding")
-            if isinstance(binding, str):
-                context.lexical_scope.define(binding, mesh)
-            context.function.state.mesh_stack.append(mesh)
-            return mesh
         elif match.branch_id == "mesh_reference":
-            if context.function is None:
-                raise ParseError.from_node(match.node, context, "Mesh requires function context")
             mesh = children["value"]
             if not isinstance(mesh, runtime.Mesh):
                 raise ParseError.from_node(match.node, context, "with context is not Mesh")
-            binding = context.values.get("mesh_binding")
-            if isinstance(binding, str):
-                context.lexical_scope.define(binding, mesh)
-            context.function.state.mesh_stack.append(mesh)
-            return mesh
-        raise RuntimeError(f"no constructor branch for {match.branch_id!r}")
+        else:
+            raise RuntimeError(f"no constructor branch for {match.branch_id!r}")
+        binding = context.values.get("mesh_binding")
+        _enter_mesh_scope(context, mesh, match)
+        if isinstance(binding, str):
+            context.lexical_scope.define(binding, mesh)
+        context.function.state.mesh_stack.append(mesh)
+        return mesh
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+
+def _parser_infer_context(context):
+    """The one inference context every node of this function is built against."""
+    found = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
+    assert isinstance(found, ParserTypeInferContext)
+    return found
+
+
+def _directly_bound_names(statements):
+    """Return names assigned directly by a block's statements."""
+    names: set[str] = set()
+    for statement in statements:
+        if isinstance(statement, (ast.With, ast.For, ast.AsyncFor, ast.FunctionDef, ast.ClassDef)):
+            continue
+        if isinstance(statement, ast.Assign):
+            targets = statement.targets
+        elif isinstance(statement, (ast.AnnAssign, ast.AugAssign)):
+            targets = (statement.target,)
+        else:
+            continue
+        for target in targets:
+            names.update(
+                name.id
+                for name in ast.walk(target)
+                if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Store)
+            )
+    return frozenset(names)
+
+
+def _loaded_names(statements):
+    """Return names read in a sequence of following statements."""
+    return frozenset(
+        name.id
+        for statement in statements
+        for name in ast.walk(statement)
+        if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Load)
+    )
+
+
+def _block_escaping_names(statements):
+    """Return each with child's escaping bindings in one reverse block scan."""
+    read_after: set[str] = set()
+    escaping: dict[int, Mapping[str, object]] = {}
+    for index in range(len(statements) - 1, -1, -1):
+        statement = statements[index]
+        if isinstance(statement, ast.With):
+            escaping[index] = {
+                "escaping_names": frozenset(
+                    _directly_bound_names(statement.body) & read_after
+                )
+            }
+        read_after.update(_loaded_names((statement,)))
+    return escaping
+
+
+def _enter_mesh_scope(context, mesh, match):
+    """Record the scope a `with` opens, before its body is built.
+
+    Inference runs as each node is constructed, so the region node is not there
+    to be walked into when the body is typed -- the `with` says what is in force
+    on the way in and puts it back on the way out. The names already bound go
+    with it, so on the way out the new ones can be told from the old.
+    """
+    infer = _parser_infer_context(context)
+    try:
+        entered_mesh = runtime.entered(infer.mesh_scope, mesh)
+    except ValueError as error:
+        raise ParseError.from_node(match.node, context, str(error)) from error
+    context.lexical_scope.push_frame()
+    context.lexical_scope.define(
+        _TYPE_INFER_CONTEXT,
+        dataclasses.replace(infer, mesh_scope=entered_mesh),
+    )
+
+
+def _name_bound_to(scope, value):
+    """Return the active name bound to *value* by identity, if one exists."""
+    return next((name for name, bound in scope.items() if bound is value), None)
+
+
+def _reject_outer_region_value(context, value, node):
+    """Reject an outer region embedded without crossing an operation boundary."""
+
+    def visit(expr):
+        if isinstance(expr, runtime.Call):
+            return
+        if isinstance(expr, runtime.HirMeshScope):
+            if (rejected_name := _name_bound_to(context.lexical_scope, expr)) is not None:
+                raise ParseError.from_node(
+                    node,
+                    context,
+                    f"'{rejected_name}' re-binds a region value made outside this scope; "
+                    "consume it through an operation, or move the `with`",
+                )
+            return
+        for child in expr_children(expr):
+            visit(child)
+
+    visit(value)
+
+
+def _scoped_region(mesh, body):
+    """Build a type-transparent HIR mesh region."""
+    return runtime.HirMeshScope(mesh=mesh, body=body, type=body.type)
+
+
+def _bind_region_results(context, region, names, node):
+    """Bind one region directly or project each result from its tuple."""
+    if len(names) == 1:
+        context.lexical_scope.define(names[0], region)
+        return
+    for index, name in enumerate(names):
+        projection = _infer_call(runtime.TupleGetItem(index=index), (region,), context)
+        attach_authored_metadata(
+            projection,
+            node,
+            dataclasses.replace(context, binding_name=name),
+        )
+        context.lexical_scope.define(name, projection)
+
+
+def _rebind_through_region(context, mesh, names, frame, node):
+    """Point escaped names at a region result, whether or not it has a body value.
+
+    A region's computed values are named, and those names are how code after it
+    reads them. Rebinding each through the region is what keeps who-ran-this on
+    the graph instead of leaving it to be guessed from a layout.
+    """
+    values = [
+        (name, frame[name])
+        for name in frame
+        if name in names and isinstance(frame[name], runtime.Expr)
+    ]
+    for _name, value in values:
+        _reject_outer_region_value(context, value, node)
+    missing = set(names) - {name for name, _value in values}
+    if missing:
+        missing_names = ", ".join(sorted(missing))
+        raise ParseError.from_node(
+            node,
+            context,
+            f"mesh scope escaping values are not frame-local Expr bindings: {missing_names}",
+        )
+    if len(values) == 1:
+        scoped = _scoped_region(mesh, values[0][1])
+        _bind_region_results(context, scoped, [values[0][0]], node)
+        return
+    tuple_type = runtime.TupleType(fields=tuple(value.type for _name, value in values))
+    tuple_body = runtime.IrTuple(
+        type=tuple_type, elements=tuple(value for _name, value in values)
+    )
+    scoped = _scoped_region(mesh, tuple_body)
+    _bind_region_results(context, scoped, [name for name, _value in values], node)
 
 
 class WithPattern(ElementPattern):
@@ -3343,11 +3476,28 @@ class WithPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        if context.function is None or not context.function.state.mesh_stack:
+        if context.function is None:
+            raise ParseError.from_node(match.node, context, "`with` requires function context")
+        mesh = children["mesh"]
+        frame = context.lexical_scope.pop_frame()
+        frame.pop(match.captures["binding"], None)
+        if not context.function.state.mesh_stack:
             raise ParseError.from_node(match.node, context, "Mesh stack is unbalanced")
-        mesh = context.function.state.mesh_stack.pop()
+        active_mesh = context.function.state.mesh_stack.pop()
+        if active_mesh is not mesh:
+            raise ParseError.from_node(match.node, context, "Mesh stack is unbalanced")
         if context.function.dialect == "hir":
-            return children["body"]
+            body = children["body"]
+            if isinstance(body, runtime.Expr):
+                _reject_outer_region_value(context, body, match.node)
+            escaping = context.values.get("escaping_names", frozenset())
+            if escaping:
+                _rebind_through_region(context, mesh, escaping, frame, match.node)
+            if body is not None:
+                return _scoped_region(mesh, body)
+            if not escaping:
+                raise ParseError.from_node(match.node, context, "mesh scope has no escaping values")
+            return None
         binding = runtime.Var(
             type=runtime.TensorType.scalar(runtime.DType.i64, storage=runtime.StorageKind.RMEM),
             name=match.captures["binding"],
@@ -3850,17 +4000,7 @@ class ForPattern(ElementPattern):
             extent=frame.extent,
             step=frame.step,
         )
-        if len(frame.carry_names) == 1:
-            context.lexical_scope.define(frame.carry_names[0], grid)
-        else:
-            for index, name in enumerate(frame.carry_names):
-                projection = _infer_call(runtime.TupleGetItem(index=index), (grid,), context)
-                attach_authored_metadata(
-                    projection,
-                    match.node,
-                    dataclasses.replace(context, binding_name=name),
-                )
-                context.lexical_scope.define(name, projection)
+        _bind_region_results(context, grid, frame.carry_names, match.node)
         return grid
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
@@ -3939,6 +4079,26 @@ class TupleAssignmentPattern(ElementPattern):
         return value
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+
+def _resolved_mesh(value, match, context):
+    """Name the levels a Mesh written in a function body says it divides.
+
+    A Mesh is a value wherever it is written, so one bound in the body has to
+    arrive as complete as one a `with` opens: it names its levels by string, and
+    the module is what says which levels those are.
+    """
+    if not isinstance(value, runtime.Mesh) or context.function is None:
+        return value
+    if not any(isinstance(topology, str) for topology in value.topologies):
+        return value
+    topologies = _resolve_mesh_topologies_at(
+        value.topologies,
+        context.function.topologies,
+        match.node,
+        context,
+    )
+    return dataclasses.replace(value, topologies=topologies)
 
 
 class StatementPattern(ElementPattern):
@@ -4058,6 +4218,7 @@ class StatementPattern(ElementPattern):
             annotation = children.get("annotation")
             if value is None:
                 raise ParseError.from_node(match.node, context, "assignment requires a value")
+            value = _resolved_mesh(value, match, context)
             if context.function.dialect == "tir" and not isinstance(value, runtime.Expr):
                 context.lexical_scope.define(match.captures["name"], value)
                 return None
@@ -4123,39 +4284,62 @@ class StatementPattern(ElementPattern):
 class BlockPattern(ElementPattern):
     element_name = "block"
     syntax = LazyPattern(
-        lambda: BranchPattern(
-            "block",
-            AstNodePattern(
-                ast.Module,
-                CapturePattern(
-                    "pass_only",
-                    lambda node, context: (
-                        len(node.body) == 1 and isinstance(node.body[0], ast.Pass)
+        lambda: BindPattern(
+            BranchPattern(
+                "block",
+                AstNodePattern(
+                    ast.Module,
+                    CapturePattern(
+                        "pass_only",
+                        lambda node, context: (
+                            len(node.body) == 1 and isinstance(node.body[0], ast.Pass)
+                        ),
+                    ),
+                    CapturePattern(
+                        "terminal_children",
+                        lambda node, context: tuple(
+                            f"statement_{index}"
+                            for index, statement in enumerate(node.body)
+                            if isinstance(statement, (ast.Return, ast.With, ast.For))
+                        ),
+                    ),
+                    FieldPattern(
+                        "body",
+                        RepeatPattern(
+                            ChildPattern(
+                                "statement_{index}",
+                                StatementPattern(),
+                                "statement",
+                                "statement",
+                            ),
+                        ),
                     ),
                 ),
-                CapturePattern(
-                    "terminal_children",
-                    lambda node, context: tuple(
-                        f"statement_{index}"
-                        for index, statement in enumerate(node.body)
-                        if isinstance(statement, (ast.Return, ast.With, ast.For))
-                    ),
-                ),
-                FieldPattern(
-                    "body",
-                    RepeatPattern(
-                        ChildPattern(
-                            "statement_{index}",
-                            StatementPattern(),
-                            "statement",
-                            "statement",
-                        )
-                    ),
-                ),
+                pattern_id="function.block",
             ),
-            pattern_id="function.block",
+            BlockPattern._bind,
         )
     )
+
+    @staticmethod
+    def _bind(node, _context, matched):
+        assert isinstance(node, ast.Module)
+        escaping = _block_escaping_names(node.body)
+        child_values = {
+            f"statement_{index}": values for index, values in escaping.items()
+        }
+        return dataclasses.replace(
+            matched,
+            children=tuple(
+                dataclasses.replace(
+                    child,
+                    values={**child.values, **child_values[child.name]},
+                )
+                if child.name in child_values
+                else child
+                for child in matched.children
+            ),
+        )
 
     @staticmethod
     def construct(match, children, context):
@@ -4411,6 +4595,13 @@ class FunctionPattern(ElementPattern):
         specializations = context.function.specializations
         converter = context.function.converter
         if context.function.dialect == "hir":
+            if body is not None and context.function.mesh is not None:
+                outer_mesh = _parser_infer_context(context).mesh_scope
+                if not isinstance(outer_mesh, runtime.Mesh):
+                    raise ParseError.from_node(
+                        match.node, context, "function mesh could not be resolved"
+                    )
+                body = _scoped_region(outer_mesh, body)
             declared_return = (
                 None if declared_return is None else canonicalize_dims(declared_return)
             )

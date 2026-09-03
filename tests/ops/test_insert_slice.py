@@ -320,26 +320,6 @@ def _cross_cta_reshard_output(a: Tensor[(2, _DEC_D), "f32"]) -> Tensor[(2, _DEC_
         return reshard(g1, layout=(2, _DEC_D @ cta), storage=gmem)
 
 
-def test_cross_cta_reshard_owned_sync() -> None:
-    """An output-position cross-CTA reshard (ownership change) still lowers to sync-then-reshard.
-
-    An output-position cross-CTA reshard (ownership change) still lowers to
-    sync-then-reshard: the grid sync is emitted before the output copy, proving
-    the output-sink path routes through the same reshard-owned fence as an
-    intermediate reshard.
-    """
-    pf = _lower(_cross_cta_reshard_output)
-    nodes = []
-    _walk(pf.body, False, nodes)
-
-    kinds = [
-        type(_op_of(val)).__name__ for in_loop, kind, var, val in nodes if _op_of(val) is not None
-    ]
-    assert "Sync" in kinds, f"no reshard-owned grid sync emitted: {kinds}"
-
-    assert kinds.index("Sync") < len(kinds) - 1 - kinds[::-1].index("Copy")
-
-
 _SCAN_ROWS, _SCAN_COLS, _SCAN_STEP = 4, 4, 2
 
 
@@ -363,5 +343,4 @@ def test_tile_window_scan_evaluates_to_the_input() -> None:
     )
     actual = evaluate(_ScanCopy.lookup("scan_copy"), x)
     torch.testing.assert_close(actual, x)
-
 

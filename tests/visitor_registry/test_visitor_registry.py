@@ -127,7 +127,7 @@ def test_where_a_walk_reads_is_one_pair_and_nothing_else() -> None:
 
     for context in (TypeInferContext, VerifyContext, CostContext):
         declared = [field.name for field in fields(context)]
-        assert declared[:3] == ["scope", "mesh_scope", "memo"]
+        assert declared[:4] == ["scope", "mesh_scope", "inherited", "memo"]
         assert not any(
             hasattr(context, name)
             for name in ("module", "caller", "child_call", "child_call_owner")

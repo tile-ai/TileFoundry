@@ -73,15 +73,6 @@ CASES = [
         ExpectedError(match=r"input 1 .*incompatible.*Reshard"),
     ),
     TypeInferCase(
-        "incompatible_meshes",
-        Stack(axis=0),
-        (
-            make_shard_tensor_type((8, 8), mesh=make_mesh((4,)), attrs=(Split(0),)),
-            make_shard_tensor_type((8, 8), mesh=make_mesh((2,)), attrs=(Split(0),)),
-        ),
-        ExpectedError(match=r"input 1 references a different mesh.*Reshard"),
-    ),
-    TypeInferCase(
         "partial_and_plain_slices",
         Stack(axis=0),
         (

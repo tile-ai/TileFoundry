@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from ..storage import StorageKind, resolve_storage
 from .int_tuple import product
 from .layout import Layout
 from .layout_algebra import is_inverse_projectable, size
-from .mesh import Mesh
+from .mesh import Mesh, positions_at
 
 
 def _as_layout(mesh: Mesh) -> Layout:
@@ -33,4 +34,35 @@ def mesh_scope_matches_required_scope(current: Mesh, required: Mesh) -> bool:
     return cur_layout.shape == req_layout.shape and cur_layout.strides == req_layout.strides
 
 
-__all__ = ["mesh_scope_matches_required_scope", "states_consistent_positions"]
+def covered_by_scope(mesh: Mesh, current: Mesh) -> bool:
+    """Whether *mesh* names no finer positions than the enclosing scope."""
+    scope = {
+        topology.name: positions_at(current, topology.name)
+        for topology in current.topologies
+    }
+    return all(
+        topology.name in scope
+        and positions_at(mesh, topology.name) == scope[topology.name]
+        for topology in mesh.topologies
+    )
+
+
+def storage_reaches(storage, mesh: Mesh, current: Mesh) -> bool:
+    """Whether *storage* reaches across a coarser value-to-scope boundary."""
+    if current.topologies[-1].name in {
+        topology.name for topology in mesh.topologies
+    }:
+        return True
+    try:
+        storage = resolve_storage(storage)
+    except (TypeError, ValueError):
+        return False
+    return storage in {StorageKind.GMEM, StorageKind.SMEM}
+
+
+__all__ = [
+    "covered_by_scope",
+    "mesh_scope_matches_required_scope",
+    "states_consistent_positions",
+    "storage_reaches",
+]

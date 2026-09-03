@@ -15,7 +15,7 @@ import pytest
 import torch
 
 from tests.models.qwen3_1_7b import reference
-from tests.models.qwen3_1_7b.model import published
+from tests.models.qwen3_1_7b.model import Qwen3_1_7B_DecoderLayer, published
 
 MODEL = "qwen3_1_7b"
 CASES = contract.model_cases(MODEL)
@@ -225,14 +225,19 @@ def _holds(reported: int, derived: int, label: str) -> None:
 
 
 def test_the_mlp_costs_its_three_matrices(tf, shipped_source) -> None:
-    """Both MLP views include 75,497,472 flops of three matmuls."""
+    """The placed view counts replicated work once per CTA position."""
     source = shipped_source(MODEL)
     authored = _reported(tf, source, "mlp", None)
     placed = _reported(tf, source, "placed_mlp", None)
     authored_flops = authored["totals"]["flops"][DT]
     placed_flops = placed["totals"]["flops"][DT]
 
-    assert placed_flops == authored_flops
+    cta_positions = next(
+        topology.size
+        for topology in Qwen3_1_7B_DecoderLayer.effective_topologies()
+        if topology.name == "cta"
+    )
+    assert placed_flops == authored_flops * cta_positions
     _holds(authored_flops, _mlp_matmul_flops(), "mlp")
 
 
