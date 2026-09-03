@@ -7,8 +7,8 @@ implementation is source code, and either can be pointed at any command.
 ```text
   step one — describe it, until it agrees
 
-        ┌────────── fix the HIR ◄────────── not yet ──────────┐
-        ▼                                                     │
+        ┌────────── fix the HIR ◄────────── not yet ───────────┐
+        ▼                                                      │
    authored HIR ─────► check ─────► agrees? ───────────────────┘
    the reference                       │
         ▲                             yes
@@ -17,8 +17,8 @@ implementation is source code, and either can be pointed at any command.
 
   step two — make it fast; both roads lead back to the same source
 
-        ┌────── change the HIR ◄────── not yet ──────┐
-        ▼                                            │
+        ┌────── change the HIR ◄────── not yet ───────────────────┐
+        ▼                                                         │
    authored HIR ─────► analyze ─────► predicted performance ok? ──┘
         ▲                                     │
         │                                    yes
