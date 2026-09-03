@@ -25,6 +25,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     layout_axis_to_tensor_axis,
     shard_layout_of,
 )
+from tilefoundry.utils.isl_utils import as_multi_aff, equates, involved_dims
 from tilefoundry.visitor_registry.access_relation import boundary_maps
 
 
@@ -46,18 +47,6 @@ def partial_reductions_by_axis(
     )
 
 
-def _equal_axis(m: "isl.map", out_axis: int, in_dim: int) -> "isl.map":
-    """Every pair whose result axis *out_axis* is its domain dim *in_dim*."""
-    params = [
-        m.get_dim_name(isl.dim_type.PARAM, index)
-        for index in range(m.dim(isl.dim_type.PARAM))
-    ]
-    prefix = f"[{', '.join(params)}] -> " if params else ""
-    reads = ", ".join(f"i{index}" for index in range(m.dim(isl.dim_type.IN)))
-    writes = ", ".join(f"o{index}" for index in range(m.dim(isl.dim_type.OUT)))
-    return isl.map(f"{prefix}{{ [{reads}] -> [{writes}] : o{out_axis} = i{in_dim} }}")
-
-
 def _tracked_anyway(m: "isl.map", out_axis: int) -> "int | None":
     """Whether a constant-looking axis provably *is* its own domain dim.
 
@@ -69,7 +58,7 @@ def _tracked_anyway(m: "isl.map", out_axis: int) -> "int | None":
     """
     if out_axis >= m.dim(isl.dim_type.IN):
         return None
-    return out_axis if m.is_subset(_equal_axis(m, out_axis, out_axis)) else None
+    return out_axis if equates(m, out_axis, out_axis) else None
 
 
 def _result_access(
@@ -82,7 +71,7 @@ def _result_access(
     or the constant it equals, and a result axis has to be traced back to the
     dim it came from.
     """
-    ma = _single_affine_piece(m)
+    ma = as_multi_aff(m)
     n_in = ma.dim(isl.dim_type.IN)
     n_out = ma.dim(isl.dim_type.OUT)
     out: dict[int, tuple[str, int | None]] = {}
@@ -110,35 +99,6 @@ def _result_access(
         else:
             out[o] = ("complex", None)
     return out
-
-
-def _single_affine_piece(m: "isl.map") -> "isl.multi_aff":
-    """Return one affine access even when its iteration domain is restricted."""
-    pieces: list[isl.multi_aff] = []
-    m.as_pw_multi_aff().foreach_piece(lambda _domain, access: pieces.append(access))
-    if len(pieces) != 1:
-        raise ValueError(
-            f"shard propagation requires one affine access piece, got {len(pieces)}"
-        )
-    return pieces[0]
-
-
-def _involved_domain_dims(m: "isl.map") -> "set[int]":
-    """All domain (in) dims referenced by any result axis of *m*.
-
-    All domain (in) dims referenced by any result axis of *m* -- including
-    those that appear only inside a non-projection (complex) access.
-    """
-    ma = _single_affine_piece(m)
-    n_in = ma.dim(isl.dim_type.IN)
-    n_out = ma.dim(isl.dim_type.OUT)
-    dims: set[int] = set()
-    for o in range(n_out):
-        aff = ma.get_at(o)
-        for j in range(n_in):
-            if int(aff.get_coefficient_val(isl.dim_type.IN, j).num_si()) != 0:
-                dims.add(j)
-    return dims
 
 
 def _carrier_layout(
@@ -292,7 +252,7 @@ def derive_output_shard_layout(
     domain_to_out_axis = {
         d: o for o, (kind, d) in out_access.items() if kind == "proj"
     }
-    out_all_dims = _involved_domain_dims(output_map)
+    out_all_dims = involved_dims(output_map)
 
     attrs: list = [Broadcast() for _ in range(mesh_rank)]
     for i, sl in sharded:

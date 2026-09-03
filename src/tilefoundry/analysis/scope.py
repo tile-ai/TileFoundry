@@ -18,7 +18,7 @@ from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.ir.visitor import expr_children
-from tilefoundry.utils.isl_utils import card
+from tilefoundry.utils.isl_utils import cardinality
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     access_relation_registry,
@@ -95,8 +95,8 @@ class Scope:
                 result = 1 if step <= 0 or extent <= start else -(-(extent - start) // step)
                 self._trips_cache = result
                 return result
-        count = card(self.domain)
-        parent_count = card(self.parent.domain)
+        count = cardinality(self.domain)
+        parent_count = cardinality(self.parent.domain)
         if count is None or not parent_count:
             return 1
         result = max(1, count // parent_count)
@@ -123,7 +123,7 @@ class Scope:
         reached = access.relation.intersect_domain(standing).range()
         if reached.dim(isl.dim_type.PARAM):
             raise AnalysisError("scope access still has an unbound parameter")
-        amount = card(reached)
+        amount = cardinality(reached)
         if amount is None:
             raise AnalysisError("scope access has no finite one-pass extent")
         result = amount

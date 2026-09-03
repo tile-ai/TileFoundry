@@ -7,7 +7,7 @@ import math
 import isl
 
 from tilefoundry.ir.types import TensorType
-from tilefoundry.utils.isl_utils import card
+from tilefoundry.utils.isl_utils import cardinality
 from tilefoundry.visitor_registry.access_relation import index_set
 
 from .affine import LoopAffineTerm
@@ -51,7 +51,7 @@ def _widest_allowed(
         reach = access.intersect_params(
             isl.set(f"{space}{{ : {name} = {value} }}")
         ).range().intersect(box)
-        amount = card(reach)
+        amount = cardinality(reach)
         if amount is None:
             return None
         if best is None or amount > best[0]:
