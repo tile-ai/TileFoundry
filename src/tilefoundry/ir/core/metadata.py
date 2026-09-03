@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 
 
@@ -67,6 +69,43 @@ def diagnostic_location(expr: "Expr") -> str | None:
     return _span_text(expr) or binding_name(expr)
 
 
+def value_label(expr: "Expr") -> str | None:
+    """The name a report calls one value, stable across runs.
+
+    An authored line disambiguates two values that share a name, and points the
+    reader at what produced the row; a definition-order suffix can do neither.
+    A declaration carries no span and needs none: its own name is unique.
+    """
+    name = getattr(expr, "name", None) or binding_name(expr)
+    span = get_metadata(expr, SourceSpanMetadata)
+    if span is None:
+        return name
+    return f"{name}:{span.line}" if name else f"<value>:{span.line}"
+
+
+def value_labels(exprs: "Iterable[Expr]") -> list[str]:
+    """One label per expr, unique within the group and located where it can be.
+
+    Uniqueness is a property of the group, not of one value, so it is settled
+    here rather than in ``value_label``. A Call carries the printer's SSA name
+    and its authored line, which already separate them. Two values can still
+    collide: a loop's carried argument keeps its authored name and has no span,
+    so two loops accumulating into ``acc`` produce one label twice. Those take a
+    numeric suffix in definition order, the only thing left to tell them apart.
+    """
+    bases = [value_label(expr) or f"<value {index}>" for index, expr in enumerate(exprs)]
+    repeated = {base for base, count in Counter(bases).items() if count > 1}
+    seen: Counter[str] = Counter()
+    labels: list[str] = []
+    for base in bases:
+        if base not in repeated:
+            labels.append(base)
+            continue
+        seen[base] += 1
+        labels.append(base if seen[base] == 1 else f"{base}_{seen[base]}")
+    return labels
+
+
 def source_metadata(expr: "Expr") -> tuple[IRMetadata, ...]:
     """Copy only authored binding/span metadata from ``expr``."""
     return tuple(
@@ -109,6 +148,8 @@ __all__ = [
     "binding_name",
     "describe_expr",
     "diagnostic_location",
+    "value_label",
+    "value_labels",
     "attach_metadata",
     "detach_metadata",
     "get_metadata",

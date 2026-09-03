@@ -350,7 +350,7 @@ def test_a_program_whose_buffers_have_nowhere_to_sit_is_refused() -> None:
     split = next(function for function in tight.functions if function.name == "split")
     roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))
 
-    refusal = r"value 'v\d+' needs 211200 B in smem, which exceeds the 105600 B"
+    refusal = r"value 'v\d+:\d+' needs 211200 B in smem, which exceeds the 105600 B"
     with pytest.raises(AnalysisError, match=refusal):
         analyze(tight, split, analysis="memory")
     with pytest.raises(AnalysisError, match=refusal):

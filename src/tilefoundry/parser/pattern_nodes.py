@@ -67,6 +67,7 @@ from .ast_pattern import (
     OptionalPattern,
     ParseError,
     PatternFailure,
+    PlacedShapeRule,
     PredicatePattern,
     ReferencePattern,
     RepeatPattern,
@@ -484,6 +485,21 @@ class MeshAxisPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
+@dataclasses.dataclass(frozen=True)
+class PlacedLayout:
+    """A placement written as sugar: the shape the author wrote, and where it goes.
+
+    The two are separate answers and neither reproduces the other. ``shape`` is
+    the extent tuple as written, before any mesh axis divides it, which is what
+    a Tensor type states. ``layout`` is the placement that sugar implies, whose
+    own shape is the divided one. Reading a logical shape back off the layout
+    gives the divided shape instead, which is a different type.
+    """
+
+    shape: tuple
+    layout: object
+
+
 class PlacedLayoutPattern(ElementPattern):
     element_name = "placed_layout"
     syntax = LazyPattern(
@@ -747,22 +763,6 @@ class TensorOptionalSlotPattern(ElementPattern):
                 lambda node, context: context.role == "storage",
                 StoragePattern(),
             ),
-            ConditionPattern(
-                "role == layout_or_storage and value is layout",
-                lambda node, context: (
-                    context.role == "layout_or_storage"
-                    and TensorOptionalSlotPattern._slot_kind(node, context) == "layout"
-                ),
-                LayoutPattern(),
-            ),
-            ConditionPattern(
-                "role == layout_or_storage and value is storage",
-                lambda node, context: (
-                    context.role == "layout_or_storage"
-                    and TensorOptionalSlotPattern._slot_kind(node, context) == "storage"
-                ),
-                StoragePattern(),
-            ),
         )
     )
 
@@ -793,11 +793,52 @@ class TensorOptionalSlotPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
+def _states_a_layout_slot(elts: object, context: "MatchContext") -> bool:
+    """Whether an annotation's third slot states a layout rather than a storage.
+
+    Read before the sequence is matched, because a child is not parsed until the
+    branch is already chosen: two branches of the same arity would otherwise be
+    settled by their order alone. A slot nobody can classify is left to the
+    storage branch, whose own patterns report it.
+    """
+    if not isinstance(elts, (tuple, list)) or len(elts) < 3:
+        return False
+    try:
+        return TensorOptionalSlotPattern._slot_kind(elts[2], context) == "layout"
+    except ParseError:
+        return False
+
+
+class PlacedShapePattern(ElementPattern):
+    """Placement sugar read by a slot that states a shape rather than a layout.
+
+    Same syntax as `PlacedLayoutPattern`, different answer. That pattern serves
+    the layout slot, whose question is only where a value goes, so a layout is
+    the whole answer. A shape slot has no operand to read a shape from, and the
+    layout's own shape is the divided one, so it needs the extents as written
+    kept beside the layout instead of recovered from it.
+    """
+
+    element_name = "placed_shape"
+    syntax = LazyPattern(lambda: PlacedLayoutPattern().syntax)
+
+    @staticmethod
+    def construct(match, children, context):
+        layout = PlacedLayoutPattern.construct(match, children, context)
+        rank = match.captures["rank"]
+        return PlacedLayout(
+            shape=tuple(children[f"extent_{axis}"] for axis in range(rank)),
+            layout=layout,
+        )
+
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = (PlacedShapeRule(),)
+
+
 class TensorShapeLayoutPattern(ElementPattern):
     element_name = "tensor_shape_layout"
     syntax = LazyPattern(
         lambda: ChoicePattern(
-            PlacedLayoutPattern(),
+            PlacedShapePattern(),
             ShapePattern(),
         )
     )
@@ -850,24 +891,28 @@ class TensorPattern(ElementPattern):
                                         "dtype",
                                     ),
                                 ),
-                                SequencePattern(
-                                    ChildPattern(
-                                        "shape_or_layout",
-                                        lambda: TensorShapeLayoutPattern(),
-                                        "tensor_shape",
-                                        "tensor_shape_or_layout",
-                                    ),
-                                    ChildPattern(
-                                        "dtype",
-                                        lambda: DTypePattern(),
-                                        "tensor_dtype",
-                                        "dtype",
-                                    ),
-                                    ChildPattern(
-                                        "optional_0",
-                                        lambda: TensorOptionalSlotPattern(),
-                                        "tensor_optional_slot",
-                                        "layout_or_storage",
+                                ConditionPattern(
+                                    "third slot states a layout",
+                                    _states_a_layout_slot,
+                                    SequencePattern(
+                                        ChildPattern(
+                                            "shape",
+                                            lambda: ShapePattern(),
+                                            "tensor_shape",
+                                            "tensor_shape",
+                                        ),
+                                        ChildPattern(
+                                            "dtype",
+                                            lambda: DTypePattern(),
+                                            "tensor_dtype",
+                                            "dtype",
+                                        ),
+                                        ChildPattern(
+                                            "layout",
+                                            lambda: TensorOptionalSlotPattern(),
+                                            "tensor_optional_slot",
+                                            "layout",
+                                        ),
                                     ),
                                 ),
                                 SequencePattern(
@@ -884,13 +929,33 @@ class TensorPattern(ElementPattern):
                                         "dtype",
                                     ),
                                     ChildPattern(
-                                        "optional_0",
+                                        "storage",
+                                        lambda: TensorOptionalSlotPattern(),
+                                        "tensor_optional_slot",
+                                        "storage",
+                                    ),
+                                ),
+                                SequencePattern(
+                                    ChildPattern(
+                                        "shape",
+                                        lambda: ShapePattern(),
+                                        "tensor_shape",
+                                        "tensor_shape",
+                                    ),
+                                    ChildPattern(
+                                        "dtype",
+                                        lambda: DTypePattern(),
+                                        "tensor_dtype",
+                                        "dtype",
+                                    ),
+                                    ChildPattern(
+                                        "layout",
                                         lambda: TensorOptionalSlotPattern(),
                                         "tensor_optional_slot",
                                         "layout",
                                     ),
                                     ChildPattern(
-                                        "optional_1",
+                                        "storage",
                                         lambda: TensorOptionalSlotPattern(),
                                         "tensor_optional_slot",
                                         "storage",
@@ -907,28 +972,27 @@ class TensorPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        shape_or_layout = children["shape_or_layout"]
-        if isinstance(shape_or_layout, runtime.LayoutBase):
-            shape = shape_or_layout.shape
-            layout = shape_or_layout
+        """One layout, from one slot.
+
+        A shape slot's placement sugar states a layout, and so does a layout
+        slot. Accepting both at once meant one silently replaced the other, so
+        the arity branches keep them apart: a stated layout slot takes a plain
+        shape beside it.
+        """
+        placed = children.get("shape_or_layout")
+        if placed is not None:
+            if isinstance(placed, PlacedLayout):
+                shape, layout = placed.shape, placed.layout
+            else:
+                shape, layout = placed, None
         else:
-            shape = shape_or_layout
-            layout = None
-        storage = runtime.StorageKind.GMEM
-        third = children.get("optional_0")
-        fourth = children.get("optional_1")
-        if isinstance(third, runtime.StorageKind):
-            storage = third
-        elif third is None or isinstance(third, runtime.LayoutBase):
-            layout = third
-        else:
-            raise ParseError.from_node(
-                match.node, context, "third Tensor slot is not layout/storage"
-            )
-        if fourth is not None:
-            storage = fourth
+            shape, layout = children["shape"], children["layout"]
+        storage = children.get("storage")
         return runtime.TensorType(
-            shape=shape, dtype=children["dtype"], layout=layout, storage=storage
+            shape=shape,
+            dtype=children["dtype"],
+            layout=layout,
+            storage=runtime.StorageKind.GMEM if storage is None else storage,
         )
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (

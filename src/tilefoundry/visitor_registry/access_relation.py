@@ -19,6 +19,7 @@ from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
 from tilefoundry.ir.types.dim_isl import to_dim, to_domain
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis
+from tilefoundry.utils.isl_utils import cardinality
 
 from .registries import AnalysisRegistry
 
@@ -798,10 +799,7 @@ def reached_elements(
     image = _reached_image(pattern, box, within)
     if image.dim(isl.dim_type.PARAM):
         return None
-    try:
-        return int(str(image.coalesce().count_val()))
-    except ValueError:
-        return None
+    return cardinality(image)
 
 
 def control_leaves(type_: "Type") -> int:

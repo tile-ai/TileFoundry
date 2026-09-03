@@ -457,7 +457,7 @@ print(error.rstrip())
 ```
 
 ```text
-tilefoundry: error: function 'gqa_decode': value 'v16' needs 232960 B in smem, which exceeds the 232448 B the target states for that level
+tilefoundry: error: function 'gqa_decode': value 'v16:240' needs 232960 B in smem, which exceeds the 232448 B the target states for that level
 ```
 
 The formula chooses the dispatch boundary. It is not a benchmark-tuned magic number.

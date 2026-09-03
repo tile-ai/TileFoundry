@@ -228,7 +228,9 @@ def test_analyze_reports_only_the_analyses_that_were_requested(tf, cwide, tmp_pa
     assert "; performance=" not in report
 
 
-def test_analyze_failure_reports_line_variable_and_reason(tf, tmp_path) -> None:
+def test_analyze_failure_reports_line_variable_and_reason(
+    tf, dynamic_trip_count, tmp_path
+) -> None:
     bad = tmp_path / "bad.py"
     bad.write_text(_BAD_MODULE, encoding="utf-8")
 
@@ -239,6 +241,22 @@ def test_analyze_failure_reports_line_variable_and_reason(tf, tmp_path) -> None:
     assert f"{bad}:9:" in done.stderr
     assert "variable 'wrong'" in done.stderr
     assert "dtype mismatch" in done.stderr
+
+    report = tmp_path / "dynamic_report.py"
+    refused = tf(
+        "analyze", f"{dynamic_trip_count}:DynamicTripCount", str(report), "--memory"
+    )
+    assert refused.returncode == 1
+    assert refused.stdout == ""
+    assert "loop '_step'" in refused.stderr
+    assert "'reps'" in refused.stderr
+    assert "computes at run time" in refused.stderr
+    assert not any(
+        leak in refused.stderr
+        for leak in ("TensorType(", "ShardLayout(", "GridRegionExpr(", "FloatDType(")
+    )
+    assert len(refused.stderr.strip()) < 300
+    assert not report.exists()
 
 
 def test_analyze_points_at_a_detached_tuple_projection(

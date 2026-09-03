@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 import isl
 
-from tilefoundry.ir.core import Call, Expr, binding_name
+from tilefoundry.ir.core import Call, Expr, value_label, value_labels
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
@@ -18,6 +18,7 @@ from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.ir.visitor import expr_children
+from tilefoundry.utils.isl_utils import cardinality
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     access_relation_registry,
@@ -94,11 +95,11 @@ class Scope:
                 result = 1 if step <= 0 or extent <= start else -(-(extent - start) // step)
                 self._trips_cache = result
                 return result
-        count = self.domain.count_val()
-        parent_count = self.parent.domain.count_val()
-        if not count.is_int() or not parent_count.is_int() or not parent_count.get_num_si():
+        count = cardinality(self.domain)
+        parent_count = cardinality(self.parent.domain)
+        if count is None or not parent_count:
             return 1
-        result = max(1, count.get_num_si() // parent_count.get_num_si())
+        result = max(1, count // parent_count)
         self._trips_cache = result
         return result
 
@@ -122,10 +123,10 @@ class Scope:
         reached = access.relation.intersect_domain(standing).range()
         if reached.dim(isl.dim_type.PARAM):
             raise AnalysisError("scope access still has an unbound parameter")
-        amount = reached.coalesce().count_val()
-        if not amount.is_int():
+        amount = cardinality(reached)
+        if amount is None:
             raise AnalysisError("scope access has no finite one-pass extent")
-        result = amount.get_num_si()
+        result = amount
         cache[id(access)] = result
         self._one_pass_cache = cache
         return result
@@ -166,8 +167,14 @@ class Scope:
         return all(child.known(view) for child in self.children)
 
     def footprint(self) -> LoopFootprintMetadata:
-        """Summarize device and per-unit access bytes for this scope."""
-        rows: dict[tuple[int, str], tuple[Expr, int, int]] = {}
+        """Summarize device and per-unit access bytes for this scope.
+
+        Two structurally equal buffers are distinct allocations, so identity
+        groups the rows. It does not order or name them: an address is whatever
+        the allocator handed out this run, and a report exists to be compared
+        against another run.
+        """
+        rows: dict[tuple[int, str], tuple[Expr, int, int, int]] = {}
         for view, scale in (("narrow", "bytes"), ("device", "device_bytes")):
             for access in self.reaching(view):
                 try:
@@ -179,26 +186,38 @@ class Scope:
                     continue
                 device_amount = amount * max(1, self.trips())
                 key = (id(access.buffer), str(getattr(access.buffer.type, "storage", "unknown")))
-                current = rows.get(key, (access.buffer, 0, 0))
+                current = rows.get(key, (access.buffer, len(rows), 0, 0))
                 rows[key] = (
                     current[0],
-                    current[1] + (amount * size if scale == "bytes" else 0),
-                    current[2] + (device_amount * size if scale == "device_bytes" else 0),
+                    current[1],
+                    current[2] + (amount * size if scale == "bytes" else 0),
+                    current[3] + (device_amount * size if scale == "device_bytes" else 0),
                 )
+        entries = list(rows.items())
+        labels = value_labels(buffer for _, (buffer, _, _, _) in entries)
+        ordered = sorted(
+            (label, level, local, device)
+            for label, ((_, level), (_, _, local, device)) in zip(labels, entries)
+        )
         footprints = tuple(
             BufferFootprint(
-                buffer=binding_name(values[0]) or f"<buffer {buffer_id}>",
+                buffer=label,
                 level=level,
-                bytes=values[1],
-                device_bytes=values[2],
-                repeated_bytes=values[1] * self.trips(),
+                bytes=local,
+                device_bytes=device,
+                repeated_bytes=local * self.trips(),
             )
-            for (buffer_id, level), values in sorted(rows.items())
+            for label, level, local, device in ordered
         )
         return LoopFootprintMetadata(
             footprints=footprints,
             known=self.known("narrow") and self.known("device"),
         )
+
+
+def _induction_of(loop: GridRegionExpr) -> str:
+    """How a diagnostic names one loop: by the variable the author bound it to."""
+    return getattr(loop.induction_var, "name", None) or "<unnamed>"
 
 
 def _domain_for(owner: Function | GridRegionExpr, parent: Scope | None) -> isl.set:
@@ -217,7 +236,13 @@ def _domain_for(owner: Function | GridRegionExpr, parent: Scope | None) -> isl.s
         start = static_dim_value(loop.start)
         step = static_dim_value(loop.step)
         if start is None or step is None:
-            raise AnalysisError(f"scope {loop!r}: loop bounds must be static")
+            which = "start" if start is None else "step"
+            culprit = value_label(loop.start if start is None else loop.step)
+            raise AnalysisError(
+                f"loop {_induction_of(loop)!r} takes its {which} from "
+                f"{culprit or 'a value'!r}, which the program computes at run time; "
+                f"analysis needs a literal {which}"
+            )
         extent = loop.extent
         if isinstance(extent, DimVar):
             params[extent.name] = extent
@@ -225,7 +250,12 @@ def _domain_for(owner: Function | GridRegionExpr, parent: Scope | None) -> isl.s
         else:
             value = static_dim_value(extent)
             if value is None:
-                raise AnalysisError(f"scope {loop!r}: loop extent is not bounded")
+                raise AnalysisError(
+                    f"loop {_induction_of(loop)!r} has a trip count the program computes "
+                    f"at run time from {value_label(extent) or 'a value'!r}, so no "
+                    f"per-occurrence total can be scaled by it; bind the extent to a "
+                    f"literal, or state it as an open dimension"
+                )
             stop = str(value)
         bounds.append(f"{start} <= p{index} < {stop}")
         if step != 1:
