@@ -1552,6 +1552,20 @@ class LayoutPositionRule:
 
 
 @dataclass(frozen=True)
+class PlacedShapeRule:
+    STATEMENT: ClassVar[str] = "Placement sugar in a shape slot states both a shape and a layout."
+
+    def apply(self, value, *, match, context):
+        if not isinstance(value.shape, tuple):
+            raise ParseError.from_node(match.node, context, "placed shape is not a tuple")
+        if not isinstance(value.layout, runtime.LayoutBase):
+            raise ParseError.from_node(
+                match.node, context, "placed shape did not carry a LayoutBase"
+            )
+        return value
+
+
+@dataclass(frozen=True)
 class StorageValueRule:
     STATEMENT: ClassVar[str] = "Storage must resolve to a StorageKind."
 
