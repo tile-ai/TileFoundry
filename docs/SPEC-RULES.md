@@ -77,11 +77,12 @@ Every reference to a spec section is a markdown link:
 
     [<doc> §<number>](<path>#<github-anchor>)
 
-*path* is relative inside `docs/spec` (`./runtime.md`), repository-root
-everywhere else (`docs/spec/runtime.md`). The anchor MUST name the section the
-display text numbers, never a heading nested under it. A bare `§2.3` records
-which section was true once; the link breaks when the heading moves, which is
-the point.
+*path* is relative inside a page (`./runtime.md`) and repository-root from
+code (`docs/spec/runtime.md`): a renderer resolves a page's links beside the
+page, and a source file has no anchor but the root. The anchor MUST name the
+section the display text numbers, never a heading nested under it. A bare
+`§2.3` records which section was true once; the link breaks when the heading
+moves, which is the point.
 
 `scripts/spec_refs_lint.py` enforces this over `docs/spec/*.md`, `src/`,
 `tests/` and `include/`; a `§` inside a fenced block is example text.

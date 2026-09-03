@@ -180,7 +180,7 @@ bounds the caller stated.
     run happens. Omitted, it is the device the selection's Target declares. Given,
     it is honoured as stated: a Target declaring CUDA no longer refuses a machine
     without one, because the caller has said where to run. The evaluator picks no
-    device of its own ([evaluator §2](docs/spec/evaluator.md#2-parameters-and-inputs)).
+    device of its own ([evaluator §2](./evaluator.md#2-parameters-and-inputs)).
   - A FAIL with `--inputs random` MUST state that the draw makes each activation
     independently; a target that relies on semantic relationships between
     activations MAY differ at ulp scale without either implementation being wrong,
