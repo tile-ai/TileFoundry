@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <b>One prompt in</b>&nbsp; · &nbsp;<b>612 tok/s out</b>&nbsp; · &nbsp;<b>nobody in the loop</b>
+  <b>One prompt in</b>&nbsp; · &nbsp;<b>612 tok/s out</b>&nbsp; · &nbsp;<b>Compiler in the loop</b>
 </p>
 
 ---
