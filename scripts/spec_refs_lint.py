@@ -67,16 +67,16 @@ def anchors(document: Path) -> dict[str, str | None]:
 def _target_document(source: Path, path: str) -> Path | None:
     """The document a reference's target names, or None if it names none.
 
-    A repository-root path is read from the root, anything else from beside the
-    referring file. Which of the two a reference uses is a matter of where it is
-    written -- relative inside `docs/spec`, root-relative from code -- but both
-    resolve the same way wherever they appear, so the check does not need to know
-    the convention to enforce the link. An empty path is the same document, which
-    only means anything in markdown.
+    Where a path is anchored follows from what reads it. A reference in code is
+    read from the repository root, the only anchor a `.py` or `.h` file has, so
+    it spells the root path. A reference in a page is read by a renderer, which
+    resolves every link beside the page holding it, so the root path is not a
+    path a page can use at all -- `_why` refuses it before this. An empty path
+    is the same document, which only means anything in markdown.
     """
     if not path:
         return source if source.suffix == ".md" else None
-    if path.startswith("docs/"):
+    if path.startswith("docs/") and source.suffix != ".md":
         return (_ROOT / path).resolve()
     return (source.parent / path).resolve()
 
@@ -149,7 +149,10 @@ def _why(source: Path, display: str, target: str) -> str:
     if "#" not in target:
         return "names no heading; the target needs a `#<anchor>`"
     path, _, fragment = target.partition("#")
-    document = _target_document(source, path.strip())
+    path = path.strip()
+    if source.suffix == ".md" and path.startswith("docs/"):
+        return f"{path!r} is a repository-root path; a page's links resolve beside the page"
+    document = _target_document(source, path)
     if document is None or not document.is_file():
         return f"target document {path!r} does not exist"
     named = spelled.group("doc")
@@ -185,7 +188,7 @@ def main(argv: list[str]) -> int:
             "\nA reference to a spec section MUST be written "
             "`[<doc> §<number>](<path>#<github-anchor>)`, with the anchor naming "
             "the very section the display text numbers -- `./<doc>.md` from "
-            "inside docs/spec, `docs/spec/<doc>.md` from anywhere else. Ask "
+            "inside a page, `docs/spec/<doc>.md` from code. Ask "
             "`tilefoundry spec <topic>` for the sections a document has.",
             file=sys.stderr,
         )
