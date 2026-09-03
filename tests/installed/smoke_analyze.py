@@ -33,28 +33,6 @@ class Open:
 '''
 
 
-_DYNAMIC_TRIP_MODULE = '''
-from tilefoundry import module
-from tilefoundry.dsl import Mesh, Tensor, Topology, func, tf
-from tilefoundry.target import CudaTarget
-
-CTAS = 132
-N = CTAS * 128
-
-@module(entry="kernel", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", CTAS),))
-class DynTrip:
-    @func
-    def kernel(x: Tensor[(N,), "f32"], reps: Tensor[(), "i64"]) -> Tensor[(N,), "f32"]:
-        with Mesh(("cta",), layout=(CTAS,), names=("block",)) as m:
-            placed = tf.reshard(x, (N @ m.block,), "gmem")
-            acc = placed
-            bound = reps + 0
-            for _step in range(bound):
-                acc = tf.square(acc)
-            return tf.reshard(acc, (N @ m.block,), "gmem")
-'''
-
-
 def test_logical_analyses_run_and_performance_requires_an_execution_domain(
     tf, cmine, tmp_path
 ) -> None:
@@ -250,7 +228,9 @@ def test_analyze_reports_only_the_analyses_that_were_requested(tf, cwide, tmp_pa
     assert "; performance=" not in report
 
 
-def test_analyze_failure_reports_line_variable_and_reason(tf, tmp_path) -> None:
+def test_analyze_failure_reports_line_variable_and_reason(
+    tf, dynamic_trip_count, tmp_path
+) -> None:
     bad = tmp_path / "bad.py"
     bad.write_text(_BAD_MODULE, encoding="utf-8")
 
@@ -262,11 +242,10 @@ def test_analyze_failure_reports_line_variable_and_reason(tf, tmp_path) -> None:
     assert "variable 'wrong'" in done.stderr
     assert "dtype mismatch" in done.stderr
 
-    dynamic = tmp_path / "dynamic_trip.py"
-    dynamic.write_text(_DYNAMIC_TRIP_MODULE, encoding="utf-8")
     report = tmp_path / "dynamic_report.py"
-
-    refused = tf("analyze", f"{dynamic}:DynTrip", str(report), "--memory")
+    refused = tf(
+        "analyze", f"{dynamic_trip_count}:DynamicTripCount", str(report), "--memory"
+    )
     assert refused.returncode == 1
     assert refused.stdout == ""
     assert "loop '_step'" in refused.stderr

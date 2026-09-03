@@ -189,6 +189,11 @@ def tuple_projection_diagnostic() -> Path:
 
 
 @pytest.fixture(scope="module")
+def dynamic_trip_count() -> Path:
+    return _fixture_path("diagnostics", "dynamic_trip_count.py")
+
+
+@pytest.fixture(scope="module")
 def derived_prefill() -> Path:
     return _fixture_path("placed", "derived_prefill.py")
 

@@ -754,35 +754,13 @@ class TensorOptionalSlotPattern(ElementPattern):
     syntax = LazyPattern(
         lambda: ChoicePattern(
             ConditionPattern(
-                "role == layout and value is layout",
-                lambda node, context: (
-                    context.role == "layout"
-                    and TensorOptionalSlotPattern._slot_kind(node, context) == "layout"
-                ),
+                "role == layout",
+                lambda node, context: context.role == "layout",
                 LayoutPattern(),
             ),
             ConditionPattern(
-                "role == storage and value is storage",
-                lambda node, context: (
-                    context.role == "storage"
-                    and TensorOptionalSlotPattern._slot_kind(node, context) == "storage"
-                ),
-                StoragePattern(),
-            ),
-            ConditionPattern(
-                "role == layout_or_storage and value is layout",
-                lambda node, context: (
-                    context.role == "layout_or_storage"
-                    and TensorOptionalSlotPattern._slot_kind(node, context) == "layout"
-                ),
-                LayoutPattern(),
-            ),
-            ConditionPattern(
-                "role == layout_or_storage and value is storage",
-                lambda node, context: (
-                    context.role == "layout_or_storage"
-                    and TensorOptionalSlotPattern._slot_kind(node, context) == "storage"
-                ),
+                "role == storage",
+                lambda node, context: context.role == "storage",
                 StoragePattern(),
             ),
         )
