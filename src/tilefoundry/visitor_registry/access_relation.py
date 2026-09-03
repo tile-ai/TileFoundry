@@ -788,11 +788,13 @@ def point_count(image: "isl.set") -> int | None:
     """How many points *image* holds, or None when that is not a finite number.
 
     A box is counted from its bounds: every axis is an independent bounded
-    interval, so the product of their lengths is the answer and ISL never has to
-    enumerate. Enumeration costs one step per point, which a reshaped dimension
-    of a million elements makes unusable, and the reshape and transpose chains a
-    real model is written as reach this with exactly that shape. Anything that is
-    not a box falls back to enumerating.
+    interval, so their lengths multiply and nothing is enumerated. Enumerating
+    costs one step per point, which a reshaped million-element dimension makes
+    unusable.
+
+    Anything else enumerates, and no binding closes that gap: counting a set in
+    ISL is a scan, ``isl_set_count_val`` living in ``isl_scan.c``. Symbolic
+    counting is barvinok's.
     """
     image = image.coalesce()
     if image.is_box():
