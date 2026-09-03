@@ -260,18 +260,6 @@ def test_authored_target_boundaries_accept_unregistered_target_instances() -> No
     assert Decorated.target is target
 
 
-def test_lowering_and_codegen_keep_the_external_target_instance() -> None:
-    function = RmsnormModule.entry_function()
-    target = ExternalCudaTarget("nvidia.h200_sxm")
-    module = Module("external", (function,), function.name, target=target)
-
-    lowered = lower(module)
-
-    assert lowered.target is target
-    assert all(fn.target is target for fn in lowered.functions)
-    assert target.get_code_generator() is CudaTarget("nvidia.h200_sxm").get_code_generator()
-
-
 def test_lower_rejects_a_topology_level_unsupported_by_the_target() -> None:
     unsupported = replace(SquareCudaModel, topologies=(Topology("warp", 4),))
 

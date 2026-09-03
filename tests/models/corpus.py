@@ -218,10 +218,6 @@ class FunctionCase:
     context length. A model with no open dimension states none, and that is not
     the same as a model that has one and cannot be asked -- see `SizedCase`.
 
-    Whether the function is placed is not stated here. It is a fact about the
-    program, asked of the concrete HIR by `states_execution_domain`, so a model
-    that gains a placement is asked the larger question without anyone
-    remembering to change a flag.
     """
 
     id: str
@@ -392,31 +388,6 @@ class ConcreteCase:
         return self.build()
 
 
-def states_execution_domain(
-    owner: Module,
-    function: Function,
-    dims: "Mapping[str, int] | None",
-    level: str = "cta",
-) -> bool:
-    """Whether *function*, once concrete, runs anything inside a Mesh of *level*."""
-    from tilefoundry.analysis.check import _resolve_program_geometry
-    from tilefoundry.ir.visitor import collect_exprs
-    from tilefoundry.ir.core import Call, get_metadata
-    from tilefoundry.ir.core.metadata import ExecutionDomainMetadata
-    from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
-
-    _module, concrete = _resolve_program_geometry(
-        owner, function, dims, TypeInferContext(scope=FunctionScope(owner, function))
-    )
-    return any(
-        (get_metadata(item, ExecutionDomainMetadata) or ExecutionDomainMetadata())
-        .at(level)
-        is not None
-        for item in collect_exprs(concrete.body)
-        if isinstance(item, Call)
-    )
-
-
 #: The machine a root that states none is asked on, the way `TargetFixture` binds
 #: one. A program with no Target is not yet a question about a machine.
 _UNBOUND_MACHINE = "nvidia.h200_sxm"
@@ -545,5 +516,4 @@ __all__ = [
     "TargetFixture",
     "placed_cases",
     "placed_fixture_roots",
-    "states_execution_domain",
 ]

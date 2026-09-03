@@ -38,6 +38,7 @@ from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
+from tilefoundry.ir.hir.mesh_scope import MeshScope
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.specialize import (
     canonical_specialization_signature,
@@ -714,22 +715,28 @@ def iter_exprs(root: Expr | None, seen: set[int] | None = None) -> Iterator[Expr
     yield root
 
 
-def _collect_meshes(fn: HirFunction, *, include_node_types: bool = False) -> dict[int, Mesh]:
-    """Collect unique Mesh objects referenced anywhere in *fn* — params, return type.
+def _collect_meshes(
+    fn: HirFunction,
+    *,
+    include_node_types: bool = False,
+) -> tuple[dict[int, Mesh], dict[int, Mesh]]:
+    """Collect meshes needed before emitting a function header.
 
-    Collect unique Mesh objects referenced anywhere in *fn* — params,
-    return type, and every ``Reshard`` layout in the body.
+    The function header declares every mesh and builds the name map used by
+    parameter annotations and region bodies, so collection must precede body
+    emission. It walks params, return type, and body references once; the
+    optional node-type scan is used by the viewer for intermediate annotations.
 
     With ``include_node_types=True`` (the viewer's wider scan, via
     ``viewer.builder._collect_view_meshes``) every node's own result type is
-    also walked, since the viewer renders shard sugar on intermediate types
-    too, not just params/return.
+    also walked, since the viewer renders shard sugar on intermediate types too.
     """
-    meshes: dict[int, Mesh] = {}
+    type_meshes: dict[int, Mesh] = {}
+    scope_meshes: dict[int, Mesh] = {}
 
     def _add_layout(layout) -> None:
         if isinstance(layout, ShardLayout):
-            meshes.setdefault(id(layout.mesh), layout.mesh)
+            type_meshes.setdefault(id(layout.mesh), layout.mesh)
 
     def _add_type(ty) -> None:
         if isinstance(ty, TensorType):
@@ -742,13 +749,32 @@ def _collect_meshes(fn: HirFunction, *, include_node_types: bool = False) -> dic
         _add_type(p.type)
     _add_type(fn.return_type)
 
-    for expr in iter_exprs(fn.body):
+    expressions = tuple(iter_exprs(fn.body))
+    for expr in expressions:
         if include_node_types:
             _add_type(getattr(expr, "type", None))
         if isinstance(expr, Call) and isinstance(expr.target, Reshard):
             _add_layout(expr.target.layout)
+        if isinstance(expr, MeshScope):
+            scope_meshes.setdefault(id(expr.mesh), expr.mesh)
 
-    return meshes
+    return type_meshes, scope_meshes
+
+
+def _region_projection(expr: Expr) -> GridRegionExpr | MeshScope | None:
+    """Return the region projected by a one-argument ``TupleGetItem``."""
+    if not (
+        isinstance(expr, Call)
+        and isinstance(expr.target, TupleGetItem)
+        and len(expr.args) == 1
+    ):
+        return None
+    region = expr.args[0]
+    if isinstance(region, GridRegionExpr):
+        return region
+    if isinstance(region, MeshScope) and isinstance(region.body, Tuple):
+        return region
+    return None
 
 
 def _mesh_name_map(meshes: dict[int, Mesh]) -> dict[int, str]:
@@ -816,6 +842,14 @@ def _emit_def(
     _order: list[Expr] = list(iter_exprs(fn.body, _seen))
     for p in fn.params:
         _order.extend(iter_exprs(p, _seen))
+    for scope in tuple(expr for expr in _order if isinstance(expr, MeshScope)):
+        for param in scope.params:
+            _order.extend(iter_exprs(param, _seen))
+    _param_alias = {
+        id(param): arg
+        for scope in tuple(expr for expr in _order if isinstance(expr, MeshScope))
+        for param, arg in zip(scope.params, scope.args, strict=True)
+    }
 
 
     _op_names_set: set[str] = set()
@@ -839,8 +873,8 @@ def _emit_def(
     }
 
     _grid_internal_ids: set[int] = set()
+    _mesh_scope_internal_ids: set[int] = set()
     _nested_grid_ids: set[int] = set()
-
     for expr in _order:
         if not isinstance(expr, GridRegionExpr):
             continue
@@ -893,6 +927,10 @@ def _emit_def(
                 pass
     _grid_internal_ids.difference_update(_root_grid_init_ids)
 
+    for expr in _order:
+        if isinstance(expr, MeshScope):
+            for _ in iter_exprs(expr.body, _mesh_scope_internal_ids):
+                pass
     def _moved_window(start, size, stride):
         """The tile window and offset *start* moves it by, else ``None``."""
         window, offset = window_base(start)
@@ -963,14 +1001,11 @@ def _emit_def(
         return f"({inner})"
 
     def _expr_ref(expr: Expr) -> str:
-        if (
-            isinstance(expr, Call)
-            and isinstance(expr.target, TupleGetItem)
-            and len(expr.args) == 1
-            and isinstance(expr.args[0], GridRegionExpr)
-        ):
-            grid = expr.args[0]
-            return _names[id(grid.carried_args[expr.target.index])]
+        if id(expr) in _param_alias:
+            return _expr_ref(_param_alias[id(expr)])
+        projection = _region_projection(expr)
+        if isinstance(projection, GridRegionExpr):
+            return _names[id(projection.carried_args[expr.target.index])]
         if isinstance(expr, GridRegionExpr):
 
 
@@ -979,6 +1014,10 @@ def _emit_def(
             if len(carried) == 1:
                 return carried[0]
             return "(" + ", ".join(carried) + ")"
+        if isinstance(projection, MeshScope):
+            return _expr_ref(projection.body.elements[expr.target.index])
+        if isinstance(expr, MeshScope):
+            return _arg_ref(expr.body)
         return _names[id(expr)]
 
     def _arg_ref(a) -> str:
@@ -1048,13 +1087,15 @@ def _emit_def(
         ``<HirFunction>(...)`` special forms, else ``op_name(args, attr=val,
         ...)``. Shared by the inline (tile-loop body) emitter and the
         top-level emit loop so an attribute-rendering rule (``ShardLayout``,
-        ``DType``, ...) only needs one edit.
+        ``DType``, ...) only needs one edit. A reshard that gathers back to the
+        whole names no mesh, so its target is a plain ``Layout`` and there is no
+        mesh reference to abbreviate.
         """
         target = expr.target
         args_str = ", ".join(_arg_ref(arg) for arg in expr.args)
         if isinstance(target, Reshard):
             layout_kw = ""
-            if target.layout is not None:
+            if isinstance(target.layout, ShardLayout):
                 layout_text = _shard_layout_str(
                     target.layout,
                     indent=indent_here + "    ",
@@ -1065,6 +1106,8 @@ def _emit_def(
                     ),
                 )
                 layout_kw = ", layout=" + layout_text
+            elif target.layout is not None:
+                layout_kw = ", layout=" + _layout_str(target.layout, indent_here + "    ")
             storage = (
                 f", storage={target.storage.name.lower()}"
                 if target.storage is not None
@@ -1211,13 +1254,17 @@ def _emit_def(
         def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx=None) -> None:
             _emit_grid(expr, self.level)
 
+        def visit_MeshScope(self, expr: MeshScope, ctx=None) -> None:
+            _emit_mesh_scope(expr, self.level)
+
         def visit_Call(self, expr: Call, ctx=None) -> None:
-            if (
-                isinstance(expr.target, TupleGetItem)
-                and len(expr.args) == 1
-                and isinstance(expr.args[0], GridRegionExpr)
-            ):
-                _emit_grid(expr.args[0], self.level)
+            projection = _region_projection(expr)
+            if isinstance(projection, GridRegionExpr):
+                _emit_grid(projection, self.level)
+                printed.add(id(expr))
+                return
+            if isinstance(projection, MeshScope):
+                _emit_mesh_scope(projection, self.level)
                 printed.add(id(expr))
                 return
             for arg in expr.args:
@@ -1263,8 +1310,32 @@ def _emit_def(
         for carry, value in zip(grid.carried_args, grid.yield_values):
             lines.append(f"{inner}{_names[id(carry)]} = {_expr_ref(value)}")
 
+    def _emit_mesh_scope(scope: MeshScope, level: str, *, terminal: bool = False) -> None:
+        key = id(scope)
+        if key in printed:
+            return
+        for arg in scope.args:
+            _emit_expr(arg, level)
+        mesh_name = mesh_map[id(scope.mesh)]
+        lines.append(
+            f"{level}with {mesh_name} as _{mesh_name}:"
+            f"{_comments(scope, options, mesh_map)}"
+        )
+        printed.add(key)
+        inner = level + "    "
+        if terminal and isinstance(scope.body, MeshScope):
+            _emit_mesh_scope(scope.body, inner, terminal=True)
+            return
+        _emit_expr(scope.body, inner)
+        if terminal:
+            lines.append(f"{inner}return {_arg_ref(scope.body)}")
+
     for expr in _order:
-        if isinstance(expr, Var) or id(expr) in _grid_internal_ids:
+        if (
+            isinstance(expr, Var)
+            or id(expr) in _grid_internal_ids
+            or id(expr) in _mesh_scope_internal_ids
+        ):
             continue
         if id(expr) in _inlined_start_ids:
             printed.add(id(expr))
@@ -1272,12 +1343,10 @@ def _emit_def(
         if isinstance(expr, GridRegionExpr):
             _emit_grid(expr, indent)
             continue
-        if (
-            isinstance(expr, Call)
-            and isinstance(expr.target, TupleGetItem)
-            and len(expr.args) == 1
-            and isinstance(expr.args[0], GridRegionExpr)
-        ):
+        if isinstance(expr, MeshScope):
+            _emit_mesh_scope(expr, indent, terminal=expr is fn.body)
+            continue
+        if _region_projection(expr) is not None:
             printed.add(id(expr))
             continue
         if isinstance(expr, Constant):
@@ -1312,15 +1381,16 @@ def _emit_def(
 
 
 
-    if isinstance(fn.body, Tuple):
-        lines.append(f"{indent}return {_tuple_literal(fn.body.elements)}")
-    elif isinstance(fn.body, GridRegionExpr):
-        values = tuple(_names[id(carry)] for carry in fn.body.carried_args)
-        result = values[0] if len(values) == 1 else "(" + ", ".join(values) + ")"
-        lines.append(f"{indent}return {result}")
-    else:
-        body_name = _expr_ref(fn.body)
-        lines.append(f"{indent}return {body_name}")
+    if not isinstance(fn.body, MeshScope):
+        if isinstance(fn.body, Tuple):
+            lines.append(f"{indent}return {_tuple_literal(fn.body.elements)}")
+        elif isinstance(fn.body, GridRegionExpr):
+            values = tuple(_names[id(carry)] for carry in fn.body.carried_args)
+            result = values[0] if len(values) == 1 else "(" + ", ".join(values) + ")"
+            lines.append(f"{indent}return {result}")
+        else:
+            body_name = _expr_ref(fn.body)
+            lines.append(f"{indent}return {body_name}")
     return lines
 
 
@@ -1331,17 +1401,22 @@ def _pattern_ctor(pat: Pattern) -> str:
     return repr(pat)
 
 
-def _collect_all_meshes(fn: HirFunction) -> dict[int, Mesh]:
+def _collect_all_meshes(
+    fn: HirFunction,
+) -> tuple[dict[int, Mesh], dict[int, Mesh]]:
     """Meshes referenced by *fn* and every specialization variant.
 
     Meshes referenced by *fn* and every specialization variant — the
     printer's mesh-name map must stay stable across the base prototype and
     each ``.specialize`` block.
     """
-    meshes: dict[int, Mesh] = {}
+    type_meshes: dict[int, Mesh] = {}
+    scope_meshes: dict[int, Mesh] = {}
     for f in (fn, *fn.variants):
-        meshes.update(_collect_meshes(f))
-    return meshes
+        types, scopes = _collect_meshes(f)
+        type_meshes.update(types)
+        scope_meshes.update(scopes)
+    return type_meshes, scope_meshes
 
 
 def _emit_header(
@@ -1353,6 +1428,7 @@ def _emit_header(
     for_module: bool = False,
     target: object | None = None,
     dim_vars: "dict[str, object] | None" = None,
+    scope_mesh_ids: set[int] | None = None,
 ) -> list[str]:
     """Import header + mesh-prelude shared by ``hir_function_to_python`` and ``_module_to_python``.
 
@@ -1391,8 +1467,10 @@ def _emit_header(
         lines.append("")
 
 
-    if any(m.names for m in meshes.values()):
+    if any(mesh.names or mid in (scope_mesh_ids or ()) for mid, mesh in meshes.items()):
         for mid, mesh in meshes.items():
+            if not mesh.names and mid not in (scope_mesh_ids or ()):
+                continue
             name = mesh_map[mid]
             topologies = _topologies_str(mesh)
             names_repr = repr(tuple(mesh.names)) if mesh.names else "()"
@@ -1473,10 +1551,16 @@ def _render_hir_function(
     verbose ``ShardLayout(...)`` form is used.
     """
     indent = "    "
-    meshes = _collect_all_meshes(fn)
+    type_meshes, scope_meshes = _collect_all_meshes(fn)
+    meshes = {**type_meshes, **scope_meshes}
     mesh_map = _mesh_name_map(meshes)
     lines = _emit_header(
-        fn, meshes, mesh_map, indent, dim_vars=dim_vars_reached(fn)
+        fn,
+        meshes,
+        mesh_map,
+        indent,
+        dim_vars=dim_vars_reached(fn),
+        scope_mesh_ids=set(scope_meshes),
     )
     statements: dict[int, _PrintedStatement] = {}
     lines.extend(
@@ -1617,9 +1701,13 @@ def _module_to_python(
 
     header_of = entry if entry is not None else functions[0]
     indent4 = "    "
-    meshes: dict[int, Mesh] = {}
+    type_meshes: dict[int, Mesh] = {}
+    scope_meshes: dict[int, Mesh] = {}
     for fn in functions:
-        meshes.update(_collect_all_meshes(fn))
+        types, scopes = _collect_all_meshes(fn)
+        type_meshes.update(types)
+        scope_meshes.update(scopes)
+    meshes = {**type_meshes, **scope_meshes}
     mesh_map = _mesh_name_map(meshes)
 
 
@@ -1631,7 +1719,7 @@ def _module_to_python(
         dim_vars.update(dim_vars_by_name(node.topologies or ()))
     lines = _emit_header(
         header_of, meshes, mesh_map, indent4, for_module=True, target=root.target,
-        dim_vars=dim_vars,
+        dim_vars=dim_vars, scope_mesh_ids=set(scope_meshes),
     )
     tensor_names = "ConstTensor, Tensor" if any(
         param.is_const for fn in functions for param in fn.params

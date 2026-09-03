@@ -23,6 +23,7 @@ from tilefoundry.ir.core import Call, Constant, Tuple, Var, describe_expr
 from tilefoundry.ir.core.pattern import locate_dim_var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.mesh_scope import MeshScope as HirMeshScope
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.ir.visitor import ExprVisitor
@@ -112,6 +113,16 @@ class EvaluatorVisitor(ExprVisitor):
 
     def __init__(self, *, memo=None) -> None:
         super().__init__(memo=memo)
+
+    def visit_MeshScope(self, scope: HirMeshScope, ctx: EvaluateContext) -> Value:
+        """Evaluate boundary arguments outside, then the isolated body."""
+        args = tuple(self.visit(arg, ctx) for arg in scope.args)
+        if len(args) != len(scope.params):
+            raise EvalError(
+                f"evaluator: MeshScope expects {len(scope.params)} args, got {len(args)}"
+            )
+        memo = {id(param): (param, value) for param, value in zip(scope.params, args)}
+        return EvaluatorVisitor(memo=memo).visit(scope.body, ctx)
 
     def visit_leaf_Var(self, var: Var, _operands, ctx: EvaluateContext) -> Value:
         raise EvalError(f"evaluator: unbound variable {var.name!r}")

@@ -201,6 +201,8 @@ def test_a_nested_block_does_not_gain_function_docstring_semantics() -> None:
 )
 def test_every_parsed_call_knows_where_it_came_from(source: Path) -> None:
     """Every parser-authored Call reachable from fixture source has a source span."""
+    if "diagnostics" in source.parts:
+        pytest.skip("diagnostic fixtures are expected to refuse parsing")
     namespace, _ = load_namespace(str(source))
     for function in _functions_defined_by(namespace):
         for expr in collect_exprs(function.body):

@@ -20,7 +20,7 @@ from pathlib import Path
 import torch
 from safetensors.torch import save_file
 
-from tests.models.corpus import FunctionCase, ModelCase, states_execution_domain
+from tests.models.corpus import ModelCase
 from tests.models.decode_oracle import one_ulp_at
 from tests.models.registry import cases_of
 from tilefoundry.runtime import PREDICATES, DictResource, check
@@ -176,20 +176,16 @@ _EVIDENCE = {
 def analysed_every_family(
     tf, source: Path, case: ModelCase, selector: str, dims: Mapping[str, int] | None = None
 ) -> dict:
-    """Judge every family the selected function is ready to run.
+    """Judge every family, for every selected function.
 
-    Which families those are is read off the program: one that runs something
-    inside a CTA Mesh answers for all four, and one that runs nothing inside any
-    Mesh keeps its logical three and must make a separate performance request
-    fail for a missing execution domain. Asking a flag beside the case instead
-    would let a program that gained a placement keep being asked the smaller
-    question.
+    Every family is asked of every program. Whether a program is placed no
+    longer narrows the question: where the work runs is a fact the program
+    states, not one read back off the layout its results happen to carry, so
+    performance no longer refuses a program for lacking an execution domain.
     """
     selected = [item for item in case.analyze if item.selector == selector]
     assert len(selected) == 1, f"{case.id}: analysis selector {selector!r} is not unique"
-    owner, function = case.resolve(case.build(), selector)
-    placed = states_execution_domain(owner, function, dims or selected[0].dims)
-    families = FAMILIES if placed else LOGICAL_FAMILIES
+    families = FAMILIES
     report = reported(tf, source, case, selector, families, dims)
     assert report["executed"] == list(families), (
         f"asked for {list(families)}, the command ran {report['executed']}"
@@ -204,28 +200,6 @@ def analysed_every_family(
         f"{family} {complaint}" for family, complaint in sorted(failed.items())
     )
     return report
-
-
-def performance_refused(
-    tf,
-    source: Path,
-    case: ModelCase,
-    selected: FunctionCase,
-) -> None:
-    """One unplaced shipped-model function must identify the domain it lacks."""
-    rejected, _report_text = _run_with_report(
-        tf,
-        [
-            "analyze",
-            static(source, case, selected.selector),
-            "--performance",
-            *dim_args(selected.dims),
-        ],
-        suffix=".py",
-    )
-    assert rejected.returncode == 1, rejected.stdout + rejected.stderr
-    assert "performance:" in rejected.stderr
-    assert "has no" in rejected.stderr and "execution domain" in rejected.stderr
 
 
 def lifetimes(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 from tilefoundry.ir.types.shape_dim import ShapeDim
 from tilefoundry.ir.types.shard.int_tuple import flatten
@@ -164,54 +165,130 @@ def level_axes(mesh: "Mesh") -> tuple[tuple[int, ...], ...]:
     return tuple(found)
 
 
-def composed(meshes: "tuple[Mesh, ...]") -> "Mesh":
-    """One Mesh naming what a stack of nested single-level Meshes names together.
+def _positions_layout(mesh: Mesh) -> tuple[tuple, tuple, int]:
+    """Return flattened shape, strides, and offset for a supported mesh layout."""
+    if isinstance(mesh.layout, Layout):
+        return flatten(mesh.layout.shape), flatten(mesh.layout.strides), 0
+    if mesh.layout.inner is None and isinstance(mesh.layout.outer, Layout):
+        return (
+            flatten(mesh.layout.outer.shape),
+            flatten(mesh.layout.outer.strides),
+            mesh.layout.offset,
+        )
+    raise ValueError(f"mesh levels {mesh.topologies!r} have an unsupported layout")
 
-    A value distributed at two levels at once is distributed by one thing: the
-    lane owns part of what its CTA owns, so the positions are the pair. The
-    axes join outermost first and the outer strides are scaled by the positions
-    below them, which is the same shape a mesh naming both levels itself has --
-    so nesting the scopes and naming both on one mesh state the one fact one way.
-    """
-    if len(meshes) == 1:
-        return meshes[0]
+
+@lru_cache(maxsize=None)
+def positions_at(mesh: Mesh, level: str) -> tuple[tuple, tuple]:
+    """Return one named level's shape and normalized strides."""
+    names = tuple(topology.name for topology in mesh.topologies)
+    if level not in names:
+        raise ValueError(f"mesh names levels {names}, not {level!r}")
+    shape, strides, _offset = _positions_layout(mesh)
+    if any(stride is None for stride in strides):
+        strides = c_order_strides(shape)
+    index = names.index(level)
+    axes = level_axes(mesh)[index]
     below = 1
-    topologies: list[Topology] = []
-    shape: list[object] = []
-    strides: list[int] = []
-    names: list[str] = []
-    for mesh in reversed(meshes):
-        if len(mesh.topologies) != 1:
+    for topology in mesh.topologies[index + 1 :]:
+        if not isinstance(topology.size, int) or isinstance(topology.size, bool):
             raise ValueError(
-                f"mesh names levels {tuple(t.name for t in mesh.topologies)}; scopes "
-                "are composed one level at a time, so a scope naming several has "
-                "already said how they nest"
+                f"mesh level {topology.name!r} has a symbolic level below {level!r}"
             )
-        if not isinstance(mesh.layout, Layout):
+        below *= topology.size
+    non_unit_axes = tuple(axis for axis in axes if shape[axis] != 1)
+    normalized = tuple(strides[axis] // below for axis in non_unit_axes)
+    return tuple(shape[axis] for axis in non_unit_axes), normalized
+
+
+def composed(meshes: "tuple[Mesh, ...]") -> "Mesh":
+    """Compose scopes, replacing an existing level when the inner names it."""
+    if len(meshes) == 1:
+        check_topology(meshes[0])
+        return meshes[0]
+
+    def positions(mesh: Mesh) -> int:
+        count = 1
+        for topology in mesh.topologies:
+            size = topology.size
+            if not isinstance(size, int) or isinstance(size, bool) or size < 1:
+                raise ValueError(
+                    f"mesh level {topology.name!r} states extent {size!r}; "
+                    "composing scopes needs each level's position count"
+                )
+            count *= size
+        return count
+
+    def concatenate(outer: Mesh, inner: Mesh) -> Mesh:
+        outer_shape, outer_strides, outer_offset = _positions_layout(outer)
+        inner_shape, inner_strides, inner_offset = _positions_layout(inner)
+        for mesh, strides in ((outer, outer_strides), (inner, inner_strides)):
+            if any(
+                not isinstance(stride, int) or isinstance(stride, bool)
+                for stride in strides
+            ):
+                raise ValueError(
+                    f"mesh levels {mesh.topologies!r} need concrete strides to compose"
+                )
+        below = positions(inner)
+        layout = Layout(
+            shape=(*outer_shape, *inner_shape),
+            strides=(*(stride * below for stride in outer_strides), *inner_strides),
+        )
+        offset = outer_offset * below + inner_offset
+        sliced = isinstance(outer.layout, ComposedLayout) or isinstance(
+            inner.layout, ComposedLayout
+        )
+        return Mesh(
+            topologies=(*outer.topologies, *inner.topologies),
+            layout=(
+                layout if not sliced else ComposedLayout(inner=None, offset=offset, outer=layout)
+            ),
+            names=(*outer.names, *inner.names),
+        )
+
+    result = meshes[0]
+    for inner in meshes[1:]:
+        current_names = {topology.name for topology in result.topologies}
+        inner_names = {topology.name for topology in inner.topologies}
+        if current_names.isdisjoint(inner_names):
+            result = concatenate(result, inner)
+            continue
+        if current_names <= inner_names:
+            result = inner
+            continue
+        raise ValueError(
+            f"{sorted(current_names & inner_names)} named again while "
+            f"{sorted(current_names - inner_names)} is not; a scope either "
+            "replaces the levels in force or adds levels below them"
+        )
+    check_topology(result)
+    return result
+
+
+def check_topology(mesh: Mesh) -> None:
+    """Reject static mesh positions beyond their declared topology extents.
+
+    A constant slice is already bounded by ``Mesh.__getitem__``; its shortened
+    axes no longer land on full topology boundaries and are therefore accepted.
+    """
+    if isinstance(mesh.layout, ComposedLayout):
+        return
+    shape, _strides, _offset = _positions_layout(mesh)
+    for topology, axes in zip(mesh.topologies, level_axes(mesh)):
+        if not isinstance(topology.size, int) or isinstance(topology.size, bool):
+            continue
+        count = 1
+        for axis in axes:
+            extent = shape[axis]
+            if not isinstance(extent, int) or isinstance(extent, bool):
+                count = None
+                break
+            count *= extent
+        if count is not None and count > topology.size:
             raise ValueError(
-                "a sliced mesh cannot be composed with another: the slice and the "
-                "level boundary would both be deciding which positions these are"
+                f"mesh level {topology.name!r} has {count} positions, exceeding declared extent {topology.size}"
             )
-        (topology,) = mesh.topologies
-        own = flatten(mesh.layout.strides)
-        if any(not isinstance(item, int) or isinstance(item, bool) for item in own):
-            raise ValueError(f"mesh level {topology.name!r} has no concrete strides to compose")
-        topologies.insert(0, topology)
-        shape[:0] = list(flatten(mesh.layout.shape))
-        strides[:0] = [item * below for item in own]
-        names[:0] = list(mesh.names)
-        size = topology.size
-        if not isinstance(size, int) or isinstance(size, bool) or size < 1:
-            raise ValueError(
-                f"mesh level {topology.name!r} states extent {size!r}; composing "
-                "scopes needs each of their position counts"
-            )
-        below *= size
-    return Mesh(
-        topologies=tuple(topologies),
-        layout=Layout(shape=tuple(shape), strides=tuple(strides)),
-        names=tuple(names),
-    )
 
 
 def level_projection(mesh: "Mesh", level: str) -> Layout:
@@ -254,4 +331,12 @@ def level_projection(mesh: "Mesh", level: str) -> Layout:
     return Layout(shape=tuple(shape[item] for item in axes), strides=tuple(kept))
 
 
-__all__ = ["Mesh", "Topology", "composed", "level_axes", "level_projection"]
+__all__ = [
+    "Mesh",
+    "Topology",
+    "composed",
+    "level_axes",
+    "level_projection",
+    "positions_at",
+    "check_topology",
+]

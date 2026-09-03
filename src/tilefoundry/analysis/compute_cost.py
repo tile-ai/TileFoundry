@@ -15,9 +15,15 @@ from tilefoundry.ir.core import Call, Expr, VerifyError
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.mesh_scope import MeshScope
 from tilefoundry.ir.types import DType
+from tilefoundry.ir.types.shard import Mesh, composed, level_axes
+from tilefoundry.ir.types.shard.mesh import _positions_layout
 from tilefoundry.ir.visitor import ExprVisitor
-from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope
+from tilefoundry.visitor_registry.contexts import (
+    CostContext,
+    FunctionScope,
+)
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
@@ -129,24 +135,56 @@ def _flops(flops: dict) -> tuple[tuple[str, int], ...]:
 
 
 def _call_cost_record(
-    expr: Call, whole: CostContext, local: CostContext
+    expr: Call, local: CostContext, executing_positions: int
 ) -> ComputeCostMetadata:
     """Measure the work one Call asks for, without attaching the record.
 
-    Work only: what an occurrence moves is the memory family's answer, asked of
-    the same registered evaluator. One declaration, two readers.
+    Work only: what an occurrence moves is the memory family's answer. Global
+    work is one selected unit's work repeated over the positions executing this
+    scope, so it is derived from the same registered evaluator rather than
+    independently recomputed from the authored type.
     """
     try:
-        whole_cost = CostEvaluator().visit(expr, whole)
         local_cost = CostEvaluator().visit(expr, local)
     except (ValueError, VerifyError) as error:
         raise AnalysisError(str(error)) from None
     return ComputeCostMetadata(
-        flops=_flops(whole_cost.flops),
+        flops=_flops(
+            {dtype: value * executing_positions for dtype, value in local_cost.flops.items()}
+        ),
         flops_per_unit=_flops(local_cost.flops),
-        service=tuple(sorted(whole_cost.service.items())),
+        service=tuple(
+            sorted(
+                (kind, value * executing_positions)
+                for kind, value in local_cost.service.items()
+            )
+        ),
         service_per_unit=tuple(sorted(local_cost.service.items())),
     )
+
+
+def _scope_position_count(
+    mesh: Mesh, level: str | None, topologies: tuple
+) -> int:
+    """Count positions at or above the selected level within *mesh*."""
+    if level is None:
+        return 1
+    declared = {topology.name: index for index, topology in enumerate(topologies)}
+    selected = declared[level]
+    shape, _strides, _offset = _positions_layout(mesh)
+    positions = 1
+    for topology, axes in zip(mesh.topologies, level_axes(mesh)):
+        if declared[topology.name] > selected:
+            continue
+        for axis in axes:
+            extent = shape[axis]
+            if not isinstance(extent, int) or isinstance(extent, bool) or extent < 1:
+                raise AnalysisError(
+                    f"compute-cost: mesh axis {axis} needs a positive static extent, "
+                    f"got {extent!r}"
+                )
+            positions *= extent
+    return positions
 
 
 def _accumulate(
@@ -169,10 +207,16 @@ def _accumulate(
 
 @dataclass
 class ComputeCostContext(AnalyzeContext):
-    """State carried through the compute-cost expression walk."""
+    """State carried through the compute-cost expression walk.
 
-    whole: CostContext | None = None
+    ``executing_positions`` is the number of positions in the enclosing scope
+    through the selected topology level; it is the D68 multiplier that turns
+    per-unit work into total replicated work.
+    """
+
     local: CostContext | None = None
+    current_mesh: Mesh | None = None
+    executing_positions: int = 1
     flops: dict[str, int] = field(default_factory=dict)
     flops_per_unit: dict[str, int] = field(default_factory=dict)
     service: dict[str, int] = field(default_factory=dict)
@@ -182,6 +226,19 @@ class ComputeCostContext(AnalyzeContext):
 
 class ComputeCostVisitor(ExprVisitor[None]):
     """Attach per-Call work and accumulate multiplicity-aware totals."""
+
+    def visit_MeshScope(self, expr: MeshScope, ctx: ComputeCostContext) -> None:
+        """Carry the region's execution multiplicity into each contained Call."""
+        for arg in expr.args:
+            self.visit(arg, ctx)
+        mesh = composed((ctx.current_mesh, expr.mesh)) if ctx.current_mesh else expr.mesh
+        positions = _scope_position_count(
+            mesh, ctx.level, ctx.module.effective_topologies()
+        )
+        self.visit(
+            expr.body,
+            replace(ctx, executing_positions=positions, current_mesh=mesh),
+        )
 
     def visit_GridRegionExpr(
         self, expr: GridRegionExpr, ctx: ComputeCostContext
@@ -200,9 +257,9 @@ class ComputeCostVisitor(ExprVisitor[None]):
         if not isinstance(expr, Call):
             return
         ctx.call_count[0] += 1
-        if ctx.whole is None or ctx.local is None:
-            raise AnalysisError("compute-cost: visitor context is missing cost contexts")
-        record = _call_cost_record(expr, ctx.whole, ctx.local)
+        if ctx.local is None:
+            raise AnalysisError("compute-cost: visitor context is missing its cost context")
+        record = _call_cost_record(expr, ctx.local, ctx.executing_positions)
         attach(expr, record)
         owner = ctx.current if id(expr) in ctx.current.accesses["narrow"] else ctx.root
         repeats = 1
@@ -229,7 +286,6 @@ def analyze_compute_cost(
     module, level = context.module, context.level
     topologies = module.effective_topologies()
     scope = FunctionScope(module, function)
-    whole = CostContext(scope=scope)
     local = CostContext(scope=scope, level=level, topologies=topologies)
     cost_context = ComputeCostContext(
         module=module,
@@ -238,7 +294,6 @@ def analyze_compute_cost(
         options=context.options,
         root=context.root,
         current=context.current,
-        whole=whole,
         local=local,
     )
     ComputeCostVisitor().visit(function.body, cost_context)

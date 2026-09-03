@@ -35,7 +35,6 @@ from tilefoundry.analysis.compute_cost import _local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.scope import build_scopes, walk_scopes
 from tilefoundry.ir.core import Call, describe_expr, get_metadata
-from tilefoundry.ir.core.metadata import ExecutionDomainMetadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.specialize import (
@@ -239,30 +238,20 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
 
 
 @pytest.mark.parametrize("case", INVENTORY)
-def test_every_concrete_program_answers_for_where_it_runs(case: ConcreteCase) -> None:
+def test_every_concrete_program_predicts_coherently(case: ConcreteCase) -> None:
     """Every placed program, at every size and selector it exposes.
 
     This inventory is the whole of what these four analyses are held to: it is
     read off the directory rather than from a list beside it, so a program added
     there is asked the same questions without anyone choosing to ask. Each of
-    them runs something inside a CTA Mesh, so each is asked for all four
-    families and has to answer with a coherent prediction.
+    them is asked for all four families and has to answer with a coherent
+    prediction.
     """
     owner, function = case.program()
     result = analyze(owner, function, analysis=FAMILIES, dims=case.dims)
 
     assert result.module is owner
     assert set(result.executed) == set(FAMILIES)
-    undomained = [
-        describe_expr(call)
-        for call in collect_exprs(result.function.body)
-        if isinstance(call, Call)
-        and not isinstance(call.target, Function)
-        and (get_metadata(call, ExecutionDomainMetadata) or ExecutionDomainMetadata())
-        .at("cta")
-        is None
-    ]
-    assert not undomained, f"{case.id}: {undomained}"
     assert_performance_contract(result)
 
 

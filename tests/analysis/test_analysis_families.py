@@ -234,14 +234,20 @@ def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
         assert cost is not None and bound is not None and summary is not None
         observed[name] = (
             dict(cost.service)["integer"],
+            dict(cost.service_per_unit)["integer"],
             bound.ideal_ns,
             summary.timeline.end_ns - summary.timeline.start_ns,
         )
 
-    literal_service, literal_roofline, literal_performance = observed["literal"]
-    symbolic_service, symbolic_roofline, symbolic_performance = observed["symbolic"]
+    literal_service, literal_local, literal_roofline, literal_performance = observed[
+        "literal"
+    ]
+    symbolic_service, symbolic_local, symbolic_roofline, symbolic_performance = observed[
+        "symbolic"
+    ]
     assert literal_roofline == symbolic_roofline == 139_407
-    assert symbolic_service - literal_service == 6
+    assert symbolic_local - literal_local == 6
+    assert symbolic_service - literal_service == 6 * 128
     assert symbolic_performance - literal_performance == 6
 
 

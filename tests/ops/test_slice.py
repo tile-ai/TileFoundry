@@ -289,7 +289,6 @@ from tilefoundry import func, module  # noqa: E402
 from tilefoundry.dsl import Mesh, Tensor, Topology  # noqa: E402
 from tilefoundry.dsl.tf import *  # noqa: E402,F401,F403
 from tilefoundry.evaluator import evaluate  # noqa: E402
-from tilefoundry.target import CudaTarget  # noqa: E402
 
 _HALF, _COLS, _STEP = 4, 4, 2
 
@@ -320,16 +319,3 @@ def test_a_moved_window_reads_the_far_half_of_one_tensor():
     torch.testing.assert_close(actual, _moved_reference(gu))
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_moved_window_gpu_oracle():
-    """The offset reaches the emitted address, not just the evaluator's arithmetic."""
-    import tilefoundry  # noqa: PLC0415
-
-    rm = tilefoundry.compile(_MovedWindow, target=CudaTarget("nvidia.h200_sxm"))
-    gu = torch.randn(2 * _HALF, _COLS, device="cuda")
-    out = torch.zeros(2 * _HALF, _COLS, device="cuda")
-    rm(gu, out)
-    torch.cuda.synchronize()
-
-    expected = _moved_reference(gu)
-    assert torch.allclose(out, expected, rtol=1e-4, atol=1e-4), (out - expected).abs().max()

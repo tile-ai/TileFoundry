@@ -159,24 +159,6 @@ def reject_dynamic_shards(ctx, call, types, op_name: str) -> None:
             )
 
 
-def require_compatible_meshes(ctx, call, types, op_name: str) -> None:
-    """Require all placed inputs to reference one mesh."""
-    placed = [
-        (index, layout)
-        for index, type_ in enumerate(types)
-        if (layout := shard_layout_of(type_.layout)) is not None
-    ]
-    if not placed:
-        return
-    mesh = placed[0][1].mesh
-    for index, layout in placed[1:]:
-        if layout.mesh != mesh:
-            ctx.error(
-                call,
-                f"input {index} references a different mesh; use an explicit Reshard before {op_name}",
-            )
-
-
 def require_uniform_partial_slices(ctx, call, types, output: ShardLayout, op_name: str) -> None:
     """Require every input to carry each Partial state derived for the output."""
     for mesh_axis, output_attr in enumerate(output.attrs):
@@ -204,6 +186,5 @@ __all__ = [
     "check_multilinear_partials",
     "require_matching_partial_state",
     "reject_dynamic_shards",
-    "require_compatible_meshes",
     "require_uniform_partial_slices",
 ]

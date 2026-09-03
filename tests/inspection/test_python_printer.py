@@ -81,11 +81,10 @@ def test_annotated_tuple_fields_each_name_the_hoisted_mesh():
 
 
 def test_an_annotated_layout_sugar_cannot_say_stays_verbose():
-    """Both fallbacks keep the whole layout, and they coexist with sugar.
+    """The fallback keeps the whole layout, and it coexists with sugar.
 
-    Sugar names a mesh axis, so a mesh with no named axes has nothing to name;
-    and a layout it cannot express at all (here a broadcast over one of several
-    meshes) also stays verbose. Neither may drop what the verbose form carries.
+    Sugar names a mesh axis, so a mesh with no named axes has nothing to name
+    and stays verbose without dropping what the verbose form carries.
     """
     unnamed_axes = as_script(GqaOnline, options=PythonPrintOptions(show_types=True))
     verbose = [
@@ -107,12 +106,7 @@ def test_an_annotated_layout_sugar_cannot_say_stays_verbose():
         if "  # Tensor[" in line
     ]
 
-    restated = "mesh=Mesh((Topology(\"cta\", 132),), Layout((132,), (1,)), names=('tile',))"
     assert any("@ cta_2.tile" in annotation for annotation in annotations)
-    broadcast = [a for a in annotations if "attrs=(B(),)" in a]
-    assert broadcast
-    for annotation in broadcast:
-        assert restated in annotation
 
 
 def test_binding_metadata_names_the_emitted_binding():

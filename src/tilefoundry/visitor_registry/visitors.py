@@ -15,15 +15,25 @@ from dataclasses import replace
 from tilefoundry.ir.core.expr import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.mesh_scope import MeshScope as HirMeshScope
+from tilefoundry.ir.hir.sharding.reshard import Reshard as HirReshard
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope
+from tilefoundry.ir.types.shard.mesh import composed
+from tilefoundry.ir.types.shard.scope_match import covered_by_scope, storage_reaches
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TupleType, Type, UnitType
 from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.ir.visitor import ExprVisitor, ExprWalker, StmtVisitor
 
-from .contexts import Cost, CostContext, TypeInferContext, VerifyContext
+from .contexts import (
+    Cost,
+    CostContext,
+    TypeInferContext,
+    VerifyContext,
+)
 from .registries import (
     AnalysisRegistry,
     cost_evaluator_registry,
@@ -50,6 +60,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
         self._owns_body = owns_body
 
     def visit(self, expr: Expr, ctx: TypeInferContext) -> Type:
+        """Derive one type while preserving the active execution domain."""
         outermost = self._visit_depth == 0
         if outermost:
             if self._memo_supplied:
@@ -73,6 +84,24 @@ class TypeInferVisitor(ExprVisitor[Type]):
 
     def visit_leaf_Call(self, call: Call, arg_types, ctx: TypeInferContext) -> Type:
         target = call.target
+        if ctx.current_mesh is not None and not isinstance(target, HirReshard):
+            for index, arg_type in enumerate(arg_types):
+                layout = getattr(arg_type, "layout", None)
+                if not isinstance(layout, ShardLayout):
+                    continue
+                if not covered_by_scope(layout.mesh, ctx.current_mesh):
+                    ctx.error(
+                        call,
+                        f"input {index} is laid out more finely than the scope it "
+                        "runs in; write it inside that scope, or reshard it back first",
+                    )
+                if not storage_reaches(arg_type.storage, layout.mesh, ctx.current_mesh):
+                    ctx.error(
+                        call,
+                        f"input {index} is laid out more coarsely and kept in "
+                        f"{arg_type.storage.name.lower()}, which does not reach the units "
+                        "this runs on; reshard it to smem or gmem first",
+                    )
         if isinstance(target, Function):
             return self._call_function(call, target, arg_types, ctx)
         op_cls = type(target)
@@ -155,6 +184,42 @@ class TypeInferVisitor(ExprVisitor[Type]):
             return inner.visit(grid.carried_args[0], ctx)
         return TupleType(fields=tuple(inner.visit(phi, ctx) for phi in grid.carried_args))
 
+    def visit_MeshScope(self, expr: HirMeshScope, ctx: TypeInferContext) -> Type:
+        """Type a region against the participants in force inside it.
+
+        Entering a scope composes it onto the mesh in force, so the body reads
+        the whole nesting. The resulting mesh goes down on a child context, so
+        the caller's own scope survives the recursion. The region types as its
+        body does: who runs the work is not a fact about the shape of what it
+        produced, and what one unit costs is cost's question.
+        """
+        arg_types = tuple(self.visit(arg, ctx) for arg in expr.args)
+        if len(arg_types) != len(expr.params):
+            ctx.error(
+                expr,
+                f"mesh scope expects {len(expr.params)} argument(s), got {len(arg_types)}",
+            )
+        for index, (param, arg_type) in enumerate(
+            zip(expr.params, arg_types, strict=True)
+        ):
+            if not types_compatible(param.annotation, arg_type):
+                ctx.error(
+                    expr,
+                    f"mesh scope arg {index} type mismatch for param {param.name!r}",
+                )
+        memo = {
+            **ctx.memo,
+            **{
+                id(param): (param, arg_type)
+                for param, arg_type in zip(expr.params, arg_types, strict=True)
+            },
+        }
+        from tilefoundry.ir.hir.verify import _verify_isolated  # noqa: PLC0415
+
+        _verify_isolated(expr, ctx)
+        mesh = composed((ctx.current_mesh, expr.mesh)) if ctx.current_mesh else expr.mesh
+        return self.visit(expr.body, replace(ctx, current_mesh=mesh, memo=memo))
+
     def visit_leaf_ShapeOf(
         self, shape_of: ShapeOf, _operands, ctx: TypeInferContext
     ) -> Type:
@@ -216,17 +281,11 @@ class VerifyVisitor(StmtVisitor[None]):
         super().generic_visit(stmt)
 
     def visit_MeshScope(self, stmt: MeshScope) -> None:
-        self.ctx.mesh_stack.append(stmt.mesh)
-        try:
-
-
-            fn = self.registry.lookup(MeshScope)
-            if fn is not None:
-                fn(stmt, self.ctx)
-            for child in stmt.body:
-                self.visit(child)
-        finally:
-            self.ctx.mesh_stack.pop()
+        fn = self.registry.lookup(MeshScope)
+        if fn is not None:
+            fn(stmt, self.ctx)
+        for child in stmt.body:
+            self.visit(child)
 
 
 class CodegenVisitor:

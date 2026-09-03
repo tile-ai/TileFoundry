@@ -23,7 +23,6 @@ from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
     Constant,
-    ExecutionDomainMetadata,
     Expr,
     SourceSpanMetadata,
     Var,
@@ -39,7 +38,9 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.grid_region import GridRegionExpr
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
+from tilefoundry.ir.hir.mesh_scope import MeshScope as HirMeshScope
 from tilefoundry.ir.hir.sharding.local import Local
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.specialize import DISPLAY_NAME
 from tilefoundry.ir.hir.tensor.arange import Arange
@@ -73,6 +74,7 @@ from tilefoundry.ir.types.shard import (
 )
 from tilefoundry.ir.types.shard.layout import LayoutBase
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
+from tilefoundry.ir.visitor import BindingSubstitutionCloner
 from tilefoundry.target import MemoryHierarchyFacts, Target, UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
@@ -221,6 +223,7 @@ def attach_authored_metadata(value: object, node: ast.AST, context: "MatchContex
 
 runtime = SimpleNamespace(
     Call=Call,
+    BindingSubstitutionCloner=BindingSubstitutionCloner,
     Broadcast=Broadcast,
     Binary=Binary,
     BinaryKind=BinaryKind,
@@ -234,7 +237,6 @@ runtime = SimpleNamespace(
     DimVar=DimVar,
     Evaluate=Evaluate,
     Expr=Expr,
-    ExecutionDomainMetadata=ExecutionDomainMetadata,
     Function=Function,
     GridRegionExpr=GridRegionExpr,
     Arange=Arange,
@@ -244,6 +246,8 @@ runtime = SimpleNamespace(
     Local=Local,
     LetStmt=LetStmt,
     MeshScope=MeshScope,
+    HirMeshScope=HirMeshScope,
+    MeshCoord=MeshCoord,
     Mesh=Mesh,
     Module=Module,
     OpSchema=OpSchema,
@@ -848,7 +852,7 @@ class ParserChildModuleResolver:
 
 @dataclass
 class ParserTypeInferContext(TypeInferContext):
-    """Type inference state with parser-local child-module resolution."""
+    """Type inference state bound alongside names in parser lexical frames."""
 
     child_resolver: ParserChildModuleResolver | None = None
 
@@ -856,6 +860,7 @@ class ParserTypeInferContext(TypeInferContext):
         if self.child_resolver is not None:
             return self.child_resolver.child_for(callee)
         return super().child_for(callee)
+
 
 @dataclass(frozen=True)
 class ModuleFunctionValidationRule:
@@ -1222,10 +1227,7 @@ class MatchContext:
             if function.module_scope is not None
             else None
         )
-        scope.define(
-            _TYPE_INFER_CONTEXT,
-            ParserTypeInferContext(child_resolver=provider),
-        )
+        resolved_mesh = None
         context = cls(
             function=function,
             module=None,
@@ -1235,23 +1237,18 @@ class MatchContext:
             values=function.hardware_context,
         )
         if function.mesh is not None:
-            try:
-                topologies = _resolve_mesh_topologies(
-                    function.mesh.topologies, function.topologies
-                )
-            except KeyError as error:
-                raise ParseError.from_node(
-                    ast.Name(id=error.args[0]),
-                    context,
-                    f"topology {error.args[0]!r} not declared by @module",
-                ) from error
-            except TypeError as error:
-                raise ParseError.from_node(
-                    ast.Name(id="mesh"), context, str(error)
-                ) from error
-            mesh = dataclasses.replace(function.mesh, topologies=topologies)
-            scope.define("mesh", mesh)
-            function.state.mesh_stack.append(mesh)
+            topologies = _resolve_mesh_topologies_at(
+                function.mesh.topologies,
+                function.topologies,
+                ast.Name(id="mesh"),
+                context,
+            )
+            resolved_mesh = dataclasses.replace(function.mesh, topologies=topologies)
+            scope.define("mesh", resolved_mesh)
+        scope.define(
+            _TYPE_INFER_CONTEXT,
+            ParserTypeInferContext(child_resolver=provider, current_mesh=resolved_mesh),
+        )
         return context
 
     def child(
@@ -1386,6 +1383,20 @@ class ParseError(VerifyError):
         cls, node: ast.AST, context: MatchContext, detail: str | None = None
     ) -> ParseError:
         return cls(node=node, context=context, detail=detail)
+
+
+def _resolve_mesh_topologies_at(topologies, declared, node, context):
+    """Resolve mesh levels and anchor declaration errors to *node*."""
+    try:
+        return _resolve_mesh_topologies(topologies, declared)
+    except KeyError as error:
+        raise ParseError.from_node(
+            node,
+            context,
+            f"topology {error.args[0]!r} not declared by @module",
+        ) from error
+    except TypeError as error:
+        raise ParseError.from_node(node, context, str(error)) from error
 
 
 def _unclaimed_detail(node: ast.AST) -> str | None:
@@ -1692,12 +1703,7 @@ def _infer_call(operation, args, context):
         placeholder_type = args[0].type
     if placeholder_type is None:
         placeholder_type = runtime.TensorType.scalar(runtime.DType.f32)
-    metadata = ()
-    if context.function is not None and context.function.state.mesh_stack:
-        metadata = (runtime.ExecutionDomainMetadata(tuple(context.function.state.mesh_stack)),)
-    placeholder = runtime.Call(
-        type=placeholder_type, target=operation, args=tuple(args), metadata=metadata
-    )
+    placeholder = runtime.Call(type=placeholder_type, target=operation, args=tuple(args))
     infer_context = context.lexical_scope.lookup(_TYPE_INFER_CONTEXT)
     if not isinstance(infer_context, runtime.TypeInferContext):
         infer_context = runtime.TypeInferContext()

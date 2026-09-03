@@ -10,18 +10,34 @@ from tests.ops.cost_utils import CostCase, run_cost_case
 from tilefoundry import func
 from tilefoundry.dsl import DimVar, Tensor, tf
 from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.core import Call
+from tilefoundry.evaluator.registry import eval_registry
+from tilefoundry.evaluator.value import EvalError
+from tilefoundry.ir.core import Call, Constant
 from tilefoundry.ir.core.errors import VerifyError
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.specialize import residual_dims, specialize_concretely
 from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import ceildiv
 from tilefoundry.ir.types.dim_isl import normalize_dim
+from tilefoundry.ir.types.shard import Layout, Mesh, Topology, composed
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
 _N = DimVar("arange_n", 1, 17)
+
+_COORD_MESH = Mesh(
+    (Topology("thread", 4),), Layout((4,), (1,)), ("t",)
+)
+_COORD_INDEX = TensorType(
+    shape=(), dtype=DType.i64, layout=None, storage=StorageKind.RMEM
+)
+
+
+def _coord(mesh: Mesh = _COORD_MESH) -> Call:
+    axis = Constant(value=0, type=_COORD_INDEX)
+    return Call(type=_COORD_INDEX, target=MeshCoord(mesh=mesh), args=(axis,))
 
 
 def _infer(op: Arange) -> TensorType:
@@ -102,3 +118,32 @@ def test_arange_symbolic_extent_resolves_from_runtime_shape():
 def test_arange_rejects_unsupported_attributes(op, message):
     with pytest.raises(VerifyError, match=message):
         _infer(op)
+
+
+def test_a_bound_mesh_coordinate_is_one_number_without_placement() -> None:
+    inferred = TypeInferVisitor().visit(
+        _coord(), TypeInferContext(current_mesh=_COORD_MESH)
+    )
+    assert inferred.shape == ()
+    assert inferred.dtype == DType.i64
+    assert inferred.layout is None
+    assert inferred.storage is StorageKind.RMEM
+
+
+def test_an_unbound_mesh_coordinate_is_rejected() -> None:
+    with pytest.raises(ValueError, match="must be bound by the current mesh scope"):
+        TypeInferVisitor().visit(_coord(), TypeInferContext())
+
+
+def test_an_inner_mesh_coordinate_is_bound_by_a_multilevel_scope() -> None:
+    cta = Mesh((Topology("cta", 2),), Layout((2,), (1,)), ("c",))
+    current = composed((cta, _COORD_MESH))
+    assert TypeInferVisitor().visit(
+        _coord(), TypeInferContext(current_mesh=current)
+    ) == _COORD_INDEX
+
+
+def test_mesh_coordinate_evaluation_is_explicitly_unmodelled() -> None:
+    handler = eval_registry.lookup(MeshCoord)
+    with pytest.raises(EvalError, match="one mesh participant"):
+        handler(None)

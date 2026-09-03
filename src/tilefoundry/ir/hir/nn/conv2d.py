@@ -195,21 +195,11 @@ def _require_group_aligned_output_split(call, ctx, weight, bias, groups: int) ->
 def _require_exact_partial_state(call, ctx, x, weight, bias) -> None:
     named = (("input", x), ("weight", weight), ("bias", bias))
     placed = [
-        (index, name, layout)
-        for index, (name, type_) in enumerate(named)
+        (name, layout)
+        for name, type_ in named
         if (layout := shard_layout_of(type_.layout)) is not None
     ]
-    if placed:
-        mesh = placed[0][2].mesh
-        for index, name, layout in placed[1:]:
-            if layout.mesh != mesh:
-                ctx.error(
-                    call,
-                    f"{name} (input {index}) references a different mesh; use "
-                    "an explicit Reshard before Conv2D",
-                )
-    else:
-        mesh = None
+    mesh = placed[0][1].mesh if placed else None
 
     check_multilinear_partials(ctx, call, (("input", x), ("weight", weight)))
     contraction_splits: dict[int, tuple[str, int]] = {}

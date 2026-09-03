@@ -178,7 +178,7 @@ class PrimFunction(Stmt):
   appear directly as `LetStmt.value`. Nesting it inside any other
   Expr is rejected.
 - **`MeshScope` mesh in scope**. Any embedded `ShardLayout` MUST
-  reference a mesh on the active `MeshScope` stack or a parameter's
+  reference a mesh on the active TIR `MeshScope` traversal cache or a parameter's
   `ShardLayout.mesh`.
 - **`Evaluate.callable`**. When `callable` is a `SymbolRef`
   ([§2.1](#21-symbolref)), module-level resolution MUST find exactly one
@@ -990,7 +990,7 @@ A `T.mma` carrying an `atom` MUST satisfy:
 
 - **operand contracts**: `acc.layout == atom.C`, `lhs.layout == atom.A`,
   `rhs.layout == atom.B`.
-- **scope**: some mesh on the active `MeshScope` stack provides the
+- **scope**: some mesh on the active TIR `MeshScope` traversal cache provides the
   atom's required thread scope —
   `mesh_scope_matches_required_scope(mesh, atom.required_scope)`. The
   match is identity- and name-independent (mesh object identity, the

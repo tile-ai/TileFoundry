@@ -36,13 +36,13 @@ KINDS = [{"mamba": "linear_attention", "attention": "full_attention"}.get(k, k)
 E = CFG["n_routed_experts"]
 K = CFG["num_experts_per_tok"]
 
-#: The mesh extent. A `with Mesh` scope has to cover its topology level exactly,
-#: and a Split axis has to divide by the mesh extent, so the extent has to divide
+#: A Split axis has to divide by its mesh extent, so the placement extent has to divide
 #: every output axis this program places: 2688, 4096, 6144, 3712, 1856, 256, 128
 #: and 131072. Their gcd is 64. 132 -- the target's SM count -- divides none of
 #: them, and 128 misses 1856 = 2**6 * 29, which is the MoE expert width. So the
 #: HIR states a 64-wide division and the kernel splits finer, with a ragged
 #: remainder the divisibility rule here cannot express.
+CTA_CAPACITY = 132
 U = 64
 UE = U
 #: Attention KV blocking: the K and V tile a scan step stages into smem.
@@ -90,7 +90,17 @@ def fresh(i, kind):
     return []
 
 
-def proj(var, out, x, w, n, shardable=True, kdim="H", nk=True, axis="cta.u"):
+def proj(
+    var,
+    out,
+    x,
+    w,
+    n,
+    shardable=True,
+    kdim="H",
+    nk=True,
+    axis="cta.g @ cta.w",
+):
     """`out = x @ w` contracted over *kdim*, placed as *var* asks.
 
     *nk* says how `w` is stored: True for `(out, in)` -- what HF stores for every
@@ -367,14 +377,14 @@ def moe_body(i, var):
             # token, and contracts its own slice away again. The `down` weight is
             # stored (in, out) so that slice is contiguous bytes.
             lines += [
-                f"{p}_uw{j} = tf.reshard({p}_u{j}, (I @ cta.u, H), \"gmem\")",
+                f"{p}_uw{j} = tf.reshard({p}_u{j}, (I @ cta.g @ cta.w, H), \"gmem\")",
                 f"{p}_us{j} = tf.square(tf.relu(tf.matmul({p}_h2, {p}_uw{j},"
                 f" b_layout=\"NK\")))",
                 # The down half contracts the whole intermediate, so the split
                 # the up half made has to be completed first: this reshard is
                 # the barrier between an expert's two matmuls.
                 f"{p}_ms{j} = tf.reshard({p}_us{j}, (1, I), \"gmem\")",
-                f"{p}_dw{j} = tf.reshard({p}_d{j}, (H @ cta.u, I), \"gmem\")",
+                f"{p}_dw{j} = tf.reshard({p}_d{j}, (H @ cta.g @ cta.w, I), \"gmem\")",
                 f"{p}_rs{j} = tf.matmul({p}_ms{j}, {p}_dw{j}, b_layout=\"NK\")",
                 f"{p}_r{j} = tf.cast(tf.reshape(tf.reshard({p}_rs{j}, (1, H), \"gmem\"),"
                 f" new_shape=(H,)), dtype=\"f32\")",
@@ -504,13 +514,14 @@ RSCALE = config["routed_scaling_factor"]
 
 CAP = config["max_position_embeddings"]
 
+#: The target capacity bounds every CTA mesh; individual placements may use less.
+CTA_CAPACITY = {CTA_CAPACITY}
 #: Placement extents; gen_model.py records why each is what it is.
 U = {U}
 UE = {UE}
 ABLK = {ABLK}
 WRK = {WRK}
-#: Workers under the head axis, for the short-context placement. 33 x 4 is the
-#: SM count, which is what the kernel's grid is.
+#: Workers under the head axis: 32 heads x 4 workers uses 128 of 132 CTAs.
 WRKH = {WRKH}
 #: Where the two attention placements change over, read off the per-unit work
 #: of each (`attention.py`), not tuned: at ctx_full = 2048 walking the whole
@@ -739,10 +750,11 @@ def build(var: int) -> str:
                          nmamba=KINDS.count("linear_attention"),
                          nattn=KINDS.count("full_attention"),
                          nmoe=KINDS.count("moe"),
-                         U=U, UE=UE, ABLK=ABLK, WRK=WRK,
+                         CTA_CAPACITY=CTA_CAPACITY, U=U, UE=UE, ABLK=ABLK, WRK=WRK,
                          WRKH=WRKH, CROSSOVER=CROSSOVER)]
     out.append("\n\n@module(entry=\"decode_step\", target=_H200,\n"
-               "        topologies=(Topology(\"cta\", U), Topology(\"thread\", 256)))\n"
+               "        topologies=(Topology(\"cta\", CTA_CAPACITY), "
+               "Topology(\"thread\", 256)))\n"
                "class Nemotron35Lightning30BA3B:\n"
                "    \"\"\"The published model, and its decode step as one program.\"\"\"\n\n"
                + scan_funcs(var)
@@ -768,11 +780,12 @@ def build(var: int) -> str:
 
     ind = "        "
     body = [
-        ind + "# The one mesh every stage of this step is placed on; `cta.u` is",
-        ind + "# the axis an output row lands on. Everything is inside it: an op",
+        ind + "# The one mesh every stage of this step is placed on; `cta.g` and",
+        ind + "# `cta.w` together say which output row lands on a CTA. Everything",
+        ind + "# is inside it: an op",
         ind + "# authored outside a cta Mesh has no execution domain to be",
         ind + "# scheduled against.",
-        ind + "with Mesh((\"cta\",), layout=(U,), names=(\"u\",)) as cta:",
+        ind + "with Mesh((\"cta\",), layout=(HKV, WRK), names=(\"g\", \"w\")) as cta:",
     ]
     ind += "    "
     body += [
@@ -781,7 +794,7 @@ def build(var: int) -> str:
         ind + "tid = token_ids[0]",
         ind + "h = tf.reshape(table[tid:tid + 1, :], new_shape=(1, 1, H))",
     ]
-    if var >= 4:
+    if var == 4:
         body += [
             ind + "# Long context divides over a second axis: one worker per KV",
             ind + "# block stripe, combined by log-sum-exp at the end of the scan.",

@@ -81,7 +81,9 @@ def _collect_view_meshes(root) -> dict[int, "Mesh"]:
     """
     meshes: dict[int, Mesh] = {}
     for _label, fn in _renderable_functions(root):
-        meshes.update(_collect_meshes(fn, include_node_types=True))
+        type_meshes, scope_meshes = _collect_meshes(fn, include_node_types=True)
+        meshes.update(type_meshes)
+        meshes.update(scope_meshes)
     return meshes
 
 

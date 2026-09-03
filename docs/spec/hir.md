@@ -1,7 +1,8 @@
 # TileFoundry Spec — hir (`@func` pure SSA dataflow IR)
 
 Defines HIR, the pure SSA-as-DAG dataflow IR: its `Expr` constructs — the
-`Function` container, the structured-SSA exception `GridRegionExpr`, and the
+`Function` container, the structured-SSA exceptions `GridRegionExpr` and
+`MeshScope`, and the
 HIR Op subdirectories (math / tensor / nn / shape / sharding) — together with
 their HIR-specific typing rules. Mesh scope is authored in the parser
 ([parser](./parser.md)) and its `Mesh` / `Topology` are defined by shard
@@ -14,20 +15,23 @@ flowchart TB
     Op["<b>Op</b><br/>(core-ir)"]
     Function["<b>Function</b> (Expr)"]
     GridRegionExpr["<b>GridRegionExpr</b> (Expr)"]
+    MeshScope["<b>MeshScope</b> (Expr)"]
     HirOpBase["<b>hir.Op</b> subclasses<br/>math / tensor / nn / shape / sharding"]
 
     Expr --> Function
     Expr --> GridRegionExpr
+    Expr --> MeshScope
     Op --> HirOpBase
 ```
 
 ## 1. HIR Expr constructs
 
 HIR values are `Expr` nodes ([core-ir §2](./core-ir.md#2-expr)): a `Function`
-container, the loop-phi-shaped `GridRegionExpr`, and value `Op` calls. HIR is
+container, the loop-phi-shaped `GridRegionExpr`, the execution-region
+`MeshScope`, and value `Op` calls. HIR is
 pure **SSA-as-DAG** — there are no `Region` / `Block` abstractions and no Stmt
-sequence; the single structured exception that carries loop-phi-shaped SSA is
-`GridRegionExpr`.
+sequence; `GridRegionExpr` carries loop-phi-shaped SSA and `MeshScope` carries
+the structured execution region.
 
 ### 1.1 `Function`
 
@@ -411,6 +415,34 @@ node's stamped `.type`.
 (multi-carry); the value is the Expr itself, not a `Call`.
 Parser-side rules: see
 [parser §3](./parser.md#3-implementation-overview).
+
+### 1.2.1 `MeshScope`
+
+```python
+class MeshScope(Expr):
+    """Represent the execution domain of one structured HIR region."""
+
+    mesh: Mesh
+    params: tuple[Var, ...]
+    args: tuple[Expr, ...]
+    body: Expr
+```
+
+- constraints:
+  - `mesh` is the mesh opened by this region. Visitors compose it with the
+    enclosing execution mesh at the body edge; the `args` edge is evaluated
+    outside the region.
+  - `params` and `args` have equal length. The body may reference each captured
+    value only through its corresponding parameter; an argument is never read
+    directly from the body. This is the same binding boundary as `Function`.
+  - The region result is reachable through the values that escape its lexical
+    body. A single escaping value is the region's `body`; multiple escaping
+    values are carried by a `Tuple` and read through `TupleGetItem` projections.
+  - `MeshScope` is type-transparent: `MeshScope.type == MeshScope.body.type`.
+    Its execution domain never changes the result's `ShardLayout`.
+  - A body with no value is permitted only when at least one value escapes
+    through a later binding; a body with no value and no escaping value is a
+    parse error.
 
 **Minimal example** — loop-carried accumulator:
 
@@ -1416,6 +1448,23 @@ class RoPE(Op):
 
 `ShardLayout` and `Mesh` are type-system constructs, not Expr inputs
 ([shard §5](./shard.md#5-mesh)).
+
+##### MeshCoord
+
+```python
+class MeshCoord(Op):
+    """Return the current participant's coordinate along one mesh axis."""
+
+    mesh: Mesh
+    axis: Expr
+```
+
+- constraints:
+  - The result is an `i64` scalar with `layout=None` and no placement.
+  - Type inference MUST reject a mesh that is not bound by the current
+    `MeshScope`.
+  - Evaluation MUST raise `EvalError`, because the evaluator models values
+    without selecting one physical participant.
 
 ##### Reshard
 ```python

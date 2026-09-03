@@ -1,13 +1,4 @@
-"""Per-analysis Context dataclasses.
-
-TypeInferContext is the type-inference dispatch + unified error helper. VerifyContext
-extends it with a mesh scope stack. CostContext seeds recursive-local Cost
-Evaluators with the selected candidate's input/output Types.
-
-The concrete CUDA CodegenContext lives in tilefoundry.codegen.cuda.context —
-this module only needs the generic contract, so codegen-side context is
-imported indirectly (no cycle).
-"""
+"""Per-analysis context dataclasses used by registry visitors."""
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -23,7 +14,7 @@ from tilefoundry.ir.core.metadata import (
     get_metadata,
 )
 from tilefoundry.ir.core.stmt import Stmt
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types.shard import Mesh, Topology
 from tilefoundry.ir.types.tensor_type import DType, Type
 from tilefoundry.ir.types.utils import local_type_of
 
@@ -47,13 +38,12 @@ class TypeInferContext:
     """Track walk location and route type-inference queries.
 
     Derivation lives in ``TypeInferVisitor``. ``scope`` says where the walk is
-    reading. ``mesh_scope`` carries enclosing scopes to statement verifiers
-    without generic verification importing operation classes.
+    reading. ``current_mesh`` is the composed HIR execution domain.
     See [visitor-registry §4](docs/spec/visitor-registry.md#4-instance-1--typeinfer).
     """
 
     scope: FunctionScope | None = None
-    mesh_scope: tuple = ()
+    current_mesh: Mesh | None = None
     memo: dict[int, tuple[Expr, Type]] = field(default_factory=dict, repr=False, compare=False)
     instantiated_memo: dict[tuple[int, tuple[Type, ...]], Type] = field(
         default_factory=dict, repr=False, compare=False
@@ -76,8 +66,18 @@ class TypeInferContext:
         return FunctionScope(child or self.scope.module, callee)
 
     def for_callee(self, callee: object) -> TypeInferContext:
-        """Move to *callee* with a fresh scope memo and the shared call cache."""
-        return replace(self, scope=self.scope_for(callee), memo={})
+        """Move to *callee* with a fresh scope memo and the shared call cache.
+
+        The mesh scope resets with them: a callee runs on the participants its
+        own body names, not on the caller's as well, so asking what a call runs
+        on is a question about `callee.body` and reaches no further.
+        """
+        return replace(
+            self,
+            scope=self.scope_for(callee),
+            memo={},
+            current_mesh=None,
+        )
 
     def type_of(self, expr: Expr) -> Type:
         """Read a bound type from this scope, falling back to the node type."""
@@ -109,14 +109,14 @@ class TypeInferContext:
 
 @dataclass
 class VerifyContext(TypeInferContext):
-    """Extends TypeInferContext with a mesh scope stack.
+    """The context a per-stmt verify handler is annotated against.
 
-    VerifyVisitor pushes/pops the enclosing `MeshScope.mesh` as it traverses,
-    so per-stmt verify handlers can check that any `ShardLayout.mesh`
-    referenced at the current point is in scope (see [tir §1.3](docs/spec/tir.md#13-primfunction)).
+    The enclosing scope a handler asks about is the TIR ``mesh_scope``
+    tuple, set by whoever walks the statements
+    (see [tir §1.3](docs/spec/tir.md#13-primfunction)).
     """
 
-    mesh_stack: list = field(default_factory=list)
+    mesh_scope: tuple = ()
 
 
 @dataclass

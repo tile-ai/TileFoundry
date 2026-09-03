@@ -496,16 +496,6 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
     assert analyzed_npu.returncode == 0, analyzed_npu.stderr
     assert analyzed_npu.stdout == ""
     assert json.loads((tmp_path / "npu.json").read_text(encoding="utf-8"))["target"] == "vendor.npu"
-    unplaced_npu = _run_cli(
-        registry,
-        tmp_path,
-        "analyze",
-        f"{npu_model}:model",
-        str(tmp_path / "unplaced.py"),
-        "--performance",
-    )
-    assert unplaced_npu.returncode == 1
-    assert "has no core execution domain" in unplaced_npu.stderr
     cuda_model = _write_registered_model(
         tmp_path / "cuda_model.py",
         target='CudaTarget("vendor.v100_sxm2_32gb")',
@@ -793,7 +783,12 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
     hoisted = {
         line.split(" = ", 1)[0] for line in lines if " = Mesh((Topology(" in line
     }
-    assert hoisted == {"cta", "cta_2", "cta_3", "cta_4"}
+    scoped = {
+        line.lstrip().split()[1]
+        for line in lines
+        if line.lstrip().startswith("with ")
+    }
+    assert hoisted == {"cta", "cta_2"} | scoped
     annotated_types = [
         line.split("  # ", 1)[1].split("; ", 1)[0] for line in lines if "  # Tensor[" in line
     ]
@@ -826,8 +821,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         annotated_meshes = set(re.findall(r"@ (\w+)\.", statement.split("  # ", 1)[1]))
         assert annotated_meshes <= hoisted
         placed_meshes = set(re.findall(r"mesh=(\w+),", statement))
-        if annotated_meshes and placed_meshes:
-            assert annotated_meshes == placed_meshes
+        assert placed_meshes <= hoisted
     assert len([line for line in lines if "; performance=" in line]) == len(timed)
     assert len({row["value"] for row in rows}) == len(rows)
     assert "units=" not in annotated

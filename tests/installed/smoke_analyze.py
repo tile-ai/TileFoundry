@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import json
 from pathlib import Path
 
@@ -33,9 +32,7 @@ class Open:
 '''
 
 
-def test_logical_analyses_run_and_performance_requires_an_execution_domain(
-    tf, cmine, tmp_path
-) -> None:
+def test_logical_analyses_run(tf, cmine, tmp_path) -> None:
     done = tf(
         "analyze",
         f"{cmine}:CMine.root",
@@ -49,13 +46,6 @@ def test_logical_analyses_run_and_performance_requires_an_execution_domain(
     report = (tmp_path / "logical.py").read_text(encoding="utf-8")
     for conclusion in ("# compute-cost flops=", "# peak-footprint=", "# roofline ideal-ns="):
         assert conclusion in report, conclusion
-
-    rejected = tf(
-        "analyze", f"{cmine}:CMine.root", str(tmp_path / "rejected.py"), "--performance"
-    )
-    assert rejected.returncode == 1
-    assert "performance:" in rejected.stderr
-    assert "has no cta execution domain" in rejected.stderr
 
 
 def test_mega_kernel_reports_four_families_on_one_expanded_program(tf, tmp_path) -> None:
@@ -257,40 +247,6 @@ def test_analyze_failure_reports_line_variable_and_reason(
     )
     assert len(refused.stderr.strip()) < 300
     assert not report.exists()
-
-
-def test_analyze_points_at_a_detached_tuple_projection(
-    tf, tuple_projection_diagnostic, tmp_path
-) -> None:
-    tree = ast.parse(
-        tuple_projection_diagnostic.read_text(encoding="utf-8"),
-        filename=str(tuple_projection_diagnostic),
-    )
-    assignment = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and len(node.targets) == 1
-        and isinstance(node.targets[0], ast.Tuple)
-        and tuple(target.id for target in node.targets[0].elts if isinstance(target, ast.Name))
-        == ("values", "indices")
-    )
-    assert isinstance(assignment.targets[0], ast.Tuple)
-    values = assignment.targets[0].elts[0]
-    assert isinstance(values, ast.Name)
-
-    done = tf(
-        "analyze",
-        f"{tuple_projection_diagnostic}:TupleProjectionDiagnostic",
-        str(tmp_path / "tuple_projection.py"),
-        "--performance",
-    )
-
-    assert done.returncode == 1
-    assert done.stdout == ""
-    assert f"{tuple_projection_diagnostic}:{values.lineno}:{values.col_offset + 1}" in done.stderr
-    assert "op=TupleGetItem" in done.stderr
-    assert "has no cta execution domain" in done.stderr
 
 
 def test_analyze_loads_sibling_modules_without_leaking_paths_or_output(

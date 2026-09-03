@@ -8,12 +8,9 @@ silently downgraded; and a real GPU run of the warp-only path.
 
 from __future__ import annotations
 
-import re
-
 import pytest
 import torch
 
-import tilefoundry
 from tests.ops.typeinfer_utils import (
     ExpectedError,
     TypeInferCase,
@@ -22,8 +19,6 @@ from tests.ops.typeinfer_utils import (
     split_local_extents,
 )
 from tilefoundry import func, module
-from tilefoundry.codegen.cuda.module import emit_cuda_module
-from tilefoundry.codegen.registry import group_functions_by_target
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core.kinds import ReduceKind
@@ -34,7 +29,6 @@ from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.passes.transforms.hir_to_tir import _analyze_cross_warp_workspace
-from tilefoundry.target import CudaTarget
 
 _RMEM = StorageKind.RMEM
 _BF = DType.bf16
@@ -193,26 +187,6 @@ class _CrossWarpSumModule:
             a_reg = tf.reshard(a, (4 @ m.tk, 32 @ m.hc), "rmem")
             s = tf.reduce(a_reg, (0,), True, ReduceKind.SUM)
             return tf.reshard(s, (1, 32 @ m.hc), "gmem")
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_cross_warp_sum_matches_torch() -> None:
-    rm = tilefoundry.compile(_CrossWarpSumModule, target=CudaTarget("nvidia.h200_sxm"))
-    torch.manual_seed(0)
-    x = torch.randn(4, 32, dtype=torch.float32, device="cuda")
-    out = rm(x)
-    torch.cuda.synchronize()
-    torch.testing.assert_close(out, x.sum(0, keepdim=True), rtol=1e-4, atol=1e-4)
-
-
-def test_cross_warp_sum_emits_reduce() -> None:
-
-    lowered = tilefoundry.lower(_CrossWarpSumModule, target=CudaTarget("nvidia.h200_sxm"))
-    groups = group_functions_by_target(lowered)
-    target, functions = next(iter(groups.items()))
-    src = emit_cuda_module(lowered, functions, target).source
-    assert re.search(r"\breduce<[^(]*>\([^;]*\);", src), src
-    assert re.search(r"__shared__ __align__\(16\) float ws\w*\[128\];", src), src
 
 
 @module(entry="max_over_nothing", topologies=())

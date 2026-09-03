@@ -242,9 +242,6 @@ def derive_output_shard_layout(
     if not sharded:
         return None
     mesh = sharded[0][1].mesh
-    for i, sl in sharded:
-        if sl.mesh != mesh:
-            raise ValueError(f"input {i} references a different mesh")
     mesh_rank = len(mesh.layout.shape)
 
     *input_maps, output_map = boundary_maps(relations)

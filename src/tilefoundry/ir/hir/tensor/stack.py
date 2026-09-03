@@ -14,7 +14,6 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import (
     reject_dynamic_shards,
-    require_compatible_meshes,
     require_uniform_partial_slices,
 )
 from tilefoundry.ir.types import TensorType
@@ -68,7 +67,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_shape.insert(axis, len(call.args))
     new_shape = tuple(new_shape)
     reject_dynamic_shards(ctx, call, types, "Stack")
-    require_compatible_meshes(ctx, call, types, "Stack")
     try:
         relation = relations_of(call, ctx)
         layout = derive_output_shard_layout(tuple(types), relation, new_shape, fresh_strides=True)

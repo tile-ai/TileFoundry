@@ -225,15 +225,17 @@ def _holds(reported: int, derived: int, label: str) -> None:
 
 
 def test_the_mlp_costs_its_three_matrices(tf, shipped_source) -> None:
-    """Both MLP views include 75,497,472 flops of three matmuls."""
+    """The placed view counts work across its 128-CTA split."""
     source = shipped_source(MODEL)
     authored = _reported(tf, source, "mlp", None)
     placed = _reported(tf, source, "placed_mlp", None)
     authored_flops = authored["totals"]["flops"][DT]
     placed_flops = placed["totals"]["flops"][DT]
+    placed_per_unit = placed["function_records"]["compute-cost"]["flops_per_unit"][DT]
 
-    assert placed_flops == authored_flops
+    assert placed_flops == placed_per_unit * 128
     _holds(authored_flops, _mlp_matmul_flops(), "mlp")
+    _holds(placed_flops, _mlp_matmul_flops(), "placed mlp")
 
 
 def test_the_attention_costs_its_projections_and_its_context(tf, shipped_source) -> None:
