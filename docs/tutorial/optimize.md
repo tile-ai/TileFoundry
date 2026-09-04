@@ -227,10 +227,4 @@ twin.py:Fast
 PASS
 ```
 
-## Where the other answers are
-
-This page changed one placement decision and priced it.
-`tilefoundry tutorial authoring` takes one kernel through six of them, with the analysis
-output after each. `tilefoundry analyze --help` lists the other selectors,
-`tilefoundry check --help` states every predicate and how to derive a tolerance for a
-dtype, and `tilefoundry spec` is the normative reference behind both.
+`tilefoundry tutorial showcase` takes one kernel through six placement decisions, with the analysis output after each. `tilefoundry analyze --help` lists the other selectors, `tilefoundry check --help` states every predicate and how to derive a tolerance for a dtype, and `tilefoundry spec` is the normative reference behind both.

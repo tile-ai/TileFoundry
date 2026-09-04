@@ -7,7 +7,7 @@ from pathlib import Path
 from tilefoundry.cli import data
 from tilefoundry.cli.models import render_source_directory, source_summary
 
-PAGES: tuple[str, ...] = ("index", "migrate", "optimize", "authoring")
+PAGES: tuple[str, ...] = ("index", "migrate", "optimize", "showcase")
 
 
 def page_path(page: str) -> Path:
@@ -22,12 +22,15 @@ def render_page(page: str) -> str:
     return page_path(page).read_text(encoding="utf-8").rstrip() + "\n"
 
 
-def render_index() -> str:
-    """The pages there are, and how to read one."""
-    rendered = render_page("index")
-    beside = ["", "The pages:", ""]
+def page_lines() -> list[str]:
+    """One line per page a reader may ask for: the name, and the page's own title.
+
+    The title is read from the page rather than restated here, so a retitled page
+    cannot start describing itself differently in the help than on its first line.
+    """
+    lines = []
     for page in PAGES[1:]:
-        heading = next(
+        title = next(
             (
                 line.lstrip("# ").strip()
                 for line in page_path(page).read_text(encoding="utf-8").splitlines()
@@ -35,9 +38,9 @@ def render_index() -> str:
             ),
             page,
         )
-        beside.append(f"  {page:<9} {heading}")
-    beside += ["", "Read one with `tilefoundry tutorial <page>`."]
-    return rendered + "\n".join(beside) + "\n"
+        lines.append(f"    {page:<13}{title}")
+    lines.append(f"    {'orchestrator':<13}the shipped decode loops; name a FAMILY for one")
+    return lines
 
 
 def _orchestrator_families() -> tuple[Path, ...]:
@@ -79,7 +82,7 @@ def run_tutorial(page: str | None, family: str | None = None) -> int:
     import sys  # noqa: PLC0415
 
     if page is None:
-        rendered = render_index()
+        rendered = render_page(PAGES[0])
     elif page == "orchestrator":
         rendered = render_orchestrators() if family is None else render_orchestrator(family)
     elif family is not None:
@@ -92,8 +95,8 @@ def run_tutorial(page: str | None, family: str | None = None) -> int:
 
 __all__ = [
     "PAGES",
+    "page_lines",
     "page_path",
-    "render_index",
     "render_orchestrator",
     "render_orchestrators",
     "render_page",

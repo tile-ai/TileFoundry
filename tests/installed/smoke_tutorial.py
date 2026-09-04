@@ -73,7 +73,7 @@ def _reproduce(match: re.Match[str], region: str, *, python: Path, cwd: Path) ->
     assert ahead.startswith(shown), f"{block}\n{_difference(shown, ahead)}"
 
 
-NOTEBOOK_PAGES = ("migrate", "optimize", "authoring")
+NOTEBOOK_PAGES = ("migrate", "optimize", "showcase")
 
 
 def test_the_index_names_the_pages_there_are(tf) -> None:
