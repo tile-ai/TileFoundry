@@ -42,7 +42,7 @@ class TirRuntimeCase:
 
 def _square_invocation(runtime) -> TirInvocation:
     torch.manual_seed(0)
-    x = torch.rand(128, dtype=torch.float32, device="cuda")
+    x = torch.randn(128, dtype=torch.float32, device="cuda")
     expected = x.square()
     return TirInvocation(
         run=lambda: runtime(x),
@@ -99,7 +99,7 @@ def _async_copy_invocation(runtime) -> TirInvocation:
 
 def _sync_invocation(runtime) -> TirInvocation:
     torch.manual_seed(4)
-    x = torch.rand(4, 32, dtype=torch.float32, device="cuda")
+    x = torch.randn(4, 32, dtype=torch.float32, device="cuda")
     expected = x.square()
     return TirInvocation(
         run=lambda: runtime(x),
