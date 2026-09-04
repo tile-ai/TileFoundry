@@ -10,11 +10,14 @@ import tilefoundry.codegen.cuda  # noqa: F401
 from tests._source import import_dsl
 from tests.integration.test_mma_tir_handwritten import MmHandwritten
 from tests.ir.test_dispatch_call import _build_module as build_dispatch_functions
+from tests.ir.tir.test_async_copy import AsyncStage
+from tests.ir.tir.test_sync import SyncSquare
 from tilefoundry import module, prim_func
 from tilefoundry.codegen.cuda.context import CodegenContext
-from tilefoundry.dsl import Tensor
+from tilefoundry.dsl import T, Tensor
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Constant, Op, Var
+from tilefoundry.ir.core.kinds import BinaryKind, ReduceKind, UnaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.op_registry import get_stmt_by_name, iter_schema_names
 from tilefoundry.ir.tir.dispatch import DispatchCall
@@ -61,6 +64,31 @@ class _TirBaseline:
         return
 
 
+@prim_func(target=CpuTarget())
+def current_tir_ops(
+    a: Tensor[(8,), "f32"],
+    b: Tensor[(8,), "f32"],
+    weight: Tensor[(8,), "f32"],
+):
+    ptr = T.ptr_of(a)
+    span = T.memory_span(ptr)
+    T.binary(span, b, b, kind=BinaryKind.ADD)
+    T.unary(b, b, kind=UnaryKind.NEG)
+    T.clamp(b, b, min_val=-1.0, max_val=1.0)
+    T.reduce(b, b, b, axes=(0,), kind=ReduceKind.SUM)
+    T.relu(b, b)
+    T.rms_norm(b, b, weight, eps=1e-5)
+    return
+
+
+CURRENT_TIR_SURFACE_PROGRAMS = {
+    "mma": (MmHandwritten, "MmHandwritten"),
+    "sync": (SyncSquare, "SyncSquare"),
+    "async_copy": (AsyncStage, "AsyncStage"),
+    "remaining_ops": (current_tir_ops, "current_tir_ops"),
+}
+
+
 def _assert_lint_clean(source: str) -> None:
     lint = subprocess.run(
         [
@@ -85,11 +113,27 @@ def test_tir_module_printer_roundtrips() -> None:
     assert as_script(import_dsl(printed, name="_TirBaseline")) == printed
 
 
-def test_handwritten_tir_mma_module_roundtrips() -> None:
-    printed = as_script(MmHandwritten)
-    assert as_script(import_dsl(printed, name="MmHandwritten")) == printed
-
+@pytest.mark.parametrize(
+    ("program", "binding"),
+    [pytest.param(*program, id=name) for name, program in CURRENT_TIR_SURFACE_PROGRAMS.items()],
+)
+def test_current_tir_surface_roundtrips(program, binding: str) -> None:
+    printed = as_script(program)
+    assert as_script(import_dsl(printed, name=binding)) == printed
     _assert_lint_clean(printed)
+
+
+def test_current_tir_surface_programs_cover_every_schema_form() -> None:
+    lines = [
+        line.strip()
+        for program, _ in CURRENT_TIR_SURFACE_PROGRAMS.values()
+        for line in as_script(program).splitlines()
+    ]
+    for name, form in TIR_SUPPORT_MATRIX.items():
+        if form == "effect-form":
+            assert any(line.startswith(f"T.{name}(") for line in lines), name
+        else:
+            assert any(f" = T.{name}(" in line for line in lines), name
 
 
 def test_mixed_hir_tir_module_prints_both_function_families() -> None:

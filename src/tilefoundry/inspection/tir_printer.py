@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import enum
 import re
 
@@ -195,17 +196,24 @@ def _function_block(fn: PrimFunction) -> list[str]:
 
 
 def _imports(text: str, targets: set[str], *, module: bool) -> list[str]:
+    identifiers = {
+        node.id
+        for node in ast.walk(ast.parse(text))
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
     names = ["module"] if module else []
     names.append("prim_func")
     lines = [f"from tilefoundry import {', '.join(names)}"]
-    if "T." in text:
-        lines.append("from tilefoundry.dsl import T, Tensor")
-    else:
-        lines.append("from tilefoundry.dsl import Tensor")
+    dsl_names = [name for name in ("T", "Tensor") if name in identifiers]
+    if dsl_names:
+        lines.append(f"from tilefoundry.dsl import {', '.join(dsl_names)}")
+    kind_names = [name for name in ("BinaryKind", "ReduceKind", "UnaryKind") if name in identifiers]
+    if kind_names:
+        lines.append(f"from tilefoundry.ir.core.kinds import {', '.join(kind_names)}")
     shard_names = [
         name
         for name in ("B", "ComposedLayout", "Layout", "Mesh", "P", "S", "ShardLayout", "Topology")
-        if f"{name}(" in text
+        if name in identifiers
     ]
     if shard_names:
         lines.append(f"from tilefoundry.ir.types.shard import {', '.join(shard_names)}")

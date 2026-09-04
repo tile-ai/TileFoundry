@@ -525,6 +525,11 @@ handle. Effect Ops appear in Stmt position as `Evaluate(op, args)`
 below; code carries only a one-line purpose docstring
 ([SPEC-RULES](../SPEC-RULES.md)).
 
+The canonical inspection surface covers every Op in this catalog. Printing and
+re-importing a TIR program MUST reach a fixed point: value Ops remain assignment
+forms, effect Ops remain statement forms, and enum-valued attributes use their
+named enum members with the owning enum imported by the printed program.
+
 - `TensorType.storage` is a `StorageKind` ([types §2](./types.md#2-tensortype)).
   A memory-resident TIR tensor MUST carry a concrete level; the unmaterialized
   `umat` ([types §2](./types.md#2-tensortype)) is an HIR-only value and MUST
