@@ -8,10 +8,11 @@ import pytest
 
 import tilefoundry.codegen.cuda  # noqa: F401
 from tests._source import import_dsl
-from tests.integration.test_mma_tir_handwritten import MmHandwritten
+from tests.fixtures.tir.async_sync import AsyncStage, SyncSquare
+from tests.fixtures.tir.mma import MmHandwritten
+from tests.fixtures.tir.rmsnorm import TirRmsnorm
+from tests.fixtures.tir.square import TirSquare
 from tests.ir.test_dispatch_call import _build_module as build_dispatch_functions
-from tests.ir.tir.test_async_copy import AsyncStage
-from tests.ir.tir.test_sync import SyncSquare
 from tilefoundry import module, prim_func
 from tilefoundry.codegen.cuda.context import CodegenContext
 from tilefoundry.dsl import T, Tensor
@@ -82,6 +83,8 @@ def current_tir_ops(
 
 
 CURRENT_TIR_SURFACE_PROGRAMS = {
+    "square": (TirSquare, "TirSquare"),
+    "rmsnorm": (TirRmsnorm, "TirRmsnorm"),
     "mma": (MmHandwritten, "MmHandwritten"),
     "sync": (SyncSquare, "SyncSquare"),
     "async_copy": (AsyncStage, "AsyncStage"),
