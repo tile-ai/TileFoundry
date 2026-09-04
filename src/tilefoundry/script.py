@@ -530,7 +530,8 @@ def prim_func(fn=None, *, target=None):
             binding_name=fn_inner.__name__,
             target=resolved_target,
         )
-        verify_prim_function(ir)
+        if module_context is None:
+            verify_prim_function(ir)
         return ir
 
     if fn is not None:

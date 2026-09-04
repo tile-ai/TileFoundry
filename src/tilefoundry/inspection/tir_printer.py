@@ -12,6 +12,7 @@ from tilefoundry.inspection._python_render import (
     tensor_annotation,
 )
 from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var
+from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom
@@ -34,13 +35,17 @@ from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import ShardLayout
 
 
+def _binding_name(name: str) -> str:
+    return re.sub(r"\W", "_", name)
+
+
 def _expr(expr: object) -> str:
     if isinstance(expr, Var):
         return expr.name
     if isinstance(expr, Constant):
         return repr(expr.value)
     if isinstance(expr, SymbolRef):
-        return expr.name
+        return _binding_name(expr.name)
     if isinstance(expr, ShapeOf):
         return f"shape_of({expr.param.name}, axis={expr.axis})"
     if isinstance(expr, Op):
@@ -53,6 +58,18 @@ def _expr(expr: object) -> str:
         return f"({values})"
     if isinstance(expr, Call):
         target = expr.target
+        scalar_binary = {
+            BinaryKind.EQ: "==",
+            BinaryKind.NE: "!=",
+            BinaryKind.LT: "<",
+            BinaryKind.LE: "<=",
+            BinaryKind.GT: ">",
+            BinaryKind.GE: ">=",
+            BinaryKind.AND: "and",
+        }
+        kind = getattr(target, "kind", None)
+        if kind in scalar_binary and len(expr.args) == 2 and expr.type.dtype is DType.bool:
+            return f"{_expr(expr.args[0])} {scalar_binary[kind]} {_expr(expr.args[1])}"
         op_name = getattr(getattr(target, "_op_schema", None), "name", None)
         if op_name is None:
             op_name = re.sub(r"(?<!^)(?=[A-Z])", "_", type(target).__name__).lower()
@@ -142,14 +159,13 @@ def _emit_stmt(stmt, indent: str, lines: list[str]) -> None:
         for patterns, call in zip(stmt.case_patterns, stmt.case_calls):
             pats = ", ".join(pattern_ctor(pattern) for pattern in patterns)
             args = _join_args(call.args)
-            cases.append(f"(({pats}), {call.callable.name}, ({args}))")
-        fallback: list[str] = []
-        _emit_stmt(stmt.fallback, "", fallback)
+            cases.append(f"(({pats},), {_binding_name(call.callable.name)!r}, ({args},))")
         lines.append(
-            f"{indent}dispatch_call({stmt.callee_name!r}, "
-            f"subjects=({_join_args(stmt.subjects)}), cases=({', '.join(cases)}), "
-            f"fallback=({'; '.join(fallback)}))"
+            f"{indent}with dispatch_call({stmt.callee_name!r}, "
+            f"subjects=({_join_args(stmt.subjects)},), cases=({', '.join(cases)},), "
+            "):"
         )
+        _emit_stmt(stmt.fallback, indent + "    ", lines)
     else:
         raise NotImplementedError(f"TIR printer has no form for {type(stmt).__name__}")
 
@@ -165,7 +181,7 @@ def _function_block(fn: PrimFunction) -> list[str]:
         f"{p.name}: {tensor_annotation(p.type) if isinstance(p.type, TensorType) else repr(p.type)}"
         for p in fn.params
     )
-    lines.append(f"def {fn.name}({params}):")
+    lines.append(f"def {_binding_name(fn.name)}({params}):")
     body: list[str] = []
     _emit_stmt(fn.body, "    ", body)
     lines.extend(body or ["    pass"])
@@ -180,7 +196,11 @@ def _imports(text: str, targets: set[str], *, module: bool) -> list[str]:
         lines.append("from tilefoundry.dsl import T, Tensor")
     else:
         lines.append("from tilefoundry.dsl import Tensor")
-    shard_names = [name for name in ("Layout", "Mesh", "S", "ShardLayout", "Topology") if re.search(rf"\b{name}\b", text)]
+    shard_names = [
+        name
+        for name in ("Layout", "Mesh", "S", "ShardLayout", "Topology")
+        if f"{name}(" in text
+    ]
     if shard_names:
         lines.append(f"from tilefoundry.ir.types.shard import {', '.join(shard_names)}")
     if targets:
@@ -201,7 +221,7 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
     lines: list[str] = []
     kwargs = []
     if mod.entry is not None:
-        kwargs.append(f'entry="{mod.entry}"')
+        kwargs.append(f'entry="{_binding_name(mod.entry)}"')
     if mod.target is not None:
         kwargs.append(f"target={mod.target.to_python().text}")
     if mod.topologies is not None:

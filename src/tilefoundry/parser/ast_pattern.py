@@ -34,6 +34,7 @@ from tilefoundry.ir.core.expr import Tuple as IrTuple
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.op_schema import OpSchema
+from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
@@ -47,9 +48,22 @@ from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice, slice_size
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
+from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, MeshScope, Return, Sequential
+from tilefoundry.ir.tir.shape import ShapeOf
+from tilefoundry.ir.tir.stmts import (
+    Abort,
+    Evaluate,
+    For,
+    If,
+    LetStmt,
+    MeshScope,
+    Return,
+    Sequential,
+)
+from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types import DType, TensorType, TupleType, UnitType
+from tilefoundry.ir.types.callable_type import CallableType
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimFloorDiv,
@@ -223,10 +237,12 @@ def attach_authored_metadata(value: object, node: ast.AST, context: "MatchContex
 
 runtime = SimpleNamespace(
     Call=Call,
+    CallableType=CallableType,
     BindingSubstitutionCloner=BindingSubstitutionCloner,
     Broadcast=Broadcast,
     Binary=Binary,
     BinaryKind=BinaryKind,
+    Abort=Abort,
     Constant=Constant,
     DType=DType,
     DimAdd=DimAdd,
@@ -235,7 +251,10 @@ runtime = SimpleNamespace(
     DimMul=DimMul,
     DimSub=DimSub,
     DimVar=DimVar,
+    DimVarRangePat=DimVarRangePat,
+    DispatchCall=DispatchCall,
     Evaluate=Evaluate,
+    For=For,
     Expr=Expr,
     Function=Function,
     LoopRegion=LoopRegion,
@@ -247,6 +266,7 @@ runtime = SimpleNamespace(
     LetStmt=LetStmt,
     MeshScope=MeshScope,
     MeshRegion=MeshRegion,
+    If=If,
     MeshCoord=MeshCoord,
     Mesh=Mesh,
     Module=Module,
@@ -256,10 +276,12 @@ runtime = SimpleNamespace(
     Reshape=Reshape,
     Return=Return,
     Sequential=Sequential,
+    ShapeOf=ShapeOf,
     ShardLayout=ShardLayout,
     Slice=Slice,
     Split=Split,
     StorageKind=StorageKind,
+    SymbolRef=SymbolRef,
     TensorType=TensorType,
     TupleType=TupleType,
     TypeInferContext=TypeInferContext,

@@ -4,18 +4,25 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
+
+import tilefoundry.codegen.cuda  # noqa: F401
 from tests._source import import_dsl
 from tests.integration.test_mma_tir_handwritten import MmHandwritten
+from tests.ir.test_dispatch_call import _build_module as build_dispatch_functions
 from tilefoundry import module, prim_func
+from tilefoundry.codegen.cuda.context import CodegenContext
 from tilefoundry.dsl import Tensor
 from tilefoundry.inspection import as_script
-from tilefoundry.ir.core import Op
+from tilefoundry.ir.core import Constant, Op, Var
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.op_registry import get_stmt_by_name, iter_schema_names
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.shape import ShapeOf
-from tilefoundry.ir.tir.stmts import Abort
-from tilefoundry.ir.types import TensorType, UnitType
+from tilefoundry.ir.tir.stmts import Abort, For, Sequential
+from tilefoundry.ir.types import DType, TensorType, UnitType
+from tilefoundry.parser.ast_pattern import ParseError
 from tilefoundry.target import CpuTarget
 from tilefoundry.visitor_registry import typeinfer_registry
 
@@ -54,15 +61,7 @@ class _TirBaseline:
         return
 
 
-def test_tir_module_printer_roundtrips() -> None:
-    printed = as_script(_TirBaseline)
-    assert as_script(import_dsl(printed, name="_TirBaseline")) == printed
-
-
-def test_handwritten_tir_mma_module_roundtrips() -> None:
-    printed = as_script(MmHandwritten)
-    assert as_script(import_dsl(printed, name="MmHandwritten")) == printed
-
+def _assert_lint_clean(source: str) -> None:
     lint = subprocess.run(
         [
             "ruff",
@@ -73,12 +72,24 @@ def test_handwritten_tir_mma_module_roundtrips() -> None:
             "tests/fixtures/tir_printed.py",
             "-",
         ],
-        input=printed,
+        input=source,
         text=True,
         capture_output=True,
         check=False,
     )
     assert lint.returncode == 0, lint.stdout + lint.stderr
+
+
+def test_tir_module_printer_roundtrips() -> None:
+    printed = as_script(_TirBaseline)
+    assert as_script(import_dsl(printed, name="_TirBaseline")) == printed
+
+
+def test_handwritten_tir_mma_module_roundtrips() -> None:
+    printed = as_script(MmHandwritten)
+    assert as_script(import_dsl(printed, name="MmHandwritten")) == printed
+
+    _assert_lint_clean(printed)
 
 
 def test_mixed_hir_tir_module_prints_both_function_families() -> None:
@@ -95,6 +106,80 @@ def test_mixed_hir_tir_module_prints_both_function_families() -> None:
     printed = as_script(mixed)
     assert "@func" in printed and "@prim_func" in printed
     assert as_script(import_dsl(printed, name="Mixed")) == printed
+
+
+def test_tir_for_if_and_abort_roundtrip() -> None:
+    function = import_dsl(
+        "from tilefoundry import prim_func\n"
+        "from tilefoundry.dsl import Tensor\n"
+        "from tilefoundry.target import CpuTarget\n\n"
+        "@prim_func(target=CpuTarget())\n"
+        "def control(a: Tensor[(1,), 'f32']):\n"
+        "    for i in range(2):\n"
+        "        if i < 1:\n"
+        "            abort('stop')\n",
+        name="control",
+    )
+    printed = as_script(function)
+    assert "for i in range(0, 2, 1):" in printed
+    assert "if i < 1:" in printed
+    assert as_script(import_dsl(printed, name="control")) == printed
+
+
+def test_tir_for_rejects_nonconstant_bounds() -> None:
+    with pytest.raises(ParseError, match="CUDA codegen cannot emit a non-constant loop bound"):
+        import_dsl(
+            "from tilefoundry import prim_func\n"
+            "from tilefoundry.dsl import Tensor\n"
+            "from tilefoundry.target import CpuTarget\n\n"
+            "@prim_func(target=CpuTarget())\n"
+            "def dynamic(n: Tensor[(), 'i64']):\n"
+            "    for i in range(n):\n"
+            "        return\n",
+            name="dynamic",
+        )
+
+
+def test_tir_for_codegen_rejects_nonconstant_bounds() -> None:
+    scalar = TensorType.scalar(DType.i64)
+    variable = Var(type=scalar, name="n")
+    loop = For(
+        induction_var=Var(type=scalar, name="i"),
+        start=Constant(type=scalar, value=0),
+        stop=variable,
+        step=Constant(type=scalar, value=1),
+        body=Sequential(()),
+    )
+    with pytest.raises(NotImplementedError, match="silently wrong loop"):
+        CodegenContext().emit_node(loop)
+
+
+def test_tir_shape_of_roundtrips() -> None:
+    function = import_dsl(
+        "from tilefoundry import prim_func\n"
+        "from tilefoundry.dsl import Tensor\n"
+        "from tilefoundry.target import CpuTarget\n\n"
+        "@prim_func(target=CpuTarget())\n"
+        "def shape(a: Tensor[(8,), 'f32']):\n"
+        "    extent = shape_of(a, axis=0)\n"
+        "    return\n",
+        name="shape",
+    )
+    printed = as_script(function)
+    assert as_script(import_dsl(printed, name="shape")) == printed
+
+
+def test_tir_dispatch_call_roundtrips_with_statement_fallback() -> None:
+    module = Module(
+        name="Dispatch",
+        functions=tuple(build_dispatch_functions()),
+        entry="main",
+    )
+    printed = as_script(module)
+    assert "with dispatch_call(" in printed
+    assert "\n            abort('')" in printed
+    assert as_script(import_dsl(printed, name="Dispatch")) == printed
+    _assert_lint_clean(printed)
 
 
 def test_t_schema_inventory_matches_the_tir_support_matrix() -> None:

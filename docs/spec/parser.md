@@ -94,13 +94,13 @@ dim-expr              ::= integer-literal
                           | dim-expr ('+' | '-' | '*' | '//' | '%') dim-expr
                           | (identifier | primary '.' identifier) '(' (dim-expr (',' dim-expr)*)?
                             ')'
-placed-layout         ::= '(' ((expression '@' ('(' mesh-axis (',' mesh-axis)* ')' | mesh-axis) |
+placed-shape          ::= '(' ((expression '@' ('(' mesh-axis (',' mesh-axis)* ')' | mesh-axis) |
                           dim-expr) (',' (expression '@' ('(' mesh-axis (',' mesh-axis)* ')' |
                           mesh-axis) | dim-expr))*)? ')'
 shape                 ::= '(' (dim-expr (',' dim-expr)*)? ')'
                           | identifier
                           | primary '.' identifier
-tensor-shape-layout   ::= placed-layout
+tensor-shape-layout   ::= placed-shape
                           | shape
 dtype                 ::= string-literal
                           | primary
@@ -133,7 +133,10 @@ expression            ::= literal
                           | subscript
 call                  ::= expression '(' ((expression | keyword-name '=' expression) (','
                           (expression | keyword-name '=' expression))*)? ')'
-explicit-layout       ::= '(' tensor-shape-layout ',' shape ')'
+explicit-layout       ::= '(' (tensor-shape-layout | shape) ',' shape ')'
+placed-layout         ::= '(' ((expression '@' ('(' mesh-axis (',' mesh-axis)* ')' | mesh-axis) |
+                          dim-expr) (',' (expression '@' ('(' mesh-axis (',' mesh-axis)* ')' |
+                          mesh-axis) | dim-expr))*)? ')'
 plain-layout          ::= '(' (dim-expr (',' dim-expr)*)? ')'
 layout                ::= None
                           | primary
@@ -145,9 +148,10 @@ storage               ::= string-literal
                           | primary
 tensor-optional-slot  ::= layout
                           | storage
-tensor                ::= tensor-head '[' '(' (tensor-shape-layout ',' dtype | tensor-shape-layout
-                          ',' dtype ',' tensor-optional-slot | tensor-shape-layout ',' dtype ','
-                          tensor-optional-slot ',' tensor-optional-slot) ')' ']'
+tensor                ::= tensor-head '[' '(' (tensor-shape-layout ',' dtype | shape ',' dtype ','
+                          tensor-optional-slot | tensor-shape-layout ',' dtype ','
+                          tensor-optional-slot | shape ',' dtype ',' tensor-optional-slot ','
+                          tensor-optional-slot) ')' ']'
 tuple-type            ::= 'tuple' '[' '(' type-annotation (',' type-annotation)* ')' ']'
                           | 'tuple' '[' type-annotation ']'
 scalar-type           ::= primary
@@ -156,9 +160,14 @@ type-annotation       ::= tensor
                           | scalar-type
 signature             ::= (name ':' type-annotation (',' name ':' type-annotation)*)?
 return-type           ::= type-annotation
+tir-if                ::= if cond-node block (block)?
 loop-iterator         ::= 'tile' '(' expression ',' expression ')'
                           | 'range' '(' (expression | expression ',' expression | expression ','
                             expression ',' expression) ')'
+tir-loop-header       ::= 'for' identifier 'in' loop-iterator ':' block
+tir-for               ::= 'for' name 'in' expression ':' block
+abort                 ::= 'abort' '(' literal ')'
+dispatch-call         ::= 'with' ':' block
 loop-carry-statement  ::= expression '=' expression
                           | 'for' name 'in' expression ':' loop-carry
                           | statement
@@ -171,6 +180,8 @@ mesh-context          ::= ('Mesh' | primary '.' identifier) '(' (expression | ('
                             expression))* ')'
                           | expression
 with                  ::= 'with' mesh-context ('as' identifier)? ':' block
+name                  ::= identifier
+shape-of              ::= 'shape_of' '(' name 'axis' '=' literal ')'
 op-call               ::= primary '(' ((expression | keyword-name '=' expression) (',' (expression |
                           keyword-name '=' expression))*)? ')'
 launch                ::= callee '(' ')'
@@ -194,12 +205,12 @@ binary-expression     ::= runtime-expression ('+' | '-' | '*' | '/' | '//' | '%'
                             runtime-expression
                           | runtime-expression ('and' | 'or') runtime-expression
 unary-expression      ::= unary-op runtime-expression
-name                  ::= identifier
 constant              ::= boolean-literal
                           | integer-literal
                           | float-literal
 tuple-expression      ::= '(' (runtime-expression (',' runtime-expression)*)? ')'
-runtime-expression    ::= op-call
+runtime-expression    ::= shape-of
+                          | op-call
                           | launch
                           | subscript-expression
                           | matmul-expression
@@ -213,7 +224,11 @@ runtime-expression    ::= op-call
                           | primary '.' identifier
 tuple-assignment      ::= '(' identifier (',' identifier)* ')' '=' runtime-expression
 where-annotation      ::= 'where' '(' ')'
-statement             ::= for
+statement             ::= tir-if
+                          | tir-for
+                          | abort
+                          | dispatch-call
+                          | for
                           | with
                           | tuple-assignment
                           | identifier '=' (runtime-expression | expression)
@@ -236,8 +251,8 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | binary_expression, matmul_expression, op_call, unary_expression | expression, slice_endpoint, subscript_index | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
 | dim_expr | dim_expr, layout_extent, layout_shape, tensor_dim_expr, tensor_optional_slot, tensor_shape | ShapeDimRule | A shape dimension must be an integer, DimVar, or expression. | src/tilefoundry/parser/ast_pattern.py |
 | dtype | tensor_dtype | CanonicalDTypeRule | A dtype must resolve to a canonical DType. | src/tilefoundry/parser/ast_pattern.py |
-| explicit_layout, layout, placed_layout, plain_layout | layout_shape, tensor_optional_slot, tensor_shape | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
-| explicit_layout, layout, placed_layout, plain_layout | layout_shape, tensor_optional_slot, tensor_shape | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
+| explicit_layout, layout, placed_layout, plain_layout | tensor_optional_slot | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
+| explicit_layout, layout, placed_layout, plain_layout | tensor_optional_slot | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
 | function | function | FunctionDialectRule | A function kind and constructed value must agree with the active dialect. | src/tilefoundry/parser/pattern_nodes.py |
 | function | function | FunctionRegistrationRule | A validated function must be registered exactly once in its owning scope. | src/tilefoundry/parser/pattern_nodes.py |
 | function | function | FunctionReturnCompatibilityRule | A HIR body with a return annotation must satisfy that annotation; a dispatch prototype must declare one, and each variant body must satisfy the prototype return contract. | src/tilefoundry/parser/pattern_nodes.py |
@@ -248,6 +263,7 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | module | module_function | ModuleFunctionRegistrationRule | A validated module function must be recorded in declaration order. | src/tilefoundry/parser/ast_pattern.py |
 | module | module_function | ModuleFunctionValidationRule | A module function must satisfy its root, variant, or converter role before mutation. | src/tilefoundry/parser/ast_pattern.py |
 | op_call | expression, slice_endpoint, subscript_index | CallVariadicInputFormRule | A variadic call must use one explicit list, tuple, or supported static list comprehension. | src/tilefoundry/parser/pattern_nodes.py |
+| placed_shape | layout_shape, tensor_shape | PlacedShapeRule | Placement sugar in a shape slot states both a shape and a layout. | src/tilefoundry/parser/ast_pattern.py |
 | shape | layout_shape, layout_strides, tensor_shape | ShapeTupleRule | A shape must construct a tuple of dimensions. | src/tilefoundry/parser/ast_pattern.py |
 | storage | tensor_optional_slot | StorageValueRule | Storage must resolve to a StorageKind. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | annotation, expression, slice_endpoint, subscript_index, type_annotation | TensorLayoutStorageRule | A tensor type must contain compatible layout and storage values. | src/tilefoundry/parser/ast_pattern.py |

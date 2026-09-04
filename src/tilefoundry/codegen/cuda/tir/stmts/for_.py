@@ -10,9 +10,12 @@ from tilefoundry.ir.tir.stmts import For
 @register_codegen_cuda(For)
 def _emit(node: For, ctx: CodegenContext) -> None:
     iv_name = ctx.name_for(node.induction_var)
-    start = node.start.value if isinstance(node.start, Constant) else 0
-    stop = node.stop.value if isinstance(node.stop, Constant) else 1
-    step = node.step.value if isinstance(node.step, Constant) else 1
+    for name, bound in (("start", node.start), ("stop", node.stop), ("step", node.step)):
+        if not isinstance(bound, Constant):
+            raise NotImplementedError(
+                f"tir.For {name} is not a Constant; emitting a substituted bound would produce a silently wrong loop"
+            )
+    start, stop, step = node.start.value, node.stop.value, node.step.value
 
     ctx.emit(f"for (int {iv_name} = {start}; {iv_name} < {stop}; {iv_name} += {step}) {{")
     ctx.indent()

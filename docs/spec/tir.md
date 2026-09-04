@@ -356,6 +356,20 @@ class DispatchCall(Stmt):
 ([§1.4](#14-evaluate)); each `case_calls[i]` is an
 `Evaluate(SymbolRef, args)` invoking that case's specialized callee.
 
+Canonical authored text uses a statement suite for the fallback, so every
+fallback `Stmt` remains representable rather than being forced into an
+expression or lambda:
+
+```python
+with dispatch_call("main", subjects=(shape_of(x, axis=0),), cases=(... ,)):
+    abort("")
+```
+
+`shape_of(param, axis=N)` is the authored form of `ShapeOf`; `abort(message)`
+is the authored form of `Abort`. The `dispatch_call` case table preserves
+source order and names callees by string so lowered specialization names need
+not be valid Python identifiers.
+
 Semantics: the i-th `case_patterns` matches against `subjects` by
 position; the first `i` whose every pattern matches runs
 `case_calls[i]` and the op completes. If no case matches, `fallback`
