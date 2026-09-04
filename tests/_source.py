@@ -7,9 +7,10 @@ from pathlib import Path
 
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.tir.prim_function import PrimFunction
 
 
-def import_dsl(source: str, name: str | None = None) -> Module | Function:
+def import_dsl(source: str, name: str | None = None) -> Module | Function | PrimFunction:
     """Write DSL source to a real file and return the object its decorators build."""
     with tempfile.TemporaryDirectory() as directory:
         source_path = Path(directory) / "source.py"
@@ -22,9 +23,11 @@ def import_dsl(source: str, name: str | None = None) -> Module | Function:
 
     if name is not None:
         value = getattr(loaded, name)
-        assert isinstance(value, (Module, Function))
+        assert isinstance(value, (Module, Function, PrimFunction))
         return value
 
-    values = [value for value in vars(loaded).values() if isinstance(value, (Module, Function))]
+    values = [
+        value for value in vars(loaded).values() if isinstance(value, (Module, Function, PrimFunction))
+    ]
     assert len(values) == 1, "name the DSL binding when source builds more than one"
     return values[0]

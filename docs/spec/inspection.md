@@ -92,12 +92,12 @@ def hir_function_to_python(
 
 ```python
 def as_script(
-    fn: hir.Function | Module,
+    fn: hir.Function | tir.PrimFunction | Module,
     *,
     module: str | None = None,
     options: PythonPrintOptions | None = None,
 ) -> str:
-    """Render a HIR function or Module as Python DSL source.
+    """Render a HIR/TIR function or Module as Python DSL source.
 
     Args:
         fn: Function or Module to render.
@@ -122,6 +122,12 @@ def module_to_python(fn: hir.Function, module_name: str = "M") -> str:
     """
     ...
 ```
+
+For TIR, `as_script` emits `@prim_func` and statement-form DSL. A
+`PrimFunction` passed with `module=None` is rendered standalone; passing
+`module="Name"` wraps it in an `@module` class, preserving the caller's
+explicit wrapper request. Module output computes imports from names actually
+used by the rendered program and MUST remain lint-clean.
 
 - constraints:
   - Module input MUST emit every HIR Function and preserve shared `Mesh` and
@@ -253,6 +259,11 @@ dispatch prototype has a `DimVar` parameter, its rendering is a
 validation artifact.
 
 ### 2.7 Round-trip contract
+
+For canonical TIR, the contract is the print/import/print fixed point:
+`as_script(import_dsl(as_script(x))) == as_script(x)`. This is an IR contract,
+not authored-source identity; erased authored bindings may be reconstructed in
+their canonical representation.
 
 A rendering is one of two surfaces:
 

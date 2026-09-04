@@ -49,6 +49,7 @@ from tilefoundry.ir.hir.specialize import (
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice, window_base
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
+from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
     DimAdd,
@@ -76,6 +77,7 @@ from tilefoundry.ir.types.substitute import dim_vars_by_name
 from tilefoundry.ir.visitor import ExprFunctor, expr_children
 from tilefoundry.utils.python_source import PythonExpr
 
+from .tir_printer import tir_function_to_python, tir_module_to_python
 from .values import PARTS, render_comment
 
 _DIM_INFIX_OPS: dict[type, str] = {
@@ -1584,7 +1586,7 @@ def hir_function_to_python(
 
 
 def as_script(
-    fn: HirFunction | Module, *, module: str | None = None,
+    fn: HirFunction | PrimFunction | Module, *, module: str | None = None,
     options: PythonPrintOptions | None = None,
 ) -> str:
     """Convert an HIR function or module to Python DSL source.
@@ -1594,8 +1596,14 @@ def as_script(
     controls canonical-source rendering.
     """
     if isinstance(fn, Module):
+        if any(isinstance(item, PrimFunction) for item in fn.functions):
+            return tir_module_to_python(fn, module, options=options)
         return _module_to_python(fn, module, options=options)
+    if isinstance(fn, PrimFunction) and module is None:
+        return tir_function_to_python(fn, options=options)
     if module is not None:
+        if isinstance(fn, PrimFunction):
+            return tir_module_to_python(Module(name=module, functions=(fn,), entry=fn.name), options=options)
         return _module_to_python(fn, module, options=options)
     return hir_function_to_python(fn, options=options)
 
