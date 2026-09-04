@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from tests._source import import_dsl
+from tests.integration.test_mma_tir_handwritten import MmHandwritten
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import Tensor
 from tilefoundry.inspection import as_script
@@ -54,6 +55,11 @@ class _TirBaseline:
 def test_tir_module_printer_roundtrips() -> None:
     printed = as_script(_TirBaseline)
     assert as_script(import_dsl(printed, name="_TirBaseline")) == printed
+
+
+def test_handwritten_tir_mma_module_roundtrips() -> None:
+    printed = as_script(MmHandwritten)
+    assert as_script(import_dsl(printed, name="MmHandwritten")) == printed
 
 
 def test_t_schema_inventory_matches_the_tir_support_matrix() -> None:

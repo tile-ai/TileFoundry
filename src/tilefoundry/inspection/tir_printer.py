@@ -6,8 +6,9 @@ import enum
 import re
 
 from tilefoundry.inspection._python_render import mesh_str, tensor_annotation
-from tilefoundry.ir.core import Call, Constant, Expr, Op, Tuple, Var
+from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import (
@@ -23,10 +24,6 @@ from tilefoundry.ir.tir.stmts import (
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types import DType, TensorType
-
-
-def _name(expr: Expr) -> str:
-    return expr.name if isinstance(expr, Var) else f"v{id(expr) % 10000}"
 
 
 def _expr(expr: object) -> str:
@@ -61,7 +58,7 @@ def _expr(expr: object) -> str:
             if isinstance(value, DType):
                 value = repr(value.name)
             elif isinstance(value, enum.Enum):
-                value = repr(value.value)
+                value = f"{type(value).__name__}.{value.name}"
             elif isinstance(value, TensorType):
                 value = tensor_annotation(value)
             else:
@@ -79,7 +76,30 @@ def _emit_stmt(stmt, indent: str, lines: list[str]) -> None:
         lines.append(f"{indent}{stmt.var.name} = {_expr(stmt.value)}")
         _emit_stmt(stmt.body, indent, lines)
     elif isinstance(stmt, Evaluate):
-        lines.append(f"{indent}{_expr(stmt.callable)}({_join_args(stmt.args)})")
+        if type(stmt.callable).__name__ == "Launch":
+            callee, grid = stmt.args[0], stmt.args[1:4]
+            block = stmt.args[4:7]
+            forwarded = stmt.args[7:]
+            lines.append(
+                f"{indent}launch({_expr(callee)}, {_join_args(forwarded)}, "
+                f"grid={_expr(Tuple(type=grid[0].type, elements=tuple(grid)))}, "
+                f"block={_expr(Tuple(type=block[0].type, elements=tuple(block)))})  # noqa: F821"
+            )
+        else:
+            target = stmt.callable
+            args = list(stmt.args)
+            attrs = []
+            if isinstance(target, Op):
+                for p in type(target).params():
+                    if p.kind == "attribute":
+                        value = getattr(target, p.name, None)
+                        if value is not None:
+                            if isinstance(value, enum.Enum):
+                                rendered = f"{type(value).__name__}.{value.name}"
+                            else:
+                                rendered = repr(value)
+                            attrs.append(f"{p.name}={rendered}")
+            lines.append(f"{indent}{_expr(target)}({', '.join([_expr(a) for a in args] + attrs)})")
     elif isinstance(stmt, MeshScope):
         lines.append(f"{indent}with {mesh_str(stmt.mesh)} as {stmt.binding.name}:")
         _emit_stmt(stmt.body, indent + "    ", lines)
@@ -117,8 +137,11 @@ def tir_function_to_python(fn: PrimFunction, *, options=None) -> str:
         "from tilefoundry import prim_func",
         "from tilefoundry.dsl import T, Tensor",
         "from tilefoundry.ir.types import DType, TensorType",
+        "from tilefoundry.ir.types.dtype import FloatDType, IntegerDType",
         "from tilefoundry.ir.types.shard import B, P, S, Layout, Mesh, ShardLayout, Split, Topology",
         "from tilefoundry.ir.types.storage import StorageKind",
+        "from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom",
+        "from tilefoundry.ir.tir.cuda.nn.mma import MmaOpSpec",
         "",
     ])
     lines.append("@prim_func(target=" + target.text + ")")
@@ -146,17 +169,38 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
         "from tilefoundry import module, prim_func",
         "from tilefoundry.dsl import T, Tensor",
         "from tilefoundry.ir.types import DType, TensorType",
+        "from tilefoundry.ir.types.dtype import FloatDType, IntegerDType",
         "from tilefoundry.ir.types.shard import B, P, S, Layout, Mesh, ShardLayout, Split, Topology",
         "from tilefoundry.ir.types.storage import StorageKind",
+        "from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom",
+        "from tilefoundry.ir.tir.cuda.nn.mma import MmaOpSpec",
         "",
     ])
-    entry = f'entry="{mod.entry}"' if mod.entry is not None else ""
-    lines.append(f"@module({entry})")
+    kwargs = []
+    if mod.entry is not None:
+        kwargs.append(f'entry="{mod.entry}"')
+    if mod.target is not None:
+        kwargs.append(f"target={mod.target.to_python().text}")
+    if mod.topologies is not None:
+        rendered = ", ".join(f'Topology("{t.name}", {t.size!r})' for t in mod.topologies)
+        kwargs.append(f"topologies=({rendered},)" if rendered else "topologies=()")
+    lines.append(f"@module({', '.join(kwargs)})")
     lines.append(f"class {name}:")
+    blocks: list[list[str]] = []
+    for child in mod.modules:
+        child_source = tir_module_to_python(child, child.name, options=options).splitlines()
+        class_at = next(i for i, line in enumerate(child_source) if line.startswith("@module"))
+        blocks.append(child_source[class_at:])
     for fn in mod.functions:
         if not isinstance(fn, PrimFunction):
+            if isinstance(fn, HirFunction):
+                raise NotImplementedError("mixed HIR/TIR module printing is not yet supported")
             raise TypeError(f"TIR printer cannot serialize {type(fn).__name__}")
         rendered_all = tir_function_to_python(fn, options=options).splitlines()
         rendered = rendered_all[rendered_all.index(next(line for line in rendered_all if line.startswith("@prim_func"))) :]
-        lines.extend("    " + line if line else line for line in rendered)
+        blocks.append(rendered)
+    for index, block in enumerate(blocks):
+        if index:
+            lines.append("")
+        lines.extend("    " + line if line else line for line in block)
     return "\n".join(lines) + "\n"
