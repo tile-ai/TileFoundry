@@ -61,9 +61,7 @@ def _expr(expr: object) -> str:
             if p.kind != "attribute":
                 continue
             value = getattr(target, p.name, None)
-            if value is None or p.name == "kind" and isinstance(value, enum.Enum):
-                if p.name == "kind":
-                    continue
+            if value is None:
                 continue
             if isinstance(value, DType):
                 value = repr(value.name)
@@ -145,9 +143,12 @@ def _emit_stmt(stmt, indent: str, lines: list[str]) -> None:
             pats = ", ".join(pattern_ctor(pattern) for pattern in patterns)
             args = _join_args(call.args)
             cases.append(f"(({pats}), {call.callable.name}, ({args}))")
+        fallback: list[str] = []
+        _emit_stmt(stmt.fallback, "", fallback)
         lines.append(
             f"{indent}dispatch_call({stmt.callee_name!r}, "
-            f"subjects=({_join_args(stmt.subjects)}), cases=({', '.join(cases)}))"
+            f"subjects=({_join_args(stmt.subjects)}), cases=({', '.join(cases)}), "
+            f"fallback=({'; '.join(fallback)}))"
         )
     else:
         raise NotImplementedError(f"TIR printer has no form for {type(stmt).__name__}")
