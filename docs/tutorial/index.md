@@ -29,8 +29,3 @@ implementation is source code, and either can be pointed at any command.
         │                                             ┌───────┴───────┐
         └─────────────────── no ◄─────────────────────┘               └──► ship
 ```
-
-## Where the other answers are
-
-- `tilefoundry tutorial orchestrator causal_lm` — the shipped autoregressive decode
-  loop.

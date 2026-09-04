@@ -235,9 +235,13 @@ granularity.
     every source file's leading docstring without importing or executing it. An
     unknown family MUST name the available families. Checkout and installed
     lookups MUST report the same shipped families and files.
-  - Its pages are `index`, `migrate`, `optimize`, and `authoring`; the first three
-    are the workflow and `authoring` is one kernel taken through six analyze-driven
-    stages. Causal-LM decode sources are listed through `tutorial orchestrator`.
+  - Its pages are `index`, `migrate`, `optimize`, and `showcase`; the first three
+    are the workflow and `showcase` is one kernel taken through six analyze-driven
+    stages, exercising the authoring surface the other pages touch in part.
+    Causal-LM decode sources are listed through `tutorial orchestrator`. A bare
+    `tutorial` MUST print the `index` page followed by its own help, which names
+    the pages a reader may ask for and `orchestrator`. `index` is that overview's
+    source, not a page the command accepts.
   - A family's list description MUST be the leading docstring of the first file
     in stable filename order.
 

@@ -22,7 +22,7 @@ from tilefoundry.cli.target import run_add_module as run_target_add_module
 from tilefoundry.cli.target import run_list as run_target_list
 from tilefoundry.cli.target import run_remove as run_target_remove
 from tilefoundry.cli.target import run_show as run_target_show
-from tilefoundry.cli.tutorial import PAGES, run_tutorial
+from tilefoundry.cli.tutorial import PAGES, page_lines, render_page, run_tutorial
 from tilefoundry.ir.core import VerifyError
 
 _ANALYSES = ANALYSES
@@ -106,22 +106,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="one section's key, as the outline prints it; with none, print the outline",
     )
 
+    try:
+        pages = "Pages:\n  <page>\n" + "\n".join(page_lines())
+    except OSError:
+        pages = None
     tutorial = commands.add_parser(
-        "tutorial", help=_COMMANDS["tutorial"], description=_COMMANDS["tutorial"]
+        "tutorial",
+        help=_COMMANDS["tutorial"],
+        description=_COMMANDS["tutorial"],
+        epilog=pages,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        usage="tilefoundry tutorial [-h] [<page>] [FAMILY]",
     )
     tutorial.add_argument(
         "page",
         nargs="?",
         choices=(*PAGES[1:], "orchestrator"),
         metavar="PAGE",
-        help="which page; with none, the overview and the pages there are",
+        help=argparse.SUPPRESS,
     )
     tutorial.add_argument(
         "family",
         nargs="?",
         metavar="FAMILY",
-        help="which orchestrator family to show",
+        help=argparse.SUPPRESS,
     )
+    tutorial.set_defaults(_command_parser=tutorial)
 
     check = commands.add_parser(
         "check",
@@ -202,6 +212,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.print_help()
         return 0
     if args.command == "target" and args.target_command is None:
+        args._command_parser.print_help()
+        return 0
+    if args.command == "tutorial" and args.page is None:
+        try:
+            print(render_page(PAGES[0]))
+        except OSError as error:
+            print(f"tilefoundry: warning: {error}", file=sys.stderr)
         args._command_parser.print_help()
         return 0
     analyses: tuple[str, ...] = ()

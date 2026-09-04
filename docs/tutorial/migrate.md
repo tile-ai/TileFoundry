@@ -229,14 +229,4 @@ rms_norm_quant.py:RmsNormQuant
 PASS
 ```
 
-## Where the other answers are
-
-On a real migration the shape is the same and only the selector and the weights change:
-`tilefoundry models` lists the models already described, `--source` prints the directory to
-copy from, and the same `check` runs against a published checkpoint with
-`--weights ckpt:DIR` -- for instance the `mla_kv_update` boundary of
-`deepseek_v4_flash`, whose `config.json` this page just read.
-
-Once the program agrees, `tilefoundry tutorial optimize` is the second step: making it
-fast without losing the agreement. `tilefoundry check --help` states every predicate and
-the arithmetic for choosing a bound, and `tilefoundry spec` is the normative reference.
+Once the program agrees, `tilefoundry tutorial optimize` is the second step: making it fast without losing the agreement. `tilefoundry check --help` states every predicate and the arithmetic for choosing a bound, and `tilefoundry spec` is the normative reference.
