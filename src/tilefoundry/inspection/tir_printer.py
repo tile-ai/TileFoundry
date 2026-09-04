@@ -191,7 +191,7 @@ def tir_function_to_python(fn: PrimFunction, *, options=None) -> str:
     lines = _function_block(fn)
     text = "\n".join(lines)
     targets = {type(fn.target).__name__}
-    lines = ["from __future__ import annotations", "", *_imports(text, targets, module=False), "", *lines]
+    lines = ["from __future__ import annotations", "", *_imports(text, targets, module=False), "", "", *lines]
     return "\n".join(lines) + "\n"
 
 
@@ -227,5 +227,5 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
     targets = {type(fn.target).__name__ for fn in mod.functions if isinstance(fn, PrimFunction)}
     if mod.target is not None:
         targets.add(type(mod.target).__name__)
-    header = ["from __future__ import annotations", "", *_imports(text, targets, module=True), ""]
+    header = ["from __future__ import annotations", "", *_imports(text, targets, module=True), "", ""]
     return "\n".join(header + lines) + "\n"

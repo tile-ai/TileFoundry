@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+
 from tests._source import import_dsl
 from tests.integration.test_mma_tir_handwritten import MmHandwritten
 from tilefoundry import module, prim_func
@@ -60,6 +62,23 @@ def test_tir_module_printer_roundtrips() -> None:
 def test_handwritten_tir_mma_module_roundtrips() -> None:
     printed = as_script(MmHandwritten)
     assert as_script(import_dsl(printed, name="MmHandwritten")) == printed
+
+    lint = subprocess.run(
+        [
+            "ruff",
+            "check",
+            "--config",
+            "pyproject.toml",
+            "--stdin-filename",
+            "tests/fixtures/tir_printed.py",
+            "-",
+        ],
+        input=printed,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert lint.returncode == 0, lint.stdout + lint.stderr
 
 
 def test_mixed_hir_tir_module_prints_both_function_families() -> None:

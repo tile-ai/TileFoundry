@@ -33,7 +33,6 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
@@ -63,7 +62,7 @@ from tilefoundry.ir.types.dim import (
     DimVar,
 )
 from tilefoundry.ir.types.shard import try_c_order_strides
-from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase
+from tilefoundry.ir.types.shard.layout import Layout, LayoutBase
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
@@ -72,11 +71,37 @@ from tilefoundry.ir.types.shard.shard_layout import (
     Split,
     layout_axis_to_tensor_axis,
 )
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.substitute import dim_vars_by_name
 from tilefoundry.ir.visitor import ExprFunctor, expr_children
 from tilefoundry.utils.python_source import PythonExpr
 
+from ._python_render import (
+    dtype_str as _shared_dtype_str,
+)
+from ._python_render import (
+    layout_str as _shared_layout_str,
+)
+from ._python_render import (
+    mesh_name_map as _shared_mesh_name_map,
+)
+from ._python_render import (
+    mesh_str as _shared_mesh_str,
+)
+from ._python_render import (
+    pattern_ctor as _shared_pattern_ctor,
+)
+from ._python_render import (
+    shape_tuple as _shared_shape_tuple,
+)
+from ._python_render import (
+    shard_layout_str as _shared_shard_layout_str,
+)
+from ._python_render import (
+    tensor_annotation as _shared_tensor_annotation,
+)
+from ._python_render import (
+    topologies_str as _shared_topologies_str,
+)
 from .tir_printer import _function_block as _tir_function_block
 from .tir_printer import tir_function_to_python, tir_module_to_python
 from .values import PARTS, render_comment
@@ -372,24 +397,6 @@ def shard_compact_inline(
     return split_ref, partials
 
 
-def _dtype_str(dtype: DType) -> str:
-    return dtype.name
-
-
-def _shape_tuple(shape: tuple) -> str:
-    """Render a shape as a Python tuple literal.
-
-    Each entry is rendered via ``shape_entry_str`` so symbolic
-    ``DimVar`` and dim-arithmetic ``Expr`` entries print as their
-    canonical math-shaped string (``CTX_LEN``, ``CTX_LEN + 1``)
-    instead of the dataclass repr. 1D rank renders as ``(N,)``.
-    """
-    rendered = tuple(shape_entry_str(e) for e in shape)
-    if len(rendered) == 1:
-        return f"({rendered[0]},)"
-    return "(" + ", ".join(rendered) + ")"
-
-
 def _moved_window_ref(name: str, offset: int) -> str:
     """A tile-window indexer, carrying the compile-time offset that moves it."""
     if offset == 0:
@@ -423,73 +430,6 @@ def _is_dim_entry(entry: object) -> bool:
     )
 
 
-def _shard_attr_str(attr) -> str:
-    """Single ShardAttr to Python constructor string."""
-    if isinstance(attr, Broadcast):
-        return "B()"
-    if isinstance(attr, Split):
-        return f"S({attr.axis})"
-    if isinstance(attr, Partial):
-        return f'P("{attr.reduction}")'
-    return f"/* {type(attr).__name__} */"
-
-
-def _layout_str(layout: LayoutBase | None, indent: str = "") -> str:
-    """Render a complete layout descriptor without flattening compositions."""
-    if layout is None:
-        return "None"
-    if isinstance(layout, Layout):
-        strides = _shape_tuple(layout.strides) if layout.strides is not None else "None"
-        return f"Layout({_shape_tuple(layout.shape)}, {strides})"
-    if isinstance(layout, ShardLayout):
-        return _shard_layout_str(layout, indent=indent)
-    if isinstance(layout, ComposedLayout):
-        child_indent = indent + "    "
-        return (
-            "ComposedLayout(\n"
-            f"{child_indent}inner={_layout_str(layout.inner, child_indent)},\n"
-            f"{child_indent}offset={shape_entry_str(layout.offset)},\n"
-            f"{child_indent}outer={_layout_str(layout.outer, child_indent)},\n"
-            f"{indent})"
-        )
-    raise TypeError(f"unsupported layout type: {type(layout).__name__}")
-
-
-def _topologies_str(mesh: Mesh) -> str:
-    topologies = ", ".join(
-        f'Topology("{topology.name}", {shape_entry_str(topology.size)})'
-        for topology in mesh.topologies
-    )
-    return f"({topologies}{',' if len(mesh.topologies) == 1 else ''})"
-
-
-def _mesh_str(mesh: Mesh, indent: str = "") -> str:
-    """Mesh(...) constructor string, includes ``names=`` when non-empty."""
-    base = f"Mesh({_topologies_str(mesh)}, {_layout_str(mesh.layout, indent)}"
-    if mesh.names:
-        base += f", names={repr(tuple(mesh.names))}"
-    return base + ")"
-
-
-def _shard_layout_str(
-    sl: ShardLayout, indent: str = "", *, mesh_ref: str | None = None
-) -> str:
-    """ShardLayout(...) constructor string, multi-line for readability."""
-    child_indent = indent + "    "
-    layout = _layout_str(sl.layout, child_indent)
-    mesh = mesh_ref or _mesh_str(sl.mesh, child_indent)
-    attrs = ", ".join(_shard_attr_str(a) for a in sl.attrs)
-    if len(sl.attrs) == 1:
-        attrs += ","
-    return (
-        f"ShardLayout(\n"
-        f"{child_indent}layout={layout},\n"
-        f"{child_indent}attrs=({attrs}),\n"
-        f"{child_indent}mesh={mesh},\n"
-        f"{indent})"
-    )
-
-
 def _tensor_import_names(fn: HirFunction) -> str:
     """``"Tensor"`` or ``"ConstTensor, Tensor"``.
 
@@ -499,42 +439,6 @@ def _tensor_import_names(fn: HirFunction) -> str:
     if any(p.is_const for f in (fn, *fn.variants) for p in f.params):
         return "ConstTensor, Tensor"
     return "Tensor"
-
-
-def _tensor_annotation(
-    ty: TensorType,
-    *,
-    mesh_name_map: dict[int, str] | None = None,
-    indent: str = "",
-    is_const: bool = False,
-) -> str:
-    """Tensor[(shape), dtype, ShardLayout?, storage?] annotation string.
-
-    When *mesh_name_map* is provided and the layout's mesh has named axes,
-    compact sugar form is used instead of verbose ``ShardLayout(...)``.
-    ``is_const`` selects the ``ConstTensor[...]`` head instead of ``Tensor``.
-    """
-    head = "ConstTensor" if is_const else "Tensor"
-    base = f'{head}[{_shape_tuple(ty.shape)}, "{_dtype_str(ty.dtype)}"'
-    if isinstance(ty.layout, ShardLayout):
-        sl = ty.layout
-        mesh = sl.mesh
-        mesh_name = mesh_name_map.get(id(mesh)) if mesh_name_map else None
-        mesh_unique = mesh_name_map is not None and len(mesh_name_map) == 1
-        if mesh_name and mesh.names:
-            sugar = _shard_layout_surface_str(sl, mesh_name=mesh_name, mesh_unique=mesh_unique)
-            if sugar is not None:
-                base += f", {sugar}"
-            else:
-                sl_str = _shard_layout_str(sl, indent=indent + "    ")
-                base += f",\n{indent}    {sl_str}"
-        else:
-            sl_str = _shard_layout_str(sl, indent=indent + "    ")
-            base += f",\n{indent}    {sl_str}"
-    if ty.storage is not StorageKind.GMEM:
-        base += f', "{ty.storage.name.lower()}"'
-    base += "]"
-    return base
 
 
 def _op_name(target) -> str:
@@ -778,26 +682,6 @@ def _region_projection(expr: Expr) -> LoopRegion | MeshRegion | None:
     if isinstance(region, MeshRegion) and isinstance(region.body, Tuple):
         return region
     return None
-
-
-def _mesh_name_map(meshes: dict[int, Mesh]) -> dict[int, str]:
-    """Assign stable variable names to each Mesh.
-
-    Uses the first declared topology name when available; falls back to
-    ``mesh_N``.
-    """
-    name_map: dict[int, str] = {}
-    used: set[str] = set()
-    for mid, mesh in meshes.items():
-        base = mesh.topologies[0].name if mesh.topologies else "mesh"
-        name = base
-        n = 2
-        while name in used:
-            name = f"{base}_{n}"
-            n += 1
-        used.add(name)
-        name_map[mid] = name
-    return name_map
 
 
 def _module_callee_binding(target: HirFunction, child_entries: dict[int, str]) -> str | None:
@@ -1397,11 +1281,40 @@ def _emit_def(
     return lines
 
 
-def _pattern_ctor(pat: Pattern) -> str:
-    """Render a Pattern as its constructor, for a ``.specialize(...)`` decorator."""
-    if isinstance(pat, DimVarRangePat):
-        return f'DimVarRangePat("{pat.dim_var}", {pat.lo}, {pat.hi})'
-    return repr(pat)
+_dtype_str = _shared_dtype_str
+_mesh_name_map = _shared_mesh_name_map
+_pattern_ctor = _shared_pattern_ctor
+
+
+def _topologies_str(mesh: Mesh) -> str:
+    return _shared_topologies_str(mesh, shape_entry_str)
+
+
+def _shape_tuple(shape: tuple) -> str:
+    return _shared_shape_tuple(shape, shape_entry_str)
+
+
+def _layout_str(layout: LayoutBase | None, indent: str = "") -> str:
+    return _shared_layout_str(layout, indent, render=shape_entry_str)
+
+
+def _mesh_str(mesh: Mesh, indent: str = "") -> str:
+    return _shared_mesh_str(mesh, indent, render=shape_entry_str)
+
+
+def _shard_layout_str(sl: ShardLayout, indent: str = "", *, mesh_ref=None) -> str:
+    return _shared_shard_layout_str(sl, indent, mesh_ref=mesh_ref, render=shape_entry_str)
+
+
+def _tensor_annotation(ty: TensorType, *, mesh_name_map=None, indent="", is_const=False) -> str:
+    return _shared_tensor_annotation(
+        ty,
+        mesh_name_map=mesh_name_map,
+        indent=indent,
+        is_const=is_const,
+        render=shape_entry_str,
+        surface=_shard_layout_surface_str,
+    )
 
 
 def _collect_all_meshes(
