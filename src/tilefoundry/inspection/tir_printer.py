@@ -32,14 +32,15 @@ from tilefoundry.ir.tir.stmts import (
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import ShardLayout
+from tilefoundry.ir.types.shard import Mesh, ShardLayout
 
 
 def _binding_name(name: str) -> str:
     return re.sub(r"\W", "_", name)
 
 
-def _expr(expr: object) -> str:
+def _expr(expr: object, mesh_bindings: dict[int, str] | None = None) -> str:
+    mesh_bindings = {} if mesh_bindings is None else mesh_bindings
     if isinstance(expr, Var):
         return expr.name
     if isinstance(expr, Constant):
@@ -52,7 +53,7 @@ def _expr(expr: object) -> str:
         name = getattr(getattr(expr, "_op_schema", None), "name", type(expr).__name__.lower())
         return f"T.{name}"
     if isinstance(expr, Tuple):
-        values = ", ".join(_expr(x) for x in expr.elements)
+        values = ", ".join(_expr(x, mesh_bindings) for x in expr.elements)
         if len(expr.elements) == 1:
             values += ","
         return f"({values})"
@@ -69,11 +70,11 @@ def _expr(expr: object) -> str:
         }
         kind = getattr(target, "kind", None)
         if kind in scalar_binary and len(expr.args) == 2 and expr.type.dtype is DType.bool:
-            return f"{_expr(expr.args[0])} {scalar_binary[kind]} {_expr(expr.args[1])}"
+            return f"{_expr(expr.args[0], mesh_bindings)} {scalar_binary[kind]} {_expr(expr.args[1], mesh_bindings)}"
         op_name = getattr(getattr(target, "_op_schema", None), "name", None)
         if op_name is None:
             op_name = re.sub(r"(?<!^)(?=[A-Z])", "_", type(target).__name__).lower()
-        args = [_expr(x) for x in expr.args]
+        args = [_expr(x, mesh_bindings) for x in expr.args]
         for p in type(target).params():
             if p.kind != "attribute":
                 continue
@@ -90,6 +91,8 @@ def _expr(expr: object) -> str:
                 value = tensor_annotation(value)
             elif isinstance(value, ShardLayout):
                 value = shard_layout_str(value)
+            elif isinstance(value, Mesh):
+                value = mesh_bindings.get(id(value), mesh_str(value))
             elif isinstance(value, (str, int, float, bool, tuple)):
                 value = repr(value)
             else:
@@ -99,20 +102,21 @@ def _expr(expr: object) -> str:
     raise NotImplementedError(f"TIR printer has no canonical expression form for {type(expr).__name__}")
 
 
-def _emit_stmt(stmt, indent: str, lines: list[str]) -> None:
+def _emit_stmt(stmt, indent: str, lines: list[str], mesh_bindings=None) -> None:
+    mesh_bindings = {} if mesh_bindings is None else mesh_bindings
     if isinstance(stmt, Sequential):
         for child in stmt.body:
-            _emit_stmt(child, indent, lines)
+            _emit_stmt(child, indent, lines, mesh_bindings)
     elif isinstance(stmt, LetStmt):
-        lines.append(f"{indent}{stmt.var.name} = {_expr(stmt.value)}")
-        _emit_stmt(stmt.body, indent, lines)
+        lines.append(f"{indent}{stmt.var.name} = {_expr(stmt.value, mesh_bindings)}")
+        _emit_stmt(stmt.body, indent, lines, mesh_bindings)
     elif isinstance(stmt, Evaluate):
         if type(stmt.callable).__name__ == "Launch":
             callee, grid = stmt.args[0], stmt.args[1:4]
             block = stmt.args[4:7]
             forwarded = stmt.args[7:]
             lines.append(
-                f"{indent}launch({_expr(callee)}, {_join_args(forwarded)}, "
+                f"{indent}launch({_expr(callee, mesh_bindings)}, {_join_args(forwarded, mesh_bindings)}, "
                 f"grid={_expr(Tuple(type=grid[0].type, elements=tuple(grid)))}, "
                 f"block={_expr(Tuple(type=block[0].type, elements=tuple(block)))})  # noqa: F821"
             )
@@ -121,6 +125,7 @@ def _emit_stmt(stmt, indent: str, lines: list[str]) -> None:
             args = list(stmt.args)
             attrs = []
             if isinstance(target, Op):
+                op_name = getattr(getattr(target, "_op_schema", None), "name", None)
                 for p in type(target).params():
                     if p.kind == "attribute":
                         value = getattr(target, p.name, None)
@@ -129,27 +134,29 @@ def _emit_stmt(stmt, indent: str, lines: list[str]) -> None:
                                 rendered = f"{type(value).__name__}.{value.name}"
                             elif isinstance(value, MmaAtom):
                                 rendered = f"T.cuda.mma.atom(op=T.cuda.mma.{value.op.name})"
+                            elif isinstance(value, Mesh):
+                                rendered = mesh_bindings.get(id(value), mesh_str(value))
                             elif isinstance(value, (str, int, float, bool, tuple)):
                                 rendered = repr(value)
                             else:
                                 raise NotImplementedError(f"TIR printer has no canonical attribute form for {type(value).__name__}")
-                            attrs.append(f"{p.name}={rendered}")
-            lines.append(f"{indent}{_expr(target)}({', '.join([_expr(a) for a in args] + attrs)})")
+                            attrs.append(rendered if op_name == "sync" and p.name == "mesh" else f"{p.name}={rendered}")
+            lines.append(f"{indent}{_expr(target, mesh_bindings)}({', '.join([_expr(a, mesh_bindings) for a in args] + attrs)})")
     elif isinstance(stmt, MeshScope):
         lines.append(f"{indent}with {mesh_str(stmt.mesh)} as {stmt.binding.name}:")
-        _emit_stmt(stmt.body, indent + "    ", lines)
+        _emit_stmt(stmt.body, indent + "    ", lines, {**mesh_bindings, id(stmt.mesh): stmt.binding.name})
     elif isinstance(stmt, For):
         lines.append(f"{indent}for {stmt.induction_var.name} in range({_expr(stmt.start)}, {_expr(stmt.stop)}, {_expr(stmt.step)}):")
-        _emit_stmt(stmt.body, indent + "    ", lines)
+        _emit_stmt(stmt.body, indent + "    ", lines, mesh_bindings)
     elif isinstance(stmt, If):
-        lines.append(f"{indent}if {_expr(stmt.cond)}:")
-        _emit_stmt(stmt.then_body, indent + "    ", lines)
+        lines.append(f"{indent}if {_expr(stmt.cond, mesh_bindings)}:")
+        _emit_stmt(stmt.then_body, indent + "    ", lines, mesh_bindings)
         if stmt.else_body.body:
             lines.append(f"{indent}else:")
-            _emit_stmt(stmt.else_body, indent + "    ", lines)
+            _emit_stmt(stmt.else_body, indent + "    ", lines, mesh_bindings)
     elif isinstance(stmt, While):
         lines.append(f"{indent}while {_expr(stmt.cond)}:")
-        _emit_stmt(stmt.body, indent + "    ", lines)
+        _emit_stmt(stmt.body, indent + "    ", lines, mesh_bindings)
     elif isinstance(stmt, Return):
         lines.append(f"{indent}return")
     elif isinstance(stmt, Abort):
@@ -162,16 +169,15 @@ def _emit_stmt(stmt, indent: str, lines: list[str]) -> None:
             cases.append(f"(({pats},), {_binding_name(call.callable.name)!r}, ({args},))")
         lines.append(
             f"{indent}with dispatch_call({stmt.callee_name!r}, "
-            f"subjects=({_join_args(stmt.subjects)},), cases=({', '.join(cases)},), "
-            "):"
+            f"subjects=({_join_args(stmt.subjects)},), cases=({', '.join(cases)},)):"
         )
-        _emit_stmt(stmt.fallback, indent + "    ", lines)
+        _emit_stmt(stmt.fallback, indent + "    ", lines, mesh_bindings)
     else:
         raise NotImplementedError(f"TIR printer has no form for {type(stmt).__name__}")
 
 
-def _join_args(args) -> str:
-    return ", ".join(_expr(arg) for arg in args)
+def _join_args(args, mesh_bindings=None) -> str:
+    return ", ".join(_expr(arg, mesh_bindings) for arg in args)
 
 
 def _function_block(fn: PrimFunction) -> list[str]:
@@ -198,7 +204,7 @@ def _imports(text: str, targets: set[str], *, module: bool) -> list[str]:
         lines.append("from tilefoundry.dsl import Tensor")
     shard_names = [
         name
-        for name in ("Layout", "Mesh", "S", "ShardLayout", "Topology")
+        for name in ("B", "ComposedLayout", "Layout", "Mesh", "P", "S", "ShardLayout", "Topology")
         if f"{name}(" in text
     ]
     if shard_names:

@@ -126,6 +126,28 @@ def test_tir_for_if_and_abort_roundtrip() -> None:
     assert as_script(import_dsl(printed, name="control")) == printed
 
 
+def test_tir_for_if_and_sync_mesh_forms_roundtrip() -> None:
+    function = import_dsl(
+        "from tilefoundry import prim_func\n"
+        "from tilefoundry.dsl import T, Tensor\n"
+        "from tilefoundry.ir.types.shard import Layout, Mesh, Topology\n"
+        "from tilefoundry.target import CudaTarget\n\n"
+        "@prim_func(target=CudaTarget('nvidia.h200_sxm'))\n"
+        "def device(a: Tensor[(64,), 'f32'], out: Tensor[(64,), 'f32']):\n"
+        "    with Mesh((Topology('thread', 32),), Layout((32,), (1,))) as thread:\n"
+        "        for i in range(0, 2, 1):\n"
+        "            if i < 1:\n"
+        "                T.sync(thread)\n"
+        "            else:\n"
+        "                T.sync(thread[:])\n",
+        name="device",
+    )
+    printed = as_script(function)
+    assert "T.sync(thread)" in printed
+    assert "T.sync(Mesh(" in printed
+    assert as_script(import_dsl(printed, name="device")) == printed
+
+
 def test_tir_for_rejects_nonconstant_bounds() -> None:
     with pytest.raises(ParseError, match="CUDA codegen cannot emit a non-constant loop bound"):
         import_dsl(
