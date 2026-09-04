@@ -18,71 +18,103 @@ from tilefoundry.target import CudaTarget
 
 
 @dataclass(frozen=True)
+class TirInvocation:
+    run: Callable[[], None]
+    assert_output: Callable[[], None]
+    shape: tuple[int, ...]
+    dtype: str
+
+
+@dataclass(frozen=True)
 class TirRuntimeCase:
+    """One shared correctness/perf case with a contention-safe ceiling.
+
+    Local H200 medians are 20-74 microseconds. The one-second default leaves
+    more than four orders of magnitude for shared-card contention while still
+    rejecting a pathological kernel that makes no useful forward progress.
+    """
+
     name: str
     module: Module
-    assert_matches: Callable[[object], None]
+    make_invocation: Callable[[object], TirInvocation]
+    generous_ceiling_us: float = 1_000_000.0
 
 
-def _square_matches(runtime) -> None:
+def _square_invocation(runtime) -> TirInvocation:
     torch.manual_seed(0)
-    x = torch.randn(128, dtype=torch.float32, device="cuda")
+    x = torch.rand(128, dtype=torch.float32, device="cuda")
     expected = x.square()
-    runtime(x)
-    torch.cuda.synchronize()
-    torch.testing.assert_close(x, expected, rtol=0, atol=0)
+    return TirInvocation(
+        run=lambda: runtime(x),
+        assert_output=lambda: torch.testing.assert_close(x, expected, rtol=0, atol=0),
+        shape=tuple(x.shape),
+        dtype=str(x.dtype),
+    )
 
 
-def _rmsnorm_matches(runtime) -> None:
+def _rmsnorm_invocation(runtime) -> TirInvocation:
     torch.manual_seed(1)
     x = torch.randn(1, 128, dtype=torch.float32, device="cuda")
     weight = torch.randn(128, dtype=torch.float32, device="cuda")
     out = torch.empty_like(x)
-    runtime(x, weight, out)
-    torch.cuda.synchronize()
     expected = x * torch.rsqrt(x.square().mean(dim=-1, keepdim=True) + 1e-5) * weight
-    torch.testing.assert_close(out, expected, rtol=2e-5, atol=2e-5)
+    return TirInvocation(
+        run=lambda: runtime(x, weight, out),
+        assert_output=lambda: torch.testing.assert_close(out, expected, rtol=2e-5, atol=2e-5),
+        shape=tuple(x.shape),
+        dtype=str(x.dtype),
+    )
 
 
-def _mma_matches(runtime) -> None:
+def _mma_invocation(runtime) -> TirInvocation:
     torch.manual_seed(2)
     a = torch.randn(16, 16, dtype=torch.bfloat16, device="cuda")
     b = torch.randn(16, 8, dtype=torch.bfloat16, device="cuda")
     out = torch.empty(16, 8, dtype=torch.float32, device="cuda")
-    runtime(a, b, out)
-    torch.cuda.synchronize()
-    torch.testing.assert_close(
-        out,
-        torch.matmul(a.float(), b.float()),
-        rtol=2e-2,
-        atol=2e-2,
+    expected = torch.matmul(a.float(), b.float())
+    return TirInvocation(
+        run=lambda: runtime(a, b, out),
+        assert_output=lambda: torch.testing.assert_close(
+            out,
+            expected,
+            rtol=2e-2,
+            atol=2e-2,
+        ),
+        shape=tuple(out.shape),
+        dtype=str(out.dtype),
     )
 
 
-def _async_copy_matches(runtime) -> None:
+def _async_copy_invocation(runtime) -> TirInvocation:
     torch.manual_seed(3)
     source = torch.randn(128, 4, dtype=torch.float32, device="cuda")
     out = torch.empty_like(source)
-    runtime(source, out)
-    torch.cuda.synchronize()
-    torch.testing.assert_close(out, source, rtol=0, atol=0)
+    return TirInvocation(
+        run=lambda: runtime(source, out),
+        assert_output=lambda: torch.testing.assert_close(out, source, rtol=0, atol=0),
+        shape=tuple(source.shape),
+        dtype=str(source.dtype),
+    )
 
 
-def _sync_matches(runtime) -> None:
+def _sync_invocation(runtime) -> TirInvocation:
     torch.manual_seed(4)
-    x = torch.randn(4, 32, dtype=torch.float32, device="cuda")
+    x = torch.rand(4, 32, dtype=torch.float32, device="cuda")
     expected = x.square()
-    runtime(x)
-    torch.cuda.synchronize()
-    torch.testing.assert_close(x, expected, rtol=0, atol=0)
+    return TirInvocation(
+        run=lambda: runtime(x),
+        assert_output=lambda: torch.testing.assert_close(x, expected, rtol=0, atol=0),
+        shape=tuple(x.shape),
+        dtype=str(x.dtype),
+    )
 
 
 TIR_RUNTIME_CASES = (
-    TirRuntimeCase("square", TirSquare, _square_matches),
-    TirRuntimeCase("rmsnorm", TirRmsnorm, _rmsnorm_matches),
-    TirRuntimeCase("mma", MmHandwritten, _mma_matches),
-    TirRuntimeCase("async_copy", AsyncStage, _async_copy_matches),
-    TirRuntimeCase("sync", SyncSquare, _sync_matches),
+    TirRuntimeCase("square", TirSquare, _square_invocation),
+    TirRuntimeCase("rmsnorm", TirRmsnorm, _rmsnorm_invocation),
+    TirRuntimeCase("mma", MmHandwritten, _mma_invocation),
+    TirRuntimeCase("async_copy", AsyncStage, _async_copy_invocation),
+    TirRuntimeCase("sync", SyncSquare, _sync_invocation),
 )
 
 
@@ -90,4 +122,7 @@ TIR_RUNTIME_CASES = (
 @pytest.mark.parametrize("case", TIR_RUNTIME_CASES, ids=lambda case: case.name)
 def test_tir_fixture_matches_torch(case: TirRuntimeCase) -> None:
     runtime = tilefoundry.compile(case.module, target=CudaTarget("nvidia.h200_sxm"))
-    case.assert_matches(runtime)
+    invocation = case.make_invocation(runtime)
+    invocation.run()
+    torch.cuda.synchronize()
+    invocation.assert_output()
