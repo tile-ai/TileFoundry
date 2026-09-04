@@ -77,6 +77,7 @@ from tilefoundry.ir.types.substitute import dim_vars_by_name
 from tilefoundry.ir.visitor import ExprFunctor, expr_children
 from tilefoundry.utils.python_source import PythonExpr
 
+from .tir_printer import _function_block as _tir_function_block
 from .tir_printer import tir_function_to_python, tir_module_to_python
 from .values import PARTS, render_comment
 
@@ -1596,7 +1597,7 @@ def as_script(
     controls canonical-source rendering.
     """
     if isinstance(fn, Module):
-        if any(isinstance(item, PrimFunction) for item in fn.functions):
+        if fn.functions and all(isinstance(item, PrimFunction) for item in fn.functions):
             return tir_module_to_python(fn, module, options=options)
         return _module_to_python(fn, module, options=options)
     if isinstance(fn, PrimFunction) and module is None:
@@ -1614,11 +1615,8 @@ def module_to_python(fn: HirFunction, module_name: str = "M") -> str:
 
 
 def _module_hir_functions(mod: Module) -> tuple[HirFunction, ...]:
-    """The Module's HIR functions, rejecting a mixed HIR/TIR container."""
-    functions = tuple(fn for fn in mod.functions if isinstance(fn, HirFunction))
-    if len(functions) != len(mod.functions):
-        raise TypeError("HIR Module printer does not serialize mixed HIR/TIR Modules")
-    return functions
+    """The Module's HIR functions."""
+    return tuple(fn for fn in mod.functions if isinstance(fn, HirFunction))
 
 
 def _module_tree_functions(mod: Module) -> tuple[HirFunction, ...]:
@@ -1658,7 +1656,7 @@ def _emit_module_class(
     Children first, because a body calling one names the attribute it is bound
     to and a class body binds in the order it is written.
     """
-    functions = _module_hir_functions(mod)
+    functions = mod.functions
     entry = mod.entry_function() if functions and mod.entry is not None else None
     lines = [_module_decorator_line(mod, mod.entry), f"class {module_name}:"]
     ordered = tuple(fn for fn in functions if fn is not entry)
@@ -1673,10 +1671,13 @@ def _emit_module_class(
         _emit_module_class(child, child.name, mesh_map, indent, options)
         for child in mod.modules
     ]
-    blocks.extend(
-        _emit_decorated_defs(fn, mesh_map, indent, options, child_entries)
-        for fn in ordered
-    )
+    for fn in ordered:
+        if isinstance(fn, HirFunction):
+            blocks.append(_emit_decorated_defs(fn, mesh_map, indent, options, child_entries))
+        elif isinstance(fn, PrimFunction):
+            blocks.append(_tir_function_block(fn))
+        else:
+            raise TypeError(f"Python printer cannot serialize {type(fn).__name__}")
     for index, block in enumerate(blocks):
         if index:
             lines.append("")
@@ -1703,8 +1704,8 @@ def _module_to_python(
     if not functions:
         raise TypeError("HIR Module printer requires at least one HIR function")
     entry = root.entry_function() if root.entry is not None else None
-    if entry is not None and not isinstance(entry, HirFunction):
-        raise TypeError("HIR Module printer requires a HIR entry Function")
+    if entry is not None and not isinstance(entry, (HirFunction, PrimFunction)):
+        raise TypeError("Module printer requires a function entry")
 
 
     header_of = entry if entry is not None else functions[0]
@@ -1729,6 +1730,15 @@ def _module_to_python(
         header_of, meshes, mesh_map, indent4, for_module=True, target=root.target,
         dim_vars=dim_vars, scope_mesh_ids=set(scope_meshes),
     )
+    if any(isinstance(fn, PrimFunction) for node in _module_tree(root) for fn in node.functions):
+        lines = [
+            line.replace("from tilefoundry import func", "from tilefoundry import func, prim_func")
+            for line in lines
+        ]
+        tensor_line = next(i for i, line in enumerate(lines) if line.startswith("from tilefoundry.dsl import "))
+        lines[tensor_line] = lines[tensor_line].replace("import ", "import T, ")
+        target_imports = sorted({fn.target.to_python().imports[0] for node in _module_tree(root) for fn in node.functions if isinstance(fn, PrimFunction)})
+        lines[2:2] = target_imports
     tensor_names = "ConstTensor, Tensor" if any(
         param.is_const for fn in functions for param in fn.params
     ) else "Tensor"

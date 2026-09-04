@@ -62,6 +62,22 @@ def test_handwritten_tir_mma_module_roundtrips() -> None:
     assert as_script(import_dsl(printed, name="MmHandwritten")) == printed
 
 
+def test_mixed_hir_tir_module_prints_both_function_families() -> None:
+    mixed = import_dsl(
+        "from tilefoundry import func, module, prim_func\n"
+        "from tilefoundry.dsl import Tensor\n"
+        "from tilefoundry.target import CpuTarget\n\n"
+        "@module()\nclass Mixed:\n"
+        "    @func\n    def h(a: Tensor[(1,), 'f32']):\n        return a\n\n"
+        "    @prim_func(target=CpuTarget())\n"
+        "    def t(a: Tensor[(1,), 'f32']):\n        return\n",
+        name="Mixed",
+    )
+    printed = as_script(mixed)
+    assert "@func" in printed and "@prim_func" in printed
+    assert as_script(import_dsl(printed, name="Mixed")) == printed
+
+
 def test_t_schema_inventory_matches_the_tir_support_matrix() -> None:
     assert sorted(iter_schema_names("T")) == sorted(TIR_SUPPORT_MATRIX)
 

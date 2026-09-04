@@ -40,6 +40,10 @@ def mesh_name_map(meshes):
     return _printer()._mesh_name_map(meshes)
 
 
+def pattern_ctor(pattern) -> str:
+    return _printer()._pattern_ctor(pattern)
+
+
 __all__ = [
     "layout_str",
     "mesh_str",
@@ -48,4 +52,5 @@ __all__ = [
     "dtype_str",
     "shape_tuple",
     "mesh_name_map",
+    "pattern_ctor",
 ]
