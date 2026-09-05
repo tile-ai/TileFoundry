@@ -75,33 +75,7 @@ from tilefoundry.ir.types.substitute import dim_vars_by_name
 from tilefoundry.ir.visitor import ExprFunctor, expr_children
 from tilefoundry.utils.python_source import PythonExpr
 
-from ._python_render import (
-    dtype_str as _shared_dtype_str,
-)
-from ._python_render import (
-    layout_str as _shared_layout_str,
-)
-from ._python_render import (
-    mesh_name_map as _shared_mesh_name_map,
-)
-from ._python_render import (
-    mesh_str as _shared_mesh_str,
-)
-from ._python_render import (
-    pattern_ctor as _shared_pattern_ctor,
-)
-from ._python_render import (
-    shape_tuple as _shared_shape_tuple,
-)
-from ._python_render import (
-    shard_layout_str as _shared_shard_layout_str,
-)
-from ._python_render import (
-    tensor_annotation as _shared_tensor_annotation,
-)
-from ._python_render import (
-    topologies_str as _shared_topologies_str,
-)
+from .print_context import HirPrintContext
 from .printer_base import PythonPrinter
 from .tir_printer import _function_block as _tir_function_block
 from .tir_printer import tir_function_to_python, tir_module_to_python
@@ -127,6 +101,18 @@ class HirPrinter(PythonPrinter):
 
     def print(self, fn: HirFunction, *, options=None) -> str:
         return _render_hir_function(fn, options=options).source
+
+    def dim_entry(self, value, ctx=None) -> str:
+        return shape_entry_str(value)
+
+    def shard_surface(self, value, ctx=None):
+        mesh_map = getattr(ctx, "mesh_name_map", {}) if ctx is not None else {}
+        mesh_name = mesh_map.get(id(value.mesh))
+        if mesh_name is None:
+            return None
+        return _shard_layout_surface_str(
+            value, mesh_name=mesh_name, mesh_unique=len(mesh_map) == 1
+        )
 
 
 @dataclass(frozen=True)
@@ -1289,39 +1275,39 @@ def _emit_def(
     return lines
 
 
-_dtype_str = _shared_dtype_str
-_mesh_name_map = _shared_mesh_name_map
-_pattern_ctor = _shared_pattern_ctor
+_HIR_RENDERER = HirPrinter()
+_dtype_str = _HIR_RENDERER.dtype_str
+_mesh_name_map = _HIR_RENDERER.mesh_name_map
+_pattern_ctor = _HIR_RENDERER.render_pattern
 
 
 def _topologies_str(mesh: Mesh) -> str:
-    return _shared_topologies_str(mesh, shape_entry_str)
+    values = ", ".join(
+        f'Topology("{topology.name}", {shape_entry_str(topology.size)})'
+        for topology in mesh.topologies
+    )
+    return f"({values}{',' if len(mesh.topologies) == 1 else ''})"
 
 
 def _shape_tuple(shape: tuple) -> str:
-    return _shared_shape_tuple(shape, shape_entry_str)
+    return _HIR_RENDERER.shape_tuple(shape)
 
 
 def _layout_str(layout: LayoutBase | None, indent: str = "") -> str:
-    return _shared_layout_str(layout, indent, render=shape_entry_str)
+    return _HIR_RENDERER.render_layout(layout, HirPrintContext(), indent)
 
 
 def _mesh_str(mesh: Mesh, indent: str = "") -> str:
-    return _shared_mesh_str(mesh, indent, render=shape_entry_str)
+    return _HIR_RENDERER.render_mesh(mesh, HirPrintContext(), indent)
 
 
 def _shard_layout_str(sl: ShardLayout, indent: str = "", *, mesh_ref=None) -> str:
-    return _shared_shard_layout_str(sl, indent, mesh_ref=mesh_ref, render=shape_entry_str)
+    return _HIR_RENDERER.render_shard_layout(sl, HirPrintContext(), indent)
 
 
 def _tensor_annotation(ty: TensorType, *, mesh_name_map=None, indent="", is_const=False) -> str:
-    return _shared_tensor_annotation(
-        ty,
-        mesh_name_map=mesh_name_map,
-        indent=indent,
-        is_const=is_const,
-        render=shape_entry_str,
-        surface=_shard_layout_surface_str,
+    return _HIR_RENDERER.render_tensor_type(
+        ty, HirPrintContext(mesh_name_map), indent, is_const
     )
 
 
@@ -1341,6 +1327,17 @@ def _collect_all_meshes(
         type_meshes.update(types)
         scope_meshes.update(scopes)
     return type_meshes, scope_meshes
+
+
+def _dedup_meshes(meshes: dict[int, Mesh]) -> dict[int, Mesh]:
+    """Collapse structurally identical descriptors before naming hoisted meshes."""
+    result: dict[int, Mesh] = {}
+    for identity, mesh in meshes.items():
+        signature = _mesh_str(mesh)
+        if any(signature == _mesh_str(existing) for existing in result.values()):
+            continue
+        result[identity] = mesh
+    return result
 
 
 def _emit_header(
@@ -1392,10 +1389,15 @@ def _emit_header(
 
 
     if any(mesh.names or mid in (scope_mesh_ids or ()) for mid, mesh in meshes.items()):
+        emitted_meshes: set[str] = set()
         for mid, mesh in meshes.items():
             if not mesh.names and mid not in (scope_mesh_ids or ()):
                 continue
             name = mesh_map[mid]
+            signature = _mesh_str(mesh)
+            if signature in emitted_meshes:
+                continue
+            emitted_meshes.add(signature)
             topologies = _topologies_str(mesh)
             names_repr = repr(tuple(mesh.names)) if mesh.names else "()"
             lines.append(

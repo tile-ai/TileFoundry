@@ -2,21 +2,14 @@
 
 from __future__ import annotations
 
-import enum
 import re
 
-from tilefoundry.inspection._python_render import (
-    mesh_str,
-    pattern_ctor,
-    tensor_annotation,
-)
 from tilefoundry.inspection.print_context import TirPrintContext
-from tilefoundry.inspection.python_printer import PythonPrinter
+from tilefoundry.inspection.printer_base import PythonPrinter
 from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
@@ -25,8 +18,14 @@ from tilefoundry.ir.tir.stmts import (
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import Mesh
 from tilefoundry.ir.visitor import StmtVisitor
+from tilefoundry.utils.python_source import PythonExpr, _merge_imports
+
+
+class _RenderedLines(list):
+    def __init__(self, lines, imports):
+        super().__init__(lines)
+        self.imports = imports
 
 
 class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
@@ -48,25 +47,25 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         return [line for child in stmt.body for line in self.visit(child)]
 
     def visit_LetStmt(self, stmt):
-        return [f"{self.indent}{stmt.var.name} = {_expr(stmt.value, self.context_mesh_bindings())}"] + self.visit(stmt.body)
+        return [f"{self.indent}{stmt.var.name} = {self._expr(stmt.value)}"] + self.visit(stmt.body)
 
     def visit_Evaluate(self, stmt):
-        return _emit_evaluate(stmt, self.indent, self.context_mesh_bindings())
+        return self._emit_evaluate(stmt)
 
     def visit_MeshScope(self, stmt):
-        lines = [f"{self.indent}with {mesh_str(stmt.mesh)} as {stmt.binding.name}:"]
+        lines = [f"{self.indent}with {self.render_mesh(stmt.mesh, self.context, self.indent)} as {stmt.binding.name}:"]
         self.context.push_mesh(stmt.mesh, stmt.binding.name)
         lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body))
         self.context.pop_mesh()
         return lines
 
     def visit_For(self, stmt):
-        lines = [f"{self.indent}for {stmt.induction_var.name} in range({_expr(stmt.start)}, {_expr(stmt.stop)}, {_expr(stmt.step)}):"]
+        lines = [f"{self.indent}for {stmt.induction_var.name} in range({self._expr(stmt.start)}, {self._expr(stmt.stop)}, {self._expr(stmt.step)}):"]
         lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body))
         return lines
 
     def visit_If(self, stmt):
-        lines = [f"{self.indent}if {_expr(stmt.cond, self.context_mesh_bindings())}:"]
+        lines = [f"{self.indent}if {self._expr(stmt.cond)}:"]
         lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.then_body))
         if stmt.else_body.body:
             lines.append(f"{self.indent}else:")
@@ -74,7 +73,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         return lines
 
     def visit_While(self, stmt):
-        return [f"{self.indent}while {_expr(stmt.cond, self.context_mesh_bindings())}:"] + TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body)
+        return [f"{self.indent}while {self._expr(stmt.cond)}:"] + TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body)
 
     def visit_Return(self, stmt):
         return [f"{self.indent}return"]
@@ -85,18 +84,53 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
     def visit_DispatchCall(self, stmt):
         cases = []
         for patterns, call in zip(stmt.case_patterns, stmt.case_calls):
-            pats = ", ".join(pattern_ctor(pattern) for pattern in patterns)
-            args = _join_args(call.args, self.context_mesh_bindings())
+            pats = ", ".join(self.render_pattern(pattern, self.context) for pattern in patterns)
+            args = self._join_args(call.args)
             cases.append(f"(({pats},), {_binding_name(call.callable.name)!r}, ({args},))")
-        lines = [f"{self.indent}with dispatch_call({stmt.callee_name!r}, subjects=({_join_args(stmt.subjects, self.context_mesh_bindings())},), cases=({', '.join(cases)},)):"]
+        lines = [f"{self.indent}with dispatch_call({stmt.callee_name!r}, subjects=({self._join_args(stmt.subjects)},), cases=({', '.join(cases)},)):"]
         lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.fallback))
         return lines
 
-    def context_mesh_bindings(self) -> dict[int, str]:
-        aliases: dict[int, str] = {}
-        for frame in self.context._mesh_aliases:
-            aliases.update(frame)
-        return aliases
+    def _expr(self, expr):
+        if isinstance(expr, Var):
+            return expr.name
+        if isinstance(expr, Constant):
+            return repr(expr.value)
+        if isinstance(expr, SymbolRef):
+            return _binding_name(expr.name)
+        if isinstance(expr, ShapeOf):
+            return f"shape_of({expr.param.name}, axis={expr.axis})"
+        if isinstance(expr, Op):
+            name = getattr(getattr(expr, "_op_schema", None), "name", type(expr).__name__.lower())
+            self.context.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
+            return f"T.{name}"
+        if isinstance(expr, Tuple):
+            vals = ", ".join(self._expr(x) for x in expr.elements)
+            return f"({vals}{',' if len(expr.elements)==1 else ''})"
+        if isinstance(expr, Call):
+            target = expr.target
+            scalar_binary = {BinaryKind.EQ:"==", BinaryKind.NE:"!=", BinaryKind.LT:"<", BinaryKind.LE:"<=", BinaryKind.GT:">", BinaryKind.GE:">=", BinaryKind.AND:"and"}
+            kind = getattr(target, "kind", None)
+            if kind in scalar_binary and len(expr.args)==2 and expr.type.dtype is DType.bool:
+                return f"{self._expr(expr.args[0])} {scalar_binary[kind]} {self._expr(expr.args[1])}"
+            name = getattr(getattr(target, "_op_schema", None), "name", None) or re.sub(r"(?<!^)(?=[A-Z])", "_", type(target).__name__).lower()
+            args = [self._expr(x) for x in expr.args]
+            for p in type(target).params():
+                if p.kind == "attribute":
+                    value = getattr(target, p.name, None)
+                    if value is not None:
+                        args.append(f"{p.name}={self.render_value(value, self.context)}")
+            self.context.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
+            return f"T.{name}({', '.join(args)})"
+        return self.render_value(expr, self.context)
+
+    def _join_args(self, args): return ", ".join(self._expr(arg) for arg in args)
+
+    def _emit_evaluate(self, stmt):
+        handler = _STMT_PRINTERS.get(type(stmt.callable)) or (_STMT_PRINTERS.get(Op) if isinstance(stmt.callable, Op) else None)
+        if handler is None:
+            raise NotImplementedError(f"TIR printer has no emitter for {type(stmt.callable).__name__}")
+        return handler(stmt, self)
 
 
 _STMT_PRINTERS: dict[type, object] = {}
@@ -114,91 +148,18 @@ def _binding_name(name: str) -> str:
     return re.sub(r"\W", "_", name)
 
 
-def _python_value(value: object, mesh_bindings: dict[int, str] | None = None) -> str:
-    """Render descriptor attributes through their canonical PythonExpr form."""
-    mesh_bindings = mesh_bindings or {}
-    if isinstance(value, Mesh) and id(value) in mesh_bindings:
-        return mesh_bindings[id(value)]
-    to_python = getattr(value, "to_python", None)
-    if callable(to_python):
-        return to_python().text
-    if isinstance(value, TensorType):
-        return tensor_annotation(value)
-    if isinstance(value, DType):
-        return repr(value.name)
-    if isinstance(value, MmaAtom):
-        return f"T.cuda.mma.atom(op=T.cuda.mma.{value.op.name})"
-    if isinstance(value, enum.Enum):
-        return f"{type(value).__name__}.{value.name}"
-    if isinstance(value, (str, int, float, bool, tuple)):
-        return repr(value)
-    raise NotImplementedError(
-        f"TIR printer has no canonical attribute form for {type(value).__name__}"
-    )
-
-
-def _expr(expr: object, mesh_bindings: dict[int, str] | None = None) -> str:
-    mesh_bindings = {} if mesh_bindings is None else mesh_bindings
-    if isinstance(expr, Var):
-        return expr.name
-    if isinstance(expr, Constant):
-        return repr(expr.value)
-    if isinstance(expr, SymbolRef):
-        return _binding_name(expr.name)
-    if isinstance(expr, ShapeOf):
-        return f"shape_of({expr.param.name}, axis={expr.axis})"
-    if isinstance(expr, Op):
-        name = getattr(getattr(expr, "_op_schema", None), "name", type(expr).__name__.lower())
-        return f"T.{name}"
-    if isinstance(expr, Tuple):
-        values = ", ".join(_expr(x, mesh_bindings) for x in expr.elements)
-        if len(expr.elements) == 1:
-            values += ","
-        return f"({values})"
-    if isinstance(expr, Call):
-        target = expr.target
-        scalar_binary = {
-            BinaryKind.EQ: "==",
-            BinaryKind.NE: "!=",
-            BinaryKind.LT: "<",
-            BinaryKind.LE: "<=",
-            BinaryKind.GT: ">",
-            BinaryKind.GE: ">=",
-            BinaryKind.AND: "and",
-        }
-        kind = getattr(target, "kind", None)
-        if kind in scalar_binary and len(expr.args) == 2 and expr.type.dtype is DType.bool:
-            return f"{_expr(expr.args[0], mesh_bindings)} {scalar_binary[kind]} {_expr(expr.args[1], mesh_bindings)}"
-        op_name = getattr(getattr(target, "_op_schema", None), "name", None)
-        if op_name is None:
-            op_name = re.sub(r"(?<!^)(?=[A-Z])", "_", type(target).__name__).lower()
-        args = [_expr(x, mesh_bindings) for x in expr.args]
-        for p in type(target).params():
-            if p.kind != "attribute":
-                continue
-            value = getattr(target, p.name, None)
-            if value is None:
-                continue
-            value = _python_value(value, mesh_bindings)
-            args.append(f"{p.name}={value}")
-        return f"T.{op_name}({', '.join(args)})"
-    raise NotImplementedError(f"TIR printer has no canonical expression form for {type(expr).__name__}")
-
-
 @register_tir_printer(Launch)
-def _print_launch(stmt: Evaluate, indent: str, mesh_bindings: dict[int, str]) -> list[str]:
+def _print_launch(stmt: Evaluate, printer: TirPrinter) -> list[str]:
+    indent = printer.indent
     callee, grid = stmt.args[0], stmt.args[1:4]
     block = stmt.args[4:7]
     forwarded = stmt.args[7:]
-    return [
-        f"{indent}launch({_expr(callee, mesh_bindings)}, {_join_args(forwarded, mesh_bindings)}, "
-        f"grid={_expr(Tuple(type=grid[0].type, elements=tuple(grid)))}, "
-        f"block={_expr(Tuple(type=block[0].type, elements=tuple(block)))})  # noqa: F821"
-    ]
+    return [f"{indent}launch({printer._expr(callee)}, {printer._join_args(forwarded)}, grid={printer._expr(Tuple(type=grid[0].type, elements=tuple(grid)))}, block={printer._expr(Tuple(type=block[0].type, elements=tuple(block)))})  # noqa: F821"]
 
 
 @register_tir_printer(Op)
-def _print_op_evaluate(stmt: Evaluate, indent: str, mesh_bindings: dict[int, str]) -> list[str]:
+def _print_op_evaluate(stmt: Evaluate, printer: TirPrinter) -> list[str]:
+    indent = printer.indent
     target = stmt.callable
     args = list(stmt.args)
     attrs = []
@@ -209,82 +170,51 @@ def _print_op_evaluate(stmt: Evaluate, indent: str, mesh_bindings: dict[int, str
         value = getattr(target, p.name, None)
         if value is None:
             continue
-        rendered = _python_value(value, mesh_bindings)
+        rendered = printer.render_value(value, printer.context)
         attrs.append(rendered if op_name == "sync" and p.name == "mesh" else f"{p.name}={rendered}")
-    rendered_args = [_expr(arg, mesh_bindings) for arg in args]
-    return [f"{indent}{_expr(target, mesh_bindings)}({', '.join(rendered_args + attrs)})"]
-
-
-def _emit_evaluate(stmt: Evaluate, indent: str, mesh_bindings: dict[int, str]) -> list[str]:
-    handler = _STMT_PRINTERS.get(type(stmt.callable))
-    if handler is None and isinstance(stmt.callable, Op):
-        handler = _STMT_PRINTERS[Op]
-    if handler is None:
-        raise NotImplementedError(f"TIR printer has no emitter for {type(stmt.callable).__name__}")
-    return handler(stmt, indent, mesh_bindings)
-
-
-def _emit_stmt(stmt, indent: str, lines: list[str], mesh_bindings=None) -> None:
-    lines.extend(TirPrinter(context=TirPrintContext(), indent=indent).visit(stmt))
-
-
-def _join_args(args, mesh_bindings=None) -> str:
-    return ", ".join(_expr(arg, mesh_bindings) for arg in args)
+    rendered_args = [printer._expr(arg) for arg in args]
+    return [f"{indent}{printer._expr(target)}({', '.join(rendered_args + attrs)})"]
 
 
 def _function_block(fn: PrimFunction) -> list[str]:
-    target = fn.target.to_python()
-    lines = ["@prim_func(target=" + target.text + ")"]
+    ctx = TirPrintContext()
+    target = ctx.use(fn.target.to_python())
+    ctx.use(PythonExpr(("from tilefoundry import prim_func",), "prim_func"))
+    ctx.use(PythonExpr(("from tilefoundry.dsl import Tensor",), "Tensor"))
+    lines = ["@prim_func(target=" + target + ")"]
     params = ", ".join(
-        f"{p.name}: {tensor_annotation(p.type) if isinstance(p.type, TensorType) else repr(p.type)}"
+        f"{p.name}: {TirPrinter(context=ctx).render_value(p.type, ctx) if isinstance(p.type, TensorType) else repr(p.type)}"
         for p in fn.params
     )
     lines.append(f"def {_binding_name(fn.name)}({params}):")
-    body = TirPrinter(indent="    ").visit(fn.body)
+    body = TirPrinter(context=ctx, indent="    ").visit(fn.body)
     lines.extend(body or ["    pass"])
-    return lines
+    return _RenderedLines(lines, ctx.imports)
 
 
-def _imports(text: str, targets: set[str], *, module: bool) -> list[str]:
-    identifiers = set(re.findall(r"\b[A-Za-z_]\w*\b", text))
-    names = ["module"] if module else []
-    names.append("prim_func")
-    lines = [f"from tilefoundry import {', '.join(names)}"]
-    dsl_names = [name for name in ("T", "Tensor") if name in identifiers]
-    if dsl_names:
-        lines.append(f"from tilefoundry.dsl import {', '.join(dsl_names)}")
-    kind_names = sorted(name for name in identifiers if name.endswith("Kind"))
-    if kind_names:
-        lines.append(f"from tilefoundry.ir.core.kinds import {', '.join(kind_names)}")
-    shard_names = [
-        name
-        for name in ("B", "ComposedLayout", "Layout", "Mesh", "P", "S", "ShardLayout", "Topology")
-        if name in identifiers
-    ]
-    if shard_names:
-        lines.append(f"from tilefoundry.ir.types.shard import {', '.join(shard_names)}")
-    if targets:
-        lines.append(f"from tilefoundry.target import {', '.join(sorted(targets))}")
-    return lines
+def _imports_from(lines) -> list[str]:
+    return list(_merge_imports(tuple(getattr(lines, "imports", ()))))
 
 
 def tir_function_to_python(fn: PrimFunction, *, options=None) -> str:
     lines = _function_block(fn)
-    text = "\n".join(lines)
-    targets = {type(fn.target).__name__}
-    lines = ["from __future__ import annotations", "", *_imports(text, targets, module=False), "", "", *lines]
+    lines = ["from __future__ import annotations", "", *_imports_from(lines), "", "", *lines]
     return "\n".join(lines) + "\n"
 
 
 def tir_module_to_python(mod: Module, module_name: str | None = None, *, options=None) -> str:
     name = module_name or mod.name
     lines: list[str] = []
+    imports = {"from tilefoundry import module"}
     kwargs = []
     if mod.entry is not None:
         kwargs.append(f'entry="{_binding_name(mod.entry)}"')
     if mod.target is not None:
-        kwargs.append(f"target={mod.target.to_python().text}")
+        target = mod.target.to_python()
+        imports.update(target.imports)
+        kwargs.append(f"target={target.text}")
     if mod.topologies is not None:
+        imports.add("from tilefoundry.ir.types.shard import Topology")
         rendered = ", ".join(f'Topology("{t.name}", {t.size!r})' for t in mod.topologies)
         kwargs.append(f"topologies=({rendered},)" if rendered else "topologies=()")
     lines.append(f"@module({', '.join(kwargs)})")
@@ -299,14 +229,12 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
             if isinstance(fn, HirFunction):
                 raise NotImplementedError("mixed HIR/TIR module printing is not yet supported")
             raise TypeError(f"TIR printer cannot serialize {type(fn).__name__}")
-        blocks.append(_function_block(fn))
+        block = _function_block(fn)
+        imports.update(block.imports)
+        blocks.append(block)
     for index, block in enumerate(blocks):
         if index:
             lines.append("")
         lines.extend("    " + line if line else line for line in block)
-    text = "\n".join(lines)
-    targets = {type(fn.target).__name__ for fn in mod.functions if isinstance(fn, PrimFunction)}
-    if mod.target is not None:
-        targets.add(type(mod.target).__name__)
-    header = ["from __future__ import annotations", "", *_imports(text, targets, module=True), "", ""]
+    header = ["from __future__ import annotations", "", *_merge_imports(tuple(imports)), "", ""]
     return "\n".join(header + lines) + "\n"
