@@ -1036,3 +1036,142 @@ __device__ void copy_async(TSrc const& src, TDst& dst);
     `cp_async_commit` and `cp_async_wait`.
   - Runtime implementation details such as vector width, tail handling, and
     architecture fallback live in code comments, not this spec entry.
+
+### 3.7 `tilefoundry::ops::warp_*` (warp-scoped exchange)
+
+Three ops, one public entry each, and **no tiers**: their operand is a
+register-resident scalar, which carries no `ShardLayout`, so there is nothing
+for a compile-time tier selection to read. The one-entry rule of
+[§3](#3-runtime-ops) requires one entry per op; it does not require every op to
+have more than one implementation.
+
+`warp.cuh` is included before `reduce.cuh` so that `ops::reduce`'s intra-warp
+tier folds through `warp_reduce` rather than spelling the butterfly a second
+time.
+
+```cpp
+/**
+ * @brief Exchange a value with the lane whose id differs by lane_mask.
+ * @param value this lane's contribution
+ * @param lane_mask the lane-id bits exchanged across
+ * @param member_mask the participating lanes
+ */
+template <class T>
+__device__ T shuffle_xor(T value, int lane_mask, unsigned member_mask = 0xFFFFFFFFu);
+
+/**
+ * @brief Select exactly one thread of the leading Width threads of the CTA.
+ * @tparam Width compile-time participating thread count
+ */
+template <int Width>
+__device__ bool shuffle_elect();
+
+/**
+ * @brief Fold value across the warp, leaving the result in every lane.
+ * @tparam Combine functor type supplying a static apply(T, T) -> T
+ * @param value this lane's contribution
+ */
+template <class Combine, class T>
+__device__ T warp_reduce(T value);
+```
+
+- constraints:
+  - `shuffle_elect` elects one thread of the **CTA**, not one lane of each warp.
+    An mbarrier armed for a single arrival is correct only under that reading.
+  - `warp_reduce` is the five-step butterfly and leaves its result in every lane.
+  - Types wider than the shuffle intrinsic's are exchanged word-wise; that
+    choice lives in code comments, not this entry.
+
+### 3.8 `tilefoundry::ops::mbarrier_*` (shared-memory barrier object)
+
+A Hopper mbarrier is a 64-bit shared-memory word carrying an arrival count, a
+transaction-byte count and a phase parity. It is not `ops::sync`
+([§3.4](#34-tilefoundryopssync-mesh-scoped-barrier)): that is a whole-mesh
+rendezvous every participant reaches, while these let a producer signal
+completion of work the consumer did not perform.
+
+`ops::sync` collapses five `SyncKind`s behind one entry because they are five
+ways to spell one op — "barrier for this mesh scope" — with the scope choosing
+the spelling. `mbarrier.init` / `arrive` / `try_wait` are not one op: they are
+three instructions with three meanings and three signatures. The one-entry rule
+forbids exposing the *tiers* of one op separately; it does not ask distinct
+operations to hide behind an enum. **No tiers:** a barrier is a shared-memory
+object, not a sharded tensor, so no operand carries a `ShardLayout`.
+
+```cpp
+/** @brief Arm a barrier so arrive_count arrivals complete a phase. */
+__device__ void mbarrier_init(uint64_t* bar, unsigned arrive_count);
+
+/** @brief Contribute one arrival to the barrier's current phase. */
+__device__ void mbarrier_arrive(uint64_t* bar);
+
+/** @brief Arrive and declare tx_bytes of asynchronous data in one instruction. */
+__device__ void mbarrier_arrive_expect_tx(uint64_t* bar, unsigned tx_bytes);
+
+/** @brief Declare tx_bytes against the current phase without arriving. */
+__device__ void mbarrier_expect_tx(uint64_t* bar, unsigned tx_bytes);
+
+/** @brief Test the phase once without blocking. */
+__device__ bool mbarrier_try_wait_parity(uint64_t* bar, unsigned phase);
+
+/** @brief Block until the barrier's phase parity reaches phase. */
+__device__ void mbarrier_wait_parity(uint64_t* bar, unsigned phase);
+
+/** @brief Release the barrier's shared-memory word. */
+__device__ void mbarrier_invalidate(uint64_t* bar);
+```
+
+- constraints:
+  - `bar` addresses shared memory. One thread calls `mbarrier_init`, and a
+    `sync` covering every thread that will use the barrier separates it from the
+    first arrival or wait.
+  - The parity alternates `0, 1, 0, ...` across successive completions, which is
+    what lets a fixed ring of barriers serve a pipeline of any length: stage `t`
+    of a ring of `n` waits on parity `(t / n) & 1`.
+  - A `tx_bytes` that disagrees with the bytes the paired copy delivers leaves
+    the phase permanently incomplete; the failure presents as a hang, not as a
+    wrong value.
+
+### 3.9 `tilefoundry::ops::tma_bulk_copy` (bulk async gmem→smem staging)
+
+`cp.async.bulk`, and not a tier of `ops::copy_async`
+([§3.6](#36-tilefoundryopscopy_async-async-gmemsmem-staging)): there every
+thread issues its own 4-, 8- or 16-byte load and a commit closes the group; here
+one thread issues a whole contiguous run and an mbarrier signals completion.
+
+**One implementation.** The hardware's two bulk forms are the rank-1
+`cp.async.bulk` implemented here and the tensor forms
+`cp.async.bulk.tensor.Nd`, which take a host-encoded `TensorMap` in place of a
+size. Those differ in their *operands*, not in a tier a trait could pick
+between, and a caller holding one cannot supply the other. A weaker-alignment
+fallback is likewise absent: that is `ops::copy_async`, and this entry refuses
+rather than silently becoming a slower copy.
+
+```cpp
+/**
+ * @brief Stage a contiguous run gmem→smem as one bulk async copy.
+ * @param src_gmem the source run
+ * @param dst_smem the shared destination
+ * @param count elements transferred
+ * @param bar the mbarrier the completion lands on
+ */
+template <class T>
+__device__ void tma_bulk_copy(T const* src_gmem, T* dst_smem, unsigned count, uint64_t* bar);
+
+/**
+ * @brief The byte count tma_bulk_copy transfers, for the arrival that declares it.
+ * @param count elements transferred
+ */
+template <class T>
+__device__ __host__ constexpr unsigned tma_bulk_bytes(unsigned count);
+```
+
+- constraints:
+  - Exactly one thread issues the copy, and nothing blocks: it is in flight when
+    the issuing thread reaches the next statement.
+  - Both addresses are 16-byte aligned and the byte count is a multiple of 16.
+    The instruction has no defined behaviour otherwise.
+  - The issuing thread pairs the copy with
+    `mbarrier_arrive_expect_tx(bar, tma_bulk_bytes<T>(count))`; consumers wait
+    with `mbarrier_wait_parity`. `tma_bulk_bytes` exists so the declared and
+    delivered counts cannot drift.
