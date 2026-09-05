@@ -372,13 +372,13 @@ answered rather than guessed at.
 
 | | what it was | under handwritten CUDA |
 |---|---|---|
-| TL-1 | descriptor TMA cannot take a device-only pointer | **gone.** `ops::tma_bulk_copy` is the rank-1 form, which takes an address, not a descriptor. |
-| TL-2 | `T.gemm` layout inference reaches through `T.view` | **gone.** No layout inference: a gemv is a loop over rows this code writes. |
-| TL-3 | a linear layout makes gemm 6x slower | **not applicable.** These are matrix-vector products; there is no tensor-core operand layout to get wrong. |
+| TL-1 | descriptor TMA cannot take a device-only pointer | **gone.** `ops::tma_copy` reads the tier off the operands' shard layouts and the contiguous one is the rank-1 bulk instruction, which takes an address rather than a descriptor. |
+| TL-2 | `T.gemm` layout inference reaches through `T.view` | **gone.** There is no inference to reach through: an `ops::mma` operand *is* a shard layout, so an `(N, K)` view of a `(K, N)` buffer is a stride and there is no transpose flag to infer. |
+| TL-3 | a linear layout makes gemm 6x slower | **not applicable to the projections**, which are matrix-vector products with no tensor-core operand layout to get wrong. The attention scan does issue `ops::mma`, and it reads its key and value tiles straight out of the packed shape the copy left them in. |
 | TL-4 | the shared allocator does not reuse disjoint lifetimes | **still there, differently.** One kernel calls every stage, so the compiler holds every stage's static shared array at once and the arena is sized to the widest. Writing past it was a real fault here, caught by compute-sanitizer. |
-| TL-5 | several things at M=16 | **gone.** No MMA instruction is issued. |
+| TL-5 | several things at M=16 | **gone.** The attention scan runs `ops::mma` at exactly M=16 -- one `(16, 128)` score block a key block -- and the tier picks the atom off the operand layouts, so M=16 is a shape the entry handles rather than a case that needs its own path. |
 | TL-6 | `ThreadSync` hoists `__syncthreads()` out of an `if` | **gone**, and its opposite arrived: a barrier this code does *not* write is not inserted for it. A missing one in `s_moe_down` corrupted the expert accumulator, which six separate launches had hidden. |
-| TL-7 | the instruction `T.copy` picks by default is worse than `cp_async` | **gone.** The instruction is written out. What replaces the problem is that the right choice is not uniform: staging wins for the Mamba projections and loses for the MoE experts, measured both ways in `kernels/nemotron.cu`. |
+| TL-7 | the instruction `T.copy` picks by default is worse than `cp_async` | **gone.** `ops::copy` reads the move width off the two shard layouts and `ops::tma_copy` reads its tier the same way, so neither is a default to be overridden. What replaces the problem is that the right *shape* is not uniform: staging wins for the Mamba projections and loses for the MoE experts, measured both ways in `kernels/nemotron.cu`. |
 | TL-8 | the eager builder rejects a Python-level loop over a tuple | **gone.** The 52 layers are a `for` in CUDA C, so `gen_kernel.py`'s reason for existing does not apply to the CUDA path. |
 
 The trade is not free: TL-4 and TL-6 come back as the author's problem instead of
