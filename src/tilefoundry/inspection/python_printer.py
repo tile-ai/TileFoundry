@@ -1390,15 +1390,10 @@ def _emit_header(
 
 
     if any(mesh.names or mid in (scope_mesh_ids or ()) for mid, mesh in meshes.items()):
-        emitted_meshes: set[str] = set()
         for mid, mesh in meshes.items():
             if not mesh.names and mid not in (scope_mesh_ids or ()):
                 continue
             name = mesh_map[mid]
-            signature = _mesh_str(mesh)
-            if signature in emitted_meshes:
-                continue
-            emitted_meshes.add(signature)
             topologies = _topologies_str(mesh)
             names_repr = repr(tuple(mesh.names)) if mesh.names else "()"
             lines.append(

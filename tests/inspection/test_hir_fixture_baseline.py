@@ -1,6 +1,5 @@
 """Byte baseline for the complete checked-in HIR fixture corpus."""
 
-import hashlib
 import importlib.util
 import sys
 from pathlib import Path
@@ -10,7 +9,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 
 ROOT = Path(__file__).parents[1] / "fixtures"
-EXPECTED = Path(__file__).with_name("hir_fixture_baseline.sha256")
+EXPECTED = Path(__file__).with_name("hir_fixture_baseline.txt")
 
 
 def _programs():
@@ -32,4 +31,4 @@ def test_hir_fixture_output_matches_checked_in_baseline() -> None:
     rendered = "\n".join(
         f"### {name}\n{as_script(program)}" for name, program in _programs()
     )
-    assert hashlib.sha256(rendered.encode()).hexdigest()[:16] == EXPECTED.read_text().strip()
+    assert rendered == EXPECTED.read_text()
