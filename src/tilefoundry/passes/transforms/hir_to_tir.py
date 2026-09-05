@@ -1897,12 +1897,17 @@ class HirToTirPass(ModulePass):
                     continue
                 emitted_groups.add(group_name)
                 mangled_for_group = mangled_by_group[group_name]
-                new_fns.extend(mangled_for_group)
-                new_fns.append(
-                    _build_dispatch_entry(
-                        dispatch_view[group_name], mangled_for_group, target
-                    )
+                template = dispatch_view[group_name][0]
+                base = _build_dispatch_entry(
+                    dispatch_view[group_name], mangled_for_group, target
                 )
+                base = replace(
+                    base,
+                    specializations=template.specializations,
+                    variants=tuple(mangled_for_group),
+                )
+                new_fns.extend(mangled_for_group)
+                new_fns.append(base)
                 continue
 
             new_fns.append(

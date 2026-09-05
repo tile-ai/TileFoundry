@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from tilefoundry.ir.core import Var
+from tilefoundry.ir.core.pattern import Pattern
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Sequential
 from tilefoundry.target.base import Target, target_instance
@@ -30,6 +31,8 @@ class PrimFunction(Stmt):
     body: Sequential
     output_count: int = 1
     target: Target = field(default_factory=_default_target)
+    specializations: tuple[Pattern, ...] = ()
+    variants: tuple["PrimFunction", ...] = ()
 
     def __post_init__(self) -> None:
         target_instance(self.target)
