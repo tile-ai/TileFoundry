@@ -21,6 +21,9 @@ class PrintContext:
     def mesh_alias(self, mesh) -> str | None:
         return None
 
+    def render_mode(self) -> str:
+        return "hir"
+
 
 class HirPrintContext(PrintContext):
     def __init__(self, mesh_name_map: dict[int, str] | None = None) -> None:
@@ -38,6 +41,9 @@ class TirPrintContext(PrintContext):
     def __init__(self) -> None:
         super().__init__()
         self._mesh_aliases: list[dict[int, str]] = []
+
+    def render_mode(self) -> str:
+        return "tir"
 
     def push_mesh(self, mesh, name: str) -> None:
         self._mesh_aliases.append({id(mesh): name})
