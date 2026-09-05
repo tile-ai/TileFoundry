@@ -40,6 +40,14 @@ class PythonPrinter(ExprFunctor[str]):
                 return alias
         if isinstance(value, TensorType):
             return self.render_tensor_type(value, ctx, indent)
+        if isinstance(value, Mesh):
+            if ctx is not None and hasattr(ctx, "_mesh_aliases"):
+                return ctx.use(value.to_python())
+            return self.render_mesh(value, ctx, indent)
+        if isinstance(value, LayoutBase):
+            if ctx is not None and hasattr(ctx, "_mesh_aliases"):
+                return ctx.use(value.to_python())
+            return self.render_layout(value, ctx, indent)
         if isinstance(value, MmaAtom):
             if ctx is not None:
                 ctx.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
@@ -92,6 +100,8 @@ class PythonPrinter(ExprFunctor[str]):
         if isinstance(layout, ShardLayout):
             return self.render_shard_layout(layout, ctx, indent)
         if isinstance(layout, ComposedLayout):
+            if ctx is not None:
+                ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import ComposedLayout",), ""))
             child = indent + "    "
             return (
                 "ComposedLayout(\n"
@@ -103,6 +113,8 @@ class PythonPrinter(ExprFunctor[str]):
         raise TypeError(f"unsupported layout type: {type(layout).__name__}")
 
     def render_mesh(self, mesh: Mesh, ctx=None, indent: str = "") -> str:
+        if ctx is not None:
+            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Layout, Mesh, Topology",), ""))
         values = ", ".join(
             f'Topology("{topology.name}", {self.dim_entry(topology.size, ctx)})'
             for topology in mesh.topologies
@@ -114,6 +126,8 @@ class PythonPrinter(ExprFunctor[str]):
         return result + ")"
 
     def render_shard_layout(self, layout: ShardLayout, ctx=None, indent: str = "") -> str:
+        if ctx is not None:
+            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import ShardLayout",), ""))
         child = indent + "    "
         attrs = ", ".join(self._shard_attr_str(attr, ctx) for attr in layout.attrs)
         if len(layout.attrs) == 1:
@@ -122,7 +136,7 @@ class PythonPrinter(ExprFunctor[str]):
             "ShardLayout(\n"
             f"{child}layout={self.render_layout(layout.layout, ctx, child)},\n"
             f"{child}attrs=({attrs}),\n"
-            f"{child}mesh={self.render_mesh(layout.mesh, ctx, child)},\n"
+            f"{child}mesh={self.render_value(layout.mesh, ctx, child) if ctx is not None and hasattr(ctx, '_mesh_aliases') else self.render_mesh(layout.mesh, ctx, child)},\n"
             f"{indent})"
         )
 
@@ -147,12 +161,11 @@ class PythonPrinter(ExprFunctor[str]):
     def mesh_name_map(self, meshes: dict[int, Mesh]) -> dict[int, str]:
         used: set[str] = set()
         result: dict[int, str] = {}
+        signatures: dict[str, str] = {}
         for identity, mesh in meshes.items():
-            for prior_id, prior_mesh in meshes.items():
-                if prior_id != identity and prior_id in result and self.render_mesh(prior_mesh) == self.render_mesh(mesh):
-                    result[identity] = result[prior_id]
-                    break
-            if identity in result:
+            signature = self.render_mesh(mesh)
+            if signature in signatures:
+                result[identity] = signatures[signature]
                 continue
             base = mesh.topologies[0].name if mesh.topologies else "mesh"
             name, suffix = base, 2
@@ -161,4 +174,5 @@ class PythonPrinter(ExprFunctor[str]):
                 suffix += 1
             used.add(name)
             result[identity] = name
+            signatures[signature] = name
         return result
