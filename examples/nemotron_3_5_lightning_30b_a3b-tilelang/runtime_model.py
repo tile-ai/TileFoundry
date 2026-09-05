@@ -11,11 +11,11 @@ Two bodies live here and `NEMO_IMPL` (or `set_impl`) chooses between them:
            exactly the points where `model.py` reshards a value back out of its
            mesh split. This is the implementation the numbers are about.
 ``cuda``   handwritten CUDA, calling the public ``tilefoundry::ops`` entries.
-           The Mamba-2 layers run `kernels/nemotron.cu`; every other layer runs
-           the op-by-op path, so a step is many launches and what this setting
-           produces is per-layer evidence, not tok/s. It cannot fall through to
-           ``mega`` for the rest: that is one launch over the whole step and has
-           no entry that takes over a single layer.
+           The Mamba-2 and MoE layers run `kernels/nemotron.cu`; the attention
+           layers still run the op-by-op path, so a step is many launches and
+           what this setting produces is per-layer evidence, not tok/s. It
+           cannot fall through to ``mega`` for the rest: that is one launch over
+           the whole step and has no entry that takes over a single layer.
 ``ops``    the op-by-op path: one torch call per operation, so a step is
            hundreds of launches. It exists to be the other number criterion 3
            asks for, and to be a second opinion on the mega kernel's arithmetic.
@@ -164,7 +164,23 @@ def _mamba_cuda(i, h, w, acts):
             ssm_out.reshape(1, MH, MD, SS))
 
 
-def _ops_step(w, acts, stop=None, attn_at=None, mamba=None):
+def _moe_cuda(i, h, w, acts):
+    """One MoE layer through `kernels/nemotron.cu`.
+
+    The router picks six of the 128 experts and the kernel runs those six plus
+    the shared one; the residual add is the kernel's, as in the Mamba path.
+    """
+    _kernels = _sibling_import("kernels").ops
+
+    out = _kernels().moe_layer(
+        h.reshape(H), w[f"l{i}_gamma"].reshape(H),
+        w[f"l{i}_w_router"].reshape(-1), w[f"l{i}_e_bias"].reshape(E).float(),
+        w[f"l{i}_w_up"].reshape(-1), w[f"l{i}_w_down"].reshape(-1),
+        w[f"l{i}_w_sh_up"].reshape(-1), w[f"l{i}_w_sh_down"].reshape(-1))
+    return out[0].reshape(1, 1, H)
+
+
+def _ops_step(w, acts, stop=None, attn_at=None, mamba=None, moe=None):
     """One decode step, one torch call per operation.
 
     *stop* returns the running hidden row after that many layers instead of the
@@ -182,6 +198,9 @@ def _ops_step(w, acts, stop=None, attn_at=None, mamba=None):
         if kind == "linear_attention" and mamba is not None:
             h, conv_out, ssm_out = mamba(i, h, w, acts)
             fresh += [conv_out, ssm_out]
+            continue
+        if kind == "moe" and moe is not None:
+            h = moe(i, h, w, acts)
             continue
         h2 = _rms(h, w[f"l{i}_gamma"]).reshape(1, H)
         if kind == "linear_attention":
@@ -303,7 +322,7 @@ class Nemotron35Lightning30BA3BRuntime:
         if IMPL == "ops":
             return _ops_step(self._bound, acts)
         if IMPL == "cuda":
-            return _ops_step(self._bound, acts, mamba=_mamba_cuda)
+            return _ops_step(self._bound, acts, mamba=_mamba_cuda, moe=_moe_cuda)
         return self._mega(args, acts)
 
     def _mega(self, args, acts):
