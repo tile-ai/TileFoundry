@@ -30,70 +30,87 @@ It is correct: against the TileLang kernel the whole step lands at 4.513e-2 on
 the 5.018e-2 envelope `check_all.py` derives, with the same argmax at every step.
 Greedy token identity is a knife edge that all three implementations fall off on
 some prompt and none falls off consistently -- the table is in [section
-7](#7-token-identity-is-a-knife-edge-not-a-gate). Speed is the whole of what is
+8](#8-token-identity-is-a-knife-edge-not-a-gate). Speed is the whole of what is
 wrong here.
 
-## 2. Which layers
+## 2. Where the time goes
 
-Inside the launch, by timing prefixes of the layer walk:
+Every stage can be switched off in the kernel (`NEMO_MEGA_SKIP`, a bitmask) and
+its cost taken by difference. Turning *all* of them off leaves the layer walk and
+its barriers: **0.34 ms of 5.48**, so the resident structure is 6% and not the
+problem. The rest:
 
-| layer kind | count | in the fused launch | as separate launches | ratio |
-|---|---|---|---|---|
-| Mamba-2 | 23 | 63.9 us | 49.8 us | 1.28x |
-| MoE | 23 | 123.1 us | 114.2 us | 1.08x |
-| **attention** | **6** | **260.7 us** | **57.1 us** | **4.6x** |
-| closing norm + head | 1 | ~240 us | — | — |
+| stage | of the step | per layer | share |
+|---|---|---|---|
+| MoE down x23 | 1.298 ms | 56.4 us | 23.7% |
+| MoE up x23 | 0.943 ms | 41.0 us | 17.2% |
+| Mamba in_proj x23 | 0.708 ms | 30.8 us | 12.9% |
+| MoE top-k x23 | 0.524 ms | 22.8 us | 9.6% |
+| Mamba ssm x23 | 0.350 ms | 15.2 us | 6.4% |
+| MoE finish x23 | 0.296 ms | 12.9 us | 5.4% |
+| MoE shared_up x23 | 0.285 ms | 12.4 us | 5.2% |
+| Mamba out_proj x23 | 0.232 ms | 10.1 us | 4.2% |
+| head | 0.161 ms | 160.6 us | 2.9% |
+| everything attention x6 | 0.227 ms | | **4.1%** |
+| the rest | 0.111 ms | | 2.0% |
 
-Weighted: MoE is 2.83 ms of the 5.49, attention 1.56 ms, Mamba-2 1.47 ms.
+An earlier version of this document said attention was the largest fixable item
+at 28% of the step. That came from differencing prefixes of the layer walk, which
+attributes badly. Attention is 4%.
 
-## 3. What each gap is
+## 3. The cause: how long a run of tiles each CTA gets
 
-**The grid barrier costs about 2–3 us.** Mamba-2 pays 14.1 us over five barriers
-and MoE 8.9 us over five, which is the whole difference between fused and
-separate for those two. That is the price of being resident and it is a small
-one.
+Every stage here is a matrix-vector product over a large matrix, so the step is
+bandwidth-bound throughout and the only question is what fraction of the card's
+bandwidth each stage reaches. Against the bytes each one has to move:
 
-**Attention does not fit that account.** Four barriers cannot be 203 us. At
-ctx 32 the scan is split over the context — `nb_tail * HKV` is 2 — so two CTAs
-do the scan and 130 wait at the barrier behind them. The split that long context
-needs is the wrong one at short context, which is the crossover
-`attention.py` dispatches on and which this kernel does not implement: it has one
-placement where the authored program has two.
+| stage | MB | us | TB/s | tiles a CTA gets | staged? |
+|---|---|---|---|---|---|
+| head | 704.6 | 160.6 | **4.39** | 124.1 | yes |
+| attn o_proj | 22.0 | 9.9 | 2.22 | 2.5 | no |
+| Mamba out_proj | 22.0 | 10.1 | 2.18 | 2.5 | no |
+| Mamba in_proj | 55.4 | 30.8 | 1.80 | 9.8 | yes |
+| MoE shared_up | 20.0 | 12.4 | 1.61 | 3.5 | no |
+| MoE finish | 20.0 | 12.9 | 1.55 | 2.5 | no |
+| attn qkv | 24.8 | 16.8 | 1.47 | 4.4 | no |
+| MoE up | 59.9 | 41.0 | 1.46 | 1.8 | no |
+| MoE down | 59.9 | 56.4 | **1.06** | 1.8 | no |
 
-**MoE is the largest absolute cost and it is bandwidth, not structure.** Its four
-expert projections move 160 MB a layer and take 74 us of the 114, which is where
-the TileLang kernel's whole-step budget implies they should be. The remaining
-40 us is the gap between six launches and one.
+Whole step: TileLang 2.35 TB/s, this kernel 1.28 TB/s.
 
-**The step as a whole moves 6.997 GB a token** (`README.md:302`). TileLang gets
-2.35 TB/s of that. This kernel gets 1.27 TB/s.
+**The head reaches 4.39 TB/s.** Same code, same card, same kernel: the hardware
+and this implementation can go near peak. What the head has that nothing else
+does is 124 tiles per CTA -- a long enough run for the three-deep prefetch to
+have anything to hide behind. The two MoE expert projections have 1.8, the
+fewest of any stage, and they are 41% of the step.
 
-## 4. What the two implementations do differently
+The lever is the run length, not the launch structure and not the placement. 232
+tiles split over 132 CTAs is under two apiece; the prologue issues three and the
+loop consumes two, so the pipeline never starts. Treating the six experts as one
+stream of 1392 tiles would put ten tiles in each CTA, which is what Mamba's
+in_proj has, and in_proj reaches 1.80 TB/s.
 
-The TileLang kernel stages every projection's weight slice through shared memory
-three tiles ahead. This one does that for the Mamba-2 projections and the head,
-and reads the expert weights straight from global memory, because measured
-separately the choice inverts with how many tiles a CTA gets:
+## 4. What that does not explain
 
-| | staged | direct |
-|---|---|---|
-| Mamba-2 layer (about 78 rows a CTA) | **49.6 us** | 85.7 us |
-| MoE layer (under 2 tiles a CTA) | 320 us | **114 us** |
+Ten tiles a CTA is 1.80 TB/s, not 4.39. Bringing every projection to in_proj's
+figure would take the step to roughly 4.7 ms -- 214 tok/s against TileLang's 336.
+So run length is the measured lever and it is not the whole gap; what else
+TileLang does per stage has not been established here.
 
-In one resident kernel that trade-off is not free to make per stage: the launch
-has a single shared-memory request, and asking for the staged ring's 131 KB
-holds the grid at one CTA per SM for every stage, including the ones that would
-rather have four. Dropping the staged path from the two projections that did not
-need it took the step from 6.77 ms to 5.49 ms — 125 to 182 tok/s — without
-changing a single arithmetic result.
+## 5. MoE top-k costs 9.6% and does almost nothing
 
-## 5. Hypotheses that were wrong
+768 comparisons, on one thread of one CTA, 23 times a step. 22.8 us a layer, and
+131 CTAs sit at the barrier behind it. This one is not bandwidth, it is a
+serial section that was never sized against what waits for it.
+
+## 6. Hypotheses that were wrong
 
 Recorded because the wrong ones outnumbered the right one four to two, and each
 was plausible enough to act on:
 
 | guessed | measured |
 |---|---|
+| attention's placement is the biggest fixable item | attention is **4%** of the step; the guess came from differencing layer prefixes, which attributes badly |
 | twelve expert launches are the cost | fusing them to two: **13% faster** |
 | shared-memory staging starves occupancy | removing it from MoE: **no change** |
 | the accumulator dependency chain stalls the loads | eight accumulators: **3% faster** |
@@ -104,19 +121,20 @@ was plausible enough to act on:
 Only `nsys` and the layer-prefix timings moved this forward; every hypothesis
 formed by reading the code was wrong.
 
-## 6. What is fixable and what is not
+## 7. What is fixable
 
-- **Attention's placement (fixable, ~1.3 ms).** Splitting by head at short
-  context, the way the authored program does, would put the other 130 CTAs to
-  work. The crossover `attention.py` already names is the number to dispatch on.
-- **The shared-memory ceiling (fixable, unquantified).** A staged path that fits
-  in a smaller ring, or a head that stages less, would let more CTAs per SM and
-  lift the expert projections nearer their 74 us floor.
-- **The barrier count (not worth it).** 5 barriers a layer at 2–3 us is about
-  0.7 ms of the 5.49. Merging stages to save some of it costs the clarity of
-  having one barrier per reshard the authored program states.
+- **Run length on the MoE experts (1.6 ms of 5.5).** Six experts as one stream of
+  1392 tiles instead of six streams of 232 puts ten tiles in a CTA. At in_proj's
+  1.80 TB/s that is 33 us a projection instead of 41 and 56.
+- **Top-k (0.5 ms).** Anything that is not one thread of one CTA.
+- **Whatever takes 1.80 TB/s to 2.35 (about 1 ms).** Not established. The head
+  shows 4.39 is reachable, so the ceiling is not the card.
 
-## 7. Token identity is a knife edge, not a gate
+Not worth it: the barriers. Five a layer at 2-3 us each is 0.34 ms, and merging
+stages to recover some of it costs the correspondence between a barrier and a
+reshard the authored program states.
+
+## 8. Token identity is a knife edge, not a gate
 
 An earlier reading of this said the fused path had a fault of its own, because it
 diverged from `transformers` where the stage-per-launch path did not. That
@@ -158,7 +176,7 @@ Two other explanations were tested and eliminated. The fused launch is
 every scratch buffer with NaN before a step changes **nothing**, so no stage
 reads a buffer it did not write.
 
-## 8. What could not be measured
+## 9. What could not be measured
 
 `ncu` does not run on this machine: `ERR_NVGPUCTRPERM`, GPU performance counters
 are restricted to administrators. Everything above rests on `nsys` kernel tracing

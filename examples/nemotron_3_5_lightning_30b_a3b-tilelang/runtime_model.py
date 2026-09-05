@@ -291,7 +291,8 @@ def _mega_cuda(twin, args, acts):
     logits = _kernels().mega_step(
         [packed.t[n] for n in packing.PACK_ORDER], states, scratch, kinds, ats,
         acts["token_ids"].reshape(-1), cur_pos, ctx_full, ctx_tail,
-        int(os.environ.get("NEMO_MEGA_LAYERS", "0")))
+        int(os.environ.get("NEMO_MEGA_LAYERS", "0")),
+        int(os.environ.get("NEMO_MEGA_SKIP", "0")))
     if os.environ.get("NEMO_MEGA_LAYERS"):
         return (scratch[0].float().reshape(1, H),)
     for i, a, b in out:

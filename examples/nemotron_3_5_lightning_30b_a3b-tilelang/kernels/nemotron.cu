@@ -1203,7 +1203,15 @@ struct Scratch {
 __global__ __launch_bounds__(THREADS) void mega_decode(
     Weights w, Scratch s, void **st, const int *kind, const int *at,
     const long *token_ids, int nlayer, int n_mamba, int n_attn, int cur_pos,
-    int ctx_full, int ctx_tail, int vocab) {
+    int ctx_full, int ctx_tail, int vocab, int skip) {
+    /// `skip` turns individual stages off so their cost can be measured by
+    /// difference. It is a measurement instrument, not a mode: every bit set
+    /// produces wrong numbers on purpose. The barriers stay either way, so a
+    /// difference is the stage's own work and not the barrier's.
+    ///   1 in_proj   2 conv   4 ssm    8 gate_norm  16 out_proj
+    ///  32 qkv      64 scan 128 combine 256 o_proj
+    /// 512 logits 1024 topk 2048 up   4096 down   8192 shared_up 16384 finish
+    /// 32768 head
     extern __shared__ __align__(16) char arena[];
     cg::grid_group grid = cg::this_grid();
     const int cta = int(blockIdx.x), nctas = int(gridDim.x);
@@ -1227,18 +1235,23 @@ __global__ __launch_bounds__(THREADS) void mega_decode(
             bf16 *conv_out = static_cast<bf16 *>(st[2 * n_mamba + a]);
             float *ssm_out = static_cast<float *>(st[3 * n_mamba + a]);
             const bf16 *ms = w.mscal + size_t(a) * 3 * MH;
-            s_in_proj(cta, nctas, s.h, gam, w.win + size_t(a) * PROJ * H,
+            if (!(skip & 1))
+                s_in_proj(cta, nctas, s.h, gam, w.win + size_t(a) * PROJ * H,
                       s.proj);
             grid.sync();
-            s_conv(cta, nctas, s.proj, conv_in, w.convw + size_t(a) * CONV * KER,
+            if (!(skip & 2))
+                s_conv(cta, nctas, s.proj, conv_in, w.convw + size_t(a) * CONV * KER,
                    w.convb + size_t(a) * CONV, conv_out, s.xbc);
             grid.sync();
-            s_ssm(cta, nctas, s.xbc, s.proj, ms, ssm_in, ssm_out, s.y);
+            if (!(skip & 4))
+                s_ssm(cta, nctas, s.xbc, s.proj, ms, ssm_in, ssm_out, s.y);
             grid.sync();
-            s_gate_norm(cta, nctas, s.y, s.xbc, s.proj, ms,
+            if (!(skip & 8))
+                s_gate_norm(cta, nctas, s.y, s.xbc, s.proj, ms,
                         w.ggdn + size_t(a) * MI, s.scan);
             grid.sync();
-            s_out_proj(cta, nctas, s.scan, w.wout + size_t(a) * H * MI, s.h,
+            if (!(skip & 16))
+                s_out_proj(cta, nctas, s.scan, w.wout + size_t(a) * H * MI, s.h,
                        s.h);
             grid.sync();
         } else if (kind[L] == 1) {
@@ -1246,46 +1259,57 @@ __global__ __launch_bounds__(THREADS) void mega_decode(
             const bf16 *vc = static_cast<const bf16 *>(st[4 * n_mamba + 1 * n_attn + a]);
             bf16 *kt = static_cast<bf16 *>(st[4 * n_mamba + 2 * n_attn + a]);
             bf16 *vt = static_cast<bf16 *>(st[4 * n_mamba + 3 * n_attn + a]);
-            s_qkv(cta, nctas, s.h, gam, w.wqkv + size_t(a) * QKV * H, s.qkv,
+            if (!(skip & 32))
+                s_qkv(cta, nctas, s.h, gam, w.wqkv + size_t(a) * QKV * H, s.qkv,
                   kt, vt, cur_pos);
             grid.sync();
+            if (!(skip & 64))
             for (int b = cta; b < nb_full * HKV; b += nctas)
                 s_attn_block(b / HKV, nb_full, b % HKV, s.qkv, kc, vc, ctx_full, 0,
                              s.pm, s.pl, s.pacc);
+            if (!(skip & 64))
             for (int b = cta; b < nb_tail * HKV; b += nctas)
                 s_attn_block(b / HKV, nb_tail, b % HKV, s.qkv, kt, vt, live_tail,
                              nb_full, s.pm, s.pl, s.pacc);
             grid.sync();
+            if (!(skip & 128))
             for (int u = cta; u < GQA * HKV; u += nctas)
                 s_attn_combine(u / HKV, 0, u % HKV, s.pm, s.pl, s.pacc,
                                nb_full + nb_tail, s.ctx);
             grid.sync();
-            s_o_proj(cta, nctas, s.ctx, w.wo + size_t(a) * H * QP, s.h, s.h);
+            if (!(skip & 256))
+                s_o_proj(cta, nctas, s.ctx, w.wo + size_t(a) * H * QP, s.h, s.h);
             grid.sync();
         } else {
-            s_moe_logits(cta, nctas, s.h, gam, w.wrt + size_t(a) * E * H, s.h2,
+            if (!(skip & 512))
+                s_moe_logits(cta, nctas, s.h, gam, w.wrt + size_t(a) * E * H, s.h2,
                          s.rlog);
             grid.sync();
-            if (cta == 0)
+            if (cta == 0 && !(skip & 1024))
                 s_moe_topk(0, 1, s.rlog, w.eb + size_t(a) * E, s.idx, s.gw);
             for (int i = cta * THREADS + tid; i < H; i += nctas * THREADS)
                 s.acc[i] = 0.0f;
             grid.sync();
+            if (!(skip & 2048))
             for (int slot = 0; slot < KTOP; ++slot)
                 s_moe_up(cta, nctas, slot, s.h2, w.wup + size_t(a) * E * I * H,
                          s.idx, s.mid);
-            s_moe_shared_up(cta, nctas, s.h2, w.wsu + size_t(a) * IS * H, s.smid);
+            if (!(skip & 8192))
+                s_moe_shared_up(cta, nctas, s.h2, w.wsu + size_t(a) * IS * H, s.smid);
             grid.sync();
+            if (!(skip & 4096))
             for (int slot = 0; slot < KTOP; ++slot)
                 s_moe_down(cta, nctas, slot, s.mid, w.wdn + size_t(a) * E * H * I,
                            s.idx, s.gw, s.acc);
             grid.sync();
-            s_moe_finish(cta, nctas, s.smid, w.wsd + size_t(a) * H * IS, s.acc,
+            if (!(skip & 16384))
+                s_moe_finish(cta, nctas, s.smid, w.wsd + size_t(a) * H * IS, s.acc,
                          s.h, s.h);
             grid.sync();
         }
     }
-    s_head(arena, cta, nctas, s.h, w.gf, w.whead, vocab, s.logits);
+    if (!(skip & 32768))
+        s_head(arena, cta, nctas, s.h, w.gf, w.whead, vocab, s.logits);
 }
 
 /// How many CTAs of `mega_decode` fit at once.
@@ -1326,7 +1350,7 @@ torch::Tensor mega_step(std::vector<torch::Tensor> weights,
                         std::vector<torch::Tensor> scratch, torch::Tensor kinds,
                         torch::Tensor ats, torch::Tensor token_ids,
                         int64_t cur_pos, int64_t ctx_full, int64_t ctx_tail,
-                        int64_t layers) {
+                        int64_t layers, int64_t skip) {
     TORCH_CHECK(weights.size() == 18, "expected 18 packed weight tensors");
     TORCH_CHECK(scratch.size() == 18, "expected 18 scratch tensors");
     auto B = [&](const torch::Tensor &t) { return static_cast<bf16 *>(t.data_ptr()); };
@@ -1386,8 +1410,9 @@ torch::Tensor mega_step(std::vector<torch::Tensor> weights,
     int *atp = static_cast<int *>(ats.data_ptr());
     long *tok = static_cast<long *>(token_ids.data_ptr());
     int cp = int(cur_pos), cf = int(ctx_full), ct = int(ctx_tail);
+    int sk = int(skip);
     void *args[] = {&w,      &s,       &st,     &kd, &atp, &tok, &nlayer,
-                    &n_mamba, &n_attn, &cp,     &cf, &ct,  &vocab};
+                    &n_mamba, &n_attn, &cp,     &cf, &ct,  &vocab, &sk};
     C10_CUDA_CHECK(cudaLaunchCooperativeKernel(
         reinterpret_cast<const void *>(mega_decode), dim3(grid), dim3(THREADS),
         args, kSmem, at::cuda::getCurrentCUDAStream()));
