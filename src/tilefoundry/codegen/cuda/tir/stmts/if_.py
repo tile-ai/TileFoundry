@@ -14,6 +14,8 @@ from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.tir.stmts import If
 from tilefoundry.ir.visitor import ExprVisitor
 
+from .scalar_expr import render_scalar_expr
+
 _SCALAR_BINARY_OP: dict[BinaryKind, str] = {
     BinaryKind.EQ: "==",
     BinaryKind.NE: "!=",
@@ -76,7 +78,7 @@ def render_scalar_predicate(expr, ctx: CodegenContext) -> str:
 
 @register_codegen_cuda(If)
 def _emit(node: If, ctx: CodegenContext) -> None:
-    cond = render_scalar_predicate(node.cond, ctx)
+    cond = render_scalar_expr(node.cond, ctx)
     ctx.emit(f"if ({cond}) {{")
     ctx.indent()
     ctx.emit_node(node.then_body)
