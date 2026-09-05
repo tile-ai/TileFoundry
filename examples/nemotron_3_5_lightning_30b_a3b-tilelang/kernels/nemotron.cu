@@ -406,7 +406,12 @@ template <int IN, int STAGES> struct ProjSmem {
     }
 };
 
-constexpr int IN_STAGES = 3;
+/// How many tiles a staged projection runs ahead.
+///
+/// Two rather than three: measured 4.33 against 4.55 ms a token at ctx 32. A
+/// third stage buys prefetch depth the loop does not use and costs shared
+/// memory the residency does.
+constexpr int IN_STAGES = 2;
 constexpr int PROJ_TILES = PROJ / TILE_ROWS;
 constexpr int OUT_TILES = H / TILE_ROWS;
 
@@ -601,7 +606,7 @@ std::vector<torch::Tensor> mamba_layer(
 constexpr int UP_TILES = I / TILE_ROWS;
 constexpr int DOWN_TILES = H / TILE_ROWS;
 constexpr int SH_UP_TILES = IS / TILE_ROWS;
-constexpr int MOE_STAGES = 3;
+constexpr int MOE_STAGES = IN_STAGES;
 
 /// The arena every stage that wants shared memory overlays, sized to the
 /// largest of them.
