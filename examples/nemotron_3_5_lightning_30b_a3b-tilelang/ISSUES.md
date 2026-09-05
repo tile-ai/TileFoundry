@@ -383,11 +383,13 @@ answered rather than guessed at.
 
 The trade is not free: TL-4 and TL-6 come back as the author's problem instead of
 the backend's, and three of the four faults found while bringing the persistent
-grid up were of exactly that kind. A fourth is still open -- the fused path
-drifts from the stage-per-launch path across steps (1.3e-4 at three steps,
-3.6e-2 at thirty-six) and loses token identity at step 35, while the staged path
-holds 64 of 64. Same device code, so the difference is in what one resident
-launch does between layers that separate launches do not.
+grid up were of exactly that kind.
+
+One thing the handwritten kernels do **not** do worse: greedy token identity.
+Measured 48 steps, teacher-forced, three prompts, all three implementations lose
+it on one prompt each and hold it on another, and on `In 1969 the first humans`
+all three diverge at the same step and pick the same token as each other. The
+table is in `reports/WHY_SLOWER.md`.
 
 ## III. One piece of good news
 
