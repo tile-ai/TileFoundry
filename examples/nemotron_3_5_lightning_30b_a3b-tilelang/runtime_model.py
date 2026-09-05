@@ -10,6 +10,12 @@ Two bodies live here and `NEMO_IMPL` (or `set_impl`) chooses between them:
            52 layers, the closing norm and the head, with `T.sync_grid()` at
            exactly the points where `model.py` reshards a value back out of its
            mesh split. This is the implementation the numbers are about.
+``cuda``   handwritten CUDA, calling the public ``tilefoundry::ops`` entries.
+           The Mamba-2 layers run `kernels/nemotron.cu`; every other layer runs
+           the op-by-op path, so a step is many launches and what this setting
+           produces is per-layer evidence, not tok/s. It cannot fall through to
+           ``mega`` for the rest: that is one launch over the whole step and has
+           no entry that takes over a single layer.
 ``ops``    the op-by-op path: one torch call per operation, so a step is
            hundreds of launches. It exists to be the other number criterion 3
            asks for, and to be a second opinion on the mega kernel's arithmetic.
@@ -45,11 +51,15 @@ BF16 = torch.bfloat16
 IMPL = os.environ.get("NEMO_IMPL", "mega")
 
 
+#: The implementations `decode_step` can run. See the module docstring.
+IMPLS = ("mega", "ops", "cuda")
+
+
 def set_impl(name: str) -> None:
-    """Choose between the mega kernel and the op-by-op path."""
+    """Choose which implementation `decode_step` runs."""
     global IMPL
-    if name not in ("mega", "ops"):
-        raise ValueError(f"impl must be 'mega' or 'ops', got {name!r}")
+    if name not in IMPLS:
+        raise ValueError(f"impl must be one of {IMPLS}, got {name!r}")
     IMPL = name
 
 
@@ -108,7 +118,37 @@ def _attend(qg, blocks):
     return (acc / l).to(BF16)
 
 
-def _ops_step(w, acts, stop=None, attn_at=None):
+#: Per-layer (3, MH) scale slabs the CUDA kernel takes as one tensor, built
+#: once: the declared weights are three separate (MH,) views.
+_MSCAL_CACHE = {}
+
+
+def _mamba_cuda(i, h, w, acts):
+    """One Mamba-2 layer through `kernels/nemotron.cu`.
+
+    Returns the layer's output hidden row and the two states it hands on. The
+    residual add is the kernel's -- it owns the output rows it wrote, so adding
+    there costs no second pass over the hidden row.
+    """
+    from kernels import ops as _kernels  # noqa: PLC0415 -- compiled on first use
+
+    if i not in _MSCAL_CACHE:
+        _MSCAL_CACHE[i] = torch.stack([
+            w[f"l{i}_a_log"].reshape(MH), w[f"l{i}_dt_bias"].reshape(MH),
+            w[f"l{i}_d_skip"].reshape(MH)]).reshape(-1).contiguous()
+    out = _kernels().mamba_layer(
+        h.reshape(H), w[f"l{i}_gamma"].reshape(H),
+        w[f"l{i}_w_in"].reshape(-1), w[f"l{i}_w_out"].reshape(-1),
+        w[f"l{i}_conv_w"].reshape(-1), w[f"l{i}_conv_b"].reshape(CONV),
+        w[f"l{i}_gamma_gdn"].reshape(MI), _MSCAL_CACHE[i],
+        acts[f"l{i}_conv_state"].reshape(-1).contiguous(),
+        acts[f"l{i}_ssm_state"].reshape(-1).contiguous())
+    h_out, conv_out, ssm_out = out[0], out[1], out[2]
+    return (h_out.reshape(1, 1, H), conv_out.reshape(1, CONV, WIN),
+            ssm_out.reshape(1, MH, MD, SS))
+
+
+def _ops_step(w, acts, stop=None, attn_at=None, mamba=None):
     """One decode step, one torch call per operation.
 
     *stop* returns the running hidden row after that many layers instead of the
@@ -123,6 +163,10 @@ def _ops_step(w, acts, stop=None, attn_at=None):
     for i, kind in enumerate(KINDS):
         if stop is not None and i >= stop:
             return h.reshape(-1).float()
+        if kind == "linear_attention" and mamba is not None:
+            h, conv_out, ssm_out = mamba(i, h, w, acts)
+            fresh += [conv_out, ssm_out]
+            continue
         h2 = _rms(h, w[f"l{i}_gamma"]).reshape(1, H)
         if kind == "linear_attention":
             conv_state, ssm_state = acts[f"l{i}_conv_state"], acts[f"l{i}_ssm_state"]
@@ -242,6 +286,8 @@ class Nemotron35Lightning30BA3BRuntime:
         acts["token_ids"] = args[_INDEX["token_ids"]]
         if IMPL == "ops":
             return _ops_step(self._bound, acts)
+        if IMPL == "cuda":
+            return _ops_step(self._bound, acts, mamba=_mamba_cuda)
         return self._mega(args, acts)
 
     def _mega(self, args, acts):
