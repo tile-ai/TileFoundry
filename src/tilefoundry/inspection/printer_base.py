@@ -121,18 +121,19 @@ class PythonPrinter(ExprFunctor[str]):
             result += f", names={tuple(mesh.names)!r}"
         return result + ")"
 
-    def render_shard_layout(self, layout: ShardLayout, ctx=None, indent: str = "") -> str:
+    def render_shard_layout(self, layout: ShardLayout, ctx=None, indent: str = "", *, mesh_ref=None) -> str:
         if ctx is not None:
             ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import ShardLayout",), ""))
         child = indent + "    "
         attrs = ", ".join(self._shard_attr_str(attr, ctx) for attr in layout.attrs)
         if len(layout.attrs) == 1:
             attrs += ","
+        mesh_text = mesh_ref if mesh_ref is not None else self.render_mesh(layout.mesh, ctx, child)
         return (
             "ShardLayout(\n"
             f"{child}layout={self.render_layout(layout.layout, ctx, child)},\n"
             f"{child}attrs=({attrs}),\n"
-            f"{child}mesh={(alias if (alias := ctx.mesh_alias(layout.mesh)) is not None else self.render_mesh(layout.mesh, ctx, child)) if ctx is not None else self.render_mesh(layout.mesh, ctx, child)},\n"
+            f"{child}mesh={mesh_text},\n"
             f"{indent})"
         )
 

@@ -1303,7 +1303,7 @@ def _mesh_str(mesh: Mesh, indent: str = "") -> str:
 
 def _shard_layout_str(sl: ShardLayout, indent: str = "", *, mesh_ref=None) -> str:
     ctx = HirPrintContext({id(sl.mesh): mesh_ref} if mesh_ref is not None else None)
-    return _HIR_RENDERER.render_shard_layout(sl, ctx, indent)
+    return _HIR_RENDERER.render_shard_layout(sl, ctx, indent, mesh_ref=mesh_ref)
 
 
 def _tensor_annotation(ty: TensorType, *, mesh_name_map=None, indent="", is_const=False) -> str:

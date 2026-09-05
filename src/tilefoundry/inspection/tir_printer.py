@@ -18,6 +18,7 @@ from tilefoundry.ir.tir.stmts import (
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shard import Mesh, ShardLayout
 from tilefoundry.ir.visitor import StmtVisitor
 from tilefoundry.utils.python_source import PythonExpr, _merge_imports
 
@@ -39,6 +40,11 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         PythonPrinter.__init__(self)
         self.context = context or TirPrintContext()
         self.indent = indent
+
+    def render_value(self, value, ctx=None, indent: str = ""):
+        if isinstance(value, (Mesh, ShardLayout)) and ctx is not None and ctx.mesh_alias(value) is None:
+            return ctx.use(value.to_python())
+        return super().render_value(value, ctx, indent)
 
     def visit(self, stmt, ctx=None):  # type: ignore[override]
         return StmtVisitor.visit(self, stmt)
