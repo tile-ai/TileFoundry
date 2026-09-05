@@ -157,12 +157,7 @@ class PythonPrinter(ExprFunctor[str]):
     def mesh_name_map(self, meshes: dict[int, Mesh]) -> dict[int, str]:
         used: set[str] = set()
         result: dict[int, str] = {}
-        signatures: dict[str, str] = {}
         for identity, mesh in meshes.items():
-            signature = self.render_mesh(mesh)
-            if signature in signatures:
-                result[identity] = signatures[signature]
-                continue
             base = mesh.topologies[0].name if mesh.topologies else "mesh"
             name, suffix = base, 2
             while name in used:
@@ -170,5 +165,4 @@ class PythonPrinter(ExprFunctor[str]):
                 suffix += 1
             used.add(name)
             result[identity] = name
-            signatures[signature] = name
         return result
