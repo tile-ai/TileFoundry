@@ -3921,7 +3921,9 @@ class LoopHeaderPattern(ElementPattern):
         children.extend(
             AstChild(
                 field_name,
-                StaticValuePattern(),
+                ChoicePattern(ExpressionPattern(), StaticValuePattern())
+                if context.function is not None and context.function.dialect == "tir"
+                else StaticValuePattern(),
                 argument,
                 "loop_bound",
                 field_name,
@@ -3944,6 +3946,15 @@ class LoopHeaderPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
+        if context.function is not None and context.function.dialect == "tir":
+            iv = runtime.Var(type=runtime.TensorType.scalar(runtime.DType.i64), name=match.captures["target"])
+            values = dict(match.captures["defaults"])
+            values.update({name: value for name, value in children.items() if name != "carry"})
+            bounds = [values[name] for name in ("start", "extent", "step")]
+            bounds = [_constant(v) if isinstance(v, (bool, int, float)) else v for v in bounds]
+            context.lexical_scope.push_frame()
+            context.lexical_scope.define(match.captures["target"], iv)
+            return (iv, *bounds)
         if context.function is None or context.function.dialect != "hir":
             raise ParseError.from_node(match.node, context, "HIR loop header in a non-HIR context")
         values = dict(match.captures["defaults"])
@@ -4038,46 +4049,20 @@ class LoopBodyPattern(ElementPattern):
 class ForPattern(ElementPattern):
     element_name = "for"
     syntax = LazyPattern(
-        lambda: ChoicePattern(
-            ConditionPattern(
-                "tir_for",
-                lambda node, context: context.function is not None
-                and context.function.dialect == "tir",
-                BranchPattern(
-                    "tir_for",
-                    AstNodePattern(
-                        ast.For,
-                        ChildPattern("header", TirLoopHeaderPattern(), "tir_loop_header"),
-                        FieldPattern(
-                            "body",
-                            ChildPattern("body", BlockPattern(), "block", transform=_body_as_ast_module),
-                        ),
-                    ),
-                    pattern_id="statement.tir_for",
-                ),
-            ),
-            BranchPattern(
-                "loop",
-                AstNodePattern(
-                    ast.For,
-                    ChildPattern("header", LoopHeaderPattern(), "loop_header"),
-                    FieldPattern(
-                        "body",
-                        ChildPattern("body", LoopBodyPattern(), "loop_body", transform=_body_as_ast_module),
-                    ),
-                ),
-                pattern_id="statement.for",
-            ),
-        )
+        lambda: BranchPattern("loop", AstNodePattern(
+            ast.For,
+            ChildPattern("header", LoopHeaderPattern(), "loop_header"),
+            FieldPattern("body", ChildPattern("body", ChoicePattern(BlockPattern(), LoopBodyPattern()), "loop_body", transform=_body_as_ast_module)),
+        ), pattern_id="statement.for")
     )
 
     @staticmethod
     def construct(match, children, context):
         frame = children["header"]
         body = children["body"]
-        if isinstance(frame, TirLoopFrame):
+        if context.function is not None and context.function.dialect == "tir":
             context.lexical_scope.pop_frame()
-            return runtime.For(frame.induction_var, frame.start, frame.stop, frame.step, body)
+            return runtime.For(frame[0], frame[1], frame[2], frame[3], body)
         yield_values = tuple(context.lexical_scope.lookup(name) for name in frame.carry_names)
         context.lexical_scope.pop_frame()
         if frame.carry_names:
@@ -4101,69 +4086,6 @@ class ForPattern(ElementPattern):
         )
         _bind_region_results(context, grid, frame.carry_names, match.node)
         return grid
-
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
-
-
-@dataclass(frozen=True)
-class TirLoopFrame:
-    induction_var: object
-    start: object
-    stop: object
-    step: object
-
-
-class TirLoopHeaderPattern(ElementPattern):
-    element_name = "tir_loop_header"
-    syntax = LazyPattern(
-        lambda: BindPattern(
-            AstNodePattern(
-                ast.For,
-                FieldPattern("target", AstNodePattern(ast.Name)),
-                FieldPattern("iter", LoopIteratorPattern()),
-            ),
-            TirLoopHeaderPattern._bind,
-        )
-    )
-
-    def match(self, node, context):
-        if context.function is None or context.function.dialect != "tir":
-            return None
-        return super().match(node, context)
-
-    @staticmethod
-    def _bind(node, context, matched):
-        assert isinstance(node, ast.For) and isinstance(node.target, ast.Name)
-        assert isinstance(node.iter, ast.Call)
-        if not isinstance(node.iter.func, ast.Name) or node.iter.func.id != "range":
-            return PatternFailure("tir_loop_header", node.iter, "TIR loops require range(...)")
-        count = len(node.iter.args)
-        if node.iter.keywords or count not in {1, 2, 3}:
-            return PatternFailure("tir_loop_header", node.iter, "range() takes 1 to 3 positional arguments")
-        args = list(node.iter.args)
-        if count == 1:
-            args = [ast.Constant(value=0), args[0], ast.Constant(value=1)]
-        elif count == 2:
-            args.append(ast.Constant(value=1))
-        children = tuple(
-            AstChild(name, ExpressionPattern(), value, "tir_loop_bound", name)
-            for name, value in zip(("start", "stop", "step"), args)
-        )
-        return dataclasses.replace(
-            matched,
-            captures={**matched.captures, "target": node.target.id},
-            children=children,
-        )
-
-    @staticmethod
-    def construct(match, children, context):
-        induction_var = runtime.Var(
-            type=runtime.TensorType.scalar(runtime.DType.i64),
-            name=match.captures["target"],
-        )
-        context.lexical_scope.push_frame()
-        context.lexical_scope.define(match.captures["target"], induction_var)
-        return TirLoopFrame(induction_var, children["start"], children["stop"], children["step"])
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
