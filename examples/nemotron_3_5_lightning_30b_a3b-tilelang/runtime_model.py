@@ -33,6 +33,7 @@ import torch
 import torch.nn.functional as F
 
 import model
+import packing
 from model import Nemotron35Lightning30BA3B as SEM
 from tilefoundry.runtime import runtime_func, runtime_module
 
@@ -303,12 +304,22 @@ class Nemotron35Lightning30BA3BRuntime:
         original. `_bound` then keeps the *view* standing for that weight, so the
         op-by-op path and `check`'s weight report see exactly what was declared
         while the kernel sees eighteen buffers.
-        """
-        import mega_kernel  # noqa: PLC0415
 
+        The layout comes from `packing`, which imports no backend: loading
+        happens before an implementation runs, and reaching for one here would
+        make every implementation need every backend installed. Only ``mega``
+        builds a `mega_kernel.Runner`, and only ``mega`` needs TileLang.
+        """
         device = getattr(resource, "device", "cuda")
-        self._run = mega_kernel.Runner(device)
+        if IMPL == "mega":
+            import mega_kernel  # noqa: PLC0415
+
+            self._run = mega_kernel.Runner(device)
+            packed = self._run.packed
+        else:
+            self._run = None
+            packed = packing.Packed(device)
         for name in self._ir.weights:
             value = resource.load(name)
-            self._bound[name] = mega_kernel.pack_into(self._run.packed, name, value)
+            self._bound[name] = packing.pack_into(packed, name, value)
             del value
