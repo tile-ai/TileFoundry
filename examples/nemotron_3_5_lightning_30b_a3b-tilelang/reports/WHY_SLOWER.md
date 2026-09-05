@@ -12,22 +12,26 @@ them as the bar would let a 17%-slower implementation look level.
 
 ## 1. Where it stands
 
-| | ctx 32 | ms/token |
-|---|---|---|
-| TileLang, one cooperative launch | **335.9 tok/s** | 2.977 |
-| handwritten, one cooperative launch | **153.6 tok/s** | 6.510 |
+| | ctx 32 | ms/token | |
+|---|---|---|---|
+| TileLang, one cooperative launch | **335.9 tok/s** | 2.977 | faster |
+| handwritten, one cooperative launch | **153.6 tok/s** | 6.510 | **2.19x slower** |
+
+Slower, throughout this document: the handwritten kernel takes 2.19 times as
+long to produce a token as the TileLang one does. The goal was a handwritten
+kernel **no slower** than TileLang, so the goal is not met.
 
 End to end through `bench_mine.py`, which is the number to quote. Timing the
 launch alone in a tight loop gives 5.495 ms; the difference is the Python either
 implementation pays per step for `prepare_inputs_for_generation` and
 `append_cache`, and both pay it.
 
-1.85x off. Against the TileLang kernel the whole step lands at 4.513e-2 on the
-5.018e-2 envelope `check_all.py` derives, with the same argmax at every step.
-Token identity is where the fused path and the stage-per-launch path part: the
-staged one matches `transformers` for 64 of 64 greedy steps, the fused one
-diverges at step 35. They run the same device code, so that is an open fault of
-the resident launch, not of the arithmetic, and it is not diagnosed here.
+It is correct: against the TileLang kernel the whole step lands at 4.513e-2 on
+the 5.018e-2 envelope `check_all.py` derives, with the same argmax at every step.
+Greedy token identity is a knife edge that all three implementations fall off on
+some prompt and none falls off consistently -- the table is in [section
+7](#7-token-identity-is-a-knife-edge-not-a-gate). Speed is the whole of what is
+wrong here.
 
 ## 2. Which layers
 
