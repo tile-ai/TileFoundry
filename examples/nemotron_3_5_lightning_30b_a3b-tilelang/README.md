@@ -15,6 +15,37 @@ out, and the whole step is a single device launch.
 2.37x - 2.44x off the measured bandwidth floor, flat across nine context lengths
 ```
 
+There are now two implementations of that one launch. `NEMO_IMPL=mega` is the
+TileLang kernel above and stays the default; `NEMO_IMPL=cuda` is handwritten
+CUDA calling the public `tilefoundry::ops` entries, one cooperative launch over
+all 52 layers. A third, `NEMO_IMPL=cuda-stages`, runs the same device code a
+stage per launch, which is what bisects a disagreement to a layer.
+
+Where they stand against `transformers`, greedy and teacher-forced:
+
+```
+NEMO_IMPL=cuda-stages    64 of 64 identical
+NEMO_IMPL=cuda           34 of 64 identical, first divergence at step 35
+```
+
+The two CUDA paths run the same arithmetic, so the fused one carries a small
+systematic difference the staged one does not: measured against `cuda-stages` it
+is 1.3e-4 after three steps and 3.6e-2 after thirty-six, which is inside the
+envelope `check_all.py` derives and outside what token identity tolerates. It is
+not diagnosed yet.
+
+```
+                        ctx 32, one H200, one session
+TileLang  NEMO_IMPL=mega     335.9 tok/s     2.977 ms/token
+CUDA      NEMO_IMPL=cuda     182.0 tok/s     5.495 ms/token
+```
+
+**The CUDA one is 1.85x off and is not the default for that reason.** The gap is
+taken apart layer by layer in `reports/WHY_SLOWER.md`, which also explains why
+the numbers there are not the ones in the block above: re-measured today, the
+TileLang kernel is 16-17% faster than this file records, so the recorded figures
+are not a bar anything can be held to.
+
 **It does not beat SGLang.** It is 97.5% of it at short context and 83.2% at
 262080, and the gap is accounted for in §6. What is new here is the shape, not
 the speed: the authored HIR *is* the mega program, so `check` compares the thing

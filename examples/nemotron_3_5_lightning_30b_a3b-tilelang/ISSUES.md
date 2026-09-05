@@ -365,6 +365,30 @@ relaxed.
 
 ---
 
+## II-b. Do the TileLang problems survive a handwritten kernel?
+
+`NEMO_IMPL=cuda` reimplements the same step in CUDA, so each entry above can be
+answered rather than guessed at.
+
+| | what it was | under handwritten CUDA |
+|---|---|---|
+| TL-1 | descriptor TMA cannot take a device-only pointer | **gone.** `ops::tma_bulk_copy` is the rank-1 form, which takes an address, not a descriptor. |
+| TL-2 | `T.gemm` layout inference reaches through `T.view` | **gone.** No layout inference: a gemv is a loop over rows this code writes. |
+| TL-3 | a linear layout makes gemm 6x slower | **not applicable.** These are matrix-vector products; there is no tensor-core operand layout to get wrong. |
+| TL-4 | the shared allocator does not reuse disjoint lifetimes | **still there, differently.** One kernel calls every stage, so the compiler holds every stage's static shared array at once and the arena is sized to the widest. Writing past it was a real fault here, caught by compute-sanitizer. |
+| TL-5 | several things at M=16 | **gone.** No MMA instruction is issued. |
+| TL-6 | `ThreadSync` hoists `__syncthreads()` out of an `if` | **gone**, and its opposite arrived: a barrier this code does *not* write is not inserted for it. A missing one in `s_moe_down` corrupted the expert accumulator, which six separate launches had hidden. |
+| TL-7 | the instruction `T.copy` picks by default is worse than `cp_async` | **gone.** The instruction is written out. What replaces the problem is that the right choice is not uniform: staging wins for the Mamba projections and loses for the MoE experts, measured both ways in `kernels/nemotron.cu`. |
+| TL-8 | the eager builder rejects a Python-level loop over a tuple | **gone.** The 52 layers are a `for` in CUDA C, so `gen_kernel.py`'s reason for existing does not apply to the CUDA path. |
+
+The trade is not free: TL-4 and TL-6 come back as the author's problem instead of
+the backend's, and three of the four faults found while bringing the persistent
+grid up were of exactly that kind. A fourth is still open -- the fused path
+drifts from the stage-per-launch path across steps (1.3e-4 at three steps,
+3.6e-2 at thirty-six) and loses token identity at step 35, while the staged path
+holds 64 of 64. Same device code, so the difference is in what one resident
+launch does between layers that separate launches do not.
+
 ## III. One piece of good news
 
 `T.copy` (descriptorless, through cp.async) is **as fast as bulk TMA** on this
