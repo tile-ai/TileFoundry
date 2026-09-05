@@ -28,6 +28,7 @@ that takes 18 can address any of them by (layer, row).
 from __future__ import annotations
 
 import os
+import sys
 
 import torch
 import torch.nn.functional as F
@@ -119,6 +120,20 @@ def _attend(qg, blocks):
     return (acc / l).to(BF16)
 
 
+#: This file's own directory. `tilefoundry check` puts a source file's directory
+#: on `sys.path` only while it imports the module and takes it off again, so a
+#: lazy import from inside a method -- which is how both the TileLang kernel and
+#: the CUDA extension are compiled on first use -- cannot rely on it being there.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _sibling_import(name):
+    """Import a module that lives beside this one, whatever `sys.path` holds."""
+    if _HERE not in sys.path:
+        sys.path.insert(0, _HERE)
+    return __import__(name)
+
+
 #: Per-layer (3, MH) scale slabs the CUDA kernel takes as one tensor, built
 #: once: the declared weights are three separate (MH,) views.
 _MSCAL_CACHE = {}
@@ -131,7 +146,7 @@ def _mamba_cuda(i, h, w, acts):
     residual add is the kernel's -- it owns the output rows it wrote, so adding
     there costs no second pass over the hidden row.
     """
-    from kernels import ops as _kernels  # noqa: PLC0415 -- compiled on first use
+    _kernels = _sibling_import("kernels").ops  # compiled on first use
 
     if i not in _MSCAL_CACHE:
         _MSCAL_CACHE[i] = torch.stack([
@@ -255,14 +270,14 @@ class Nemotron35Lightning30BA3BRuntime:
         the same code generated around a pair of parameters instead of around
         the step's own scratch.
         """
-        import mega_kernel  # noqa: PLC0415 -- compiled on first use
+        mega_kernel = _sibling_import("mega_kernel")
 
         return mega_kernel.run_attn("head", qg, k_cache, v_cache, k_tail, v_tail)
 
     @runtime_func
     def attend_by_context(self, qg, k_cache, v_cache, k_tail, v_tail):
         """The long-context placement, on its own. See `attend_by_head`."""
-        import mega_kernel  # noqa: PLC0415
+        mega_kernel = _sibling_import("mega_kernel")
 
         return mega_kernel.run_attn("context", qg, k_cache, v_cache, k_tail, v_tail)
 
@@ -273,7 +288,7 @@ class Nemotron35Lightning30BA3BRuntime:
         The same number the semantics dispatches on and the same number the
         step's own branch reads: `ctx_full`, against the crossover.
         """
-        import mega_kernel  # noqa: PLC0415
+        mega_kernel = _sibling_import("mega_kernel")
 
         return mega_kernel.run_attn("dispatch", qg, k_cache, v_cache, k_tail, v_tail)
 
@@ -292,7 +307,7 @@ class Nemotron35Lightning30BA3BRuntime:
         return self._mega(args, acts)
 
     def _mega(self, args, acts):
-        import mega_kernel  # noqa: PLC0415 -- compiled on first use
+        mega_kernel = _sibling_import("mega_kernel")
 
         return mega_kernel.run_step(self._run, args, acts["cur_pos"], _INDEX)
 
@@ -312,7 +327,7 @@ class Nemotron35Lightning30BA3BRuntime:
         """
         device = getattr(resource, "device", "cuda")
         if IMPL == "mega":
-            import mega_kernel  # noqa: PLC0415
+            mega_kernel = _sibling_import("mega_kernel")
 
             self._run = mega_kernel.Runner(device)
             packed = self._run.packed

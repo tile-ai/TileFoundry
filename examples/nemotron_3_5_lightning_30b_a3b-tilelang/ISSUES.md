@@ -177,6 +177,48 @@ unexpected keyword argument 'num_sms'`. What is actually wanted is
 
 ---
 
+### TF-8 a twin that imports lazily cannot be checked
+
+`tilefoundry check` puts a source file's directory on `sys.path` while it imports
+the module and takes it off again (`src/tilefoundry/cli/source.py:284,314`). Both
+kernels here are compiled on first *use*, from inside a method, which is the
+pattern `granite_4_0_h_small-cuda` uses too -- and by then the directory is gone:
+
+    tilefoundry check: error: No module named 'mega_kernel'
+    tilefoundry check: error: No module named 'kernels'
+
+Worked around here by re-inserting the module's own directory before each lazy
+import (`runtime_model._sibling_import`). The general fix belongs in the CLI:
+a source file's directory is where its siblings live for as long as it runs, not
+only while it is imported.
+
+### TF-9 `check`'s bounds admit only an implementation that rounds like the reference
+
+`check_all.py` derives each bound as `2^-9*sqrt(k)` over the bf16 landings on the
+path to an output, which treats the roundings as an independent random walk. A
+52-layer residual network amplifies a perturbation instead, so the bound is met
+only by an implementation whose arithmetic *is* the reference's. Measured on one
+batch of dumped activations, one card:
+
+| impl | passed | failing | logits rel_l2 | logits cosine |
+|---|---|---|---|---|
+| `ops` (torch) | yes | 0/119 | — | — |
+| `mega` (this directory's shipped kernel) | **no** | 34/119 | 9.65e-2 | 0.99551 |
+| `cuda` (handwritten) | no | 31/119 | 8.59e-2 | 0.99723 |
+
+The shipped kernel fails its own directory's check, and by more than the
+handwritten one does. Reading that as "the handwritten kernel is broken" is the
+mistake the table exists to prevent. What decides a kernel here is agreement with
+the incumbent plus greedy-token identity, which is what `README.md:11` reports.
+
+### TF-10 `check_all.py` had drifted off the CLI
+
+`--ckpt DIR`, `--inputs real` and repeated `--input FILE` are three arguments
+`tilefoundry check` no longer takes; the help text also pointed at a
+`dump_acts.py` that did not exist. The script could not run at all. Fixed here,
+and `dump_acts.py` written, because `--inputs random` draws states that no step
+could have produced and `check` says so itself.
+
 ## II. TileLang (the backend)
 
 In the order they were hit. All timings on an H200 with the SM clock at 1500 MHz.

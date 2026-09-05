@@ -78,11 +78,72 @@ def rel_l2(a, b):
     return (a - b).norm().item() / (denom if denom else 1.0)
 
 
+def _real(a) -> int:
+    """One layer of the checkpoint, on a hidden row a real step produced.
+
+    A synthetic draw does not reproduce the checkpoint's weight distribution or
+    the magnitude the residual stream reaches by the middle of the model, and a
+    stage whose error only shows up there is invisible without this.
+    """
+    import pathlib as _pl  # noqa: PLC0415
+
+    import paths  # noqa: PLC0415
+    import runtime_model as R  # noqa: PLC0415
+    from tilefoundry.runtime import SafetensorsResource  # noqa: PLC0415
+
+    dev = "cuda:0"
+    twin = R.Nemotron35Lightning30BA3BRuntime()
+    R.set_impl("ops")
+    twin.load(SafetensorsResource(str(paths.need("prepared", a.prepared)), device=dev))
+
+    params = model.Nemotron35Lightning30BA3B.entry_function().params
+    files = sorted(_pl.Path(a.acts).glob("*.pt"))
+    if not files:
+        raise SystemExit(f"no *.pt under {a.acts}; run dump_acts.py first")
+    acts, j = {}, 0
+    for p in params:
+        if p.is_const:
+            continue
+        acts[p.name] = torch.load(files[j], map_location=dev)
+        j += 1
+    acts["cur_pos"] = int(acts["cur_pos"][0])
+
+    layer = a.layer
+    if layer is None:
+        layer = model.LAYER_KINDS.index("linear_attention")
+    if model.LAYER_KINDS[layer] != "linear_attention":
+        raise SystemExit(f"layer {layer} is {model.LAYER_KINDS[layer]}, not Mamba-2")
+
+    h = R._ops_step(twin._bound, acts, stop=layer).reshape(1, 1, H).to(BF16)
+    w = twin._bound
+    args = (h.reshape(H), w[f"l{layer}_gamma"].reshape(H),
+            w[f"l{layer}_w_in"].reshape(PROJ, H), w[f"l{layer}_w_out"].reshape(H, MI),
+            w[f"l{layer}_conv_w"].reshape(CONV, KER), w[f"l{layer}_conv_b"].reshape(CONV),
+            w[f"l{layer}_gamma_gdn"].reshape(MI),
+            torch.stack([w[f"l{layer}_a_log"].reshape(MH),
+                         w[f"l{layer}_dt_bias"].reshape(MH),
+                         w[f"l{layer}_d_skip"].reshape(MH)]),
+            acts[f"l{layer}_conv_state"].reshape(CONV, WIN),
+            acts[f"l{layer}_ssm_state"].reshape(MH, MD, SS).float())
+    print(f"layer {layer}  |h| = {h.float().norm().item():.4e}")
+    return _compare(a, *args)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tol-scale", type=float, default=1.0)
+    ap.add_argument("--real", action="store_true",
+                    help="use the checkpoint's weights and a real hidden row, "
+                         "not a synthetic draw")
+    ap.add_argument("--layer", type=int, default=None,
+                    help="with --real: which Mamba layer (default: the first)")
+    ap.add_argument("--acts", default="acts")
+    ap.add_argument("--prepared", default=None)
     a = ap.parse_args()
+
+    if a.real:
+        return _real(a)
 
     torch.manual_seed(a.seed)
     dev = "cuda"
@@ -115,6 +176,13 @@ def main() -> int:
     d_skip = torch.randn(MH, device=dev) * 0.5 + 1.0
     mscal = torch.stack([a_log.to(BF16), dt_bias.to(BF16), d_skip.to(BF16)])
 
+    return _compare(a, h, gamma, w_in, w_out, conv_w, conv_b, ggdn, mscal,
+                    conv_state, ssm_state)
+
+
+def _compare(a, h, gamma, w_in, w_out, conv_w, conv_b, ggdn, mscal,
+             conv_state, ssm_state) -> int:
+    """Run both sides over one layer's inputs and report every stage."""
     ref = reference(h, gamma, w_in, w_out, conv_w, conv_b, ggdn, mscal,
                     conv_state, ssm_state)
 
