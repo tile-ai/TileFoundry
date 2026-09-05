@@ -107,7 +107,7 @@ class HirPrinter(PythonPrinter):
 
     def shard_surface(self, value, ctx=None):
         mesh_map = getattr(ctx, "mesh_name_map", {}) if ctx is not None else {}
-        mesh_name = mesh_map.get(id(value.mesh))
+        mesh_name = ctx.mesh_alias(value.mesh) if ctx is not None else None
         if mesh_name is None or not value.mesh.names:
             return None
         return _shard_layout_surface_str(

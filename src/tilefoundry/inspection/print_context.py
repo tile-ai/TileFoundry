@@ -15,6 +15,9 @@ class PrintContext:
             return rendered.text
         return rendered
 
+    def mesh_alias(self, mesh) -> str | None:
+        return None
+
 
 class HirPrintContext(PrintContext):
     def __init__(self, mesh_name_map: dict[int, str] | None = None) -> None:

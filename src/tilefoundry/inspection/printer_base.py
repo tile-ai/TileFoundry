@@ -35,18 +35,14 @@ class PythonPrinter(ExprFunctor[str]):
     def render_value(self, value, ctx=None, indent: str = "") -> str:
         """Render a DSL value and register every import needed by it."""
         if isinstance(value, Mesh) and ctx is not None:
-            alias = getattr(ctx, "mesh_alias", lambda _m: None)(value)
+            alias = ctx.mesh_alias(value)
             if alias is not None:
                 return alias
         if isinstance(value, TensorType):
             return self.render_tensor_type(value, ctx, indent)
         if isinstance(value, Mesh):
-            if ctx is not None and hasattr(ctx, "_mesh_aliases"):
-                return ctx.use(value.to_python())
             return self.render_mesh(value, ctx, indent)
         if isinstance(value, LayoutBase):
-            if ctx is not None and hasattr(ctx, "_mesh_aliases"):
-                return ctx.use(value.to_python())
             return self.render_layout(value, ctx, indent)
         if isinstance(value, MmaAtom):
             if ctx is not None:
@@ -136,7 +132,7 @@ class PythonPrinter(ExprFunctor[str]):
             "ShardLayout(\n"
             f"{child}layout={self.render_layout(layout.layout, ctx, child)},\n"
             f"{child}attrs=({attrs}),\n"
-            f"{child}mesh={self.render_value(layout.mesh, ctx, child) if ctx is not None and hasattr(ctx, '_mesh_aliases') else self.render_mesh(layout.mesh, ctx, child)},\n"
+            f"{child}mesh={(alias if (alias := ctx.mesh_alias(layout.mesh)) is not None and not hasattr(ctx, 'mesh_name_map') else self.render_mesh(layout.mesh, ctx, child)) if ctx is not None else self.render_mesh(layout.mesh, ctx, child)},\n"
             f"{indent})"
         )
 

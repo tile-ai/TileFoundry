@@ -25,9 +25,11 @@ def _programs():
         sys.path.pop(0)
         for value in vars(module).values():
             if isinstance(value, (Module, Function)):
-                yield path.name, value
+                yield f"{path.stem}.{next((name for name, item in vars(module).items() if item is value), 'program')}", value
 
 
 def test_hir_fixture_output_matches_checked_in_baseline() -> None:
-    rendered = "".join(as_script(program) for _, program in _programs())
+    rendered = "\n".join(
+        f"### {name}\n{as_script(program)}" for name, program in _programs()
+    )
     assert hashlib.sha256(rendered.encode()).hexdigest()[:16] == EXPECTED.read_text().strip()
