@@ -1342,3 +1342,46 @@ __device__ cute::tuple<int, int> mma_acc_coord(int f, int tid);
   - Today's atom is `SM80_16x8x16_F32BF16BF16F32_TN`: bf16 operands, f32
     accumulate. Another instruction is another atom under the same entry, not
     another entry.
+
+### 3.13 `tilefoundry::ops::dot` (fused multiply-contract)
+
+`dst = sum(lhs * rhs)`. A matrix-vector product's inner loop is one statement,
+not a `binary` followed by a `reduce`
+([§3.5](#35-tilefoundryopsreduce-reduction-family)): materialising the product
+first would cost a register per element of the row, which is what makes that
+pair the wrong spelling here.
+
+```cpp
+/**
+ * @brief dst = sum(lhs * rhs) over the axes the operands' meshes contract.
+ * @param lhs the left operand
+ * @param rhs the right operand
+ * @param dst the destination cell
+ * @param ws optional shared workspace, one slot per warp
+ */
+template <class Lhs, class Rhs, class Dst, class Ws = reduce_impl::no_workspace_t>
+__device__ void dot(Lhs const& lhs, Rhs const& rhs, Dst& dst, Ws&& ws = {});
+
+/**
+ * @brief Elements per load dot will use on these operands.
+ */
+template <class Lhs, class Rhs>
+inline constexpr int dot_vector_elems;
+```
+
+- constraints:
+  - **Two tiers, one entry.** With no workspace the contraction lives inside a
+    warp and one butterfly finishes it; with a workspace it spans the block,
+    each warp posting a partial into a slot. Either way every participant leaves
+    holding the total, so a caller never broadcasts it back.
+  - The load width is the operands' shard layouts', the same question
+    [§2.8](#28-tilefoundrycopy--shard-aware-overloads) answers for `copy`, and
+    `dot_vector_elems` reports it. A row split so that a lane owns four
+    contiguous elements loads eight bytes at a time; one that leaves it eight
+    loads sixteen. Neither width appears at the call site.
+  - The fold uses a fixed number of independent partial accumulators, and the
+    tree that combines them is this op's summation order. One running sum would
+    make a row a chain of dependent multiply-adds, and the loads could not run
+    ahead of it: what a warp then waits on is the row's latency, not its bytes.
+  - Accumulation is f32 regardless of the operand type.
+

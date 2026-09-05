@@ -86,6 +86,8 @@ namespace ops {
 /// generic-to-shared conversion.
 #include "ops/tma.cuh"
 #include "ops/reduce.cuh"
+/// dot after reduce: it reuses reduce's no-workspace tag.
+#include "ops/dot.cuh"
 #include "ops/cast.cuh"
 #include "ops/clamp.cuh"
 #include "ops/rmsnorm.cuh"

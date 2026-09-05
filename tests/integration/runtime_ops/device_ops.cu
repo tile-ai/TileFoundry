@@ -214,6 +214,127 @@ __global__ void mma_tile_kernel(const __nv_bfloat16 *ga,
     }
 }
 
+/// dot.
+
+/// The widest block of a row a lane can own so the 32 of them tile it evenly.
+///
+/// Capped at one 16-byte load and then cut down until it divides the per-lane
+/// share. 2688 leaves each lane 84, which is four but not eight; 4096 leaves
+/// 128, which is eight. That is why the width is not a constant.
+constexpr int lane_vec(int n) {
+    const int per = n / 32;
+    int v = 1;
+    while (v * 2 <= 8 && per % (v * 2) == 0)
+        v *= 2;
+    return v;
+}
+
+/// Rows of an `(rows, N)` matrix, one per warp, each split across the lanes.
+///
+/// The mesh is `(32 lanes, warps)` and the attrs point each axis at the tensor
+/// axis it divides, so `local()` hands a lane its `V`-element blocks and no
+/// index arithmetic appears at the call site. `Rows == 0` means the operand is
+/// the shared vector: the same lane split, broadcast across the warps.
+template <int N, int Rows, int Warps, class Ptr>
+__device__ auto lane_split(Ptr p) {
+    constexpr int V = lane_vec(N);
+    auto mesh_layout =
+        cute::make_layout(cute::make_shape(cute::Int<32>{}, cute::Int<Warps>{}),
+                          cute::make_stride(cute::Int<1>{}, cute::Int<32>{}));
+    tilefoundry::Mesh<
+        tilefoundry::Topology<tilefoundry::TopologyScope::thread, Warps * 32>,
+        decltype(mesh_layout)>
+        mesh{mesh_layout};
+    if constexpr (Rows == 0) {
+        auto layout =
+            cute::make_layout(cute::make_shape(cute::Int<V>{}, cute::Int<32>{},
+                                               cute::Int<N / (32 * V)>{}),
+                              cute::make_stride(cute::Int<1>{}, cute::Int<V>{},
+                                                cute::Int<32 * V>{}));
+        tilefoundry::ShardLayout<
+            decltype(layout),
+            cute::tuple<tilefoundry::shard::S<1>, tilefoundry::shard::B>,
+            decltype(mesh)>
+            shard{layout, mesh};
+        return tilefoundry::make_shard_tensor(cute::make_tensor(p, layout),
+                                              layout, shard);
+    } else {
+        auto layout = cute::make_layout(
+            cute::make_shape(cute::Int<V>{}, cute::Int<32>{},
+                             cute::Int<N / (32 * V)>{}, cute::Int<Rows>{}),
+            cute::make_stride(cute::Int<1>{}, cute::Int<V>{},
+                              cute::Int<32 * V>{}, cute::Int<N>{}));
+        tilefoundry::ShardLayout<
+            decltype(layout),
+            cute::tuple<tilefoundry::shard::S<1>, tilefoundry::shard::S<3>>,
+            decltype(mesh)>
+            shard{layout, mesh};
+        return tilefoundry::make_shard_tensor(cute::make_tensor(p, layout),
+                                              layout, shard);
+    }
+}
+
+/// `out[row] = dot(w[row], x)` for a run of rows, one `ops::dot` a row.
+template <int N, int Rows>
+__global__ void dot_gemv_kernel(const __nv_bfloat16 *w, const __nv_bfloat16 *x,
+                                float *out, int ntiles) {
+    constexpr int warps = kThreads / 32;
+    for (int t = 0; t < ntiles; ++t) {
+        auto a = lane_split<N, Rows, warps>(
+            cute::make_gmem_ptr(w + size_t(t) * Rows * N));
+        auto b = lane_split<N, 0, warps>(cute::make_gmem_ptr(x));
+        static_assert(
+            ops::dot_vector_elems<decltype(a), decltype(b)> == lane_vec(N),
+            "the load width must be the block the layout gave a lane");
+        float acc;
+        auto d = cute::make_tensor(cute::make_rmem_ptr(&acc), cute::Int<1>{});
+        ops::dot(a, b, d);
+        if ((threadIdx.x & 31) == 0)
+            out[t * Rows + (int(threadIdx.x) >> 5)] = acc;
+    }
+}
+
+/// A run of `N` split across all `Threads` threads, `V` contiguous each.
+///
+/// The lane split above broadcasts across the warps, which is what a per-warp
+/// row wants; a contraction that spans the block must instead divide the run
+/// over every thread, or each warp would fold the whole thing and the total
+/// would come out one factor of `warps` too large.
+template <int N, int Threads, class Ptr> __device__ auto block_split(Ptr p) {
+    constexpr int V = lane_vec(N * 32 / Threads);
+    auto layout =
+        cute::make_layout(cute::make_shape(cute::Int<V>{}, cute::Int<Threads>{},
+                                           cute::Int<N / (Threads * V)>{}),
+                          cute::make_stride(cute::Int<1>{}, cute::Int<V>{},
+                                            cute::Int<Threads * V>{}));
+    auto mesh_layout = cute::make_layout(cute::make_shape(cute::Int<Threads>{}),
+                                         cute::make_stride(cute::Int<1>{}));
+    tilefoundry::Mesh<
+        tilefoundry::Topology<tilefoundry::TopologyScope::thread, Threads>,
+        decltype(mesh_layout)>
+        mesh{mesh_layout};
+    tilefoundry::ShardLayout<
+        decltype(layout), cute::tuple<tilefoundry::shard::S<1>>, decltype(mesh)>
+        shard{layout, mesh};
+    return tilefoundry::make_shard_tensor(cute::make_tensor(p, layout), layout,
+                                          shard);
+}
+
+/// One number over the whole block: `sum(x * x)` with a shared workspace.
+template <int N>
+__global__ void dot_cta_kernel(const __nv_bfloat16 *x, float *out) {
+    constexpr int warps = kThreads / 32;
+    __shared__ float slots[warps];
+    auto a = block_split<N, kThreads>(cute::make_gmem_ptr(x));
+    auto ws =
+        cute::make_tensor(cute::make_smem_ptr(&slots[0]), cute::Int<warps>{});
+    float total;
+    auto d = cute::make_tensor(cute::make_rmem_ptr(&total), cute::Int<1>{});
+    ops::dot(a, a, d, ws);
+    /// Every thread must hold the total, not only one of them.
+    out[threadIdx.x] = total;
+}
+
 /// tma.
 
 /// A `Stages`-deep ring staged by `ops::tma_copy`, each tile doubled on the way
@@ -323,6 +444,41 @@ torch::Tensor mbarrier_pipeline(torch::Tensor x, int64_t tile) {
 /// is 24 bytes -- contiguous, so bulk-eligible, but off the 16-byte grain, so
 /// the entry hands it to the element path at run time. All three are the same
 /// `ops::tma_copy` call and must land the same values.
+torch::Tensor dot_gemv(torch::Tensor w, torch::Tensor x) {
+    constexpr int Rows = 8;
+    TORCH_CHECK(w.is_cuda() && x.is_cuda(), "w and x must be CUDA tensors");
+    auto wb = w.to(at::kBFloat16).contiguous();
+    auto xb = x.to(at::kBFloat16).contiguous();
+    const int n = int(x.numel());
+    const int ntiles = int(w.numel() / (int64_t(n) * Rows));
+    auto out = torch::empty({int64_t(ntiles) * Rows},
+                            torch::dtype(torch::kFloat32).device(w.device()));
+    auto stream = at::cuda::getCurrentCUDAStream();
+    auto *pw = reinterpret_cast<const __nv_bfloat16 *>(wb.data_ptr());
+    auto *px = reinterpret_cast<const __nv_bfloat16 *>(xb.data_ptr());
+    if (n == 2688)
+        dot_gemv_kernel<2688, Rows>
+            <<<1, kThreads, 0, stream>>>(pw, px, out.data_ptr<float>(), ntiles);
+    else if (n == 4096)
+        dot_gemv_kernel<4096, Rows>
+            <<<1, kThreads, 0, stream>>>(pw, px, out.data_ptr<float>(), ntiles);
+    else
+        TORCH_CHECK(false, "dot_gemv: no instantiation for n=", n);
+    return out;
+}
+
+torch::Tensor dot_cta(torch::Tensor x) {
+    TORCH_CHECK(x.is_cuda() && x.numel() == 4096,
+                "dot_cta wants 4096 elements");
+    auto xb = x.to(at::kBFloat16).contiguous();
+    auto out = torch::empty({kThreads},
+                            torch::dtype(torch::kFloat32).device(x.device()));
+    dot_cta_kernel<4096><<<1, kThreads, 0, at::cuda::getCurrentCUDAStream()>>>(
+        reinterpret_cast<const __nv_bfloat16 *>(xb.data_ptr()),
+        out.data_ptr<float>());
+    return out;
+}
+
 torch::Tensor mma_tile(torch::Tensor a, torch::Tensor b, bool b_k_major) {
     TORCH_CHECK(a.is_cuda() && b.is_cuda(), "a and b must be CUDA tensors");
     constexpr int M = 16, N = 128, K = 128;
@@ -415,4 +571,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("copy_tile", &copy_tile);
     m.def("copy_widen", &copy_widen);
     m.def("mma_tile", &mma_tile);
+    m.def("dot_gemv", &dot_gemv);
+    m.def("dot_cta", &dot_cta);
 }

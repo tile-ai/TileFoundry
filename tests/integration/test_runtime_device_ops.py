@@ -166,3 +166,33 @@ def test_mma_loops_the_atom_over_a_whole_tile(ops, b_k_major: bool) -> None:
     b = nk if b_k_major else nk.t().contiguous()
     got = ops.mma_tile(a, b, b_k_major)
     torch.testing.assert_close(got, a.float() @ nk.float().t(), rtol=2e-2, atol=2e-2)
+
+
+@pytest.mark.parametrize("n", [2688, 4096])
+def test_dot_contracts_a_row_inside_a_warp(ops, n: int) -> None:
+    """A matrix-vector product, one ``ops::dot`` a row, against torch.
+
+    2688 leaves each lane 84 elements and 4096 leaves 128, so the two widths
+    load 8 and 16 bytes at a time; the kernel ``static_assert``s which it got.
+    The call itself is the same either way.
+    """
+    g = torch.Generator(device="cpu").manual_seed(20260905)
+    w = torch.randn(24, n, generator=g).cuda().to(torch.bfloat16)
+    x = torch.randn(n, generator=g).cuda().to(torch.bfloat16)
+    got = ops.dot_gemv(w, x)
+    torch.testing.assert_close(got, w.float() @ x.float(), rtol=2e-3, atol=2e-3)
+
+
+def test_dot_contracts_across_the_block_and_leaves_it_everywhere(ops) -> None:
+    """With a workspace the contraction spans the block, and every thread has it.
+
+    A tier that left the total in one thread would pass a check on element 0
+    and fail this one, which is why the whole output is compared. 4096 over 256
+    threads is 16 each; a length the mesh cannot divide has to be padded before
+    it gets here, which is the caller's business and not this op's.
+    """
+    g = torch.Generator(device="cpu").manual_seed(20260905)
+    x = torch.randn(4096, generator=g).cuda().to(torch.bfloat16)
+    got = ops.dot_cta(x)
+    want = (x.float() * x.float()).sum()
+    torch.testing.assert_close(got, want.expand(256), rtol=3e-3, atol=3e-3)
