@@ -1,4 +1,4 @@
-/// Nemotron-3.5-Lightning-30B-A3B decode, handwritten.
+/// Nemotron-3.5-Lightning-30B-A3B decode, handwritten over the runtime ops.
 ///
 /// Every stage is a `__device__` function over gmem pointers plus a shared
 /// scratch. The `__global__` wrappers below launch one stage at a time, which
@@ -6,13 +6,17 @@
 /// persistent cooperative grid calls the same functions with a grid barrier
 /// where a wrapper boundary is today.
 
-/// Primitives come from the runtime, not from this file:
-/// `tilefoundry::ops::{warp_reduce, shuffle_elect, mbarrier_*, tma_bulk_copy}`.
-/// The weight staging below is the shape the tilelang implementation uses --
-/// one elected lane issues a bulk copy of eight weight rows and arrives on that
-/// tile's mbarrier, consumers wait on the phase parity -- expressed through
-/// those entries instead of through inline PTX.
+/// Nothing here writes a thread index into arithmetic. A stage says which
+/// layout it wants -- `row_tile`, `lane_vector`, `block_run` (shards.cuh) --
+/// and `local()` hands each thread its slice; the tile operations are then
+/// `ops::{tma_copy, copy, dot, mma, fill}`, which read the transfer width, the
+/// contraction mesh and the tiling off those layouts. What stays written out is
+/// the model's own arithmetic, including every place it rounds to bf16 mid
+/// expression, because that is what the checkpoint does and it has to stay
+/// readable.
 #include <tilefoundry/runtime/cuda/runtime.cuh>
+
+#include "shards.cuh"
 
 #include <cooperative_groups.h>
 
@@ -44,7 +48,6 @@ constexpr int HPG = 8;
 constexpr float EPS = 1e-5f;
 constexpr float DTMIN = 0.001f;
 
-constexpr int HQ = 32;
 constexpr int HKV = 2;
 constexpr int DH = 128;
 constexpr int QP = 4096;
@@ -78,22 +81,13 @@ __device__ inline float softplus_f(float x) {
     return x > 20.0f ? x : log1pf(expf(x));
 }
 
-/// Sum ``v`` across the whole CTA, leaving the total in every thread.
+/// The shared-memory run this kernel normalises over.
 ///
-/// A warp fold through ``ops::warp_reduce`` and then one slot per warp in
-/// shared memory; the second fold is over eight values, so it costs less as a
-/// serial loop than as a second butterfly.
-__device__ inline float cta_sum(float v, float *slots) {
-    v = ops::warp_reduce<ops::warp_sum>(v);
-    const int lane = threadIdx.x & 31;
-    const int warp = threadIdx.x >> 5;
-    if (lane == 0) slots[warp] = v;
-    ops::sync<ops::SyncKind::syncthreads>();
-    float total = 0.0f;
-    for (int i = 0; i < WARPS; ++i) total += slots[i];
-    return total;
-}
-
+/// 2688 is ten and a half elements a thread, and a mesh either divides a run or
+/// it does not; padding it to twelve costs 768 bytes of shared memory and lets
+/// the sum of squares be one `ops::dot` over one shard instead of a shard plus
+/// a remainder. The pad holds zeros, which a sum of squares ignores.
+constexpr int HPAD = padded_span(H, THREADS);
 
 /// One weight tile: ``TILE_ROWS`` whole rows of an ``(out, in)`` matrix.
 ///
@@ -103,64 +97,94 @@ __device__ inline float cta_sum(float v, float *slots) {
 /// uses, and it is one row per warp.
 constexpr int TILE_ROWS = WARPS;
 
-/// ``out[row] = dot(w[row], x)`` for a run of rows, streaming ``w`` through a
-/// shared ring.
+/// What a stage does with one row's product.
 ///
-/// The loads run ``STAGES`` tiles ahead, so the tile issued last is still in
-/// flight while this one is being folded. Every fold is a warp butterfly, and
-/// the accumulator is f32 with a bf16 landing on the way out -- what a bf16
-/// matmul does.
-template <int IN, int STAGES>
-__device__ void gemv_rows(const bf16 *__restrict__ w, const bf16 *__restrict__ x,
-                          bf16 *out, int tile0, int ntiles, bf16 *stage,
-                          uint64_t *bars, const bf16 *resid = nullptr) {
-    constexpr unsigned kBytes = unsigned(TILE_ROWS) * IN * sizeof(bf16);
+/// The product lands in bf16 before anything else touches it, because that is
+/// what a bf16 matmul does; the epilogues differ only in what happens next.
+/// `tile0` is where this call's tiles start, so an epilogue is told which tile
+/// and which warp and never has to be handed the same offset twice.
+struct store_bf16 {
+    bf16 *out;
+    int tile0;
+    const bf16 *resid;
+    __device__ void operator()(int tile, int warp, float acc) const {
+        const int row = (tile0 + tile) * TILE_ROWS + warp;
+        out[row] = __float2bfloat16(resid ? ld(resid + row) + bf(acc) : acc);
+    }
+};
+
+/// `(fh @ w.t()).float()`: the product lands in bf16 and only then widens, so
+/// the rounding is the matmul's and not the store's.
+struct store_f32 {
+    float *out;
+    int tile0;
+    __device__ void operator()(int tile, int warp, float acc) const {
+        out[(tile0 + tile) * TILE_ROWS + warp] = bf(acc);
+    }
+};
+
+/// The staged matrix-vector loop every projection in this file is.
+///
+/// `src(t)` names tile `t`'s first row -- which is where the expert index and
+/// the row clamp live for the MoE and a plain stride for everything else --
+/// `vec(t)` names the vector that tile contracts against, and `epi(tile, warp, acc)`
+/// is what the stage does with a row's product.
+///
+/// The loads run `STAGES` tiles ahead, so the tile issued last is still in
+/// flight while this one is folded. `ops::tma_copy` decides from the tile's
+/// layout whether that is a bulk instruction and arrives on the barrier itself,
+/// so the wait is the only thing this loop says about staging.
+template <int IN, int STAGES, class Src, class Vec, class Epi>
+__device__ void gemv_staged(Src src, Vec vec, int ntiles, bf16 *stage,
+                            uint64_t *bars, Epi epi) {
     constexpr int kTileElems = TILE_ROWS * IN;
     const int warp = threadIdx.x >> 5;
     const int lane = threadIdx.x & 31;
 
-    const bool elected = ops::shuffle_elect<THREADS>();
-    if (elected)
+    if (ops::shuffle_elect<THREADS>())
         for (int s = 0; s < STAGES; ++s) ops::mbarrier_init(&bars[s], 1);
     ops::sync<ops::SyncKind::syncthreads>();
 
-    for (int s = 0; s < STAGES && s < ntiles; ++s) {
-        if (elected) {
-            ops::mbarrier_arrive_expect_tx(&bars[s], kBytes);
-            ops::tma_bulk_copy(w + size_t(tile0 + s) * kTileElems,
-                               stage + s * kTileElems, kTileElems, &bars[s]);
-        }
-    }
+    auto issue = [&](int tile, int slot) {
+        auto from = whole_run<kTileElems, THREADS>(
+            cute::make_gmem_ptr(src(tile)));
+        auto into = whole_run<kTileElems, THREADS>(
+            cute::make_smem_ptr(stage + slot * kTileElems));
+        ops::tma_copy(from, into, &bars[slot]);
+    };
+    for (int s = 0; s < STAGES && s < ntiles; ++s) issue(s, s);
 
     for (int t = 0; t < ntiles; ++t) {
         const int slot = t % STAGES;
         ops::mbarrier_wait_parity(&bars[slot], unsigned(t / STAGES) & 1u);
 
-        const bf16 *row = stage + slot * kTileElems + warp * IN;
-        float acc = 0.0f;
-        for (int j = lane; j < IN; j += 32) acc += ld(row + j) * ld(x + j);
-        acc = ops::warp_reduce<ops::warp_sum>(acc);
-        if (lane == 0) {
-            const int row = (tile0 + t) * TILE_ROWS + warp;
-            // The product lands in bf16 before the residual adds to it, which
-            // is what `h + (scan @ w_out.t())` does one operation at a time.
-            out[row] = __float2bfloat16(resid ? ld(resid + row) + bf(acc) : acc);
-        }
+        auto rows = row_tile<IN, TILE_ROWS, THREADS>(
+            cute::make_smem_ptr(stage + slot * kTileElems));
+        auto xv = lane_vector<IN, THREADS>(cute::make_smem_ptr(vec(t)));
+        float acc;
+        auto out = cell(&acc);
+        ops::dot(rows, xv, out);
+        if (lane == 0) epi(t, warp, acc);
 
         ops::sync<ops::SyncKind::syncthreads>();
         const int next = t + STAGES;
-        if (next < ntiles && elected) {
-            ops::mbarrier_arrive_expect_tx(&bars[slot], kBytes);
-            ops::tma_bulk_copy(w + size_t(tile0 + next) * kTileElems,
-                               stage + slot * kTileElems, kTileElems, &bars[slot]);
-        }
+        if (next < ntiles) issue(next, slot);
     }
-    if (elected)
+    if (ops::shuffle_elect<THREADS>())
         for (int s = 0; s < STAGES; ++s) ops::mbarrier_invalidate(&bars[s]);
 }
 
-/// Which of the two gemv shapes wins is a measurement, and both are here so it
-/// can be repeated. Measured on one H200, one layer of the checkpoint:
+/// The same loop with the weights read where they lie.
+///
+/// A gemv reads each weight byte exactly once, so there is nothing for a shared
+/// tile to be reused by. What staging costs instead is occupancy: three stages
+/// of eight 2688-wide rows is 129 KB, which fits one CTA per SM and leaves the
+/// memory system with one CTA's worth of requests in flight. Reading the rows
+/// in place keeps the shared budget at zero, so the SM holds as many CTAs as
+/// the launch offers.
+///
+/// Which of the two wins is a measurement, and both are here so it can be
+/// repeated. Measured on one H200, one layer of the checkpoint:
 ///
 ///   Mamba-2 layer   staged 49.6 us   direct 85.7 us
 ///   MoE layer       staged  320 us   direct  114 us (with the router fixed)
@@ -168,52 +192,31 @@ __device__ void gemv_rows(const bf16 *__restrict__ w, const bf16 *__restrict__ x
 /// The split is how many tiles a CTA gets. The Mamba projections give each CTA
 /// about 78 rows, and running three tiles ahead hides the next load behind this
 /// tile's fold. The MoE experts give each CTA under two tiles, so the prologue
-/// issues more than the loop consumes and the staging is pure overhead. Staged
-/// for the first, direct for the second.
-
-/// ``out[row] = dot(w[row], x)`` straight from global memory, no staging.
-///
-/// A gemv reads each weight byte exactly once, so there is nothing for a shared
-/// tile to be reused by. What staging costs instead is occupancy: three stages
-/// of eight 2688-wide rows is 129 KB, which fits one CTA per SM and leaves the
-/// memory system with one CTA's worth of requests in flight. This reads 16
-/// bytes per lane straight from gmem -- a warp covers 512 bytes a step, fully
-/// coalesced -- and keeps the shared budget at zero, so the SM holds as many
-/// CTAs as the launch offers.
-///
-/// Kept beside `gemv_rows` rather than replacing it: which one wins is a
-/// measurement, and the two are here so the measurement can be repeated.
-template <int IN>
-__device__ void gemv_rows_direct(const bf16 *__restrict__ w,
-                                 const bf16 *__restrict__ x,
-                                 bf16 *out, int row0, int nrows,
-                                 const bf16 *resid = nullptr) {
-    static_assert(IN % 8 == 0, "gemv_rows_direct: IN must be a multiple of 8");
-    constexpr int kVec = IN / 8;
+/// issues more than the loop consumes and the staging is pure overhead.
+template <int IN, class Src, class Vec, class Epi>
+__device__ void gemv_direct(Src src, Vec vec, int ntiles, Epi epi) {
     const int warp = threadIdx.x >> 5;
     const int lane = threadIdx.x & 31;
-    const int4 *xv = reinterpret_cast<const int4 *>(x);
-
-    for (int r = warp; r < nrows; r += WARPS) {
-        const int row = row0 + r;
-        const int4 *wv = reinterpret_cast<const int4 *>(w + size_t(row) * IN);
-        // Eight accumulators, not one. A single running sum makes the whole row
-        // a serial chain of dependent FMAs, and the loads cannot run ahead of a
-        // chain: the row's latency, not its bytes, is what the warp waits on.
-        float part[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-        for (int v = lane; v < kVec; v += 32) {
-            const int4 a = wv[v], b = xv[v];
-            const bf16 *pa = reinterpret_cast<const bf16 *>(&a);
-            const bf16 *pb = reinterpret_cast<const bf16 *>(&b);
-#pragma unroll
-            for (int k = 0; k < 8; ++k) part[k] += ld(pa + k) * ld(pb + k);
-        }
-        float acc = (part[0] + part[1]) + (part[2] + part[3]) +
-                    ((part[4] + part[5]) + (part[6] + part[7]));
-        acc = ops::warp_reduce<ops::warp_sum>(acc);
-        if (lane == 0)
-            out[row] = __float2bfloat16(resid ? ld(resid + row) + bf(acc) : acc);
+    for (int t = 0; t < ntiles; ++t) {
+        auto rows =
+            row_tile<IN, TILE_ROWS, THREADS>(cute::make_gmem_ptr(src(t)));
+        auto xv = lane_vector<IN, THREADS>(cute::make_smem_ptr(vec(t)));
+        float acc;
+        auto out = cell(&acc);
+        ops::dot(rows, xv, out);
+        if (lane == 0) epi(t, warp, acc);
     }
+}
+
+/// A run of tiles read straight through, and the vector every one of them
+/// contracts against.
+template <int IN> __device__ auto tile_stride(const bf16 *w, int tile0) {
+    return [w, tile0](int t) {
+        return w + size_t(tile0 + t) * TILE_ROWS * IN;
+    };
+}
+__device__ auto same_vector(const bf16 *x) {
+    return [x](int) { return x; };
 }
 
 /// The published ``NemotronHRMSNorm``, into shared memory.
@@ -221,39 +224,64 @@ __device__ void gemv_rows_direct(const bf16 *__restrict__ w,
 /// The normalised value lands in bf16 **before** the weight multiplies it,
 /// which is one rounding more than doing the whole thing in f32 would be. It is
 /// what the checkpoint's own implementation does, so it is what this does.
-__device__ void rms_norm_to_smem(const bf16 *__restrict__ h,
-                                 const bf16 *__restrict__ gamma,
-                                 bf16 *__restrict__ dst, float *slots) {
-    float sq = 0.0f;
-    for (int i = threadIdx.x; i < H; i += THREADS) {
-        const float v = ld(h + i);
-        sq += v * v;
-    }
-    const float scale = rsqrtf(cta_sum(sq, slots) / float(H) + EPS);
-    for (int i = threadIdx.x; i < H; i += THREADS)
-        dst[i] = __float2bfloat16(bf(ld(h + i) * scale) * ld(gamma + i));
+///
+/// `dst` holds `HPAD`, not `H`: the sum of squares runs over the padded shard
+/// as one `ops::dot`, and the scale-and-weight pass that follows walks each
+/// thread's own slice of it.
+__device__ void rms_norm_to_smem(const bf16 *h, const bf16 *gamma, bf16 *dst,
+                                 float *slots) {
+    auto padded = block_run<HPAD, THREADS>(cute::make_smem_ptr(dst));
+    ops::fill(padded, 0.0f, local_n(padded));
+    ops::sync<ops::SyncKind::syncthreads>();
+    copy_run<H, THREADS>(cute::make_gmem_ptr(h), cute::make_smem_ptr(dst));
+    ops::sync<ops::SyncKind::syncthreads>();
+
+    float sq;
+    auto total = cell(&sq);
+    auto ws = cute::make_tensor(cute::make_smem_ptr(slots), cute::Int<WARPS>{});
+    ops::dot(padded, padded, total, ws);
+    const float scale = rsqrtf(sq / float(H) + EPS);
+
+    constexpr int SPAN = block_span(H, THREADS);
+    auto xs = tilefoundry::local(
+        block_run<SPAN, THREADS>(cute::make_smem_ptr(dst)));
+    auto gs = tilefoundry::local(
+        block_run<SPAN, THREADS>(cute::make_gmem_ptr(gamma)));
+    const int n = int(cute::size(xs));
+    for (int u = 0; u < n; ++u)
+        xs(u) = __float2bfloat16(bf(ld(&xs(u)) * scale) * ld(&gs(u)));
+    /// The 128 the mesh could not divide, one element a thread.
+    const int tail = int(threadIdx.x);
+    if (tail < H - SPAN)
+        dst[SPAN + tail] = __float2bfloat16(bf(ld(dst + SPAN + tail) * scale) *
+                                            ld(gamma + SPAN + tail));
 }
 
-/// The depthwise convolution over one channel run, and the state it hands on.
+/// The depthwise convolution over one chunk of channels, and the state it
+/// hands on.
 ///
-/// The window a step hands on is two columns of the window it was handed,
-/// shifted, plus one fresh column from the input projection. Every rounding
-/// below is one the op-by-op reference makes: the products land in bf16, the
-/// fold over the four taps is f32, and the bias and the silu each land again.
-__device__ void mamba_conv_stage(const bf16 *__restrict__ col0,
-                                 const bf16 *__restrict__ conv_state,
-                                 const bf16 *__restrict__ conv_w,
-                                 const bf16 *__restrict__ conv_b,
-                                 bf16 *__restrict__ conv_out,
-                                 bf16 *__restrict__ xbc, int c0, int c1) {
-    for (int c = c0 + int(threadIdx.x); c < c1; c += THREADS) {
+/// A chunk is a whole block's width, so which channel a thread owns is the
+/// shard's answer and not an index this code computes. Every rounding below is
+/// one the op-by-op reference makes: the products land in bf16, the fold over
+/// the four taps is f32, and the bias and the silu each land again.
+__device__ void mamba_conv_stage(const bf16 *col0, const bf16 *conv_state,
+                                 const bf16 *conv_w, const bf16 *conv_b,
+                                 bf16 *conv_out, bf16 *xbc, int chunk) {
+    const bf16 *base = col0 + size_t(chunk) * THREADS;
+    auto cols = tilefoundry::local(
+        block_run<THREADS, THREADS>(cute::make_gmem_ptr(base)));
+    const int n = int(cute::size(cols));
+
+    for (int u = 0; u < n; ++u) {
+        const int c = chunk * THREADS + index_of(cols, u, base);
         float win[KER];
         for (int k = 0; k < WIN; ++k) win[k] = ld(conv_state + c * WIN + k);
-        win[WIN] = ld(col0 + c);
+        win[WIN] = ld(&cols(u));
         for (int k = 0; k < WIN; ++k)
             conv_out[c * WIN + k] = __float2bfloat16(win[k + 1]);
         float acc = 0.0f;
-        for (int k = 0; k < KER; ++k) acc += bf(win[k] * ld(conv_w + c * KER + k));
+        for (int k = 0; k < KER; ++k)
+            acc += bf(win[k] * ld(conv_w + c * KER + k));
         xbc[c] = __float2bfloat16(silu_f(bf(bf(acc) + ld(conv_b + c))));
     }
 }
@@ -300,29 +328,46 @@ __device__ void mamba_ssm_stage(const bf16 *__restrict__ xbc,
 /// The D skip, the gate, and the gated group norm over one group.
 ///
 /// ``group`` names which of the ``NG`` runs of ``GRP`` this call owns. The norm
-/// is over that run alone, so the CTA-wide fold below is the whole reduction.
-__device__ void mamba_gate_norm_stage(const bf16 *__restrict__ y,
-                                      const bf16 *__restrict__ xbc,
-                                      const bf16 *__restrict__ gate,
-                                      const bf16 *__restrict__ mscal,
-                                      const bf16 *__restrict__ ggdn,
-                                      bf16 *__restrict__ scan, int group,
+/// is over that run alone, and ``GRP`` is two elements a thread exactly, so the
+/// fold is one `ops::dot` over the block. Every operand is sharded the same
+/// way, so ``u`` names the same element in all of them and no index is
+/// recomputed; only ``head``, which the model needs, is asked of the shard.
+__device__ void mamba_gate_norm_stage(const bf16 *y, const bf16 *xbc,
+                                      const bf16 *gate, const bf16 *mscal,
+                                      const bf16 *ggdn, bf16 *scan, int group,
                                       float *slots, float *yf) {
     const int base = group * GRP;
-    float sq = 0.0f;
-    for (int j = int(threadIdx.x); j < GRP; j += THREADS) {
-        const int i = base + j;
-        const int head = i / MD;
-        const float xv = ld(xbc + i);
+    auto owned = block_run<GRP, THREADS>(cute::make_smem_ptr(yf));
+    auto mine = tilefoundry::local(owned);
+    auto yv = tilefoundry::local(
+        block_run<GRP, THREADS>(cute::make_gmem_ptr(y + base)));
+    auto xv = tilefoundry::local(
+        block_run<GRP, THREADS>(cute::make_gmem_ptr(xbc + base)));
+    auto gv = tilefoundry::local(
+        block_run<GRP, THREADS>(cute::make_gmem_ptr(gate + base)));
+    auto wv = tilefoundry::local(
+        block_run<GRP, THREADS>(cute::make_gmem_ptr(ggdn + base)));
+    auto sv = tilefoundry::local(
+        block_run<GRP, THREADS>(cute::make_gmem_ptr(scan + base)));
+    const int n = int(cute::size(mine));
+
+    for (int u = 0; u < n; ++u) {
+        const int head = (base + index_of(yv, u, y + base)) / MD;
+        const float x = ld(&xv(u));
         const float d_skip = ld(mscal + 2 * MH + head);
-        const float yd = bf(ld(y + i) + bf(xv * d_skip));
-        const float v = yd * silu_f(ld(gate + i));
-        yf[j] = v;
-        sq += v * v;
+        const float yd = bf(ld(&yv(u)) + bf(x * d_skip));
+        mine(u) = yd * silu_f(ld(&gv(u)));
     }
-    const float scale = rsqrtf(cta_sum(sq, slots) / float(GRP) + EPS);
-    for (int j = int(threadIdx.x); j < GRP; j += THREADS)
-        scan[base + j] = __float2bfloat16(bf(yf[j] * scale) * ld(ggdn + base + j));
+    ops::sync<ops::SyncKind::syncthreads>();
+
+    float sq;
+    auto total = cell(&sq);
+    auto ws = cute::make_tensor(cute::make_smem_ptr(slots), cute::Int<WARPS>{});
+    ops::dot(owned, owned, total, ws);
+    const float scale = rsqrtf(sq / float(GRP) + EPS);
+
+    for (int u = 0; u < n; ++u)
+        sv(u) = __float2bfloat16(bf(mine(u) * scale) * ld(&wv(u)));
 }
 
 /// The tile range CTA ``c`` of ``nc`` owns, splitting ``ntiles`` as evenly as
@@ -338,7 +383,12 @@ __device__ __host__ inline void tile_span(int ntiles, int c, int nc, int *first,
 /// Shared layout shared by both projections: the staged weight ring first (the
 /// bulk copy's destination has the strictest alignment), then the input vector,
 /// then the barriers and the per-warp fold slots.
+///
+/// The vector is `padded_span(IN, THREADS)` and not `IN`: a stage that
+/// normalises into it reduces over a shard, and a shard's mesh either divides
+/// the run or it does not.
 template <int IN, int STAGES> struct ProjSmem {
+    static constexpr int kVec = padded_span(IN, THREADS);
     bf16 *stage;
     bf16 *x;
     uint64_t *bars;
@@ -347,17 +397,16 @@ template <int IN, int STAGES> struct ProjSmem {
     __device__ explicit ProjSmem(char *raw) {
         stage = reinterpret_cast<bf16 *>(raw);
         x = stage + size_t(STAGES) * TILE_ROWS * IN;
-        bars = reinterpret_cast<uint64_t *>(x + IN);
+        bars = reinterpret_cast<uint64_t *>(x + kVec);
         slots = reinterpret_cast<float *>(bars + STAGES);
     }
     static constexpr size_t bytes() {
-        return sizeof(bf16) * (size_t(STAGES) * TILE_ROWS * IN + IN) +
+        return sizeof(bf16) * (size_t(STAGES) * TILE_ROWS * IN + kVec) +
                sizeof(uint64_t) * STAGES + sizeof(float) * WARPS;
     }
 };
 
 constexpr int IN_STAGES = 3;
-constexpr int OUT_STAGES = 2;
 constexpr int PROJ_TILES = PROJ / TILE_ROWS;
 constexpr int OUT_TILES = H / TILE_ROWS;
 
@@ -366,14 +415,16 @@ constexpr int OUT_TILES = H / TILE_ROWS;
 /// Every CTA normalises the hidden row itself rather than one CTA doing it
 /// behind a barrier: 2688 elements is not work worth dividing, and dividing it
 /// would cost a barrier to put back together.
-__device__ void s_in_proj(int cta, int nctas, const bf16 *__restrict__ h, const bf16 *__restrict__ gamma, const bf16 *__restrict__ w_in, bf16 *__restrict__ proj) {
+__device__ void s_in_proj(int cta, int nctas, const bf16 *h, const bf16 *gamma,
+                          const bf16 *w_in, bf16 *proj) {
     __shared__ float slots[WARPS];
-    __shared__ __align__(16) bf16 xs[H];
+    __shared__ __align__(16) bf16 xs[HPAD];
     rms_norm_to_smem(h, gamma, xs, slots);
     ops::sync<ops::SyncKind::syncthreads>();
     int first, count;
     tile_span(PROJ_TILES, cta, nctas, &first, &count);
-    gemv_rows_direct<H>(w_in, xs, proj, first * TILE_ROWS, count * TILE_ROWS);
+    gemv_direct<H>(tile_stride<H>(w_in, first), same_vector(xs), count,
+                   store_bf16{proj, first, nullptr});
 }
 
 __global__ __launch_bounds__(THREADS) void k_in_proj(
@@ -384,14 +435,15 @@ __global__ __launch_bounds__(THREADS) void k_in_proj(
 
 
 /// The output projection and the residual add.
-__device__ void s_out_proj(int cta, int nctas, const bf16 *__restrict__ scan, const bf16 *__restrict__ w_out, const bf16 *__restrict__ h_in, bf16 *__restrict__ h_out) {
+__device__ void s_out_proj(int cta, int nctas, const bf16 *scan,
+                           const bf16 *w_out, const bf16 *h_in, bf16 *h_out) {
     __shared__ __align__(16) bf16 xs[MI];
-    for (int i = int(threadIdx.x); i < MI; i += THREADS) xs[i] = scan[i];
+    copy_run<MI, THREADS>(cute::make_gmem_ptr(scan), cute::make_smem_ptr(xs));
     ops::sync<ops::SyncKind::syncthreads>();
     int first, count;
     tile_span(OUT_TILES, cta, nctas, &first, &count);
-    gemv_rows_direct<MI>(w_out, xs, h_out, first * TILE_ROWS, count * TILE_ROWS,
-                         h_in);
+    gemv_direct<MI>(tile_stride<MI>(w_out, first), same_vector(xs), count,
+                    store_bf16{h_out, first, h_in});
 }
 
 __global__ __launch_bounds__(THREADS) void k_out_proj(
@@ -401,11 +453,18 @@ __global__ __launch_bounds__(THREADS) void k_out_proj(
 }
 
 
-__device__ void s_conv(int cta, int nctas, const bf16 *__restrict__ proj, const bf16 *__restrict__ conv_state, const bf16 *__restrict__ conv_w, const bf16 *__restrict__ conv_b, bf16 *__restrict__ conv_out, bf16 *__restrict__ xbc) {
-    const int per = (CONV + nctas - 1) / nctas;
-    const int c0 = cta * per;
-    mamba_conv_stage(proj + MI, conv_state, conv_w, conv_b, conv_out, xbc, c0,
-                     min(c0 + per, CONV));
+/// The channel run as whole-block chunks, one CTA taking every `nctas`-th.
+///
+/// A CTA's share of 6144 depends on the grid, and a shard's extents do not; a
+/// chunk is a compile-time width and which chunks a CTA takes is the loop.
+__device__ void s_conv(int cta, int nctas, const bf16 *proj,
+                       const bf16 *conv_state, const bf16 *conv_w,
+                       const bf16 *conv_b, bf16 *conv_out, bf16 *xbc) {
+    constexpr int CHUNKS = CONV / THREADS;
+    static_assert(CONV % THREADS == 0, "the channel run is whole blocks");
+    for (int chunk = cta; chunk < CHUNKS; chunk += nctas)
+        mamba_conv_stage(proj + MI, conv_state, conv_w, conv_b, conv_out, xbc,
+                         chunk);
 }
 
 __global__ __launch_bounds__(THREADS) void k_conv(
@@ -507,12 +566,11 @@ std::vector<torch::Tensor> mamba_layer(
     auto stream = at::cuda::getCurrentCUDAStream();
     const int ctas = sm_count();
 
-    constexpr size_t kIn = ProjSmem<H, IN_STAGES>::bytes();
-    constexpr size_t kOut = ProjSmem<MI, OUT_STAGES>::bytes();
-    allow_smem(k_in_proj, kIn);
-    allow_smem(k_out_proj, kOut);
+    /// Both projections read their weights where they lie, so neither asks for
+    /// a dynamic allocation: one would cap how many CTAs an SM can hold for
+    /// nothing in return.
 
-    k_in_proj<<<ctas, THREADS, kIn, stream>>>(
+    k_in_proj<<<ctas, THREADS, 0, stream>>>(
         static_cast<const bf16 *>(h.data_ptr()),
         static_cast<const bf16 *>(gamma.data_ptr()),
         static_cast<const bf16 *>(w_in.data_ptr()), P);
@@ -531,7 +589,7 @@ std::vector<torch::Tensor> mamba_layer(
         static_cast<const bf16 *>(mscal.data_ptr()),
         static_cast<const bf16 *>(ggdn.data_ptr()),
         static_cast<bf16 *>(scan.data_ptr()));
-    k_out_proj<<<ctas, THREADS, kOut, stream>>>(
+    k_out_proj<<<ctas, THREADS, 0, stream>>>(
         static_cast<const bf16 *>(scan.data_ptr()),
         static_cast<const bf16 *>(w_out.data_ptr()),
         static_cast<const bf16 *>(h.data_ptr()),
@@ -563,39 +621,25 @@ constexpr size_t kMegaSmem = ProjSmem<H, IN_STAGES>::bytes();
 ///
 /// Every CTA normalises the hidden row itself, as elsewhere; CTA zero also
 /// publishes it, because the expert projections read it next.
-__device__ void s_moe_logits(int cta, int nctas, const bf16 *__restrict__ h, const bf16 *__restrict__ gamma, const bf16 *__restrict__ w_router, bf16 *__restrict__ h2, float *__restrict__ logits) {
+__device__ void s_moe_logits(int cta, int nctas, const bf16 *h,
+                             const bf16 *gamma, const bf16 *w_router, bf16 *h2,
+                             float *logits) {
     __shared__ float slots[WARPS];
-    __shared__ __align__(16) bf16 xs[H];
+    __shared__ __align__(16) bf16 xs[HPAD];
 
     rms_norm_to_smem(h, gamma, xs, slots);
     ops::sync<ops::SyncKind::syncthreads>();
     if (cta == 0)
-        for (int i = int(threadIdx.x); i < H; i += THREADS) h2[i] = xs[i];
+        copy_run<H, THREADS>(cute::make_smem_ptr(xs), cute::make_gmem_ptr(h2));
 
-    const int warp = threadIdx.x >> 5;
-    const int lane = threadIdx.x & 31;
-    constexpr int kVec = H / 8;
-    const int4 *xv = reinterpret_cast<const int4 *>(xs);
-    const int warps_total = nctas * WARPS;
-    const int my_warp = cta * WARPS + warp;
-
-    for (int e = my_warp; e < E; e += warps_total) {
-        const int4 *wv = reinterpret_cast<const int4 *>(w_router + size_t(e) * H);
-        float part[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-        for (int v = lane; v < kVec; v += 32) {
-            const int4 a = wv[v], b = xv[v];
-            const bf16 *pa = reinterpret_cast<const bf16 *>(&a);
-            const bf16 *pb = reinterpret_cast<const bf16 *>(&b);
-#pragma unroll
-            for (int k = 0; k < 8; ++k) part[k] += ld(pa + k) * ld(pb + k);
-        }
-        float acc = (part[0] + part[1]) + (part[2] + part[3]) +
-                    ((part[4] + part[5]) + (part[6] + part[7]));
-        acc = ops::warp_reduce<ops::warp_sum>(acc);
-        // The router runs in f32 on both sides -- `h2.float() @ w.float().t()`
-        // -- so this is the one projection that does not land in bf16.
-        if (lane == 0) logits[e] = acc;
-    }
+    int first, count;
+    tile_span(E / TILE_ROWS, cta, nctas, &first, &count);
+    /// The router runs in f32 on both sides -- `h2.float() @ w.float().t()` --
+    /// so this is the one projection that does not land in bf16 first.
+    gemv_direct<H>(tile_stride<H>(w_router, first), same_vector(xs), count,
+                   [logits, first](int tile, int warp, float acc) {
+                       logits[(first + tile) * TILE_ROWS + warp] = acc;
+                   });
 }
 
 __global__ __launch_bounds__(THREADS) void k_moe_logits(
@@ -653,68 +697,35 @@ __global__ __launch_bounds__(32) void k_moe_topk(
 ///
 /// This is the shape `mega_kernel.py` uses, where the same index carries the
 /// expert and the block (`sel[t // 2]`, `(t % 2) * 8`).
-__device__ void s_moe_up(char *arena, int cta, int nctas,
-                         const bf16 *__restrict__ h2,
-                         const bf16 *__restrict__ w_up,
-                         const int *__restrict__ idx, bf16 *__restrict__ mid) {
+__device__ void s_moe_up(char *arena, int cta, int nctas, const bf16 *h2,
+                         const bf16 *w_up, const int *idx, bf16 *mid) {
     __shared__ __align__(16) bf16 xs[H];
-    for (int i = int(threadIdx.x); i < H; i += THREADS) xs[i] = h2[i];
+    copy_run<H, THREADS>(cute::make_gmem_ptr(h2), cute::make_smem_ptr(xs));
     ops::sync<ops::SyncKind::syncthreads>();
 
     ProjSmem<H, MOE_STAGES> sm(arena);
-    const int rows = (I + nctas - 1) / nctas;
-    const int tpe = (rows + TILE_ROWS - 1) / TILE_ROWS;
-    const int ntiles = KTOP * tpe;
-    const int row0 = cta * rows;
-    constexpr unsigned kBytes = unsigned(TILE_ROWS) * H * sizeof(bf16);
-    constexpr int kTileElems = TILE_ROWS * H;
-    const int warp = threadIdx.x >> 5;
-    const int lane = threadIdx.x & 31;
-
-    // The tile's first row, clamped so a bulk copy never reads past the matrix.
-    auto src = [&](int tile) {
-        const int e = idx[tile / tpe];
-        const int r = min(row0 + (tile % tpe) * TILE_ROWS, I - TILE_ROWS);
-        return w_up + (size_t(e) * I + max(r, 0)) * H;
+    /// A CTA owns a run of output rows in every expert, so its work is
+    /// `KTOP * count` tiles that differ only in which expert's matrix they come
+    /// from: `tile / count` picks the expert and `tile % count` the block. The
+    /// split is `tile_span`'s, so the runs are disjoint and cover the matrix --
+    /// a per-CTA row count rounded up to whole tiles would overlap its
+    /// neighbour, which a store survives and the atomic accumulation below does
+    /// not.
+    int first, count;
+    tile_span(UP_TILES, cta, nctas, &first, &count);
+    auto row_of = [first, count](int tile) {
+        return (first + tile % count) * TILE_ROWS;
     };
-
-    const bool elected = ops::shuffle_elect<THREADS>();
-    if (elected)
-        for (int s = 0; s < MOE_STAGES; ++s) ops::mbarrier_init(&sm.bars[s], 1);
-    ops::sync<ops::SyncKind::syncthreads>();
-    for (int s = 0; s < MOE_STAGES && s < ntiles; ++s)
-        if (elected) {
-            ops::mbarrier_arrive_expect_tx(&sm.bars[s], kBytes);
-            ops::tma_bulk_copy(src(s), sm.stage + s * kTileElems, kTileElems,
-                               &sm.bars[s]);
-        }
-    for (int t = 0; t < ntiles; ++t) {
-        const int s = t % MOE_STAGES;
-        ops::mbarrier_wait_parity(&sm.bars[s], unsigned(t / MOE_STAGES) & 1u);
-        const bf16 *row = sm.stage + s * kTileElems + warp * H;
-        float part[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-        for (int j = lane, u = 0; j < H; j += 32, ++u)
-            part[u & 7] += ld(row + j) * ld(xs + j);
-        float acc = (part[0] + part[1]) + (part[2] + part[3]) +
-                    ((part[4] + part[5]) + (part[6] + part[7]));
-        acc = ops::warp_reduce<ops::warp_sum>(acc);
-        if (lane == 0) {
-            const int r = min(row0 + (t % tpe) * TILE_ROWS, I - TILE_ROWS) + warp;
-            if (r >= 0 && r < I) {
-                const float v = fmaxf(bf(acc), 0.0f);
-                mid[size_t(t / tpe) * I + r] = __float2bfloat16(bf(v) * bf(v));
-            }
-        }
-        ops::sync<ops::SyncKind::syncthreads>();
-        const int next = t + MOE_STAGES;
-        if (next < ntiles && elected) {
-            ops::mbarrier_arrive_expect_tx(&sm.bars[s], kBytes);
-            ops::tma_bulk_copy(src(next), sm.stage + s * kTileElems, kTileElems,
-                               &sm.bars[s]);
-        }
-    }
-    if (elected)
-        for (int s = 0; s < MOE_STAGES; ++s) ops::mbarrier_invalidate(&sm.bars[s]);
+    auto src = [w_up, idx, count, row_of](int tile) {
+        return w_up + (size_t(idx[tile / count]) * I + row_of(tile)) * H;
+    };
+    gemv_staged<H, MOE_STAGES>(
+        src, same_vector(xs), KTOP * count, sm.stage, sm.bars,
+        [mid, count, row_of](int tile, int warp, float acc) {
+            const float v = fmaxf(bf(acc), 0.0f);
+            mid[size_t(tile / count) * I + row_of(tile) + warp] =
+                __float2bfloat16(bf(v) * bf(v));
+        });
 }
 
 __global__ __launch_bounds__(THREADS) void k_moe_up(
@@ -729,68 +740,35 @@ __global__ __launch_bounds__(THREADS) void k_moe_up(
 /// Same shape as `s_moe_up`, over `(H, I)` instead of `(I, H)`, scaled by each
 /// expert's routing weight and accumulated in f32. The accumulator is atomic
 /// because six experts land on the same row.
-__device__ void s_moe_down(char *arena, int cta, int nctas,
-                           const bf16 *__restrict__ mid,
-                           const bf16 *__restrict__ w_down,
-                           const int *__restrict__ idx,
-                           const float *__restrict__ gw,
-                           float *__restrict__ acc) {
+__device__ void s_moe_down(char *arena, int cta, int nctas, const bf16 *mid,
+                           const bf16 *w_down, const int *idx, const float *gw,
+                           float *acc_out) {
     __shared__ __align__(16) bf16 xs[KTOP * I];
-    for (int i = int(threadIdx.x); i < KTOP * I; i += THREADS) xs[i] = mid[i];
+    copy_run<KTOP * I, THREADS>(cute::make_gmem_ptr(mid),
+                                cute::make_smem_ptr(xs));
     ops::sync<ops::SyncKind::syncthreads>();
 
     ProjSmem<I, MOE_STAGES> sm(arena);
-    const int rows = (H + nctas - 1) / nctas;
-    const int tpe = (rows + TILE_ROWS - 1) / TILE_ROWS;
-    const int ntiles = KTOP * tpe;
-    const int row0 = cta * rows;
-    constexpr unsigned kBytes = unsigned(TILE_ROWS) * I * sizeof(bf16);
-    constexpr int kTileElems = TILE_ROWS * I;
-    const int warp = threadIdx.x >> 5;
-    const int lane = threadIdx.x & 31;
-
-    auto src = [&](int tile) {
-        const int e = idx[tile / tpe];
-        const int r = min(row0 + (tile % tpe) * TILE_ROWS, H - TILE_ROWS);
-        return w_down + (size_t(e) * H + max(r, 0)) * I;
+    /// Same stream of tiles as `s_moe_up`, over `(H, I)` instead of `(I, H)`.
+    int first, count;
+    tile_span(DOWN_TILES, cta, nctas, &first, &count);
+    auto row_of = [first, count](int tile) {
+        return (first + tile % count) * TILE_ROWS;
     };
-
-    const bool elected = ops::shuffle_elect<THREADS>();
-    if (elected)
-        for (int s = 0; s < MOE_STAGES; ++s) ops::mbarrier_init(&sm.bars[s], 1);
-    ops::sync<ops::SyncKind::syncthreads>();
-    for (int s = 0; s < MOE_STAGES && s < ntiles; ++s)
-        if (elected) {
-            ops::mbarrier_arrive_expect_tx(&sm.bars[s], kBytes);
-            ops::tma_bulk_copy(src(s), sm.stage + s * kTileElems, kTileElems,
-                               &sm.bars[s]);
-        }
-    for (int t = 0; t < ntiles; ++t) {
-        const int s = t % MOE_STAGES;
-        const int slot = t / tpe;
-        ops::mbarrier_wait_parity(&sm.bars[s], unsigned(t / MOE_STAGES) & 1u);
-        const bf16 *row = sm.stage + s * kTileElems + warp * I;
-        const bf16 *x = xs + size_t(slot) * I;
-        float part[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-        for (int j = lane, u = 0; j < I; j += 32, ++u)
-            part[u & 7] += ld(row + j) * ld(x + j);
-        float dot = (part[0] + part[1]) + (part[2] + part[3]) +
-                    ((part[4] + part[5]) + (part[6] + part[7]));
-        dot = ops::warp_reduce<ops::warp_sum>(dot);
-        if (lane == 0) {
-            const int r = min(row0 + (t % tpe) * TILE_ROWS, H - TILE_ROWS) + warp;
-            if (r >= 0 && r < H) atomicAdd(&acc[r], bf(dot) * gw[slot]);
-        }
-        ops::sync<ops::SyncKind::syncthreads>();
-        const int next = t + MOE_STAGES;
-        if (next < ntiles && elected) {
-            ops::mbarrier_arrive_expect_tx(&sm.bars[s], kBytes);
-            ops::tma_bulk_copy(src(next), sm.stage + s * kTileElems, kTileElems,
-                               &sm.bars[s]);
-        }
-    }
-    if (elected)
-        for (int s = 0; s < MOE_STAGES; ++s) ops::mbarrier_invalidate(&sm.bars[s]);
+    auto src = [w_down, idx, count, row_of](int tile) {
+        return w_down + (size_t(idx[tile / count]) * H + row_of(tile)) * I;
+    };
+    /// Each expert contracts against its own slice of `mid`, so the vector is a
+    /// function of the tile just as the matrix is.
+    bf16 *slab = xs;
+    auto vec = [slab, count](int tile) {
+        return slab + size_t(tile / count) * I;
+    };
+    gemv_staged<I, MOE_STAGES>(
+        src, vec, KTOP * count, sm.stage, sm.bars,
+        [acc_out, gw, count, row_of](int tile, int warp, float dot) {
+            atomicAdd(&acc_out[row_of(tile) + warp], bf(dot) * gw[tile / count]);
+        });
 }
 
 __global__ __launch_bounds__(THREADS) void k_moe_down(
@@ -805,17 +783,17 @@ __global__ __launch_bounds__(THREADS) void k_moe_down(
 /// selected and takes no routing weight.
 __device__ void s_moe_shared_up(int cta, int nctas, const bf16 *__restrict__ h2, const bf16 *__restrict__ w_sh_up, bf16 *__restrict__ smid) {
     __shared__ __align__(16) bf16 xs[H];
-    for (int i = int(threadIdx.x); i < H; i += THREADS) xs[i] = h2[i];
+    copy_run<H, THREADS>(cute::make_gmem_ptr(h2), cute::make_smem_ptr(xs));
     ops::sync<ops::SyncKind::syncthreads>();
     int first, count;
     tile_span(SH_UP_TILES, cta, nctas, &first, &count);
-    const int lo = first * TILE_ROWS, hi = (first + count) * TILE_ROWS;
-    gemv_rows_direct<H>(w_sh_up, xs, smid, lo, hi - lo);
-    ops::sync<ops::SyncKind::syncthreads>();
-    for (int row = lo + int(threadIdx.x); row < hi; row += THREADS) {
-        const float v = fmaxf(ld(smid + row), 0.0f);
-        smid[row] = __float2bfloat16(bf(v) * bf(v));
-    }
+    /// relu squared, folded into the epilogue: the row is written once.
+    gemv_direct<H>(tile_stride<H>(w_sh_up, first), same_vector(xs), count,
+                   [smid, first](int tile, int warp, float acc) {
+                       const float v = fmaxf(bf(acc), 0.0f);
+                       smid[(first + tile) * TILE_ROWS + warp] =
+                           __float2bfloat16(bf(v) * bf(v));
+                   });
 }
 
 __global__ __launch_bounds__(THREADS) void k_moe_shared_up(
@@ -829,39 +807,23 @@ __global__ __launch_bounds__(THREADS) void k_moe_shared_up(
 ///
 /// The routed experts land in bf16 once, after all six have been summed in f32
 /// -- ``(total.to(bf16) + sh)`` -- so the accumulator arrives here still in f32.
-__device__ void s_moe_finish(int cta, int nctas, const bf16 *__restrict__ smid, const bf16 *__restrict__ w_sh_down, const float *__restrict__ acc, const bf16 *__restrict__ h_in, bf16 *__restrict__ h_out) {
+__device__ void s_moe_finish(int cta, int nctas, const bf16 *smid,
+                             const bf16 *w_sh_down, const float *acc,
+                             const bf16 *h_in, bf16 *h_out) {
     __shared__ __align__(16) bf16 xs[IS];
-    for (int i = int(threadIdx.x); i < IS; i += THREADS) xs[i] = smid[i];
+    copy_run<IS, THREADS>(cute::make_gmem_ptr(smid), cute::make_smem_ptr(xs));
     ops::sync<ops::SyncKind::syncthreads>();
 
-    const int warp = threadIdx.x >> 5;
-    const int lane = threadIdx.x & 31;
     int first, count;
     tile_span(DOWN_TILES, cta, nctas, &first, &count);
-    const int lo = first * TILE_ROWS, hi = (first + count) * TILE_ROWS;
-    constexpr int kVec = IS / 8;
-    const int4 *xv = reinterpret_cast<const int4 *>(xs);
-
-    for (int row = lo + warp; row < hi; row += WARPS) {
-        const int4 *wv = reinterpret_cast<const int4 *>(w_sh_down + size_t(row) * IS);
-        float part[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-        for (int v = lane; v < kVec; v += 32) {
-            const int4 a = wv[v], b = xv[v];
-            const bf16 *pa = reinterpret_cast<const bf16 *>(&a);
-            const bf16 *pb = reinterpret_cast<const bf16 *>(&b);
-#pragma unroll
-            for (int k = 0; k < 8; ++k) part[k] += ld(pa + k) * ld(pb + k);
-        }
-        float dot = (part[0] + part[1]) + (part[2] + part[3]) +
-                    ((part[4] + part[5]) + (part[6] + part[7]));
-        dot = ops::warp_reduce<ops::warp_sum>(dot);
-        if (lane == 0) {
-            // The routed experts land in bf16 once, after all six have summed
-            // in f32 -- `(total.to(bf16) + sh)`.
-            const float mix = bf(bf(acc[row]) + bf(dot));
-            h_out[row] = __float2bfloat16(ld(h_in + row) + mix);
-        }
-    }
+    gemv_direct<IS>(tile_stride<IS>(w_sh_down, first), same_vector(xs), count,
+                    [acc, h_in, h_out, first](int tile, int warp, float dot) {
+                        const int row = (first + tile) * TILE_ROWS + warp;
+                        /// The routed experts land in bf16 once, after all
+                        /// six have summed in f32 -- `(total.to(bf16) + sh)`.
+                        const float mix = bf(bf(acc[row]) + bf(dot));
+                        h_out[row] = __float2bfloat16(ld(h_in + row) + mix);
+                    });
 }
 
 __global__ __launch_bounds__(THREADS) void k_moe_finish(
@@ -1081,12 +1043,13 @@ constexpr int O_TILES = H / TILE_ROWS;
 /// is written where the scan will read it, so nothing is copied between steps.
 __device__ void s_qkv(int cta, int nctas, const bf16 *__restrict__ h, const bf16 *__restrict__ gamma, const bf16 *__restrict__ w_qkv, bf16 *__restrict__ qkv, bf16 *__restrict__ k_tail, bf16 *__restrict__ v_tail, int cur_pos) {
     __shared__ float slots[WARPS];
-    __shared__ __align__(16) bf16 xs[H];
+    __shared__ __align__(16) bf16 xs[HPAD];
     rms_norm_to_smem(h, gamma, xs, slots);
     ops::sync<ops::SyncKind::syncthreads>();
     int first, count;
     tile_span(QKV_TILES, cta, nctas, &first, &count);
-    gemv_rows_direct<H>(w_qkv, xs, qkv, first * TILE_ROWS, count * TILE_ROWS);
+    gemv_direct<H>(tile_stride<H>(w_qkv, first), same_vector(xs), count,
+                   store_bf16{qkv, first, nullptr});
     ops::sync<ops::SyncKind::syncthreads>();
 
     const int lo = first * TILE_ROWS, hi = (first + count) * TILE_ROWS;
@@ -1110,12 +1073,12 @@ __global__ __launch_bounds__(THREADS) void k_qkv(
 /// The output projection and the residual add.
 __device__ void s_o_proj(int cta, int nctas, const bf16 *__restrict__ ctx, const bf16 *__restrict__ w_o, const bf16 *__restrict__ h_in, bf16 *__restrict__ h_out) {
     __shared__ __align__(16) bf16 xs[QP];
-    for (int i = int(threadIdx.x); i < QP; i += THREADS) xs[i] = ctx[i];
+    copy_run<QP, THREADS>(cute::make_gmem_ptr(ctx), cute::make_smem_ptr(xs));
     ops::sync<ops::SyncKind::syncthreads>();
     int first, count;
     tile_span(O_TILES, cta, nctas, &first, &count);
-    gemv_rows_direct<QP>(w_o, xs, h_out, first * TILE_ROWS, count * TILE_ROWS,
-                         h_in);
+    gemv_direct<QP>(tile_stride<QP>(w_o, first), same_vector(xs), count,
+                    store_bf16{h_out, first, h_in});
 }
 
 __global__ __launch_bounds__(THREADS) void k_o_proj(
@@ -1157,10 +1120,7 @@ std::vector<torch::Tensor> attn_layer(
 
     auto stream = at::cuda::getCurrentCUDAStream();
     const int ctas = sm_count();
-    constexpr size_t kQkv = ProjSmem<H, IN_STAGES>::bytes();
-    allow_smem(k_qkv, kQkv);
-
-    k_qkv<<<ctas, THREADS, kQkv, stream>>>(
+    k_qkv<<<ctas, THREADS, 0, stream>>>(
         static_cast<const bf16 *>(h.data_ptr()),
         static_cast<const bf16 *>(gamma.data_ptr()),
         static_cast<const bf16 *>(w_qkv.data_ptr()),
@@ -1197,60 +1157,20 @@ std::vector<torch::Tensor> attn_layer(
 ///
 /// 131072 rows over 132 CTAs is 124 tiles each, which is where running tiles
 /// ahead pays; the head is the single largest read in the step at 705 MB.
-__device__ void s_head(char *arena, int cta, int nctas, const bf16 *__restrict__ h,
-                       const bf16 *__restrict__ gf, const bf16 *__restrict__ whead,
-                       int vocab, float *__restrict__ logits) {
-    char *raw = arena;
-    ProjSmem<H, IN_STAGES> sm(raw);
+__device__ void s_head(char *arena, int cta, int nctas, const bf16 *h,
+                       const bf16 *gf, const bf16 *whead, int vocab,
+                       float *logits) {
+    ProjSmem<H, IN_STAGES> sm(arena);
     rms_norm_to_smem(h, gf, sm.x, sm.slots);
     ops::sync<ops::SyncKind::syncthreads>();
 
-    const int ntiles = vocab / TILE_ROWS;
     int first, count;
-    tile_span(ntiles, cta, nctas, &first, &count);
-
-    constexpr unsigned kBytes = unsigned(TILE_ROWS) * H * sizeof(bf16);
-    constexpr int kTileElems = TILE_ROWS * H;
-    const int warp = threadIdx.x >> 5;
-    const int lane = threadIdx.x & 31;
-    const bool elected = ops::shuffle_elect<THREADS>();
-    if (elected)
-        for (int s = 0; s < IN_STAGES; ++s) ops::mbarrier_init(&sm.bars[s], 1);
-    ops::sync<ops::SyncKind::syncthreads>();
-    for (int s = 0; s < IN_STAGES && s < count; ++s)
-        if (elected) {
-            ops::mbarrier_arrive_expect_tx(&sm.bars[s], kBytes);
-            ops::tma_bulk_copy(whead + size_t(first + s) * kTileElems,
-                               sm.stage + s * kTileElems, kTileElems, &sm.bars[s]);
-        }
-    for (int t = 0; t < count; ++t) {
-        const int s = t % IN_STAGES;
-        ops::mbarrier_wait_parity(&sm.bars[s], unsigned(t / IN_STAGES) & 1u);
-        const bf16 *row = sm.stage + s * kTileElems + warp * H;
-        float part[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-        // `j` steps by 32, so `j & 7` is constant for a lane and would leave
-        // seven accumulators at zero. The step index is what varies.
-        for (int j = lane, u = 0; j < H; j += 32, ++u)
-            part[u & 7] += ld(row + j) * ld(sm.x + j);
-        float acc = (part[0] + part[1]) + (part[2] + part[3]) +
-                    ((part[4] + part[5]) + (part[6] + part[7]));
-        acc = ops::warp_reduce<ops::warp_sum>(acc);
-        // `(fh @ w_head.t()).float()`: the product lands in bf16 and only then
-        // widens, so the rounding is the matmul's, not the store's.
-        if (lane == 0) logits[(first + t) * TILE_ROWS + warp] = bf(acc);
-        ops::sync<ops::SyncKind::syncthreads>();
-        const int next = t + IN_STAGES;
-        if (next < count && elected) {
-            ops::mbarrier_arrive_expect_tx(&sm.bars[s], kBytes);
-            ops::tma_bulk_copy(whead + size_t(first + next) * kTileElems,
-                               sm.stage + s * kTileElems, kTileElems, &sm.bars[s]);
-        }
-    }
-    if (elected)
-        for (int s = 0; s < IN_STAGES; ++s) ops::mbarrier_invalidate(&sm.bars[s]);
+    tile_span(vocab / TILE_ROWS, cta, nctas, &first, &count);
+    gemv_staged<H, IN_STAGES>(tile_stride<H>(whead, first), same_vector(sm.x),
+                              count, sm.stage, sm.bars,
+                              store_f32{logits, first});
 }
 
-/// Everything one step reads that does not change between steps.
 struct Weights {
     const bf16 *win, *wout, *convw, *convb, *ggdn, *mscal;
     const bf16 *wqkv, *wo;
