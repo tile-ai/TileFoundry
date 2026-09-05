@@ -12,7 +12,7 @@ template <class Op> struct Unary {
         auto &&d = detail::to_local(dst);
         using value_type = cute::remove_cvref_t<decltype(d(0))>;
         for (int i = 0; i < N; ++i) {
-            d(i) = static_cast<value_type>(op(s(i)));
+            d(i) = tilefoundry::detail::convert<value_type>(op(s(i)));
         }
     }
 };

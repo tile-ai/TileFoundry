@@ -67,6 +67,8 @@ template <TopologyScope T> constexpr auto program_dim() noexcept {
 
 #include "layout/shard_layout.cuh"
 #include "tensor_view/shard_tensor.cuh"
+/// after shard_tensor.cuh: the static projection mirrors ``local()``.
+#include "layout/local_layout.cuh"
 #include "tensor_view/shard_copy.cuh"
 
 namespace ops {

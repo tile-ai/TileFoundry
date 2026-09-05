@@ -4,6 +4,17 @@
 
 namespace copy_impl {
 
+/// One tier: the element loop, widened by whatever the two layouts have in
+/// common. There is no second tier to choose between -- the width *is* the
+/// choice, and it is made in the type system rather than by an ``if
+/// constexpr`` over named strategies.
+struct Copy {
+    template <class TSrc, class TDst>
+    __device__ void operator()(TSrc const &src, TDst &dst) const {
+        tilefoundry::copy(src, dst);
+    }
+};
+
 struct CopyAsync {
     template <class TSrc, class TDst>
     __device__ void operator()(TSrc const &src, TDst &dst) const {

@@ -545,6 +545,15 @@ constexpr int DOWN_TILES = H / TILE_ROWS;
 constexpr int SH_UP_TILES = IS / TILE_ROWS;
 constexpr int MOE_STAGES = 3;
 
+/// The arena every staged projection overlays, sized to the largest of them.
+///
+/// One kernel calls all of them, so one allocation has to cover the widest:
+/// `s_out_proj` stages 4096-wide rows and needs more than `s_in_proj`'s 2688.
+/// Getting this wrong is a shared-memory write past the end, which is what
+/// compute-sanitizer reported before it was a constant.
+constexpr size_t kMegaSmem = ProjSmem<H, IN_STAGES>::bytes();
+
+
 /// The router's logits: 128 numbers, spread over the whole grid.
 ///
 /// One warp per expert row, lanes striding it 16 bytes at a time. Written out
@@ -632,90 +641,165 @@ __global__ __launch_bounds__(32) void k_moe_topk(
 }
 
 
-/// One expert's up projection: ``square(relu(h2 @ w_up[e].t()))``.
+/// All six routed experts' up projections, as one stream of tiles.
 ///
-/// ``slot`` selects which of the chosen experts this launch runs, so the six
-/// are six launches here and six stages of one kernel once the grid is
-/// persistent.
-__device__ void s_moe_up(int cta, int nctas, int slot, const bf16 *__restrict__ h2, const bf16 *__restrict__ w_up, const int *__restrict__ idx, bf16 *__restrict__ mid) {
-    /// `blockIdx.y` is which of the chosen experts this CTA runs. The six are
-    /// independent, so they are one launch: at batch 1 each projection moves
-    /// about 10 MB, which is microseconds of bandwidth against a launch apiece.
+/// The six are not six pipelines. A CTA owns a run of output rows in every
+/// expert, so its work is `KTOP * tiles_per_expert` tiles that differ only in
+/// which expert's matrix they come from -- `t / tpe` picks the expert and
+/// `t % tpe` the block within it. Run as one loop, the three-deep prefetch has
+/// something to hide behind; run as six loops of under two tiles, the prologue
+/// issues more than the loop consumes and the pipeline never starts. Measured:
+/// 1.8 tiles a CTA reached 1.46 TB/s, and the head at 124 reaches 4.39.
+///
+/// This is the shape `mega_kernel.py` uses, where the same index carries the
+/// expert and the block (`sel[t // 2]`, `(t % 2) * 8`).
+__device__ void s_moe_up(char *arena, int cta, int nctas,
+                         const bf16 *__restrict__ h2,
+                         const bf16 *__restrict__ w_up,
+                         const int *__restrict__ idx, bf16 *__restrict__ mid) {
     __shared__ __align__(16) bf16 xs[H];
     for (int i = int(threadIdx.x); i < H; i += THREADS) xs[i] = h2[i];
     ops::sync<ops::SyncKind::syncthreads>();
-    int first, count;
-    tile_span(UP_TILES, cta, nctas, &first, &count);
-    const bf16 *w = w_up + size_t(idx[slot]) * I * H;
-    bf16 *out = mid + size_t(slot) * I;
-    const int lo = first * TILE_ROWS, hi = (first + count) * TILE_ROWS;
-    gemv_rows_direct<H>(w, xs, out, lo, hi - lo);
+
+    ProjSmem<H, MOE_STAGES> sm(arena);
+    const int rows = (I + nctas - 1) / nctas;
+    const int tpe = (rows + TILE_ROWS - 1) / TILE_ROWS;
+    const int ntiles = KTOP * tpe;
+    const int row0 = cta * rows;
+    constexpr unsigned kBytes = unsigned(TILE_ROWS) * H * sizeof(bf16);
+    constexpr int kTileElems = TILE_ROWS * H;
+    const int warp = threadIdx.x >> 5;
+    const int lane = threadIdx.x & 31;
+
+    // The tile's first row, clamped so a bulk copy never reads past the matrix.
+    auto src = [&](int tile) {
+        const int e = idx[tile / tpe];
+        const int r = min(row0 + (tile % tpe) * TILE_ROWS, I - TILE_ROWS);
+        return w_up + (size_t(e) * I + max(r, 0)) * H;
+    };
+
+    const bool elected = ops::shuffle_elect<THREADS>();
+    if (elected)
+        for (int s = 0; s < MOE_STAGES; ++s) ops::mbarrier_init(&sm.bars[s], 1);
     ops::sync<ops::SyncKind::syncthreads>();
-    for (int row = lo + int(threadIdx.x); row < hi; row += THREADS) {
-        const float v = fmaxf(ld(out + row), 0.0f);
-        out[row] = __float2bfloat16(bf(v) * bf(v));
+    for (int s = 0; s < MOE_STAGES && s < ntiles; ++s)
+        if (elected) {
+            ops::mbarrier_arrive_expect_tx(&sm.bars[s], kBytes);
+            ops::tma_bulk_copy(src(s), sm.stage + s * kTileElems, kTileElems,
+                               &sm.bars[s]);
+        }
+    for (int t = 0; t < ntiles; ++t) {
+        const int s = t % MOE_STAGES;
+        ops::mbarrier_wait_parity(&sm.bars[s], unsigned(t / MOE_STAGES) & 1u);
+        const bf16 *row = sm.stage + s * kTileElems + warp * H;
+        float part[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+        for (int j = lane, u = 0; j < H; j += 32, ++u)
+            part[u & 7] += ld(row + j) * ld(xs + j);
+        float acc = (part[0] + part[1]) + (part[2] + part[3]) +
+                    ((part[4] + part[5]) + (part[6] + part[7]));
+        acc = ops::warp_reduce<ops::warp_sum>(acc);
+        if (lane == 0) {
+            const int r = min(row0 + (t % tpe) * TILE_ROWS, I - TILE_ROWS) + warp;
+            if (r >= 0 && r < I) {
+                const float v = fmaxf(bf(acc), 0.0f);
+                mid[size_t(t / tpe) * I + r] = __float2bfloat16(bf(v) * bf(v));
+            }
+        }
+        ops::sync<ops::SyncKind::syncthreads>();
+        const int next = t + MOE_STAGES;
+        if (next < ntiles && elected) {
+            ops::mbarrier_arrive_expect_tx(&sm.bars[s], kBytes);
+            ops::tma_bulk_copy(src(next), sm.stage + s * kTileElems, kTileElems,
+                               &sm.bars[s]);
+        }
     }
+    if (elected)
+        for (int s = 0; s < MOE_STAGES; ++s) ops::mbarrier_invalidate(&sm.bars[s]);
 }
 
 __global__ __launch_bounds__(THREADS) void k_moe_up(
     const bf16 *__restrict__ h2, const bf16 *__restrict__ w_up,
     const int *__restrict__ idx, bf16 *__restrict__ mid) {
-    s_moe_up(int(blockIdx.x), int(gridDim.x), int(blockIdx.y), h2, w_up, idx, mid);
+    extern __shared__ __align__(16) char arena[];
+    s_moe_up(arena, int(blockIdx.x), int(gridDim.x), h2, w_up, idx, mid);
 }
 
-
-/// One expert's down projection, scaled by its routing weight and accumulated.
+/// All six routed experts' down projections, as one stream of tiles.
 ///
-/// The accumulator is f32 because the reference sums the experts in f32 and
-/// only lands in bf16 once, after the six.
-__device__ void s_moe_down(int cta, int nctas, int slot, const bf16 *__restrict__ mid, const bf16 *__restrict__ w_down, const int *__restrict__ idx, const float *__restrict__ gw, float *__restrict__ acc) {
-    __shared__ __align__(16) bf16 xs[I];
-    const bf16 *my_mid = mid + size_t(slot) * I;
-    for (int i = int(threadIdx.x); i < I; i += THREADS) xs[i] = my_mid[i];
+/// Same shape as `s_moe_up`, over `(H, I)` instead of `(I, H)`, scaled by each
+/// expert's routing weight and accumulated in f32. The accumulator is atomic
+/// because six experts land on the same row.
+__device__ void s_moe_down(char *arena, int cta, int nctas,
+                           const bf16 *__restrict__ mid,
+                           const bf16 *__restrict__ w_down,
+                           const int *__restrict__ idx,
+                           const float *__restrict__ gw,
+                           float *__restrict__ acc) {
+    __shared__ __align__(16) bf16 xs[KTOP * I];
+    for (int i = int(threadIdx.x); i < KTOP * I; i += THREADS) xs[i] = mid[i];
     ops::sync<ops::SyncKind::syncthreads>();
 
+    ProjSmem<I, MOE_STAGES> sm(arena);
+    const int rows = (H + nctas - 1) / nctas;
+    const int tpe = (rows + TILE_ROWS - 1) / TILE_ROWS;
+    const int ntiles = KTOP * tpe;
+    const int row0 = cta * rows;
+    constexpr unsigned kBytes = unsigned(TILE_ROWS) * I * sizeof(bf16);
+    constexpr int kTileElems = TILE_ROWS * I;
     const int warp = threadIdx.x >> 5;
     const int lane = threadIdx.x & 31;
-    int first, count;
-    tile_span(DOWN_TILES, cta, nctas, &first, &count);
-    const bf16 *w = w_down + size_t(idx[slot]) * H * I;
-    const float scale = gw[slot];
-    const int lo = first * TILE_ROWS, hi = (first + count) * TILE_ROWS;
-    constexpr int kVec = I / 8;
-    const int4 *xv = reinterpret_cast<const int4 *>(xs);
 
-    for (int row = lo + warp; row < hi; row += WARPS) {
-        const int4 *wv = reinterpret_cast<const int4 *>(w + size_t(row) * I);
-        float part[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-        for (int v = lane; v < kVec; v += 32) {
-            const int4 a = wv[v], b = xv[v];
-            const bf16 *pa = reinterpret_cast<const bf16 *>(&a);
-            const bf16 *pb = reinterpret_cast<const bf16 *>(&b);
-#pragma unroll
-            for (int k = 0; k < 8; ++k) part[k] += ld(pa + k) * ld(pb + k);
+    auto src = [&](int tile) {
+        const int e = idx[tile / tpe];
+        const int r = min(row0 + (tile % tpe) * TILE_ROWS, H - TILE_ROWS);
+        return w_down + (size_t(e) * H + max(r, 0)) * I;
+    };
+
+    const bool elected = ops::shuffle_elect<THREADS>();
+    if (elected)
+        for (int s = 0; s < MOE_STAGES; ++s) ops::mbarrier_init(&sm.bars[s], 1);
+    ops::sync<ops::SyncKind::syncthreads>();
+    for (int s = 0; s < MOE_STAGES && s < ntiles; ++s)
+        if (elected) {
+            ops::mbarrier_arrive_expect_tx(&sm.bars[s], kBytes);
+            ops::tma_bulk_copy(src(s), sm.stage + s * kTileElems, kTileElems,
+                               &sm.bars[s]);
         }
+    for (int t = 0; t < ntiles; ++t) {
+        const int s = t % MOE_STAGES;
+        const int slot = t / tpe;
+        ops::mbarrier_wait_parity(&sm.bars[s], unsigned(t / MOE_STAGES) & 1u);
+        const bf16 *row = sm.stage + s * kTileElems + warp * I;
+        const bf16 *x = xs + size_t(slot) * I;
+        float part[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+        for (int j = lane, u = 0; j < I; j += 32, ++u)
+            part[u & 7] += ld(row + j) * ld(x + j);
         float dot = (part[0] + part[1]) + (part[2] + part[3]) +
                     ((part[4] + part[5]) + (part[6] + part[7]));
         dot = ops::warp_reduce<ops::warp_sum>(dot);
-        // Six experts land on the same row, so the accumulation is atomic. The
-        // reference sums them in f32 too; only the order differs, which is a
-        // part in 1e7 against a budget of parts in 1e3.
-        if (lane == 0) atomicAdd(&acc[row], bf(dot) * scale);
+        if (lane == 0) {
+            const int r = min(row0 + (t % tpe) * TILE_ROWS, H - TILE_ROWS) + warp;
+            if (r >= 0 && r < H) atomicAdd(&acc[r], bf(dot) * gw[slot]);
+        }
+        ops::sync<ops::SyncKind::syncthreads>();
+        const int next = t + MOE_STAGES;
+        if (next < ntiles && elected) {
+            ops::mbarrier_arrive_expect_tx(&sm.bars[s], kBytes);
+            ops::tma_bulk_copy(src(next), sm.stage + s * kTileElems, kTileElems,
+                               &sm.bars[s]);
+        }
     }
-    // `xs` holds *this* expert's activations. A persistent grid runs the six
-    // experts one after another in the same CTA, so without this the next
-    // expert overwrites the tile while threads are still folding against it.
-    // Six separate launches never had to say so.
-    ops::sync<ops::SyncKind::syncthreads>();
+    if (elected)
+        for (int s = 0; s < MOE_STAGES; ++s) ops::mbarrier_invalidate(&sm.bars[s]);
 }
 
 __global__ __launch_bounds__(THREADS) void k_moe_down(
     const bf16 *__restrict__ mid, const bf16 *__restrict__ w_down,
     const int *__restrict__ idx, const float *__restrict__ gw,
     float *__restrict__ acc) {
-    s_moe_down(int(blockIdx.x), int(gridDim.x), int(blockIdx.y), mid, w_down, idx, gw, acc);
+    extern __shared__ __align__(16) char arena[];
+    s_moe_down(arena, int(blockIdx.x), int(gridDim.x), mid, w_down, idx, gw, acc);
 }
-
 
 /// The shared expert's up projection. Every token goes through it, so it is not
 /// selected and takes no routing weight.
@@ -819,6 +903,9 @@ std::vector<torch::Tensor> moe_layer(
     // and a dynamic allocation would cap how many CTAs an SM can hold for
     // nothing in return.
 
+    allow_smem(k_moe_up, kMegaSmem);
+    allow_smem(k_moe_down, kMegaSmem);
+
     auto *H2 = static_cast<bf16 *>(h2.data_ptr());
     auto *IDX = static_cast<int *>(idx.data_ptr());
     auto *GW = static_cast<float *>(gw.data_ptr());
@@ -833,9 +920,9 @@ std::vector<torch::Tensor> moe_layer(
     k_moe_topk<<<1, 32, 0, stream>>>(
         static_cast<const float *>(logits.data_ptr()),
         static_cast<const float *>(e_bias.data_ptr()), IDX, GW);
-    k_moe_up<<<dim3(ctas, KTOP), THREADS, 0, stream>>>(
+    k_moe_up<<<ctas, THREADS, kMegaSmem, stream>>>(
         H2, static_cast<const bf16 *>(w_up.data_ptr()), IDX, MID);
-    k_moe_down<<<dim3(ctas, KTOP), THREADS, 0, stream>>>(
+    k_moe_down<<<ctas, THREADS, kMegaSmem, stream>>>(
         MID, static_cast<const bf16 *>(w_down.data_ptr()), IDX, GW,
         static_cast<float *>(acc.data_ptr()));
     k_moe_shared_up<<<ctas, THREADS, 0, stream>>>(
@@ -1163,14 +1250,6 @@ __device__ void s_head(char *arena, int cta, int nctas, const bf16 *__restrict__
         for (int s = 0; s < IN_STAGES; ++s) ops::mbarrier_invalidate(&sm.bars[s]);
 }
 
-/// The arena every staged projection overlays, sized to the largest of them.
-///
-/// One kernel calls all of them, so one allocation has to cover the widest:
-/// `s_out_proj` stages 4096-wide rows and needs more than `s_in_proj`'s 2688.
-/// Getting this wrong is a shared-memory write past the end, which is what
-/// compute-sanitizer reported before it was a constant.
-constexpr size_t kMegaSmem = ProjSmem<H, IN_STAGES>::bytes();
-
 /// Everything one step reads that does not change between steps.
 struct Weights {
     const bf16 *win, *wout, *convw, *convb, *ggdn, *mscal;
@@ -1291,16 +1370,14 @@ __global__ __launch_bounds__(THREADS) void mega_decode(
                 s.acc[i] = 0.0f;
             grid.sync();
             if (!(skip & 2048))
-            for (int slot = 0; slot < KTOP; ++slot)
-                s_moe_up(cta, nctas, slot, s.h2, w.wup + size_t(a) * E * I * H,
-                         s.idx, s.mid);
+                s_moe_up(arena, cta, nctas, s.h2,
+                         w.wup + size_t(a) * E * I * H, s.idx, s.mid);
             if (!(skip & 8192))
                 s_moe_shared_up(cta, nctas, s.h2, w.wsu + size_t(a) * IS * H, s.smid);
             grid.sync();
             if (!(skip & 4096))
-            for (int slot = 0; slot < KTOP; ++slot)
-                s_moe_down(cta, nctas, slot, s.mid, w.wdn + size_t(a) * E * H * I,
-                           s.idx, s.gw, s.acc);
+                s_moe_down(arena, cta, nctas, s.mid,
+                           w.wdn + size_t(a) * E * H * I, s.idx, s.gw, s.acc);
             grid.sync();
             if (!(skip & 16384))
                 s_moe_finish(cta, nctas, s.smid, w.wsd + size_t(a) * H * IS, s.acc,

@@ -1057,25 +1057,31 @@ class CpAsyncWait(Op):
   - `n` is a non-negative compile-time count.
   - `n = 0` drains every outstanding committed group.
 
-##### TmaBulkCopy
+##### TmaCopy
 
-`cp.async.bulk` is the other asynchronous staging instruction, and it is not a
-tier of `CopyAsync`: there, every thread issues its own 4-, 8- or 16-byte load
-and a commit closes the group; here **one** thread issues a whole contiguous run
-and an mbarrier signals completion. They differ in who issues, in what closes
-them, and in the alignment they demand.
+A staging copy whose completion lands on an mbarrier, and not a tier of
+`CopyAsync`: there every thread issues its own load and a commit closes the
+group, so the thread that issues is the thread that waits; here a consumer can
+wait for a tile it did not fetch.
 
-Only the rank-1 form is defined. The tensor forms (`cp.async.bulk.tensor.Nd`)
-take a host-encoded `TensorMap` in place of a size, which is a different operand
-list rather than a different tier.
+Which instruction carries it is the runtime's choice from the operand shard
+layouts, not something this op names: a contiguous run takes `cp.async.bulk`,
+anything else takes an element path ([runtime
+§3.11](./runtime.md#311-tilefoundryopstma_copy-barrier-completing-gmemsmem-staging)).
+Carrying that on the op would be codegen selecting a tier, which
+[§2.3](#23-tir-ops) forbids.
+
+The tensor forms (`cp.async.bulk.tensor.Nd`) take a host-encoded `TensorMap` in
+place of a size, which is a different operand list rather than a different tier,
+and are outside this op.
 
 ```python
-class TmaBulkCopy(Op):
-    """Effect form; bulk async gmem→smem copy completing on an mbarrier.
+class TmaCopy(Op):
+    """Effect form; gmem→smem staging copy completing on an mbarrier.
 
     Attributes:
-        src: input; gmem source, a contiguous run.
-        dst: input; smem destination.
+        src: input; gmem source tile.
+        dst: input; smem destination tile.
         barrier: input; smem mbarrier the completion lands on.
     """
 
@@ -1087,16 +1093,15 @@ class TmaBulkCopy(Op):
   - `src` is gmem, `dst` is smem, `barrier` is smem.
   - `src` and `dst` agree in dtype and shape; the copy moves bytes and does not
     convert them.
-  - The transfer is a whole number of 16-byte grains. Off the grain the
-    instruction has no defined behaviour, so a static extent that violates this
-    is rejected rather than rounded.
-  - Exactly one thread issues it, and nothing blocks: the copy is in flight when
-    the issuing thread reaches the next statement.
-  - The issuing thread pairs it with `MBarrierArriveExpectTx` naming the same
-    byte count; consumers wait with `MBarrierWaitParity`.
+  - Nothing blocks: the copy may still be in flight when the issuing thread
+    reaches the next statement.
+  - Consumers wait with `MBarrierWaitParity`. The arrival that declares the
+    transferred bytes is the implementation's, issued on the same instruction as
+    the copy; a caller pairing this with its own `MBarrierArriveExpectTx` would
+    be declaring a count the op already knows.
   - **No CUDA lowering is registered.** The op states the contract; the
     implementation it corresponds to is
-    `tilefoundry::ops::tma_bulk_copy(src, dst, count, bar)`
+    `tilefoundry::ops::tma_copy(src, dst, bar)`
     ([runtime §3](./runtime.md#3-runtime-ops)), reached today only by a
     hand-written kernel.
 

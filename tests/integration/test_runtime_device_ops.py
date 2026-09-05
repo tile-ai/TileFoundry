@@ -82,7 +82,7 @@ def test_mbarrier_pipeline_flips_parity_across_rounds(ops) -> None:
 
 
 @pytest.mark.parametrize("stages", [1, 3])
-def test_tma_bulk_copy_stages_every_tile(ops, stages: int) -> None:
+def test_tma_copy_stages_every_tile(ops, stages: int) -> None:
     """Every tile arrives, over a ring that does not divide the tile count.
 
     7 tiles over a 3-deep ring is two full turns plus one, so the parity is
@@ -90,16 +90,79 @@ def test_tma_bulk_copy_stages_every_tile(ops, stages: int) -> None:
     """
     tile, ntile = 1024, 7
     x = _lanes(tile * ntile)
-    got = ops.tma_stage(x, tile, stages)
+    got = ops.tma_stage(x, tile, stages, 1)
     torch.testing.assert_close(got, x * 2.0, rtol=0, atol=0)
 
 
-def test_tma_bulk_copy_rejects_an_unaligned_tile(ops) -> None:
-    """An off-grain tile is refused, not transferred.
+def test_tma_copy_takes_the_element_tier_for_a_strided_source(ops) -> None:
+    """A source layout that is not one run of bytes cannot be a bulk copy.
 
-    The instruction has no defined behaviour off the 16-byte grain, so the entry
-    refuses rather than moving something else.
+    The kernel ``static_assert``s that this call picked the other tier, so a
+    trait that quietly admitted it would fail to compile rather than run
+    slowly; this pins that the values still land.
+    """
+    tile, ntile = 1024, 7
+    x = _lanes(tile * ntile * 2)
+    got = ops.tma_stage(x, tile, 3, 2)
+    torch.testing.assert_close(got, x[::2] * 2.0, rtol=0, atol=0)
+
+
+def test_tma_copy_falls_back_off_the_16_byte_grain(ops) -> None:
+    """6 floats is contiguous but 24 bytes, so the instruction cannot carry it.
+
+    The extent is what the shard leaves behind, not a property of the layout
+    type, so this is a run-time hand-off inside the same entry rather than a
+    different tier -- and the caller still just waits on the phase.
+    """
+    tile, ntile = 6, 7
+    x = _lanes(_THREADS)[: tile * ntile]
+    got = ops.tma_stage(x, tile, 3, 1)
+    torch.testing.assert_close(got, x * 2.0, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize(
+    ("n", "src_stride", "threads", "width"),
+    [(1024, 1, 1, 8), (1024, 2, 1, 1), (1024, 1, 256, 4), (512, 1, 256, 2)],
+)
+def test_copy_moves_the_tile_at_the_width_the_layouts_admit(
+    ops, n: int, src_stride: int, threads: int, width: int
+) -> None:
+    """The width is the layouts' answer, and the kernel ``static_assert``s it.
+
+    A contiguous bf16 run gives 8 elements per move; a strided one gives 1; and
+    splitting the run over 256 threads leaves each of them 4 or 2, which caps
+    the move at what it owns. This pins the values; the width is pinned at
+    compile time, so a wrong choice never reaches here.
+    """
+    x = _lanes(n * src_stride)
+    got = ops.copy_tile(x, src_stride, threads)
+    want = x[::src_stride].to(torch.bfloat16).to(torch.float32)
+    torch.testing.assert_close(got, want, rtol=0, atol=0)
+    assert width in (1, 2, 4, 8)
+
+
+def test_copy_widens_the_element_on_the_way_out(ops) -> None:
+    """bf16 into f32: the wide load still holds, the conversion is on the store.
+
+    4 elements is 8 bytes in and 16 out, which is the cap the wider side sets.
     """
     x = _lanes(_THREADS)
-    with pytest.raises(RuntimeError, match="16-byte multiple"):
-        ops.tma_stage(x, 3, 1)
+    got = ops.copy_widen(x)
+    torch.testing.assert_close(got, x.to(torch.bfloat16).to(torch.float32), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("b_k_major", [True, False])
+def test_mma_loops_the_atom_over_a_whole_tile(ops, b_k_major: bool) -> None:
+    """16x128x128 through one ``ops::mma`` call, against torch's matmul.
+
+    ``b`` is logically ``(N, K)`` either way, so both cases compute the same
+    product and the reference is one expression; ``b_k_major`` changes only
+    which buffer it names, and therefore only its strides. That the same call
+    reads both is the reason the entry has no transpose flag.
+    """
+    g = torch.Generator(device="cpu").manual_seed(20260905)
+    a = torch.randn(16, 128, generator=g).cuda().to(torch.bfloat16)
+    nk = torch.randn(128, 128, generator=g).cuda().to(torch.bfloat16)
+    b = nk if b_k_major else nk.t().contiguous()
+    got = ops.mma_tile(a, b, b_k_major)
+    torch.testing.assert_close(got, a.float() @ nk.float().t(), rtol=2e-2, atol=2e-2)

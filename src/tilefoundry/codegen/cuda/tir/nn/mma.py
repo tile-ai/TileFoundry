@@ -1,8 +1,10 @@
 """Emit effect-form matrix multiply-accumulate operations.
 
-The current runtime entry supports the SM80 16x8x16 BF16 atom and packs each
-lane's coalesced fragments for the corresponding PTX MMA instruction. Other
-architecture, dtype, and shape combinations require an explicit runtime mapping.
+One call, ``tilefoundry::ops::mma``, whichever tier the operand layouts pick:
+a lane's gathered fragments take the single PTX instruction and a rank-2 tile
+loops the atom over it. The table below is what an atom name is allowed to
+emit, not a tier -- other architecture, dtype and shape combinations need their
+own runtime mapping ([runtime §3](docs/spec/runtime.md#3-runtime-ops)).
 """
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ from tilefoundry.ir.core import Var
 from tilefoundry.ir.tir.cuda.nn.mma import Mma
 
 _MMA_RUNTIME = {
-    "SM80_16x8x16_F32BF16BF16F32_TN": "tilefoundry::ops::mma_sm80_16x8x16_bf16",
+    "SM80_16x8x16_F32BF16BF16F32_TN": "tilefoundry::ops::mma",
 }
 
 
