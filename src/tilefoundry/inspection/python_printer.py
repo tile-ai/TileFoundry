@@ -108,7 +108,7 @@ class HirPrinter(PythonPrinter):
     def shard_surface(self, value, ctx=None):
         mesh_map = getattr(ctx, "mesh_name_map", {}) if ctx is not None else {}
         mesh_name = mesh_map.get(id(value.mesh))
-        if mesh_name is None:
+        if mesh_name is None or not value.mesh.names:
             return None
         return _shard_layout_surface_str(
             value, mesh_name=mesh_name, mesh_unique=len(mesh_map) == 1
@@ -1302,7 +1302,8 @@ def _mesh_str(mesh: Mesh, indent: str = "") -> str:
 
 
 def _shard_layout_str(sl: ShardLayout, indent: str = "", *, mesh_ref=None) -> str:
-    return _HIR_RENDERER.render_shard_layout(sl, HirPrintContext(), indent)
+    ctx = HirPrintContext({id(sl.mesh): mesh_ref} if mesh_ref is not None else None)
+    return _HIR_RENDERER.render_shard_layout(sl, ctx, indent)
 
 
 def _tensor_annotation(ty: TensorType, *, mesh_name_map=None, indent="", is_const=False) -> str:
