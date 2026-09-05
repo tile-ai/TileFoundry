@@ -9,6 +9,9 @@ class PrintContext:
     def __init__(self) -> None:
         self.imports: set[str] = set()
 
+    def mesh_count(self) -> int:
+        return 0
+
     def use(self, rendered: PythonExpr | str) -> str:
         if isinstance(rendered, PythonExpr):
             self.imports.update(rendered.imports)
@@ -26,6 +29,9 @@ class HirPrintContext(PrintContext):
 
     def mesh_alias(self, mesh) -> str | None:
         return self.mesh_name_map.get(id(mesh)) if mesh.names else None
+
+    def mesh_count(self) -> int:
+        return len(self.mesh_name_map)
 
 
 class TirPrintContext(PrintContext):
