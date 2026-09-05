@@ -653,33 +653,75 @@ __global__ __launch_bounds__(THREADS) void k_moe_logits(
 
 /// Which six experts, and with what weights.
 ///
-/// 128 logits and six passes over them: one CTA, and the choice is not divided.
-/// Dividing it would cost a barrier to put back together for less work than the
-/// barrier.
-__device__ void s_moe_topk(int cta, int nctas, const float *__restrict__ logits, const float *__restrict__ e_bias, int *__restrict__ idx, float *__restrict__ gw) {
-    __shared__ float sig[E];
-    __shared__ float ch[E];
-    for (int e = int(threadIdx.x); e < E; e += 32) {
-        const float s = 1.0f / (1.0f + expf(-logits[e]));
-        sig[e] = s;
-        ch[e] = s + e_bias[e];
-    }
-    ops::sync<ops::SyncKind::syncthreads>();
-    if (threadIdx.x != 0) return;
-    float total = 0.0f;
-    for (int j = 0; j < KTOP; ++j) {
-        int best = 0;
-        for (int e = 1; e < E; ++e)
-            if (ch[e] > ch[best]) best = e;
-        idx[j] = best;
-        total += sig[best];
-        ch[best] = -INFINITY;
-    }
-    const float inv = 1.0f / (total + 1e-20f);
-    for (int j = 0; j < KTOP; ++j) gw[j] = sig[idx[j]] * inv * RSCALE;
+/// One CTA, and the other 131 wait at the grid barrier for it, so what this
+/// costs the step is what it costs serially. Six passes of a 128-way scan on
+/// one thread measured 11% of the whole step; the same six passes as a
+/// butterfly over the 128 threads that already hold the logits are a handful
+/// of shuffles.
+///
+/// The comparison is on a packed key rather than on the score, so one exchange
+/// carries both the value and the expert it came from. The low bits count down
+/// from `E`, which makes the larger key the smaller index and reproduces what a
+/// strict `>` over a serial scan picks on a tie.
+__device__ inline unsigned long long topk_key(float score, int expert) {
+    const unsigned b = __float_as_uint(score);
+    const unsigned mono = (b & 0x80000000u) ? ~b : (b | 0x80000000u);
+    return (static_cast<unsigned long long>(mono) << 32) |
+           static_cast<unsigned long long>(E - expert);
 }
 
-__global__ __launch_bounds__(32) void k_moe_topk(
+struct topk_max {
+    __device__ static unsigned long long apply(unsigned long long a,
+                                               unsigned long long b) {
+        return a > b ? a : b;
+    }
+};
+
+__device__ void s_moe_topk(int cta, int nctas, const float *logits,
+                           const float *e_bias, int *idx, float *gw) {
+    constexpr int GROUPS = E / 32;
+    __shared__ float sig[E];
+    __shared__ float chosen[KTOP];
+    __shared__ unsigned long long slots[GROUPS];
+    const int tid = int(threadIdx.x);
+    const int mine = tid < E ? tid : 0;
+
+    float score = 0.0f;
+    if (tid < E) {
+        const float s = 1.0f / (1.0f + expf(-logits[tid]));
+        sig[tid] = s;
+        score = s + e_bias[tid];
+    }
+    ops::sync<ops::SyncKind::syncthreads>();
+
+    bool taken = false;
+    float total = 0.0f;
+    for (int j = 0; j < KTOP; ++j) {
+        if (tid < E) {
+            const unsigned long long best = ops::warp_reduce<topk_max>(
+                taken ? 0ull : topk_key(score, mine));
+            if ((tid & 31) == 0) slots[tid >> 5] = best;
+        }
+        ops::sync<ops::SyncKind::syncthreads>();
+        unsigned long long top = slots[0];
+        for (int g = 1; g < GROUPS; ++g) top = topk_max::apply(top, slots[g]);
+        const int pick = E - int(top & 0xFFFFFFFFull);
+        if (mine == pick) taken = true;
+        if (tid == 0) {
+            idx[j] = pick;
+            chosen[j] = sig[pick];
+        }
+        total += sig[pick];
+        ops::sync<ops::SyncKind::syncthreads>();
+    }
+
+    const float inv = 1.0f / (total + 1e-20f);
+    if (tid < KTOP) gw[tid] = chosen[tid] * inv * RSCALE;
+    (void)cta;
+    (void)nctas;
+}
+
+__global__ __launch_bounds__(E) void k_moe_topk(
     const float *__restrict__ logits, const float *__restrict__ e_bias,
     int *__restrict__ idx, float *__restrict__ gw) {
     s_moe_topk(int(blockIdx.x), int(gridDim.x), logits, e_bias, idx, gw);
@@ -880,7 +922,7 @@ std::vector<torch::Tensor> moe_layer(
         static_cast<const bf16 *>(gamma.data_ptr()),
         static_cast<const bf16 *>(w_router.data_ptr()), H2,
         static_cast<float *>(logits.data_ptr()));
-    k_moe_topk<<<1, 32, 0, stream>>>(
+    k_moe_topk<<<1, E, 0, stream>>>(
         static_cast<const float *>(logits.data_ptr()),
         static_cast<const float *>(e_bias.data_ptr()), IDX, GW);
     k_moe_up<<<ctas, THREADS, kProjSmem, stream>>>(
