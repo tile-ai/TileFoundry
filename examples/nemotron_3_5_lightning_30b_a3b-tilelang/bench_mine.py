@@ -35,7 +35,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--prepared", default=None, help="or $NEMOTRON35_PREPARED")
     ap.add_argument("--device", default="cuda:0")
-    ap.add_argument("--impl", default="mega", choices=["mega", "ops"])
+    ap.add_argument("--impl", default="mega",
+                    choices=["mega", "ops", "cuda", "cuda-stages"])
     ap.add_argument("--steps", type=int, default=256, help="timed steps per point")
     ap.add_argument("--warmup", type=int, default=32)
     ap.add_argument("--points", default=",".join(str(p) for p in POINTS))
