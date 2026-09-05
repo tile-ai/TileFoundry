@@ -40,10 +40,10 @@ handwritten paths from the shipped one on this criterion.
 ```
                         ctx 32, one H200, one session
 TileLang  NEMO_IMPL=mega     335.9 tok/s     2.977 ms/token
-CUDA      NEMO_IMPL=cuda     182.0 tok/s     5.495 ms/token
+CUDA      NEMO_IMPL=cuda     153.6 tok/s     6.510 ms/token
 ```
 
-**The CUDA one is 1.85x off and is not the default for that reason.** The gap is
+**The CUDA one is 2.19x off and is not the default for that reason.** The gap is
 taken apart layer by layer in `reports/WHY_SLOWER.md`, which also explains why
 the numbers there are not the ones in the block above: re-measured today, the
 TileLang kernel is 16-17% faster than this file records, so the recorded figures
