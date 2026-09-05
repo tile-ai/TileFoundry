@@ -21,6 +21,9 @@ class HirPrintContext(PrintContext):
         super().__init__()
         self.mesh_name_map = mesh_name_map or {}
 
+    def mesh_alias(self, mesh) -> str | None:
+        return self.mesh_name_map.get(id(mesh))
+
 
 class TirPrintContext(PrintContext):
     def __init__(self) -> None:
@@ -38,4 +41,3 @@ class TirPrintContext(PrintContext):
             if id(mesh) in aliases:
                 return aliases[id(mesh)]
         return None
-
