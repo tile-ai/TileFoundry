@@ -102,6 +102,7 @@ from ._python_render import (
 from ._python_render import (
     topologies_str as _shared_topologies_str,
 )
+from .printer_base import PythonPrinter
 from .tir_printer import _function_block as _tir_function_block
 from .tir_printer import tir_function_to_python, tir_module_to_python
 from .values import PARTS, render_comment
@@ -119,6 +120,13 @@ _DIM_FUNC_OPS: dict[type, str] = {
     DimMin: "min",
     DimMax: "max",
 }
+
+
+class HirPrinter(PythonPrinter):
+    """HIR façade retaining the historical canonical rendering entry point."""
+
+    def print(self, fn: HirFunction, *, options=None) -> str:
+        return _render_hir_function(fn, options=options).source
 
 
 @dataclass(frozen=True)
@@ -1496,7 +1504,7 @@ def hir_function_to_python(
     fn: HirFunction, *, options: PythonPrintOptions | None = None,
 ) -> str:
     """Convert a HIR Function to canonical Python DSL source."""
-    return _render_hir_function(fn, options=options).source
+    return HirPrinter().print(fn, options=options)
 
 
 def as_script(

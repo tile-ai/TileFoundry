@@ -9,6 +9,7 @@ See [tir §2.3](docs/spec/tir.md#23-tir-ops).
 from __future__ import annotations
 
 import pytest
+import torch
 
 import tilefoundry
 import tilefoundry.codegen.cuda  # noqa: F401 — trigger emitter autodiscovery
@@ -92,3 +93,14 @@ def test_async_copy_emits_cp_async() -> None:
     assert "tilefoundry::ops::copy_async(" in src
     assert "cp.async.commit_group;" in src
     assert "cp.async.wait_group %0;" in src
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_async_copy_stage_matches_input() -> None:
+    torch.manual_seed(3)
+    source = torch.randn(128, 4, dtype=torch.float32, device="cuda")
+    out = torch.empty_like(source)
+    runtime = tilefoundry.compile(AsyncStage, target=CudaTarget("nvidia.h200_sxm"))
+    runtime(source, out)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(out, source, rtol=0, atol=0)

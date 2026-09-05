@@ -7,6 +7,7 @@ from tilefoundry.ir.types.shape_dim import ShapeDim
 from tilefoundry.ir.types.shard.int_tuple import flatten
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
 from tilefoundry.ir.types.shard.layout_algebra import c_order_strides
+from tilefoundry.utils.python_source import PythonExpr, dataclass_to_python
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,9 @@ class Topology:
     name: str
 
     size: "ShapeDim"
+
+    def to_python(self) -> PythonExpr:
+        return dataclass_to_python(self, "tilefoundry.ir.types.shard")
 
     def __post_init__(self) -> None:
         if self.size is None:
@@ -40,6 +44,9 @@ class Mesh:
     topologies: tuple[Topology | str, ...]
     layout: "Layout | ComposedLayout"
     names: tuple[str, ...] = ()
+
+    def to_python(self) -> PythonExpr:
+        return dataclass_to_python(self, "tilefoundry.ir.types.shard")
 
     def __post_init__(self) -> None:
         layout = self.layout

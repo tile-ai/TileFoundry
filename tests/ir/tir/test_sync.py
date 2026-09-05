@@ -9,8 +9,11 @@ See [tir §1.5](docs/spec/tir.md#15-sync).
 
 from __future__ import annotations
 
+import pytest
+import torch
+
 import tilefoundry
-from tests.fixtures.tir.async_sync import SyncSquare
+from tests.fixtures.tir.sync import SyncSquare
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
 from tilefoundry.ir.types.shard import Layout, Mesh, Topology
@@ -70,3 +73,14 @@ def test_grid_scope_sync_emits_grid_barrier() -> None:
     )
 
     assert "static __device__ unsigned int tf_grid_bar_state[2];" in src
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_sync_kernel_runs_and_squares() -> None:
+    torch.manual_seed(4)
+    x = torch.randn(4, 32, dtype=torch.float32, device="cuda")
+    expected = x.square()
+    runtime = tilefoundry.compile(SyncSquare, target=CudaTarget("nvidia.h200_sxm"))
+    runtime(x)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(x, expected, rtol=0, atol=0)

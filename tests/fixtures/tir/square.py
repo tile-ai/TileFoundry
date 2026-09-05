@@ -1,11 +1,9 @@
-"""A minimal in-place TIR square with authored control flow."""
+from __future__ import annotations
 
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
 from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Layout, Mesh, S, ShardLayout, Topology
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import CpuTarget, CudaTarget
 
 
@@ -14,11 +12,13 @@ class TirSquare:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def square_device(x: Tensor[(128,), "f32"]):
         with Mesh((Topology("thread", 128),), Layout((128,), (1,))) as thread:
-            layout = ShardLayout(Layout((128,), (1,)), (S(0),), thread)
-            view = T.tensor_view(x, layout=layout)
-            reg = T.alloc_tensor(
-                TensorType((128,), DType.f32, layout, StorageKind.RMEM)
-            )
+            view = T.tensor_view(x, layout=ShardLayout(layout=Layout(shape=(128,), strides=(1,)), attrs=(S(0),), mesh=Mesh(topologies=(Topology(name="thread", size=128),), layout=Layout(shape=(128,), strides=(1,)), names=())))
+            reg = T.alloc_tensor(tensor_type=Tensor[(128,), "f32",
+    ShardLayout(
+        layout=Layout((128,), (1,)),
+        attrs=(S(0),),
+        mesh=Mesh((Topology("thread", 128),), Layout((128,), (1,))),
+    ), "rmem"])
             for phase in range(0, 2, 1):
                 if phase < 1:
                     T.copy(view, reg)

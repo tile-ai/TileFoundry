@@ -4038,22 +4038,36 @@ class LoopBodyPattern(ElementPattern):
 class ForPattern(ElementPattern):
     element_name = "for"
     syntax = LazyPattern(
-        lambda: BranchPattern(
-            "loop",
-            AstNodePattern(
-                ast.For,
-                ChildPattern("header", LoopHeaderPattern(), "loop_header"),
-                FieldPattern(
-                    "body",
-                    ChildPattern(
-                        "body",
-                        LoopBodyPattern(),
-                        "loop_body",
-                        transform=_body_as_ast_module,
+        lambda: ChoicePattern(
+            ConditionPattern(
+                "tir_for",
+                lambda node, context: context.function is not None
+                and context.function.dialect == "tir",
+                BranchPattern(
+                    "tir_for",
+                    AstNodePattern(
+                        ast.For,
+                        ChildPattern("header", TirLoopHeaderPattern(), "tir_loop_header"),
+                        FieldPattern(
+                            "body",
+                            ChildPattern("body", BlockPattern(), "block", transform=_body_as_ast_module),
+                        ),
                     ),
+                    pattern_id="statement.tir_for",
                 ),
             ),
-            pattern_id="statement.for",
+            BranchPattern(
+                "loop",
+                AstNodePattern(
+                    ast.For,
+                    ChildPattern("header", LoopHeaderPattern(), "loop_header"),
+                    FieldPattern(
+                        "body",
+                        ChildPattern("body", LoopBodyPattern(), "loop_body", transform=_body_as_ast_module),
+                    ),
+                ),
+                pattern_id="statement.for",
+            ),
         )
     )
 
@@ -4061,6 +4075,9 @@ class ForPattern(ElementPattern):
     def construct(match, children, context):
         frame = children["header"]
         body = children["body"]
+        if isinstance(frame, TirLoopFrame):
+            context.lexical_scope.pop_frame()
+            return runtime.For(frame.induction_var, frame.start, frame.stop, frame.step, body)
         yield_values = tuple(context.lexical_scope.lookup(name) for name in frame.carry_names)
         context.lexical_scope.pop_frame()
         if frame.carry_names:
@@ -4158,38 +4175,7 @@ class TirLoopHeaderPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
-class TirForPattern(ElementPattern):
-    element_name = "tir_for"
-    syntax = LazyPattern(
-        lambda: BranchPattern(
-            "tir_for",
-            AstNodePattern(
-                ast.For,
-                ChildPattern("header", TirLoopHeaderPattern(), "tir_loop_header"),
-                FieldPattern(
-                    "body",
-                    ChildPattern("body", BlockPattern(), "block", transform=_body_as_ast_module),
-                ),
-            ),
-            pattern_id="statement.tir_for",
-        )
-    )
-
-    def match(self, node, context):
-        if context.function is None or context.function.dialect != "tir":
-            return None
-        return super().match(node, context)
-
-    @staticmethod
-    def construct(match, children, context):
-        frame = children["header"]
-        context.lexical_scope.pop_frame()
-        return runtime.For(frame.induction_var, frame.start, frame.stop, frame.step, children["body"])
-
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
-
-
-class TirIfPattern(ElementPattern):
+class IfPattern(ElementPattern):
     element_name = "tir_if"
     syntax = LazyPattern(
         lambda: BranchPattern(
@@ -4454,8 +4440,7 @@ class StatementPattern(ElementPattern):
     element_name = "statement"
     syntax = LazyPattern(
         lambda: ChoicePattern(
-            TirIfPattern(),
-            TirForPattern(),
+            IfPattern(),
             AbortPattern(),
             DispatchCallPattern(),
             ForPattern(),
