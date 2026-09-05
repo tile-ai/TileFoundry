@@ -1056,3 +1056,257 @@ class CpAsyncWait(Op):
 - constraints:
   - `n` is a non-negative compile-time count.
   - `n = 0` drains every outstanding committed group.
+
+##### TmaBulkCopy
+
+`cp.async.bulk` is the other asynchronous staging instruction, and it is not a
+tier of `CopyAsync`: there, every thread issues its own 4-, 8- or 16-byte load
+and a commit closes the group; here **one** thread issues a whole contiguous run
+and an mbarrier signals completion. They differ in who issues, in what closes
+them, and in the alignment they demand.
+
+Only the rank-1 form is defined. The tensor forms (`cp.async.bulk.tensor.Nd`)
+take a host-encoded `TensorMap` in place of a size, which is a different operand
+list rather than a different tier.
+
+```python
+class TmaBulkCopy(Op):
+    """Effect form; bulk async gmem→smem copy completing on an mbarrier.
+
+    Attributes:
+        src: input; gmem source, a contiguous run.
+        dst: input; smem destination.
+        barrier: input; smem mbarrier the completion lands on.
+    """
+
+    src: Tensor
+    dst: Tensor
+    barrier: Tensor
+```
+- constraints:
+  - `src` is gmem, `dst` is smem, `barrier` is smem.
+  - `src` and `dst` agree in dtype and shape; the copy moves bytes and does not
+    convert them.
+  - The transfer is a whole number of 16-byte grains. Off the grain the
+    instruction has no defined behaviour, so a static extent that violates this
+    is rejected rather than rounded.
+  - Exactly one thread issues it, and nothing blocks: the copy is in flight when
+    the issuing thread reaches the next statement.
+  - The issuing thread pairs it with `MBarrierArriveExpectTx` naming the same
+    byte count; consumers wait with `MBarrierWaitParity`.
+  - **No CUDA lowering is registered.** The op states the contract; the
+    implementation it corresponds to is
+    `tilefoundry::ops::tma_bulk_copy(src, dst, count, bar)`
+    ([runtime §3](./runtime.md#3-runtime-ops)), reached today only by a
+    hand-written kernel.
+
+#### Barrier object Ops (`tir.sync.mbarrier_*`)
+
+A Hopper mbarrier is a 64-bit shared-memory word carrying an arrival count, a
+transaction-byte count and a phase parity. It is not `Sync`
+([§1.5](#15-sync)): `Sync` is a whole-mesh rendezvous every participant reaches,
+while these let a producer signal completion of work the consumer did not
+perform — which is what an asynchronous copy needs, since the thread that issues
+one is not the thread that waits for it.
+
+**No CUDA lowering is registered for any op in this group.** Each states its
+contract and names the `tilefoundry::ops` entry it corresponds to
+([runtime §3](./runtime.md#3-runtime-ops)).
+
+##### MBarrierInit
+
+```python
+class MBarrierInit(Op):
+    """Effect form; arm a barrier for a fixed number of arrivals.
+
+    Attributes:
+        barrier: input; smem barrier object.
+        arrive_count: attribute; arrivals that complete one phase.
+    """
+
+    barrier: Tensor
+    arrive_count: int
+```
+- constraints:
+  - `barrier` is smem; the instructions take a shared-window address.
+  - `arrive_count` is a positive compile-time count. A phase needing zero
+    arrivals is complete before anything is produced, which makes every
+    consumer's wait a no-op.
+  - One thread initialises, and a `Sync` covering every thread that will use the
+    barrier separates this from the first arrival or wait.
+  - Corresponds to `tilefoundry::ops::mbarrier_init(bar, arrive_count)`.
+
+##### MBarrierArrive
+
+```python
+class MBarrierArrive(Op):
+    """Effect form; contribute one arrival to the barrier's current phase.
+
+    Attributes:
+        barrier: input; smem barrier object.
+    """
+
+    barrier: Tensor
+```
+- constraints:
+  - `barrier` is smem.
+  - The arrival token is not a value here: consumers wait on the phase parity,
+    not on a token handed between threads.
+  - Corresponds to `tilefoundry::ops::mbarrier_arrive(bar)`.
+
+##### MBarrierArriveExpectTx
+
+```python
+class MBarrierArriveExpectTx(Op):
+    """Effect form; arrive and declare asynchronous bytes in one instruction.
+
+    Attributes:
+        barrier: input; smem barrier object.
+        tx_bytes: attribute; bytes the paired copy delivers to this phase.
+    """
+
+    barrier: Tensor
+    tx_bytes: int
+```
+- constraints:
+  - `barrier` is smem and `tx_bytes` is a positive compile-time count.
+  - The phase completes when both the arrivals and the byte count are satisfied,
+    so one wait covers a copy the waiting thread did not issue.
+  - `tx_bytes` MUST equal the bytes the paired copy delivers. A phase expecting a
+    different count never completes, and that failure presents as a hang rather
+    than as a wrong value.
+  - Corresponds to `tilefoundry::ops::mbarrier_arrive_expect_tx(bar, tx_bytes)`.
+
+##### MBarrierExpectTx
+
+```python
+class MBarrierExpectTx(Op):
+    """Effect form; declare asynchronous bytes without arriving.
+
+    Attributes:
+        barrier: input; smem barrier object.
+        tx_bytes: attribute; bytes the paired copy delivers to this phase.
+    """
+
+    barrier: Tensor
+    tx_bytes: int
+```
+- constraints:
+  - `barrier` is smem and `tx_bytes` is a positive compile-time count.
+  - Corresponds to `tilefoundry::ops::mbarrier_expect_tx(bar, tx_bytes)`.
+
+##### MBarrierWaitParity
+
+```python
+class MBarrierWaitParity(Op):
+    """Effect form; block until the barrier's phase parity reaches a value.
+
+    Attributes:
+        barrier: input; smem barrier object.
+        phase: input; the parity waited for.
+    """
+
+    barrier: Tensor
+    phase: Tensor
+```
+- constraints:
+  - `barrier` is smem.
+  - The parity alternates `0, 1, 0, ...` across successive completions, which is
+    what lets a fixed ring of barriers serve a pipeline of any length: stage `t`
+    of a ring of `n` waits on parity `(t // n) & 1`.
+  - Corresponds to `tilefoundry::ops::mbarrier_wait_parity(bar, phase)`.
+
+##### MBarrierInvalidate
+
+```python
+class MBarrierInvalidate(Op):
+    """Effect form; release the barrier's shared-memory word.
+
+    Attributes:
+        barrier: input; smem barrier object.
+    """
+
+    barrier: Tensor
+```
+- constraints:
+  - `barrier` is smem.
+  - Corresponds to `tilefoundry::ops::mbarrier_invalidate(bar)`.
+
+#### Warp Ops (`tir.warp.*`)
+
+Lane-to-lane exchange inside one warp. Every operand is register-resident: a
+shuffle moves a value between lanes' registers, and an operand in shared or
+global memory names a different instruction rather than a slower spelling of
+this one.
+
+**No CUDA lowering is registered for any op in this group.** Each states its
+contract and names the `tilefoundry::ops` entry it corresponds to
+([runtime §3](./runtime.md#3-runtime-ops)).
+
+##### ShuffleXor
+
+```python
+class ShuffleXor(Op):
+    """Effect form; exchange a value with the lane whose id differs by a mask.
+
+    Attributes:
+        src: input; rmem scalar contributed by this lane.
+        dst: input; rmem scalar receiving the partner lane's value.
+        lane_mask: attribute; the lane-id bits exchanged across.
+    """
+
+    src: Tensor
+    dst: Tensor
+    lane_mask: int
+```
+- constraints:
+  - `src` and `dst` are rmem scalars agreeing in dtype.
+  - `lane_mask` is in `1..31`. Zero exchanges a lane with itself and 32 or more
+    names a lane outside this warp; neither is a butterfly step.
+  - `dst` receives the `src` of lane `laneid ^ lane_mask`.
+  - Corresponds to `tilefoundry::ops::shuffle_xor(value, lane_mask)`.
+
+##### ShuffleElect
+
+```python
+class ShuffleElect(Op):
+    """Effect form; select exactly one thread of a leading thread range.
+
+    Attributes:
+        dst: input; rmem scalar, true on the elected thread.
+        width: attribute; participating threads, counted from the CTA's first.
+    """
+
+    dst: Tensor
+    width: int
+```
+- constraints:
+  - `dst` is an rmem scalar and `width` is a positive compile-time count.
+  - The elected thread is one thread of the **CTA**, not one lane of each warp.
+    An mbarrier armed for a single arrival is correct only under that reading.
+  - Corresponds to `tilefoundry::ops::shuffle_elect<Width>()`.
+
+##### WarpReduce
+
+```python
+class WarpReduce(Op):
+    """Effect form; fold a value across the warp, leaving it in every lane.
+
+    Attributes:
+        src: input; rmem scalar contributed by this lane.
+        dst: input; rmem scalar receiving the warp's fold.
+        kind: attribute; the combine — sum, max or min.
+    """
+
+    src: Tensor
+    dst: Tensor
+    kind: WarpReduceKind
+```
+- constraints:
+  - `src` and `dst` are rmem scalars agreeing in dtype.
+  - Defined as five `ShuffleXor` steps with masks `16, 8, 4, 2, 1` and a combine
+    between them — five shuffles and five combines, not a fold over 32 lanes.
+    The count is stated because it is the reason a caller reaches for this rather
+    than a shared-memory fold.
+  - The result is in every lane, not only in lane 0.
+  - Corresponds to `tilefoundry::ops::warp_reduce<Combine>(value)`.

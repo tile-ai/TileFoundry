@@ -77,6 +77,12 @@ namespace ops {
 #include "ops/unary.cuh"
 #include "ops/copy.cuh"
 #include "ops/binary.cuh"
+/// warp before reduce: reduce's intra-warp tier folds through warp_reduce.
+#include "ops/warp.cuh"
+#include "ops/mbarrier.cuh"
+/// tma after mbarrier: a bulk copy completes on an mbarrier and reuses its
+/// generic-to-shared conversion.
+#include "ops/tma.cuh"
 #include "ops/reduce.cuh"
 #include "ops/cast.cuh"
 #include "ops/clamp.cuh"
