@@ -112,9 +112,8 @@ constexpr int TILE_ROWS = WARPS;
 /// matmul does.
 template <int IN, int STAGES>
 __device__ void gemv_rows(const bf16 *__restrict__ w, const bf16 *__restrict__ x,
-                          bf16 *__restrict__ out, int tile0, int ntiles,
-                          bf16 *stage, uint64_t *bars,
-                          const bf16 *__restrict__ resid = nullptr) {
+                          bf16 *out, int tile0, int ntiles, bf16 *stage,
+                          uint64_t *bars, const bf16 *resid = nullptr) {
     constexpr unsigned kBytes = unsigned(TILE_ROWS) * IN * sizeof(bf16);
     constexpr int kTileElems = TILE_ROWS * IN;
     const int warp = threadIdx.x >> 5;
@@ -187,8 +186,8 @@ __device__ void gemv_rows(const bf16 *__restrict__ w, const bf16 *__restrict__ x
 template <int IN>
 __device__ void gemv_rows_direct(const bf16 *__restrict__ w,
                                  const bf16 *__restrict__ x,
-                                 bf16 *__restrict__ out, int row0, int nrows,
-                                 const bf16 *__restrict__ resid = nullptr) {
+                                 bf16 *out, int row0, int nrows,
+                                 const bf16 *resid = nullptr) {
     static_assert(IN % 8 == 0, "gemv_rows_direct: IN must be a multiple of 8");
     constexpr int kVec = IN / 8;
     const int warp = threadIdx.x >> 5;
@@ -783,8 +782,7 @@ __device__ void s_moe_finish(int cta, int nctas, const bf16 *__restrict__ smid, 
 
 __global__ __launch_bounds__(THREADS) void k_moe_finish(
     const bf16 *__restrict__ smid, const bf16 *__restrict__ w_sh_down,
-    const float *__restrict__ acc, const bf16 *__restrict__ h_in,
-    bf16 *__restrict__ h_out) {
+    const float *__restrict__ acc, const bf16 *h_in, bf16 *h_out) {
     s_moe_finish(int(blockIdx.x), int(gridDim.x), smid, w_sh_down, acc, h_in, h_out);
 }
 

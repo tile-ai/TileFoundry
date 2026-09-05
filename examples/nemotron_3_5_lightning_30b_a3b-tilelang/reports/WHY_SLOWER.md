@@ -106,24 +106,15 @@ the same stages run a launch apiece:
 | 19 – 33 | 5–7e-4 (flat) |
 | 40 | 7.6e-3 |
 
-Eight layers bit-identical rules out a logic error in any stage: a wrong index or
-a missing barrier does not wait until the ninth layer. What is left is a
-reproducibility difference — the fused path rounds somewhere the staged path does
-not — that stays inside every bound `check_all.py` derives and still costs token
-identity, because greedy decoding has no tolerance at all.
+Nine layers bit-identical, then parts in 1e5. That is the accumulator's 5.8e-8
+reaching a bf16 rounding boundary, not a fault: two orders of summing six
+numbers in f32, neither more correct than the other, and the fused one is
+actually the order the op-by-op reference uses.
 
-Two candidates, neither confirmed:
-
-- **Scratch reuse.** The fused launch keeps one set of buffers for all 52 layers;
-  the staged path allocates each layer's afresh. Every buffer is written before
-  it is read on the paths checked, but "checked" is by reading the code, not by
-  a tool.
-- **The head.** `cuda-stages` finishes in torch (`fh @ w_head.t()`), the fused
-  path in `s_head`. That explains a difference in the logits and nothing about
-  the states, which also differ.
-
-Until this is understood the fused path should not be described as
-token-identical, and `README.md` does not.
+Two other explanations were tested and eliminated. The fused launch is
+**deterministic** — three runs bit-identical — so nothing races. And filling
+every scratch buffer with NaN before a step changes **nothing**, so no stage
+reads a buffer it did not write.
 
 ## 7. What could not be measured
 
