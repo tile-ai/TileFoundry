@@ -161,20 +161,21 @@ type-annotation       ::= tensor
 signature             ::= (name ':' type-annotation (',' name ':' type-annotation)*)?
 return-type           ::= type-annotation
 tir-if                ::= if cond-node block (block)?
+tir-while             ::= while cond-node block
+abort                 ::= 'abort' '(' literal ')'
+dispatch-call         ::= 'with' ':' block
 loop-iterator         ::= 'tile' '(' expression ',' expression ')'
                           | 'range' '(' (expression | expression ',' expression | expression ','
                             expression ',' expression) ')'
 tir-loop-header       ::= 'for' identifier 'in' loop-iterator ':' block
-tir-for               ::= 'for' name 'in' expression ':' block
-abort                 ::= 'abort' '(' literal ')'
-dispatch-call         ::= 'with' ':' block
 loop-carry-statement  ::= expression '=' expression
                           | 'for' name 'in' expression ':' loop-carry
                           | statement
 loop-carry            ::= (loop-carry-statement (newline loop-carry-statement)*)?
 loop-header           ::= 'for' identifier 'in' loop-iterator ':' loop-carry
 loop-body             ::= (statement (newline statement)*)?
-for                   ::= 'for' name 'in' expression ':' loop-body
+for                   ::= 'for' name 'in' expression ':' block
+                          | 'for' name 'in' expression ':' loop-body
 mesh-context          ::= ('Mesh' | primary '.' identifier) '(' (expression | ('layout' | 'names')
                             '=' expression) (',' (expression | ('layout' | 'names') '='
                             expression))* ')'
@@ -225,7 +226,7 @@ runtime-expression    ::= shape-of
 tuple-assignment      ::= '(' identifier (',' identifier)* ')' '=' runtime-expression
 where-annotation      ::= 'where' '(' ')'
 statement             ::= tir-if
-                          | tir-for
+                          | tir-while
                           | abort
                           | dispatch-call
                           | for
