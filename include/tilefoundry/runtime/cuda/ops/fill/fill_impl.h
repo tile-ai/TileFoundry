@@ -10,7 +10,7 @@ struct Fill {
         auto &&d = detail::to_local(dst);
         using value_type = cute::remove_cvref_t<decltype(d(0))>;
         for (int i = 0; i < N; ++i) {
-            d(i) = static_cast<value_type>(val);
+            d(i) = tilefoundry::detail::convert<value_type>(val);
         }
     }
 };

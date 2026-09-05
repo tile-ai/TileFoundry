@@ -15,6 +15,52 @@ out, and the whole step is a single device launch.
 2.37x - 2.44x off the measured bandwidth floor, flat across nine context lengths
 ```
 
+There are now two implementations of that one launch. `NEMO_IMPL=mega` is the
+TileLang kernel above and stays the default; `NEMO_IMPL=cuda` is handwritten
+CUDA written against the public `tilefoundry::ops` entries, one cooperative
+launch over all 52 layers. A third, `NEMO_IMPL=cuda-stages`, runs the same device
+code a stage per launch, which is what bisects a disagreement to a layer.
+
+The handwritten one writes no thread index into arithmetic. Each stage says
+which layout it wants — `row_tile`, `lane_vector`, `block_run` in
+`kernels/shards.cuh` — and `local()` hands every thread its slice; the tile
+operations are then `ops::{tma_copy, copy, dot, mma, fill}`, which read the
+transfer width, the contraction mesh and the tiling off those shard layouts.
+What stays written out is the model's own arithmetic, including every place it
+rounds to bf16 mid-expression.
+
+**Token identity is prompt-specific, for every implementation.** Greedy and
+teacher-forced, 48 steps, three prompts, all three implementations:
+
+| prompt | `mega` | `cuda` | `cuda-stages` |
+|---|---|---|---|
+| `The capital of France is` | 48/48 | step 35 | step 35 |
+| `In 1969 the first humans` | step 3 | step 3 | step 3 |
+| `A prime number is` | step 42 | 48/48 | step 42 |
+
+On the middle prompt all three diverge at the same step and pick the same token
+as each other (24556 against the reference's 33290), which is a tie the
+reference resolves one way and every implementation here resolves the other. The
+"64 of 64" in the block above is the first prompt with the TileLang kernel; it is
+not a property any of these three has in general. Nothing distinguishes the
+handwritten paths from the shipped one on this criterion.
+
+```
+                        ctx 32, one H200, one session
+TileLang  NEMO_IMPL=mega     335.9 tok/s     2.977 ms/token   faster
+CUDA      NEMO_IMPL=cuda     231.3 tok/s     4.323 ms/token   1.45x SLOWER
+```
+
+**The handwritten one is 1.45x slower** -- it takes 4.323 ms to produce a token
+where the TileLang kernel takes 2.977 -- **and is not the default for that
+reason.** The gap is taken apart stage by stage in `reports/WHY_SLOWER.md`, which
+also explains why the numbers there are not the ones in the block above:
+re-measured today, the TileLang kernel is 16-17% faster than this file records,
+so the recorded figures are not a bar anything can be held to. The report's §3
+puts what is left in one sentence: every direct projection is at the ceiling of
+"read a tile, fold it, read the next", and closing the rest is a restructuring of
+how a CTA gets its tiles, not a tuning of the loop inside one.
+
 **It does not beat SGLang.** It is 97.5% of it at short context and 83.2% at
 262080, and the gap is accounted for in §6. What is new here is the shape, not
 the speed: the authored HIR *is* the mega program, so `check` compares the thing

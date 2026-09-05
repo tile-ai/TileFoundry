@@ -67,6 +67,8 @@ template <TopologyScope T> constexpr auto program_dim() noexcept {
 
 #include "layout/shard_layout.cuh"
 #include "tensor_view/shard_tensor.cuh"
+/// after shard_tensor.cuh: the static projection mirrors ``local()``.
+#include "layout/local_layout.cuh"
 #include "tensor_view/shard_copy.cuh"
 
 namespace ops {
@@ -77,7 +79,15 @@ namespace ops {
 #include "ops/unary.cuh"
 #include "ops/copy.cuh"
 #include "ops/binary.cuh"
+/// warp before reduce: reduce's intra-warp tier folds through warp_reduce.
+#include "ops/warp.cuh"
+#include "ops/mbarrier.cuh"
+/// tma after mbarrier: a bulk copy completes on an mbarrier and reuses its
+/// generic-to-shared conversion.
+#include "ops/tma.cuh"
 #include "ops/reduce.cuh"
+/// dot after reduce: it reuses reduce's no-workspace tag.
+#include "ops/dot.cuh"
 #include "ops/cast.cuh"
 #include "ops/clamp.cuh"
 #include "ops/rmsnorm.cuh"

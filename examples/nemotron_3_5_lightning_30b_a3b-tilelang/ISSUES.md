@@ -177,6 +177,48 @@ unexpected keyword argument 'num_sms'`. What is actually wanted is
 
 ---
 
+### TF-8 a twin that imports lazily cannot be checked
+
+`tilefoundry check` puts a source file's directory on `sys.path` while it imports
+the module and takes it off again (`src/tilefoundry/cli/source.py:284,314`). Both
+kernels here are compiled on first *use*, from inside a method, which is the
+pattern `granite_4_0_h_small-cuda` uses too -- and by then the directory is gone:
+
+    tilefoundry check: error: No module named 'mega_kernel'
+    tilefoundry check: error: No module named 'kernels'
+
+Worked around here by re-inserting the module's own directory before each lazy
+import (`runtime_model._sibling_import`). The general fix belongs in the CLI:
+a source file's directory is where its siblings live for as long as it runs, not
+only while it is imported.
+
+### TF-9 `check`'s bounds admit only an implementation that rounds like the reference
+
+`check_all.py` derives each bound as `2^-9*sqrt(k)` over the bf16 landings on the
+path to an output, which treats the roundings as an independent random walk. A
+52-layer residual network amplifies a perturbation instead, so the bound is met
+only by an implementation whose arithmetic *is* the reference's. Measured on one
+batch of dumped activations, one card:
+
+| impl | passed | failing | logits rel_l2 | logits cosine |
+|---|---|---|---|---|
+| `ops` (torch) | yes | 0/119 | — | — |
+| `mega` (this directory's shipped kernel) | **no** | 34/119 | 9.65e-2 | 0.99551 |
+| `cuda` (handwritten) | no | 31/119 | 8.59e-2 | 0.99723 |
+
+The shipped kernel fails its own directory's check, and by more than the
+handwritten one does. Reading that as "the handwritten kernel is broken" is the
+mistake the table exists to prevent. What decides a kernel here is agreement with
+the incumbent plus greedy-token identity, which is what `README.md:11` reports.
+
+### TF-10 `check_all.py` had drifted off the CLI
+
+`--ckpt DIR`, `--inputs real` and repeated `--input FILE` are three arguments
+`tilefoundry check` no longer takes; the help text also pointed at a
+`dump_acts.py` that did not exist. The script could not run at all. Fixed here,
+and `dump_acts.py` written, because `--inputs random` draws states that no step
+could have produced and `check` says so itself.
+
 ## II. TileLang (the backend)
 
 In the order they were hit. All timings on an H200 with the SM clock at 1500 MHz.
@@ -322,6 +364,32 @@ unrolled by hand. `range` works, so this looks like something that could be
 relaxed.
 
 ---
+
+## II-b. Do the TileLang problems survive a handwritten kernel?
+
+`NEMO_IMPL=cuda` reimplements the same step in CUDA, so each entry above can be
+answered rather than guessed at.
+
+| | what it was | under handwritten CUDA |
+|---|---|---|
+| TL-1 | descriptor TMA cannot take a device-only pointer | **gone.** `ops::tma_copy` reads the tier off the operands' shard layouts and the contiguous one is the rank-1 bulk instruction, which takes an address rather than a descriptor. |
+| TL-2 | `T.gemm` layout inference reaches through `T.view` | **gone.** There is no inference to reach through: an `ops::mma` operand *is* a shard layout, so an `(N, K)` view of a `(K, N)` buffer is a stride and there is no transpose flag to infer. |
+| TL-3 | a linear layout makes gemm 6x slower | **not applicable to the projections**, which are matrix-vector products with no tensor-core operand layout to get wrong. The attention scan does issue `ops::mma`, and it reads its key and value tiles straight out of the packed shape the copy left them in. |
+| TL-4 | the shared allocator does not reuse disjoint lifetimes | **still there, differently.** One kernel calls every stage, so the compiler holds every stage's static shared array at once and the arena is sized to the widest. Writing past it was a real fault here, caught by compute-sanitizer. |
+| TL-5 | several things at M=16 | **gone.** The attention scan runs `ops::mma` at exactly M=16 -- one `(16, 128)` score block a key block -- and the tier picks the atom off the operand layouts, so M=16 is a shape the entry handles rather than a case that needs its own path. |
+| TL-6 | `ThreadSync` hoists `__syncthreads()` out of an `if` | **gone**, and its opposite arrived: a barrier this code does *not* write is not inserted for it. A missing one in `s_moe_down` corrupted the expert accumulator, which six separate launches had hidden. |
+| TL-7 | the instruction `T.copy` picks by default is worse than `cp_async` | **gone.** `ops::copy` reads the move width off the two shard layouts and `ops::tma_copy` reads its tier the same way, so neither is a default to be overridden. What replaces the problem is that the right *shape* is not uniform: staging wins for the Mamba projections and loses for the MoE experts, measured both ways in `kernels/nemotron.cu`. |
+| TL-8 | the eager builder rejects a Python-level loop over a tuple | **gone.** The 52 layers are a `for` in CUDA C, so `gen_kernel.py`'s reason for existing does not apply to the CUDA path. |
+
+The trade is not free: TL-4 and TL-6 come back as the author's problem instead of
+the backend's, and three of the four faults found while bringing the persistent
+grid up were of exactly that kind.
+
+One thing the handwritten kernels do **not** do worse: greedy token identity.
+Measured 48 steps, teacher-forced, three prompts, all three implementations lose
+it on one prompt each and hold it on another, and on `In 1969 the first humans`
+all three diverge at the same step and pick the same token as each other. The
+table is in `reports/WHY_SLOWER.md`.
 
 ## III. One piece of good news
 

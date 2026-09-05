@@ -804,10 +804,51 @@ void copy(ShardTensor<T, GL, SL> const& src, DT& dst);
  */
 template <class ST, class T, class GL, class SL>
 void copy(ST const& src, ShardTensor<T, GL, SL>& dst);
+
+/**
+ * @brief Copy this instance's slice, shard → shard.
+ * @param src the shard-tensor source
+ * @param dst the shard-tensor destination
+ */
+template <class TS, class GLS, class SLS, class TD, class GLD, class SLD>
+void copy(ShardTensor<TS, GLS, SLS> const& src, ShardTensor<TD, GLD, SLD>& dst);
+
+/**
+ * @brief Copy the full tensor, plain → plain.
+ * @param src the source tensor
+ * @param dst the destination tensor
+ */
+template <class ST, class DT>
+void copy(ST const& src, DT& dst);
+
+/**
+ * @brief Elements per move copy will use on these operands.
+ */
+template <class Src, class Dst>
+inline constexpr int copy_vector_elems;
 ```
 
 - constraints:
-  - No additional constraints.
+  - Each overload copies what `local()` ([§2.10](#210-local)) leaves this
+    execution instance, so a copy the mesh splits across threads is a
+    thread-scoped shard layout rather than a strided loop at the call site.
+  - **The move width is a property of the layouts, not of the call.** It is the
+    largest power of two both operands run contiguously over —
+    `max_common_vector` of the two *projected* layouts, which
+    [§2.10.2](#2102-computation) derives statically from the shard layout and
+    the mesh — capped so neither side's move exceeds 16 bytes.
+    `copy_vector_elems` reports it, so a caller staging a tile can state the
+    width it expects and have the compiler check it.
+  - A dtype change does not force the width to one element: the wide load still
+    holds and the conversion happens on the way out. The cap follows the wider
+    of the two element types.
+  - Register fragments take the element path. Addressing `&frag(i)` under a loop
+    the compiler cannot unroll spills the fragment to local memory, which costs
+    more than the wider move saves.
+  - Where the shard's offset lands is the one thing a layout cannot state, so
+    the implementation tests the two base pointers against the width's alignment
+    and falls back to the element path when it does not hold. That is one
+    comparison, not a scan.
 
 ### 2.10 `local()`
 
@@ -1019,7 +1060,59 @@ __device__ void reduce(Src const& src, Dst& dst, Ws&& ws = {});
     runtime.
   - A reduction whose reduced axis crosses CTA boundaries is not supported.
 
-### 3.6 `tilefoundry::ops::copy_async` (async gmem→smem staging)
+### 3.6 `tilefoundry::ops::copy` (tile copy)
+
+The op-surface spelling of `tilefoundry::copy` ([§2.8](#28-tilefoundrycopy--shard-aware-overloads)):
+one entry, taking tensors, with the transfer shape, the strides, the element
+types, the share this instance owns and the move width all read off the operand
+`ShardLayout`s.
+
+```cpp
+/**
+ * @brief Copy src into dst, at the width their shard layouts admit.
+ * @param src the source tile
+ * @param dst the destination tile
+ */
+template <class TSrc, class TDst>
+__device__ void copy(TSrc const& src, TDst& dst);
+
+/**
+ * @brief Elements per move copy will use on these operands.
+ */
+template <class TSrc, class TDst>
+inline constexpr int copy_vector_elems;
+```
+
+- constraints:
+  - The width rule, the dtype-change rule, the register-fragment rule and the
+    alignment fallback are [§2.8](#28-tilefoundrycopy--shard-aware-overloads)'s
+    and are not restated here.
+  - The call site names no vector width and no thread index. A copy split across
+    a block's threads is a thread-scoped mesh in the operands' shard layouts;
+    the entry then copies exactly the slice `local()` hands each thread.
+  - `copy_n` ([§3.7](#37-tilefoundryopscopy_n-counted-element-copy)) is the
+    counted per-element form codegen emits for a dynamic extent, not a tier of
+    this one: it takes a count the layouts do not carry.
+
+### 3.7 `tilefoundry::ops::copy_n` (counted element copy)
+
+```cpp
+/**
+ * @brief Copy N elements, converting on the way.
+ * @param src the source operand
+ * @param dst the destination operand
+ * @param N elements copied
+ */
+template <class TSrc, class TDst>
+__device__ void copy_n(TSrc const& src, TDst& dst, int N);
+```
+
+- constraints:
+  - Routed through the shared `unary_impl::Unary<identity_op>` skeleton, like
+    `cast`; the count comes from the call because the operand shapes carry
+    `DimVar`s the layouts cannot resolve.
+
+### 3.8 `tilefoundry::ops::copy_async` (async gmem→smem staging)
 
 ```cpp
 /**
@@ -1036,3 +1129,265 @@ __device__ void copy_async(TSrc const& src, TDst& dst);
     `cp_async_commit` and `cp_async_wait`.
   - Runtime implementation details such as vector width, tail handling, and
     architecture fallback live in code comments, not this spec entry.
+
+### 3.9 `tilefoundry::ops::warp_*` (warp-scoped exchange)
+
+Three ops, one public entry each, and **no tiers**: their operand is a
+register-resident scalar, which carries no `ShardLayout`, so there is nothing
+for a compile-time tier selection to read. The one-entry rule of
+[§3](#3-runtime-ops) requires one entry per op; it does not require every op to
+have more than one implementation.
+
+`warp.cuh` is included before `reduce.cuh` so that `ops::reduce`'s intra-warp
+tier folds through `warp_reduce` rather than spelling the butterfly a second
+time.
+
+```cpp
+/**
+ * @brief Exchange a value with the lane whose id differs by lane_mask.
+ * @param value this lane's contribution
+ * @param lane_mask the lane-id bits exchanged across
+ * @param member_mask the participating lanes
+ */
+template <class T>
+__device__ T shuffle_xor(T value, int lane_mask, unsigned member_mask = 0xFFFFFFFFu);
+
+/**
+ * @brief Select exactly one thread of the leading Width threads of the CTA.
+ * @tparam Width compile-time participating thread count
+ */
+template <int Width>
+__device__ bool shuffle_elect();
+
+/**
+ * @brief Fold value across each aligned run of Width lanes, leaving the result in every lane of the run.
+ * @tparam Combine functor type supplying a static apply(T, T) -> T
+ * @tparam Width lanes per fold, a power of two up to 32
+ * @param value this lane's contribution
+ */
+template <class Combine, int Width = 32, class T>
+__device__ T warp_reduce(T value);
+```
+
+- constraints:
+  - `shuffle_elect` elects one thread of the **CTA**, not one lane of each warp.
+    An mbarrier armed for a single arrival is correct only under that reading.
+  - `warp_reduce` is a butterfly over `Width` lanes — `log2(Width)` shuffles —
+    and leaves its result in every lane of the run, not only in its first.
+  - A `Width` under 32 leaves the runs independent, which is what a per-row
+    reduction over a tile laid out several rows to a warp needs. The
+    alternatives are a shared round trip or leaving every lane but one row's
+    idle.
+  - Types wider than the shuffle intrinsic's are exchanged word-wise; that
+    choice lives in code comments, not this entry.
+
+### 3.10 `tilefoundry::ops::mbarrier_*` (shared-memory barrier object)
+
+A Hopper mbarrier is a 64-bit shared-memory word carrying an arrival count, a
+transaction-byte count and a phase parity. It is not `ops::sync`
+([§3.4](#34-tilefoundryopssync-mesh-scoped-barrier)): that is a whole-mesh
+rendezvous every participant reaches, while these let a producer signal
+completion of work the consumer did not perform.
+
+`ops::sync` collapses five `SyncKind`s behind one entry because they are five
+ways to spell one op — "barrier for this mesh scope" — with the scope choosing
+the spelling. `mbarrier.init` / `arrive` / `try_wait` are not one op: they are
+three instructions with three meanings and three signatures. The one-entry rule
+forbids exposing the *tiers* of one op separately; it does not ask distinct
+operations to hide behind an enum. **No tiers:** a barrier is a shared-memory
+object, not a sharded tensor, so no operand carries a `ShardLayout`.
+
+```cpp
+/** @brief Arm a barrier so arrive_count arrivals complete a phase. */
+__device__ void mbarrier_init(uint64_t* bar, unsigned arrive_count);
+
+/** @brief Contribute one arrival to the barrier's current phase. */
+__device__ void mbarrier_arrive(uint64_t* bar);
+
+/** @brief Arrive and declare tx_bytes of asynchronous data in one instruction. */
+__device__ void mbarrier_arrive_expect_tx(uint64_t* bar, unsigned tx_bytes);
+
+/** @brief Declare tx_bytes against the current phase without arriving. */
+__device__ void mbarrier_expect_tx(uint64_t* bar, unsigned tx_bytes);
+
+/** @brief Test the phase once without blocking. */
+__device__ bool mbarrier_try_wait_parity(uint64_t* bar, unsigned phase);
+
+/** @brief Block until the barrier's phase parity reaches phase. */
+__device__ void mbarrier_wait_parity(uint64_t* bar, unsigned phase);
+
+/** @brief Release the barrier's shared-memory word. */
+__device__ void mbarrier_invalidate(uint64_t* bar);
+```
+
+- constraints:
+  - `bar` addresses shared memory. One thread calls `mbarrier_init`, and a
+    `sync` covering every thread that will use the barrier separates it from the
+    first arrival or wait.
+  - The parity alternates `0, 1, 0, ...` across successive completions, which is
+    what lets a fixed ring of barriers serve a pipeline of any length: stage `t`
+    of a ring of `n` waits on parity `(t / n) & 1`.
+  - A `tx_bytes` that disagrees with the bytes the paired copy delivers leaves
+    the phase permanently incomplete; the failure presents as a hang, not as a
+    wrong value.
+
+### 3.11 `tilefoundry::ops::tma_copy` (barrier-completing gmem→smem staging)
+
+Stage a tile into shared memory and signal an mbarrier when it is readable. It
+is not a tier of `ops::copy_async`
+([§3.8](#38-tilefoundryopscopy_async-async-gmemsmem-staging)): there every
+thread issues its own load and a commit closes the group, so the thread that
+issues is the thread that waits; here completion lands on a barrier, which is
+what lets a consumer wait for a tile it did not fetch.
+
+```cpp
+/**
+ * @brief Stage src into dst, completing on bar.
+ * @param src the source tile
+ * @param dst the shared destination tile
+ * @param bar the mbarrier the completion lands on
+ */
+template <class Src, class Dst>
+__device__ void tma_copy(Src const& src, Dst& dst, uint64_t* bar);
+
+/**
+ * @brief Whether tma_copy on these operands takes the bulk instruction.
+ */
+template <class Src, class Dst>
+inline constexpr bool tma_copy_is_bulk;
+```
+
+- constraints:
+  - The operands are tensors, not addresses: the entry takes the transfer shape,
+    the strides and the element type from the operand `ShardLayout`s. A caller
+    passing a pointer and a byte count would be choosing the tier itself, which
+    is what [§3](#3-runtime-ops) puts behind one entry.
+  - **Two tiers, one entry.** The tier is derived at compile time from the
+    operand `ShardLayout`s: a shard layout that coalesces to one static rank-1
+    unit-stride run on both ends, with matching element types, takes
+    `cp.async.bulk` — one elected thread issues the whole run, nothing blocks,
+    and it is still in flight at the next statement. Anything else takes the
+    element path, taken by every thread in the block. `tma_copy_is_bulk` reports
+    the choice so a caller sizing a shared ring, or a test meaning to exercise
+    one tier, can assert it.
+  - Both tiers leave `bar` completing when the data is readable, and both are
+    safe to call from every thread in the block. Consumers wait with
+    `mbarrier_wait_parity` ([§3.10](#310-tilefoundryopsmbarrier_-shared-memory-barrier-object))
+    and never learn which tier ran.
+  - The bulk tier's arrival declares the byte count on the instruction that
+    issues the copy, so the declared and delivered counts are one expression and
+    cannot drift; the caller does not arrive separately.
+  - The transfer must be a whole number of 16-byte grains for the instruction to
+    have defined behaviour. The extent is what the shard leaves behind, not a
+    property of the layout type, so an off-grain extent is a run-time hand-off
+    to the element path inside the same entry — same barrier, same result.
+
+### 3.12 `tilefoundry::ops::mma` (matrix multiply-accumulate)
+
+`c += a @ b`, one entry, with the tier read off the operand layouts: rank-2
+static shard layouts on `a` and `b` are a tile and the entry loops the atom over
+it; anything else is a lane's already-gathered fragment and takes the single
+instruction. Codegen emits this one call either way.
+
+```cpp
+/**
+ * @brief c += a @ b, over a tile or over one lane's fragments.
+ * @param a the left operand, (M, K) for a tile
+ * @param b the right operand, (N, K) for a tile
+ * @param c the accumulator
+ */
+template <class TA, class TB, class TC>
+__device__ void mma(TA const& a, TB const& b, TC& c);
+
+/**
+ * @brief Whether mma on these operands loops the atom over a tile.
+ */
+template <class TA, class TB, class TC>
+inline constexpr bool mma_is_tile;
+
+/**
+ * @brief Accumulator values one lane holds for an MxN tile over Threads.
+ */
+template <int M, int N, int Threads>
+constexpr int mma_acc_elems();
+
+/**
+ * @brief This lane's accumulator for an MxN tile, as a ShardTensor.
+ * @param regs the lane's register array
+ */
+template <int M, int N, int Threads, class Ptr>
+__device__ auto mma_acc_tensor(Ptr regs);
+
+/**
+ * @brief The (row, col) of accumulator entry f on thread tid.
+ * @param f the entry's index in the lane's fragment
+ * @param tid the thread's index in the block
+ */
+template <int M, int N, int Threads>
+__device__ cute::tuple<int, int> mma_acc_coord(int f, int tid);
+```
+
+- constraints:
+  - The tile tier reads `a` as `(M, K)` and `b` as `(N, K)`. **There is no
+    transpose flag.** Whether the buffer behind `b` is k-major or n-major is a
+    stride in its layout, and the indexing picks that up, so the same call reads
+    both.
+  - `M` and `K` must be whole multiples of the atom's `16` and `16`, and every
+    warp must receive a whole number of `N` atoms of `8`. Violations are
+    `static_assert`s, not run-time checks.
+  - Warps split `N`. The warp count comes from the accumulator's mesh — that is
+    what `c` being a `ShardTensor` is for — not from `blockDim`.
+  - The accumulator's engine is the lane's own registers, which is what
+    `local()` ([§2.10](#210-local)) hands back for register storage, while its
+    shard layout carries the tile shape and the thread mesh. `mma_acc_tensor`
+    builds that pairing so a call site does not restate the fragment length.
+  - The fragment-to-`(row, col)` map belongs to the instruction, and
+    `mma_acc_coord` publishes it. A caller doing elementwise work on the
+    accumulator — rescaling a row, say — asks for the row rather than
+    rediscovering the map.
+  - Today's atom is `SM80_16x8x16_F32BF16BF16F32_TN`: bf16 operands, f32
+    accumulate. Another instruction is another atom under the same entry, not
+    another entry.
+
+### 3.13 `tilefoundry::ops::dot` (fused multiply-contract)
+
+`dst = sum(lhs * rhs)`. A matrix-vector product's inner loop is one statement,
+not a `binary` followed by a `reduce`
+([§3.5](#35-tilefoundryopsreduce-reduction-family)): materialising the product
+first would cost a register per element of the row, which is what makes that
+pair the wrong spelling here.
+
+```cpp
+/**
+ * @brief dst = sum(lhs * rhs) over the axes the operands' meshes contract.
+ * @param lhs the left operand
+ * @param rhs the right operand
+ * @param dst the destination cell
+ * @param ws optional shared workspace, one slot per warp
+ */
+template <class Lhs, class Rhs, class Dst, class Ws = reduce_impl::no_workspace_t>
+__device__ void dot(Lhs const& lhs, Rhs const& rhs, Dst& dst, Ws&& ws = {});
+
+/**
+ * @brief Elements per load dot will use on these operands.
+ */
+template <class Lhs, class Rhs>
+inline constexpr int dot_vector_elems;
+```
+
+- constraints:
+  - **Two tiers, one entry.** With no workspace the contraction lives inside a
+    warp and one butterfly finishes it; with a workspace it spans the block,
+    each warp posting a partial into a slot. Either way every participant leaves
+    holding the total, so a caller never broadcasts it back.
+  - The load width is the operands' shard layouts', the same question
+    [§2.8](#28-tilefoundrycopy--shard-aware-overloads) answers for `copy`, and
+    `dot_vector_elems` reports it. A row split so that a lane owns four
+    contiguous elements loads eight bytes at a time; one that leaves it eight
+    loads sixteen. Neither width appears at the call site.
+  - The fold uses a fixed number of independent partial accumulators, and the
+    tree that combines them is this op's summation order. One running sum would
+    make a row a chain of dependent multiply-adds, and the loads could not run
+    ahead of it: what a warp then waits on is the row's latency, not its bytes.
+  - Accumulation is f32 regardless of the operand type.
+

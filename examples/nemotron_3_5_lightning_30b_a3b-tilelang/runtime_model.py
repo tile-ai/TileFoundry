@@ -10,6 +10,12 @@ Two bodies live here and `NEMO_IMPL` (or `set_impl`) chooses between them:
            52 layers, the closing norm and the head, with `T.sync_grid()` at
            exactly the points where `model.py` reshards a value back out of its
            mesh split. This is the implementation the numbers are about.
+``cuda``   handwritten CUDA, calling the public ``tilefoundry::ops`` entries.
+           All 52 layers run `kernels/nemotron.cu`, but as many launches rather
+           than one, so what this setting produces is per-layer evidence and a
+           correct step, not tok/s. It
+           cannot fall through to ``mega`` for the rest: that is one launch over
+           the whole step and has no entry that takes over a single layer.
 ``ops``    the op-by-op path: one torch call per operation, so a step is
            hundreds of launches. It exists to be the other number criterion 3
            asks for, and to be a second opinion on the mega kernel's arithmetic.
@@ -22,11 +28,13 @@ that takes 18 can address any of them by (layer, row).
 from __future__ import annotations
 
 import os
+import sys
 
 import torch
 import torch.nn.functional as F
 
 import model
+import packing
 from model import Nemotron35Lightning30BA3B as SEM
 from tilefoundry.runtime import runtime_func, runtime_module
 
@@ -45,11 +53,15 @@ BF16 = torch.bfloat16
 IMPL = os.environ.get("NEMO_IMPL", "mega")
 
 
+#: The implementations `decode_step` can run. See the module docstring.
+IMPLS = ("mega", "ops", "cuda", "cuda-stages")
+
+
 def set_impl(name: str) -> None:
-    """Choose between the mega kernel and the op-by-op path."""
+    """Choose which implementation `decode_step` runs."""
     global IMPL
-    if name not in ("mega", "ops"):
-        raise ValueError(f"impl must be 'mega' or 'ops', got {name!r}")
+    if name not in IMPLS:
+        raise ValueError(f"impl must be one of {IMPLS}, got {name!r}")
     IMPL = name
 
 
@@ -108,7 +120,195 @@ def _attend(qg, blocks):
     return (acc / l).to(BF16)
 
 
-def _ops_step(w, acts, stop=None, attn_at=None):
+#: This file's own directory. `tilefoundry check` puts a source file's directory
+#: on `sys.path` only while it imports the module and takes it off again, so a
+#: lazy import from inside a method -- which is how both the TileLang kernel and
+#: the CUDA extension are compiled on first use -- cannot rely on it being there.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _sibling_import(name):
+    """Import a module that lives beside this one, whatever `sys.path` holds."""
+    if _HERE not in sys.path:
+        sys.path.insert(0, _HERE)
+    return __import__(name)
+
+
+#: Per-layer (3, MH) scale slabs the CUDA kernel takes as one tensor, built
+#: once: the declared weights are three separate (MH,) views.
+_MSCAL_CACHE = {}
+
+#: Per-layer fused (QKV, H) views over the packed attention weights.
+_QKV_CACHE = {}
+
+
+def _mamba_cuda(i, h, w, acts):
+    """One Mamba-2 layer through `kernels/nemotron.cu`.
+
+    Returns the layer's output hidden row and the two states it hands on. The
+    residual add is the kernel's -- it owns the output rows it wrote, so adding
+    there costs no second pass over the hidden row.
+    """
+    _kernels = _sibling_import("kernels").ops  # compiled on first use
+
+    if i not in _MSCAL_CACHE:
+        _MSCAL_CACHE[i] = torch.stack([
+            w[f"l{i}_a_log"].reshape(MH), w[f"l{i}_dt_bias"].reshape(MH),
+            w[f"l{i}_d_skip"].reshape(MH)]).reshape(-1).contiguous()
+    out = _kernels().mamba_layer(
+        h.reshape(H), w[f"l{i}_gamma"].reshape(H),
+        w[f"l{i}_w_in"].reshape(-1), w[f"l{i}_w_out"].reshape(-1),
+        w[f"l{i}_conv_w"].reshape(-1), w[f"l{i}_conv_b"].reshape(CONV),
+        w[f"l{i}_gamma_gdn"].reshape(MI), _MSCAL_CACHE[i],
+        acts[f"l{i}_conv_state"].reshape(-1).contiguous(),
+        acts[f"l{i}_ssm_state"].reshape(-1).contiguous())
+    h_out, conv_out, ssm_out = out[0], out[1], out[2]
+    return (h_out.reshape(1, 1, H), conv_out.reshape(1, CONV, WIN),
+            ssm_out.reshape(1, MH, MD, SS))
+
+
+def _moe_cuda(i, h, w, acts):
+    """One MoE layer through `kernels/nemotron.cu`.
+
+    The router picks six of the 128 experts and the kernel runs those six plus
+    the shared one; the residual add is the kernel's, as in the Mamba path.
+    """
+    _kernels = _sibling_import("kernels").ops
+
+    out = _kernels().moe_layer(
+        h.reshape(H), w[f"l{i}_gamma"].reshape(H),
+        w[f"l{i}_w_router"].reshape(-1), w[f"l{i}_e_bias"].reshape(E).float(),
+        w[f"l{i}_w_up"].reshape(-1), w[f"l{i}_w_down"].reshape(-1),
+        w[f"l{i}_w_sh_up"].reshape(-1), w[f"l{i}_w_sh_down"].reshape(-1))
+    return out[0].reshape(1, 1, H)
+
+
+def _attn_cuda(i, h, w, acts, cur_pos):
+    """One full-attention layer through `kernels/nemotron.cu`.
+
+    The kernel writes this token's K/V row into the tail buffers it was handed,
+    which is `cache_update` realised on the cache's own memory, so the rows the
+    step hands on are views of those buffers rather than copies.
+    """
+    _kernels = _sibling_import("kernels").ops
+
+    if i not in _QKV_CACHE:
+        # `w_q`, `w_k` and `w_v` are three contiguous slices of one (QKV, H)
+        # slab in the pack, so the fused matrix the kernel wants is already
+        # there: take the view rather than concatenating 25 MB every step.
+        wq = w[f"l{i}_w_q"]
+        _QKV_CACHE[i] = wq.as_strided(((QP + 2 * KVP) * H,), (1,),
+                                      wq.storage_offset())
+    k_tail, v_tail = acts[f"l{i}_k_tail"], acts[f"l{i}_v_tail"]
+    out = _kernels().attn_layer(
+        h.reshape(H), w[f"l{i}_gamma"].reshape(H),
+        _QKV_CACHE[i], w[f"l{i}_w_o"].reshape(-1),
+        acts[f"l{i}_k_cache"].reshape(-1), acts[f"l{i}_v_cache"].reshape(-1),
+        k_tail.reshape(-1), v_tail.reshape(-1), cur_pos)
+    fresh = [k_tail[:, cur_pos:cur_pos + 1].reshape(1, 1, HKV, DH),
+             v_tail[:, cur_pos:cur_pos + 1].reshape(1, 1, HKV, DH)]
+    return out[0].reshape(1, 1, H), fresh
+
+
+#: The scratch one cooperative launch writes, kept between steps: allocating
+#: 17 MB of attention partials every token would cost more than the step.
+#: The attention scan's block, which is the tensor core's N for a score
+#: block of sixteen queries: `kernels/nemotron.cu`'s `ABLK`.
+ABLK = 128
+
+_MEGA = {}
+
+
+def _mega_scratch(device, ctx_full, ctx_tail):
+    """Every buffer `mega_decode` writes, in the order its `Scratch` names them."""
+    nblock = -(-ctx_full // ABLK) + -(-ctx_tail // ABLK) + 2
+    key = (str(device), nblock)
+    if key not in _MEGA:
+        bf = dict(dtype=BF16, device=device)
+        f32 = dict(dtype=torch.float32, device=device)
+        _MEGA[key] = [
+            torch.empty(H, **bf), torch.empty(H, **bf), torch.empty(PROJ, **bf),
+            torch.empty(CONV, **bf), torch.empty(MI, **bf), torch.empty(MI, **bf),
+            torch.empty(QP + 2 * KVP, **bf), torch.empty(QP, **bf),
+            torch.empty(K * I, **bf), torch.empty(IS, **bf),
+            torch.empty(H, **f32), torch.empty(E, **f32),
+            torch.empty(nblock * HKV * GQA, **f32),
+            torch.empty(nblock * HKV * GQA, **f32),
+            torch.empty(nblock * HKV * GQA * DH, **f32),
+            torch.empty(K, dtype=torch.int32, device=device),
+            torch.empty(K, **f32), torch.empty(V, **f32),
+        ]
+    return _MEGA[key]
+
+
+_MEGA_META = {}
+
+
+def _mega_meta(device):
+    """The per-layer kind and its index within that kind, as the kernel reads them."""
+    if device not in _MEGA_META:
+        kid = {"linear_attention": 0, "full_attention": 1, "moe": 2}
+        kinds, ats, seen = [], [], {0: 0, 1: 0, 2: 0}
+        for k in KINDS:
+            kinds.append(kid[k])
+            ats.append(seen[kid[k]])
+            seen[kid[k]] += 1
+        _MEGA_META[device] = (
+            torch.tensor(kinds, dtype=torch.int32, device=device),
+            torch.tensor(ats, dtype=torch.int32, device=device))
+    return _MEGA_META[device]
+
+
+def _mega_cuda(twin, args, acts):
+    """One decode step as a single cooperative launch."""
+    _kernels = _sibling_import("kernels").ops
+
+    packed = twin._packed
+    device = packed.t["gam"].device
+    cur_pos = acts["cur_pos"]
+    ctx_full = ctx_tail = 0
+    states, fresh = [], []
+    conv_in, ssm_in, conv_out, ssm_out = [], [], [], []
+    kc, vc, kt, vt = [], [], [], []
+    out = []
+    for i, kind in enumerate(KINDS):
+        if kind == "linear_attention":
+            conv_in.append(acts[f"l{i}_conv_state"].reshape(-1))
+            ssm_in.append(acts[f"l{i}_ssm_state"].reshape(-1))
+            co = torch.empty(CONV * WIN, dtype=BF16, device=device)
+            so = torch.empty(MH * MD * SS, dtype=torch.float32, device=device)
+            conv_out.append(co)
+            ssm_out.append(so)
+            out.append((i, co.reshape(1, CONV, WIN), so.reshape(1, MH, MD, SS)))
+        elif kind == "full_attention":
+            a_kc, a_vc = acts[f"l{i}_k_cache"], acts[f"l{i}_v_cache"]
+            a_kt, a_vt = acts[f"l{i}_k_tail"], acts[f"l{i}_v_tail"]
+            ctx_full, ctx_tail = a_kc.shape[1], a_kt.shape[1]
+            kc.append(a_kc.reshape(-1))
+            vc.append(a_vc.reshape(-1))
+            kt.append(a_kt.reshape(-1))
+            vt.append(a_vt.reshape(-1))
+            out.append((i, a_kt, a_vt))
+    states = conv_in + ssm_in + conv_out + ssm_out + kc + vc + kt + vt
+    kinds, ats = _mega_meta(device)
+    scratch = _mega_scratch(device, ctx_full, ctx_tail)
+    logits = _kernels().mega_step(
+        [packed.t[n] for n in packing.PACK_ORDER], states, scratch, kinds, ats,
+        acts["token_ids"].reshape(-1), cur_pos, ctx_full, ctx_tail,
+        int(os.environ.get("NEMO_MEGA_LAYERS", "0")),
+        int(os.environ.get("NEMO_MEGA_SKIP", "0")))
+    if os.environ.get("NEMO_MEGA_LAYERS"):
+        return (scratch[0].float().reshape(1, H),)
+    for i, a, b in out:
+        if KINDS[i] == "linear_attention":
+            fresh += [a, b]
+        else:
+            fresh += [a[:, cur_pos:cur_pos + 1].reshape(1, 1, HKV, DH),
+                      b[:, cur_pos:cur_pos + 1].reshape(1, 1, HKV, DH)]
+    return (logits.reshape(1, V), *fresh)
+
+
+def _ops_step(w, acts, stop=None, attn_at=None, mamba=None, moe=None, attn=None):
     """One decode step, one torch call per operation.
 
     *stop* returns the running hidden row after that many layers instead of the
@@ -123,6 +323,17 @@ def _ops_step(w, acts, stop=None, attn_at=None):
     for i, kind in enumerate(KINDS):
         if stop is not None and i >= stop:
             return h.reshape(-1).float()
+        if kind == "linear_attention" and mamba is not None:
+            h, conv_out, ssm_out = mamba(i, h, w, acts)
+            fresh += [conv_out, ssm_out]
+            continue
+        if kind == "moe" and moe is not None:
+            h = moe(i, h, w, acts)
+            continue
+        if kind == "full_attention" and attn is not None and attn_at != i:
+            h, pair = attn(i, h, w, acts, cur_pos)
+            fresh += pair
+            continue
         h2 = _rms(h, w[f"l{i}_gamma"]).reshape(1, H)
         if kind == "linear_attention":
             conv_state, ssm_state = acts[f"l{i}_conv_state"], acts[f"l{i}_ssm_state"]
@@ -210,14 +421,14 @@ class Nemotron35Lightning30BA3BRuntime:
         the same code generated around a pair of parameters instead of around
         the step's own scratch.
         """
-        import mega_kernel  # noqa: PLC0415 -- compiled on first use
+        mega_kernel = _sibling_import("mega_kernel")
 
         return mega_kernel.run_attn("head", qg, k_cache, v_cache, k_tail, v_tail)
 
     @runtime_func
     def attend_by_context(self, qg, k_cache, v_cache, k_tail, v_tail):
         """The long-context placement, on its own. See `attend_by_head`."""
-        import mega_kernel  # noqa: PLC0415
+        mega_kernel = _sibling_import("mega_kernel")
 
         return mega_kernel.run_attn("context", qg, k_cache, v_cache, k_tail, v_tail)
 
@@ -228,7 +439,7 @@ class Nemotron35Lightning30BA3BRuntime:
         The same number the semantics dispatches on and the same number the
         step's own branch reads: `ctx_full`, against the crossover.
         """
-        import mega_kernel  # noqa: PLC0415
+        mega_kernel = _sibling_import("mega_kernel")
 
         return mega_kernel.run_attn("dispatch", qg, k_cache, v_cache, k_tail, v_tail)
 
@@ -242,11 +453,22 @@ class Nemotron35Lightning30BA3BRuntime:
         acts["token_ids"] = args[_INDEX["token_ids"]]
         if IMPL == "ops":
             return _ops_step(self._bound, acts)
+        if IMPL == "cuda":
+            return _mega_cuda(self, args, acts)
+        if IMPL == "cuda-stages":
+            return _ops_step(self._bound, acts, mamba=_mamba_cuda, moe=_moe_cuda,
+                             attn=_attn_cuda)
         return self._mega(args, acts)
 
     def _mega(self, args, acts):
-        import mega_kernel  # noqa: PLC0415 -- compiled on first use
+        mega_kernel = _sibling_import("mega_kernel")
 
+        if self._run is None:
+            # The runner carries the scratch and the address-table ring, not the
+            # weights: those are already packed, so it adopts the pack rather
+            # than allocating a second one.
+            self._run = mega_kernel.Runner(self._device)
+            self._run.packed = self._packed
         return mega_kernel.run_step(self._run, args, acts["cur_pos"], _INDEX)
 
     def load(self, resource):
@@ -257,12 +479,18 @@ class Nemotron35Lightning30BA3BRuntime:
         original. `_bound` then keeps the *view* standing for that weight, so the
         op-by-op path and `check`'s weight report see exactly what was declared
         while the kernel sees eighteen buffers.
-        """
-        import mega_kernel  # noqa: PLC0415
 
+        The layout comes from `packing`, which imports no backend. Loading
+        happens before an implementation is chosen -- `set_impl` may not have
+        been called yet -- so this must not branch on one, and the TileLang
+        runner is built when ``mega`` first runs rather than here.
+        """
         device = getattr(resource, "device", "cuda")
-        self._run = mega_kernel.Runner(device)
+        self._device = device
+        self._run = None
+        packed = packing.Packed(device)
+        self._packed = packed
         for name in self._ir.weights:
             value = resource.load(name)
-            self._bound[name] = mega_kernel.pack_into(self._run.packed, name, value)
+            self._bound[name] = packing.pack_into(packed, name, value)
             del value

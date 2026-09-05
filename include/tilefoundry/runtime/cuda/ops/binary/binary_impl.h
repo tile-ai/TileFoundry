@@ -13,8 +13,9 @@ template <class Op> struct Binary {
         auto &&d = detail::to_local(dst);
         using value_type = cute::remove_cvref_t<decltype(d(0))>;
         for (int i = 0; i < N; ++i) {
-            d(i) = static_cast<value_type>(op(static_cast<value_type>(l(i)),
-                                              static_cast<value_type>(r(i))));
+            d(i) = tilefoundry::detail::convert<value_type>(
+                op(tilefoundry::detail::convert<value_type>(l(i)),
+                   tilefoundry::detail::convert<value_type>(r(i))));
         }
     }
 };

@@ -60,24 +60,31 @@ def outputs():
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--ckpt", default=None,
-                    help="what `tilefoundry check --ckpt` wants is the "
-                         "**prepared** directory (or $NEMOTRON35_PREPARED)")
+                    help="what `tilefoundry check --weights ckpt:DIR` wants is "
+                         "the **prepared** directory (or $NEMOTRON35_PREPARED)")
     ap.add_argument("--source", default="runtime_model.py:Nemotron35Lightning30BA3BRuntime.decode_step")
     ap.add_argument("--ctx-full", default="0")
     ap.add_argument("--ctx-tail", default="1")
     ap.add_argument("--json", default="reports/check.json")
     ap.add_argument("--acts", default=None,
-                    help="a directory of real activation files from dump_acts.py")
+                    help="a directory of activation files from dump_acts.py. "
+                         "Without it the run draws activations independently, "
+                         "which `tilefoundry check` warns is not decisive for a "
+                         "model whose states are what earlier steps left behind")
     ap.add_argument("--dry", action="store_true")
     a = ap.parse_args()
 
-    cmd = ["tilefoundry", "check", a.source, "--ckpt", str(paths.need("prepared", a.ckpt)),
+    cmd = ["tilefoundry", "check", a.source,
+           "--weights", f"ckpt:{paths.need('prepared', a.ckpt)}",
            "--dim", f"ctx_full={a.ctx_full}", "--dim", f"ctx_tail={a.ctx_tail}",
            "--json", a.json]
-    cmd += [] if a.acts else ["--inputs", "real"]
     if a.acts:
-        for f in sorted(pathlib.Path(a.acts).glob("*.pt")):
-            cmd += ["--input", str(f)]
+        files = sorted(pathlib.Path(a.acts).glob("*.pt"))
+        if not files:
+            raise SystemExit(f"no *.pt under {a.acts}; run dump_acts.py first")
+        cmd += ["--inputs", "files:" + ",".join(str(f) for f in files)]
+    else:
+        cmd += ["--inputs", "random"]
     for at, (name, kind, k) in enumerate(outputs()):
         bound = _ULP * math.sqrt(max(k, 1))
         cmd += ["--out", f"output[{at}]", "--fn", "nan_inf"]
@@ -89,8 +96,12 @@ def main() -> int:
     if a.dry:
         print(" ".join(cmd))
         return 0
-    return subprocess.call([sys.executable.replace("python", "tilefoundry")] + cmd[1:]
-                           if False else cmd)
+    # The `tilefoundry` beside this interpreter, not whichever one PATH finds:
+    # a run made with one environment's python must not check with another's.
+    script = pathlib.Path(sys.executable).with_name("tilefoundry")
+    if script.exists():
+        cmd[0] = str(script)
+    return subprocess.call(cmd)
 
 
 if __name__ == "__main__":

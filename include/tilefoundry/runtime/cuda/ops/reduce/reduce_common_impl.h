@@ -103,14 +103,23 @@ __device__ float local_fold(SrcT const &s, int j, int step) {
     return acc;
 }
 
+/// Adapt ``reduce_traits<Op>::combine`` to the functor shape
+/// ``ops::warp_reduce`` takes.
+template <class Op> struct combine_fn {
+    __device__ static float apply(float a, float b) {
+        return reduce_traits<Op>::combine(a, b);
+    }
+};
+
 /// Intra-warp butterfly reduction (32 lanes → broadcast combine), using
 /// ``Op``'s combine (``+`` for sum/mean, ``fmaxf`` for absmax).
+///
+/// The shuffles themselves are ``ops::warp_reduce`` (ops/warp.cuh), which is
+/// where this file's ``__shfl_xor_sync`` used to be written out: one spelling
+/// of the butterfly, so a change to it cannot reach reduce and the warp op
+/// differently.
 template <class Op> __device__ float warp_butterfly(float val) {
-    for (int delta = 16; delta > 0; delta >>= 1) {
-        val = reduce_traits<Op>::combine(
-            val, __shfl_xor_sync(0xFFFFFFFFu, val, delta));
-    }
-    return val;
+    return warp_reduce<combine_fn<Op>>(val);
 }
 
 /// Cross-warp SUM aggregation via a shared-memory workspace.
