@@ -1,4 +1,4 @@
-"""Audit baselines for the authored TIR print/import surface."""
+"""Canonical fixture contracts for the authored HIR and TIR surfaces."""
 
 from __future__ import annotations
 
@@ -17,7 +17,11 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.stmts import For, Sequential
 from tilefoundry.ir.types import DType, TensorType
 
-FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "tir"
+FIXTURES = Path(__file__).parents[1] / "fixtures"
+CANONICAL = (
+    *(FIXTURES / "tir").glob("*.py"),
+    *(FIXTURES / "logical").glob("canonical_*.py"),
+)
 
 
 def _module_in(path: Path):
@@ -30,7 +34,7 @@ def _module_in(path: Path):
 
 @pytest.mark.parametrize(
     "path",
-    sorted(path for path in FIXTURE_DIR.glob("*.py") if path.name != "__init__.py"),
+    sorted(path for path in CANONICAL if path.name != "__init__.py"),
     ids=lambda path: path.stem,
 )
 def test_fixture_prints_back_to_its_own_source(path: Path) -> None:
