@@ -18,9 +18,9 @@ from tilefoundry.ir.tir.stmts import (
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import Mesh, ShardLayout
+from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout
 from tilefoundry.ir.visitor import StmtVisitor
-from tilefoundry.utils.python_source import PythonExpr, _merge_imports
+from tilefoundry.utils.python_source import PythonExpr, _merge_imports, dataclass_to_python
 
 
 class _RenderedLines(list):
@@ -42,9 +42,89 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         self.indent = indent
 
     def render_value(self, value, ctx=None, indent: str = ""):
-        if isinstance(value, (Mesh, ShardLayout)) and ctx is not None and ctx.mesh_alias(value) is None:
-            return ctx.use(value.to_python())
+        if isinstance(value, ShardLayout):
+            if ctx is not None:
+                ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import ShardLayout",), ""))
+            attrs = ", ".join(self._shard_attr_str(a, ctx) for a in value.attrs)
+            if len(value.attrs) == 1:
+                attrs += ","
+            return f"ShardLayout(layout={self.render_layout(value.layout, ctx)}, attrs=({attrs}), mesh={self._render_mesh_dataclass(value.mesh, ctx)})"
+        if isinstance(value, Mesh):
+            if ctx is not None and ctx.mesh_alias(value) is not None:
+                return ctx.mesh_alias(value)
+            rendered = dataclass_to_python(value, "tilefoundry.ir.types.shard")
+            return ctx.use(rendered) if ctx is not None else rendered.text
         return super().render_value(value, ctx, indent)
+
+    def render_layout(self, layout, ctx=None, indent: str = ""):
+        if isinstance(layout, Layout):
+            if ctx is not None:
+                ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Layout",), ""))
+            strides = self.shape_tuple(layout.strides, ctx) if layout.strides is not None else "None"
+            return f"Layout(shape={self.shape_tuple(layout.shape, ctx)}, strides={strides})"
+        return super().render_layout(layout, ctx, indent)
+
+    def _render_layout_positional(self, layout, ctx=None):
+        if isinstance(layout, Layout):
+            strides = self.shape_tuple(layout.strides, ctx) if layout.strides is not None else "None"
+            return f"Layout({self.shape_tuple(layout.shape, ctx)}, {strides})"
+        return self.render_layout(layout, ctx)
+
+    def render_shard_layout(self, layout, ctx=None, indent: str = "", *, mesh_ref=None):
+        if ctx is not None:
+            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import ShardLayout",), ""))
+        child = indent + "    "
+        attrs = ", ".join(self._shard_attr_str(attr, ctx) for attr in layout.attrs)
+        if len(layout.attrs) == 1:
+            attrs += ","
+        mesh_text = mesh_ref if mesh_ref is not None else self._render_mesh_compact(layout.mesh, ctx)
+        return (
+            "ShardLayout(\n"
+            f"{child}layout={self._render_layout_positional(layout.layout, ctx)},\n"
+            f"{child}attrs=({attrs}),\n"
+            f"{child}mesh={mesh_text},\n"
+            f"{indent})"
+        )
+
+    def _render_mesh_dataclass(self, mesh, ctx=None):
+        if ctx is not None:
+            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Mesh, Topology",), ""))
+        values = ", ".join(f'Topology(name="{t.name}", size={self.dim_entry(t.size, ctx)})' for t in mesh.topologies)
+        if len(mesh.topologies) == 1:
+            values += ","
+        names = ", ".join(f'"{n}"' for n in mesh.names)
+        if len(mesh.names) == 1:
+            names += ","
+        layout = self.render_layout(mesh.layout, ctx)
+        if isinstance(mesh.layout, Layout):
+            layout = f"Layout(shape={mesh.layout.shape!r}, strides={mesh.layout.strides!r})"
+        return f"Mesh(topologies=({values}), layout={layout}, names=({names}))"
+
+    def render_mesh(self, mesh, ctx=None, indent: str = ""):
+        if ctx is not None:
+            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Mesh, Topology",), ""))
+        values = ", ".join(
+            f'Topology("{topology.name}", {self.dim_entry(topology.size, ctx)})'
+            for topology in mesh.topologies
+        )
+        topologies = f"({values}{',' if len(mesh.topologies) == 1 else ''})"
+        names = f", names={tuple(mesh.names)!r}" if mesh.names else ", names=()"
+        return f"Mesh(topologies={topologies}, layout={self.render_layout(mesh.layout, ctx)}{names})"
+
+    def _render_mesh_compact(self, mesh, ctx=None):
+        if ctx is not None:
+            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Topology",), ""))
+        values = ", ".join(
+            f'Topology("{topology.name}", {self.dim_entry(topology.size, ctx)})'
+            for topology in mesh.topologies
+        )
+        topologies = f"({values}{',' if len(mesh.topologies) == 1 else ''})"
+        names = f", names={tuple(mesh.names)!r}" if mesh.names else ""
+        layout = self.render_layout(mesh.layout, ctx)
+        if isinstance(mesh.layout, Layout):
+            strides = self.shape_tuple(mesh.layout.strides, ctx) if mesh.layout.strides is not None else "None"
+            layout = f"Layout({self.shape_tuple(mesh.layout.shape, ctx)}, {strides})"
+        return f"Mesh({topologies}, {layout}{names})"
 
     def visit(self, stmt, ctx=None):  # type: ignore[override]
         return StmtVisitor.visit(self, stmt)
@@ -59,7 +139,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         return self._emit_evaluate(stmt)
 
     def visit_MeshScope(self, stmt):
-        lines = [f"{self.indent}with {self.render_mesh(stmt.mesh, self.context, self.indent)} as {stmt.binding.name}:"]
+        lines = [f"{self.indent}with {self._render_mesh_compact(stmt.mesh, self.context)} as {stmt.binding.name}:"]
         self.context.push_mesh(stmt.mesh, stmt.binding.name)
         lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body))
         self.context.pop_mesh()

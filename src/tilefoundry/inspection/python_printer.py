@@ -62,7 +62,7 @@ from tilefoundry.ir.types.dim import (
     DimVar,
 )
 from tilefoundry.ir.types.shard import try_c_order_strides
-from tilefoundry.ir.types.shard.layout import Layout, LayoutBase
+from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
@@ -1369,9 +1369,51 @@ def _emit_header(
     lines.append("from tilefoundry.dsl.tf import *  # noqa: F401, F403")
     lines.append(f"from tilefoundry.dsl import {_tensor_import_names(fn)}")
     lines.append("from tilefoundry.dsl.storage import gmem, host, rmem, smem, tmem  # noqa: F401")
-    lines.append("from tilefoundry.ir.types.shard import (")
-    lines.append(f"{indent}B, S, P, ComposedLayout, Layout, Mesh, ShardLayout, Topology,")
-    lines.append(")")
+    shard_names = {"Layout", "Mesh", "Topology"} if meshes else set()
+    if for_module:
+        shard_names.add("Topology")
+    layouts = []
+    functions = (fn, *fn.variants)
+    for current in functions:
+        for param in current.params:
+            if isinstance(param.type, TensorType):
+                layouts.append(param.type.layout)
+        if isinstance(current.return_type, TensorType):
+            layouts.append(current.return_type.layout)
+    for current in functions:
+        for expr in iter_exprs(current.body):
+            if isinstance(expr.type, TensorType):
+                layouts.append(expr.type.layout)
+            if isinstance(expr, Call):
+                for candidate in vars(expr.target).values() if hasattr(expr.target, "__dict__") else ():
+                    if isinstance(candidate, LayoutBase):
+                        layouts.append(candidate)
+                    elif isinstance(candidate, TensorType):
+                        layouts.append(candidate.layout)
+    def nested_layouts(layout):
+        if isinstance(layout, ComposedLayout):
+            yield layout
+            if layout.inner is not None:
+                yield from nested_layouts(layout.inner)
+            if layout.outer is not None:
+                yield from nested_layouts(layout.outer)
+        elif isinstance(layout, ShardLayout):
+            yield layout
+            yield from nested_layouts(layout.layout)
+
+    all_layouts = [nested for layout in layouts for nested in nested_layouts(layout)]
+    if any(isinstance(layout, ShardLayout) for layout in all_layouts):
+        shard_names.add("ShardLayout")
+    if any(isinstance(layout, ComposedLayout) for layout in all_layouts):
+        shard_names.add("ComposedLayout")
+    for layout in all_layouts:
+        if isinstance(layout, ShardLayout):
+            for attr in layout.attrs:
+                shard_names.add({Broadcast: "B", Split: "S", Partial: "P"}.get(type(attr), ""))
+    shard_names.discard("")
+    shard_import = ", ".join(sorted(shard_names))
+    if shard_import:
+        lines.append(f"from tilefoundry.ir.types.shard import {shard_import}")
     if fn.variants:
         lines.append("from tilefoundry.ir.core.pattern import DimVarRangePat")
     if dim_vars:

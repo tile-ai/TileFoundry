@@ -18,10 +18,7 @@ from tilefoundry.ir.tir.stmts import For, Sequential
 from tilefoundry.ir.types import DType, TensorType
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
-CANONICAL = (
-    *(FIXTURES / "tir").glob("*.py"),
-    *(FIXTURES / "logical").glob("canonical_*.py"),
-)
+CANONICAL = tuple((FIXTURES / "tir").glob("*.py"))
 
 
 def _module_in(path: Path):

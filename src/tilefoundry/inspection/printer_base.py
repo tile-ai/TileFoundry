@@ -17,6 +17,7 @@ from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, ShardLayout, Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import ExprFunctor
+from tilefoundry.target import Target
 from tilefoundry.utils.python_source import PythonExpr
 
 
@@ -52,12 +53,11 @@ class PythonPrinter(ExprFunctor[str]):
             if ctx is not None:
                 ctx.use(PythonExpr((f"from {type(value).__module__} import {type(value).__name__}",), ""))
             return f"{type(value).__name__}.{value.name}"
-        rendered = getattr(value, "to_python", None)
-        if callable(rendered):
-            expr = rendered()
+        if isinstance(value, Target):
+            expr = value.to_python()
             return ctx.use(expr) if ctx is not None else expr.text
         if isinstance(value, DType):
-            return repr(value.name)
+            return self.dtype_str(value, ctx)
         if isinstance(value, (str, int, float, bool, tuple, type(None))):
             if isinstance(value, tuple):
                 vals = ", ".join(self.render_value(v, ctx, indent) for v in value)

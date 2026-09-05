@@ -1,5 +1,7 @@
 """Small, layer-independent vocabulary for values that render Python source."""
 
+# ruff: noqa: PLC0415, I001
+
 from __future__ import annotations
 
 import json
@@ -36,6 +38,39 @@ def _value_to_python(value: object) -> PythonExpr:
     to_python = getattr(value, "to_python", None)
     if callable(to_python):
         return to_python()
+    from tilefoundry.ir.types import DType
+    from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
+    from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
+    from tilefoundry.ir.types.shard.mesh import Mesh, Topology
+    from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+
+    if isinstance(value, DType):
+        return PythonExpr(("from tilefoundry.ir.types import DType",), f"DType.{value.name}")
+    if isinstance(value, Broadcast):
+        return PythonExpr(("from tilefoundry.ir.types.shard import B",), "B()")
+    if isinstance(value, Split):
+        return PythonExpr(("from tilefoundry.ir.types.shard import S",), f"S({value.axis})")
+    if isinstance(value, Partial):
+        return PythonExpr(("from tilefoundry.ir.types.shard import P",), f'P("{value.reduction}")')
+    if isinstance(value, Layout):
+        return PythonExpr((), f"Layout(shape={value.shape!r}, strides={value.strides!r})")
+    if isinstance(value, ComposedLayout):
+        return dataclass_to_python(value, "tilefoundry.ir.types.shard")
+    if isinstance(value, Topology):
+        return PythonExpr((), f"Topology(name={json.dumps(value.name)}, size={value.size!r})")
+    if isinstance(value, Mesh):
+        topologies = ", ".join(_value_to_python(item).text for item in value.topologies)
+        if len(value.topologies) == 1:
+            topologies += ","
+        names = ", ".join(json.dumps(item) for item in value.names)
+        if len(value.names) == 1:
+            names += ","
+        return PythonExpr((), f"Mesh(topologies=({topologies}), layout={_value_to_python(value.layout).text}, names=({names}))")
+    if isinstance(value, ShardLayout):
+        attrs = ", ".join(_value_to_python(item).text for item in value.attrs)
+        if len(value.attrs) == 1:
+            attrs += ","
+        return PythonExpr((), f"ShardLayout(layout={value.layout!r}, attrs=({attrs}), mesh={value.mesh!r})")
     if isinstance(value, str):
         return PythonExpr((), json.dumps(value))
     if value is None or isinstance(value, (bool, int, float)):
@@ -46,7 +81,9 @@ def _value_to_python(value: object) -> PythonExpr:
         return PythonExpr(
             _merge_imports(*(item.imports for item in values)),
             "(" + ", ".join(item.text for item in values) + suffix + ")",
-        )
+            )
+    if is_dataclass(value):
+        return dataclass_to_python(value, "tilefoundry.ir.types.shard")
     raise TypeError(f"cannot render {type(value).__name__} as canonical Python")
 
 

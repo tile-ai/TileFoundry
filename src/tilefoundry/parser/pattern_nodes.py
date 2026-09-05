@@ -4055,11 +4055,24 @@ class ForPattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
+@dataclass(frozen=True)
+class TirOnlyStatementRule:
+    STATEMENT: ClassVar[str] = "A TIR-only statement must appear in a prim_func."
+
+    def apply(self, value, *, match, context):
+        if context.function is None or context.function.dialect != "tir":
+            raise ParseError.from_node(
+                match.node, context,
+                f"{match.element_name} is a TIR statement; HIR does not support it",
+            )
+        return value
+
+
 class IfPattern(ElementPattern):
-    element_name = "tir_if"
+    element_name = "if"
     syntax = LazyPattern(
         lambda: BranchPattern(
-            "tir_if",
+            "if",
             AstNodePattern(
                 ast.If,
                 CapturePattern("cond_node", lambda node, context: node.test),
@@ -4069,14 +4082,9 @@ class IfPattern(ElementPattern):
                     OptionalPattern(ChildPattern("else", BlockPattern(), "block", transform=_body_as_ast_module)),
                 ),
             ),
-            pattern_id="statement.tir_if",
+            pattern_id="statement.if",
         )
     )
-
-    def match(self, node, context):
-        if context.function is None or context.function.dialect != "tir":
-            return None
-        return super().match(node, context)
 
     @staticmethod
     def construct(match, children, context):
@@ -4086,26 +4094,21 @@ class IfPattern(ElementPattern):
             children.get("else", runtime.Sequential(body=())),
         )
 
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = (TirOnlyStatementRule(),)
 
 class WhilePattern(ElementPattern):
-    element_name = "tir_while"
-    syntax = LazyPattern(lambda: BranchPattern("tir_while", AstNodePattern(
+    element_name = "while"
+    syntax = LazyPattern(lambda: BranchPattern("while", AstNodePattern(
         ast.While,
         CapturePattern("cond_node", lambda node, context: node.test),
         FieldPattern("body", ChildPattern("body", BlockPattern(), "block", transform=_body_as_ast_module)),
-    ), pattern_id="statement.tir_while"))
-
-    def match(self, node, context):
-        if context.function is None or context.function.dialect != "tir":
-            return None
-        return super().match(node, context)
+    ), pattern_id="statement.while"))
 
     @staticmethod
     def construct(match, children, context):
         return runtime.While(_tir_scalar_expr(match.captures["cond_node"], context), children["body"])
 
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = (TirOnlyStatementRule(),)
 
 
 def _tir_scalar_expr(node: ast.expr, context):

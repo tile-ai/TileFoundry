@@ -160,8 +160,8 @@ type-annotation       ::= tensor
                           | scalar-type
 signature             ::= (name ':' type-annotation (',' name ':' type-annotation)*)?
 return-type           ::= type-annotation
-tir-if                ::= if cond-node block (block)?
-tir-while             ::= while cond-node block
+if                    ::= if cond-node block (block)?
+while                 ::= while cond-node block
 loop-iterator         ::= 'tile' '(' expression ',' expression ')'
                           | 'range' '(' (expression | expression ',' expression | expression ','
                             expression ',' expression) ')'
@@ -219,8 +219,8 @@ runtime-expression    ::= op-call
                           | primary '.' identifier
 tuple-assignment      ::= '(' identifier (',' identifier)* ')' '=' runtime-expression
 where-annotation      ::= 'where' '(' ')'
-statement             ::= tir-if
-                          | tir-while
+statement             ::= if
+                          | while
                           | for
                           | with
                           | tuple-assignment
@@ -251,6 +251,7 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | function | function | FunctionReturnCompatibilityRule | A HIR body with a return annotation must satisfy that annotation; a dispatch prototype must declare one, and each variant body must satisfy the prototype return contract. | src/tilefoundry/parser/pattern_nodes.py |
 | function | function | FunctionRoleValidationRule | A root, variant, or converter must satisfy its role before registration. | src/tilefoundry/parser/pattern_nodes.py |
 | function | function | FunctionSignatureRule | A function must construct an ordered parameter tuple. | src/tilefoundry/parser/pattern_nodes.py |
+| if, while | loop_statement, statement | TirOnlyStatementRule | A TIR-only statement must appear in a prim_func. | src/tilefoundry/parser/pattern_nodes.py |
 | index_slice | subscript_index | TileWindowSliceBoundRule | A tile window cannot be used as a slice bound. | src/tilefoundry/parser/pattern_nodes.py |
 | module | module_finalization | ModuleFinalizationRule | A module declaration must contain valid unique members and a resolvable entry. | src/tilefoundry/parser/ast_pattern.py |
 | module | module_function | ModuleFunctionRegistrationRule | A validated module function must be recorded in declaration order. | src/tilefoundry/parser/ast_pattern.py |

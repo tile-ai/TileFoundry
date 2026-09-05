@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.utils.python_source import PythonExpr, dataclass_to_python
-
 from .layout import ComposedLayout, Layout, LayoutBase
 from .layout_algebra import try_c_order_strides
 from .mesh import Mesh
@@ -11,32 +9,22 @@ from .mesh import Mesh
 
 class ShardAttr:
     """Base for per-mesh-axis sharding attributes."""
-
-    def to_python(self) -> PythonExpr:
-        raise TypeError(f"cannot render shard attribute {type(self).__name__}")
+    pass
 
 
 @dataclass(frozen=True)
 class Split(ShardAttr):
     axis: int
 
-    def to_python(self) -> PythonExpr:
-        return PythonExpr(("from tilefoundry.ir.types.shard import S",), f"S({self.axis})")
-
 
 @dataclass(frozen=True)
 class Partial(ShardAttr):
     reduction: str = "sum"
 
-    def to_python(self) -> PythonExpr:
-        return PythonExpr(("from tilefoundry.ir.types.shard import P",), f'P("{self.reduction}")')
-
 
 @dataclass(frozen=True)
 class Broadcast(ShardAttr):
-    def to_python(self) -> PythonExpr:
-        return PythonExpr(("from tilefoundry.ir.types.shard import B",), "B()")
-
+    pass
 
 @dataclass(frozen=True)
 class Dynamic(ShardAttr):
@@ -62,9 +50,6 @@ class ShardLayout(LayoutBase):
     layout: LayoutBase
     attrs: tuple[ShardAttr, ...]
     mesh: Mesh
-
-    def to_python(self) -> PythonExpr:
-        return dataclass_to_python(self, "tilefoundry.ir.types.shard")
 
     @property
     def shape(self) -> tuple:
