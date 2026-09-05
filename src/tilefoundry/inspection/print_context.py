@@ -28,7 +28,7 @@ class HirPrintContext(PrintContext):
         self.mesh_name_map = mesh_name_map or {}
 
     def mesh_alias(self, mesh) -> str | None:
-        return self.mesh_name_map.get(id(mesh)) if mesh.names else None
+        return self.mesh_name_map.get(id(mesh))
 
     def mesh_count(self) -> int:
         return len(self.mesh_name_map)

@@ -9,8 +9,6 @@ from tilefoundry.ir.types.shard import (
     B, S, P, ComposedLayout, Layout, Mesh, ShardLayout, Topology,
 )
 
-cta_2 = Mesh((Topology("cta", 8),), Layout((8,), (1,)), names=())
-
 @module(entry="run", topologies=(Topology("cta", 8),))
 class CanonicalAnonMesh:
     @func
@@ -27,6 +25,5 @@ class CanonicalAnonMesh:
             attrs=(B(),),
             mesh=Mesh((Topology("cta", 8),), Layout((8,), (1,))),
         )]:
-        with cta_2 as _cta_2:
-            v0 = mul(x, x)
-            return v0
+        v0 = mul(x, x)
+        return v0
