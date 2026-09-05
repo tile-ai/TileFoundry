@@ -3882,7 +3882,9 @@ class LoopHeaderPattern(ElementPattern):
         children.extend(
             AstChild(
                 field_name,
-                StaticValuePattern(),
+                ChoicePattern(ExpressionPattern(), StaticValuePattern())
+                if context.function is not None and context.function.dialect == "tir"
+                else StaticValuePattern(),
                 argument,
                 "loop_bound",
                 field_name,
@@ -3905,8 +3907,17 @@ class LoopHeaderPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
+        if context.function is not None and context.function.dialect == "tir":
+            iv = runtime.Var(type=runtime.TensorType.scalar(runtime.DType.i64), name=match.captures["target"])
+            values = dict(match.captures["defaults"])
+            values.update({name: value for name, value in children.items() if name != "carry"})
+            bounds = [values[name] for name in ("start", "extent", "step")]
+            bounds = [_constant(v) if isinstance(v, (bool, int, float)) else v for v in bounds]
+            context.lexical_scope.push_frame()
+            context.lexical_scope.define(match.captures["target"], iv)
+            return (iv, *bounds)
         if context.function is None or context.function.dialect != "hir":
-            raise ParseError.from_node(match.node, context, "loops require HIR context")
+            raise ParseError.from_node(match.node, context, "HIR loop header in a non-HIR context")
         values = dict(match.captures["defaults"])
         values.update((name, value) for name, value in children.items() if name != "carry")
         try:
@@ -3999,29 +4010,24 @@ class LoopBodyPattern(ElementPattern):
 class ForPattern(ElementPattern):
     element_name = "for"
     syntax = LazyPattern(
-        lambda: BranchPattern(
-            "loop",
-            AstNodePattern(
-                ast.For,
-                ChildPattern("header", LoopHeaderPattern(), "loop_header"),
-                FieldPattern(
-                    "body",
-                    ChildPattern(
-                        "body",
-                        LoopBodyPattern(),
-                        "loop_body",
-                        transform=_body_as_ast_module,
-                    ),
-                ),
-            ),
-            pattern_id="statement.for",
-        )
+        lambda: BranchPattern("loop", AstNodePattern(
+            ast.For,
+            ChildPattern("header", LoopHeaderPattern(), "loop_header"),
+            FieldPattern("body", ChildPattern("body", ChoicePattern(
+                ConditionPattern("tir loop body", lambda node, context: context.function is not None and context.function.dialect == "tir", BlockPattern()),
+                ConditionPattern("hir loop body", lambda node, context: context.function is None or context.function.dialect == "hir", LoopBodyPattern()),
+            ), "loop_body", transform=_body_as_ast_module)),
+        ), pattern_id="statement.for")
     )
 
     @staticmethod
     def construct(match, children, context):
         frame = children["header"]
         body = children["body"]
+        if context.function is not None and context.function.dialect == "tir":
+            context.lexical_scope.pop_frame()
+            induction_var, start, stop, step = frame
+            return runtime.For(induction_var, start, stop, step, body)
         yield_values = tuple(context.lexical_scope.lookup(name) for name in frame.carry_names)
         context.lexical_scope.pop_frame()
         if frame.carry_names:
@@ -4047,6 +4053,83 @@ class ForPattern(ElementPattern):
         return grid
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+
+class IfPattern(ElementPattern):
+    element_name = "tir_if"
+    syntax = LazyPattern(
+        lambda: BranchPattern(
+            "tir_if",
+            AstNodePattern(
+                ast.If,
+                CapturePattern("cond_node", lambda node, context: node.test),
+                FieldPattern("body", ChildPattern("then", BlockPattern(), "block", transform=_body_as_ast_module)),
+                FieldPattern(
+                    "orelse",
+                    OptionalPattern(ChildPattern("else", BlockPattern(), "block", transform=_body_as_ast_module)),
+                ),
+            ),
+            pattern_id="statement.tir_if",
+        )
+    )
+
+    def match(self, node, context):
+        if context.function is None or context.function.dialect != "tir":
+            return None
+        return super().match(node, context)
+
+    @staticmethod
+    def construct(match, children, context):
+        return runtime.If(
+            _tir_scalar_expr(match.captures["cond_node"], context),
+            children["then"],
+            children.get("else", runtime.Sequential(body=())),
+        )
+
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+class WhilePattern(ElementPattern):
+    element_name = "tir_while"
+    syntax = LazyPattern(lambda: BranchPattern("tir_while", AstNodePattern(
+        ast.While,
+        CapturePattern("cond_node", lambda node, context: node.test),
+        FieldPattern("body", ChildPattern("body", BlockPattern(), "block", transform=_body_as_ast_module)),
+    ), pattern_id="statement.tir_while"))
+
+    def match(self, node, context):
+        if context.function is None or context.function.dialect != "tir":
+            return None
+        return super().match(node, context)
+
+    @staticmethod
+    def construct(match, children, context):
+        return runtime.While(_tir_scalar_expr(match.captures["cond_node"], context), children["body"])
+
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+
+def _tir_scalar_expr(node: ast.expr, context):
+    if isinstance(node, ast.Name):
+        value = context.lexical_scope.lookup(node.id)
+        if isinstance(value, runtime.Expr):
+            return value
+    if isinstance(node, ast.Constant) and isinstance(node.value, (bool, int)):
+        return _constant(node.value)
+    if isinstance(node, ast.Compare) and len(node.ops) == 1 and len(node.comparators) == 1:
+        kind = _EXPR_BINARY_KINDS.get(type(node.ops[0]))
+        if kind is not None:
+            lhs = _tir_scalar_expr(node.left, context)
+            rhs = _tir_scalar_expr(node.comparators[0], context)
+            return runtime.Call(
+                type=runtime.TensorType.scalar(runtime.DType.bool),
+                target=runtime.Binary(kind=runtime.BinaryKind[kind]),
+                args=(lhs, rhs),
+            )
+    raise ParseError.from_node(
+        node,
+        context,
+        "TIR if predicate must be an integer/bool constant, scalar variable, or supported comparison",
+    )
 
 
 class TupleAssignmentPattern(ElementPattern):
@@ -4148,6 +4231,8 @@ class StatementPattern(ElementPattern):
     element_name = "statement"
     syntax = LazyPattern(
         lambda: ChoicePattern(
+            IfPattern(),
+            WhilePattern(),
             ForPattern(),
             WithPattern(),
             TupleAssignmentPattern(),

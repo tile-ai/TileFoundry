@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
-from tilefoundry.ir.core import Constant
 from tilefoundry.ir.tir.stmts import For
+
+from .scalar_expr import render_scalar_expr
 
 
 @register_codegen_cuda(For)
 def _emit(node: For, ctx: CodegenContext) -> None:
     iv_name = ctx.name_for(node.induction_var)
-    start = node.start.value if isinstance(node.start, Constant) else 0
-    stop = node.stop.value if isinstance(node.stop, Constant) else 1
-    step = node.step.value if isinstance(node.step, Constant) else 1
+    start = render_scalar_expr(node.start, ctx)
+    stop = render_scalar_expr(node.stop, ctx)
+    step = render_scalar_expr(node.step, ctx)
 
     ctx.emit(f"for (int {iv_name} = {start}; {iv_name} < {stop}; {iv_name} += {step}) {{")
     ctx.indent()

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from tilefoundry.utils.python_source import PythonExpr, dataclass_to_python
+
 from .int_tuple import flatten
 
 
@@ -21,6 +23,9 @@ class Layout(LayoutBase):
     shape: tuple["ShapeDim", ...]
     strides: Optional[tuple["ShapeDim", ...]] = None
 
+    def to_python(self) -> PythonExpr:
+        return dataclass_to_python(self, "tilefoundry.ir.types.shard")
+
 
 @dataclass(frozen=True)
 class ComposedLayout(LayoutBase):
@@ -36,6 +41,9 @@ class ComposedLayout(LayoutBase):
     inner: LayoutBase | None
     offset: int
     outer: LayoutBase | None
+
+    def to_python(self) -> PythonExpr:
+        return dataclass_to_python(self, "tilefoundry.ir.types.shard")
 
     @property
     def shape(self) -> tuple:

@@ -13,10 +13,11 @@ from __future__ import annotations
 from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.tir.abort import Abort
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.memory import AllocTensor as AllocTensorOp
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.stmts import Abort, LetStmt, Sequential
+from tilefoundry.ir.tir.stmts import Evaluate, LetStmt, Sequential
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.passes.transforms import HirToTirPass
@@ -43,7 +44,13 @@ def test_lifetime_collector_finds_buffer_inside_dispatch_call_fallback():
     buf_var = Var(type=buf_type, name="buf")
     alloc_call = Call(type=buf_type, target=AllocTensorOp(tensor_type=buf_type), args=())
     fallback = Sequential(
-        body=(LetStmt(var=buf_var, value=alloc_call, body=Sequential(body=(Abort(),))),)
+        body=(
+            LetStmt(
+                var=buf_var,
+                value=alloc_call,
+                body=Sequential(body=(Evaluate(callable=Abort(message=""), args=()),)),
+            ),
+        )
     )
     dispatch = DispatchCall(
         callee_name="f",

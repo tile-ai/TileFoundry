@@ -21,7 +21,6 @@ from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import (
-    Abort,
     Evaluate,
     For,
     If,
@@ -136,7 +135,7 @@ def _stmt_children(stmt: Stmt) -> tuple[Stmt, ...]:
         case DispatchCall(case_calls=case_calls, fallback=fallback):
             return (*case_calls, fallback)
 
-        case Return() | Evaluate() | Abort():
+        case Return() | Evaluate():
             return ()
         case _:
             raise AssertionError(f"_stmt_children: unknown Stmt subclass {type(stmt).__name__}")
@@ -166,7 +165,7 @@ def _rebuild_stmt_children(stmt: Stmt, new_children: tuple[Stmt, ...]) -> Stmt:
                 case_calls=tuple(new_case_calls),
                 fallback=new_fallback,
             )
-        case Return() | Evaluate() | Abort():
+        case Return() | Evaluate():
             return stmt
         case _:
             raise AssertionError(

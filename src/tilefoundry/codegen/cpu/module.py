@@ -20,11 +20,12 @@ from tilefoundry.codegen.registry import CodeGenerator
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat
+from tilefoundry.ir.tir.abort import Abort
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
-from tilefoundry.ir.tir.stmts import Abort, Evaluate, Sequential
+from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import (
     DimAdd,
@@ -354,7 +355,8 @@ def _lower_dispatch(entry: PrimFunction, dispatch: DispatchCall, module):
     if not (
         isinstance(fb, Sequential)
         and len(fb.body) == 1
-        and isinstance(fb.body[0], Abort)
+        and isinstance(fb.body[0], Evaluate)
+        and isinstance(fb.body[0].callable, Abort)
     ):
         raise NotImplementedError(
             "emit_host_module: dispatch v1 expects fallback Sequential((Abort,))"

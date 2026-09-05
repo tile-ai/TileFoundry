@@ -92,12 +92,12 @@ def hir_function_to_python(
 
 ```python
 def as_script(
-    fn: hir.Function | Module,
+    fn: hir.Function | tir.PrimFunction | Module,
     *,
     module: str | None = None,
     options: PythonPrintOptions | None = None,
 ) -> str:
-    """Render a HIR function or Module as Python DSL source.
+    """Render a HIR/TIR function or Module as Python DSL source.
 
     Args:
         fn: Function or Module to render.
@@ -122,6 +122,12 @@ def module_to_python(fn: hir.Function, module_name: str = "M") -> str:
     """
     ...
 ```
+
+For TIR, `as_script` emits `@prim_func` and statement-form DSL. A
+`PrimFunction` passed with `module=None` is rendered standalone; passing
+`module="Name"` wraps it in an `@module` class, preserving the caller's
+explicit wrapper request. Module output computes imports from names actually
+used by the rendered program and MUST remain lint-clean.
 
 - constraints:
   - Module input MUST emit every HIR Function and preserve shared `Mesh` and
@@ -254,6 +260,15 @@ validation artifact.
 
 ### 2.7 Round-trip contract
 
+For authored TIR, canonical fixture source is the contract:
+`as_script(module) == fixture_source`. This pins the spelling authors consume,
+not merely a printer/parser fixed point.
+
+Lowering-only nodes have a different contract. `ShapeOf` and `DispatchCall` are
+assembled while lowering HIR specialization tables and have no authored parser
+surface. The printer MUST render them without raising and preserve their
+semantics in readable text, but that text is not required to import.
+
 A rendering is one of two surfaces:
 
 **Canonical** — the rendering of a function with no `DimVar` parameter, or a
@@ -270,11 +285,11 @@ MUST agree over
   [parser §2.1](./parser.md#21-syntax) value-state form, and preserve `Partial.reduction` plus the
   attrs-position mesh axis in the underlying IR
 
-**Display-only** — the rendering of a function with a `DimVar` parameter, and
-therefore of any dispatch prototype and its `.specialize` variants ([§2.6](#26-specialization-printing)). A
-display-only rendering is human-readable and MUST NOT be used as a
-structural round-trip validation artifact: it is held to importing, not to the
-same structural comparison.
+**Display-only** — the rendering of a function with a `DimVar` parameter, a
+dispatch prototype and its `.specialize` variants ([§2.6](#26-specialization-printing)),
+or lowering-only `ShapeOf` / `DispatchCall` nodes. A display-only rendering is
+human-readable and MUST NOT be used as a structural round-trip validation
+artifact. Lowering-only node renderings need not import.
 
 A canonical grid loop MUST render each yielded expression under its own unique
 binding. After the loop body has emitted every yielded expression, the printer

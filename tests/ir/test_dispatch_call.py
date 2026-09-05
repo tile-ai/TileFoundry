@@ -14,10 +14,11 @@ import pytest
 
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.core.pattern import DimVarRangePat, ScalarPat
+from tilefoundry.ir.tir.abort import Abort
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
-from tilefoundry.ir.tir.stmts import Abort, Evaluate, Return, Sequential
+from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
 from tilefoundry.ir.tir.symbol_ref import SymbolRef, symbol_call
 from tilefoundry.ir.tir.verify import verify_module
 from tilefoundry.ir.types import DType, TensorType, callable_type_for_prim_function
@@ -60,7 +61,9 @@ def _build_module(
         subjects=subjects,
         case_patterns=case_patterns,
         case_calls=tuple(symbol_call(c, (x_entry,)) for c in callees),
-        fallback=fallback if fallback is not None else Sequential(body=(Abort(),)),
+        fallback=fallback
+        if fallback is not None
+        else Sequential(body=(Evaluate(callable=Abort(message=""), args=()),)),
     )
     entry = PrimFunction(
         name="main",
@@ -100,7 +103,7 @@ def test_subject_must_be_a_shape_of_an_enclosing_param_axis() -> None:
         subjects=(ShapeOf(type=_scalar_i32(), param=x_entry, axis=5),),
         case_patterns=((DimVarRangePat(dim_var="S", lo=1, hi=4),),),
         case_calls=(symbol_call(callee, (x_entry,)),),
-        fallback=Sequential(body=(Abort(),)),
+        fallback=Sequential(body=(Evaluate(callable=Abort(message=""), args=()),)),
     )
     entry = PrimFunction(name="main", params=(x_entry,), body=Sequential(body=(dc,)))
     with pytest.raises(VerifyError, match="out of\\s+rank"):

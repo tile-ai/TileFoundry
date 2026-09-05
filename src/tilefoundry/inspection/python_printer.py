@@ -33,7 +33,6 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
@@ -49,6 +48,7 @@ from tilefoundry.ir.hir.specialize import (
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice, window_base
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
+from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
     DimAdd,
@@ -62,7 +62,7 @@ from tilefoundry.ir.types.dim import (
     DimVar,
 )
 from tilefoundry.ir.types.shard import try_c_order_strides
-from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase
+from tilefoundry.ir.types.shard.layout import Layout, LayoutBase
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
@@ -71,11 +71,14 @@ from tilefoundry.ir.types.shard.shard_layout import (
     Split,
     layout_axis_to_tensor_axis,
 )
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.substitute import dim_vars_by_name
 from tilefoundry.ir.visitor import ExprFunctor, expr_children
 from tilefoundry.utils.python_source import PythonExpr
 
+from .print_context import HirPrintContext
+from .printer_base import PythonPrinter
+from .tir_printer import _function_block as _tir_function_block
+from .tir_printer import tir_function_to_python, tir_module_to_python
 from .values import PARTS, render_comment
 
 _DIM_INFIX_OPS: dict[type, str] = {
@@ -91,6 +94,24 @@ _DIM_FUNC_OPS: dict[type, str] = {
     DimMin: "min",
     DimMax: "max",
 }
+
+
+class HirPrinter(PythonPrinter):
+    """HIR façade retaining the historical canonical rendering entry point."""
+
+    def print(self, fn: HirFunction, *, options=None) -> str:
+        return _render_hir_function(fn, options=options).source
+
+    def dim_entry(self, value, ctx=None) -> str:
+        return shape_entry_str(value)
+
+    def shard_surface(self, value, ctx=None):
+        mesh_name = ctx.mesh_alias(value.mesh) if ctx is not None else None
+        if mesh_name is None or not value.mesh.names:
+            return None
+        return _shard_layout_surface_str(
+            value, mesh_name=mesh_name, mesh_unique=ctx.mesh_count() == 1
+        )
 
 
 @dataclass(frozen=True)
@@ -369,24 +390,6 @@ def shard_compact_inline(
     return split_ref, partials
 
 
-def _dtype_str(dtype: DType) -> str:
-    return dtype.name
-
-
-def _shape_tuple(shape: tuple) -> str:
-    """Render a shape as a Python tuple literal.
-
-    Each entry is rendered via ``shape_entry_str`` so symbolic
-    ``DimVar`` and dim-arithmetic ``Expr`` entries print as their
-    canonical math-shaped string (``CTX_LEN``, ``CTX_LEN + 1``)
-    instead of the dataclass repr. 1D rank renders as ``(N,)``.
-    """
-    rendered = tuple(shape_entry_str(e) for e in shape)
-    if len(rendered) == 1:
-        return f"({rendered[0]},)"
-    return "(" + ", ".join(rendered) + ")"
-
-
 def _moved_window_ref(name: str, offset: int) -> str:
     """A tile-window indexer, carrying the compile-time offset that moves it."""
     if offset == 0:
@@ -420,73 +423,6 @@ def _is_dim_entry(entry: object) -> bool:
     )
 
 
-def _shard_attr_str(attr) -> str:
-    """Single ShardAttr to Python constructor string."""
-    if isinstance(attr, Broadcast):
-        return "B()"
-    if isinstance(attr, Split):
-        return f"S({attr.axis})"
-    if isinstance(attr, Partial):
-        return f'P("{attr.reduction}")'
-    return f"/* {type(attr).__name__} */"
-
-
-def _layout_str(layout: LayoutBase | None, indent: str = "") -> str:
-    """Render a complete layout descriptor without flattening compositions."""
-    if layout is None:
-        return "None"
-    if isinstance(layout, Layout):
-        strides = _shape_tuple(layout.strides) if layout.strides is not None else "None"
-        return f"Layout({_shape_tuple(layout.shape)}, {strides})"
-    if isinstance(layout, ShardLayout):
-        return _shard_layout_str(layout, indent=indent)
-    if isinstance(layout, ComposedLayout):
-        child_indent = indent + "    "
-        return (
-            "ComposedLayout(\n"
-            f"{child_indent}inner={_layout_str(layout.inner, child_indent)},\n"
-            f"{child_indent}offset={shape_entry_str(layout.offset)},\n"
-            f"{child_indent}outer={_layout_str(layout.outer, child_indent)},\n"
-            f"{indent})"
-        )
-    raise TypeError(f"unsupported layout type: {type(layout).__name__}")
-
-
-def _topologies_str(mesh: Mesh) -> str:
-    topologies = ", ".join(
-        f'Topology("{topology.name}", {shape_entry_str(topology.size)})'
-        for topology in mesh.topologies
-    )
-    return f"({topologies}{',' if len(mesh.topologies) == 1 else ''})"
-
-
-def _mesh_str(mesh: Mesh, indent: str = "") -> str:
-    """Mesh(...) constructor string, includes ``names=`` when non-empty."""
-    base = f"Mesh({_topologies_str(mesh)}, {_layout_str(mesh.layout, indent)}"
-    if mesh.names:
-        base += f", names={repr(tuple(mesh.names))}"
-    return base + ")"
-
-
-def _shard_layout_str(
-    sl: ShardLayout, indent: str = "", *, mesh_ref: str | None = None
-) -> str:
-    """ShardLayout(...) constructor string, multi-line for readability."""
-    child_indent = indent + "    "
-    layout = _layout_str(sl.layout, child_indent)
-    mesh = mesh_ref or _mesh_str(sl.mesh, child_indent)
-    attrs = ", ".join(_shard_attr_str(a) for a in sl.attrs)
-    if len(sl.attrs) == 1:
-        attrs += ","
-    return (
-        f"ShardLayout(\n"
-        f"{child_indent}layout={layout},\n"
-        f"{child_indent}attrs=({attrs}),\n"
-        f"{child_indent}mesh={mesh},\n"
-        f"{indent})"
-    )
-
-
 def _tensor_import_names(fn: HirFunction) -> str:
     """``"Tensor"`` or ``"ConstTensor, Tensor"``.
 
@@ -496,42 +432,6 @@ def _tensor_import_names(fn: HirFunction) -> str:
     if any(p.is_const for f in (fn, *fn.variants) for p in f.params):
         return "ConstTensor, Tensor"
     return "Tensor"
-
-
-def _tensor_annotation(
-    ty: TensorType,
-    *,
-    mesh_name_map: dict[int, str] | None = None,
-    indent: str = "",
-    is_const: bool = False,
-) -> str:
-    """Tensor[(shape), dtype, ShardLayout?, storage?] annotation string.
-
-    When *mesh_name_map* is provided and the layout's mesh has named axes,
-    compact sugar form is used instead of verbose ``ShardLayout(...)``.
-    ``is_const`` selects the ``ConstTensor[...]`` head instead of ``Tensor``.
-    """
-    head = "ConstTensor" if is_const else "Tensor"
-    base = f'{head}[{_shape_tuple(ty.shape)}, "{_dtype_str(ty.dtype)}"'
-    if isinstance(ty.layout, ShardLayout):
-        sl = ty.layout
-        mesh = sl.mesh
-        mesh_name = mesh_name_map.get(id(mesh)) if mesh_name_map else None
-        mesh_unique = mesh_name_map is not None and len(mesh_name_map) == 1
-        if mesh_name and mesh.names:
-            sugar = _shard_layout_surface_str(sl, mesh_name=mesh_name, mesh_unique=mesh_unique)
-            if sugar is not None:
-                base += f", {sugar}"
-            else:
-                sl_str = _shard_layout_str(sl, indent=indent + "    ")
-                base += f",\n{indent}    {sl_str}"
-        else:
-            sl_str = _shard_layout_str(sl, indent=indent + "    ")
-            base += f",\n{indent}    {sl_str}"
-    if ty.storage is not StorageKind.GMEM:
-        base += f', "{ty.storage.name.lower()}"'
-    base += "]"
-    return base
 
 
 def _op_name(target) -> str:
@@ -775,26 +675,6 @@ def _region_projection(expr: Expr) -> LoopRegion | MeshRegion | None:
     if isinstance(region, MeshRegion) and isinstance(region.body, Tuple):
         return region
     return None
-
-
-def _mesh_name_map(meshes: dict[int, Mesh]) -> dict[int, str]:
-    """Assign stable variable names to each Mesh.
-
-    Uses the first declared topology name when available; falls back to
-    ``mesh_N``.
-    """
-    name_map: dict[int, str] = {}
-    used: set[str] = set()
-    for mid, mesh in meshes.items():
-        base = mesh.topologies[0].name if mesh.topologies else "mesh"
-        name = base
-        n = 2
-        while name in used:
-            name = f"{base}_{n}"
-            n += 1
-        used.add(name)
-        name_map[mid] = name
-    return name_map
 
 
 def _module_callee_binding(target: HirFunction, child_entries: dict[int, str]) -> str | None:
@@ -1394,11 +1274,41 @@ def _emit_def(
     return lines
 
 
-def _pattern_ctor(pat: Pattern) -> str:
-    """Render a Pattern as its constructor, for a ``.specialize(...)`` decorator."""
-    if isinstance(pat, DimVarRangePat):
-        return f'DimVarRangePat("{pat.dim_var}", {pat.lo}, {pat.hi})'
-    return repr(pat)
+_HIR_RENDERER = HirPrinter()
+_dtype_str = _HIR_RENDERER.dtype_str
+_mesh_name_map = _HIR_RENDERER.mesh_name_map
+_pattern_ctor = _HIR_RENDERER.render_pattern
+
+
+def _topologies_str(mesh: Mesh) -> str:
+    values = ", ".join(
+        f'Topology("{topology.name}", {shape_entry_str(topology.size)})'
+        for topology in mesh.topologies
+    )
+    return f"({values}{',' if len(mesh.topologies) == 1 else ''})"
+
+
+def _shape_tuple(shape: tuple) -> str:
+    return _HIR_RENDERER.shape_tuple(shape)
+
+
+def _layout_str(layout: LayoutBase | None, indent: str = "") -> str:
+    return _HIR_RENDERER.render_layout(layout, HirPrintContext(), indent)
+
+
+def _mesh_str(mesh: Mesh, indent: str = "") -> str:
+    return _HIR_RENDERER.render_mesh(mesh, HirPrintContext(), indent)
+
+
+def _shard_layout_str(sl: ShardLayout, indent: str = "", *, mesh_ref=None) -> str:
+    ctx = HirPrintContext({id(sl.mesh): mesh_ref} if mesh_ref is not None else None)
+    return _HIR_RENDERER.render_shard_layout(sl, ctx, indent, mesh_ref=mesh_ref)
+
+
+def _tensor_annotation(ty: TensorType, *, mesh_name_map=None, indent="", is_const=False) -> str:
+    return _HIR_RENDERER.render_tensor_type(
+        ty, HirPrintContext(mesh_name_map), indent, is_const
+    )
 
 
 def _collect_all_meshes(
@@ -1417,6 +1327,17 @@ def _collect_all_meshes(
         type_meshes.update(types)
         scope_meshes.update(scopes)
     return type_meshes, scope_meshes
+
+
+def _dedup_meshes(meshes: dict[int, Mesh]) -> dict[int, Mesh]:
+    """Collapse structurally identical descriptors before naming hoisted meshes."""
+    result: dict[int, Mesh] = {}
+    for identity, mesh in meshes.items():
+        signature = _mesh_str(mesh)
+        if any(signature == _mesh_str(existing) for existing in result.values()):
+            continue
+        result[identity] = mesh
+    return result
 
 
 def _emit_header(
@@ -1580,11 +1501,11 @@ def hir_function_to_python(
     fn: HirFunction, *, options: PythonPrintOptions | None = None,
 ) -> str:
     """Convert a HIR Function to canonical Python DSL source."""
-    return _render_hir_function(fn, options=options).source
+    return HirPrinter().print(fn, options=options)
 
 
 def as_script(
-    fn: HirFunction | Module, *, module: str | None = None,
+    fn: HirFunction | PrimFunction | Module, *, module: str | None = None,
     options: PythonPrintOptions | None = None,
 ) -> str:
     """Convert an HIR function or module to Python DSL source.
@@ -1594,8 +1515,14 @@ def as_script(
     controls canonical-source rendering.
     """
     if isinstance(fn, Module):
+        if fn.functions and all(isinstance(item, PrimFunction) for item in fn.functions):
+            return tir_module_to_python(fn, module, options=options)
         return _module_to_python(fn, module, options=options)
+    if isinstance(fn, PrimFunction) and module is None:
+        return tir_function_to_python(fn, options=options)
     if module is not None:
+        if isinstance(fn, PrimFunction):
+            return tir_module_to_python(Module(name=module, functions=(fn,), entry=fn.name), options=options)
         return _module_to_python(fn, module, options=options)
     return hir_function_to_python(fn, options=options)
 
@@ -1606,11 +1533,8 @@ def module_to_python(fn: HirFunction, module_name: str = "M") -> str:
 
 
 def _module_hir_functions(mod: Module) -> tuple[HirFunction, ...]:
-    """The Module's HIR functions, rejecting a mixed HIR/TIR container."""
-    functions = tuple(fn for fn in mod.functions if isinstance(fn, HirFunction))
-    if len(functions) != len(mod.functions):
-        raise TypeError("HIR Module printer does not serialize mixed HIR/TIR Modules")
-    return functions
+    """The Module's HIR functions."""
+    return tuple(fn for fn in mod.functions if isinstance(fn, HirFunction))
 
 
 def _module_tree_functions(mod: Module) -> tuple[HirFunction, ...]:
@@ -1650,7 +1574,7 @@ def _emit_module_class(
     Children first, because a body calling one names the attribute it is bound
     to and a class body binds in the order it is written.
     """
-    functions = _module_hir_functions(mod)
+    functions = mod.functions
     entry = mod.entry_function() if functions and mod.entry is not None else None
     lines = [_module_decorator_line(mod, mod.entry), f"class {module_name}:"]
     ordered = tuple(fn for fn in functions if fn is not entry)
@@ -1665,10 +1589,13 @@ def _emit_module_class(
         _emit_module_class(child, child.name, mesh_map, indent, options)
         for child in mod.modules
     ]
-    blocks.extend(
-        _emit_decorated_defs(fn, mesh_map, indent, options, child_entries)
-        for fn in ordered
-    )
+    for fn in ordered:
+        if isinstance(fn, HirFunction):
+            blocks.append(_emit_decorated_defs(fn, mesh_map, indent, options, child_entries))
+        elif isinstance(fn, PrimFunction):
+            blocks.append(_tir_function_block(fn))
+        else:
+            raise TypeError(f"Python printer cannot serialize {type(fn).__name__}")
     for index, block in enumerate(blocks):
         if index:
             lines.append("")
@@ -1695,8 +1622,8 @@ def _module_to_python(
     if not functions:
         raise TypeError("HIR Module printer requires at least one HIR function")
     entry = root.entry_function() if root.entry is not None else None
-    if entry is not None and not isinstance(entry, HirFunction):
-        raise TypeError("HIR Module printer requires a HIR entry Function")
+    if entry is not None and not isinstance(entry, (HirFunction, PrimFunction)):
+        raise TypeError("Module printer requires a function entry")
 
 
     header_of = entry if entry is not None else functions[0]
@@ -1721,6 +1648,15 @@ def _module_to_python(
         header_of, meshes, mesh_map, indent4, for_module=True, target=root.target,
         dim_vars=dim_vars, scope_mesh_ids=set(scope_meshes),
     )
+    if any(isinstance(fn, PrimFunction) for node in _module_tree(root) for fn in node.functions):
+        lines = [
+            line.replace("from tilefoundry import func", "from tilefoundry import func, prim_func")
+            for line in lines
+        ]
+        tensor_line = next(i for i, line in enumerate(lines) if line.startswith("from tilefoundry.dsl import "))
+        lines[tensor_line] = lines[tensor_line].replace("import ", "import T, ")
+        target_imports = sorted({fn.target.to_python().imports[0] for node in _module_tree(root) for fn in node.functions if isinstance(fn, PrimFunction)})
+        lines[2:2] = target_imports
     tensor_names = "ConstTensor, Tensor" if any(
         param.is_const for fn in functions for param in fn.params
     ) else "Tensor"

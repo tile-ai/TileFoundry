@@ -40,13 +40,13 @@ from tilefoundry.utils.spec_ref import spec_ref_render
 from tilefoundry.visitor_registry import verify_stmt_registry
 from tilefoundry.visitor_registry.contexts import VerifyContext
 
+from .abort import Abort
 from .dispatch import DispatchCall
 from .launch import Launch
 from .memory import AllocTensor as AllocTensorOp
 from .prim_function import PrimFunction
 from .shape import ShapeOf, is_hidden_shape_scalar, is_shape_scalar, parse_shape_var_name
 from .stmts import (
-    Abort,
     Evaluate,
     For,
     If,
@@ -150,7 +150,7 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
             _walk_stmt(stmt.body, ctx, scope, fn, module_fn_map, bound_var_ids)
             scope.pop()
             return
-        case Return() | Abort():
+        case Return():
             return
         case DispatchCall():
             _verify_dispatch_call(stmt, fn, module_fn_map, ctx)
@@ -330,7 +330,8 @@ def _verify_dispatch_call(stmt: DispatchCall, fn, module_fn_map, ctx):
     if not (
         isinstance(stmt.fallback, Sequential)
         and len(stmt.fallback.body) == 1
-        and isinstance(stmt.fallback.body[0], Abort)
+        and isinstance(stmt.fallback.body[0], Evaluate)
+        and isinstance(stmt.fallback.body[0].callable, Abort)
     ):
         raise VerifyError("DispatchCall: v0 fallback must be Sequential((Abort(),))")
     for call in stmt.case_calls:

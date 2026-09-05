@@ -31,6 +31,7 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape as HirReshape
 from tilefoundry.ir.hir.tensor.slice import Slice as HirSlice
 from tilefoundry.ir.hir.tensor.slice import window_base
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem as HirTupleGetItem
+from tilefoundry.ir.tir.abort import Abort
 from tilefoundry.ir.tir.arith import (
     Binary as TirBinary,
 )
@@ -54,7 +55,6 @@ from tilefoundry.ir.tir.reduce import Reduce as TirReduce
 from tilefoundry.ir.tir.shape import ShapeOf, parse_shape_var_name, shape_var_name
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import (
-    Abort,
     Evaluate,
     For,
     LetStmt,
@@ -857,7 +857,7 @@ class _Lowerer:
             subjects=(subject,),
             case_patterns=case_patterns,
             case_calls=tuple(case_calls),
-            fallback=Sequential(body=(Abort(),)),
+            fallback=Sequential(body=(Evaluate(callable=Abort(message=""), args=()),)),
         )
         self._items.append(dispatch)
         self._cache[id(call)] = out_var
@@ -1743,7 +1743,7 @@ def _build_dispatch_entry(
         subjects=(subject,),
         case_patterns=tuple(case_patterns),
         case_calls=tuple(case_calls),
-        fallback=Sequential(body=(Abort(),)),
+        fallback=Sequential(body=(Evaluate(callable=Abort(message=""), args=()),)),
     )
 
 

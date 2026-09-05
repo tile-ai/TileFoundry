@@ -9,56 +9,15 @@ See [tir §1.5](docs/spec/tir.md#15-sync).
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 import tilefoundry
+from tests.fixtures.tir.sync import SyncSquare
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
-from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Split, Topology
-from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types.shard import Layout, Mesh, Topology
 from tilefoundry.target import CpuTarget, CudaTarget
-
-
-@module(entry="sync_square_host")
-class SyncSquare:
-    @prim_func(target=CudaTarget("nvidia.h200_sxm"))
-    def sync_square_device(a: Tensor[(4, 32), "f32"]):
-        with Mesh(
-            (Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")
-        ) as m:
-            view = T.tensor_view(
-                a,
-                layout=ShardLayout(
-                    layout=Layout(shape=(4, 32), strides=(32, 1)),
-                    attrs=(Split(0), Split(1)),
-                    mesh=m,
-                ),
-            )
-            reg = T.alloc_tensor(
-                TensorType(
-                    shape=(4, 32),
-                    dtype=DType.f32,
-                    layout=ShardLayout(
-                        layout=Layout(shape=(4, 32), strides=(32, 1)),
-                        attrs=(Split(0), Split(1)),
-                        mesh=m,
-                    ),
-                    storage=StorageKind.RMEM,
-                )
-            )
-            T.copy(view, reg)
-            T.sync(m)
-            T.sync(m[0, :])
-            T.sync(m[0:2, :])
-            T.sync(m[2:4, :])
-            T.binary(reg, reg, reg, kind=BinaryKind.MUL)
-            T.copy(reg, view)
-
-    @prim_func(target=CpuTarget())
-    def sync_square_host(a: Tensor[(4, 32), "f32"]):
-        launch(sync_square_device, a, grid=(1, 1, 1), block=(128, 1, 1))  # noqa: F821
 
 
 def test_sync_barrier_forms_emit_expected_cuda() -> None:
@@ -116,16 +75,12 @@ def test_grid_scope_sync_emits_grid_barrier() -> None:
     assert "static __device__ unsigned int tf_grid_bar_state[2];" in src
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_sync_kernel_runs_and_squares() -> None:
-    """All four barrier forms compile and run on GPU without deadlock/fault.
-
-    All four barrier forms compile and run on GPU without deadlock/fault,
-    and the elementwise square is correct.
-    """
-    rm = tilefoundry.compile(SyncSquare, target=CudaTarget("nvidia.h200_sxm"))
-    torch.manual_seed(0)
+    torch.manual_seed(4)
     x = torch.randn(4, 32, dtype=torch.float32, device="cuda")
-    expected = x * x
-    rm(x)
+    expected = x.square()
+    runtime = tilefoundry.compile(SyncSquare, target=CudaTarget("nvidia.h200_sxm"))
+    runtime(x)
     torch.cuda.synchronize()
-    assert torch.allclose(x, expected, rtol=0, atol=0)
+    torch.testing.assert_close(x, expected, rtol=0, atol=0)

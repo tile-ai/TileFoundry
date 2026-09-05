@@ -119,5 +119,6 @@ ignore = ["E501", "F821", "E741"]
 # authoring-surface ergonomics. Internal implementation code in
 # `src/` must NOT use star imports (no exception here).
 "tests/**/*.py" = ["F403", "F405"]
+"tests/fixtures/logical/canonical_*.py" = ["F401", "I001"]
 [tool.ruff.lint.pydocstyle]
 convention = "google"
