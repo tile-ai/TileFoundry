@@ -139,6 +139,8 @@ def main() -> int:
     ap.add_argument("--layer", type=int, default=None,
                     help="with --real: which Mamba layer (default: the first)")
     ap.add_argument("--acts", default="acts")
+    ap.add_argument("--bench", type=int, default=0,
+                    help="also time the layer over this many iterations")
     ap.add_argument("--prepared", default=None)
     a = ap.parse_args()
 
@@ -214,8 +216,33 @@ def _compare(a, h, gamma, w_in, w_out, conv_w, conv_b, ggdn, mscal,
         bad += not ok
         note = "ok" if ok else ("FAIL (reference is degenerate)" if not alive else "FAIL")
         print(f"{name:10} {r:12.3e}  {bound:10.3e}  {live:10.3e}   {note}")
+    if a.bench:
+        _bench(a.bench, ops(), mine, got, h, gamma, w_in, w_out, conv_w, conv_b,
+               ggdn, mscal, conv_state, ssm_state)
     print("PASS" if not bad else f"{bad} stage(s) FAILED")
     return 1 if bad else 0
+
+
+def _bench(iters, ext, mine, got, h, gamma, w_in, w_out, conv_w, conv_b, ggdn,
+           mscal, conv_state, ssm_state) -> None:
+    """Time one layer, warmed, on the stream the launches actually use."""
+    import time  # noqa: PLC0415
+
+    call = lambda: ext.mamba_layer(  # noqa: E731
+        h.reshape(H), gamma.reshape(H), w_in.reshape(-1), w_out.reshape(-1),
+        conv_w.reshape(-1), conv_b.reshape(CONV), ggdn.reshape(MI),
+        mscal.reshape(-1), conv_state.reshape(-1), ssm_state.reshape(-1))
+    for _ in range(max(8, iters // 8)):
+        call()
+    torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    for _ in range(iters):
+        call()
+    torch.cuda.synchronize()
+    us = (time.perf_counter() - t0) / iters * 1e6
+    # 23 of the 52 layers are this one, so the step-level cost it implies is
+    # what a whole-step number has to be read against.
+    print(f"\nmamba layer: {us:8.1f} us/layer   x23 = {us * 23 / 1e3:6.3f} ms/step")
 
 
 if __name__ == "__main__":
