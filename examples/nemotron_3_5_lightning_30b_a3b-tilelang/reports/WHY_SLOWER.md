@@ -15,7 +15,12 @@ them as the bar would let a 17%-slower implementation look level.
 | | ctx 32 | ms/token |
 |---|---|---|
 | TileLang, one cooperative launch | **335.9 tok/s** | 2.977 |
-| handwritten, one cooperative launch | **182.0 tok/s** | 5.495 |
+| handwritten, one cooperative launch | **153.6 tok/s** | 6.510 |
+
+End to end through `bench_mine.py`, which is the number to quote. Timing the
+launch alone in a tight loop gives 5.495 ms; the difference is the Python either
+implementation pays per step for `prepare_inputs_for_generation` and
+`append_cache`, and both pay it.
 
 1.85x off. Against the TileLang kernel the whole step lands at 4.513e-2 on the
 5.018e-2 envelope `check_all.py` derives, with the same argmax at every step.
@@ -78,7 +83,24 @@ rather have four. Dropping the staged path from the two projections that did not
 need it took the step from 6.77 ms to 5.49 ms — 125 to 182 tok/s — without
 changing a single arithmetic result.
 
-## 5. What is fixable and what is not
+## 5. Hypotheses that were wrong
+
+Recorded because the wrong ones outnumbered the right one four to two, and each
+was plausible enough to act on:
+
+| guessed | measured |
+|---|---|
+| twelve expert launches are the cost | fusing them to two: **13% faster** |
+| shared-memory staging starves occupancy | removing it from MoE: **no change** |
+| the accumulator dependency chain stalls the loads | eight accumulators: **3% faster** |
+| the router is fine, it reads 688 KB | it was **236 of the 319 us** — one thread per row, uncoalesced, one CTA |
+| aliasing `__restrict__` on the in-place residual explains the drift | it does not; the drift is the expert accumulator's summation order |
+| allocating 46 state tensors a step costs the missing millisecond | pooling them: **no change** |
+
+Only `nsys` and the layer-prefix timings moved this forward; every hypothesis
+formed by reading the code was wrong.
+
+## 6. What is fixable and what is not
 
 - **Attention's placement (fixable, ~1.3 ms).** Splitting by head at short
   context, the way the authored program does, would put the other 130 CTAs to
@@ -90,33 +112,49 @@ changing a single arithmetic result.
   0.7 ms of the 5.49. Merging stages to save some of it costs the clarity of
   having one barrier per reshard the authored program states.
 
-## 6. The open fault: the fused path is not token-identical
+## 7. Token identity is a knife edge, not a gate
 
-`NEMO_IMPL=cuda-stages` matches `transformers` for 64 of 64 greedy steps.
-`NEMO_IMPL=cuda` diverges at step 35. They run the same `__device__` stages, so
-the difference is in what one resident launch does between them.
+An earlier reading of this said the fused path had a fault of its own, because it
+diverged from `transformers` where the stage-per-launch path did not. That
+compared two different builds. Measured together — 48 steps, greedy,
+teacher-forced, three prompts:
 
-Bisected by stopping the layer walk early and comparing the hidden row against
-the same stages run a launch apiece:
+| prompt | `mega` (TileLang) | `cuda` (fused) | `cuda-stages` |
+|---|---|---|---|
+| `The capital of France is` | 48/48 | step 35 | step 35 |
+| `In 1969 the first humans` | step 3 | step 3 | step 3 |
+| `A prime number is` | step 42 | 48/48 | step 42 |
 
-| after layer | rel_l2 |
+Every implementation loses it on some prompt. On the middle one all three
+diverge at the same step and pick the same token as each other — a tie the
+reference resolves one way and all three of these resolve the other. Nothing here
+separates the handwritten kernels from the shipped one, and `README.md`'s "64 of
+64" is the first prompt with the TileLang kernel rather than a property any of
+them has in general.
+
+The two CUDA paths do differ from each other by a hair, and it is worth naming
+because it is the only genuine arithmetic difference between them. The six routed
+experts sum into an f32 accumulator: six concurrent CTAs in the staged path, one
+CTA six times in the fused path. On one layer, every other intermediate is
+bit-identical and the accumulator differs by 5.8e-8. Across the stack:
+
+| after layer | rel_l2 (fused against staged) |
 |---|---|
-| 1 – 8 | **0** (bit-identical) |
-| 12 | 5.5e-4 |
-| 19 – 33 | 5–7e-4 (flat) |
+| 1 – 9 | **0** (bit-identical) |
+| 10 | 4.1e-4 |
+| 12 – 33 | 5–7e-4 (flat) |
 | 40 | 7.6e-3 |
 
-Nine layers bit-identical, then parts in 1e5. That is the accumulator's 5.8e-8
-reaching a bf16 rounding boundary, not a fault: two orders of summing six
-numbers in f32, neither more correct than the other, and the fused one is
-actually the order the op-by-op reference uses.
+Nine layers bit-identical, then parts in 1e4: that is 5.8e-8 reaching a bf16
+rounding boundary, not a fault. Neither order is more correct, and the fused
+one is the order the op-by-op reference uses.
 
 Two other explanations were tested and eliminated. The fused launch is
 **deterministic** — three runs bit-identical — so nothing races. And filling
 every scratch buffer with NaN before a step changes **nothing**, so no stage
 reads a buffer it did not write.
 
-## 7. What could not be measured
+## 8. What could not be measured
 
 `ncu` does not run on this machine: `ERR_NVGPUCTRPERM`, GPU performance counters
 are restricted to administrators. Everything above rests on `nsys` kernel tracing
