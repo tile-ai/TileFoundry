@@ -3319,7 +3319,7 @@ def _enter_mesh_scope(context, mesh, match):
 
 def _scoped_region(mesh, body, params=(), args=()):
     """Build a type-transparent HIR mesh region."""
-    return runtime.HirMeshScope(
+    return runtime.MeshRegion(
         mesh=mesh,
         params=tuple(params),
         args=tuple(args),
@@ -4032,7 +4032,7 @@ class ForPattern(ElementPattern):
             )
         else:
             result_type = body.type
-        grid = runtime.GridRegionExpr(
+        grid = runtime.LoopRegion(
             type=result_type,
             induction_var=frame.induction_var,
             carried_args=frame.phi_vars,

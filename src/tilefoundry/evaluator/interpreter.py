@@ -22,8 +22,8 @@ from tilefoundry.evaluator.value import (
 from tilefoundry.ir.core import Call, Constant, Tuple, Var, describe_expr
 from tilefoundry.ir.core.pattern import locate_dim_var
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.mesh_scope import MeshScope as HirMeshScope
+from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.ir.visitor import ExprVisitor
@@ -114,15 +114,15 @@ class EvaluatorVisitor(ExprVisitor):
     def __init__(self, *, memo=None) -> None:
         super().__init__(memo=memo)
 
-    def visit_MeshScope(self, scope: HirMeshScope, ctx: EvaluateContext) -> Value:
+    def visit_MeshRegion(self, region: MeshRegion, ctx: EvaluateContext) -> Value:
         """Evaluate boundary arguments outside, then the isolated body."""
-        args = tuple(self.visit(arg, ctx) for arg in scope.args)
-        if len(args) != len(scope.params):
+        args = tuple(self.visit(arg, ctx) for arg in region.args)
+        if len(args) != len(region.params):
             raise EvalError(
-                f"evaluator: MeshScope expects {len(scope.params)} args, got {len(args)}"
+                f"evaluator: MeshRegion expects {len(region.params)} args, got {len(args)}"
             )
-        memo = {id(param): (param, value) for param, value in zip(scope.params, args)}
-        return EvaluatorVisitor(memo=memo).visit(scope.body, ctx)
+        memo = {id(param): (param, value) for param, value in zip(region.params, args)}
+        return EvaluatorVisitor(memo=memo).visit(region.body, ctx)
 
     def visit_leaf_Var(self, var: Var, _operands, ctx: EvaluateContext) -> Value:
         raise EvalError(f"evaluator: unbound variable {var.name!r}")
@@ -188,21 +188,19 @@ class EvaluatorVisitor(ExprVisitor):
     def _resolve_loop_field(self, dim, what: str, ctx: EvaluateContext) -> int:
         """Resolve loop field.
 
-        Resolve a ``GridRegionExpr`` ``extent`` / ``step`` ``ShapeDim`` to a
+        Resolve a ``LoopRegion`` ``extent`` / ``step`` ``ShapeDim`` to a
         concrete ``int`` against the current DimVar bindings; fail closed.
         """
         if isinstance(dim, bool):
-            raise EvalError(f"evaluator: GridRegion {what} must be an integer")
+            raise EvalError(f"evaluator: LoopRegion {what} must be an integer")
         if isinstance(dim, int):
             return dim
         try:
             return resolve_dim(dim, ctx.dim_bindings)
         except ValueError as exc:
-            raise EvalError(f"evaluator: GridRegion {what}: {exc}") from None
+            raise EvalError(f"evaluator: LoopRegion {what}: {exc}") from None
 
-    def visit_GridRegionExpr(
-        self, region: GridRegionExpr, ctx: EvaluateContext
-    ) -> Value:
+    def visit_LoopRegion(self, region: LoopRegion, ctx: EvaluateContext) -> Value:
         init_values = tuple(self.visit(init, ctx) for init in region.init_args)
         iv = region.induction_var
         iv_dtype = to_torch_dtype(iv.type.dtype)
@@ -211,15 +209,15 @@ class EvaluatorVisitor(ExprVisitor):
         step = self._resolve_loop_field(region.step, "step", ctx)
         if start < 0:
             raise EvalError(
-                f"evaluator: GridRegion start must be non-negative, got {start}"
+                f"evaluator: LoopRegion start must be non-negative, got {start}"
             )
         if extent < 0:
             raise EvalError(
-                f"evaluator: GridRegion extent must be non-negative, got {extent}"
+                f"evaluator: LoopRegion extent must be non-negative, got {extent}"
             )
         if step <= 0:
             raise EvalError(
-                f"evaluator: GridRegion step must be positive, got {step}"
+                f"evaluator: LoopRegion step must be positive, got {step}"
             )
         indices = range(start, extent, step)
 
@@ -245,7 +243,7 @@ class EvaluatorVisitor(ExprVisitor):
                 last = EvaluatorVisitor(memo=iter_memo(i, ())).visit(region.body, ctx)
             if last is None:
                 raise EvalError(
-                    "evaluator: GridRegionExpr has an empty iteration domain"
+                    "evaluator: LoopRegion has an empty iteration domain"
                 )
             return last
 

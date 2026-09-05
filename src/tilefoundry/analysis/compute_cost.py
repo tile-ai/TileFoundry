@@ -14,8 +14,8 @@ from dataclasses import dataclass, field, replace
 from tilefoundry.ir.core import Call, Expr, VerifyError
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.mesh_scope import MeshScope
+from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard import Mesh, composed, level_axes
 from tilefoundry.ir.types.shard.mesh import _positions_layout
@@ -227,7 +227,7 @@ class ComputeCostContext(AnalyzeContext):
 class ComputeCostVisitor(ExprVisitor[None]):
     """Attach per-Call work and accumulate multiplicity-aware totals."""
 
-    def visit_MeshScope(self, expr: MeshScope, ctx: ComputeCostContext) -> None:
+    def visit_MeshRegion(self, expr: MeshRegion, ctx: ComputeCostContext) -> None:
         """Carry the region's execution multiplicity into each contained Call."""
         for arg in expr.args:
             self.visit(arg, ctx)
@@ -240,9 +240,7 @@ class ComputeCostVisitor(ExprVisitor[None]):
             replace(ctx, executing_positions=positions, current_mesh=mesh),
         )
 
-    def visit_GridRegionExpr(
-        self, expr: GridRegionExpr, ctx: ComputeCostContext
-    ) -> None:
+    def visit_LoopRegion(self, expr: LoopRegion, ctx: ComputeCostContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is expr)
         inner = replace(ctx, current=child)
         for operand in expr.init_args:

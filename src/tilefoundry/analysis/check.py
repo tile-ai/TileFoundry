@@ -26,7 +26,7 @@ from tilefoundry.ir.core.module import (
 )
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.mesh_scope import MeshScope
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.specialize import (
     SpecializationError,
     _record_complete_bindings,
@@ -430,7 +430,7 @@ class _AnalysisViewCloner(BindingSubstitutionCloner):
         metadata = (*_view_metadata(expr), BindingMetadata(self.owner._binding()))
         return replace(expr, args=new_args, metadata=metadata)
 
-    def visit_MeshScope(self, expr: MeshScope, ctx: Mapping[int, Expr]) -> MeshScope:
+    def visit_MeshRegion(self, expr: MeshRegion, ctx: Mapping[int, Expr]) -> MeshRegion:
         """Inline through a HIR execution region while preserving its boundary."""
         params = tuple(
             replace(param, metadata=_view_metadata(param)) for param in expr.params
@@ -582,7 +582,7 @@ def check_program(
 ) -> Function:
     """Prove one program holds together, then return the view analysis will read.
 
-    The returned Function has no Function-call wrapper. GridRegionExpr survives
+    The returned Function has no Function-call wrapper. LoopRegion survives
     unchanged: a loop stays a loop. The authored Module and Function are untouched.
 
     Each analysis states what it needs of the program through its own checker,

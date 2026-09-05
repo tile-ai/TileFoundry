@@ -41,7 +41,7 @@ Each owns its record types and declares its dependencies and output additions.
 | Selector | Requires | Owns | Attaches to | Rests on | Text summary adds | Annotates equations |
 |---|---|---|---|---|---|---|
 | `compute-cost` | - | `ComputeCostMetadata` | every measured Call and the Function | the authored program | `compute-cost` | every measured Call |
-| `memory` | - | `MemoryMetadata`, `TrafficMetadata`, `LoopFootprintMetadata` | `MemoryMetadata` on the Function; `TrafficMetadata` on every measured Call and the Function; `LoopFootprintMetadata` on every `GridRegionExpr` | the authored program, `MemoryHierarchyFacts` | `peak-footprint`, `traffic`, `advisory` | none |
+| `memory` | - | `MemoryMetadata`, `TrafficMetadata`, `LoopFootprintMetadata` | `MemoryMetadata` on the Function; `TrafficMetadata` on every measured Call and the Function; `LoopFootprintMetadata` on every `LoopRegion` | the authored program, `MemoryHierarchyFacts` | `peak-footprint`, `traffic`, `advisory` | none |
 | `roofline` | `compute-cost`, `memory` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | `roofline` | every measured Call |
 | `performance` | `compute-cost`, `memory` | `PerformanceMetadata`, `PerformanceSummaryMetadata` | `PerformanceMetadata` on every Call with a modeled duration; `PerformanceSummaryMetadata` on the Function | `ThroughputFacts`, `ParallelCapacityFacts`, `MemoryHierarchyFacts` | `performance` | every Call with a modeled duration |
 
@@ -276,7 +276,7 @@ class BufferFootprint:
     repeated_bytes: int
 
 class LoopFootprintMetadata(IRMetadata):
-    """Known buffer accesses or a lower bound within one authored GridRegionExpr.
+    """Known buffer accesses or a lower bound within one authored LoopRegion.
 
     Attributes:
         footprints: attribute; One row per source buffer and storage level.
@@ -864,7 +864,7 @@ model.
 - constraints:
   - A primitive Call is eligible for performance when it is reachable in the
     authored HIR. Its execution region is represented structurally by
-    `MeshScope`; the result layout remains an independent property. A result
+    `MeshRegion`; the result layout remains an independent property. A result
     carrying no `ShardLayout` MUST NOT unplace the occurrence that produced it.
     An occurrence
     with no nonzero
@@ -883,7 +883,7 @@ model.
     performed independently by every position and therefore contributes once
     per position to the total. The per-unit quantity already includes work
     projected through finer levels.
-  - A `MeshScope` evaluates its boundary arguments outside the region and
+  - A `MeshRegion` evaluates its boundary arguments outside the region and
     executes its body once per enclosing position. Argument work is charged at
     its defining site; body work is charged per enclosing position.
   - The participant set MUST be the exact image of that Mesh's layout under
@@ -895,7 +895,7 @@ model.
     end. Two positive-duration occurrences whose participant sets intersect
     MUST NOT overlap; disjoint sets MAY overlap, while a partial intersection
     serializes each whole occurrence rather than splitting it by participant.
-  - A `GridRegionExpr` MUST be represented as one structured performance node. Its
+  - A `LoopRegion` MUST be represented as one structured performance node. Its
     body is solved once, from the time the loop itself begins rather than from
     zero, so a body occurrence's reported `[start_ns, end_ns)` is the interval it
     actually runs in and not one a reader has to offset. `stride_ns` is that
@@ -983,7 +983,7 @@ class AnalysisCheckContext:
     program MUST be walked once for this however many analyses asked, and the
     first refusal MUST stop the gate before any analysis writes.
   - The returned Function MUST inline every reachable HIR Function call at its
-    call site while retaining each `GridRegionExpr` as one loop. Its induction
+    call site while retaining each `LoopRegion` as one loop. Its induction
     variable, carried values, and yields MUST NOT be replaced with iterations.
     The authored Module and Function MUST remain unchanged.
   - The returned Function parameters MUST be the authored entry parameters
@@ -1133,7 +1133,7 @@ def analyze(
 ### 2.1 Shared Scope and Access
 
 The normalized HIR is visited once per `analyze()` call. That visit produces a
-`Scope` tree parallel to Function/GridRegionExpr nesting and `Access` relations
+`Scope` tree parallel to Function/LoopRegion nesting and `Access` relations
 for the narrow and device views. `Scope.domain` is the accumulated authored
 loop domain; `Scope.accesses` and `Scope.refused` are the only family inputs for
 loop footprints, movement, and placement. An `Access` stores only its relation

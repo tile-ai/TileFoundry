@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from tilefoundry.ir.core import Call, Constant, Expr
 from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.hir.sharding.reshard import Reshard
@@ -70,7 +70,7 @@ def static_range(expr: Expr, *, narrow: bool) -> tuple[int, int] | None:
 
 
 def _loop_term(
-    value: Expr, loops: tuple[GridRegionExpr, ...], *, narrow: bool
+    value: Expr, loops: tuple[LoopRegion, ...], *, narrow: bool
 ) -> LoopAffineTerm | None:
     for index, loop in enumerate(loops):
         if loop.induction_var is value:
@@ -111,7 +111,7 @@ def _loop_term(
 
 
 def loop_affine_term(
-    value: Expr, loops: tuple[GridRegionExpr, ...], *, narrow: bool
+    value: Expr, loops: tuple[LoopRegion, ...], *, narrow: bool
 ) -> LoopAffineTerm | None:
     """Resolve a constant, loop variable, affine offset, or constant stride."""
     base, offset = window_base(value)

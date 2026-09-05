@@ -23,7 +23,7 @@ from tilefoundry.analysis.metadata import (
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.types import tensor_types
 from tilefoundry.ir.visitor import collect_exprs
 
@@ -286,7 +286,7 @@ def _loop_records(
     )
     rows: list[dict[str, object]] = []
     for expr in collect_exprs(function.body):
-        if not isinstance(expr, GridRegionExpr):
+        if not isinstance(expr, LoopRegion):
             continue
         records = _records_of(expr, selected)
         if not records:

@@ -15,7 +15,7 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.types import TensorType, TupleType, Type, bytes_by_storage
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import ExprVisitor, expr_children
@@ -297,7 +297,7 @@ class MemoryContext(AnalyzeContext):
 class MemoryVisitor(ExprVisitor[None]):
     """Attach per-Call traffic while collecting lifetime order and loop footprints."""
 
-    def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx: MemoryContext) -> None:
+    def visit_LoopRegion(self, expr: LoopRegion, ctx: MemoryContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is expr)
         inner = replace(ctx, current=child)
         for operand in expr.init_args:

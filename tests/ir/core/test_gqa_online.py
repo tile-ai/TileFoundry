@@ -27,8 +27,8 @@ from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, Tuple
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.mesh_scope import MeshScope
+from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.target import CudaTarget
 
 Hq, Hkv, D, G = NUM_Q_HEADS, NUM_KV_HEADS, HEAD_DIM, GQA_GROUP
@@ -99,13 +99,13 @@ def _walk_ir(expr, seen=None):
     elif isinstance(expr, Tuple):
         for element in expr.elements:
             yield from _walk_ir(element, seen)
-    elif isinstance(expr, GridRegionExpr):
+    elif isinstance(expr, LoopRegion):
         for arg in expr.init_args:
             yield from _walk_ir(arg, seen)
         yield from _walk_ir(expr.body, seen)
         for value in expr.yield_values:
             yield from _walk_ir(value, seen)
-    elif isinstance(expr, MeshScope):
+    elif isinstance(expr, MeshRegion):
         yield from _walk_ir(expr.body, seen)
 
 
@@ -113,7 +113,7 @@ def test_static_fixture_has_one_fixed_online_softmax_region() -> None:
     regions = tuple(
         expr
         for expr in _walk_ir(static_online_attend.entry_function().body)
-        if isinstance(expr, GridRegionExpr)
+        if isinstance(expr, LoopRegion)
     )
     assert len(regions) == 1
     region = regions[0]
@@ -128,7 +128,7 @@ def test_static_fixture_has_one_fixed_online_softmax_region() -> None:
     imported_regions = tuple(
         expr
         for expr in _walk_ir(imported.entry_function().body)
-        if isinstance(expr, GridRegionExpr)
+        if isinstance(expr, LoopRegion)
     )
     assert len(imported_regions) == 1
     assert imported_regions[0].extent == 4096

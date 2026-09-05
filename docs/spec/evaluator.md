@@ -48,7 +48,7 @@ default.
 
 The values that flow through evaluation form a small hierarchy: a
 single-output node produces a `TensorValue`; a multi-output node (a
-`Tuple`, a `TupleType` `Call`, or a multi-carry `GridRegionExpr`)
+`Tuple`, a `TupleType` `Call`, or a multi-carry `LoopRegion`)
 produces a `TupleValue`.
 
 ```python
@@ -177,7 +177,7 @@ rules; a handler MUST NOT depend on type inference having run.
 Every failed `Op` dispatch, including a missing handler and an exception from
 the handler, MUST surface as `EvalError` prefixed by `describe_expr(call)`.
 When parser provenance is available, that prefix identifies the authored
-physical source location, binding, and op. Function-call, `GridRegionExpr`,
+physical source location, binding, and op. Function-call, `LoopRegion`,
 and `Var` failures retain their own contracts.
 
 ## 4. Node evaluation
@@ -191,7 +191,7 @@ class EvaluatorVisitor(ExprVisitor):
     """Evaluate expressions with identity-based memoization."""
 
     def visit(self, expr: Expr, ctx: EvaluateContext) -> Value: ...
-    def visit_GridRegionExpr(self, region: GridRegionExpr, ctx: EvaluateContext) -> Value: ...
+    def visit_LoopRegion(self, region: LoopRegion, ctx: EvaluateContext) -> Value: ...
 ```
 
 - A `Var` resolves to its binding in the current environment; a
@@ -218,12 +218,12 @@ class EvaluatorVisitor(ExprVisitor):
   annotation under the Function-boundary rules in HIR; an incompatible value
   raises `EvalError` before the callee body is evaluated.
 
-## 5. `GridRegionExpr`
+## 5. `LoopRegion`
 
-A `GridRegionExpr` ([hir §1.2](./hir.md#12-gridregionexpr)) is a loop over its iteration
+A `LoopRegion` ([hir §1.2](./hir.md#12-loopregion)) is a loop over its iteration
 domain whose carry chain starts from `init_args`:
 
-`EvaluatorVisitor.visit_GridRegionExpr(region)` implements the loop; there is no
+`EvaluatorVisitor.visit_LoopRegion(region)` implements the loop; there is no
 separate `eval_grid` function.
 
 - The first iteration binds each `carried_args` phi to the matching

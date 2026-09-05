@@ -35,10 +35,10 @@ from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
-from tilefoundry.ir.hir.mesh_scope import MeshScope as HirMeshScope
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.local import Local
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.sharding.reshard import Reshard
@@ -238,7 +238,7 @@ runtime = SimpleNamespace(
     Evaluate=Evaluate,
     Expr=Expr,
     Function=Function,
-    GridRegionExpr=GridRegionExpr,
+    LoopRegion=LoopRegion,
     Arange=Arange,
     IrTuple=IrTuple,
     Layout=Layout,
@@ -246,7 +246,7 @@ runtime = SimpleNamespace(
     Local=Local,
     LetStmt=LetStmt,
     MeshScope=MeshScope,
-    HirMeshScope=HirMeshScope,
+    MeshRegion=MeshRegion,
     MeshCoord=MeshCoord,
     Mesh=Mesh,
     Module=Module,

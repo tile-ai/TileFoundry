@@ -279,7 +279,7 @@ same structural comparison.
 A canonical grid loop MUST render each yielded expression under its own unique
 binding. After the loop body has emitted every yielded expression, the printer
 MUST emit one `carry = yield` assignment per carried value, in
-`GridRegionExpr.carried_args` order. Those assignments are the final statements
+`LoopRegion.carried_args` order. Those assignments are the final statements
 in the loop body. This preserves references to the old carry until the update
 point and lets the parser's final-RHS carry rule rebuild the same loop.
 

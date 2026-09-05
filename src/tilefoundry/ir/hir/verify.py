@@ -3,7 +3,7 @@ from __future__ import annotations
 from tilefoundry.ir.core import Expr, VerifyError
 from tilefoundry.ir.core.expr import Call, Var
 from tilefoundry.ir.core.pattern import DimVarRangePat
-from tilefoundry.ir.hir.mesh_scope import MeshScope
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
@@ -14,17 +14,17 @@ from .function import Function
 from .specialize import canonical_specialization_signature
 
 
-def _verify_isolated(scope: MeshScope, ctx=None) -> None:
+def _verify_isolated(region: MeshRegion, ctx=None) -> None:
     """Ensure a region body reaches captured values only through its params."""
-    if len(scope.params) != len(scope.args):
+    if len(region.params) != len(region.args):
         message = (
-            f"region has {len(scope.params)} params but {len(scope.args)} args"
+            f"region has {len(region.params)} params but {len(region.args)} args"
         )
         if ctx is not None:
-            ctx.error(scope, message)
-        raise VerifyError(f"MeshScope: {message}")
-    arg_ids = {id(arg) for arg in scope.args}
-    leaked = arg_ids.intersection(id(expr) for expr in collect_exprs(scope.body))
+            ctx.error(region, message)
+        raise VerifyError(f"MeshRegion: {message}")
+    arg_ids = {id(arg) for arg in region.args}
+    leaked = arg_ids.intersection(id(expr) for expr in collect_exprs(region.body))
     if not leaked:
         return
     message = (
@@ -32,8 +32,8 @@ def _verify_isolated(scope: MeshScope, ctx=None) -> None:
         "reference its param instead"
     )
     if ctx is not None:
-        ctx.error(scope, message)
-    raise VerifyError(f"MeshScope: {message}")
+        ctx.error(region, message)
+    raise VerifyError(f"MeshRegion: {message}")
 
 
 def verify_function(fn: Function, *, module=None) -> None:
@@ -236,7 +236,7 @@ def _verify_signature_dim_vars(fn: Function) -> None:
 
 
 class _StmtRejectingVisitor(ExprVisitor[None]):
-    def visit_MeshScope(self, expr: MeshScope, ctx=None) -> None:
+    def visit_MeshRegion(self, expr: MeshRegion, ctx=None) -> None:
         _verify_isolated(expr)
         for arg in expr.args:
             self.visit(arg, ctx)

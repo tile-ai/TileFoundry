@@ -11,8 +11,8 @@ from tilefoundry import func, module, prim_func
 from tilefoundry.dsl import Mesh, Tensor, tf
 from tilefoundry.ir.core import Call, Constant, Tuple, VerifyError
 from tilefoundry.ir.core.pattern import Tensor as TensorPattern
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.mesh_scope import MeshScope
+from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.concat import Concat
@@ -282,14 +282,14 @@ def test_placement_at_and_matmul_at_coexist_in_one_function() -> None:
                 return x_local @ b_local
 
     scope = PlacedMatMul.entry_function().body
-    assert isinstance(scope, MeshScope)
+    assert isinstance(scope, MeshRegion)
     body = scope.body
     assert isinstance(body, Call)
     assert isinstance(body.target, MatMul)
     assert any(isinstance(argument.target, Reshard) for argument in body.args)
 
 
-def test_value_less_mesh_scope_exposes_multiple_values_through_a_tuple() -> None:
+def test_value_less_mesh_region_exposes_multiple_values_through_a_tuple() -> None:
     """A value-less with exports only its live values through one region result."""
 
     @module(
@@ -312,14 +312,14 @@ def test_value_less_mesh_scope_exposes_multiple_values_through_a_tuple() -> None
     assert isinstance(first.target, TupleGetItem)
     assert isinstance(second.target, TupleGetItem)
     scope = first.args[0]
-    assert isinstance(scope, MeshScope)
+    assert isinstance(scope, MeshRegion)
     assert isinstance(scope.body, Tuple)
     assert len(scope.body.elements) == 2
     assert first.target.index == 0
     assert second.target.index == 1
 
 
-def test_valueful_mesh_scope_also_wraps_escaping_bindings() -> None:
+def test_valueful_mesh_region_also_wraps_escaping_bindings() -> None:
     """A with result and an escaping assignment keep both region edges."""
 
     @module(
@@ -339,8 +339,8 @@ def test_valueful_mesh_scope_also_wraps_escaping_bindings() -> None:
     body = ValuefulEscape.entry_function().body
     assert isinstance(body, Call)
     scoped = body.args[0]
-    assert isinstance(scoped, MeshScope)
-    assert isinstance(scoped.body, GridRegionExpr)
+    assert isinstance(scoped, MeshRegion)
+    assert isinstance(scoped.body, LoopRegion)
     assert isinstance(scoped.body.body, Call)
 
 

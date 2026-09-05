@@ -17,7 +17,7 @@ import pytest
 
 from tilefoundry.ir.core import Call, Constant, Expr, Op, Var
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.tir.cuda.nn.mma import Mma
 from tilefoundry.ir.tir.memory import Copy, Fill
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -242,7 +242,7 @@ def test_expr_functor_requires_explicit_handler_for_unknown_expr() -> None:
     assert out.args[1] is top.args[1]
 
 
-def test_expr_cloner_skips_grid_region_binding_vars() -> None:
+def test_expr_cloner_skips_loop_region_binding_vars() -> None:
     """Binding-site Vars are not exposed to a generic ExprCloner.
 
     Binding-site Vars (``induction_var`` / ``carried_args``) are not
@@ -251,7 +251,7 @@ def test_expr_cloner_skips_grid_region_binding_vars() -> None:
     ind = _var("i", _i32())
     carried = (_var("a"), _var("b"))
     init = (_var("a0"), _var("b0"))
-    region = GridRegionExpr(
+    region = LoopRegion(
         type=_t(),
         induction_var=ind,
         carried_args=carried,

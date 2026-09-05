@@ -5,7 +5,7 @@ from tests.fixtures.placed.gqa_decode import GqaOnline
 from tests.fixtures.placed.region_boundaries import RegionBoundaries
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import binding_name
-from tilefoundry.ir.hir.mesh_scope import MeshScope
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.specialize import specialize_concretely
 from tilefoundry.ir.visitor import collect_exprs, expr_children
 
@@ -50,6 +50,6 @@ def test_region_boundaries_round_trip() -> None:
     producer = next(
         expr
         for expr in collect_exprs(body)
-        if isinstance(expr, MeshScope) and binding_name(expr.body) == "v2"
+        if isinstance(expr, MeshRegion) and binding_name(expr.body) == "v2"
     )
     assert sum(producer in expr_children(expr) for expr in collect_exprs(body)) == 2

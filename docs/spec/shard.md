@@ -269,7 +269,7 @@ Mesh composition uses the following rules:
   This check does not reject same-level nesting, because replacement determines
   the final position count.
 
-HIR `MeshScope` applies this composition only at its body boundary. Its `args`
+HIR `MeshRegion` applies this composition only at its body boundary. Its `args`
 are evaluated in the enclosing scope and are not recomposed merely because the
 value is consumed by a region.
 

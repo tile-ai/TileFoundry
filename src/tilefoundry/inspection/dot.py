@@ -115,7 +115,7 @@ def hir_function_to_dot(fn: HirFunction) -> str:
         def visit_Tuple(self, expr, ctx=None) -> None:
             self._emit_leaf(expr, [type(expr).__name__], "#ffffff")
 
-        def visit_GridRegionExpr(self, expr, ctx=None) -> None:
+        def visit_LoopRegion(self, expr, ctx=None) -> None:
             self._emit_leaf(expr, [type(expr).__name__], "#ffffff")
 
         def visit_ShapeOf(self, expr, ctx=None) -> None:

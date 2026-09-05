@@ -10,7 +10,7 @@ import isl
 from tilefoundry.ir.core import Call, Expr, value_label, value_labels
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import TensorType
@@ -49,7 +49,7 @@ class Access:
 class Scope:
     """One Function or authored loop, with all accesses below it."""
 
-    owner: Function | GridRegionExpr
+    owner: Function | LoopRegion
     parent: "Scope | None"
     children: tuple["Scope", ...]
     depth: int
@@ -71,7 +71,7 @@ class Scope:
 
     def is_variant(self, value: Expr) -> bool:
         """Whether *value* depends on this loop's induction or carry values."""
-        if not isinstance(self.owner, GridRegionExpr):
+        if not isinstance(self.owner, LoopRegion):
             return False
         root = self
         while root.parent is not None:
@@ -89,7 +89,7 @@ class Scope:
             return cached
         if self.parent is None:
             return 1
-        if isinstance(self.owner, GridRegionExpr):
+        if isinstance(self.owner, LoopRegion):
             start, extent, step = self.owner.start, self.owner.extent, self.owner.step
             if all(isinstance(value, int) for value in (start, extent, step)):
                 result = 1 if step <= 0 or extent <= start else -(-(extent - start) // step)
@@ -215,18 +215,18 @@ class Scope:
         )
 
 
-def _induction_of(loop: GridRegionExpr) -> str:
+def _induction_of(loop: LoopRegion) -> str:
     """How a diagnostic names one loop: by the variable the author bound it to."""
     return getattr(loop.induction_var, "name", None) or "<unnamed>"
 
 
-def _domain_for(owner: Function | GridRegionExpr, parent: Scope | None) -> isl.set:
+def _domain_for(owner: Function | LoopRegion, parent: Scope | None) -> isl.set:
     if isinstance(owner, Function):
         return isl.set("{ [] }")
-    loops: list[GridRegionExpr] = []
+    loops: list[LoopRegion] = []
     cursor = parent
     while cursor is not None:
-        if isinstance(cursor.owner, GridRegionExpr):
+        if isinstance(cursor.owner, LoopRegion):
             loops.append(cursor.owner)
         cursor = cursor.parent
     loops.reverse()
@@ -280,7 +280,7 @@ def _bind_access(
     loops = []
     cursor = scope
     while cursor is not None:
-        if isinstance(cursor.owner, GridRegionExpr):
+        if isinstance(cursor.owner, LoopRegion):
             loops.append(cursor.owner)
         cursor = cursor.parent
     loops.reverse()
@@ -394,7 +394,7 @@ def build_scopes(
         if id(expr) in seen:
             return
         seen.add(id(expr))
-        if isinstance(expr, GridRegionExpr):
+        if isinstance(expr, LoopRegion):
             for operand in expr.init_args:
                 visit(operand, scope)
             child = Scope(

@@ -243,7 +243,7 @@ def test_analyze_failure_reports_line_variable_and_reason(
     assert "computes at run time" in refused.stderr
     assert not any(
         leak in refused.stderr
-        for leak in ("TensorType(", "ShardLayout(", "GridRegionExpr(", "FloatDType(")
+        for leak in ("TensorType(", "ShardLayout(", "LoopRegion(", "FloatDType(")
     )
     assert len(refused.stderr.strip()) < 300
     assert not report.exists()

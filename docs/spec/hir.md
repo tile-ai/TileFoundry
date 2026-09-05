@@ -1,8 +1,8 @@
 # TileFoundry Spec — hir (`@func` pure SSA dataflow IR)
 
 Defines HIR, the pure SSA-as-DAG dataflow IR: its `Expr` constructs — the
-`Function` container, the structured-SSA exceptions `GridRegionExpr` and
-`MeshScope`, and the
+`Function` container, the structured-SSA exceptions `LoopRegion` and
+`MeshRegion`, and the
 HIR Op subdirectories (math / tensor / nn / shape / sharding) — together with
 their HIR-specific typing rules. Mesh scope is authored in the parser
 ([parser](./parser.md)) and its `Mesh` / `Topology` are defined by shard
@@ -14,23 +14,23 @@ flowchart TB
     Expr["<b>Expr</b><br/>(core-ir)"]
     Op["<b>Op</b><br/>(core-ir)"]
     Function["<b>Function</b> (Expr)"]
-    GridRegionExpr["<b>GridRegionExpr</b> (Expr)"]
-    MeshScope["<b>MeshScope</b> (Expr)"]
+    LoopRegion["<b>LoopRegion</b> (Expr)"]
+    MeshRegion["<b>MeshRegion</b> (Expr)"]
     HirOpBase["<b>hir.Op</b> subclasses<br/>math / tensor / nn / shape / sharding"]
 
     Expr --> Function
-    Expr --> GridRegionExpr
-    Expr --> MeshScope
+    Expr --> LoopRegion
+    Expr --> MeshRegion
     Op --> HirOpBase
 ```
 
 ## 1. HIR Expr constructs
 
 HIR values are `Expr` nodes ([core-ir §2](./core-ir.md#2-expr)): a `Function`
-container, the loop-phi-shaped `GridRegionExpr`, the execution-region
-`MeshScope`, and value `Op` calls. HIR is
+container, the loop-phi-shaped `LoopRegion`, the execution-region
+`MeshRegion`, and value `Op` calls. HIR is
 pure **SSA-as-DAG** — there are no `Region` / `Block` abstractions and no Stmt
-sequence; `GridRegionExpr` carries loop-phi-shaped SSA and `MeshScope` carries
+sequence; `LoopRegion` carries loop-phi-shaped SSA and `MeshRegion` carries
 the structured execution region.
 
 ### 1.1 `Function`
@@ -90,7 +90,7 @@ therefore begins its own invocation; the method itself is not interpreted,
 traced, or dummy-run as HIR.
 
 `Function.body` is a **single Expr** (usually a Call DAG, possibly
-nested inside a `GridRegionExpr`). HIR has no Stmt sequence; name
+nested inside a `LoopRegion`). HIR has no Stmt sequence; name
 reuse lives in the parser's lexical environment, not the IR. The one
 exception is a **dispatch prototype** — a specialized function's base,
 whose body is `None` (written `pass` in the DSL); it declares the
@@ -133,7 +133,7 @@ inference only: it does not rebuild a `Function`, mutate the target, or create
 a per-call instance.
 Caller-supplied layout (sharding) flowing into a layout-unconstrained
 parameter propagates through the body, including through a `Tuple` or
-`GridRegionExpr` return.
+`LoopRegion` return.
 
 Within one inference traversal, repeated calls to the same `Function` object
 with equal argument types MUST reuse the previously inferred result type. The
@@ -221,7 +221,7 @@ results is expressed by Python object identity:
 
 There are no `Region` / `Block` abstractions in HIR. The single
 structured exception that carries loop-phi-shaped SSA is
-`GridRegionExpr` ([§1.2](#12-gridregionexpr)). Everything else is a
+`LoopRegion` ([§1.2](#12-loopregion)). Everything else is a
 pure Call DAG.
 
 **Function typing rules.** `Function` is not an `Op` and is not registered in
@@ -322,10 +322,10 @@ hashing, a base MUST NOT be hashed while still accumulating variants. A
 top-level `Module.functions` entry MUST NOT be a variant: a top-level
 `Function` with `specializations != ()` is a verifier error.
 
-### 1.2 `GridRegionExpr`
+### 1.2 `LoopRegion`
 
 ```python
-class GridRegionExpr(Expr):
+class LoopRegion(Expr):
     """Loop-phi-shaped structured SSA folding a tile-style loop into one Expr value.
 
     Attributes:
@@ -393,7 +393,7 @@ grid-loop body contains an `ast.Assign` whose single
   `init_args` (the carry's value on the first iteration),
 - inside the loop body the same name resolves to that phi `Var`,
 - after the loop, the post-region binding refers to the
-  `GridRegionExpr` itself (single carry) or a `tuple_get_item` of it
+  `LoopRegion` itself (single carry) or a `tuple_get_item` of it
   (multi-carry, when `len(yield_values) > 1`).
 
 `init_args` are value Exprs (traversed and rewritten by the
@@ -411,15 +411,15 @@ to its matching init type. The body and yields are derived in that region
 visitor. A carry result is read from those phi bindings, never from the phi
 node's stamped `.type`.
 
-`GridRegionExpr.type` is `TensorType` (single carry) or `TupleType`
+`LoopRegion.type` is `TensorType` (single carry) or `TupleType`
 (multi-carry); the value is the Expr itself, not a `Call`.
 Parser-side rules: see
 [parser §3](./parser.md#3-implementation-overview).
 
-### 1.2.1 `MeshScope`
+### 1.2.1 `MeshRegion`
 
 ```python
-class MeshScope(Expr):
+class MeshRegion(Expr):
     """Represent the execution domain of one structured HIR region."""
 
     mesh: Mesh
@@ -438,7 +438,7 @@ class MeshScope(Expr):
   - The region result is reachable through the values that escape its lexical
     body. A single escaping value is the region's `body`; multiple escaping
     values are carried by a `Tuple` and read through `TupleGetItem` projections.
-  - `MeshScope` is type-transparent: `MeshScope.type == MeshScope.body.type`.
+  - `MeshRegion` is type-transparent: `MeshRegion.type == MeshRegion.body.type`.
     Its execution domain never changes the result's `ShardLayout`.
   - A body with no value is permitted only when at least one value escapes
     through a later binding; a body with no value and no escaping value is a
@@ -451,14 +451,14 @@ class MeshScope(Expr):
 acc = zeros((M,), f32, storage="rmem")
 for i in tile(K, BLOCK):
     acc = acc + load_tile(x, i)
-# After the loop, `acc` resolves to the GridRegionExpr value.
+# After the loop, `acc` resolves to the LoopRegion value.
 ```
 
 becomes (sketched):
 
 ```python
 # example
-GridRegionExpr(
+LoopRegion(
     induction_var = i,
     carried_args  = (acc_phi,),
     init_args     = (Call(Zeros(...), ()),),   # the pre-loop `acc`
@@ -1272,8 +1272,8 @@ class TopK(Op):
     `DimMod` with a symbolic divisor), is not checked at typeinfer — it fails
     open, same as the pre-existing static-only check this widens.
   - A symbolic `k`'s `DimVar`(s) MUST be resolvable from `x`'s own (input)
-    shape at evaluation time: narrower than `GridRegionExpr`'s `ShapeDim`
-    fields ([§1.2](#12-gridregionexpr)), which resolve against the enclosing
+    shape at evaluation time: narrower than `LoopRegion`'s `ShapeDim`
+    fields ([§1.2](#12-loopregion)), which resolve against the enclosing
     Function's full parameter shapes — a `k` expression whose `DimVar`
     appears only in some other argument, never in `x`, is not resolvable at
     TopK's evaluation site.
@@ -1462,7 +1462,7 @@ class MeshCoord(Op):
 - constraints:
   - The result is an `i64` scalar with `layout=None` and no placement.
   - Type inference MUST reject a mesh that is not bound by the current
-    `MeshScope`.
+    `MeshRegion`.
   - Evaluation MUST raise `EvalError`, because the evaluator models values
     without selecting one physical participant.
 

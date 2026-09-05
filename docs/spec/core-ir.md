@@ -370,10 +370,13 @@ field through the `tuple_get_item` Op (a regular registered Op; no
 dedicated `Expr` subclass).
 
 Dialect-specific `Expr` subclasses are owned by their dialect specs, not
-here: HIR owns `Function`, `GridRegionExpr`, and `MeshScope`
+here: HIR owns `Function`, `LoopRegion`, and `MeshRegion`
 ([hir §1](./hir.md#1-hir-expr-constructs)),
 and TIR owns `SymbolRef` and other TIR-specific `Expr` constructs
-([tir](./tir.md)).
+([tir](./tir.md)). The similarly-shaped TIR statement keeps the name
+`MeshScope` ([tir §1.2](./tir.md#12-structural-stmts-tirstmts)) on purpose,
+not by oversight: it binds a `Var` over a `Sequential` body, whereas
+`MeshRegion` folds a region into one value.
 
 ### 2.1 `Call`
 

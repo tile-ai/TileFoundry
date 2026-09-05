@@ -90,7 +90,7 @@ class ExprVisitor(ExprFunctor[T]):                 # read-only Expr traversal; T
   - `visit_operands` uses the fixed class-match table `_expr_children` in
     `ir/visitor.py`, not the dataclass-field walker `child_exprs` in
     `ir/core/expr.py`. It visits value children only and excludes binding-site
-    Vars, including `GridRegionExpr.carried_args` and Function parameters.
+    Vars, including `LoopRegion.carried_args` and Function parameters.
   - `visit_operands` is the only operand hook. A node needing non-generic
     traversal overrides its complete `visit_<Kind>(node, ctx)` method; there
     are no per-kind `visit_operands_<Kind>` hooks.
@@ -117,10 +117,10 @@ table that grows whenever a new Expr subclass appears:
 | `ShapeOf` | `()` |
 | `Tuple` | `elements` |
 | `Call` | `args` |
-| `GridRegionExpr` | `init_args`, `body`, `yield_values` (binding-site Vars are excluded) |
+| `LoopRegion` | `init_args`, `body`, `yield_values` (binding-site Vars are excluded) |
 | `hir.Function` | `body` (parameter binding-site Vars are excluded) |
 
-The `GridRegionExpr` row intentionally excludes `carried_args`; passes that
+The `LoopRegion` row intentionally excludes `carried_args`; passes that
 collect dimension variables from carried bindings must enumerate that field
 explicitly. `child_exprs` remains the broader dataclass-field helper for
 module ownership and is not the visitor traversal contract.
@@ -166,7 +166,7 @@ class ExprCloner(ExprVisitor[Expr]):                   # memoized identity-prese
 
 `BindingSubstitutionCloner` is the binding-aware specialization. It replaces
 `Var` values from an identity-keyed environment and extends that environment
-for `GridRegionExpr` induction and carried bindings. It inherits
+for `LoopRegion` induction and carried bindings. It inherits
 `ExprCloner`'s identity memo: sharing within one clone is preserved, while a
 caller that needs independent copies MUST use a fresh instance for each copy.
 `expr_operands(expr)` exposes value/dataflow operands without entering a
