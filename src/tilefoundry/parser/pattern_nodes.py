@@ -4052,7 +4052,10 @@ class ForPattern(ElementPattern):
         lambda: BranchPattern("loop", AstNodePattern(
             ast.For,
             ChildPattern("header", LoopHeaderPattern(), "loop_header"),
-            FieldPattern("body", ChildPattern("body", ChoicePattern(BlockPattern(), LoopBodyPattern()), "loop_body", transform=_body_as_ast_module)),
+            FieldPattern("body", ChildPattern("body", ChoicePattern(
+                ConditionPattern("tir loop body", lambda node, context: context.function is not None and context.function.dialect == "tir", BlockPattern()),
+                ConditionPattern("hir loop body", lambda node, context: context.function is None or context.function.dialect == "hir", LoopBodyPattern()),
+            ), "loop_body", transform=_body_as_ast_module)),
         ), pattern_id="statement.for")
     )
 
@@ -4062,7 +4065,8 @@ class ForPattern(ElementPattern):
         body = children["body"]
         if context.function is not None and context.function.dialect == "tir":
             context.lexical_scope.pop_frame()
-            return runtime.For(frame[0], frame[1], frame[2], frame[3], body)
+            induction_var, start, stop, step = frame
+            return runtime.For(induction_var, start, stop, step, body)
         yield_values = tuple(context.lexical_scope.lookup(name) for name in frame.carry_names)
         context.lexical_scope.pop_frame()
         if frame.carry_names:
