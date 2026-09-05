@@ -76,19 +76,6 @@ class Return(Stmt):
 
 
 @dataclass(frozen=True)
-class Abort(Stmt):
-    """Terminating stmt — runtime unreachable / dispatch fallback.
-
-    A successfully-verified Abort exists in code paths the compiler
-    believes are unreachable. When hit at runtime, the CUDA emitter
-    produces ``__trap();`` (or equivalent abort) so failures are
-    loud rather than silent.
-    """
-
-    message: str = ""
-
-
-@dataclass(frozen=True)
 class Evaluate(Stmt):
     """Place a value-less effect Op or symbol invocation in statement position."""
 
@@ -104,6 +91,5 @@ __all__ = [
     "If",
     "MeshScope",
     "Return",
-    "Abort",
     "Evaluate",
 ]

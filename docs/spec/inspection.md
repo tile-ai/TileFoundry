@@ -260,10 +260,14 @@ validation artifact.
 
 ### 2.7 Round-trip contract
 
-For canonical TIR, the contract is the print/import/print fixed point:
-`as_script(import_dsl(as_script(x))) == as_script(x)`. This is an IR contract,
-not authored-source identity; erased authored bindings may be reconstructed in
-their canonical representation.
+For authored TIR, canonical fixture source is the contract:
+`as_script(module) == fixture_source`. This pins the spelling authors consume,
+not merely a printer/parser fixed point.
+
+Lowering-only nodes have a different contract. `ShapeOf` and `DispatchCall` are
+assembled while lowering HIR specialization tables and have no authored parser
+surface. The printer MUST render them without raising and preserve their
+semantics in readable text, but that text is not required to import.
 
 A rendering is one of two surfaces:
 
@@ -281,11 +285,11 @@ MUST agree over
   [parser §2.1](./parser.md#21-syntax) value-state form, and preserve `Partial.reduction` plus the
   attrs-position mesh axis in the underlying IR
 
-**Display-only** — the rendering of a function with a `DimVar` parameter, and
-therefore of any dispatch prototype and its `.specialize` variants ([§2.6](#26-specialization-printing)). A
-display-only rendering is human-readable and MUST NOT be used as a
-structural round-trip validation artifact: it is held to importing, not to the
-same structural comparison.
+**Display-only** — the rendering of a function with a `DimVar` parameter, a
+dispatch prototype and its `.specialize` variants ([§2.6](#26-specialization-printing)),
+or lowering-only `ShapeOf` / `DispatchCall` nodes. A display-only rendering is
+human-readable and MUST NOT be used as a structural round-trip validation
+artifact. Lowering-only node renderings need not import.
 
 A canonical grid loop MUST render each yielded expression under its own unique
 binding. After the loop body has emitted every yielded expression, the printer

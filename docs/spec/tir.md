@@ -356,19 +356,20 @@ class DispatchCall(Stmt):
 ([§1.4](#14-evaluate)); each `case_calls[i]` is an
 `Evaluate(SymbolRef, args)` invoking that case's specialized callee.
 
-Canonical authored text uses a statement suite for the fallback, so every
-fallback `Stmt` remains representable rather than being forced into an
-expression or lambda:
+The inspection printer uses a statement suite for the fallback, so every
+fallback `Stmt` remains readable rather than being forced into an expression
+or lambda:
 
 ```python
 with dispatch_call("main", subjects=(shape_of(x, axis=0),), cases=(... ,)):
-    abort("")
+    T.abort(message="")
 ```
 
-`shape_of(param, axis=N)` is the authored form of `ShapeOf`; `abort(message)`
-is the authored form of `Abort`. The `dispatch_call` case table preserves
-source order and names callees by string so lowered specialization names need
-not be valid Python identifiers.
+`ShapeOf` and `DispatchCall` are lowering products, not authored syntax. Their
+printed forms are display-only and need not import. `T.abort(message=...)` is
+authored through the ordinary registered-op call surface. The `dispatch_call`
+case table preserves source order and names callees by string so lowered
+specialization names need not be valid Python identifiers.
 
 Semantics: the i-th `case_patterns` matches against `subjects` by
 position; the first `i` whose every pattern matches runs
@@ -386,8 +387,8 @@ The verifier requires:
 - Each `case_patterns[i]` has length `== len(subjects) == 1`.
 - Each `case_patterns[i][0]` is a `DimVarRangePat`
   ([core-ir.md §3.1](./core-ir.md#31-dimvarrangepat)).
-- `fallback` is exactly `Sequential((Abort(),))` — a length-1 body
-  containing one `Abort`.
+- `fallback` is exactly `Sequential((Evaluate(Abort(), ()),))` — a length-1
+  body containing the `Abort` effect.
 
 `subjects` carries a canonical ordering so the IR is deterministic
 across compiles: ordered by axis kind, then by canonical name of the
@@ -396,12 +397,13 @@ matched key. A single dispatch axis makes this ordering trivial.
 ### 1.7 `Abort`
 
 ```python
-class Abort(Stmt):
-    message: str = ""    # a debug surface; carries no semantics
+class Abort(Op):
+    message: str = ""
 ```
 
 - constraints:
-  - a terminating Stmt on believed-unreachable paths (notably `DispatchCall.fallback`).
+  - a terminating effect Op on believed-unreachable paths (notably
+    `DispatchCall.fallback`), anchored in Stmt position by `Evaluate`.
 
 - The CUDA emitter renders `Abort` as `__trap();` in device contexts
   and `assert(false);` in host contexts so a runtime hit is loud

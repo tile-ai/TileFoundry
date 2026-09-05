@@ -56,13 +56,13 @@ def test_mixed_hir_tir_module_prints_both_function_families() -> None:
 def test_tir_for_if_and_abort_roundtrip() -> None:
     function = import_dsl(
         "from tilefoundry import prim_func\n"
-        "from tilefoundry.dsl import Tensor\n"
+        "from tilefoundry.dsl import T, Tensor\n"
         "from tilefoundry.target import CpuTarget\n\n"
         "@prim_func(target=CpuTarget())\n"
         "def control(a: Tensor[(1,), 'f32']):\n"
         "    for i in range(2):\n"
         "        if i < 1:\n"
-        "            abort('stop')\n",
+        "            T.abort(message='stop')\n",
         name="control",
     )
     printed = as_script(function)
@@ -121,29 +121,18 @@ def test_tir_for_codegen_renders_nonconstant_bounds() -> None:
     assert "i_1 < n_2" in context.source()
 
 
-def test_tir_shape_of_roundtrips() -> None:
-    function = import_dsl(
-        "from tilefoundry import prim_func\n"
-        "from tilefoundry.dsl import Tensor\n"
-        "from tilefoundry.target import CpuTarget\n\n"
-        "@prim_func(target=CpuTarget())\n"
-        "def shape(a: Tensor[(8,), 'f32']):\n"
-        "    extent = shape_of(a, axis=0)\n"
-        "    return\n",
-        name="shape",
-    )
-    printed = as_script(function)
-    assert as_script(import_dsl(printed, name="shape")) == printed
-
-
-def test_tir_dispatch_call_roundtrips_with_statement_fallback() -> None:
+def test_lowered_dispatch_prints_readable_shape_and_fallback() -> None:
     module = Module(
         name="Dispatch",
         functions=tuple(build_dispatch_functions()),
         entry="main",
     )
+
     printed = as_script(module)
+
     assert "with dispatch_call(" in printed
-    assert "\n            abort('')" in printed
-    assert as_script(import_dsl(printed, name="Dispatch")) == printed
+    assert "shape_of(" in printed
+    assert "T.abort(message='')" in printed
+
+
     return None

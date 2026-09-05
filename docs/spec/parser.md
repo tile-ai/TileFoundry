@@ -162,8 +162,6 @@ signature             ::= (name ':' type-annotation (',' name ':' type-annotatio
 return-type           ::= type-annotation
 tir-if                ::= if cond-node block (block)?
 tir-while             ::= while cond-node block
-abort                 ::= 'abort' '(' literal ')'
-dispatch-call         ::= 'with' ':' block
 loop-iterator         ::= 'tile' '(' expression ',' expression ')'
                           | 'range' '(' (expression | expression ',' expression | expression ','
                             expression ',' expression) ')'
@@ -179,8 +177,6 @@ mesh-context          ::= ('Mesh' | primary '.' identifier) '(' (expression | ('
                             expression))* ')'
                           | expression
 with                  ::= 'with' mesh-context ('as' identifier)? ':' block
-name                  ::= identifier
-shape-of              ::= 'shape_of' '(' name 'axis' '=' literal ')'
 op-call               ::= primary '(' ((expression | keyword-name '=' expression) (',' (expression |
                           keyword-name '=' expression))*)? ')'
 launch                ::= callee '(' ')'
@@ -204,12 +200,12 @@ binary-expression     ::= runtime-expression ('+' | '-' | '*' | '/' | '//' | '%'
                             runtime-expression
                           | runtime-expression ('and' | 'or') runtime-expression
 unary-expression      ::= unary-op runtime-expression
+name                  ::= identifier
 constant              ::= boolean-literal
                           | integer-literal
                           | float-literal
 tuple-expression      ::= '(' (runtime-expression (',' runtime-expression)*)? ')'
-runtime-expression    ::= shape-of
-                          | op-call
+runtime-expression    ::= op-call
                           | launch
                           | subscript-expression
                           | matmul-expression
@@ -225,8 +221,6 @@ tuple-assignment      ::= '(' identifier (',' identifier)* ')' '=' runtime-expre
 where-annotation      ::= 'where' '(' ')'
 statement             ::= tir-if
                           | tir-while
-                          | abort
-                          | dispatch-call
                           | for
                           | with
                           | tuple-assignment

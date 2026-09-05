@@ -13,10 +13,11 @@ import tilefoundry.codegen.cuda  # noqa: F401  — trigger emitter autodiscovery
 from tilefoundry.codegen.cuda.context import CodegenContext
 from tilefoundry.ir.core import Var
 from tilefoundry.ir.core.pattern import DimVarRangePat
+from tilefoundry.ir.tir.abort import Abort
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
-from tilefoundry.ir.tir.stmts import Abort, Sequential
+from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.ir.tir.symbol_ref import symbol_call
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.storage import StorageKind
@@ -64,7 +65,7 @@ def test_dispatch_call_emits_if_chain_and_trap_fallback() -> None:
             symbol_call(pf_lo, (x, x_shape_1)),
             symbol_call(pf_hi, (x, x_shape_1)),
         ),
-        fallback=Sequential(body=(Abort(),)),
+        fallback=Sequential(body=(Evaluate(callable=Abort(message=""), args=()),)),
     )
 
     ctx = CodegenContext()

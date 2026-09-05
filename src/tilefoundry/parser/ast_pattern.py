@@ -52,7 +52,6 @@ from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import (
-    Abort,
     Evaluate,
     For,
     If,
@@ -243,7 +242,6 @@ runtime = SimpleNamespace(
     Broadcast=Broadcast,
     Binary=Binary,
     BinaryKind=BinaryKind,
-    Abort=Abort,
     Constant=Constant,
     DType=DType,
     DimAdd=DimAdd,

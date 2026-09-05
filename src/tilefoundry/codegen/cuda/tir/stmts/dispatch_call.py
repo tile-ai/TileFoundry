@@ -11,9 +11,10 @@ from __future__ import annotations
 from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
 from tilefoundry.ir.core import Var
 from tilefoundry.ir.core.pattern import DimVarRangePat
+from tilefoundry.ir.tir.abort import Abort
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.shape import ShapeOf, shape_var_name
-from tilefoundry.ir.tir.stmts import Abort, Evaluate, Sequential
+from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 
 
 def _render_subject(subject) -> str:
@@ -83,7 +84,7 @@ def _emit_fallback(fallback: Sequential, ctx: CodegenContext) -> None:
 
 
     for stmt in fallback.body:
-        if isinstance(stmt, Abort):
+        if isinstance(stmt, Evaluate) and isinstance(stmt.callable, Abort):
             ctx.emit("assert(false);")
         else:
             raise NotImplementedError(

@@ -3046,49 +3046,10 @@ class MeshCoordinatePattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
 
-class ShapeOfPattern(ElementPattern):
-    element_name = "shape_of"
-    syntax = LazyPattern(
-        lambda: BranchPattern(
-            "shape_of",
-            AstNodePattern(
-                ast.Call,
-                FieldPattern("func", AstNodePattern(ast.Name, FieldPattern("id", LiteralPattern("shape_of")))),
-                FieldPattern("args", SequencePattern(ChildPattern("param", NamePattern(), "name"))),
-                FieldPattern(
-                    "keywords",
-                    SequencePattern(
-                        AstNodePattern(
-                            ast.keyword,
-                            FieldPattern("arg", LiteralPattern("axis")),
-                            FieldPattern("value", ChildPattern("axis", StaticLiteralPattern(), "expression")),
-                        )
-                    ),
-                ),
-            ),
-            pattern_id="expression.shape_of",
-        )
-    )
-
-    @staticmethod
-    def construct(match, children, context):
-        param, axis = children["param"], children["axis"]
-        if not isinstance(param, runtime.Var) or isinstance(axis, bool) or not isinstance(axis, int):
-            raise ParseError.from_node(match.node, context, "shape_of requires a parameter and integer axis")
-        return runtime.ShapeOf(
-            param=param,
-            axis=axis,
-            type=runtime.TensorType.scalar(runtime.DType.i32, storage=runtime.StorageKind.RMEM),
-        )
-
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
-
-
 class ExpressionPattern(ElementPattern):
     element_name = "runtime_expression"
     syntax = LazyPattern(
         lambda: ChoicePattern(
-            ShapeOfPattern(),
             CallPattern(),
             LaunchPattern(),
             SubscriptExpressionPattern(),
@@ -4266,122 +4227,12 @@ def _resolved_mesh(value, match, context):
     return dataclasses.replace(value, topologies=topologies)
 
 
-class AbortPattern(ElementPattern):
-    element_name = "abort"
-    syntax = LazyPattern(
-        lambda: BranchPattern(
-            "abort",
-            AstNodePattern(
-                ast.Expr,
-                FieldPattern(
-                    "value",
-                    AstNodePattern(
-                        ast.Call,
-                        FieldPattern("func", AstNodePattern(ast.Name, FieldPattern("id", LiteralPattern("abort")))),
-                        FieldPattern("args", SequencePattern(ChildPattern("message", StaticLiteralPattern(), "expression"))),
-                        FieldPattern("keywords", SequencePattern()),
-                    ),
-                ),
-            ),
-            pattern_id="statement.abort",
-        )
-    )
-
-    @staticmethod
-    def construct(match, children, context):
-        if context.function is None or context.function.dialect != "tir":
-            raise ParseError.from_node(match.node, context, "abort requires TIR context")
-        if not isinstance(children["message"], str):
-            raise ParseError.from_node(match.node, context, "abort message must be a string literal")
-        return runtime.Abort(children["message"])
-
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
-
-
-def _tuple_nodes(node: ast.expr) -> tuple[ast.expr, ...]:
-    return tuple(node.elts) if isinstance(node, ast.Tuple) else (node,)
-
-
-class DispatchCallPattern(ElementPattern):
-    element_name = "dispatch_call"
-    syntax = LazyPattern(
-        lambda: BranchPattern(
-            "dispatch_call",
-            AstNodePattern(
-                ast.With,
-                CapturePattern("with_node", lambda node, context: node),
-            ),
-            pattern_id="statement.dispatch_call",
-        )
-    )
-
-    def match(self, node, context):
-        if context.function is None or context.function.dialect != "tir":
-            return None
-        if not (
-            isinstance(node, ast.With)
-            and len(node.items) == 1
-            and node.items[0].optional_vars is None
-            and isinstance(node.items[0].context_expr, ast.Call)
-            and isinstance(node.items[0].context_expr.func, ast.Name)
-            and node.items[0].context_expr.func.id == "dispatch_call"
-        ):
-            return None
-        return super().match(node, context)
-
-    @staticmethod
-    def construct(match, children, context):
-        with_node = match.captures["with_node"]
-        call = with_node.items[0].context_expr
-        if context.function is None or context.function.dialect != "tir":
-            raise ParseError.from_node(match.node, context, "dispatch_call requires TIR context")
-        if len(call.args) != 1 or not isinstance(call.args[0], ast.Constant) or not isinstance(call.args[0].value, str):
-            raise ParseError.from_node(match.node, context, "dispatch_call requires one string callee name")
-        keywords = {keyword.arg: keyword.value for keyword in call.keywords}
-        if set(keywords) != {"subjects", "cases"}:
-            raise ParseError.from_node(match.node, context, "dispatch_call requires subjects and cases")
-        subjects = tuple(parse_node(ExpressionPattern(), node, context) for node in _tuple_nodes(keywords["subjects"]))
-        patterns = []
-        calls = []
-        for case in _tuple_nodes(keywords["cases"]):
-            if not isinstance(case, ast.Tuple) or len(case.elts) != 3:
-                raise ParseError.from_node(case, context, "dispatch case must be (patterns, callee, args)")
-            pattern_nodes, callee_node, arg_nodes = case.elts
-            row = []
-            for pattern in _tuple_nodes(pattern_nodes):
-                if not isinstance(pattern, ast.Call) or not isinstance(pattern.func, ast.Name) or pattern.func.id != "DimVarRangePat":
-                    raise ParseError.from_node(pattern, context, "dispatch patterns must use DimVarRangePat")
-                values = [ast.literal_eval(arg) for arg in pattern.args]
-                row.append(runtime.DimVarRangePat(*values))
-            if not isinstance(callee_node, ast.Constant) or not isinstance(callee_node.value, str):
-                raise ParseError.from_node(callee_node, context, "dispatch callee must be a string")
-            args = tuple(parse_node(ExpressionPattern(), node, context) for node in _tuple_nodes(arg_nodes))
-            ref = runtime.SymbolRef(
-                name=callee_node.value,
-                type=runtime.CallableType(runtime.UnitType(), tuple(arg.type for arg in args)),
-            )
-            patterns.append(tuple(row))
-            calls.append(runtime.Evaluate(ref, args))
-        fallback = parse_node(BlockPattern(), _body_as_ast_module(with_node.body), context)
-        return runtime.DispatchCall(
-            call.args[0].value,
-            subjects,
-            tuple(patterns),
-            tuple(calls),
-            fallback,
-        )
-
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
-
-
 class StatementPattern(ElementPattern):
     element_name = "statement"
     syntax = LazyPattern(
         lambda: ChoicePattern(
             IfPattern(),
             WhilePattern(),
-            AbortPattern(),
-            DispatchCallPattern(),
             ForPattern(),
             WithPattern(),
             TupleAssignmentPattern(),

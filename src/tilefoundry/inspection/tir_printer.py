@@ -84,9 +84,6 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
     def visit_Return(self, stmt):
         return [f"{self.indent}return"]
 
-    def visit_Abort(self, stmt):
-        return [f"{self.indent}abort({stmt.message!r})"]
-
     def visit_DispatchCall(self, stmt):
         cases = []
         for patterns, call in zip(stmt.case_patterns, stmt.case_calls):
