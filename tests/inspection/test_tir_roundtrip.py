@@ -16,7 +16,6 @@ from tilefoundry.ir.core import Constant, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.stmts import For, Sequential
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.parser.ast_pattern import ParseError
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "tir"
 
@@ -94,9 +93,8 @@ def test_tir_for_if_and_sync_mesh_forms_roundtrip() -> None:
     assert as_script(import_dsl(printed, name="device")) == printed
 
 
-def test_tir_for_rejects_nonconstant_bounds() -> None:
-    with pytest.raises(ParseError, match="CUDA codegen cannot emit a non-constant loop bound"):
-        import_dsl(
+def test_tir_for_accepts_nonconstant_bounds() -> None:
+    import_dsl(
             "from tilefoundry import prim_func\n"
             "from tilefoundry.dsl import Tensor\n"
             "from tilefoundry.target import CpuTarget\n\n"
@@ -104,11 +102,11 @@ def test_tir_for_rejects_nonconstant_bounds() -> None:
             "def dynamic(n: Tensor[(), 'i64']):\n"
             "    for i in range(n):\n"
             "        return\n",
-            name="dynamic",
-        )
+        name="dynamic",
+    )
 
 
-def test_tir_for_codegen_rejects_nonconstant_bounds() -> None:
+def test_tir_for_codegen_renders_nonconstant_bounds() -> None:
     scalar = TensorType.scalar(DType.i64)
     variable = Var(type=scalar, name="n")
     loop = For(
@@ -118,8 +116,9 @@ def test_tir_for_codegen_rejects_nonconstant_bounds() -> None:
         step=Constant(type=scalar, value=1),
         body=Sequential(()),
     )
-    with pytest.raises(NotImplementedError, match="silently wrong loop"):
-        CodegenContext().emit_node(loop)
+    context = CodegenContext()
+    context.emit_node(loop)
+    assert "i_1 < n_2" in context.source()
 
 
 def test_tir_shape_of_roundtrips() -> None:

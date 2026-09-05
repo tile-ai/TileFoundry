@@ -4157,13 +4157,6 @@ class TirLoopHeaderPattern(ElementPattern):
 
     @staticmethod
     def construct(match, children, context):
-        for name in ("start", "stop", "step"):
-            if not isinstance(children[name], runtime.Constant):
-                raise ParseError.from_node(
-                    match.node,
-                    context,
-                    f"tir for {name} must be a constant; CUDA codegen cannot emit a non-constant loop bound yet",
-                )
         induction_var = runtime.Var(
             type=runtime.TensorType.scalar(runtime.DType.i64),
             name=match.captures["target"],
@@ -4205,6 +4198,25 @@ class IfPattern(ElementPattern):
             children["then"],
             children.get("else", runtime.Sequential(body=())),
         )
+
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
+
+class WhilePattern(ElementPattern):
+    element_name = "tir_while"
+    syntax = LazyPattern(lambda: BranchPattern("tir_while", AstNodePattern(
+        ast.While,
+        CapturePattern("cond_node", lambda node, context: node.test),
+        FieldPattern("body", ChildPattern("body", BlockPattern(), "block", transform=_body_as_ast_module)),
+    ), pattern_id="statement.tir_while"))
+
+    def match(self, node, context):
+        if context.function is None or context.function.dialect != "tir":
+            return None
+        return super().match(node, context)
+
+    @staticmethod
+    def construct(match, children, context):
+        return runtime.While(_tir_scalar_expr(match.captures["cond_node"], context), children["body"])
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = ()
 
@@ -4441,6 +4453,7 @@ class StatementPattern(ElementPattern):
     syntax = LazyPattern(
         lambda: ChoicePattern(
             IfPattern(),
+            WhilePattern(),
             AbortPattern(),
             DispatchCallPattern(),
             ForPattern(),

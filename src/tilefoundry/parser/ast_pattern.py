@@ -60,6 +60,7 @@ from tilefoundry.ir.tir.stmts import (
     MeshScope,
     Return,
     Sequential,
+    While,
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types import DType, TensorType, TupleType, UnitType
@@ -267,6 +268,7 @@ runtime = SimpleNamespace(
     MeshScope=MeshScope,
     MeshRegion=MeshRegion,
     If=If,
+    While=While,
     MeshCoord=MeshCoord,
     Mesh=Mesh,
     Module=Module,
