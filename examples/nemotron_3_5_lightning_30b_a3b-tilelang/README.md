@@ -21,18 +21,21 @@ CUDA calling the public `tilefoundry::ops` entries, one cooperative launch over
 all 52 layers. A third, `NEMO_IMPL=cuda-stages`, runs the same device code a
 stage per launch, which is what bisects a disagreement to a layer.
 
-Where they stand against `transformers`, greedy and teacher-forced:
+**Token identity is prompt-specific, for every implementation.** Greedy and
+teacher-forced, 48 steps, three prompts, all three implementations:
 
-```
-NEMO_IMPL=cuda-stages    64 of 64 identical
-NEMO_IMPL=cuda           34 of 64 identical, first divergence at step 35
-```
+| prompt | `mega` | `cuda` | `cuda-stages` |
+|---|---|---|---|
+| `The capital of France is` | 48/48 | step 35 | step 35 |
+| `In 1969 the first humans` | step 3 | step 3 | step 3 |
+| `A prime number is` | step 42 | 48/48 | step 42 |
 
-The two CUDA paths run the same arithmetic, so the fused one carries a small
-systematic difference the staged one does not: measured against `cuda-stages` it
-is 1.3e-4 after three steps and 3.6e-2 after thirty-six, which is inside the
-envelope `check_all.py` derives and outside what token identity tolerates. It is
-not diagnosed yet.
+On the middle prompt all three diverge at the same step and pick the same token
+as each other (24556 against the reference's 33290), which is a tie the
+reference resolves one way and every implementation here resolves the other. The
+"64 of 64" in the block above is the first prompt with the TileLang kernel; it is
+not a property any of these three has in general. Nothing distinguishes the
+handwritten paths from the shipped one on this criterion.
 
 ```
                         ctx 32, one H200, one session
