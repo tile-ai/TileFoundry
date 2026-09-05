@@ -1160,18 +1160,24 @@ template <int Width>
 __device__ bool shuffle_elect();
 
 /**
- * @brief Fold value across the warp, leaving the result in every lane.
+ * @brief Fold value across each aligned run of Width lanes, leaving the result in every lane of the run.
  * @tparam Combine functor type supplying a static apply(T, T) -> T
+ * @tparam Width lanes per fold, a power of two up to 32
  * @param value this lane's contribution
  */
-template <class Combine, class T>
+template <class Combine, int Width = 32, class T>
 __device__ T warp_reduce(T value);
 ```
 
 - constraints:
   - `shuffle_elect` elects one thread of the **CTA**, not one lane of each warp.
     An mbarrier armed for a single arrival is correct only under that reading.
-  - `warp_reduce` is the five-step butterfly and leaves its result in every lane.
+  - `warp_reduce` is a butterfly over `Width` lanes — `log2(Width)` shuffles —
+    and leaves its result in every lane of the run, not only in its first.
+  - A `Width` under 32 leaves the runs independent, which is what a per-row
+    reduction over a tile laid out several rows to a warp needs. The
+    alternatives are a shared round trip or leaving every lane but one row's
+    idle.
   - Types wider than the shuffle intrinsic's are exchanged word-wise; that
     choice lives in code comments, not this entry.
 

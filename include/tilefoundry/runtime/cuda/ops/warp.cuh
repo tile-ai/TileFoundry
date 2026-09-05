@@ -34,14 +34,19 @@ template <int Width> __device__ inline bool shuffle_elect() {
     return warp_impl::Elect<Width>{}();
 }
 
-/// Fold ``value`` across the 32 lanes with ``Combine``, leaving the result in
-/// **every** lane.
+/// Fold ``value`` across each aligned run of ``Width`` lanes with ``Combine``,
+/// leaving the result in **every** lane of the run.
 ///
 /// ``Combine`` is a functor type with a static ``apply(T, T) -> T``. The fold
-/// is the five-step butterfly, so the instruction count to expect is five
-/// shuffles and five combines, not a loop over 32 lanes.
-template <class Combine, class T> __device__ inline T warp_reduce(T value) {
-    return warp_impl::Butterfly<Combine, T>{}(value);
+/// is a butterfly, so the instruction count to expect is ``log2(Width)``
+/// shuffles and as many combines, not a loop over the lanes.
+///
+/// ``Width`` under 32 leaves the runs independent. A tile laid out several rows
+/// to a warp reduces each row that way; the alternatives are a shared round
+/// trip or leaving every lane but one row's idle.
+template <class Combine, int Width = 32, class T>
+__device__ inline T warp_reduce(T value) {
+    return warp_impl::Butterfly<Combine, T, Width>{}(value);
 }
 
 /// Sum combine for ``warp_reduce``.

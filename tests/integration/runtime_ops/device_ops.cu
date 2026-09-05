@@ -25,10 +25,10 @@ constexpr int kThreads = 256;
 
 /// warp.
 
-template <class Combine>
+template <class Combine, int Width = 32>
 __global__ void warp_reduce_kernel(const float *in, float *out) {
     const int t = blockIdx.x * blockDim.x + threadIdx.x;
-    out[t] = ops::warp_reduce<Combine>(in[t]);
+    out[t] = ops::warp_reduce<Combine, Width>(in[t]);
 }
 
 __global__ void shuffle_xor_kernel(const float *in, float *out, int lane_mask) {
@@ -396,6 +396,34 @@ torch::Tensor warp_reduce_max(torch::Tensor x) {
     return out;
 }
 
+/// A fold narrower than a warp: the runs must stay independent.
+torch::Tensor warp_reduce_sum_width(torch::Tensor x, int64_t width) {
+    check_f32_cuda(x, "x");
+    auto out = torch::empty_like(x);
+    const int n = int(x.numel());
+    TORCH_CHECK(n % kThreads == 0, "x must be a multiple of ", kThreads);
+    auto stream = at::cuda::getCurrentCUDAStream();
+    auto *i = x.data_ptr<float>();
+    auto *o = out.data_ptr<float>();
+    switch (width) {
+    case 2:
+        warp_reduce_kernel<ops::warp_sum, 2>
+            <<<n / kThreads, kThreads, 0, stream>>>(i, o);
+        break;
+    case 8:
+        warp_reduce_kernel<ops::warp_sum, 8>
+            <<<n / kThreads, kThreads, 0, stream>>>(i, o);
+        break;
+    case 16:
+        warp_reduce_kernel<ops::warp_sum, 16>
+            <<<n / kThreads, kThreads, 0, stream>>>(i, o);
+        break;
+    default:
+        TORCH_CHECK(false, "warp_reduce_sum_width: unsupported width ", width);
+    }
+    return out;
+}
+
 torch::Tensor shuffle_xor(torch::Tensor x, int64_t lane_mask) {
     check_f32_cuda(x, "x");
     auto out = torch::empty_like(x);
@@ -564,6 +592,7 @@ torch::Tensor tma_stage(torch::Tensor x, int64_t tile, int64_t stages,
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("warp_reduce_sum", &warp_reduce_sum);
     m.def("warp_reduce_max", &warp_reduce_max);
+    m.def("warp_reduce_sum_width", &warp_reduce_sum_width);
     m.def("shuffle_xor", &shuffle_xor);
     m.def("elect_count", &elect_count);
     m.def("mbarrier_pipeline", &mbarrier_pipeline);

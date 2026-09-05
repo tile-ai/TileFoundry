@@ -192,3 +192,79 @@ __device__ void copy_run(SPtr src, DPtr dst) {
         if (i < N - span) dst[span + i] = src[span + i];
     }
 }
+
+/// A `(Rows, Cols)` tile whose rows sit `Stride` apart, split over the block.
+///
+/// Warp `w` takes the `Rows/warps` rows starting at `w * Rows/warps` and lane
+/// `l` takes `Cols/32` contiguous columns of each: the row block is the mesh's
+/// stride, which is what [runtime §2.10.2](docs/spec/runtime.md#2102-computation)
+/// asks a canonical Split for. Reading a strided source into a packed
+/// destination is then one `ops::copy` between two of these.
+template <int Rows, int Cols, int Stride, int Threads, class Ptr>
+__device__ auto strided_tile(Ptr p) {
+    constexpr int W = Threads / 32;
+    constexpr int V = lane_block(Cols);
+    static_assert(Cols == 32 * V, "a lane takes one block of the row");
+    static_assert(Rows % W == 0, "the rows divide over the warps");
+    auto layout = cute::make_layout(
+        cute::make_shape(cute::Int<V>{}, cute::Int<32>{}, cute::Int<W>{},
+                         cute::Int<Rows / W>{}),
+        cute::make_stride(cute::Int<1>{}, cute::Int<V>{},
+                          cute::Int<(Rows / W) * Stride>{},
+                          cute::Int<Stride>{}));
+    auto mesh = lane_warp_mesh<Threads>();
+    tilefoundry::ShardLayout<decltype(layout),
+                             cute::tuple<tilefoundry::shard::S<1>,
+                                         tilefoundry::shard::S<2>>,
+                             decltype(mesh)>
+        shard{layout, mesh};
+    return tilefoundry::make_shard_tensor(cute::make_tensor(p, layout), layout,
+                                          shard);
+}
+
+/// A `(Rows, Cols)` tile with one thread to a run of `Cols/Groups` columns.
+///
+/// `Groups` threads cover a row and `Threads/Groups` rows are in flight, which
+/// is the shape a softmax over a score block wants: a row's reduction is then
+/// a `Groups`-wide butterfly over adjacent lanes rather than a shared round
+/// trip.
+template <int Rows, int Cols, int Groups, int Threads, class Ptr>
+__device__ auto row_group_tile(Ptr p) {
+    constexpr int V = Cols / Groups;
+    static_assert(Threads / Groups == Rows, "one pass over the rows");
+    auto layout = cute::make_layout(
+        cute::make_shape(cute::Int<V>{}, cute::Int<Groups>{},
+                         cute::Int<Rows>{}),
+        cute::make_stride(cute::Int<1>{}, cute::Int<V>{}, cute::Int<Cols>{}));
+    auto mesh_layout = cute::make_layout(
+        cute::make_shape(cute::Int<Groups>{}, cute::Int<Threads / Groups>{}),
+        cute::make_stride(cute::Int<1>{}, cute::Int<Groups>{}));
+    tilefoundry::Mesh<
+        tilefoundry::Topology<tilefoundry::TopologyScope::thread, Threads>,
+        decltype(mesh_layout)>
+        mesh{mesh_layout};
+    tilefoundry::ShardLayout<decltype(layout),
+                             cute::tuple<tilefoundry::shard::S<1>,
+                                         tilefoundry::shard::S<2>>,
+                             decltype(mesh)>
+        shard{layout, mesh};
+    return tilefoundry::make_shard_tensor(cute::make_tensor(p, layout), layout,
+                                          shard);
+}
+
+/// A rank-2 tile as a ShardTensor, whole on every thread.
+///
+/// `ops::mma`'s operands: the strides say the shape, so an `(N, K)` view of a
+/// `(K, N)` buffer is this with them swapped and no transpose flag anywhere.
+template <int Rows, int Cols, int S0, int S1, int Threads, class Ptr>
+__device__ auto mma_operand(Ptr p) {
+    auto layout =
+        cute::make_layout(cute::make_shape(cute::Int<Rows>{}, cute::Int<Cols>{}),
+                          cute::make_stride(cute::Int<S0>{}, cute::Int<S1>{}));
+    auto mesh = flat_mesh<Threads>();
+    tilefoundry::ShardLayout<decltype(layout),
+                             cute::tuple<tilefoundry::shard::B>, decltype(mesh)>
+        shard{layout, mesh};
+    return tilefoundry::make_shard_tensor(cute::make_tensor(p, layout), layout,
+                                          shard);
+}

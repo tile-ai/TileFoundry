@@ -603,13 +603,14 @@ constexpr int DOWN_TILES = H / TILE_ROWS;
 constexpr int SH_UP_TILES = IS / TILE_ROWS;
 constexpr int MOE_STAGES = 3;
 
-/// The arena every staged projection overlays, sized to the largest of them.
+/// The arena every stage that wants shared memory overlays, sized to the
+/// largest of them.
 ///
-/// One kernel calls all of them, so one allocation has to cover the widest:
-/// `s_out_proj` stages 4096-wide rows and needs more than `s_in_proj`'s 2688.
+/// One kernel calls all of them, so one allocation has to cover the widest.
 /// Getting this wrong is a shared-memory write past the end, which is what
-/// compute-sanitizer reported before it was a constant.
-constexpr size_t kMegaSmem = ProjSmem<H, IN_STAGES>::bytes();
+/// compute-sanitizer reported before it was a constant. Attention's tiles are
+/// declared below, so the maximum is taken where both are in scope.
+constexpr size_t kProjSmem = ProjSmem<H, IN_STAGES>::bytes();
 
 
 /// The router's logits: 128 numbers, spread over the whole grid.
@@ -865,8 +866,8 @@ std::vector<torch::Tensor> moe_layer(
     // and a dynamic allocation would cap how many CTAs an SM can hold for
     // nothing in return.
 
-    allow_smem(k_moe_up, kMegaSmem);
-    allow_smem(k_moe_down, kMegaSmem);
+    allow_smem(k_moe_up, kProjSmem);
+    allow_smem(k_moe_down, kProjSmem);
 
     auto *H2 = static_cast<bf16 *>(h2.data_ptr());
     auto *IDX = static_cast<int *>(idx.data_ptr());
@@ -882,9 +883,9 @@ std::vector<torch::Tensor> moe_layer(
     k_moe_topk<<<1, 32, 0, stream>>>(
         static_cast<const float *>(logits.data_ptr()),
         static_cast<const float *>(e_bias.data_ptr()), IDX, GW);
-    k_moe_up<<<ctas, THREADS, kMegaSmem, stream>>>(
+    k_moe_up<<<ctas, THREADS, kProjSmem, stream>>>(
         H2, static_cast<const bf16 *>(w_up.data_ptr()), IDX, MID);
-    k_moe_down<<<ctas, THREADS, kMegaSmem, stream>>>(
+    k_moe_down<<<ctas, THREADS, kProjSmem, stream>>>(
         MID, static_cast<const bf16 *>(w_down.data_ptr()), IDX, GW,
         static_cast<float *>(acc.data_ptr()));
     k_moe_shared_up<<<ctas, THREADS, 0, stream>>>(
@@ -907,82 +908,190 @@ std::vector<torch::Tensor> moe_layer(
 /// a running (max, sum, accumulator) and `k_attn_combine` merges the blocks,
 /// which is what makes reading them separately the same value as one softmax
 /// over their concatenation.
-constexpr int ABLK = 256;
+///
+/// 128 and not some other number: it is the tensor core's N for a `(16, 128)`
+/// score block, so a block of keys is one `ops::mma`.
+constexpr int ABLK = 128;
 constexpr int ATT_THREADS = 256;
-constexpr int ATT_WARPS = ATT_THREADS / 32;
-constexpr int Q_PER_WARP = GQA / ATT_WARPS;
+
+/// The arena one attention block overlays: the two key/value tiles first (they
+/// are the mma's operands and want the widest alignment), then the probability
+/// block, the query tile, and the per-query softmax state.
+struct AttnSmem {
+    bf16 *ks;
+    bf16 *vs;
+    bf16 *ps;
+    bf16 *qs;
+    float *sml;
+
+    __device__ explicit AttnSmem(char *raw) {
+        ks = reinterpret_cast<bf16 *>(raw);
+        vs = ks + ABLK * DH;
+        ps = vs + ABLK * DH;
+        qs = ps + GQA * ABLK;
+        sml = reinterpret_cast<float *>(qs + GQA * DH);
+    }
+    static constexpr size_t bytes() {
+        return sizeof(bf16) * (2 * size_t(ABLK) * DH + GQA * ABLK + GQA * DH) +
+               sizeof(float) * 3 * GQA;
+    }
+};
 
 /// One block of keys, for one KV head, folded into a partial softmax.
 ///
-/// Lane `l` takes key `base + l`, so a lane's 128 dot products are serial and no
-/// reduction crosses the warp for a score. The softmax over the 32 keys a warp
-/// holds is two warp folds, and the value accumulation broadcasts each weight
-/// back with a shuffle.
-__device__ void s_attn_block(int cta, int nctas, int head, const bf16 *__restrict__ q, const bf16 *__restrict__ kc, const bf16 *__restrict__ vc, int nkey, int blk_offset, float *__restrict__ pm, float *__restrict__ pl, float *__restrict__ pacc) {
+/// The shape is the tilelang kernel's: a `(16, 128)` score block out of one
+/// `ops::mma`, an online softmax over it with a query to sixteen adjacent
+/// lanes, and a second `ops::mma` against the value block. Neither call names a
+/// transpose -- `ks` is read as `(keys, dims)` and `vs` as `(dims, keys)`, and
+/// that is a stride each.
+__device__ void s_attn_block(char *arena, int cta, int nctas, int head,
+                             const bf16 *q, const bf16 *kc, const bf16 *vc,
+                             int nkey, int blk_offset, float *pm, float *pl,
+                             float *pacc) {
+    constexpr int GROUPS = ABLK / 8;
+    AttnSmem sm(arena);
     const int blk = cta;
-    const int warp = threadIdx.x >> 5;
-    const int lane = threadIdx.x & 31;
+    const int tid = int(threadIdx.x);
+    const int row = tid / GROUPS;
+    const int lo = blk * ABLK;
+    const int live = min(nkey - lo, ABLK);
+    const size_t at = (size_t(blk_offset + blk) * HKV + head) * GQA;
+    /// A block past the end still publishes its partial: the merge skips a
+    /// block whose max is -inf, and uninitialised memory is not that.
+    if (live <= 0) {
+        if (tid < GQA) {
+            pm[at + tid] = -INFINITY;
+            pl[at + tid] = 0.0f;
+        }
+        return;
+    }
+    (void)nctas;
 
-    __shared__ __align__(16) bf16 qs[GQA * DH];
-    for (int i = int(threadIdx.x); i < GQA * DH; i += ATT_THREADS)
-        qs[i] = q[size_t(head) * GQA * DH + i];
+    /// The query rows this KV head owns, packed.
+    {
+        auto src = strided_tile<GQA, DH, DH, ATT_THREADS>(
+            cute::make_gmem_ptr(q + size_t(head) * GQA * DH));
+        auto dst = strided_tile<GQA, DH, DH, ATT_THREADS>(
+            cute::make_smem_ptr(sm.qs));
+        ops::copy(src, dst);
+    }
+    if (tid < GQA) {
+        sm.sml[tid] = -INFINITY;
+        sm.sml[GQA + tid] = 0.0f;
+    }
+    float out[ops::mma_acc_elems<GQA, DH, ATT_THREADS>()];
+    for (int f = 0; f < int(sizeof(out) / sizeof(float)); ++f) out[f] = 0.0f;
     ops::sync<ops::SyncKind::syncthreads>();
 
-    const int lo = blk * ABLK;
-    const int hi = min(lo + ABLK, nkey);
-
-    for (int qi = 0; qi < Q_PER_WARP; ++qi) {
-        const int g = warp * Q_PER_WARP + qi;
-        const bf16 *qrow = qs + g * DH;
-        float m = -INFINITY, l = 0.0f;
-        float acc[DH / 32];
-#pragma unroll
-        for (int i = 0; i < DH / 32; ++i) acc[i] = 0.0f;
-
-        for (int base = lo; base < hi; base += 32) {
-            const int key = base + lane;
-            /// `raw` lands in bf16 before the scale, because
-            /// `matmul(qg, kh.t())` is a bf16 matmul and only then `.float()`.
-            float s = -INFINITY;
-            if (key < hi) {
-                const bf16 *krow = kc + (size_t(key) * HKV + head) * DH;
-                float part[4] = {0, 0, 0, 0};
-#pragma unroll
-                for (int d = 0; d < DH; d += 4)
-#pragma unroll
-                    for (int u = 0; u < 4; ++u)
-                        part[u] += ld(krow + d + u) * ld(qrow + d + u);
-                s = bf(part[0] + part[1] + part[2] + part[3]) * QSCALE;
-            }
-            const float bm = ops::warp_reduce<ops::warp_max>(s);
-            const float nm = fmaxf(m, bm);
-            const float cr = (m == -INFINITY) ? 0.0f : __expf(m - nm);
-            const float pw = (key < hi) ? __expf(s - nm) : 0.0f;
-            l = l * cr + ops::warp_reduce<ops::warp_sum>(pw);
-#pragma unroll
-            for (int i = 0; i < DH / 32; ++i) acc[i] *= cr;
-            /// The weights are per key, the accumulator per dim, so each key's
-            /// weight comes back to every lane with a shuffle rather than
-            /// through shared memory.
-            for (int j = 0; j < 32; ++j) {
-                const float w = __shfl_sync(0xFFFFFFFFu, pw, j);
-                const int kj = base + j;
-                if (kj >= hi || w == 0.0f) continue;
-                const bf16 *vrow = vc + (size_t(kj) * HKV + head) * DH;
-#pragma unroll
-                for (int i = 0; i < DH / 32; ++i)
-                    acc[i] += w * ld(vrow + lane + i * 32);
-            }
-            m = nm;
+    if (live == ABLK) {
+        auto ksrc = strided_tile<ABLK, DH, HKV * DH, ATT_THREADS>(
+            cute::make_gmem_ptr(kc + (size_t(lo) * HKV + head) * DH));
+        auto kdst =
+            strided_tile<ABLK, DH, DH, ATT_THREADS>(cute::make_smem_ptr(sm.ks));
+        auto vsrc = strided_tile<ABLK, DH, HKV * DH, ATT_THREADS>(
+            cute::make_gmem_ptr(vc + (size_t(lo) * HKV + head) * DH));
+        auto vdst =
+            strided_tile<ABLK, DH, DH, ATT_THREADS>(cute::make_smem_ptr(sm.vs));
+        ops::copy(ksrc, kdst);
+        ops::copy(vsrc, vdst);
+    } else {
+        /// The last block is shorter than the tile and the cache holds no rows
+        /// past it, so each row is clamped to the last live one; its score is
+        /// masked out below, so which row it read is moot. The clamp is the one
+        /// thing a static shard cannot state -- the mapping is still the
+        /// shard's, and only the row index is written here.
+        auto kdst = tilefoundry::local(
+            strided_tile<ABLK, DH, DH, ATT_THREADS>(cute::make_smem_ptr(sm.ks)));
+        auto vdst = tilefoundry::local(
+            strided_tile<ABLK, DH, DH, ATT_THREADS>(cute::make_smem_ptr(sm.vs)));
+        const int m = int(cute::size(kdst));
+        for (int u = 0; u < m; ++u) {
+            const int idx = index_of(kdst, u, sm.ks);
+            const int key = min(lo + idx / DH, lo + live - 1);
+            const size_t src = (size_t(key) * HKV + head) * DH + idx % DH;
+            kdst(u) = kc[src];
+            vdst(u) = vc[src];
         }
-        const size_t at = (size_t(blk_offset + blk) * HKV + head) * GQA + g;
-        if (lane == 0) {
-            pm[at] = m;
-            pl[at] = l;
-        }
-#pragma unroll
-        for (int i = 0; i < DH / 32; ++i)
-            pacc[at * DH + lane + i * 32] = acc[i];
+    }
+    ops::sync<ops::SyncKind::syncthreads>();
+
+    /// The scores. `ks` is `(keys, dims)` and the contraction is over dims, so
+    /// the `(N, K)` operand is that buffer read as it lies.
+    float scores[ops::mma_acc_elems<GQA, ABLK, ATT_THREADS>()];
+    auto sfg = ops::mma_acc_tensor<GQA, ABLK, ATT_THREADS>(
+        cute::make_rmem_ptr(&scores[0]));
+    ops::fill(sfg, 0.0f, int(sizeof(scores) / sizeof(float)));
+    {
+        auto qf = mma_operand<GQA, DH, DH, 1, ATT_THREADS>(
+            cute::make_smem_ptr(sm.qs));
+        auto kf = mma_operand<ABLK, DH, DH, 1, ATT_THREADS>(
+            cute::make_smem_ptr(sm.ks));
+        ops::mma(qf, kf, sfg);
+    }
+    for (int f = 0; f < int(sizeof(scores) / sizeof(float)); ++f) {
+        auto rc = ops::mma_acc_coord<GQA, ABLK, ATT_THREADS>(f, tid);
+        /// The product lands in bf16 before the scale, because
+        /// `matmul(qg, kh.t())` is a bf16 matmul and only then `.float()`.
+        sm.ps[cute::get<0>(rc) * ABLK + cute::get<1>(rc)] =
+            __float2bfloat16(bf(scores[f]));
+    }
+    ops::sync<ops::SyncKind::syncthreads>();
+
+    /// The online softmax, in place over the score block: a query to sixteen
+    /// adjacent lanes and eight keys each, so both folds are butterflies over
+    /// registers -- no shared round trip, and no lane idle.
+    auto mine = tilefoundry::local(
+        row_group_tile<GQA, ABLK, GROUPS, ATT_THREADS>(
+            cute::make_smem_ptr(sm.ps)));
+    const int n = int(cute::size(mine));
+    const int key0 = index_of(mine, 0, sm.ps) - row * ABLK;
+
+    float peak = -INFINITY;
+    for (int u = 0; u < n; ++u)
+        if (key0 + u < live) peak = fmaxf(peak, ld(&mine(u)) * QSCALE);
+    peak = ops::warp_reduce<ops::warp_max, GROUPS>(peak);
+    const float nm = fmaxf(sm.sml[row], peak);
+    const float corr = (sm.sml[row] == -INFINITY) ? 0.0f : expf(sm.sml[row] - nm);
+
+    float sum = 0.0f;
+    for (int u = 0; u < n; ++u) {
+        const float p =
+            (key0 + u < live) ? expf(ld(&mine(u)) * QSCALE - nm) : 0.0f;
+        mine(u) = __float2bfloat16(p);
+        sum += p;
+    }
+    sum = ops::warp_reduce<ops::warp_sum, GROUPS>(sum);
+    if (tid % GROUPS == 0) {
+        sm.sml[GQA + row] = sm.sml[GQA + row] * corr + sum;
+        sm.sml[row] = nm;
+        sm.sml[2 * GQA + row] = corr;
+    }
+    ops::sync<ops::SyncKind::syncthreads>();
+
+    /// Rescale what came before, then add this block's share. `vs` is
+    /// `(keys, dims)` and the contraction is over keys, so the `(N, K)` operand
+    /// is the same buffer with its strides the other way round.
+    auto ofg = ops::mma_acc_tensor<GQA, DH, ATT_THREADS>(
+        cute::make_rmem_ptr(&out[0]));
+    for (int f = 0; f < int(sizeof(out) / sizeof(float)); ++f) {
+        auto rc = ops::mma_acc_coord<GQA, DH, ATT_THREADS>(f, tid);
+        out[f] *= sm.sml[2 * GQA + cute::get<0>(rc)];
+    }
+    {
+        auto pf = mma_operand<GQA, ABLK, ABLK, 1, ATT_THREADS>(
+            cute::make_smem_ptr(sm.ps));
+        auto vf = mma_operand<DH, ABLK, 1, DH, ATT_THREADS>(
+            cute::make_smem_ptr(sm.vs));
+        ops::mma(pf, vf, ofg);
+    }
+
+    if (tid % GROUPS == 0) {
+        pm[at + row] = sm.sml[row];
+        pl[at + row] = sm.sml[GQA + row];
+    }
+    for (int f = 0; f < int(sizeof(out) / sizeof(float)); ++f) {
+        auto rc = ops::mma_acc_coord<GQA, DH, ATT_THREADS>(f, tid);
+        pacc[(at + cute::get<0>(rc)) * DH + cute::get<1>(rc)] = out[f];
     }
 }
 
@@ -990,7 +1099,9 @@ __global__ __launch_bounds__(ATT_THREADS) void k_attn_block(
     const bf16 *__restrict__ q, const bf16 *__restrict__ kc,
     const bf16 *__restrict__ vc, int nkey, int blk_offset,
     float *__restrict__ pm, float *__restrict__ pl, float *__restrict__ pacc) {
-    s_attn_block(int(blockIdx.x), int(gridDim.x), int(blockIdx.y), q, kc, vc, nkey, blk_offset, pm, pl, pacc);
+    extern __shared__ __align__(16) char arena[];
+    s_attn_block(arena, int(blockIdx.x), int(gridDim.x), int(blockIdx.y), q, kc,
+                 vc, nkey, blk_offset, pm, pl, pacc);
 }
 
 
@@ -1032,6 +1143,11 @@ __global__ __launch_bounds__(DH) void k_attn_combine(
                    pacc, nblock, ctx);
 }
 
+
+/// One launch runs the projections and the attention scan, so its arena is the
+/// larger of the two shapes.
+constexpr size_t kMegaSmem =
+    kProjSmem > AttnSmem::bytes() ? kProjSmem : AttnSmem::bytes();
 
 constexpr int QKV = QP + 2 * KVP;
 constexpr int QKV_TILES = QKV / TILE_ROWS;
@@ -1120,6 +1236,7 @@ std::vector<torch::Tensor> attn_layer(
 
     auto stream = at::cuda::getCurrentCUDAStream();
     const int ctas = sm_count();
+    allow_smem(k_attn_block, AttnSmem::bytes());
     k_qkv<<<ctas, THREADS, 0, stream>>>(
         static_cast<const bf16 *>(h.data_ptr()),
         static_cast<const bf16 *>(gamma.data_ptr()),
@@ -1133,11 +1250,11 @@ std::vector<torch::Tensor> attn_layer(
     auto *PL = static_cast<float *>(pl.data_ptr());
     auto *PA = static_cast<float *>(pacc.data_ptr());
     if (nb_full)
-        k_attn_block<<<dim3(nb_full, HKV), ATT_THREADS, 0, stream>>>(
+        k_attn_block<<<dim3(nb_full, HKV), ATT_THREADS, AttnSmem::bytes(), stream>>>(
             Q, static_cast<const bf16 *>(k_cache.data_ptr()),
             static_cast<const bf16 *>(v_cache.data_ptr()), ctx_full, 0, PM, PL, PA);
     if (nb_tail)
-        k_attn_block<<<dim3(nb_tail, HKV), ATT_THREADS, 0, stream>>>(
+        k_attn_block<<<dim3(nb_tail, HKV), ATT_THREADS, AttnSmem::bytes(), stream>>>(
             Q, static_cast<const bf16 *>(k_tail.data_ptr()),
             static_cast<const bf16 *>(v_tail.data_ptr()), live_tail, nb_full,
             PM, PL, PA);
@@ -1264,12 +1381,12 @@ __global__ __launch_bounds__(THREADS) void mega_decode(
             grid.sync();
             if (!(skip & 64))
             for (int b = cta; b < nb_full * HKV; b += nctas)
-                s_attn_block(b / HKV, nb_full, b % HKV, s.qkv, kc, vc, ctx_full, 0,
-                             s.pm, s.pl, s.pacc);
+                s_attn_block(arena, b / HKV, nb_full, b % HKV, s.qkv, kc, vc,
+                             ctx_full, 0, s.pm, s.pl, s.pacc);
             if (!(skip & 64))
             for (int b = cta; b < nb_tail * HKV; b += nctas)
-                s_attn_block(b / HKV, nb_tail, b % HKV, s.qkv, kt, vt, live_tail,
-                             nb_full, s.pm, s.pl, s.pacc);
+                s_attn_block(arena, b / HKV, nb_tail, b % HKV, s.qkv, kt, vt,
+                             live_tail, nb_full, s.pm, s.pl, s.pacc);
             grid.sync();
             if (!(skip & 128))
             for (int u = cta; u < GQA * HKV; u += nctas)

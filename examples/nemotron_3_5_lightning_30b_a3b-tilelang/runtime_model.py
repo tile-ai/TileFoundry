@@ -212,12 +212,16 @@ def _attn_cuda(i, h, w, acts, cur_pos):
 
 #: The scratch one cooperative launch writes, kept between steps: allocating
 #: 17 MB of attention partials every token would cost more than the step.
+#: The attention scan's block, which is the tensor core's N for a score
+#: block of sixteen queries: `kernels/nemotron.cu`'s `ABLK`.
+ABLK = 128
+
 _MEGA = {}
 
 
 def _mega_scratch(device, ctx_full, ctx_tail):
     """Every buffer `mega_decode` writes, in the order its `Scratch` names them."""
-    nblock = -(-ctx_full // 256) + -(-ctx_tail // 256) + 2
+    nblock = -(-ctx_full // ABLK) + -(-ctx_tail // ABLK) + 2
     key = (str(device), nblock)
     if key not in _MEGA:
         bf = dict(dtype=BF16, device=device)

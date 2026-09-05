@@ -73,12 +73,19 @@ template <int Width> struct Elect {
     }
 };
 
-/// The five-step butterfly: after step ``k`` every lane holds the combination
-/// of its ``2^(k+1)``-lane block, so after five steps every lane holds the
-/// warp's. The result is in every lane, not only in lane 0.
-template <class Combine, class T> struct Butterfly {
+/// The butterfly: after step ``k`` every lane holds the combination of its
+/// ``2^(k+1)``-lane block, so after ``log2(Width)`` steps every lane holds its
+/// block's. The result is in every lane, not only in the block's first.
+///
+/// ``Width`` under 32 folds within each aligned run of that many lanes and
+/// leaves the runs independent, which is what a per-row reduction over a tile
+/// laid out several rows to a warp needs: the alternative is a shared round
+/// trip, or leaving the other rows' lanes idle.
+template <class Combine, class T, int Width> struct Butterfly {
     __device__ T operator()(T value) const {
-        for (int delta = 16; delta > 0; delta >>= 1)
+        static_assert(Width >= 2 && Width <= 32 && (Width & (Width - 1)) == 0,
+                      "warp_reduce: Width must be a power of two up to 32");
+        for (int delta = Width >> 1; delta > 0; delta >>= 1)
             value = Combine::apply(value,
                                    ShuffleXor<T>{}(value, delta, 0xFFFFFFFFu));
         return value;

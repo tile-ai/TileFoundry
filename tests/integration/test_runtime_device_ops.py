@@ -196,3 +196,17 @@ def test_dot_contracts_across_the_block_and_leaves_it_everywhere(ops) -> None:
     got = ops.dot_cta(x)
     want = (x.float() * x.float()).sum()
     torch.testing.assert_close(got, want.expand(256), rtol=3e-3, atol=3e-3)
+
+
+@pytest.mark.parametrize("width", [2, 8, 16])
+def test_warp_reduce_folds_each_run_of_width_lanes(ops, width: int) -> None:
+    """Below 32 the runs stay independent, and every lane of a run holds its total.
+
+    A fold that leaked across runs would agree with the reference only at
+    width 32, and one that left the total in the run's first lane would fail
+    on every other lane — both are what the tile softmax below a warp needs.
+    """
+    x = _lanes(4 * _THREADS)
+    got = ops.warp_reduce_sum_width(x, width)
+    want = x.reshape(-1, width).sum(-1, keepdim=True).expand(-1, width).reshape(-1)
+    torch.testing.assert_close(got, want, rtol=0, atol=1e-5)
