@@ -7,7 +7,7 @@ import pytest
 from tilefoundry import func, module
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.ir.core import Call
-from tilefoundry.ir.hir.mesh_scope import MeshScope
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.parser import ParseError
 from tilefoundry.target import CudaTarget
@@ -33,7 +33,7 @@ def test_body_local_integer_arithmetic_is_normalized_before_layout_construction(
                 )
 
     scope = Model.functions[0].body
-    assert isinstance(scope, MeshScope)
+    assert isinstance(scope, MeshRegion)
     call = scope.body
     assert isinstance(call, Call) and isinstance(call.target, Reshard)
     assert call.target.layout.layout.shape == (1, 16, 128, 64)

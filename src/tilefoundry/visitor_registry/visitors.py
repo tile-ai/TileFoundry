@@ -14,8 +14,8 @@ from dataclasses import replace
 
 from tilefoundry.ir.core.expr import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.mesh_scope import MeshScope as HirMeshScope
+from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.reshard import Reshard as HirReshard
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmt import Stmt
@@ -166,25 +166,25 @@ class TypeInferVisitor(ExprVisitor[Type]):
         """
         return TupleType(fields=operands)
 
-    def visit_GridRegionExpr(self, grid: GridRegionExpr, ctx: TypeInferContext) -> Type:
+    def visit_LoopRegion(self, region: LoopRegion, ctx: TypeInferContext) -> Type:
         """Infer a loop after binding its induction and carried variables."""
-        inits = tuple(self.visit(arg, ctx) for arg in grid.init_args)
+        inits = tuple(self.visit(arg, ctx) for arg in region.init_args)
         memo = {
             **self._memo,
-            id(grid.induction_var): (grid.induction_var, grid.induction_var.annotation),
-            **{id(phi): (phi, type_) for phi, type_ in zip(grid.carried_args, inits)},
+            id(region.induction_var): (region.induction_var, region.induction_var.annotation),
+            **{id(phi): (phi, type_) for phi, type_ in zip(region.carried_args, inits)},
         }
         inner = TypeInferVisitor(memo=memo, owns_body=self._owns_body)
-        body_type = inner.visit(grid.body, ctx)
-        for y in grid.yield_values:
+        body_type = inner.visit(region.body, ctx)
+        for y in region.yield_values:
             inner.visit(y, ctx)
-        if not grid.carried_args:
+        if not region.carried_args:
             return body_type
-        if len(grid.carried_args) == 1:
-            return inner.visit(grid.carried_args[0], ctx)
-        return TupleType(fields=tuple(inner.visit(phi, ctx) for phi in grid.carried_args))
+        if len(region.carried_args) == 1:
+            return inner.visit(region.carried_args[0], ctx)
+        return TupleType(fields=tuple(inner.visit(phi, ctx) for phi in region.carried_args))
 
-    def visit_MeshScope(self, expr: HirMeshScope, ctx: TypeInferContext) -> Type:
+    def visit_MeshRegion(self, expr: MeshRegion, ctx: TypeInferContext) -> Type:
         """Type a region against the participants in force inside it.
 
         Entering a scope composes it onto the mesh in force, so the body reads

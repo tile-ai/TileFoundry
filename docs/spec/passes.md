@@ -196,7 +196,7 @@ def compile(mod: Module, /, *, target: Target | None = None) -> RuntimeModule: .
 
 `lower` runs the default pipeline (`HirToTirPass → BufferizePass →
 …`) and returns a lowered TIR `Module`. Mesh bindings come from
-the HIR body's `MeshScope` regions — the verbs do not accept
+the HIR body's `MeshRegion` regions — the verbs do not accept
 `cta_mesh` / `thread_mesh` kwargs.
 
 `lower` uses the Module-owned Target when present. At an undeclared root it
@@ -292,7 +292,7 @@ compile-time offset is still that loop's window for this rule.
 `HirToTirPass` MUST preserve the HIR execution regions when deriving TIR
 structure. It MAY derive target-specific mesh information from
 `ShardLayout.mesh` references in the body, but it MUST NOT fabricate a
-synthetic `MeshScope` for a missing reference. Each HIR `MeshScope` lowers to
+synthetic `MeshScope` for a missing reference. Each HIR `MeshRegion` lowers to
 the corresponding TIR scope around its body.
 
 #### `Reshard` lowering — dual semantics

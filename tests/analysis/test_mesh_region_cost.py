@@ -10,7 +10,7 @@ from tilefoundry.analysis import ComputeCostMetadata, analyze
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.ir.core import Call, Var, VerifyError, get_metadata
 from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.hir.mesh_scope import MeshScope
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Layout
 from tilefoundry.ir.types.storage import StorageKind
@@ -106,7 +106,7 @@ def test_analysis_rejects_a_region_body_that_embeds_its_raw_argument() -> None:
         shape=(8,), dtype=DType.f32, layout=None, storage=StorageKind.GMEM
     )
     value = Var(name="value", type=value_type)
-    scope = MeshScope(
+    scope = MeshRegion(
         mesh=Mesh((Topology("cta", 1),), Layout((1,), (1,)), ("cta",)),
         params=(Var(name="param", type=value_type),),
         args=(value,),

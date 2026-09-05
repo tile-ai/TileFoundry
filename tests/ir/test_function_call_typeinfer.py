@@ -15,7 +15,7 @@ from tilefoundry.ir.core import BindingMetadata, Call, Constant, Tuple, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
@@ -56,10 +56,10 @@ def test_plain_formal_specializes_per_call_site():
 def test_carrying_loop_propagates_split():
     """Test carrying loop propagates split.
 
-    A callee whose body is a single-carry loop-phi ``GridRegionExpr``
+    A callee whose body is a single-carry loop-phi ``LoopRegion``
     (``acc = x + x`` before the loop, ``acc = acc + x`` inside it): the loop-phi's
     own type must re-derive from the elaborated init value
-    ([hir §1.2](docs/spec/hir.md#12-gridregionexpr)), not retain the callee's
+    ([hir §1.2](docs/spec/hir.md#12-loopregion)), not retain the callee's
     parse-time unsharded type.
     """
     param_type = make_tensor_type((8,), _F)
@@ -68,7 +68,7 @@ def test_carrying_loop_propagates_split():
     phi = Var(type=param_type, name="acc")
     iv = Var(type=make_tensor_type((), DType.i64), name="i")
     body = Call(type=param_type, target=Binary(kind=BinaryKind.ADD), args=(phi, x))
-    grid = GridRegionExpr(
+    grid = LoopRegion(
         type=param_type,
         induction_var=iv,
         carried_args=(phi,),

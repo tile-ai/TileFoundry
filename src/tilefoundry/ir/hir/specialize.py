@@ -15,8 +15,8 @@ from collections.abc import Mapping
 
 from tilefoundry.ir.core import Call, Constant, Expr, Op, Tuple, Var
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.mesh_scope import MeshScope as HirMeshScope
+from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types.dim import is_dim_expr
 from tilefoundry.ir.types.shard.mesh import composed
 from tilefoundry.ir.types.substitute import (
@@ -218,7 +218,7 @@ class DimensionInstantiator(ExprCloner):
     def visit_Constant(self, const: Constant, ctx: InstantiateContext) -> Expr:
         return const
 
-    def visit_MeshScope(self, expr: HirMeshScope, ctx: InstantiateContext) -> Expr:
+    def visit_MeshRegion(self, expr: MeshRegion, ctx: InstantiateContext) -> Expr:
         """Instantiate a region's boundary values and body independently."""
         mesh = substitute_mesh_dims(expr.mesh, ctx.dims)
         new_args = tuple(self.visit(arg, ctx) for arg in expr.args)
@@ -272,34 +272,32 @@ class DimensionInstantiator(ExprCloner):
         rebuilt = dataclasses.replace(call, args=new_args, target=new_target)
         return self._retyped(rebuilt, ctx)
 
-    def visit_GridRegionExpr(
-        self, grid: GridRegionExpr, ctx: InstantiateContext
-    ) -> Expr:
+    def visit_LoopRegion(self, region: LoopRegion, ctx: InstantiateContext) -> Expr:
         """Rebuild loop bindings and shape fields excluded by generic cloning."""
-        new_inits = tuple(self.visit(arg, ctx) for arg in grid.init_args)
+        new_inits = tuple(self.visit(arg, ctx) for arg in region.init_args)
         new_phis = tuple(
             old_phi
             if new_init.type == old_phi.type
             else Var(type=new_init.type, name=old_phi.name)
-            for old_phi, new_init in zip(grid.carried_args, new_inits)
+            for old_phi, new_init in zip(region.carried_args, new_inits)
         )
-        for old_phi, new_phi in zip(grid.carried_args, new_phis):
+        for old_phi, new_phi in zip(region.carried_args, new_phis):
             if new_phi is not old_phi:
                 ctx.subst[id(old_phi)] = new_phi
-        new_body = self.visit(grid.body, ctx)
-        new_yields = tuple(self.visit(value, ctx) for value in grid.yield_values)
-        bounds = (grid.extent, grid.step, grid.start)
+        new_body = self.visit(region.body, ctx)
+        new_yields = tuple(self.visit(value, ctx) for value in region.yield_values)
+        bounds = (region.extent, region.step, region.start)
         new_bounds = tuple(substitute_shape_dim(bound, ctx.dims) for bound in bounds)
         if (
-            all(new is old for new, old in zip(new_inits, grid.init_args))
-            and all(new is old for new, old in zip(new_phis, grid.carried_args))
-            and new_body is grid.body
-            and all(new is old for new, old in zip(new_yields, grid.yield_values))
+            all(new is old for new, old in zip(new_inits, region.init_args))
+            and all(new is old for new, old in zip(new_phis, region.carried_args))
+            and new_body is region.body
+            and all(new is old for new, old in zip(new_yields, region.yield_values))
             and new_bounds == bounds
         ):
-            return grid
+            return region
         rebuilt = dataclasses.replace(
-            grid,
+            region,
             carried_args=new_phis,
             init_args=new_inits,
             body=new_body,
@@ -549,7 +547,7 @@ class _DimVarCollector(ExprWalker[None]):
         self._collect_expr(expr)
         self._visit_children(expr, ctx)
 
-    def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx=None) -> None:
+    def visit_LoopRegion(self, expr: LoopRegion, ctx=None) -> None:
         self._collect_expr(expr)
         self._collect_bounds(expr)
         self._visit_children(expr, ctx)
@@ -644,10 +642,10 @@ class _SymbolicDimVisitor(ExprVisitor[bool]):
     def visit_Tuple(self, expr: Tuple, ctx=None) -> bool:
         return self._expr_has_symbolic(expr) or self._children_have_symbolic(expr, ctx)
 
-    def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx=None) -> bool:
+    def visit_LoopRegion(self, expr: LoopRegion, ctx=None) -> bool:
         return self._expr_has_symbolic(expr) or self._children_have_symbolic(expr, ctx)
 
-    def visit_MeshScope(self, expr: HirMeshScope, ctx=None) -> bool:
+    def visit_MeshRegion(self, expr: MeshRegion, ctx=None) -> bool:
         return self._expr_has_symbolic(expr) or self._children_have_symbolic(expr, ctx)
 
     def visit_Function(self, expr: Function, ctx=None) -> bool:

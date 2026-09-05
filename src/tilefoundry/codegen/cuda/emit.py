@@ -14,7 +14,7 @@ import os
 import pkgutil
 
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import LetStmt, MeshScope, Sequential
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
@@ -145,7 +145,7 @@ def _derive_launch_config(
         def visit_Tuple(self, expr: Tuple, ctx=None) -> None:
             self._record(expr)
 
-        def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx=None) -> None:
+        def visit_LoopRegion(self, expr: LoopRegion, ctx=None) -> None:
             self._record(expr)
 
         def visit_Var(self, expr: Var, ctx=None) -> None:

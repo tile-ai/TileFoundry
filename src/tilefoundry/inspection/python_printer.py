@@ -35,10 +35,10 @@ from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
-from tilefoundry.ir.hir.mesh_scope import MeshScope
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.specialize import (
     canonical_specialization_signature,
@@ -698,7 +698,7 @@ def iter_exprs(root: Expr | None, seen: set[int] | None = None) -> Iterator[Expr
 
     Post-order traversal of *root* and its descendants via
     ``tilefoundry.ir.visitor.expr_children`` (which, unlike the hand-rolled
-    walkers this replaces, descends into ``GridRegionExpr``). Each node is
+    walkers this replaces, descends into ``LoopRegion``). Each node is
     yielded exactly once by object identity; *seen* lets callers share dedup
     state across repeated calls (e.g. one per function param).
     """
@@ -755,13 +755,13 @@ def _collect_meshes(
             _add_type(getattr(expr, "type", None))
         if isinstance(expr, Call) and isinstance(expr.target, Reshard):
             _add_layout(expr.target.layout)
-        if isinstance(expr, MeshScope):
+        if isinstance(expr, MeshRegion):
             scope_meshes.setdefault(id(expr.mesh), expr.mesh)
 
     return type_meshes, scope_meshes
 
 
-def _region_projection(expr: Expr) -> GridRegionExpr | MeshScope | None:
+def _region_projection(expr: Expr) -> LoopRegion | MeshRegion | None:
     """Return the region projected by a one-argument ``TupleGetItem``."""
     if not (
         isinstance(expr, Call)
@@ -770,9 +770,9 @@ def _region_projection(expr: Expr) -> GridRegionExpr | MeshScope | None:
     ):
         return None
     region = expr.args[0]
-    if isinstance(region, GridRegionExpr):
+    if isinstance(region, LoopRegion):
         return region
-    if isinstance(region, MeshScope) and isinstance(region.body, Tuple):
+    if isinstance(region, MeshRegion) and isinstance(region.body, Tuple):
         return region
     return None
 
@@ -842,12 +842,12 @@ def _emit_def(
     _order: list[Expr] = list(iter_exprs(fn.body, _seen))
     for p in fn.params:
         _order.extend(iter_exprs(p, _seen))
-    for scope in tuple(expr for expr in _order if isinstance(expr, MeshScope)):
+    for scope in tuple(expr for expr in _order if isinstance(expr, MeshRegion)):
         for param in scope.params:
             _order.extend(iter_exprs(param, _seen))
     _param_alias = {
         id(param): arg
-        for scope in tuple(expr for expr in _order if isinstance(expr, MeshScope))
+        for scope in tuple(expr for expr in _order if isinstance(expr, MeshRegion))
         for param, arg in zip(scope.params, scope.args, strict=True)
     }
 
@@ -873,10 +873,10 @@ def _emit_def(
     }
 
     _grid_internal_ids: set[int] = set()
-    _mesh_scope_internal_ids: set[int] = set()
+    _mesh_region_internal_ids: set[int] = set()
     _nested_grid_ids: set[int] = set()
     for expr in _order:
-        if not isinstance(expr, GridRegionExpr):
+        if not isinstance(expr, LoopRegion):
             continue
         if (
             expr.start == 0
@@ -911,16 +911,16 @@ def _emit_def(
             for _ in iter_exprs(value, _grid_internal_ids):
                 pass
         for nested in iter_exprs(expr.body, set()):
-            if isinstance(nested, GridRegionExpr) and nested is not expr:
+            if isinstance(nested, LoopRegion) and nested is not expr:
                 _nested_grid_ids.add(id(nested))
         for value in expr.yield_values:
             for nested in iter_exprs(value, set()):
-                if isinstance(nested, GridRegionExpr) and nested is not expr:
+                if isinstance(nested, LoopRegion) and nested is not expr:
                     _nested_grid_ids.add(id(nested))
 
     _root_grid_init_ids: set[int] = set()
     for expr in _order:
-        if not isinstance(expr, GridRegionExpr) or id(expr) in _nested_grid_ids:
+        if not isinstance(expr, LoopRegion) or id(expr) in _nested_grid_ids:
             continue
         for init in expr.init_args:
             for _ in iter_exprs(init, _root_grid_init_ids):
@@ -928,8 +928,8 @@ def _emit_def(
     _grid_internal_ids.difference_update(_root_grid_init_ids)
 
     for expr in _order:
-        if isinstance(expr, MeshScope):
-            for _ in iter_exprs(expr.body, _mesh_scope_internal_ids):
+        if isinstance(expr, MeshRegion):
+            for _ in iter_exprs(expr.body, _mesh_region_internal_ids):
                 pass
     def _moved_window(start, size, stride):
         """The tile window and offset *start* moves it by, else ``None``."""
@@ -987,7 +987,7 @@ def _emit_def(
     for expr in _order:
         _assign_name(expr)
     for expr in _order:
-        if isinstance(expr, GridRegionExpr):
+        if isinstance(expr, LoopRegion):
             for carry in expr.carried_args:
                 _assign_name(carry)
 
@@ -1004,9 +1004,9 @@ def _emit_def(
         if id(expr) in _param_alias:
             return _expr_ref(_param_alias[id(expr)])
         projection = _region_projection(expr)
-        if isinstance(projection, GridRegionExpr):
+        if isinstance(projection, LoopRegion):
             return _names[id(projection.carried_args[expr.target.index])]
-        if isinstance(expr, GridRegionExpr):
+        if isinstance(expr, LoopRegion):
 
 
 
@@ -1014,9 +1014,9 @@ def _emit_def(
             if len(carried) == 1:
                 return carried[0]
             return "(" + ", ".join(carried) + ")"
-        if isinstance(projection, MeshScope):
+        if isinstance(projection, MeshRegion):
             return _expr_ref(projection.body.elements[expr.target.index])
-        if isinstance(expr, MeshScope):
+        if isinstance(expr, MeshRegion):
             return _arg_ref(expr.body)
         return _names[id(expr)]
 
@@ -1251,20 +1251,20 @@ def _emit_def(
                     self.visit(element, ctx)
             printed.add(id(expr))
 
-        def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx=None) -> None:
-            _emit_grid(expr, self.level)
+        def visit_LoopRegion(self, expr: LoopRegion, ctx=None) -> None:
+            _emit_loop_region(expr, self.level)
 
-        def visit_MeshScope(self, expr: MeshScope, ctx=None) -> None:
-            _emit_mesh_scope(expr, self.level)
+        def visit_MeshRegion(self, expr: MeshRegion, ctx=None) -> None:
+            _emit_mesh_region(expr, self.level)
 
         def visit_Call(self, expr: Call, ctx=None) -> None:
             projection = _region_projection(expr)
-            if isinstance(projection, GridRegionExpr):
-                _emit_grid(projection, self.level)
+            if isinstance(projection, LoopRegion):
+                _emit_loop_region(projection, self.level)
                 printed.add(id(expr))
                 return
-            if isinstance(projection, MeshScope):
-                _emit_mesh_scope(projection, self.level)
+            if isinstance(projection, MeshRegion):
+                _emit_mesh_region(projection, self.level)
                 printed.add(id(expr))
                 return
             for arg in expr.args:
@@ -1284,67 +1284,67 @@ def _emit_def(
         finally:
             _expr_emitter.level = previous
 
-    def _emit_grid(grid: GridRegionExpr, level: str) -> None:
-        key = id(grid)
+    def _emit_loop_region(region: LoopRegion, level: str) -> None:
+        key = id(region)
         if key in printed:
             return
-        for init in grid.init_args:
+        for init in region.init_args:
             _emit_expr(init, level)
-        for carry in grid.carried_args:
+        for carry in region.carried_args:
             printed.add(id(carry))
-        extent = shape_entry_str(grid.extent)
-        step = shape_entry_str(grid.step)
-        start = shape_entry_str(grid.start)
-        if id(grid.induction_var) in _tile_window_steps:
+        extent = shape_entry_str(region.extent)
+        step = shape_entry_str(region.step)
+        start = shape_entry_str(region.start)
+        if id(region.induction_var) in _tile_window_steps:
             loop = f"tile({extent}, {step})"
-        elif grid.start == 0 and grid.step == 1:
+        elif region.start == 0 and region.step == 1:
             loop = f"range({extent})"
         else:
             loop = f"range({start}, {extent}, {step})"
-        lines.append(f"{level}for {grid.induction_var.name} in {loop}:{_comments(grid, options, mesh_map)}")
+        lines.append(f"{level}for {region.induction_var.name} in {loop}:{_comments(region, options, mesh_map)}")
         printed.add(key)
         inner = level + "    "
-        _emit_expr(grid.body, inner)
-        for value in grid.yield_values:
+        _emit_expr(region.body, inner)
+        for value in region.yield_values:
             _emit_expr(value, inner)
-        for carry, value in zip(grid.carried_args, grid.yield_values):
+        for carry, value in zip(region.carried_args, region.yield_values):
             lines.append(f"{inner}{_names[id(carry)]} = {_expr_ref(value)}")
 
-    def _emit_mesh_scope(scope: MeshScope, level: str, *, terminal: bool = False) -> None:
-        key = id(scope)
+    def _emit_mesh_region(region: MeshRegion, level: str, *, terminal: bool = False) -> None:
+        key = id(region)
         if key in printed:
             return
-        for arg in scope.args:
+        for arg in region.args:
             _emit_expr(arg, level)
-        mesh_name = mesh_map[id(scope.mesh)]
+        mesh_name = mesh_map[id(region.mesh)]
         lines.append(
             f"{level}with {mesh_name} as _{mesh_name}:"
-            f"{_comments(scope, options, mesh_map)}"
+            f"{_comments(region, options, mesh_map)}"
         )
         printed.add(key)
         inner = level + "    "
-        if terminal and isinstance(scope.body, MeshScope):
-            _emit_mesh_scope(scope.body, inner, terminal=True)
+        if terminal and isinstance(region.body, MeshRegion):
+            _emit_mesh_region(region.body, inner, terminal=True)
             return
-        _emit_expr(scope.body, inner)
+        _emit_expr(region.body, inner)
         if terminal:
-            lines.append(f"{inner}return {_arg_ref(scope.body)}")
+            lines.append(f"{inner}return {_arg_ref(region.body)}")
 
     for expr in _order:
         if (
             isinstance(expr, Var)
             or id(expr) in _grid_internal_ids
-            or id(expr) in _mesh_scope_internal_ids
+            or id(expr) in _mesh_region_internal_ids
         ):
             continue
         if id(expr) in _inlined_start_ids:
             printed.add(id(expr))
             continue
-        if isinstance(expr, GridRegionExpr):
-            _emit_grid(expr, indent)
+        if isinstance(expr, LoopRegion):
+            _emit_loop_region(expr, indent)
             continue
-        if isinstance(expr, MeshScope):
-            _emit_mesh_scope(expr, indent, terminal=expr is fn.body)
+        if isinstance(expr, MeshRegion):
+            _emit_mesh_region(expr, indent, terminal=expr is fn.body)
             continue
         if _region_projection(expr) is not None:
             printed.add(id(expr))
@@ -1381,10 +1381,10 @@ def _emit_def(
 
 
 
-    if not isinstance(fn.body, MeshScope):
+    if not isinstance(fn.body, MeshRegion):
         if isinstance(fn.body, Tuple):
             lines.append(f"{indent}return {_tuple_literal(fn.body.elements)}")
-        elif isinstance(fn.body, GridRegionExpr):
+        elif isinstance(fn.body, LoopRegion):
             values = tuple(_names[id(carry)] for carry in fn.body.carried_args)
             result = values[0] if len(values) == 1 else "(" + ", ".join(values) + ")"
             lines.append(f"{indent}return {result}")

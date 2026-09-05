@@ -304,10 +304,10 @@ def test_a_child_call_in_a_specialization_body_survives_the_round_trip() -> None
     assert [param.is_const for param in variant.body.target.params] == [False, True]
 
 
-def test_hir_function_dot_keeps_grid_regions_as_opaque_leaves() -> None:
+def test_hir_function_dot_keeps_loop_regions_as_opaque_leaves() -> None:
     """The public DOT form keeps structured regions as white leaf boxes."""
     dot = hir_function_to_dot(static_online_attend.entry_function())
 
     assert len(dot.splitlines()) == 29
-    assert 'label="GridRegionExpr", fillcolor="#ffffff"' in dot
+    assert 'label="LoopRegion", fillcolor="#ffffff"' in dot
     assert "TupleType(" not in dot

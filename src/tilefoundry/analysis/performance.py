@@ -8,7 +8,7 @@ from dataclasses import dataclass, field, replace
 from tilefoundry.ir.core import Call, Expr, get_metadata
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.visitor import ExprVisitor
@@ -42,9 +42,7 @@ class PerformanceContext(AnalyzeContext):
 class PerformanceVisitor(ExprVisitor[None]):
     """Collect one duration per Call in authored order."""
 
-    def visit_GridRegionExpr(
-        self, expr: GridRegionExpr, ctx: PerformanceContext
-    ) -> None:
+    def visit_LoopRegion(self, expr: LoopRegion, ctx: PerformanceContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is expr)
         inner = replace(ctx, current=child)
         for operand in expr.init_args:

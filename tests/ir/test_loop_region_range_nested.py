@@ -1,12 +1,12 @@
 """Define test grid region range nested behavior.
 
 End-to-end (parse + evaluate) tests for the unified ``range`` / ``tile``
-loop surface, nested GridRegions, and dim-expression loop bounds.
+loop surface, nested LoopRegions, and dim-expression loop bounds.
 
 ``range`` and ``tile`` share one loop domain ``(start, extent, step)`` and lower
-to the same ``GridRegionExpr``; they differ only in the loop-var binding
+to the same ``LoopRegion``; they differ only in the loop-var binding
 (``range`` → scalar, two-arg ``tile`` → slice). Neither is unrolled. Nested
-``for`` loops produce nested GridRegions, and loop bounds accept dim expressions
+``for`` loops produce nested LoopRegions, and loop bounds accept dim expressions
 (e.g. ``C // N``) resolved at evaluate time.
 """
 
@@ -72,7 +72,7 @@ def test_range_start_step():
     assert torch.allclose(out.reshape(()), x[1:n:2].sum()), (n, out)
 
 
-def test_nested_grid_region_outer_carry_in_inner():
+def test_nested_loop_region_outer_carry_in_inner():
     x = torch.randn(4, 5)
     out = evaluate(_nested_sum, x)
     assert torch.allclose(out.reshape(()), x.sum(), atol=1e-4), out

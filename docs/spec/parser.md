@@ -63,16 +63,16 @@ recursive parse situation. These are the only public parser symbols.
 ### 1.5 Mesh declarations and region captures
 
 Mesh declarations are values. `Mesh(...)` constructs the compile-time domain
-object used by layout sugar and by a `MeshScope`; it is not itself a runtime
+object used by layout sugar and by a `MeshRegion`; it is not itself a runtime
 expression in the HIR value graph. A `with Mesh(...)` statement uses that value
 to delimit an execution domain and does not describe the placement of its
 result. An `as name` binding is lexical: it is available inside the `with`
 body and expires when the statement ends. When a body binds names that are read
-after the `with`, each escaping name is rebound to the enclosing `MeshScope`
+after the `with`, each escaping name is rebound to the enclosing `MeshRegion`
 result (a tuple region with `TupleGetItem` projections when several names
 escape); names used only inside the body remain local to the scope. Names read
-inside a region but bound outside it are captured as `MeshScope.args`, with a
-fresh `MeshScope.params` binding used by the body. Capture is performed one
+inside a region but bound outside it are captured as `MeshRegion.args`, with a
+fresh `MeshRegion.params` binding used by the body. Capture is performed one
 region boundary at a time, so nested regions pass a value through each door.
 
 ## 2. Syntax and Rules

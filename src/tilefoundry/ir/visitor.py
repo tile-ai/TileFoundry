@@ -14,8 +14,8 @@ from dataclasses import replace
 from typing import Any, Callable
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
-from tilefoundry.ir.hir.mesh_scope import MeshScope as HirMeshScope
+from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
@@ -54,11 +54,11 @@ __all__ = [
 def expr_children(expr: Expr) -> tuple[Expr, ...]:
     """Enumerate direct child Expr nodes of `expr`.
 
-    Binding-site Var fields (e.g. `GridRegionExpr.induction_var` /
-    `GridRegionExpr.carried_args`) are intentionally excluded — rewriting
+    Binding-site Var fields (e.g. `LoopRegion.induction_var` /
+    `LoopRegion.carried_args`) are intentionally excluded — rewriting
     them with a generic ExprCloner could produce type-illegal nodes (a
     non-Var in a `tuple[Var, ...]` slot). A mutator that wants to rename
-    or substitute bindings must override `visit_GridRegionExpr` and rebuild
+    or substitute bindings must override `visit_LoopRegion` and rebuild
     explicitly.
     """
     match expr:
@@ -66,9 +66,9 @@ def expr_children(expr: Expr) -> tuple[Expr, ...]:
             return ()
         case Call(args=args):
             return args
-        case HirMeshScope(args=args, body=body):
+        case MeshRegion(args=args, body=body):
             return (*args, body)
-        case GridRegionExpr(init_args=init_args, body=body, yield_values=yield_values):
+        case LoopRegion(init_args=init_args, body=body, yield_values=yield_values):
             return (*init_args, body, *yield_values)
         case HirFunction(body=body):
             return (body,)
@@ -88,10 +88,10 @@ def _rebuild_expr(expr: Expr, new_children: tuple[Expr, ...]) -> Expr:
             return expr
         case Call():
             return replace(expr, args=new_children)
-        case HirMeshScope(args=args):
+        case MeshRegion(args=args):
             n_args = len(args)
             return replace(expr, args=new_children[:n_args], body=new_children[n_args])
-        case GridRegionExpr(init_args=init_args):
+        case LoopRegion(init_args=init_args):
             n_init = len(init_args)
             init = new_children[:n_init]
             body = new_children[n_init]
@@ -365,7 +365,7 @@ class BindingSubstitutionCloner(ExprCloner):
     This is an ``ExprCloner``, so one instance memoizes by source-expression
     identity: shared inputs remain shared in its output. Callers that need
     independent copies, such as two inline call sites, use one cloner instance
-    per copy. Binding sites in a GridRegion create an extended environment for
+    per copy. Binding sites in a LoopRegion create an extended environment for
     its body and yields without rewriting a Var slot to a non-Var value.
     """
 
@@ -389,7 +389,7 @@ class BindingSubstitutionCloner(ExprCloner):
             metadata=self._cloned_metadata(expr),
         )
 
-    def visit_MeshScope(self, expr: HirMeshScope, ctx: Mapping[int, Expr]) -> Expr:
+    def visit_MeshRegion(self, expr: MeshRegion, ctx: Mapping[int, Expr]) -> Expr:
         params = tuple(replace(param, metadata=self._cloned_metadata(param)) for param in expr.params)
         inner = dict(ctx)
         inner.update((id(old), new) for old, new in zip(expr.params, params, strict=True))
@@ -401,29 +401,27 @@ class BindingSubstitutionCloner(ExprCloner):
             metadata=self._cloned_metadata(expr),
         )
 
-    def visit_GridRegionExpr(
-        self, grid: GridRegionExpr, ctx: Mapping[int, Expr]
-    ) -> GridRegionExpr:
-        init_args = tuple(self.visit(item, ctx) for item in grid.init_args)
+    def visit_LoopRegion(self, region: LoopRegion, ctx: Mapping[int, Expr]) -> LoopRegion:
+        init_args = tuple(self.visit(item, ctx) for item in region.init_args)
         induction_var = replace(
-            grid.induction_var,
-            metadata=self._cloned_metadata(grid.induction_var),
+            region.induction_var,
+            metadata=self._cloned_metadata(region.induction_var),
         )
         carried_args = tuple(
             replace(item, metadata=self._cloned_metadata(item))
-            for item in grid.carried_args
+            for item in region.carried_args
         )
         inner = dict(ctx)
-        inner[id(grid.induction_var)] = induction_var
-        inner.update((id(old), new) for old, new in zip(grid.carried_args, carried_args))
+        inner[id(region.induction_var)] = induction_var
+        inner.update((id(old), new) for old, new in zip(region.carried_args, carried_args))
         return replace(
-            grid,
+            region,
             induction_var=induction_var,
             carried_args=carried_args,
             init_args=init_args,
-            body=self.visit(grid.body, inner),
-            yield_values=tuple(self.visit(item, inner) for item in grid.yield_values),
-            metadata=self._cloned_metadata(grid),
+            body=self.visit(region.body, inner),
+            yield_values=tuple(self.visit(item, inner) for item in region.yield_values),
+            metadata=self._cloned_metadata(region),
         )
 
     def visit_Call(self, expr: Call, ctx: Mapping[int, Expr]) -> Expr:

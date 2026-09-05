@@ -36,7 +36,7 @@ from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.scope import build_scopes, walk_scopes
 from tilefoundry.ir.core import Call, describe_expr, get_metadata
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.specialize import (
     origin_of,
     residual_dims,
@@ -146,7 +146,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
     assert bool(timed) is bool(predicted_ns)
     _every_number_counts_something(result)
     for expr in collect_exprs(fn.body):
-        if not isinstance(expr, GridRegionExpr):
+        if not isinstance(expr, LoopRegion):
             continue
         assert get_metadata(expr, PerformanceMetadata) is None, describe_expr(expr)
         assert get_metadata(expr, PerformanceSummaryMetadata) is None, describe_expr(expr)

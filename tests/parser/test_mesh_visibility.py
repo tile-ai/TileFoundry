@@ -14,7 +14,7 @@ from tilefoundry import module
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, VerifyError, binding_name
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.mesh_scope import MeshScope
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.visitor import collect_exprs, expr_children
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
@@ -66,22 +66,22 @@ def test_reshard_is_the_one_consumer_allowed_to_move_an_invisible_value() -> Non
 
 def test_a_function_mesh_is_an_outer_region_around_its_body() -> None:
     stage = FusedBoundary.stage
-    assert isinstance(stage.body, MeshScope)
+    assert isinstance(stage.body, MeshRegion)
     assert [topology.name for topology in stage.body.mesh.topologies] == ["cta"]
-    assert isinstance(stage.body.body, MeshScope)
+    assert isinstance(stage.body.body, MeshRegion)
     assert [topology.name for topology in stage.body.body.mesh.topologies] == ["thread"]
 
 
 def test_an_inner_level_layout_is_covered_by_the_whole_running_scope() -> None:
     body = RmsnormModule.rmsnorm.body
-    assert isinstance(body, MeshScope)
+    assert isinstance(body, MeshRegion)
     TypeInferVisitor().visit(body, TypeInferContext())
 
 
 def test_region_boundaries_capture_external_regions_through_args() -> None:
     """A sibling region receives an earlier region value through its boundary."""
     body = RegionBoundaries.entry_function().body
-    scopes = [expr for expr in collect_exprs(body) if isinstance(expr, MeshScope)]
+    scopes = [expr for expr in collect_exprs(body) if isinstance(expr, MeshRegion)]
     helper_call = next(
         expr
         for expr in collect_exprs(body)
@@ -101,7 +101,7 @@ def test_region_boundaries_capture_external_regions_through_args() -> None:
         if producer in expr_children(expr)
     ]
     assert len(parents) == 2
-    assert any(isinstance(parent, MeshScope) and producer in parent.args for parent in parents)
+    assert any(isinstance(parent, MeshRegion) and producer in parent.args for parent in parents)
 
     import_dsl(_diagnostic("region_rebind"), "RegionRebind")
     import_dsl(_diagnostic("region_tuple_rebind"), "RegionTupleRebind")

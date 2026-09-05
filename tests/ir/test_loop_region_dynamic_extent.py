@@ -1,4 +1,4 @@
-"""GridRegionExpr dynamic (`ShapeDim`) extent / step — evaluator resolution.
+"""LoopRegion dynamic (`ShapeDim`) extent / step — evaluator resolution.
 
 `extent` / `step` may be a static `int` or a `ShapeDim` (a `DimVar` or a dim
 `Expr`). A symbolic value is resolved to a concrete `int` at evaluate time from
@@ -19,7 +19,7 @@ from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reshape import Reshape
@@ -50,7 +50,7 @@ def _sum_loop_fn(extent, *, step=1, extra_params=()):
     selected = Call(type=_f32((1,)), target=IndexSelect(dim=0), args=(x, index))
     row = Call(type=_f32(()), target=Reshape(new_shape=()), args=(selected,))
     new_acc = Call(type=_f32(()), target=Binary(kind=BinaryKind.ADD), args=(acc, row))
-    grid = GridRegionExpr(
+    grid = LoopRegion(
         type=_f32(()),
         induction_var=iv,
         carried_args=(acc,),

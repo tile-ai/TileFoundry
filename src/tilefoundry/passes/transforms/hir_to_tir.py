@@ -15,7 +15,7 @@ from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, locate_dim_var
 from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.hir.grid_region import GridRegionExpr
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.hir.math.clamp import Clamp as HirClamp
 from tilefoundry.ir.hir.math.unary import Unary as HirUnary
@@ -119,7 +119,7 @@ class _InductionSliceVisitor(ExprVisitor[bool]):
     def visit_Tuple(self, expr: Tuple, ctx=None) -> bool:
         return any(self.visit(element, ctx) for element in expr.elements)
 
-    def visit_GridRegionExpr(self, expr: GridRegionExpr, ctx=None) -> bool:
+    def visit_LoopRegion(self, expr: LoopRegion, ctx=None) -> bool:
         return any(
             self.visit(value, ctx)
             for value in (*expr.init_args, expr.body, *expr.yield_values, *expr.carried_args)
@@ -144,7 +144,7 @@ def _has_induction_slice(root: Expr, induction_var: Var) -> bool:
     return _InductionSliceVisitor(induction_var).visit(root)
 
 
-def _reject_partial_window(region: GridRegionExpr) -> None:
+def _reject_partial_window(region: LoopRegion) -> None:
     """Reject a tiled Slice tail until residual lowering has an IR contract."""
     start, extent, step = region.start, region.extent, region.step
     if not all(
@@ -457,13 +457,13 @@ class _Lowerer:
             self._items.append(_eval_call(Fill(), (r, expr)))
             self._cache[key] = r
             return r
-        if isinstance(expr, GridRegionExpr):
+        if isinstance(expr, LoopRegion):
             _reject_partial_window(expr)
 
 
 
             if expr.carried_args:
-                return self._lower_grid_region_carry(expr)
+                return self._lower_loop_region_carry(expr)
 
             iv = expr.induction_var
             grid_ty = expr.type
@@ -545,8 +545,8 @@ class _Lowerer:
         self._cache[key] = result
         return result
 
-    def _lower_grid_region_carry(self, expr: GridRegionExpr) -> Var:
-        """Lower a loop-carried ``GridRegionExpr`` (accumulator loop).
+    def _lower_loop_region_carry(self, expr: LoopRegion) -> Var:
+        """Lower a loop-carried ``LoopRegion`` (accumulator loop).
 
         Each phi is materialised as a mutable buffer initialised from its
         ``init_args`` value before the loop; each iteration lowers ``body`` with
@@ -560,7 +560,7 @@ class _Lowerer:
         start, stop, step = expr.start, expr.extent, expr.step
         if not all(isinstance(b, int) for b in (start, stop, step)):
             raise NotImplementedError(
-                f"hir_to_tir: GridRegionExpr carry lowering needs static int "
+                f"hir_to_tir: LoopRegion carry lowering needs static int "
                 f"loop bounds, got start={start!r}, extent={stop!r}, "
                 f"step={step!r}"
             )
@@ -680,9 +680,7 @@ class _Lowerer:
                     return self._recurse(initial, ctx)
                 return value if self.owner._cache.get(id(value)) is value else None
 
-            def visit_GridRegionExpr(
-                self, value: GridRegionExpr, ctx=None
-            ) -> Var | None:
+            def visit_LoopRegion(self, value: LoopRegion, ctx=None) -> Var | None:
                 for initial in value.init_args:
                     result = self._recurse(initial, ctx)
                     if result is not None:

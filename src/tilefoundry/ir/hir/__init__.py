@@ -4,8 +4,8 @@ import importlib
 import pkgutil
 
 from .function import Function
-from .grid_region import GridRegionExpr
-from .mesh_scope import MeshScope
+from .loop_region import LoopRegion
+from .mesh_region import MeshRegion
 
 
 def _auto_import(pkg_name: str) -> None:
@@ -16,4 +16,4 @@ def _auto_import(pkg_name: str) -> None:
 
 _auto_import("tilefoundry.ir.hir")
 
-__all__ = ["Function", "GridRegionExpr", "MeshScope"]
+__all__ = ["Function", "LoopRegion", "MeshRegion"]

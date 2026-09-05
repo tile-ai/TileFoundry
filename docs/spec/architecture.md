@@ -80,7 +80,7 @@ indicated and never gain pipeline ownership.
 IR design has three regions: `core_ir` holds the shared node algebra
 (`Module` / `Expr` / `Op` / `Call` / `Var` / `Constant` / `Tuple`);
 `hir` extends it with a value-semantic `Function` (an `Expr`
-subclass), `GridRegionExpr`, and value Ops; `tir` extends it with a
+subclass), `LoopRegion`, and value Ops; `tir` extends it with a
 `Stmt` base, `PrimFunction`, structural / effect Stmts, and TIR-owned
 tensor-handle / view Exprs. `hir` and `tir` are siblings — neither
 leaks its node kinds into the other's final contract. The class-level
@@ -200,11 +200,11 @@ This table is the authoritative spec-to-box map. Each row lists the
 | **[core-ir](./core-ir.md)** | core_ir shared node algebra: `Module` / `Expr` / `Op` / `Call` / `Var` / `Constant` / `Tuple`. No types, no `Stmt` |
 | **[types](./types.md)** | Core type system: `Type` union / `TensorType` / `TupleType` / `UnitType` / `DType` / `dim.*` + TensorType invariants |
 | **[shard](./shard.md)** | Shard / layout sublayer: `IntTuple` / `Layout` / `ComposedLayout` / `Mesh` family / `ShardAttr` / `ShardLayout` + shard-binding invariants |
-| **[hir](./hir.md)** | HIR dataflow IR: `Function` (`Expr` subclass), op subdirectories (math / tensor / nn / shape / sharding), `GridRegionExpr`, hir-side Mesh-scope rule |
+| **[hir](./hir.md)** | HIR dataflow IR: `Function` (`Expr` subclass), op subdirectories (math / tensor / nn / shape / sharding), `LoopRegion`, `MeshRegion` |
 | **[tir](./tir.md)** | TIR stmt IR: `Stmt` base (tir-only), `PrimFunction`, `Sequential(Stmt)`, control-flow Stmts, effect / tile Ops in `Evaluate(op, args)` form, user `@intrinsic` Stmt generation |
 | **[parser](./parser.md)** | Parser two-layer entry, AST subset, DSL surface rules, OpSchema dispatch contracts, `with Mesh` lexical-env rule |
 | **[inspection](./inspection.md)** | Developer-facing IR presentation: DOT, Python DSL pretty-printer, viewer detail rules, dump integration |
-| **[evaluator](./evaluator.md)** | HIR reference interpreter: `evaluate` entry, `Value` family (`TensorValue` / `TupleValue`), `register_eval` op registry, node-evaluation + `GridRegionExpr` + layout-domain rules. Logical reference oracle, no codegen / runtime |
+| **[evaluator](./evaluator.md)** | HIR reference interpreter: `evaluate` entry, `Value` family (`TensorValue` / `TupleValue`), `register_eval` op registry, node-evaluation + `LoopRegion` + layout-domain rules. Logical reference oracle, no codegen / runtime |
 | **[visitor-registry](./visitor-registry.md)** | Derived-visitor dispatch pattern: `AnalysisRegistry`, per-class handler registration, four instances (`typeinfer` / `verify` / `codegen_<target>` / `cost`) with their Context / Visitor derivations |
 | **[semantic-analysis](./semantic-analysis.md)** | Static analysis service semantics: type propagation (relation-derived type behavior), access relation analysis, shard propagation (logical shape → layout domain, relation-driven propagation, output storage + mesh/layout compatibility). The registration mechanism itself is owned by visitor-registry |
 | **[analysis](./analysis.md)** | Fact layer: the composed authored-HIR measurement — its analysis families, their owned Metadata records, and the narrow Target Facts each family declares |

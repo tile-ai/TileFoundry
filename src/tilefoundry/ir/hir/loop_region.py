@@ -7,8 +7,12 @@ from tilefoundry.ir.types.shape_dim import ShapeDim
 
 
 @dataclass(unsafe_hash=True)
-class GridRegionExpr(Expr):
-    """Loop-phi-shaped structured SSA folding a tile-style loop into one Expr."""
+class LoopRegion(Expr):
+    """Loop-phi-shaped structured SSA folding a tile-style loop into one region.
+
+    A region rather than a scope: the values the loop carries are its own state,
+    stated once here, not something every expression inside holds a copy of.
+    """
 
     induction_var: Var
     carried_args: tuple[Var, ...]
@@ -20,4 +24,4 @@ class GridRegionExpr(Expr):
     start: ShapeDim = 0
 
 
-__all__ = ["GridRegionExpr"]
+__all__ = ["LoopRegion"]

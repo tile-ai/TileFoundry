@@ -7,7 +7,7 @@ from tilefoundry.ir.types.shard.mesh import Mesh
 
 
 @dataclass(unsafe_hash=True)
-class MeshScope(Expr):
+class MeshRegion(Expr):
     """The participants a region of work runs on, as a node rather than a stack.
 
     Which participants run a region is a fact about the program's structure, so
@@ -24,4 +24,4 @@ class MeshScope(Expr):
     args: tuple[Expr, ...] = ()
 
 
-__all__ = ["MeshScope"]
+__all__ = ["MeshRegion"]
