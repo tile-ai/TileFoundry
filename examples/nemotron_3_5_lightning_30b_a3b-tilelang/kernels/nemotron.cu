@@ -41,6 +41,14 @@ constexpr int HPG = 8;
 constexpr float EPS = 1e-5f;
 constexpr float DTMIN = 0.001f;
 
+constexpr int HQ = 32;
+constexpr int HKV = 2;
+constexpr int DH = 128;
+constexpr int QP = 4096;
+constexpr int KVP = 256;
+constexpr int GQA = 16;
+constexpr float QSCALE = 0.08838834764831845f;
+
 constexpr int E = 128;
 constexpr int KTOP = 6;
 constexpr int I = 1856;
@@ -782,9 +790,237 @@ std::vector<torch::Tensor> moe_layer(
     return {h_out, idx, gw, h2, mid, smid, acc};
 }
 
+/// Keys per CTA of the attention scan.
+///
+/// The scan is split over the context because at 262080 positions one CTA per
+/// head would leave 130 of the 132 SMs idle. Each CTA folds its own block into
+/// a running (max, sum, accumulator) and `k_attn_combine` merges the blocks,
+/// which is what makes reading them separately the same value as one softmax
+/// over their concatenation.
+constexpr int ABLK = 256;
+constexpr int ATT_THREADS = 256;
+constexpr int ATT_WARPS = ATT_THREADS / 32;
+constexpr int Q_PER_WARP = GQA / ATT_WARPS;
+
+/// One block of keys, for one KV head, folded into a partial softmax.
+///
+/// Lane `l` takes key `base + l`, so a lane's 128 dot products are serial and no
+/// reduction crosses the warp for a score. The softmax over the 32 keys a warp
+/// holds is two warp folds, and the value accumulation broadcasts each weight
+/// back with a shuffle.
+__global__ __launch_bounds__(ATT_THREADS) void k_attn_block(
+    const bf16 *__restrict__ q, const bf16 *__restrict__ kc,
+    const bf16 *__restrict__ vc, int nkey, int blk_offset,
+    float *__restrict__ pm, float *__restrict__ pl, float *__restrict__ pacc) {
+    const int blk = int(blockIdx.x);
+    const int head = int(blockIdx.y);
+    const int warp = threadIdx.x >> 5;
+    const int lane = threadIdx.x & 31;
+
+    __shared__ __align__(16) bf16 qs[GQA * DH];
+    for (int i = int(threadIdx.x); i < GQA * DH; i += ATT_THREADS)
+        qs[i] = q[size_t(head) * GQA * DH + i];
+    ops::sync<ops::SyncKind::syncthreads>();
+
+    const int lo = blk * ABLK;
+    const int hi = min(lo + ABLK, nkey);
+
+    for (int qi = 0; qi < Q_PER_WARP; ++qi) {
+        const int g = warp * Q_PER_WARP + qi;
+        const bf16 *qrow = qs + g * DH;
+        float m = -INFINITY, l = 0.0f;
+        float acc[DH / 32];
+#pragma unroll
+        for (int i = 0; i < DH / 32; ++i) acc[i] = 0.0f;
+
+        for (int base = lo; base < hi; base += 32) {
+            const int key = base + lane;
+            /// `raw` lands in bf16 before the scale, because
+            /// `matmul(qg, kh.t())` is a bf16 matmul and only then `.float()`.
+            float s = -INFINITY;
+            if (key < hi) {
+                const bf16 *krow = kc + (size_t(key) * HKV + head) * DH;
+                float part[4] = {0, 0, 0, 0};
+#pragma unroll
+                for (int d = 0; d < DH; d += 4)
+#pragma unroll
+                    for (int u = 0; u < 4; ++u)
+                        part[u] += ld(krow + d + u) * ld(qrow + d + u);
+                s = bf(part[0] + part[1] + part[2] + part[3]) * QSCALE;
+            }
+            const float bm = ops::warp_reduce<ops::warp_max>(s);
+            const float nm = fmaxf(m, bm);
+            const float cr = (m == -INFINITY) ? 0.0f : __expf(m - nm);
+            const float pw = (key < hi) ? __expf(s - nm) : 0.0f;
+            l = l * cr + ops::warp_reduce<ops::warp_sum>(pw);
+#pragma unroll
+            for (int i = 0; i < DH / 32; ++i) acc[i] *= cr;
+            /// The weights are per key, the accumulator per dim, so each key's
+            /// weight comes back to every lane with a shuffle rather than
+            /// through shared memory.
+            for (int j = 0; j < 32; ++j) {
+                const float w = __shfl_sync(0xFFFFFFFFu, pw, j);
+                const int kj = base + j;
+                if (kj >= hi || w == 0.0f) continue;
+                const bf16 *vrow = vc + (size_t(kj) * HKV + head) * DH;
+#pragma unroll
+                for (int i = 0; i < DH / 32; ++i)
+                    acc[i] += w * ld(vrow + lane + i * 32);
+            }
+            m = nm;
+        }
+        const size_t at = (size_t(blk_offset + blk) * HKV + head) * GQA + g;
+        if (lane == 0) {
+            pm[at] = m;
+            pl[at] = l;
+        }
+#pragma unroll
+        for (int i = 0; i < DH / 32; ++i)
+            pacc[at * DH + lane + i * 32] = acc[i];
+    }
+}
+
+/// Merge the per-block partials into the context vector.
+///
+/// One CTA per (head, query). The merge is the same online step the blocks ran,
+/// applied across them, so splitting the scan changes nothing about the value.
+__global__ __launch_bounds__(DH) void k_attn_combine(
+    const float *__restrict__ pm, const float *__restrict__ pl,
+    const float *__restrict__ pacc, int nblock, bf16 *__restrict__ ctx) {
+    const int head = int(blockIdx.y);
+    const int g = int(blockIdx.x);
+    const int d = int(threadIdx.x);
+
+    float m = -INFINITY, l = 0.0f, acc = 0.0f;
+    for (int b = 0; b < nblock; ++b) {
+        const size_t at = (size_t(b) * HKV + head) * GQA + g;
+        const float bm = pm[at];
+        if (bm == -INFINITY) continue;
+        const float nm = fmaxf(m, bm);
+        const float cr = (m == -INFINITY) ? 0.0f : __expf(m - nm);
+        const float br = __expf(bm - nm);
+        l = l * cr + pl[at] * br;
+        acc = acc * cr + pacc[at * DH + d] * br;
+        m = nm;
+    }
+    ctx[(size_t(head) * GQA + g) * DH + d] = __float2bfloat16(acc / l);
+}
+
+constexpr int QKV = QP + 2 * KVP;
+constexpr int QKV_TILES = QKV / TILE_ROWS;
+constexpr int O_TILES = H / TILE_ROWS;
+
+/// Pre-norm, the fused Q/K/V projection, and this token's row of the cache.
+///
+/// `cache_update`, realised on the cache's own buffer: the row this token adds
+/// is written where the scan will read it, so nothing is copied between steps.
+__global__ __launch_bounds__(THREADS) void k_qkv(
+    const bf16 *__restrict__ h, const bf16 *__restrict__ gamma,
+    const bf16 *__restrict__ w_qkv, bf16 *__restrict__ qkv,
+    bf16 *__restrict__ k_tail, bf16 *__restrict__ v_tail, int cur_pos) {
+    extern __shared__ __align__(16) char raw[];
+    ProjSmem<H, IN_STAGES> sm(raw);
+    rms_norm_to_smem(h, gamma, sm.x, sm.slots);
+    ops::sync<ops::SyncKind::syncthreads>();
+    int first, count;
+    tile_span(QKV_TILES, int(blockIdx.x), int(gridDim.x), &first, &count);
+    gemv_rows<H, IN_STAGES>(w_qkv, sm.x, qkv, first, count, sm.stage, sm.bars);
+    ops::sync<ops::SyncKind::syncthreads>();
+
+    const int lo = first * TILE_ROWS, hi = (first + count) * TILE_ROWS;
+    for (int row = lo + int(threadIdx.x); row < hi; row += THREADS) {
+        if (row < QP) continue;
+        const int off = row - QP;
+        bf16 *dst = (off < KVP ? k_tail : v_tail) +
+                    (size_t(cur_pos) * HKV * DH) + (off % KVP);
+        *dst = qkv[row];
+    }
+}
+
+/// The output projection and the residual add.
+__global__ __launch_bounds__(THREADS) void k_o_proj(
+    const bf16 *__restrict__ ctx, const bf16 *__restrict__ w_o,
+    const bf16 *__restrict__ h_in, bf16 *__restrict__ h_out) {
+    __shared__ __align__(16) bf16 xs[QP];
+    for (int i = int(threadIdx.x); i < QP; i += THREADS) xs[i] = ctx[i];
+    ops::sync<ops::SyncKind::syncthreads>();
+    int first, count;
+    tile_span(O_TILES, int(blockIdx.x), int(gridDim.x), &first, &count);
+    gemv_rows_direct<QP>(w_o, xs, h_out, first * TILE_ROWS, count * TILE_ROWS,
+                         h_in);
+}
+
+/// One full-attention layer.
+std::vector<torch::Tensor> attn_layer(
+    torch::Tensor h, torch::Tensor gamma, torch::Tensor w_qkv, torch::Tensor w_o,
+    torch::Tensor k_cache, torch::Tensor v_cache, torch::Tensor k_tail,
+    torch::Tensor v_tail, int64_t cur_pos) {
+    check_bf16(h, H, "h");
+    check_bf16(gamma, H, "gamma");
+    check_bf16(w_qkv, int64_t(QKV) * H, "w_qkv");
+    check_bf16(w_o, int64_t(H) * QP, "w_o");
+
+    const int ctx_full = int(k_cache.numel() / (int64_t(HKV) * DH));
+    const int ctx_tail = int(k_tail.numel() / (int64_t(HKV) * DH));
+    TORCH_CHECK(cur_pos >= 0 && cur_pos < ctx_tail, "cur_pos out of the tail");
+
+    const auto bf_opt = h.options();
+    const auto f_opt = h.options().dtype(at::kFloat);
+    auto qkv = torch::empty({QKV}, bf_opt);
+    auto ctx = torch::empty({QP}, bf_opt);
+    auto h_out = torch::empty({H}, bf_opt);
+
+    const int nb_full = (ctx_full + ABLK - 1) / ABLK;
+    // The tail holds `cur_pos + 1` live rows: this token's is the last written.
+    const int live_tail = int(cur_pos) + 1;
+    const int nb_tail = (live_tail + ABLK - 1) / ABLK;
+    const int nblock = nb_full + nb_tail;
+
+    auto pm = torch::empty({nblock, HKV, GQA}, f_opt);
+    auto pl = torch::empty({nblock, HKV, GQA}, f_opt);
+    auto pacc = torch::empty({nblock, HKV, GQA, DH}, f_opt);
+
+    auto stream = at::cuda::getCurrentCUDAStream();
+    const int ctas = sm_count();
+    constexpr size_t kQkv = ProjSmem<H, IN_STAGES>::bytes();
+    allow_smem(k_qkv, kQkv);
+
+    k_qkv<<<ctas, THREADS, kQkv, stream>>>(
+        static_cast<const bf16 *>(h.data_ptr()),
+        static_cast<const bf16 *>(gamma.data_ptr()),
+        static_cast<const bf16 *>(w_qkv.data_ptr()),
+        static_cast<bf16 *>(qkv.data_ptr()),
+        static_cast<bf16 *>(k_tail.data_ptr()),
+        static_cast<bf16 *>(v_tail.data_ptr()), int(cur_pos));
+
+    auto *Q = static_cast<bf16 *>(qkv.data_ptr());
+    auto *PM = static_cast<float *>(pm.data_ptr());
+    auto *PL = static_cast<float *>(pl.data_ptr());
+    auto *PA = static_cast<float *>(pacc.data_ptr());
+    if (nb_full)
+        k_attn_block<<<dim3(nb_full, HKV), ATT_THREADS, 0, stream>>>(
+            Q, static_cast<const bf16 *>(k_cache.data_ptr()),
+            static_cast<const bf16 *>(v_cache.data_ptr()), ctx_full, 0, PM, PL, PA);
+    if (nb_tail)
+        k_attn_block<<<dim3(nb_tail, HKV), ATT_THREADS, 0, stream>>>(
+            Q, static_cast<const bf16 *>(k_tail.data_ptr()),
+            static_cast<const bf16 *>(v_tail.data_ptr()), live_tail, nb_full,
+            PM, PL, PA);
+    k_attn_combine<<<dim3(GQA, HKV), DH, 0, stream>>>(
+        PM, PL, PA, nblock, static_cast<bf16 *>(ctx.data_ptr()));
+    k_o_proj<<<ctas, THREADS, 0, stream>>>(
+        static_cast<const bf16 *>(ctx.data_ptr()),
+        static_cast<const bf16 *>(w_o.data_ptr()),
+        static_cast<const bf16 *>(h.data_ptr()),
+        static_cast<bf16 *>(h_out.data_ptr()));
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    return {h_out, qkv, ctx};
+}
+
 }  // namespace
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("mamba_layer", &mamba_layer);
     m.def("moe_layer", &moe_layer);
+    m.def("attn_layer", &attn_layer);
 }

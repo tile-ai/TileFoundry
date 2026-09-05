@@ -11,9 +11,9 @@ Two bodies live here and `NEMO_IMPL` (or `set_impl`) chooses between them:
            exactly the points where `model.py` reshards a value back out of its
            mesh split. This is the implementation the numbers are about.
 ``cuda``   handwritten CUDA, calling the public ``tilefoundry::ops`` entries.
-           The Mamba-2 and MoE layers run `kernels/nemotron.cu`; the attention
-           layers still run the op-by-op path, so a step is many launches and
-           what this setting produces is per-layer evidence, not tok/s. It
+           All 52 layers run `kernels/nemotron.cu`, but as many launches rather
+           than one, so what this setting produces is per-layer evidence and a
+           correct step, not tok/s. It
            cannot fall through to ``mega`` for the rest: that is one launch over
            the whole step and has no entry that takes over a single layer.
 ``ops``    the op-by-op path: one torch call per operation, so a step is
@@ -138,6 +138,9 @@ def _sibling_import(name):
 #: once: the declared weights are three separate (MH,) views.
 _MSCAL_CACHE = {}
 
+#: Per-layer fused (QKV, H) views over the packed attention weights.
+_QKV_CACHE = {}
+
 
 def _mamba_cuda(i, h, w, acts):
     """One Mamba-2 layer through `kernels/nemotron.cu`.
@@ -180,7 +183,34 @@ def _moe_cuda(i, h, w, acts):
     return out[0].reshape(1, 1, H)
 
 
-def _ops_step(w, acts, stop=None, attn_at=None, mamba=None, moe=None):
+def _attn_cuda(i, h, w, acts, cur_pos):
+    """One full-attention layer through `kernels/nemotron.cu`.
+
+    The kernel writes this token's K/V row into the tail buffers it was handed,
+    which is `cache_update` realised on the cache's own memory, so the rows the
+    step hands on are views of those buffers rather than copies.
+    """
+    _kernels = _sibling_import("kernels").ops
+
+    if i not in _QKV_CACHE:
+        # `w_q`, `w_k` and `w_v` are three contiguous slices of one (QKV, H)
+        # slab in the pack, so the fused matrix the kernel wants is already
+        # there: take the view rather than concatenating 25 MB every step.
+        wq = w[f"l{i}_w_q"]
+        _QKV_CACHE[i] = wq.as_strided(((QP + 2 * KVP) * H,), (1,),
+                                      wq.storage_offset())
+    k_tail, v_tail = acts[f"l{i}_k_tail"], acts[f"l{i}_v_tail"]
+    out = _kernels().attn_layer(
+        h.reshape(H), w[f"l{i}_gamma"].reshape(H),
+        _QKV_CACHE[i], w[f"l{i}_w_o"].reshape(-1),
+        acts[f"l{i}_k_cache"].reshape(-1), acts[f"l{i}_v_cache"].reshape(-1),
+        k_tail.reshape(-1), v_tail.reshape(-1), cur_pos)
+    fresh = [k_tail[:, cur_pos:cur_pos + 1].reshape(1, 1, HKV, DH),
+             v_tail[:, cur_pos:cur_pos + 1].reshape(1, 1, HKV, DH)]
+    return out[0].reshape(1, 1, H), fresh
+
+
+def _ops_step(w, acts, stop=None, attn_at=None, mamba=None, moe=None, attn=None):
     """One decode step, one torch call per operation.
 
     *stop* returns the running hidden row after that many layers instead of the
@@ -201,6 +231,10 @@ def _ops_step(w, acts, stop=None, attn_at=None, mamba=None, moe=None):
             continue
         if kind == "moe" and moe is not None:
             h = moe(i, h, w, acts)
+            continue
+        if kind == "full_attention" and attn is not None and attn_at != i:
+            h, pair = attn(i, h, w, acts, cur_pos)
+            fresh += pair
             continue
         h2 = _rms(h, w[f"l{i}_gamma"]).reshape(1, H)
         if kind == "linear_attention":
@@ -322,12 +356,19 @@ class Nemotron35Lightning30BA3BRuntime:
         if IMPL == "ops":
             return _ops_step(self._bound, acts)
         if IMPL == "cuda":
-            return _ops_step(self._bound, acts, mamba=_mamba_cuda, moe=_moe_cuda)
+            return _ops_step(self._bound, acts, mamba=_mamba_cuda, moe=_moe_cuda,
+                             attn=_attn_cuda)
         return self._mega(args, acts)
 
     def _mega(self, args, acts):
         mega_kernel = _sibling_import("mega_kernel")
 
+        if self._run is None:
+            # The runner carries the scratch and the address-table ring, not the
+            # weights: those are already packed, so it adopts the pack rather
+            # than allocating a second one.
+            self._run = mega_kernel.Runner(self._device)
+            self._run.packed = self._packed
         return mega_kernel.run_step(self._run, args, acts["cur_pos"], _INDEX)
 
     def load(self, resource):
@@ -339,20 +380,16 @@ class Nemotron35Lightning30BA3BRuntime:
         op-by-op path and `check`'s weight report see exactly what was declared
         while the kernel sees eighteen buffers.
 
-        The layout comes from `packing`, which imports no backend: loading
-        happens before an implementation runs, and reaching for one here would
-        make every implementation need every backend installed. Only ``mega``
-        builds a `mega_kernel.Runner`, and only ``mega`` needs TileLang.
+        The layout comes from `packing`, which imports no backend. Loading
+        happens before an implementation is chosen -- `set_impl` may not have
+        been called yet -- so this must not branch on one, and the TileLang
+        runner is built when ``mega`` first runs rather than here.
         """
         device = getattr(resource, "device", "cuda")
-        if IMPL == "mega":
-            mega_kernel = _sibling_import("mega_kernel")
-
-            self._run = mega_kernel.Runner(device)
-            packed = self._run.packed
-        else:
-            self._run = None
-            packed = packing.Packed(device)
+        self._device = device
+        self._run = None
+        packed = packing.Packed(device)
+        self._packed = packed
         for name in self._ir.weights:
             value = resource.load(name)
             self._bound[name] = packing.pack_into(packed, name, value)
