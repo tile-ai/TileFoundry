@@ -90,7 +90,42 @@ changing a single arithmetic result.
   0.7 ms of the 5.49. Merging stages to save some of it costs the clarity of
   having one barrier per reshard the authored program states.
 
-## 6. What could not be measured
+## 6. The open fault: the fused path is not token-identical
+
+`NEMO_IMPL=cuda-stages` matches `transformers` for 64 of 64 greedy steps.
+`NEMO_IMPL=cuda` diverges at step 35. They run the same `__device__` stages, so
+the difference is in what one resident launch does between them.
+
+Bisected by stopping the layer walk early and comparing the hidden row against
+the same stages run a launch apiece:
+
+| after layer | rel_l2 |
+|---|---|
+| 1 – 8 | **0** (bit-identical) |
+| 12 | 5.5e-4 |
+| 19 – 33 | 5–7e-4 (flat) |
+| 40 | 7.6e-3 |
+
+Eight layers bit-identical rules out a logic error in any stage: a wrong index or
+a missing barrier does not wait until the ninth layer. What is left is a
+reproducibility difference — the fused path rounds somewhere the staged path does
+not — that stays inside every bound `check_all.py` derives and still costs token
+identity, because greedy decoding has no tolerance at all.
+
+Two candidates, neither confirmed:
+
+- **Scratch reuse.** The fused launch keeps one set of buffers for all 52 layers;
+  the staged path allocates each layer's afresh. Every buffer is written before
+  it is read on the paths checked, but "checked" is by reading the code, not by
+  a tool.
+- **The head.** `cuda-stages` finishes in torch (`fh @ w_head.t()`), the fused
+  path in `s_head`. That explains a difference in the logits and nothing about
+  the states, which also differ.
+
+Until this is understood the fused path should not be described as
+token-identical, and `README.md` does not.
+
+## 7. What could not be measured
 
 `ncu` does not run on this machine: `ERR_NVGPUCTRPERM`, GPU performance counters
 are restricted to administrators. Everything above rests on `nsys` kernel tracing
