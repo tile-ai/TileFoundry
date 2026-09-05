@@ -132,7 +132,7 @@ class PythonPrinter(ExprFunctor[str]):
             "ShardLayout(\n"
             f"{child}layout={self.render_layout(layout.layout, ctx, child)},\n"
             f"{child}attrs=({attrs}),\n"
-            f"{child}mesh={(alias if (alias := ctx.mesh_alias(layout.mesh)) is not None and not hasattr(ctx, 'mesh_name_map') else self.render_mesh(layout.mesh, ctx, child)) if ctx is not None else self.render_mesh(layout.mesh, ctx, child)},\n"
+            f"{child}mesh={(alias if (alias := ctx.mesh_alias(layout.mesh)) is not None else self.render_mesh(layout.mesh, ctx, child)) if ctx is not None else self.render_mesh(layout.mesh, ctx, child)},\n"
             f"{indent})"
         )
 
