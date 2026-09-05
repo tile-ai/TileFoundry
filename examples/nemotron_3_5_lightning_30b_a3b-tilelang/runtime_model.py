@@ -54,7 +54,7 @@ IMPL = os.environ.get("NEMO_IMPL", "mega")
 
 
 #: The implementations `decode_step` can run. See the module docstring.
-IMPLS = ("mega", "ops", "cuda")
+IMPLS = ("mega", "ops", "cuda", "cuda-stages")
 
 
 def set_impl(name: str) -> None:
@@ -210,6 +210,99 @@ def _attn_cuda(i, h, w, acts, cur_pos):
     return out[0].reshape(1, 1, H), fresh
 
 
+#: The scratch one cooperative launch writes, kept between steps: allocating
+#: 17 MB of attention partials every token would cost more than the step.
+_MEGA = {}
+
+
+def _mega_scratch(device, ctx_full, ctx_tail):
+    """Every buffer `mega_decode` writes, in the order its `Scratch` names them."""
+    nblock = -(-ctx_full // 256) + -(-ctx_tail // 256) + 2
+    key = (str(device), nblock)
+    if key not in _MEGA:
+        bf = dict(dtype=BF16, device=device)
+        f32 = dict(dtype=torch.float32, device=device)
+        _MEGA[key] = [
+            torch.empty(H, **bf), torch.empty(H, **bf), torch.empty(PROJ, **bf),
+            torch.empty(CONV, **bf), torch.empty(MI, **bf), torch.empty(MI, **bf),
+            torch.empty(QP + 2 * KVP, **bf), torch.empty(QP, **bf),
+            torch.empty(K * I, **bf), torch.empty(IS, **bf),
+            torch.empty(H, **f32), torch.empty(E, **f32),
+            torch.empty(nblock * HKV * GQA, **f32),
+            torch.empty(nblock * HKV * GQA, **f32),
+            torch.empty(nblock * HKV * GQA * DH, **f32),
+            torch.empty(K, dtype=torch.int32, device=device),
+            torch.empty(K, **f32), torch.empty(V, **f32),
+        ]
+    return _MEGA[key]
+
+
+_MEGA_META = {}
+
+
+def _mega_meta(device):
+    """The per-layer kind and its index within that kind, as the kernel reads them."""
+    if device not in _MEGA_META:
+        kid = {"linear_attention": 0, "full_attention": 1, "moe": 2}
+        kinds, ats, seen = [], [], {0: 0, 1: 0, 2: 0}
+        for k in KINDS:
+            kinds.append(kid[k])
+            ats.append(seen[kid[k]])
+            seen[kid[k]] += 1
+        _MEGA_META[device] = (
+            torch.tensor(kinds, dtype=torch.int32, device=device),
+            torch.tensor(ats, dtype=torch.int32, device=device))
+    return _MEGA_META[device]
+
+
+def _mega_cuda(twin, args, acts):
+    """One decode step as a single cooperative launch."""
+    _kernels = _sibling_import("kernels").ops
+
+    packed = twin._packed
+    device = packed.t["gam"].device
+    cur_pos = acts["cur_pos"]
+    ctx_full = ctx_tail = 0
+    states, fresh = [], []
+    conv_in, ssm_in, conv_out, ssm_out = [], [], [], []
+    kc, vc, kt, vt = [], [], [], []
+    out = []
+    for i, kind in enumerate(KINDS):
+        if kind == "linear_attention":
+            conv_in.append(acts[f"l{i}_conv_state"].reshape(-1))
+            ssm_in.append(acts[f"l{i}_ssm_state"].reshape(-1))
+            co = torch.empty(CONV * WIN, dtype=BF16, device=device)
+            so = torch.empty(MH * MD * SS, dtype=torch.float32, device=device)
+            conv_out.append(co)
+            ssm_out.append(so)
+            out.append((i, co.reshape(1, CONV, WIN), so.reshape(1, MH, MD, SS)))
+        elif kind == "full_attention":
+            a_kc, a_vc = acts[f"l{i}_k_cache"], acts[f"l{i}_v_cache"]
+            a_kt, a_vt = acts[f"l{i}_k_tail"], acts[f"l{i}_v_tail"]
+            ctx_full, ctx_tail = a_kc.shape[1], a_kt.shape[1]
+            kc.append(a_kc.reshape(-1))
+            vc.append(a_vc.reshape(-1))
+            kt.append(a_kt.reshape(-1))
+            vt.append(a_vt.reshape(-1))
+            out.append((i, a_kt, a_vt))
+    states = conv_in + ssm_in + conv_out + ssm_out + kc + vc + kt + vt
+    kinds, ats = _mega_meta(device)
+    scratch = _mega_scratch(device, ctx_full, ctx_tail)
+    logits = _kernels().mega_step(
+        [packed.t[n] for n in packing.PACK_ORDER], states, scratch, kinds, ats,
+        acts["token_ids"].reshape(-1), cur_pos, ctx_full, ctx_tail,
+        int(os.environ.get("NEMO_MEGA_LAYERS", "0")))
+    if os.environ.get("NEMO_MEGA_LAYERS"):
+        return (scratch[0].float().reshape(1, H),)
+    for i, a, b in out:
+        if KINDS[i] == "linear_attention":
+            fresh += [a, b]
+        else:
+            fresh += [a[:, cur_pos:cur_pos + 1].reshape(1, 1, HKV, DH),
+                      b[:, cur_pos:cur_pos + 1].reshape(1, 1, HKV, DH)]
+    return (logits.reshape(1, V), *fresh)
+
+
 def _ops_step(w, acts, stop=None, attn_at=None, mamba=None, moe=None, attn=None):
     """One decode step, one torch call per operation.
 
@@ -356,6 +449,8 @@ class Nemotron35Lightning30BA3BRuntime:
         if IMPL == "ops":
             return _ops_step(self._bound, acts)
         if IMPL == "cuda":
+            return _mega_cuda(self, args, acts)
+        if IMPL == "cuda-stages":
             return _ops_step(self._bound, acts, mamba=_mamba_cuda, moe=_moe_cuda,
                              attn=_attn_cuda)
         return self._mega(args, acts)
