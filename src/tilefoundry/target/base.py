@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from importlib.resources import files
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, ClassVar, Mapping, TypeVar
 
+from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target.facts import TopologyLimitFacts
 from tilefoundry.target.hardware.envelope import (
@@ -22,7 +23,32 @@ from tilefoundry.target.hardware.envelope import (
     parse_document,
 )
 from tilefoundry.target.services import Analyzer, CodeGenerator
-from tilefoundry.utils.python_source import PythonExpr, dataclass_to_python
+from tilefoundry.utils.python_source import PythonExpr, _merge_imports
+
+
+def _target_value_to_python(value: object) -> PythonExpr:
+    if isinstance(value, DType):
+        return PythonExpr(("from tilefoundry.ir.types import DType",), f"DType.{value.name}")
+    if isinstance(value, tuple):
+        values = tuple(_target_value_to_python(item) for item in value)
+        return PythonExpr(
+            _merge_imports(*(item.imports for item in values)),
+            "(" + ", ".join(item.text for item in values) + ("," if len(values) == 1 else "") + ")",
+        )
+    if isinstance(value, (str, int, float, bool, type(None))):
+        return PythonExpr((), repr(value))
+    if is_dataclass(value):
+        module = type(value).__module__
+        if module.startswith("tilefoundry.target.cuda."):
+            module = "tilefoundry.target.cuda"
+        elif module.startswith("tilefoundry.target.amx."):
+            module = "tilefoundry.target.amx"
+        rendered = tuple((field.name, _target_value_to_python(getattr(value, field.name))) for field in fields(value) if field.init or field.compare)
+        return PythonExpr(
+            _merge_imports((f"from {module} import {type(value).__name__}",), *(item.imports for _, item in rendered)),
+            f"{type(value).__name__}(" + ", ".join(f"{name}={item.text}" for name, item in rendered) + ")",
+        )
+    raise TypeError(f"cannot render {type(value).__name__} as target Python")
 
 FactsT = TypeVar("FactsT")
 SchemaBuilder = Callable[[HardwareDocument], Any]
@@ -48,7 +74,7 @@ class Architecture:
         return type(self).__module__
 
     def to_python(self) -> PythonExpr:
-        return dataclass_to_python(self, self._python_import_module())
+        return _target_value_to_python(self)
 
 
 class Device:
@@ -61,7 +87,7 @@ class Device:
         return type(self).__module__
 
     def to_python(self) -> PythonExpr:
-        return dataclass_to_python(self, self._python_import_module())
+        return _target_value_to_python(self)
 
 
 class HardwareSpec:
@@ -190,7 +216,7 @@ class Target:
         return type(self).__module__
 
     def to_python(self) -> PythonExpr:
-        return dataclass_to_python(self, self._python_import_module())
+        return _target_value_to_python(self)
 
     def get_analyzer(self, selector: str) -> Analyzer:
         """Return the analysis service selected by this concrete Target."""
