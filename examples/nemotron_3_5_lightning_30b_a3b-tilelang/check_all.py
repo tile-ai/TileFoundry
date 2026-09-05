@@ -96,8 +96,12 @@ def main() -> int:
     if a.dry:
         print(" ".join(cmd))
         return 0
-    return subprocess.call([sys.executable.replace("python", "tilefoundry")] + cmd[1:]
-                           if False else cmd)
+    # The `tilefoundry` beside this interpreter, not whichever one PATH finds:
+    # a run made with one environment's python must not check with another's.
+    script = pathlib.Path(sys.executable).with_name("tilefoundry")
+    if script.exists():
+        cmd[0] = str(script)
+    return subprocess.call(cmd)
 
 
 if __name__ == "__main__":
