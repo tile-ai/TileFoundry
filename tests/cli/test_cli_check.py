@@ -503,14 +503,14 @@ def test_several_extents_check_the_dispatch_and_name_the_implementation(capsys, 
     assert [run["variant"]["display_name"] for run in runs] == [
         "head_on_cta",
         "head_on_cta",
-        "ctx_split_kv",
+        "head_on_cta",
         "ctx_split_kv",
     ]
     assert [run["variant"]["signature"] for run in runs] == [
-        "ctx_len$0_4095",
-        "ctx_len$0_4095",
-        "ctx_len$4096_262143",
-        "ctx_len$4096_262143",
+        "ctx_len$0_4096",
+        "ctx_len$0_4096",
+        "ctx_len$0_4096",
+        "ctx_len$4097_262144",
     ]
 
     assert (
@@ -532,7 +532,10 @@ def test_several_extents_check_the_dispatch_and_name_the_implementation(capsys, 
         )
         == 0
     )
-    assert "variant:   ctx_split_kv  ctx_len$4096_262143" in capsys.readouterr().out
+    assert (
+        "variant:   head_on_cta  ctx_len$0_4096  (ctx_len in [0, 4096])"
+        in capsys.readouterr().out
+    )
 
 
 def test_an_extent_outside_the_envelope_is_a_dispatch_hole_not_a_pass(capsys) -> None:
@@ -551,7 +554,7 @@ def test_an_extent_outside_the_envelope_is_a_dispatch_hole_not_a_pass(capsys) ->
                 "--weights",
                 "random",
                 "--dim",
-                "ctx_len=262144",
+                "ctx_len=262145",
                 "--out",
                 "output",
                 "--fn",
@@ -562,8 +565,8 @@ def test_an_extent_outside_the_envelope_is_a_dispatch_hole_not_a_pass(capsys) ->
     )
     refused = capsys.readouterr().err
 
-    assert "declares no variant covering ctx_len=262144" in refused
-    assert "4096, 262143]" in refused
+    assert "declares no variant covering ctx_len=262145" in refused
+    assert "4097, 262144]" in refused
 
 
 def test_a_passing_check_carries_no_verification_ranking(routing, capsys) -> None:

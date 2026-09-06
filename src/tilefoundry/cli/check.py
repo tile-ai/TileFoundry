@@ -542,7 +542,7 @@ def _render(source: str, runs: Sequence[dict[str, Any]], warnings: Sequence[str]
         if run.get("variant") is not None:
             variant = run["variant"]
             ranges = ", ".join(
-                f"{item['dim']} in [{item['lo']}, {item['hi']})" for item in variant["ranges"]
+                f"{item['dim']} in [{item['lo']}, {item['hi']}]" for item in variant["ranges"]
             )
             label = variant.get("display_name")
             shown = variant["signature"]
