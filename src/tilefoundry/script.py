@@ -18,6 +18,7 @@ from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.specialize import DISPLAY_NAME
 from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.tir.intrinsic import intrinsic as _intrinsic
+from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.ir.types.shard import Mesh
 from tilefoundry.module import UNDECLARED, _Entry
@@ -323,11 +324,11 @@ class _DeferredFunction:
             module_context=self.module_context,
             closure=self.closure,
         )
-        if self.dialect == "hir":
-            if self.role is FunctionRole.VARIANT:
-                setattr(self.parsed, DISPLAY_NAME, self.binding_name)
-                self.parsed.name = base.name
-            elif self.role is FunctionRole.CONVERTER:
+        if self.role is FunctionRole.VARIANT:
+            object.__setattr__(self.parsed, DISPLAY_NAME, self.binding_name)
+            object.__setattr__(self.parsed, "name", base.name)
+        elif self.dialect == "hir":
+            if self.role is FunctionRole.CONVERTER:
                 self.parsed.name = f"{base.name}.converter[{self.key}]"
         return self.parsed
 
@@ -338,7 +339,7 @@ class _DeferredFunction:
             declaration = _DeferredFunction(
                 self.module_context,
                 fn_inner,
-                "hir",
+                self.dialect,
                 FunctionRole.VARIANT,
                 fn_inner.__name__,
                 _capture_function_closure(fn_inner),
@@ -436,9 +437,10 @@ def _specialize(self: HirFunction, pattern: Any):
     pat = _validate_one_pattern(pattern)
 
     def _wrap_variant(fn_inner):
+        dialect = "tir" if isinstance(self, PrimFunction) else "hir"
         ir = _parse_authored(
             fn_inner,
-            dialect="hir",
+            dialect=dialect,
             role=FunctionRole.VARIANT,
             binding_name=fn_inner.__name__,
             base=self,
@@ -451,9 +453,12 @@ def _specialize(self: HirFunction, pattern: Any):
                 "`pass` (only the base prototype declares a `pass` body)"
             )
 
-        setattr(ir, DISPLAY_NAME, fn_inner.__name__)
-        ir.name = self.name
-        verify_function(ir)
+        object.__setattr__(ir, DISPLAY_NAME, fn_inner.__name__)
+        object.__setattr__(ir, "name", self.name)
+        if dialect == "hir":
+            verify_function(ir)
+        else:
+            verify_prim_function(ir)
         _register(ParsedFuncKind.VARIANT, ir, fn_inner.__name__, pat, base=self)
         return ir
 
@@ -462,6 +467,8 @@ def _specialize(self: HirFunction, pattern: Any):
 
 
 HirFunction.specialize = _specialize
+
+PrimFunction.specialize = _specialize
 
 
 def _converter(self: HirFunction, weight_name: str):

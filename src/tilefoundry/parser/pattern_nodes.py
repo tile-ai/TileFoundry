@@ -4526,7 +4526,7 @@ class FunctionDialectRule:
         kind = context.function.function_kind
         if context.function.dialect == "hir" and kind == "prim_func":
             raise ParseError.from_node(match.node, context, "prim_func requires tir dialect")
-        if context.function.dialect == "tir" and kind != "prim_func":
+        if context.function.dialect == "tir" and kind != "prim_func" and context.function.role is not FunctionRole.VARIANT:
             raise ParseError.from_node(match.node, context, f"{kind} requires hir dialect")
         expected = runtime.Function if context.function.dialect == "hir" else runtime.PrimFunction
         if not isinstance(value, expected):
@@ -4608,8 +4608,9 @@ class FunctionRoleValidationRule:
         if function_context.role is FunctionRole.ROOT:
             return
         base = function_context.base
-        if not isinstance(base, runtime.Function):
-            raise ParseError.from_node(node, match_context, "standalone role lacks a HIR base")
+        expected_base = runtime.Function if function_context.dialect == "hir" else runtime.PrimFunction
+        if not isinstance(base, expected_base):
+            raise ParseError.from_node(node, match_context, "standalone role lacks a matching base")
         if getattr(base, "_sealed", False):
             raise ParseError.from_node(node, match_context, f"base {base.name!r} is sealed")
         if getattr(function, "body", None) is None:
@@ -4789,6 +4790,7 @@ class FunctionPattern(ElementPattern):
             body=body,
             output_count=context.function.output_count,
             **kwargs,
+            specializations=specializations,
         )
         define = getattr(context.function.module_scope, "define", None)
         if callable(define):

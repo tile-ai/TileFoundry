@@ -37,5 +37,10 @@ class PrimFunction(Stmt):
     def __post_init__(self) -> None:
         target_instance(self.target)
 
+    def add_variant(self, variant: "PrimFunction") -> None:
+        if getattr(self, "_sealed", False):
+            raise RuntimeError(f"tir PrimFunction {self.name!r}: cannot add a specialization variant after sealing")
+        object.__setattr__(self, "variants", (*self.variants, variant))
+
 
 __all__ = ["PrimFunction"]

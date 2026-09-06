@@ -1020,8 +1020,9 @@ class ModuleBuildContext:
                 )
             return
         base = context.base
-        if base is None or not isinstance(base, runtime.Function):
-            raise ValueError(f"{role.value} {binding!r}: base is not a HIR Function")
+        expected_base = runtime.PrimFunction if context.dialect == "tir" else runtime.Function
+        if base is None or not isinstance(base, expected_base):
+            raise ValueError(f"{role.value} {binding!r}: base is not a matching Function")
         if getattr(base, "_sealed", False):
             raise RuntimeError(f"base {base.name!r}: cannot register {role.value} after seal")
         if binding == "_" and role is FunctionRole.VARIANT:
