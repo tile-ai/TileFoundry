@@ -78,16 +78,6 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
     def visit_Return(self, stmt):
         return [f"{self.indent}return"]
 
-    def visit_DispatchCall(self, stmt):
-        cases = []
-        for patterns, call in zip(stmt.case_patterns, stmt.case_calls):
-            pats = ", ".join(self.render_pattern(pattern, self.context) for pattern in patterns)
-            args = self._join_args(call.args)
-            cases.append(f"(({pats},), {_binding_name(call.callable.name)!r}, ({args},))")
-        lines = [f"{self.indent}with dispatch_call({stmt.callee_name!r}, subjects=({self._join_args(stmt.subjects)},), cases=({', '.join(cases)},)):"]
-        lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.fallback))
-        return lines
-
     def _expr(self, expr):
         if isinstance(expr, Var):
             return expr.name
@@ -186,6 +176,15 @@ def _function_block(fn: PrimFunction) -> list[str]:
     lines.append(f"def {_binding_name(fn.name)}({params}):")
     body = TirPrinter(context=ctx, indent="    ").visit(fn.body)
     lines.extend(body or ["    pass"])
+    for variant in fn.variants:
+        ctx.use(PythonExpr(("from tilefoundry.ir.core.pattern import DimVarRangePat",), "DimVarRangePat"))
+        ctx.use(PythonExpr(("from tilefoundry.ir.types.dim import DimVar",), "DimVar"))
+        pat = variant.specializations[0]
+        lines.append("")
+        lines.append(f"@{_binding_name(fn.name)}.specialize({TirPrinter(context=ctx).render_pattern(pat, ctx)})")
+        lines.append(f"def {_binding_name(getattr(variant, '_display_name', variant.name))}({params}):")
+        vbody = TirPrinter(context=ctx, indent="    ").visit(variant.body)
+        lines.extend(vbody or ["    pass"])
     return _RenderedLines(lines, ctx.imports)
 
 

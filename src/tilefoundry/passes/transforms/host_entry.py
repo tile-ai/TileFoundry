@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import replace
 
 from tilefoundry.codegen.cuda.emit import _derive_launch_config
-from tilefoundry.codegen.cuda.tir.prim_function import _is_dispatch_entry_shape
 from tilefoundry.ir.core import Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.launch import launch_call
@@ -53,7 +52,7 @@ def insert_default_host_entry(module: Module) -> Module:
         )
 
 
-    if _is_dispatch_entry_shape(entry_fn):
+    if entry_fn.variants:
         cpu_entry = replace(entry_fn, target=CpuTarget())
         new_functions = tuple(
             cpu_entry if fn is entry_fn else fn for fn in module.functions

@@ -1708,7 +1708,6 @@ def _build_dispatch_entry(
         )
     subject_param = entry_params[param_index]
     scalar_i32 = TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM)
-    subject = ShapeOf(type=scalar_i32, param=subject_param, axis=axis)
     case_patterns: list[tuple[DimVarRangePat, ...]] = []
     case_calls: list[Evaluate] = []
     forwarded_args = (*entry_params, *out_vars)
@@ -1738,20 +1737,11 @@ def _build_dispatch_entry(
             _, ax = parsed
             call_args.append(ShapeOf(type=scalar_i32, param=entry_p, axis=ax))
         case_calls.append(symbol_call(pf, call_args))
-    dispatch = DispatchCall(
-        callee_name=template.name,
-        subjects=(subject,),
-        case_patterns=tuple(case_patterns),
-        case_calls=tuple(case_calls),
-        fallback=Sequential(body=(Evaluate(callable=Abort(message=""), args=()),)),
-    )
-
-
     shape_param = Var(
         type=scalar_i32,
         name=shape_var_name(subject_param.name, axis),
     )
-    body = Sequential(body=(dispatch, Return()))
+    body = Sequential(body=(Return(),))
     return PrimFunction(
         name=template.name,
         params=(*entry_params, *out_vars, shape_param),
@@ -1871,6 +1861,7 @@ class HirToTirPass(ModulePass):
                     dispatch_groups=dispatch_view,
                     mangled_registry=mangled_registry,
                 )
+                pf = replace(pf, specializations=variant.specializations)
                 mangled_registry[mangled_name] = pf
                 lowered.append(pf)
             mangled_by_group[group_name] = lowered
@@ -1933,9 +1924,6 @@ def _retarget_launch_callees(fns: list) -> list:
     lowered cuda functions is an error (no guessing) — this also rejects a
     launch of a specialization group, whose variants carry mangled names.
     """
-    from tilefoundry.codegen.cuda.tir.prim_function import (  # noqa: PLC0415
-        _is_dispatch_entry_shape,
-    )
     from tilefoundry.ir.visitor import StmtMutator  # noqa: PLC0415
 
 
@@ -1945,7 +1933,7 @@ def _retarget_launch_callees(fns: list) -> list:
         if (
             isinstance(f, PrimFunction)
             and isinstance(f.target, CudaTarget)
-            and not _is_dispatch_entry_shape(f)
+            and not f.variants
         ):
             lowered_by_name.setdefault(f.name, []).append(f)
 

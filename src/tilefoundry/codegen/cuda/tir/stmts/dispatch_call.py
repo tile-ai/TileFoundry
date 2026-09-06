@@ -85,7 +85,7 @@ def _emit_fallback(fallback: Sequential, ctx: CodegenContext) -> None:
 
     for stmt in fallback.body:
         if isinstance(stmt, Evaluate) and isinstance(stmt.callable, Abort):
-            ctx.emit("assert(false);")
+            ctx.emit("__trap();")
         else:
             raise NotImplementedError(
                 f"DispatchCall emitter: fallback stmt of type "

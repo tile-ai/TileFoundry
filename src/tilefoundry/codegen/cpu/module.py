@@ -7,6 +7,8 @@ device module and shims.
 """
 from __future__ import annotations
 
+import dataclasses
+
 from tilefoundry.codegen.cpu.templates import render
 from tilefoundry.codegen.cuda.module import shim_symbol
 from tilefoundry.codegen.cuda.tir.prim_function import (
@@ -20,7 +22,7 @@ from tilefoundry.codegen.registry import CodeGenerator
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat
-from tilefoundry.ir.tir.dispatch import DispatchCall
+from tilefoundry.ir.hir.specialize import display_name
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
@@ -169,7 +171,7 @@ def _shim_decl(fn: PrimFunction) -> str:
     hidden = _hidden_names(fn.params)
     tokens = ["void*" if _is_tensor(p, hidden) else "long long" for p in fn.params]
     tokens += _LAUNCH_ABI_DECL
-    return f'extern "C" void {shim_symbol(fn.name)}({", ".join(tokens)});'
+    return f'extern "C" void {shim_symbol(display_name(fn) or fn.name)}({", ".join(tokens)});'
 
 
 def emit_host_module(
@@ -192,12 +194,36 @@ def emit_host_module(
         and isinstance(body.body[0].callable, Launch)
     ):
         shim_decls, body_lines, sig = _lower_launch(entry, body.body[0], module)
+    elif entry.variants:
+        pat = entry.variants[0].specializations[0]
+        loc = next(((p, axis) for p in entry.params if isinstance(p.type, TensorType)
+                    for axis, dim in enumerate(p.type.shape)
+                    if getattr(dim, "name", None) == pat.dim_var), None)
+        if loc is None:
+            raise ValueError("emit_host_module: cannot derive specialization subject")
+        p, axis = loc
+        subject = ShapeOf(type=TensorType.scalar(DType.i32), param=p, axis=axis)
+        def _variant_call(v):
+            args = []
+            for vp in v.params:
+                parsed = _parse_shape_param_name(vp.name)
+                if parsed is None:
+                    args.append(next(p for p in entry.params if p.name == vp.name))
+                else:
+                    base, ax = parsed
+                    ep = next(p for p in entry.params if p.name == base)
+                    args.append(ShapeOf(type=vp.type, param=ep, axis=ax))
+            return symbol_call(v, tuple(args))
+        calls = tuple(_variant_call(v) for v in entry.variants)
+        shim_decls, body_lines, sig = _lower_dispatch(
+            entry, module, callee_name=entry.name, subject=subject,
+            variants=entry.variants, calls=calls)
     elif _is_dispatch_entry_shape(entry):
-        shim_decls, body_lines, sig = _lower_dispatch(entry, body.body[0], module)
+        shim_decls, body_lines, sig = _lower_dispatch_legacy(entry, body.body[0], module)
     else:
         raise ValueError(
             f"emit_host_module: entry {entry.name!r} body must be a single "
-            f"Launch or a dispatch entry (DispatchCall)"
+            f"Launch"
         )
     source = render(
         "cpu_module.cpp.j2",
@@ -233,7 +259,7 @@ def _lower_launch(entry: PrimFunction, evaluate, module):
             raise ValueError(f"cannot derive specialization subject {dim_name!r}")
         p, axis = loc
         subject = ShapeOf(type=TensorType.scalar(DType.i32), param=p, axis=axis)
-        calls = tuple(symbol_call(v, tuple(evaluate.args[1:])) for v in device_fn.variants)
+        calls = tuple(symbol_call(v, tuple(evaluate.args[7:])) for v in device_fn.variants)
         return _lower_dispatch(entry, module, callee_name=device_fn.name, subject=subject, variants=device_fn.variants, calls=calls)
     dev_params = device_fn.params
     _reject_unsupported_config(launch_op)
@@ -354,13 +380,7 @@ def _lower_launch(entry: PrimFunction, evaluate, module):
     return [_shim_decl(device_fn)], body_lines, ", ".join(wrapper_tokens)
 
 
-def _lower_dispatch(entry: PrimFunction, dispatch_or_module, module=None, *, callee_name=None, subject=None, variants=None, calls=None):
-    dispatch = dispatch_or_module if isinstance(dispatch_or_module, DispatchCall) else None
-    module = module or dispatch_or_module
-    if dispatch is not None:
-        subject = dispatch.subjects[0]
-        variants = [module.lookup(c.callable.name) for c in dispatch.case_calls]
-        calls = dispatch.case_calls
+def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, variants, calls):
     if not isinstance(subject, ShapeOf):
         raise NotImplementedError(
             "emit_host_module: dispatch v1 expects exactly one ShapeOf subject"
@@ -396,22 +416,24 @@ def _lower_dispatch(entry: PrimFunction, dispatch_or_module, module=None, *, cal
             wrapper_tokens.append(f"tvm::ffi::Tensor {p.name}")
             body_lines.append(_placement_line(p.name, p.type.storage))
 
-    subj = dispatch.subjects[0]
+    subj = subject
     s = "__tf_dispatch_subject"
     body_lines.append(
         f"long long {s} = "
         f"static_cast<long long>({_host_name(subj)}.shape()[{subj.axis}]);"
     )
 
-    _require_uniform_case_args(calls, module)
+    for variant, call in zip(variants, calls):
+        if len(call.args) != len(variant.params):
+            raise ValueError(
+                f"emit_host_module: dispatch call to {variant.name!r} passes "
+                f"{len(call.args)} args for {len(variant.params)} parameters"
+            )
     shim_decls: dict[str, str] = {}
     for idx, (variant, call) in enumerate(zip(variants, calls)):
         pat = variant.specializations[0]
-        if dispatch is not None:
-            variant = module.lookup(call.callable.name)
-        if variant is None:
-            variant = next(v for f in module.functions if isinstance(f, PrimFunction) for v in f.variants if v.name == call.callable.name)
-        shim_decls[shim_symbol(variant.name)] = _shim_decl(variant)
+        variant_symbol = display_name(variant) or variant.name
+        shim_decls[shim_symbol(variant_symbol)] = _shim_decl(variant)
         if len(call.args) != len(variant.params):
             raise ValueError(
                 f"emit_host_module: dispatch call to {variant.name!r} passes "
@@ -446,7 +468,7 @@ def _lower_dispatch(entry: PrimFunction, dispatch_or_module, module=None, *, cal
         prefix = "if" if idx == 0 else "} else if"
         body_lines.append(f"{prefix} ({pred}) {{")
         body_lines.append(
-            f"  {shim_symbol(variant.name)}({', '.join(shim_args)});"
+            f"  {shim_symbol(variant_symbol)}({', '.join(shim_args)});"
         )
     body_lines.append("} else {")
     body_lines.append(
@@ -455,6 +477,16 @@ def _lower_dispatch(entry: PrimFunction, dispatch_or_module, module=None, *, cal
     )
     body_lines.append("}")
     return list(shim_decls.values()), body_lines, ", ".join(wrapper_tokens)
+
+def _lower_dispatch_legacy(entry, dispatch, module):
+    variants = [
+        dataclasses.replace(module.lookup(c.callable.name), specializations=pats)
+        for pats, c in zip(dispatch.case_patterns, dispatch.case_calls)
+    ]
+    return _lower_dispatch(
+        entry, module, callee_name=dispatch.callee_name,
+        subject=dispatch.subjects[0], variants=variants, calls=dispatch.case_calls,
+    )
 
 
 def _arg_descriptor(arg):

@@ -48,7 +48,6 @@ from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice, slice_size
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import (
@@ -251,7 +250,6 @@ runtime = SimpleNamespace(
     DimSub=DimSub,
     DimVar=DimVar,
     DimVarRangePat=DimVarRangePat,
-    DispatchCall=DispatchCall,
     Evaluate=Evaluate,
     For=For,
     Expr=Expr,
