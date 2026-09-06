@@ -173,6 +173,11 @@ class _KernelFields:
 
 
 def _compute_kernel_fields(node: PrimFunction, ctx: CodegenContext) -> _KernelFields:
+    if node.variants and not node.body.body:
+        raise ValueError(
+            f"PrimFunction {node.name!r} is a specialization prototype; "
+            "codegen must dispatch variants instead of emitting an empty kernel"
+        )
     for p in node.params:
         ctx.register_kernel_param(p)
 
