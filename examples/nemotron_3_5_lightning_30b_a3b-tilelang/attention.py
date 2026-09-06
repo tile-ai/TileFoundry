@@ -50,13 +50,6 @@ WRK_BOTH = 4
 _H200 = CudaTarget("nvidia.h200_sxm")
 _CTA = Topology("cta", 132)
 
-#: Where a CTA stops being able to hold its own head's whole cache on chip. One
-#: query head reads one KV head: K and V, 128 dimensions, two bytes each.
-SMEM_BUDGET = 232448
-CACHE_BYTES_PER_POSITION = 2 * HKV * DH * 2 // HKV
-CAPACITY_T = SMEM_BUDGET // CACHE_BYTES_PER_POSITION
-
-
 #: The ladder compares one decision, so the projections are not in it: they are
 #: the same four matmuls whichever way the scan is placed, and left in they
 #: dominate the per-unit flops and hide what is being compared. What is in it is

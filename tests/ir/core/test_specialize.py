@@ -33,8 +33,9 @@ ENTRY = GqaOnline.entry_function()
 STEADY = {"ctx_len": SMALL_CONTEXT_T + NUM_SPLITS}
 _LOOP_CTX = DimVar("loop_ctx", 1, 4097)
 _CALL_M = DimVar("call_m", 1, 17)
-_CALL_N = DimVar("call_n", 1, 1024)
-_NESTED_N = DimVar("nested_n", 1, 1024)
+_N_MAX = 1023
+_CALL_N = DimVar("call_n", 1, _N_MAX + 1)
+_NESTED_N = DimVar("nested_n", 1, _N_MAX + 1)
 _DISPATCH_BOUND = 128
 
 
@@ -50,7 +51,7 @@ class _MissingCalleeDimension:
     def pick_small(x: Tensor[(_CALL_N,), "f32"]) -> Tensor[(_CALL_N,), "f32"]:
         return tf.add(x, x)
 
-    @pick.specialize(DimVarRangePat("call_n", _DISPATCH_BOUND, 1023))
+    @pick.specialize(DimVarRangePat("call_n", _DISPATCH_BOUND, _N_MAX))
     def pick_big(x: Tensor[(_CALL_N,), "f32"]) -> Tensor[(_CALL_N,), "f32"]:
         return tf.add(tf.add(x, x), x)
 
@@ -73,7 +74,7 @@ class _NestedDispatch:
     def inner_small(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
         return tf.add(x, x)
 
-    @inner.specialize(DimVarRangePat("nested_n", _DISPATCH_BOUND, 1023))
+    @inner.specialize(DimVarRangePat("nested_n", _DISPATCH_BOUND, _N_MAX))
     def inner_big(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
         return tf.add(tf.add(x, x), x)
 
@@ -85,7 +86,7 @@ class _NestedDispatch:
     def mid_small(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
         return inner(x)  # noqa: F821
 
-    @mid.specialize(DimVarRangePat("nested_n", _DISPATCH_BOUND, 1023))
+    @mid.specialize(DimVarRangePat("nested_n", _DISPATCH_BOUND, _N_MAX))
     def mid_big(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
         return inner(x)  # noqa: F821
 

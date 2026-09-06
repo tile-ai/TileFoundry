@@ -286,7 +286,7 @@ T = floor(232448 B / 128 B)
   = 1816
 ```
 
-`Stage1_Specialized` expresses the dispatch as two closed `DimVarRangePat` variants: `[1, 1815]` and `[1816, 8192]`. The Stage1 body is deliberately the unsplit baseline, so the dispatch contract can be read independently from the later implementations.
+`Stage1_Specialized` expresses the dispatch as two closed `DimVarRangePat` variants: `[1, 1816]` and `[1817, 8192]`. The Stage1 body is deliberately the unsplit baseline, so the dispatch contract can be read independently from the later implementations.
 
 <!-- tilefoundry-source: attn_layer.py -->
 
@@ -359,7 +359,7 @@ class Stage1_Specialized:
     ) -> Tensor[(1, 1, HIDDEN), "bf16"]:
         pass
 
-    @gqa_decode.specialize(DimVarRangePat("ctx_len", 1, SPECIALIZE_T - 1))
+    @gqa_decode.specialize(DimVarRangePat("ctx_len", 1, SPECIALIZE_T))
     def short_context(
         hidden: Tensor[(1, 1, HIDDEN), "bf16"],
         w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
@@ -379,7 +379,7 @@ class Stage1_Specialized:
             cur_pos, write_len, pos_ids, cos_cache, sin_cache,
         )
 
-    @gqa_decode.specialize(DimVarRangePat("ctx_len", SPECIALIZE_T, ROPE_CONTEXT))
+    @gqa_decode.specialize(DimVarRangePat("ctx_len", SPECIALIZE_T + 1, ROPE_CONTEXT))
     def long_context(
         hidden: Tensor[(1, 1, HIDDEN), "bf16"],
         w_q: ConstTensor[(1, HIDDEN, HIDDEN), "bf16"],
