@@ -140,7 +140,7 @@ class SyncBarrier(Enum):
     GRID = "grid"
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class Participation:
     """Describe a contiguous participant interval and its barrier properties."""
 

@@ -186,6 +186,28 @@ def test_nested_dispatch_chain_three_levels() -> None:
     verify_module(list(out.functions))
 
 
+def test_variant_requires_single_specialization() -> None:
+    x = Var(type=_tensor((_S(),)), name="x")
+    variant = PrimFunction(
+        name="f$S$1_3", params=(x,), body=Sequential(body=()),
+        specializations=(DimVarRangePat("S", 1, 3), DimVarRangePat("S", 3, 5)),
+    )
+    fn = PrimFunction(name="f", params=(x,), body=Sequential(body=()), variants=(variant,))
+    with pytest.raises(Exception, match="one DimVarRangePat"):
+        verify_prim_function(fn)
+
+
+def test_variant_subject_must_be_in_parameters() -> None:
+    x = Var(type=_tensor((8,)), name="x")
+    variant = PrimFunction(
+        name="f$S$1_3", params=(x,), body=Sequential(body=()),
+        specializations=(DimVarRangePat("S", 1, 3),),
+    )
+    fn = PrimFunction(name="f", params=(x,), body=Sequential(body=()), variants=(variant,))
+    with pytest.raises(Exception, match="cannot be derived"):
+        verify_prim_function(fn)
+
+
 def test_empty_reachable_set_raises() -> None:
     inner = _prototype(
         "inner",

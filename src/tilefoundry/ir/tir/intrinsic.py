@@ -43,7 +43,7 @@ def intrinsic(fn):
 
     camel = _snake_to_camel(fn.__name__)
     fields = [(n, Expr) for n in param_names]
-    stmt_cls = make_dataclass(camel, fields, bases=(Stmt,), frozen=True)
+    stmt_cls = make_dataclass(camel, fields, bases=(Stmt,))
     stmt_cls.__module__ = fn.__module__
 
     def _verify(stmt, ctx):

@@ -4802,7 +4802,7 @@ class FunctionPattern(ElementPattern):
         )
         if specializations and isinstance(specializations[0], runtime.DimVarRangePat):
             function.name = _mangle_variant_name(function.name, (specializations[0],))
-        object.__setattr__(function, runtime.DISPLAY_NAME, match.captures["name"])
+        function._display_name = match.captures["name"]
         define = getattr(context.function.module_scope, "define", None)
         if callable(define):
             define(context.function.binding_name or match.captures["name"], function)

@@ -325,8 +325,8 @@ class _DeferredFunction:
             closure=self.closure,
         )
         if self.role is FunctionRole.VARIANT:
-            object.__setattr__(self.parsed, DISPLAY_NAME, self.binding_name)
-            object.__setattr__(self.parsed, "name", base.name)
+            self.parsed._display_name = self.binding_name
+            self.parsed.name = base.name
         elif self.dialect == "hir":
             if self.role is FunctionRole.CONVERTER:
                 self.parsed.name = f"{base.name}.converter[{self.key}]"

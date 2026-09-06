@@ -26,7 +26,7 @@ class CudaLaunchAttr(IntEnum):
     CLUSTER_DIMENSION = 3
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class LaunchAttrs:
     """Authored launch attribute selector/value pairs.
 

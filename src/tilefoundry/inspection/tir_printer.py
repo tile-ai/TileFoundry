@@ -241,6 +241,6 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
         lines.extend(("    " + line) if line else "" for line in block if " = DimVar(" not in line)
     declarations = list(dict.fromkeys(line for block in blocks for line in block if " = DimVar(" in line))
     if declarations:
-        lines = declarations + ["", ""] + [line for line in lines if line not in declarations]
+        lines = declarations + [""] + [line for line in lines if line not in declarations]
     header = ["from __future__ import annotations", "", *_merge_imports(tuple(imports)), "", ""]
     return "\n".join(header + lines) + "\n"
