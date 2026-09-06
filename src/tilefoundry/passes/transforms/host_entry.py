@@ -34,7 +34,7 @@ def insert_default_host_entry(module: Module) -> Module:
 
     Return a module whose entry is host-callable (CPU-target):
     - a CPU entry is already present → unchanged;
-    - the entry is a dispatch entry (host-only ``DispatchCall``) → retarget it
+    - the entry is a specialization prototype (host-only) → retarget it
       to CPU in place of the original (``module.entry`` name unchanged);
     - exactly one CUDA device kernel with no CPU entry → synthesize a CPU entry
       whose body is a single ``Launch`` of that kernel.

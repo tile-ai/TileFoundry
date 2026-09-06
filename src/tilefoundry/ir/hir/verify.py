@@ -192,7 +192,7 @@ def _collect_param_dim_vars(fn: Function) -> dict[str, tuple[int, int]]:
 
     Drives envelope ⊆ and unknown-name checks: specializations must
     anchor to a ``DimVar`` reachable from an *input* param, because
-    ``DispatchCall.subject`` lowers to ``ShapeOf(param, axis)`` and
+    Dispatch subjects lower to ``ShapeOf(param, axis)`` and
     can only reference a value the caller provides.
     """
     bounds: dict[str, tuple[int, int]] = {}
