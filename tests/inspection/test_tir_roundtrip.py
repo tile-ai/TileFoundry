@@ -9,7 +9,6 @@ import pytest
 
 import tilefoundry.codegen.cuda  # noqa: F401
 from tests._source import import_dsl
-from tests.ir.test_dispatch_call import _build_module as build_dispatch_functions
 from tilefoundry.codegen.cuda.context import CodegenContext
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Constant, Var
@@ -121,19 +120,3 @@ def test_tir_for_codegen_renders_nonconstant_bounds() -> None:
     context.emit_node(loop)
     assert "i_1 < n_2" in context.source()
 
-
-def test_lowered_dispatch_prints_readable_shape_and_fallback() -> None:
-    module = Module(
-        name="Dispatch",
-        functions=tuple(build_dispatch_functions()),
-        entry="main",
-    )
-
-    printed = as_script(module)
-
-    assert "with dispatch_call(" in printed
-    assert "shape_of(" in printed
-    assert "T.abort(message='')" in printed
-
-
-    return None

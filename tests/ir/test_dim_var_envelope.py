@@ -44,7 +44,7 @@ def test_a_signature_may_not_forge_its_dim_var_envelope() -> None:
 
     A specialization range stays inside the envelope of a parameter DimVar, and
     one name cannot carry two envelopes anywhere in a signature.
-    ``DispatchCall.subject`` lowers to ``ShapeOf(param, axis)``, so a DimVar only
+    Dispatch subjects lower to ``ShapeOf(param, axis)``, so a DimVar only
     in the return type is unreadable at runtime and remains unknown. The scan
     covers params, return type, and nested ``TupleType`` fields.
     """
