@@ -40,6 +40,10 @@ class PrimFunction(Stmt):
     def add_variant(self, variant: "PrimFunction") -> None:
         if getattr(self, "_sealed", False):
             raise RuntimeError(f"tir PrimFunction {self.name!r}: cannot add a specialization variant after sealing")
+        if variant.name == self.name and len(variant.specializations) == 1:
+            pat = variant.specializations[0]
+            if hasattr(pat, "dim_var"):
+                object.__setattr__(variant, "name", f"{self.name}${pat.dim_var}${pat.lo}_{pat.hi}")
         object.__setattr__(self, "variants", (*self.variants, variant))
 
 

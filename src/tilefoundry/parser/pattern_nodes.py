@@ -4771,7 +4771,14 @@ class FunctionPattern(ElementPattern):
             setattr(function, _AUTHORED_BODY_TYPE, None if body is None else body.type)
             if context.function.role is FunctionRole.VARIANT:
                 setattr(function, runtime.DISPLAY_NAME, match.captures["name"])
-                function.name = function_name
+                if getattr(context.function, "dialect", None) == "tir" and specializations:
+                    pat = specializations[0]
+                    if isinstance(pat, runtime.DimVarRangePat):
+                        function.name = f"{function_name}${pat.dim_var}${pat.lo}_{pat.hi}"
+                    else:
+                        function.name = function_name
+                else:
+                    function.name = function_name
             elif context.function.role is FunctionRole.CONVERTER:
                 function.name = f"{function_name}.converter[{converter}]"
             binding = context.function.binding_name or match.captures["name"]

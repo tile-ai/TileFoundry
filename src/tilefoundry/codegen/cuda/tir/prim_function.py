@@ -12,7 +12,6 @@ from dataclasses import dataclass
 
 from tilefoundry.codegen.cuda.context import CodegenContext
 from tilefoundry.codegen.cuda.tir.memory.tensor_view import render_shard_layout_value
-from tilefoundry.ir.hir.specialize import display_name
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import (
@@ -241,7 +240,7 @@ def _compute_kernel_fields(node: PrimFunction, ctx: CodegenContext) -> _KernelFi
 
     grid, block = _collect_mesh_dims(node.body)
 
-    codegen_name = display_name(node) or node.name
+    codegen_name = node.name
     return _KernelFields(
         kernel_name=codegen_name,
         internal_wrapper_name=_internal_wrapper_symbol(codegen_name),

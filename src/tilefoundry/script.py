@@ -326,7 +326,10 @@ class _DeferredFunction:
         )
         if self.role is FunctionRole.VARIANT:
             object.__setattr__(self.parsed, DISPLAY_NAME, self.binding_name)
-            object.__setattr__(self.parsed, "name", base.name)
+            if self.dialect == "tir" and hasattr(self.key, "dim_var"):
+                object.__setattr__(self.parsed, "name", f"{base.name}${self.key.dim_var}${self.key.lo}_{self.key.hi}")
+            else:
+                object.__setattr__(self.parsed, "name", base.name)
         elif self.dialect == "hir":
             if self.role is FunctionRole.CONVERTER:
                 self.parsed.name = f"{base.name}.converter[{self.key}]"

@@ -7,13 +7,10 @@ device module and shims.
 """
 from __future__ import annotations
 
-import dataclasses
-
 from tilefoundry.codegen.cpu.templates import render
 from tilefoundry.codegen.cuda.module import shim_symbol
 from tilefoundry.codegen.cuda.tir.prim_function import (
     _internal_wrapper_symbol,
-    _is_dispatch_entry_shape,
     _is_hidden_shape_scalar,
     _parse_shape_param_name,
 )
@@ -22,7 +19,6 @@ from tilefoundry.codegen.registry import CodeGenerator
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat
-from tilefoundry.ir.hir.specialize import display_name
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
@@ -171,7 +167,7 @@ def _shim_decl(fn: PrimFunction) -> str:
     hidden = _hidden_names(fn.params)
     tokens = ["void*" if _is_tensor(p, hidden) else "long long" for p in fn.params]
     tokens += _LAUNCH_ABI_DECL
-    return f'extern "C" void {shim_symbol(display_name(fn) or fn.name)}({", ".join(tokens)});'
+    return f'extern "C" void {shim_symbol(fn.name)}({", ".join(tokens)});'
 
 
 def emit_host_module(
@@ -218,8 +214,6 @@ def emit_host_module(
         shim_decls, body_lines, sig = _lower_dispatch(
             entry, module, callee_name=entry.name, subject=subject,
             variants=entry.variants, calls=calls)
-    elif _is_dispatch_entry_shape(entry):
-        shim_decls, body_lines, sig = _lower_dispatch_legacy(entry, body.body[0], module)
     else:
         raise ValueError(
             f"emit_host_module: entry {entry.name!r} body must be a single "
@@ -432,7 +426,7 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
     shim_decls: dict[str, str] = {}
     for idx, (variant, call) in enumerate(zip(variants, calls)):
         pat = variant.specializations[0]
-        variant_symbol = display_name(variant) or variant.name
+        variant_symbol = variant.name
         shim_decls[shim_symbol(variant_symbol)] = _shim_decl(variant)
         if len(call.args) != len(variant.params):
             raise ValueError(
@@ -477,71 +471,6 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
     )
     body_lines.append("}")
     return list(shim_decls.values()), body_lines, ", ".join(wrapper_tokens)
-
-def _lower_dispatch_legacy(entry, dispatch, module):
-    variants = [
-        dataclasses.replace(module.lookup(c.callable.name), specializations=pats)
-        for pats, c in zip(dispatch.case_patterns, dispatch.case_calls)
-    ]
-    return _lower_dispatch(
-        entry, module, callee_name=dispatch.callee_name,
-        subject=dispatch.subjects[0], variants=variants, calls=dispatch.case_calls,
-    )
-
-
-def _arg_descriptor(arg):
-    if isinstance(arg, Var):
-        return ("var", arg.name)
-    if isinstance(arg, ShapeOf):
-        return ("shape", arg.param.name, arg.axis)
-    return ("other", type(arg).__name__)
-
-
-def _param_contract(vp, v_hidden):
-    """Visible ABI contract of a variant parameter: kind + dtype + static shape structure + storage.
-
-    Visible ABI contract of a variant parameter: kind + dtype + (for
-    tensors) static shape structure + storage.
-    """
-    if _is_tensor(vp, v_hidden):
-        t = vp.type
-        return ("tensor", t.dtype, repr(t.shape), t.storage)
-    if vp.name in v_hidden:
-        return ("hidden", vp.type.dtype)
-    return ("scalar", vp.type.dtype, vp.type.storage)
-
-
-def _require_uniform_case_args(case_calls, module) -> None:
-    """v1: every dispatch case must expose the same visible ABI.
-
-    v1: every dispatch case must expose the same visible ABI — both the
-    forwarded host arguments AND each variant parameter's tensor/scalar
-    contract (kind, dtype, static shape, storage). The host entry does
-    placement once against the entry params, so a branch whose variant has a
-    different parameter contract would be a silent ABI/placement mismatch.
-    """
-    def _key(call):
-        variant = module.lookup(call.callable.name)
-        if len(call.args) != len(variant.params):
-            raise ValueError(
-                f"emit_host_module: dispatch call to {variant.name!r} passes "
-                f"{len(call.args)} args for {len(variant.params)} parameters"
-            )
-        v_hidden = _hidden_names(variant.params)
-        return tuple(
-            (_param_contract(vp, v_hidden), _arg_descriptor(arg))
-            for vp, arg in zip(variant.params, call.args)
-        )
-
-    keys = {module.lookup(c.callable.name).name: _key(c) for c in case_calls}
-    distinct = set(keys.values())
-    if len(distinct) > 1:
-        raise ValueError(
-            f"emit_host_module: dispatch variants {sorted(keys)} have differing "
-            f"visible parameter/argument contracts; v1 requires every variant to "
-            f"expose the same tensor ABI (kind / dtype / shape / storage)"
-        )
-
 
 def _reject_unsupported_config(cfg) -> None:
     if cfg.cluster is not None:
