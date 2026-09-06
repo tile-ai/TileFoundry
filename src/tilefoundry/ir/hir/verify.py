@@ -132,7 +132,7 @@ def _verify_partition(base: Function) -> None:
         if rlo != cursor:
             raise VerifyError(
                 f"hir Function {base.name!r}: variant ranges do not partition "
-                f"envelope [{lo}, {hi}) — gap or overlap at {rlo} (expected "
+                f"envelope [{lo}, {hi}] — gap or overlap at {rlo} (expected "
                 f"{cursor})"
             )
         cursor = rhi + 1

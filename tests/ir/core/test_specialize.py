@@ -46,11 +46,11 @@ class _MissingCalleeDimension:
     def pick(x: Tensor[(_CALL_N,), "f32"]) -> Tensor[(_CALL_N,), "f32"]:
         pass
 
-    @pick.specialize(DimVarRangePat("call_n", 1, _DISPATCH_BOUND))
+    @pick.specialize(DimVarRangePat("call_n", 1, _DISPATCH_BOUND - 1))
     def pick_small(x: Tensor[(_CALL_N,), "f32"]) -> Tensor[(_CALL_N,), "f32"]:
         return tf.add(x, x)
 
-    @pick.specialize(DimVarRangePat("call_n", _DISPATCH_BOUND, 1024))
+    @pick.specialize(DimVarRangePat("call_n", _DISPATCH_BOUND, 1023))
     def pick_big(x: Tensor[(_CALL_N,), "f32"]) -> Tensor[(_CALL_N,), "f32"]:
         return tf.add(tf.add(x, x), x)
 
@@ -69,11 +69,11 @@ class _NestedDispatch:
     def inner(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
         pass
 
-    @inner.specialize(DimVarRangePat("nested_n", 1, _DISPATCH_BOUND))
+    @inner.specialize(DimVarRangePat("nested_n", 1, _DISPATCH_BOUND - 1))
     def inner_small(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
         return tf.add(x, x)
 
-    @inner.specialize(DimVarRangePat("nested_n", _DISPATCH_BOUND, 1024))
+    @inner.specialize(DimVarRangePat("nested_n", _DISPATCH_BOUND, 1023))
     def inner_big(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
         return tf.add(tf.add(x, x), x)
 
@@ -81,11 +81,11 @@ class _NestedDispatch:
     def mid(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
         pass
 
-    @mid.specialize(DimVarRangePat("nested_n", 1, _DISPATCH_BOUND))
+    @mid.specialize(DimVarRangePat("nested_n", 1, _DISPATCH_BOUND - 1))
     def mid_small(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
         return inner(x)  # noqa: F821
 
-    @mid.specialize(DimVarRangePat("nested_n", _DISPATCH_BOUND, 1024))
+    @mid.specialize(DimVarRangePat("nested_n", _DISPATCH_BOUND, 1023))
     def mid_big(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
         return inner(x)  # noqa: F821
 
@@ -109,10 +109,10 @@ def test_a_size_selects_the_one_implementation_that_covers_it() -> None:
 
     assert short is not long
     assert [(p.dim_var, p.lo, p.hi) for p in short.specializations] == [
-        ("ctx_len", 0, SMALL_CONTEXT_T)
+        ("ctx_len", 0, SMALL_CONTEXT_T - 1)
     ]
     assert [(p.dim_var, p.lo, p.hi) for p in long.specializations] == [
-        ("ctx_len", SMALL_CONTEXT_T, MAX_CTX)
+        ("ctx_len", SMALL_CONTEXT_T, MAX_CTX - 1)
     ]
 
 

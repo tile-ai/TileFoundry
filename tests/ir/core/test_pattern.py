@@ -48,14 +48,14 @@ def test_dim_var_range_pat_contract() -> None:
     """
     p = DimVarRangePat("S", 1, 4)
     assert p.match(1) and p.match(3)
-    assert not p.match(4)
+    assert p.match(4)
     assert not p.match(0)
     assert not p.match(2.0)
     assert not p.match(True)
 
     single = DimVarRangePat("S", 3, 4)
     assert single.match(3)
-    assert not single.match(2) and not single.match(4)
+    assert not single.match(2) and single.match(4)
 
     with pytest.raises(ValueError, match="lo < hi"):
         DimVarRangePat("S", 4, 4)

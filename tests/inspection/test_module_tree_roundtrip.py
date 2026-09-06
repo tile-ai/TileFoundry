@@ -279,7 +279,7 @@ class _Dispatching:
     def dispatch(x: Tensor[(_N, 8), "f32"]) -> Tensor[(_N, 8), "f32"]:
         pass
 
-    @dispatch.specialize(DimVarRangePat("n_print", 1, 9))
+    @dispatch.specialize(DimVarRangePat("n_print", 1, 8))
     def child_dispatch(x: Tensor[(_N, 8), "f32"]) -> Tensor[(_N, 8), "f32"]:
         return leaf(x)  # noqa: F821
 
@@ -298,7 +298,7 @@ def test_a_child_call_in_a_specialization_body_survives_the_round_trip() -> None
     (imported_child,) = imported.modules
     (variant,) = imported.entry_function().variants
     assert imported.entry_function().body is None
-    assert variant.specializations == (DimVarRangePat("n_print", 1, 9),)
+    assert variant.specializations == (DimVarRangePat("n_print", 1, 8),)
     assert variant.body.target is imported_child.entry_function()
     assert len(variant.body.args) == 1
     assert [param.is_const for param in variant.body.target.params] == [False, True]

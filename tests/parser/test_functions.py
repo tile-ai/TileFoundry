@@ -110,7 +110,7 @@ def test_a_dispatch_prototype_uses_its_tuple_annotation_as_a_variant_contract() 
         ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
             pass
 
-        @root.specialize(DimVarRangePat("prototype_size", 1, 9))
+        @root.specialize(DimVarRangePat("prototype_size", 1, 8))
         def both(
             x: Tensor[(size,), "f32"],
         ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
@@ -139,7 +139,7 @@ def test_a_variant_body_must_satisfy_its_dispatch_return_contract() -> None:
             ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
                 pass
 
-            @root.specialize(DimVarRangePat("prototype_mismatch_size", 1, 9))
+            @root.specialize(DimVarRangePat("prototype_mismatch_size", 1, 8))
             def scalar(x: Tensor[(size,), "f32"]):
                 return x
 

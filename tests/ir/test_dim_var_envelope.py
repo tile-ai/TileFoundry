@@ -116,8 +116,8 @@ def test_variants_must_tile_the_envelope_exactly() -> None:
     disjoint. A gap leaves a runtime shape with no arm, and an overlap makes the
     selected arm depend on evaluation order.
     """
-    verify_function(_dispatch_proto("S_par_ok", (1, 8), [(1, 5), (5, 8)]))
-    verify_function(_dispatch_proto("S_par_pt", (1, 8), [(1, 4), (4, 5), (5, 8)]))
+    verify_function(_dispatch_proto("S_par_ok", (1, 8), [(1, 4), (5, 7)]))
+    verify_function(_dispatch_proto("S_par_pt", (1, 8), [(1, 3), (4, 4), (5, 7)]))
 
     with pytest.raises(VerifyError, match="gap or overlap at 4"):
         verify_function(_dispatch_proto("S_par_ov", (1, 8), [(1, 5), (4, 8)]))
