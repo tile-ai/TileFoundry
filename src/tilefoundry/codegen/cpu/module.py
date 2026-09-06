@@ -20,7 +20,6 @@ from tilefoundry.codegen.registry import CodeGenerator
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat
-from tilefoundry.ir.tir.abort import Abort
 from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -235,8 +234,7 @@ def _lower_launch(entry: PrimFunction, evaluate, module):
         p, axis = loc
         subject = ShapeOf(type=TensorType.scalar(DType.i32), param=p, axis=axis)
         calls = tuple(symbol_call(v, tuple(evaluate.args[1:])) for v in device_fn.variants)
-        dispatch = DispatchCall(device_fn.name, (subject,), tuple((v.specializations for v in device_fn.variants)), calls, Sequential(body=(Evaluate(callable=Abort(message=""), args=()),)))
-        return _lower_dispatch(entry, dispatch, module)
+        return _lower_dispatch(entry, module, callee_name=device_fn.name, subject=subject, variants=device_fn.variants, calls=calls)
     dev_params = device_fn.params
     _reject_unsupported_config(launch_op)
 
@@ -356,27 +354,23 @@ def _lower_launch(entry: PrimFunction, evaluate, module):
     return [_shim_decl(device_fn)], body_lines, ", ".join(wrapper_tokens)
 
 
-def _lower_dispatch(entry: PrimFunction, dispatch: DispatchCall, module):
-    if len(dispatch.subjects) != 1 or not isinstance(dispatch.subjects[0], ShapeOf):
+def _lower_dispatch(entry: PrimFunction, dispatch_or_module, module=None, *, callee_name=None, subject=None, variants=None, calls=None):
+    dispatch = dispatch_or_module if isinstance(dispatch_or_module, DispatchCall) else None
+    module = module or dispatch_or_module
+    if dispatch is not None:
+        subject = dispatch.subjects[0]
+        variants = [module.lookup(c.callable.name) for c in dispatch.case_calls]
+        calls = dispatch.case_calls
+    if not isinstance(subject, ShapeOf):
         raise NotImplementedError(
             "emit_host_module: dispatch v1 expects exactly one ShapeOf subject"
         )
-    for pats in dispatch.case_patterns:
-        if len(pats) != 1 or not isinstance(pats[0], DimVarRangePat):
+    for variant in variants:
+        if len(variant.specializations) != 1 or not isinstance(variant.specializations[0], DimVarRangePat):
             raise NotImplementedError(
                 "emit_host_module: dispatch v1 expects exactly one "
                 "DimVarRangePat per case"
             )
-    fb = dispatch.fallback
-    if not (
-        isinstance(fb, Sequential)
-        and len(fb.body) == 1
-        and isinstance(fb.body[0], Evaluate)
-        and isinstance(fb.body[0].callable, Abort)
-    ):
-        raise NotImplementedError(
-            "emit_host_module: dispatch v1 expects fallback Sequential((Abort,))"
-        )
 
     entry_params = entry.params
     entry_names = {p.name for p in entry_params}
@@ -409,13 +403,12 @@ def _lower_dispatch(entry: PrimFunction, dispatch: DispatchCall, module):
         f"static_cast<long long>({_host_name(subj)}.shape()[{subj.axis}]);"
     )
 
-    _require_uniform_case_args(dispatch.case_calls, module)
+    _require_uniform_case_args(calls, module)
     shim_decls: dict[str, str] = {}
-    for idx, (pats, call) in enumerate(
-        zip(dispatch.case_patterns, dispatch.case_calls)
-    ):
-        pat = pats[0]
-        variant = module.lookup(call.callable.name)
+    for idx, (variant, call) in enumerate(zip(variants, calls)):
+        pat = variant.specializations[0]
+        if dispatch is not None:
+            variant = module.lookup(call.callable.name)
         if variant is None:
             variant = next(v for f in module.functions if isinstance(f, PrimFunction) for v in f.variants if v.name == call.callable.name)
         shim_decls[shim_symbol(variant.name)] = _shim_decl(variant)
