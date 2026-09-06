@@ -122,7 +122,7 @@ def test_variants_must_tile_the_envelope_exactly() -> None:
     with pytest.raises(VerifyError, match="gap or overlap at 4"):
         verify_function(_dispatch_proto("S_par_ov", (1, 8), [(1, 5), (4, 8)]))
 
-    with pytest.raises(VerifyError, match="gap or overlap at 5"):
+    with pytest.raises(VerifyError, match="gap or overlap at 6"):
         verify_function(_dispatch_proto("S_par_gap", (1, 8), [(1, 3), (5, 8)]))
 
     with pytest.raises(VerifyError, match="gap or overlap at 5"):
