@@ -41,7 +41,6 @@ from tilefoundry.visitor_registry import verify_stmt_registry
 from tilefoundry.visitor_registry.contexts import VerifyContext
 
 from .abort import Abort
-from .dispatch import DispatchCall
 from .launch import Launch
 from .memory import AllocTensor as AllocTensorOp
 from .prim_function import PrimFunction
@@ -151,9 +150,6 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
             scope.pop()
             return
         case Return():
-            return
-        case DispatchCall():
-            _verify_dispatch_call(stmt, fn, module_fn_map, ctx)
             return
         case Evaluate():
             if isinstance(stmt.callable, Launch):
@@ -578,9 +574,6 @@ def _iter_all_stmts(body):
         elif isinstance(s, If):
             stack.append(s.then_body)
             stack.append(s.else_body)
-        elif isinstance(s, DispatchCall):
-            stack.extend(s.case_calls)
-            stack.append(s.fallback)
 
 
 def verify_module(fns) -> None:
