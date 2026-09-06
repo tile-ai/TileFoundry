@@ -183,9 +183,9 @@ def _function_block(fn: PrimFunction) -> list[str]:
     lines.append(f"def {_binding_name(fn.name)}({params}):")
     body = TirPrinter(context=ctx, indent="    ").visit(fn.body)
     lines.extend(body or ["    pass"])
-    for variant in fn.variants:
+    if fn.variants:
         ctx.use(PythonExpr(("from tilefoundry.ir.core.pattern import DimVarRangePat",), "DimVarRangePat"))
-        ctx.use(PythonExpr(("from tilefoundry.ir.types.dim import DimVar",), "DimVar"))
+    for variant in fn.variants:
         pat = variant.specializations[0]
         lines.append("")
         lines.append(f"@{_binding_name(fn.name)}.specialize({TirPrinter(context=ctx).render_pattern(pat, ctx)})")
