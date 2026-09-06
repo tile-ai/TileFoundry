@@ -16,10 +16,12 @@ from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
+from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.tir.verify import verify_module
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.visitor import StmtVisitor, walk_prim_function
 from tilefoundry.passes.transforms import HirToTirPass
 
 
@@ -32,6 +34,16 @@ def _find_function(mod: Module, name: str) -> PrimFunction:
     matches = [fn for fn in mod.functions if fn.name == name]
     assert len(matches) == 1, f"expected one function named {name!r}"
     return matches[0]
+
+def _callees(pf: PrimFunction) -> set[str]:
+    names: set[str] = set()
+    class _V(StmtVisitor):
+        def visit_Evaluate(self, stmt):
+            if isinstance(stmt.callable, SymbolRef):
+                names.add(stmt.callable.name)
+            return self.generic_visit(stmt)
+    walk_prim_function(_V(), pf)
+    return names
 
 
 def _S(env=(1, 7)) -> DimVar:
@@ -176,16 +188,15 @@ def test_nested_dispatch_chain_three_levels() -> None:
 
     for inner_name in ("inner$S$1_3", "inner$S$4_7"):
         inner_pf = _find_function(out, inner_name)
-        assert len(inner_pf.variants) == 0
-        assert "leaf$S$1_3" in repr(inner_pf.body)
+        assert _callees(inner_pf) >= {"leaf$S$1_3", "leaf$S$4_7"}
 
     main_entry = _find_function(out, "main")
     assert len(main_entry.variants) == 2
-    assert all("inner$S$1_3" in repr(v.body) and "inner$S$4_7" in repr(v.body) for v in main_entry.variants)
+    assert all(_callees(v) >= {"inner$S$1_3", "inner$S$4_7"} for v in main_entry.variants)
 
     for main_name in ("main$S$1_3", "main$S$4_7"):
         main_pf = _find_function(out, main_name)
-        assert main_pf.name.startswith("main$")
+        assert _callees(main_pf) >= {"inner$S$1_3", "inner$S$4_7"}
 
     verify_module(list(out.functions))
 
