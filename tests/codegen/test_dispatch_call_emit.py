@@ -81,4 +81,4 @@ def test_dispatch_call_emits_if_chain_and_trap_fallback() -> None:
     assert "__tilefoundry_main__S__1_3_host(x, x_shape_1);" in src
     assert "__tilefoundry_main__S__4_7_host(x, x_shape_1);" in src
     assert "} else {" in src
-    assert "assert(false);" in src
+    assert "__trap();" in src
