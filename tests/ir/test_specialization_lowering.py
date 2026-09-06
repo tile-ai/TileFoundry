@@ -151,8 +151,7 @@ def test_sub_call_group_lowers_to_variants() -> None:
     assert len(inner_pf.variants) == 2
     assert {v.name for v in inner_pf.variants} == {"inner$S$1_3", "inner$S$4_7"}
     caller = _find_function(out, "main")
-    caller_text = repr(caller.body)
-    assert "inner$S$1_3" in caller_text and "inner$S$4_7" in caller_text
+    assert _callees(caller) >= {"inner$S$1_3", "inner$S$4_7"}
     verify_module(list(out.functions))
 
 
