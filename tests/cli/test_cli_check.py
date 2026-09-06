@@ -532,7 +532,7 @@ def test_several_extents_check_the_dispatch_and_name_the_implementation(capsys, 
         )
         == 0
     )
-    assert "variant:   ctx_split_kv  ctx_len$4096_262144" in capsys.readouterr().out
+    assert "variant:   ctx_split_kv  ctx_len$4096_262143" in capsys.readouterr().out
 
 
 def test_an_extent_outside_the_envelope_is_a_dispatch_hole_not_a_pass(capsys) -> None:
