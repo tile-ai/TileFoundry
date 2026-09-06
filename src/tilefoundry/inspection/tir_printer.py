@@ -109,7 +109,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
                 if p.kind == "attribute":
                     value = getattr(target, p.name, None)
                     if value is not None:
-                        args.append(f"{p.name}={self.render_value(value, self.context)}")
+                        args.append(f"{p.name}={self.render_value(value, self.context, self.indent + '    ')}")
             self.context.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
             return f"T.{name}({', '.join(args)})"
         return self.render_value(expr, self.context)
@@ -160,7 +160,7 @@ def _print_op_evaluate(stmt: Evaluate, printer: TirPrinter) -> list[str]:
         value = getattr(target, p.name, None)
         if value is None:
             continue
-        rendered = printer.render_value(value, printer.context)
+        rendered = printer.render_value(value, printer.context, printer.indent + "    ")
         attrs.append(rendered if op_name == "sync" and p.name == "mesh" else f"{p.name}={rendered}")
     rendered_args = [printer._expr(arg) for arg in args]
     return [f"{indent}{printer._expr(target)}({', '.join(rendered_args + attrs)})"]
@@ -168,7 +168,10 @@ def _print_op_evaluate(stmt: Evaluate, printer: TirPrinter) -> list[str]:
 
 def _function_block(fn: PrimFunction) -> list[str]:
     ctx = TirPrintContext()
-    target = ctx.use(fn.target.to_python())
+    target = fn.target.to_python()
+    target_import = "from tilefoundry.target import CpuTarget, CudaTarget"
+    ctx.use(PythonExpr((target_import,), ""))
+    target = target.text
     ctx.use(PythonExpr(("from tilefoundry import prim_func",), "prim_func"))
     ctx.use(PythonExpr(("from tilefoundry.dsl import Tensor",), "Tensor"))
     dim_vars = {d.name: d for p in fn.params if isinstance(p.type, TensorType) for d in p.type.shape if hasattr(d, "name")}
