@@ -26,7 +26,8 @@ from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import Evaluate, Sequential
-from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.tir.symbol_ref import symbol_call
+from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimFloorDiv,
@@ -221,6 +222,21 @@ CPU_CODE_GENERATOR = CodeGenerator(emit_host_module)
 def _lower_launch(entry: PrimFunction, evaluate, module):
     launch_op = evaluate.callable
     device_fn = module.lookup(evaluate.args[0].name)
+    if device_fn.variants:
+        dim_name = device_fn.variants[0].specializations[0].dim_var
+        loc = next((
+            (p, axis) for p in device_fn.params
+            if isinstance(p.type, TensorType)
+            for axis, dim in enumerate(p.type.shape)
+            if getattr(dim, "name", None) == dim_name
+        ), None)
+        if loc is None:
+            raise ValueError(f"cannot derive specialization subject {dim_name!r}")
+        p, axis = loc
+        subject = ShapeOf(type=TensorType.scalar(DType.i32), param=p, axis=axis)
+        calls = tuple(symbol_call(v, tuple(evaluate.args[1:])) for v in device_fn.variants)
+        dispatch = DispatchCall(device_fn.name, (subject,), tuple((v.specializations for v in device_fn.variants)), calls, Sequential(body=(Evaluate(callable=Abort(message=""), args=()),)))
+        return _lower_dispatch(entry, dispatch, module)
     dev_params = device_fn.params
     _reject_unsupported_config(launch_op)
 
@@ -400,6 +416,8 @@ def _lower_dispatch(entry: PrimFunction, dispatch: DispatchCall, module):
     ):
         pat = pats[0]
         variant = module.lookup(call.callable.name)
+        if variant is None:
+            variant = next(v for f in module.functions if isinstance(f, PrimFunction) for v in f.variants if v.name == call.callable.name)
         shim_decls[shim_symbol(variant.name)] = _shim_decl(variant)
         if len(call.args) != len(variant.params):
             raise ValueError(
