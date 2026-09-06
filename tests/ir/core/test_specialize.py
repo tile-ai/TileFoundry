@@ -30,7 +30,7 @@ from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.target import CudaTarget
 
 ENTRY = GqaOnline.entry_function()
-STEADY = {"ctx_len": SMALL_CONTEXT_T}
+STEADY = {"ctx_len": SMALL_CONTEXT_T + NUM_SPLITS}
 _LOOP_CTX = DimVar("loop_ctx", 1, 4097)
 _CALL_M = DimVar("call_m", 1, 17)
 _CALL_N = DimVar("call_n", 1, 1024)
@@ -104,21 +104,21 @@ def test_the_model_is_dynamic_in_its_context_length_alone() -> None:
 
 
 def test_a_size_selects_the_one_implementation_that_covers_it() -> None:
-    short = variant_for(ENTRY, {"ctx_len": SMALL_CONTEXT_T - 1})
-    long = variant_for(ENTRY, STEADY)
+    short = variant_for(ENTRY, {"ctx_len": SMALL_CONTEXT_T})
+    long = variant_for(ENTRY, {"ctx_len": SMALL_CONTEXT_T + 1})
 
     assert short is not long
     assert [(p.dim_var, p.lo, p.hi) for p in short.specializations] == [
-        ("ctx_len", 0, SMALL_CONTEXT_T - 1)
+        ("ctx_len", 0, SMALL_CONTEXT_T)
     ]
     assert [(p.dim_var, p.lo, p.hi) for p in long.specializations] == [
-        ("ctx_len", SMALL_CONTEXT_T, MAX_CTX - 1)
+        ("ctx_len", SMALL_CONTEXT_T + 1, MAX_CTX)
     ]
 
 
 def test_a_size_no_implementation_covers_is_refused() -> None:
     with pytest.raises(SpecializationError, match="no variant covering"):
-        variant_for(ENTRY, {"ctx_len": MAX_CTX})
+        variant_for(ENTRY, {"ctx_len": MAX_CTX + 1})
 
 
 def test_choosing_an_implementation_needs_the_dimension_it_turns_on() -> None:
@@ -207,10 +207,11 @@ def test_a_derived_extent_follows_the_dimension_it_derives_from() -> None:
     concrete = specialize_function(ENTRY, STEADY)
     shapes = {tuple(param.type.shape) for param in concrete.params}
 
-    assert (1, SMALL_CONTEXT_T, 4, 128) in shapes
+    steady_context = STEADY["ctx_len"]
+    assert (1, steady_context, 4, 128) in shapes
     assert all(isinstance(extent, int) for param in concrete.params for extent in param.type.shape)
 
-    assert SMALL_CONTEXT_T % NUM_SPLITS == 0
+    assert steady_context % NUM_SPLITS == 0
 
 
 def test_the_same_request_gives_the_same_answer_every_time() -> None:
@@ -279,7 +280,7 @@ def test_a_derived_extent_reaches_the_operation_that_states_it() -> None:
     Nothing supplies it, and it has to arrive inside the callee's own reshape.
     """
     concrete = specialize_function(ENTRY, STEADY)
-    block = SMALL_CONTEXT_T // NUM_SPLITS
+    block = STEADY["ctx_len"] // NUM_SPLITS
 
     targets = _reshape_targets(concrete)
     assert targets, "no reshape reached; the walk found nothing to check"
