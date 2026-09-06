@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from tilefoundry.target.base import Target, register_target
 from tilefoundry.target.services import CodeGenerator
+from tilefoundry.utils.python_source import PythonExpr
 
 
 @register_target
@@ -14,6 +15,9 @@ class CpuTarget(Target):
     """Identify the CPU host backend."""
 
     name = "cpu"
+
+    def to_python(self) -> PythonExpr:
+        return PythonExpr(("from tilefoundry.target import CpuTarget",), "CpuTarget()")
 
     def _python_import_module(self) -> str:
         if type(self) is CpuTarget:

@@ -168,15 +168,12 @@ def _print_op_evaluate(stmt: Evaluate, printer: TirPrinter) -> list[str]:
 
 def _function_block(fn: PrimFunction) -> list[str]:
     ctx = TirPrintContext()
-    target = fn.target.to_python()
-    target_import = "from tilefoundry.target import CpuTarget, CudaTarget"
-    ctx.use(PythonExpr((target_import,), ""))
-    target = target.text
+    target = ctx.use(fn.target.to_python())
     ctx.use(PythonExpr(("from tilefoundry import prim_func",), "prim_func"))
     ctx.use(PythonExpr(("from tilefoundry.dsl import Tensor",), "Tensor"))
     dim_vars = {d.name: d for p in fn.params if isinstance(p.type, TensorType) for d in p.type.shape if hasattr(d, "name")}
     if dim_vars:
-        ctx.use(PythonExpr(("from tilefoundry.ir.types.dim import DimVar",), "DimVar"))
+        ctx.use(PythonExpr(("from tilefoundry.dsl import DimVar",), "DimVar"))
     lines = [f'_{d.name} = DimVar("{d.name}", {d.lo}, {d.hi})' for d in dim_vars.values()]
     lines.append("@prim_func(target=" + target + ")")
     params = ", ".join(
