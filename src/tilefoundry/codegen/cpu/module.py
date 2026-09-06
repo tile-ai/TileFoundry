@@ -453,7 +453,7 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
             )
         shim_args += [str(d) for d in (*grid, *block, 0)]
         shim_args.append("nullptr")
-        pred = f"(({pat.lo} <= {s}) && ({s} < {pat.hi}))"
+        pred = f"(({pat.lo} <= {s}) && ({s} <= {pat.hi}))"
         prefix = "if" if idx == 0 else "} else if"
         body_lines.append(f"{prefix} ({pred}) {{")
         body_lines.append(

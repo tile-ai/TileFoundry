@@ -763,7 +763,7 @@ class _Lowerer:
             if not isinstance(pat, DimVarRangePat):
                 continue
 
-            if pat.lo < c_hi and c_lo < pat.hi:
+            if pat.lo <= c_hi and c_lo <= pat.hi:
                 reachable.append((variant, pat))
         if not reachable:
             raise TypeError(
@@ -866,7 +866,7 @@ class _Lowerer:
             )
             upper = Call(
                 type=scalar_bool,
-                target=ScalarBinary(kind=BinaryKind.LT),
+                target=ScalarBinary(kind=BinaryKind.LE),
                 args=(subject, hi),
             )
             pred = Call(

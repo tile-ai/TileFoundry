@@ -16,7 +16,7 @@ class TirSquare:
     def square_device(x: Tensor[(_S,), "f32"]):
         pass
 
-    @square_device.specialize(DimVarRangePat("S", 1, 128))
+    @square_device.specialize(DimVarRangePat("S", 1, 127))
     def square_small(x: Tensor[(_S,), "f32"]):
         with Mesh((Topology("thread", 128),), Layout((128,), (1,))) as thread:
             view = T.tensor_view(x, layout=ShardLayout(layout=Layout(shape=(128,), strides=(1,)), attrs=(S(0),), mesh=Mesh(topologies=(Topology(name="thread", size=128),), layout=Layout(shape=(128,), strides=(1,)), names=())))
@@ -34,7 +34,7 @@ class TirSquare:
                     T.copy(reg, view)
             T.sync(thread)
 
-    @square_device.specialize(DimVarRangePat("S", 128, 256))
+    @square_device.specialize(DimVarRangePat("S", 128, 255))
     def square_large(x: Tensor[(_S,), "f32"]):
         with Mesh((Topology("thread", 128),), Layout((128,), (1,))) as thread:
             view = T.tensor_view(x, layout=ShardLayout(layout=Layout(shape=(128,), strides=(1,)), attrs=(S(0),), mesh=Mesh(topologies=(Topology(name="thread", size=128),), layout=Layout(shape=(128,), strides=(1,)), names=())))

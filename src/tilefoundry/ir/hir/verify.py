@@ -134,11 +134,11 @@ def _verify_partition(base: Function) -> None:
                 f"envelope [{lo}, {hi}) — gap or overlap at {rlo} (expected "
                 f"{cursor})"
             )
-        cursor = rhi
-    if cursor != hi:
+        cursor = rhi + 1
+    if cursor != hi + 1:
         raise VerifyError(
             f"hir Function {base.name!r}: variant ranges cover "
-            f"[{lo}, {cursor}) but the envelope is [{lo}, {hi})"
+            f"[{lo}, {cursor - 1}] but the envelope is [{lo}, {hi}]"
         )
 
 

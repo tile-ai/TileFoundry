@@ -74,7 +74,7 @@ class AndPat(Pattern):
 
 @dataclass(frozen=True)
 class DimVarRangePat(Pattern):
-    """Match ``lo <= value < hi`` for a named specialization dimension.
+    """Match ``lo <= value <= hi`` for a named specialization dimension.
 
     ``dim_var`` identifies the runtime shape source but is not inspected by
     :meth:`match`, which receives only the scalar value.
@@ -95,16 +95,16 @@ class DimVarRangePat(Pattern):
             raise TypeError(f"DimVarRangePat: lo must be int, got {type(self.lo).__name__}")
         if not isinstance(self.hi, int) or isinstance(self.hi, bool):
             raise TypeError(f"DimVarRangePat: hi must be int, got {type(self.hi).__name__}")
-        if self.lo >= self.hi:
+        if self.lo > self.hi:
             raise ValueError(
                 f"DimVarRangePat({self.dim_var!r}, {self.lo}, {self.hi}): "
-                f"requires lo < hi (half-open [lo, hi); single point is [k, k+1))"
+                f"requires lo <= hi (closed [lo, hi])"
             )
 
     def match(self, subject: Any) -> bool:
         if isinstance(subject, bool) or not isinstance(subject, int):
             return False
-        return self.lo <= subject < self.hi
+        return self.lo <= subject <= self.hi
 
 
 def locate_dim_var(params: tuple, name: str) -> tuple[int, int] | None:

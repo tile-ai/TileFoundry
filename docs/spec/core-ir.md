@@ -632,16 +632,15 @@ class DimVarRangePat(Pattern):
 
 - constraints:
   - This is the per-variant sub-range for a named `DimVar`; `match(v)` is
-    `lo <= v < hi` and ignores `dim_var`.
+    `lo <= v <= hi` and ignores `dim_var`.
   - `dim_var` MUST be a non-empty `str` — the name of the `DimVar` the
     range applies to. The lowering resolves it to a runtime
     `ShapeOf(param, axis)` by walking the enclosing function signature.
   - `lo` and `hi` MUST be plain `int`s (`bool` is rejected).
-  - The interval is half-open `[lo, hi)` (`lo` inclusive, `hi`
-    exclusive); construction MUST satisfy `lo < hi`. A single-point
+  - The interval is closed `[lo, hi]`; construction MUST satisfy `lo <= hi`. A single-point
     range is `[k, k+1)`.
   - `match(value)` returns `True` for an `int` value `v` iff
-    `lo <= v < hi`. The `dim_var` field does not participate in
+    `lo <= v <= hi`. The `dim_var` field does not participate in
     `match`.
   - The pattern references a `DimVar` by name only. The envelope of
     the named dim lives on the `DimVar(name, lo, hi)` itself (see

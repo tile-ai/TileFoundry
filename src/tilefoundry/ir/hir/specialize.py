@@ -144,7 +144,7 @@ def _covers(fn: Function, variant: Function, dims: Mapping[str, int]) -> bool:
                 f"{fn.name!r} selects a variant on {pattern.dim_var!r}, which "
                 f"was not given a size; state it to choose an implementation"
             )
-        if not pattern.lo <= dims[pattern.dim_var] < pattern.hi:
+        if not pattern.lo <= dims[pattern.dim_var] <= pattern.hi:
             return False
     return True
 
@@ -152,7 +152,7 @@ def _covers(fn: Function, variant: Function, dims: Mapping[str, int]) -> bool:
 def _coverage(fn: Function) -> str:
     return "; ".join(
         ", ".join(
-            f"{pattern.dim_var} in [{pattern.lo}, {pattern.hi})"
+            f"{pattern.dim_var} in [{pattern.lo}, {pattern.hi}]"
             for pattern in variant.specializations
             if isinstance(pattern, DimVarRangePat)
         )
