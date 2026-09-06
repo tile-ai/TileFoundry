@@ -17,6 +17,8 @@ class CpuTarget(Target):
     name = "cpu"
 
     def to_python(self) -> PythonExpr:
+        if type(self) is not CpuTarget:
+            return super().to_python()
         return PythonExpr(("from tilefoundry.target import CpuTarget",), "CpuTarget()")
 
     def _python_import_module(self) -> str:
