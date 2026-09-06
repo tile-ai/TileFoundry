@@ -174,7 +174,7 @@ def _function_block(fn: PrimFunction) -> list[str]:
     dim_vars = {d.name: d for p in fn.params if isinstance(p.type, TensorType) for d in p.type.shape if hasattr(d, "name")}
     if dim_vars:
         ctx.use(PythonExpr(("from tilefoundry.ir.types.dim import DimVar",), "DimVar"))
-    lines = [f'_N = DimVar("{d.name}", {d.lo}, {d.hi})' for d in dim_vars.values()]
+    lines = [f'_{d.name} = DimVar("{d.name}", {d.lo}, {d.hi})' for d in dim_vars.values()]
     lines.append("@prim_func(target=" + target + ")")
     params = ", ".join(
         f"{p.name}: {TirPrinter(context=ctx).render_value(p.type, ctx) if isinstance(p.type, TensorType) else repr(p.type)}"
@@ -238,8 +238,8 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
     for index, block in enumerate(blocks):
         if index:
             lines.append("")
-        lines.extend("    " + line if line and not line.startswith("_N = DimVar") else line for line in block if not line.startswith("_N = DimVar"))
-    declarations = [line for block in blocks for line in block if line.startswith("_N = DimVar")]
+        lines.extend("    " + line for line in block if " = DimVar(" not in line)
+    declarations = [line for block in blocks for line in block if " = DimVar(" in line]
     if declarations:
         lines = declarations + [line for line in lines if line not in declarations]
     header = ["from __future__ import annotations", "", *_merge_imports(tuple(imports)), "", ""]

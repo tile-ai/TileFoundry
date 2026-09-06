@@ -326,10 +326,7 @@ class _DeferredFunction:
         )
         if self.role is FunctionRole.VARIANT:
             object.__setattr__(self.parsed, DISPLAY_NAME, self.binding_name)
-            if self.dialect == "tir" and hasattr(self.key, "dim_var"):
-                object.__setattr__(self.parsed, "name", f"{base.name}${self.key.dim_var}${self.key.lo}_{self.key.hi}")
-            else:
-                object.__setattr__(self.parsed, "name", base.name)
+            object.__setattr__(self.parsed, "name", base.name)
         elif self.dialect == "hir":
             if self.role is FunctionRole.CONVERTER:
                 self.parsed.name = f"{base.name}.converter[{self.key}]"
@@ -457,7 +454,10 @@ def _specialize(self: HirFunction, pattern: Any):
             )
 
         object.__setattr__(ir, DISPLAY_NAME, fn_inner.__name__)
-        object.__setattr__(ir, "name", self.name)
+        if dialect == "tir" and hasattr(pat, "dim_var"):
+            object.__setattr__(ir, "name", f"{self.name}${pat.dim_var}${pat.lo}_{pat.hi}")
+        else:
+            object.__setattr__(ir, "name", self.name)
         if dialect == "hir":
             verify_function(ir)
         else:

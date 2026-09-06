@@ -4799,6 +4799,9 @@ class FunctionPattern(ElementPattern):
             **kwargs,
             specializations=specializations,
         )
+        if specializations and isinstance(specializations[0], runtime.DimVarRangePat):
+            object.__setattr__(function, "name", f"{function.name}${specializations[0].dim_var}${specializations[0].lo}_{specializations[0].hi}")
+        object.__setattr__(function, runtime.DISPLAY_NAME, match.captures["name"])
         define = getattr(context.function.module_scope, "define", None)
         if callable(define):
             define(context.function.binding_name or match.captures["name"], function)
