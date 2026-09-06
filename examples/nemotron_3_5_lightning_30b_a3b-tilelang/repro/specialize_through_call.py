@@ -42,14 +42,14 @@ class ToCallee:
     def pick(x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
         pass
 
-    @pick.specialize(DimVarRangePat("n", 1, BOUND))
+    @pick.specialize(DimVarRangePat("n", 1, BOUND - 1))
     def pick_small(x: Tensor[(1, D), "f32"],
                    k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
             xs = tf.reshard(x, (1, D @ m.w), "smem")
             return tf.reshard(xs + xs, (1, D), "gmem")
 
-    @pick.specialize(DimVarRangePat("n", BOUND, 1024))
+    @pick.specialize(DimVarRangePat("n", BOUND, 1023))
     def pick_big(x: Tensor[(1, D), "f32"],
                  k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
@@ -69,14 +69,14 @@ class Direct:
     def pick(x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
         pass
 
-    @pick.specialize(DimVarRangePat("n", 1, BOUND))
+    @pick.specialize(DimVarRangePat("n", 1, BOUND - 1))
     def pick_small(x: Tensor[(1, D), "f32"],
                    k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
             xs = tf.reshard(x, (1, D @ m.w), "smem")
             return tf.reshard(xs + xs, (1, D), "gmem")
 
-    @pick.specialize(DimVarRangePat("n", BOUND, 1024))
+    @pick.specialize(DimVarRangePat("n", BOUND, 1023))
     def pick_big(x: Tensor[(1, D), "f32"],
                  k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
@@ -97,7 +97,7 @@ def to_entry():
         def run(x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]):
             pass
 
-        @run.specialize(DimVarRangePat("n", 1, BOUND))
+        @run.specialize(DimVarRangePat("n", 1, BOUND - 1))
         def run_small(x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]):
             with Mesh(("cta",), layout=(W,), names=("w",)) as m:
                 xs = tf.reshard(x, (1, D @ m.w), "smem")

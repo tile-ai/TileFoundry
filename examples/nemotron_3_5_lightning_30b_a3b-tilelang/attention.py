@@ -388,7 +388,7 @@ class AttnDispatch:
     ) -> Tensor[(1, QP), _DT]:
         pass
 
-    @attend.specialize(DimVarRangePat("ctx_full", 0, CROSSOVER))
+    @attend.specialize(DimVarRangePat("ctx_full", 0, CROSSOVER - 1))
     def attend_short(
         qg: Tensor[(1, HKV, GQA, DH), _DT],
         k_cache: Tensor[(1, CF, HKV, DH), _DT],
@@ -398,7 +398,7 @@ class AttnDispatch:
     ) -> Tensor[(1, QP), _DT]:
         return by_head_worker(qg, k_cache, v_cache, k_tail, v_tail)
 
-    @attend.specialize(DimVarRangePat("ctx_full", CROSSOVER, CAP + 1))
+    @attend.specialize(DimVarRangePat("ctx_full", CROSSOVER, CAP))
     def attend_long(
         qg: Tensor[(1, HKV, GQA, DH), _DT],
         k_cache: Tensor[(1, CF, HKV, DH), _DT],

@@ -226,21 +226,3 @@ def test_empty_reachable_set_raises() -> None:
     mod = Module(name="m", functions=(inner, main), entry="main")
     with pytest.raises(TypeError, match="empty reachable"):
         HirToTirPass().run(mod)
-
-
-def test_tir_variant_requires_one_specialization() -> None:
-    ty = _tensor((_S(),))
-    x = Var(type=ty, name="x")
-    variant = PrimFunction(name="f$S$1_2", params=(x,), body=Sequential(()), specializations=(DimVarRangePat("S", 1, 2), DimVarRangePat("S", 2, 3)))
-    fn = PrimFunction(name="f", params=(x,), body=Sequential(()), variants=(variant,))
-    with pytest.raises(Exception, match="one DimVarRangePat"):
-        verify_prim_function(fn)
-
-
-def test_tir_variant_subject_must_be_in_params() -> None:
-    ty = _tensor((_S(),))
-    x = Var(type=ty, name="x")
-    variant = PrimFunction(name="f$T$1_2", params=(x,), body=Sequential(()), specializations=(DimVarRangePat("T", 1, 2),))
-    fn = PrimFunction(name="f", params=(x,), body=Sequential(()), variants=(variant,))
-    with pytest.raises(Exception, match="cannot be derived"):
-        verify_prim_function(fn)

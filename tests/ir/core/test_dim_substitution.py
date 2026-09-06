@@ -82,13 +82,8 @@ def test_an_extent_outside_the_declared_range_is_refused() -> None:
     assert substitute_dims(_tensor(CTX), {"ctx_len": 262144}).shape == (262144,)
 
 
-def test_the_bounds_are_half_open_like_the_specialisations_that_state_them() -> None:
-    """A specialisation states its range half-open.
-
-    A specialisation states its range half-open. If substitution disagreed
-    about the endpoint, a length would be admitted by one and refused by the
-    other.
-    """
+def test_dim_var_bounds_remain_half_open() -> None:
+    """DimVar envelopes stay half-open even though specialization ranges are closed."""
     assert substitute_dims(_tensor(CTX), {"ctx_len": CTX.lo}).shape == (CTX.lo,)
     with pytest.raises(DimSubstitutionError):
         substitute_dims(_tensor(CTX), {"ctx_len": CTX.hi})

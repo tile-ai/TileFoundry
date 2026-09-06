@@ -296,10 +296,10 @@ freeze** below).
 *Envelope coverage.* A dispatched function's parameter
 `TensorType.shape` carries a `DimVar(name, lo, hi)` whose `(lo, hi)` is
 the dispatch envelope; `DimVarRangePat` references that `DimVar` by name.
-The variants' ranges MUST **partition** the envelope — pairwise
-**disjoint** and jointly **complete** (their union is exactly the
-half-open `[lo, hi)`). Adjacent half-open ranges meet at the shared
-boundary value as `[.., c)` then `[c, ..)`. Every in-envelope shape
+The variants' closed ranges MUST **partition** the envelope — pairwise
+**disjoint** and jointly **complete** (their union is exactly the DimVar's
+half-open `[lo, hi)` envelope). Adjacent closed ranges are written
+`[.., c - 1]` then `[c, ..]`. Every in-envelope shape
 therefore selects exactly one variant.
 
 *Prototype body.* A base's `body is None`: the prototype is never
