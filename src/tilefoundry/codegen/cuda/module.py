@@ -79,9 +79,10 @@ def emit_cuda_module(
     ctx = CodegenContext(target)
     kernel_texts = []
     all_fields = []
-    for fn in cuda_fns:
-
-
+    expanded_fns = tuple(v for fn in cuda_fns for v in ((fn,) if not fn.variants else fn.variants))
+    for fn in expanded_fns:
+        if fn.variants:
+            continue
         if _is_dispatch_entry_shape(fn):
             continue
         fields = _compute_kernel_fields(fn, ctx)
