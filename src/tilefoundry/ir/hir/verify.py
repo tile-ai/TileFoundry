@@ -124,7 +124,8 @@ def _verify_partition(base: Function) -> None:
             f"hir Function {base.name!r}: dispatch DimVar "
             f"{next(iter(dim_vars))!r} is not reachable from an input parameter"
         )
-    lo, hi = envelope
+    lo, hi_exclusive = envelope
+    hi = hi_exclusive - 1
 
     cursor = lo
     for rlo, rhi in sorted(ranges):

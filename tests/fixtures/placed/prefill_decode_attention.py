@@ -38,7 +38,7 @@ class PrefillDecodeAttention:
     ) -> Tensor[(1, SEQ, HEADS, HEAD_DIM), "bf16"]:
         pass
 
-    @attend.specialize(DimVarRangePat("seq", 1, 2))
+    @attend.specialize(DimVarRangePat("seq", 1, 1))
     def decode(
         q: Tensor[(1, SEQ, HEADS, HEAD_DIM), "bf16"],
         k_cache: Tensor[(1, CTX, HEADS, HEAD_DIM), "bf16"],
@@ -112,7 +112,7 @@ class PrefillDecodeAttention:
                 "gmem",
             )
 
-    @attend.specialize(DimVarRangePat("seq", 2, 4097))
+    @attend.specialize(DimVarRangePat("seq", 2, 4096))
     def prefill(
         q: Tensor[(1, SEQ, HEADS, HEAD_DIM), "bf16"],
         k_cache: Tensor[(1, CTX, HEADS, HEAD_DIM), "bf16"],
