@@ -13,7 +13,7 @@ from types import FunctionType
 from typing import Any, Callable, ClassVar, Literal, Mapping
 
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
+from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern, _mangle_variant_name
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.specialize import DISPLAY_NAME
 from tilefoundry.ir.hir.verify import verify_function
@@ -106,7 +106,7 @@ class ParsedFuncRules:
     HANDLE: ClassVar[dict[ParsedFuncKind, HandleRule]] = {
         ParsedFuncKind.KERNEL: HandleRule(lambda fn, key: fn.name, "module"),
         ParsedFuncKind.VARIANT: HandleRule(
-            lambda fn, key: f"{fn.name}${key.dim_var}${key.lo}_{key.hi}", "base"
+            lambda fn, key: _mangle_variant_name(fn.name, (key,)), "base"
         ),
         ParsedFuncKind.CONVERTER: HandleRule(
             lambda fn, key: f"{fn.name}.converter[{key}]", "base"
@@ -455,7 +455,7 @@ def _specialize(self: HirFunction, pattern: Any):
 
         object.__setattr__(ir, DISPLAY_NAME, fn_inner.__name__)
         if dialect == "tir" and hasattr(pat, "dim_var"):
-            object.__setattr__(ir, "name", f"{self.name}${pat.dim_var}${pat.lo}_{pat.hi}")
+            ir.name = _mangle_variant_name(self.name, (pat,))
         else:
             object.__setattr__(ir, "name", self.name)
         if dialect == "hir":

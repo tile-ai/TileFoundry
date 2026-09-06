@@ -16,7 +16,7 @@ from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.types.shard.mesh import Mesh
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class Sequential(Stmt):
     """Wrap a ``tuple[Stmt, ...]`` as one TIR statement."""
 
@@ -32,7 +32,7 @@ class Sequential(Stmt):
         return self.body[idx]
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class LetStmt(Stmt):
     """TIR's single value-binding node."""
 
@@ -41,7 +41,7 @@ class LetStmt(Stmt):
     body: Sequential
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class For(Stmt):
     induction_var: Var
     start: Expr
@@ -50,32 +50,32 @@ class For(Stmt):
     body: Sequential
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class While(Stmt):
     cond: Expr
     body: Sequential
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class If(Stmt):
     cond: Expr
     then_body: Sequential
     else_body: Sequential
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class MeshScope(Stmt):
     mesh: Mesh
     binding: Var
     body: Sequential
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class Return(Stmt):
     """Empty return; tir functions have no value return."""
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class Evaluate(Stmt):
     """Place a value-less effect Op or symbol invocation in statement position."""
 

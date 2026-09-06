@@ -14,11 +14,11 @@ class SyncSquare:
         with Mesh((Topology("thread", 128),), Layout((4, 32), (32, 1)), names=('w', 't')) as m:
             view = T.tensor_view(a, layout=ShardLayout(layout=Layout(shape=(4, 32), strides=(32, 1)), attrs=(S(0), S(1)), mesh=Mesh(topologies=(Topology(name="thread", size=128),), layout=Layout(shape=(4, 32), strides=(32, 1)), names=("w", "t"))))
             reg = T.alloc_tensor(tensor_type=Tensor[(4, 32), "f32",
-    ShardLayout(
-        layout=Layout((4, 32), (32, 1)),
-        attrs=(S(0), S(1)),
-        mesh=Mesh((Topology("thread", 128),), Layout((4, 32), (32, 1)), names=('w', 't')),
-    ), "rmem"])
+                ShardLayout(
+                    layout=Layout((4, 32), (32, 1)),
+                    attrs=(S(0), S(1)),
+                    mesh=Mesh((Topology("thread", 128),), Layout((4, 32), (32, 1)), names=('w', 't')),
+                ), "rmem"])
             T.copy(view, reg)
             T.sync(m)
             T.sync(Mesh(topologies=(Topology(name="thread", size=128),), layout=ComposedLayout(inner=None, offset=0, outer=Layout(shape=(1, 32), strides=(32, 1))), names=("w", "t")))

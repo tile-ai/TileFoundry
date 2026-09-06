@@ -26,6 +26,13 @@ def group_functions_by_target(
                 "at codegen grouping"
             )
         groups.setdefault(function.target, []).append(function)
+        """Expose structural variants to their target-specific emitter."""
+        for variant in function.variants:
+            if variant.target is None:
+                raise ValueError(
+                    f"tilefoundry: variant {variant.name!r} has no resolved Target"
+                )
+            groups.setdefault(variant.target, []).append(variant)
 
     from tilefoundry.target import CudaTarget  # noqa: PLC0415
 

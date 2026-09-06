@@ -131,7 +131,6 @@ def _stmt_children(stmt: Stmt) -> tuple[Stmt, ...]:
             return (body,)
         case If(then_body=then_body, else_body=else_body):
             return (then_body, else_body)
-
         case Return() | Evaluate():
             return ()
         case _:

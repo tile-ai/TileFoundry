@@ -28,6 +28,7 @@ from tilefoundry.ir.core import (
     attach_metadata,
     get_metadata,
 )
+from tilefoundry.ir.core.pattern import _mangle_variant_name
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.types import TensorType
@@ -4774,7 +4775,7 @@ class FunctionPattern(ElementPattern):
                 if getattr(context.function, "dialect", None) == "tir" and specializations:
                     pat = specializations[0]
                     if isinstance(pat, runtime.DimVarRangePat):
-                        function.name = f"{function_name}${pat.dim_var}${pat.lo}_{pat.hi}"
+                        function.name = _mangle_variant_name(function_name, (pat,))
                     else:
                         function.name = function_name
                 else:
@@ -4800,7 +4801,7 @@ class FunctionPattern(ElementPattern):
             specializations=specializations,
         )
         if specializations and isinstance(specializations[0], runtime.DimVarRangePat):
-            object.__setattr__(function, "name", f"{function.name}${specializations[0].dim_var}${specializations[0].lo}_{specializations[0].hi}")
+            function.name = _mangle_variant_name(function.name, (specializations[0],))
         object.__setattr__(function, runtime.DISPLAY_NAME, match.captures["name"])
         define = getattr(context.function.module_scope, "define", None)
         if callable(define):

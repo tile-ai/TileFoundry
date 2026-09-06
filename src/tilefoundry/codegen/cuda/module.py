@@ -78,15 +78,11 @@ def emit_cuda_module(
     ctx = CodegenContext(target)
     kernel_texts = []
     all_fields = []
-    expanded_fns = tuple(v for fn in cuda_fns for v in ((fn,) if not fn.variants else fn.variants))
+    expanded_fns = tuple(
+        {v.name: v for fn in cuda_fns for v in (fn.variants or (fn,))}.values()
+    )
     for fn in expanded_fns:
-        if fn.variants:
-            continue
         fields = _compute_kernel_fields(fn, ctx)
-        if fields.entry_host_only:
-
-
-            raise NotImplementedError("emit_cuda_module: host-only function cannot emit a device kernel")
         kernel_texts.append(_emit_kernel_and_shim(fields))
         all_fields.append(fields)
     if not all_fields:

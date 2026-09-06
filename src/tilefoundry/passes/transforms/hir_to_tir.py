@@ -12,11 +12,13 @@ from dataclasses import dataclass, replace
 from typing import Union
 
 from tilefoundry.ir.core import Call, Constant, Expr, Tuple, Var
+from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.core.pattern import DimVarRangePat, locate_dim_var
+from tilefoundry.ir.core.pattern import DimVarRangePat, _mangle_variant_name, locate_dim_var
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
+from tilefoundry.ir.hir.math.binary import Binary as ScalarBinary
 from tilefoundry.ir.hir.math.clamp import Clamp as HirClamp
 from tilefoundry.ir.hir.math.unary import Unary as HirUnary
 from tilefoundry.ir.hir.nn.relu import ReLU as HirReLU
@@ -42,7 +44,6 @@ from tilefoundry.ir.tir.arith import (
     UnaryKind,
 )
 from tilefoundry.ir.tir.clamp import Clamp as TirClamp
-from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.memory import AllocTensor as AllocTensorOp
 from tilefoundry.ir.tir.memory.copy import Copy
@@ -57,6 +58,7 @@ from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import (
     Evaluate,
     For,
+    If,
     LetStmt,
     Return,
     Sequential,
@@ -699,7 +701,7 @@ class _Lowerer:
 
 
     def _lower_hir_call(self, call: Call, callee_hir: HirFunction) -> Var:
-        """Lower ``Call(target=HirFunction)`` into a ``tir.DispatchCall``.
+        """Lower a call to a specialized HIR function into an If chain.
 
         Only invoked when the callee's overload group has at least one
         non-empty specialization; the static-callee path is intentionally
@@ -794,7 +796,7 @@ class _Lowerer:
         case_patterns = tuple((pat,) for _, pat in reachable)
         case_calls: list[Evaluate] = []
         for variant, pat in reachable:
-            mangled_name = _mangle_variant_name(variant)
+            mangled_name = _mangle_variant_name(variant.name, variant.specializations)
             mangled_pf = self._mangled_registry.get(mangled_name)
             if mangled_pf is None:
                 raise RuntimeError(
@@ -852,14 +854,28 @@ class _Lowerer:
                     )
                 )
             case_calls.append(symbol_call(mangled_pf, call_args))
-        dispatch = DispatchCall(
-            callee_name=callee_hir.name,
-            subjects=(subject,),
-            case_patterns=case_patterns,
-            case_calls=tuple(case_calls),
-            fallback=Sequential(body=(Evaluate(callable=Abort(message=""), args=()),)),
-        )
-        self._items.append(dispatch)
+        chain = Evaluate(callable=Abort(message=""), args=())
+        for pat, call in reversed(tuple(zip((p[0] for p in case_patterns), case_calls))):
+            lo = Constant(type=subject.type, value=pat.lo)
+            hi = Constant(type=subject.type, value=pat.hi)
+            scalar_bool = TensorType.scalar(dtype=DType.bool, storage=StorageKind.RMEM)
+            lower = Call(
+                type=scalar_bool,
+                target=ScalarBinary(kind=BinaryKind.LE),
+                args=(lo, subject),
+            )
+            upper = Call(
+                type=scalar_bool,
+                target=ScalarBinary(kind=BinaryKind.LT),
+                args=(subject, hi),
+            )
+            pred = Call(
+                type=scalar_bool,
+                target=ScalarBinary(kind=BinaryKind.AND),
+                args=(lower, upper),
+            )
+            chain = If(cond=pred, then_body=Sequential(body=(call,)), else_body=Sequential(body=(chain,)))
+        self._items.append(chain)
         self._cache[id(call)] = out_var
         return out_var
 
@@ -1462,22 +1478,6 @@ def _lower_hir_function(ctx: "_Lowerer", target, expr) -> Var:
     return ctx._lower_hir_call(expr, target)
 
 
-def _mangle_variant_name(variant: HirFunction) -> str:
-    """Mangle a dispatch variant's symbol from its single Pattern."""
-    if len(variant.specializations) != 1:
-        raise TypeError(
-            f"variant {variant.name!r}: expected exactly one "
-            f"specialization, got {len(variant.specializations)}"
-        )
-    pat = variant.specializations[0]
-    if not isinstance(pat, DimVarRangePat):
-        raise TypeError(
-            f"variant {variant.name!r}: only DimVarRangePat is supported "
-            f"for v0 specialization mangling"
-        )
-    return f"{variant.name}${pat.dim_var}${pat.lo}_{pat.hi}"
-
-
 def _fold_items_to_sequential(items: list[_Item]) -> Sequential:
     """Turn a flat item list into a nested ``LetStmt`` chain wrapped in a ``Sequential``.
 
@@ -1666,13 +1666,12 @@ def _build_dispatch_entry(
     mangled_pfs: list[PrimFunction],
     target: Target,
 ) -> PrimFunction:
-    """Build the unmangled entry PrimFunction holding the DispatchCall.
+    """Build the unmangled entry PrimFunction holding its variants.
 
     Template params and TensorType envelope come from the first variant
     in the group; the entry forwards its own params positionally into
-    each mangled callee. The body is a single ``DispatchCall`` whose
-    subject is ``ShapeOf(param, axis)`` for the canonical first
-    occurrence of the dispatch ``DimVar`` in the variant signature.
+    each mangled callee. The entry body is an empty prototype; its variants
+    carry the specialization structure for downstream emitters.
     """
     template = group[0]
     pat0 = template.specializations[0]
@@ -1853,7 +1852,7 @@ class HirToTirPass(ModulePass):
             group = dispatch_view[group_name]
             lowered: list[PrimFunction] = []
             for variant in group:
-                mangled_name = _mangle_variant_name(variant)
+                mangled_name = _mangle_variant_name(variant.name, variant.specializations)
                 pf = _lower_function(
                     variant,
                     target=target,
@@ -1897,7 +1896,6 @@ class HirToTirPass(ModulePass):
                     specializations=template.specializations,
                     variants=tuple(mangled_for_group),
                 )
-                new_fns.extend(mangled_for_group)
                 new_fns.append(base)
                 continue
 

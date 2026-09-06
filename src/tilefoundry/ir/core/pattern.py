@@ -127,6 +127,13 @@ def locate_dim_var(params: tuple, name: str) -> tuple[int, int] | None:
     return None
 
 
+def _mangle_variant_name(name: str, specializations: tuple[Pattern, ...]) -> str:
+    if len(specializations) != 1 or not isinstance(specializations[0], DimVarRangePat):
+        raise TypeError("variant requires exactly one DimVarRangePat")
+    pat = specializations[0]
+    return f"{name}${pat.dim_var}${pat.lo}_{pat.hi}"
+
+
 Scalar: ScalarPat = ScalarPat()
 
 
@@ -142,4 +149,5 @@ __all__ = [
     "Scalar",
     "Tensor",
     "locate_dim_var",
+    "_mangle_variant_name",
 ]

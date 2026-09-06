@@ -13,11 +13,11 @@ class AsyncStage:
         with Mesh((Topology("thread", 128),), Layout((128,), (1,)), names=('t',)) as m:
             a_view = T.tensor_view(a, layout=ShardLayout(layout=Layout(shape=(128, 4), strides=(4, 1)), attrs=(S(0),), mesh=Mesh(topologies=(Topology(name="thread", size=128),), layout=Layout(shape=(128,), strides=(1,)), names=("t",))))
             shared = T.alloc_tensor(tensor_type=Tensor[(512,), "f32",
-    ShardLayout(
-        layout=Layout((512,), (1,)),
-        attrs=(B(),),
-        mesh=Mesh((Topology("thread", 128),), Layout((128,), (1,)), names=('t',)),
-    ), "smem"])
+                ShardLayout(
+                    layout=Layout((512,), (1,)),
+                    attrs=(B(),),
+                    mesh=Mesh((Topology("thread", 128),), Layout((128,), (1,)), names=('t',)),
+                ), "smem"])
             T.copy_async(a_view, shared)
             T.cp_async_commit()
             T.cp_async_wait(n=0)

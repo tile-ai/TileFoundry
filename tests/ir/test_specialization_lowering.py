@@ -15,9 +15,9 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.shape import ShapeOf
+from tilefoundry.ir.tir.stmts import Sequential
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
-from tilefoundry.ir.tir.verify import verify_module
+from tilefoundry.ir.tir.verify import verify_module, verify_prim_function
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.storage import StorageKind
@@ -104,7 +104,7 @@ def test_entry_dispatch_two_arms() -> None:
     out = HirToTirPass().run(mod)
 
     names = sorted(fn.name for fn in out.functions)
-    assert names == ["main", "main$S$1_3", "main$S$4_7"]
+    assert names == ["main"]
 
     entry = _find_function(out, "main")
 
@@ -115,9 +115,6 @@ def test_entry_dispatch_two_arms() -> None:
 
     assert len(entry.variants) == 2
     assert tuple(v.specializations for v in entry.variants) == ((DimVarRangePat("S", 1, 3),), (DimVarRangePat("S", 4, 7),))
-    subject = ShapeOf(type=TensorType.scalar(dtype=DType.i32, storage=StorageKind.RMEM), param=entry.params[0], axis=0)
-    assert isinstance(subject, ShapeOf)
-    assert subject.param is entry.params[0] and subject.axis == 0
     assert tuple(v.name for v in entry.variants) == ("main$S$1_3", "main$S$4_7")
 
     verify_module(list(out.functions))
@@ -140,12 +137,7 @@ def test_sub_call_group_lowers_to_variants() -> None:
     out = HirToTirPass().run(mod)
 
     names = sorted(fn.name for fn in out.functions)
-    assert names == [
-        "inner",
-        "inner$S$1_3",
-        "inner$S$4_7",
-        "main",
-    ]
+    assert names == ["inner", "main"]
 
     inner_pf = _find_function(out, "inner")
     assert len(inner_pf.variants) == 2
@@ -158,10 +150,8 @@ def test_sub_call_group_lowers_to_variants() -> None:
 def test_nested_dispatch_chain_three_levels() -> None:
     """3-level chain ``main -> inner -> leaf``, each a 2-arm dispatch group.
 
-    Each dispatch-level sub-call must forward the trailing
-    ``<param>_shape_<axis>`` kernel scalars its callee declared, so the
-    full chain verifies and each ``Evaluate(SymbolRef, args)``'s ``args``
-    match the callee ``PrimFunction.params`` at every level.
+    ``verify_module`` checks that every symbol call forwards the correct
+    parameters at each level.
     """
     leaf = _prototype(
         "leaf",
@@ -185,17 +175,13 @@ def test_nested_dispatch_chain_three_levels() -> None:
     )
     out = HirToTirPass().run(mod)
 
-    for inner_name in ("inner$S$1_3", "inner$S$4_7"):
-        inner_pf = _find_function(out, inner_name)
+    inner_proto = _find_function(out, "inner")
+    for inner_pf in inner_proto.variants:
         assert _callees(inner_pf) >= {"leaf$S$1_3", "leaf$S$4_7"}
 
     main_entry = _find_function(out, "main")
     assert len(main_entry.variants) == 2
     assert all(_callees(v) >= {"inner$S$1_3", "inner$S$4_7"} for v in main_entry.variants)
-
-    for main_name in ("main$S$1_3", "main$S$4_7"):
-        main_pf = _find_function(out, main_name)
-        assert _callees(main_pf) >= {"inner$S$1_3", "inner$S$4_7"}
 
     verify_module(list(out.functions))
 
@@ -218,3 +204,21 @@ def test_empty_reachable_set_raises() -> None:
     mod = Module(name="m", functions=(inner, main), entry="main")
     with pytest.raises(TypeError, match="empty reachable"):
         HirToTirPass().run(mod)
+
+
+def test_tir_variant_requires_one_specialization() -> None:
+    ty = _tensor((_S(),))
+    x = Var(type=ty, name="x")
+    variant = PrimFunction(name="f$S$1_2", params=(x,), body=Sequential(()), specializations=(DimVarRangePat("S", 1, 2), DimVarRangePat("S", 2, 3)))
+    fn = PrimFunction(name="f", params=(x,), body=Sequential(()), variants=(variant,))
+    with pytest.raises(Exception, match="one DimVarRangePat"):
+        verify_prim_function(fn)
+
+
+def test_tir_variant_subject_must_be_in_params() -> None:
+    ty = _tensor((_S(),))
+    x = Var(type=ty, name="x")
+    variant = PrimFunction(name="f$T$1_2", params=(x,), body=Sequential(()), specializations=(DimVarRangePat("T", 1, 2),))
+    fn = PrimFunction(name="f", params=(x,), body=Sequential(()), variants=(variant,))
+    with pytest.raises(Exception, match="cannot be derived"):
+        verify_prim_function(fn)

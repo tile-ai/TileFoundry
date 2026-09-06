@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class Stmt:
     """tir-only. hir does not contain Stmt nodes.
 

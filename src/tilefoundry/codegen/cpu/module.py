@@ -18,7 +18,7 @@ from tilefoundry.codegen.linkable import LinkableFunction, LinkableModule
 from tilefoundry.codegen.registry import CodeGenerator
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.core.pattern import DimVarRangePat
+from tilefoundry.ir.core.pattern import DimVarRangePat, locate_dim_var
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
@@ -192,9 +192,8 @@ def emit_host_module(
         shim_decls, body_lines, sig = _lower_launch(entry, body.body[0], module)
     elif entry.variants:
         pat = entry.variants[0].specializations[0]
-        loc = next(((p, axis) for p in entry.params if isinstance(p.type, TensorType)
-                    for axis, dim in enumerate(p.type.shape)
-                    if getattr(dim, "name", None) == pat.dim_var), None)
+        loc_idx = locate_dim_var(entry.params, pat.dim_var)
+        loc = (entry.params[loc_idx[0]], loc_idx[1]) if loc_idx is not None else None
         if loc is None:
             raise ValueError("emit_host_module: cannot derive specialization subject")
         p, axis = loc
@@ -243,12 +242,8 @@ def _lower_launch(entry: PrimFunction, evaluate, module):
     device_fn = module.lookup(evaluate.args[0].name)
     if device_fn.variants:
         dim_name = device_fn.variants[0].specializations[0].dim_var
-        loc = next((
-            (p, axis) for p in device_fn.params
-            if isinstance(p.type, TensorType)
-            for axis, dim in enumerate(p.type.shape)
-            if getattr(dim, "name", None) == dim_name
-        ), None)
+        loc_idx = locate_dim_var(device_fn.params, dim_name)
+        loc = (device_fn.params[loc_idx[0]], loc_idx[1]) if loc_idx is not None else None
         if loc is None:
             raise ValueError(f"cannot derive specialization subject {dim_name!r}")
         p, axis = loc

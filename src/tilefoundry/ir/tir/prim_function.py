@@ -16,7 +16,7 @@ def _default_target():
     return default_target()
 
 
-@dataclass(frozen=True)
+@dataclass(unsafe_hash=True)
 class PrimFunction(Stmt):
     """Contain an effect-only TIR function as a statement.
 
@@ -33,6 +33,8 @@ class PrimFunction(Stmt):
     target: Target = field(default_factory=_default_target)
     specializations: tuple[Pattern, ...] = ()
     variants: tuple["PrimFunction", ...] = ()
+    _sealed: bool = field(default=False, compare=False, hash=False, repr=False)
+    _display_name: str | None = field(default=None, compare=False, hash=False, repr=False)
 
     def __post_init__(self) -> None:
         target_instance(self.target)
@@ -40,7 +42,7 @@ class PrimFunction(Stmt):
     def add_variant(self, variant: "PrimFunction") -> None:
         if getattr(self, "_sealed", False):
             raise RuntimeError(f"tir PrimFunction {self.name!r}: cannot add a specialization variant after sealing")
-        object.__setattr__(self, "variants", (*self.variants, variant))
+        self.variants = (*self.variants, variant)
 
 
 __all__ = ["PrimFunction"]
