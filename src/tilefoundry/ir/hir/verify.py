@@ -100,7 +100,7 @@ def _verify_partition(base: Function) -> None:
     """Verify partition.
 
     Check the variants' ranges partition the base DimVar envelope —
-    pairwise disjoint and jointly complete over the half-open ``[lo, hi)``.
+    pairwise disjoint and jointly complete over closed specialization ranges.
     """
     dim_vars: set[str] = set()
     ranges: list[tuple[int, int]] = []

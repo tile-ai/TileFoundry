@@ -323,19 +323,11 @@ The pass lowers each `Module.functions` entry by its shape
      keep the original `TensorType` envelope; the dispatched range
      is carried by the variant's `specializations` and the mangled
      symbol, not by narrowed param types.
-  2. The prototype emits one entry `tir.PrimFunction` under the
-     unmangled `name` whose body is a single `tir.DispatchCall`
-     (see [tir.md §1.6](./tir.md#16-dispatchcall)):
-     - `subjects = (ShapeOf(param, axis),)` for the canonical
-       `(param, axis)` of the dispatch `DimVar`;
-     - `case_patterns` carries each variant's pattern in source
-       order;
-     - `case_calls` is a parallel tuple of `Evaluate(SymbolRef, args)`
-       invoking the mangled variants;
-     - `fallback = Sequential((Abort(),))`.
+  2. The prototype emits one entry `tir.PrimFunction` under the unmangled
+     `name`; its `variants` preserve the specialization group in source order.
 
 A `Call(target=hir_fn)` whose callee is a dispatch prototype
-(`variants != ()`) lowers to a `tir.DispatchCall` covering the
+(`variants != ()`) lowers to a nested `tir.If` chain covering the
 **reachable set** — callee variants whose specialization range
 intersects the caller-side range carried by the call argument at the
 callee's canonical `(param_index, axis)`. The caller-side range is
@@ -350,7 +342,7 @@ An empty reachable set is a compile-time error. Coverage and
 disjointness of the variants over the dispatch envelope are verified
 statically (the partition rule, [hir.md §1.1](./hir.md#11-function)),
 so an in-envelope shape always selects exactly one variant. The
-`tir.DispatchCall.fallback` (`Abort`) is reached only by an
+the final `Abort` fallback is reached only by an
 out-of-envelope shape — a call-contract violation.
 
 Each lowered `PrimFunction` that references `ShapeOf(param, axis)`

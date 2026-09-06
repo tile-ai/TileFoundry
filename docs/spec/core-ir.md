@@ -597,7 +597,7 @@ class Pattern:
 
 - constraints:
   - shared by parser dispatch (`ParamDef.pattern`) and specialization dispatch
-    (`Function.specializations` / `DispatchCall.case_patterns`).
+    (`Function.specializations` / `PrimFunction.specializations`).
 
 Two consumer surfaces:
 
@@ -608,8 +608,7 @@ Two consumer surfaces:
   convenience: `Scalar = ScalarPat()` and `Tensor = TensorPat()`.
 - **Specialization dispatch** — patterns appearing in
   `hir.Function.specializations` ([hir.md §1.1](./hir.md#11-function))
-  and the parallel `tir.DispatchCall.case_patterns`
-  ([tir.md §1.6](./tir.md#16-dispatchcall)) describe which runtime
+  and `tir.PrimFunction.specializations` describe which runtime
   shape range a variant covers. The HIR→TIR lowering inspects each
   pattern's fields directly; it does not call `match`.
 

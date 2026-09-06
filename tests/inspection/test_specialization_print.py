@@ -33,8 +33,8 @@ def _fn(*, body_is_self: bool, lo: int = 0, hi: int = 0) -> HirFunction:
 
 def _prototype() -> HirFunction:
     base = _fn(body_is_self=False)
-    base.add_variant(_fn(body_is_self=True, lo=1, hi=3))
-    base.add_variant(_fn(body_is_self=True, lo=4, hi=7))
+    base.add_variant(_fn(body_is_self=True, lo=1, hi=2))
+    base.add_variant(_fn(body_is_self=True, lo=4, hi=6))
     return base
 
 
@@ -52,10 +52,10 @@ def test_prototype_prints_pass_base_and_specialize_blocks() -> None:
 
     for src in (standalone, in_module):
         assert "    pass" in src
-        assert "def variant_S_1_3(" in src
-        assert "def variant_S_4_7(" in src
-        assert '@main.specialize(DimVarRangePat("S", 1, 3))' in src
-        assert '@main.specialize(DimVarRangePat("S", 4, 7))' in src
+        assert "def variant_S_1_2(" in src
+        assert "def variant_S_4_6(" in src
+        assert '@main.specialize(DimVarRangePat("S", 1, 2))' in src
+        assert '@main.specialize(DimVarRangePat("S", 4, 6))' in src
 
         assert "from tilefoundry.ir.core.pattern import DimVarRangePat" in src
         compile(src, "<test>", "exec")

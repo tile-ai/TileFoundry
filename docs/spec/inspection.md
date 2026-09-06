@@ -244,12 +244,12 @@ variant as an `@<name>.specialize(pattern)` block in declared order:
 def f(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
     pass
 
-@f.specialize(DimVarRangePat("S", 1, 4))
+@f.specialize(DimVarRangePat("S", 1, 3))
 def small_sequence(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
     ...
 ```
 
-The pattern prints in its constructor form (`DimVarRangePat("S", 1, 4)`;
+The pattern prints in its constructor form (`DimVarRangePat("S", 1, 3)`;
 other `Pattern` subclasses fall back to `repr(pattern)`). The emitted binding
 mirrors the authoring surface ([parser.md §2.1](./parser.md#21-syntax));
 when an IR variant has no display label, the printer synthesizes a valid binding
@@ -264,10 +264,9 @@ For authored TIR, canonical fixture source is the contract:
 `as_script(module) == fixture_source`. This pins the spelling authors consume,
 not merely a printer/parser fixed point.
 
-Lowering-only nodes have a different contract. `ShapeOf` and `DispatchCall` are
-assembled while lowering HIR specialization tables and have no authored parser
-surface. The printer MUST render them without raising and preserve their
-semantics in readable text, but that text is not required to import.
+Lowering-only `ShapeOf` nodes have no authored parser surface. The printer MUST
+render them without raising and preserve their semantics in readable text, but
+that text is not required to import.
 
 A rendering is one of two surfaces:
 
@@ -287,7 +286,7 @@ MUST agree over
 
 **Display-only** — the rendering of a function with a `DimVar` parameter, a
 dispatch prototype and its `.specialize` variants ([§2.6](#26-specialization-printing)),
-or lowering-only `ShapeOf` / `DispatchCall` nodes. A display-only rendering is
+or lowering-only `ShapeOf` nodes. A display-only rendering is
 human-readable and MUST NOT be used as a structural round-trip validation
 artifact. Lowering-only node renderings need not import.
 

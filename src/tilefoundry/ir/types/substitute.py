@@ -367,7 +367,7 @@ def substitute_shape_dim(entry: object, bindings: Mapping[str, int]) -> object:
 def _checked(variable: DimVar, extent: int) -> int:
     """*extent*, once the declaration is known to admit it.
 
-    The bounds are half-open, matching how a specialisation states the range it
+    DimVar bounds are half-open; specialization patterns use closed ranges.
     covers, so the two cannot disagree about which side an endpoint falls on.
     """
     if isinstance(extent, bool) or not isinstance(extent, int):

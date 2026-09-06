@@ -1,6 +1,6 @@
 """GPU end-to-end for dynamic-shape dispatch.
 
-A ``pass`` prototype partitions ``DimVar('S', 1, 8)`` into half-open ranges:
+A ``pass`` prototype partitions ``DimVar('S', 1, 8)`` into closed ranges:
 ``[1, 4)`` squares and ``[4, 8)`` doubles. Compilation emits one host dispatch
 wrapper forwarding to specialized kernels. Runtime extents drive their loops
 and copies, so one binary handles every shape in the envelope.
@@ -25,11 +25,11 @@ class Dispatch:
     def main(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
         pass
 
-    @main.specialize(DimVarRangePat("S", 1, 4))
+    @main.specialize(DimVarRangePat("S", 1, 3))
     def small_shape(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
         return mul(x, x)  # noqa: F821  (bound via ``from tilefoundry.dsl.tf import *``)
 
-    @main.specialize(DimVarRangePat("S", 5, 7))
+    @main.specialize(DimVarRangePat("S", 4, 7))
     def large_shape(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
         return add(x, x)  # noqa: F821
 

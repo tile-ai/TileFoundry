@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.core import Call, Var
+from tilefoundry.ir.core import Call, Var, VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function as HirFunction
@@ -193,7 +193,7 @@ def test_variant_requires_single_specialization() -> None:
         specializations=(DimVarRangePat("S", 1, 3), DimVarRangePat("S", 3, 5)),
     )
     fn = PrimFunction(name="f", params=(x,), body=Sequential(body=()), variants=(variant,))
-    with pytest.raises(Exception, match="one DimVarRangePat"):
+    with pytest.raises(VerifyError, match="one DimVarRangePat"):
         verify_prim_function(fn)
 
 
@@ -204,7 +204,7 @@ def test_variant_subject_must_be_in_parameters() -> None:
         specializations=(DimVarRangePat("S", 1, 3),),
     )
     fn = PrimFunction(name="f", params=(x,), body=Sequential(body=()), variants=(variant,))
-    with pytest.raises(Exception, match="cannot be derived"):
+    with pytest.raises(VerifyError, match="cannot be derived"):
         verify_prim_function(fn)
 
 
