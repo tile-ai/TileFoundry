@@ -15,7 +15,6 @@ from typing import Any, Callable, ClassVar, Literal, Mapping
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern, _mangle_variant_name
 from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.hir.specialize import DISPLAY_NAME
 from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.tir.intrinsic import intrinsic as _intrinsic
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -453,11 +452,11 @@ def _specialize(self: HirFunction, pattern: Any):
                 "`pass` (only the base prototype declares a `pass` body)"
             )
 
-        object.__setattr__(ir, DISPLAY_NAME, fn_inner.__name__)
+        ir._display_name = fn_inner.__name__
         if dialect == "tir" and hasattr(pat, "dim_var"):
             ir.name = _mangle_variant_name(self.name, (pat,))
         else:
-            object.__setattr__(ir, "name", self.name)
+            ir.name = self.name
         if dialect == "hir":
             verify_function(ir)
         else:
