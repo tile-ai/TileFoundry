@@ -63,6 +63,22 @@ _PRIM_FUNCTION = "[tir §1.3](docs/spec/tir.md#13-primfunction)"
 def verify_prim_function(fn: PrimFunction, *, module_fns: Iterable[PrimFunction] = ()) -> None:
     """Per [tir §1.3](docs/spec/tir.md#13-primfunction)'s rule list."""
     _check_param_homogeneity(fn)
+    if fn.variants:
+        for variant in fn.variants:
+            if len(variant.specializations) != 1 or not isinstance(variant.specializations[0], DimVarRangePat):
+                raise VerifyError(
+                    f"PrimFunction {fn.name!r}: each variant must have one DimVarRangePat"
+                )
+            pat = variant.specializations[0]
+            if not any(
+                isinstance(p.type, TensorType)
+                and any(getattr(dim, "name", None) == pat.dim_var for dim in p.type.shape)
+                for p in fn.params
+            ):
+                raise VerifyError(
+                    f"PrimFunction {fn.name!r}: specialization subject {pat.dim_var!r} "
+                    "cannot be derived from parameters"
+                )
     ctx = VerifyContext()
     scope: list[Mesh] = []
 

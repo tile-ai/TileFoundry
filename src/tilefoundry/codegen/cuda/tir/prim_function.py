@@ -12,7 +12,6 @@ from dataclasses import dataclass
 
 from tilefoundry.codegen.cuda.context import CodegenContext
 from tilefoundry.codegen.cuda.tir.memory.tensor_view import render_shard_layout_value
-from tilefoundry.ir.tir.dispatch import DispatchCall
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import (
     is_hidden_shape_scalar as _is_hidden_shape_scalar,
@@ -93,10 +92,6 @@ def _collect_mesh_dims(body: Sequential) -> tuple[tuple[int, int, int], tuple[in
 
 
     return _derive_launch_config(body)
-
-def _is_dispatch_entry_shape(node: PrimFunction) -> bool:
-    body = node.body
-    return isinstance(body, Sequential) and bool(body.body) and isinstance(body.body[0], DispatchCall)
 
 
 @dataclass(frozen=True)
