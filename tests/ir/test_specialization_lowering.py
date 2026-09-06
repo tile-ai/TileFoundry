@@ -68,7 +68,7 @@ def _prototype(name: str, variants: tuple[HirFunction, ...], env=(1, 7)) -> HirF
     return base
 
 
-def test_static_function_lowers_without_dispatch_call() -> None:
+def test_static_function_lowers_without_variants() -> None:
     ty = _tensor((8,))
     x = Var(type=ty, name="x")
     fn = HirFunction.build(name="static_fn", params=(x,), body=x, return_type=ty)
@@ -111,7 +111,7 @@ def test_entry_dispatch_two_arms() -> None:
     verify_module(list(out.functions))
 
 
-def test_sub_call_dispatch_emits_dispatch_call() -> None:
+def test_sub_call_group_lowers_to_variants() -> None:
     inner = _prototype(
         "inner",
         (_variant("inner", 1, 3), _variant("inner", 4, 7)),
@@ -138,6 +138,9 @@ def test_sub_call_dispatch_emits_dispatch_call() -> None:
     inner_pf = _find_function(out, "inner")
     assert len(inner_pf.variants) == 2
     assert {v.name for v in inner_pf.variants} == {"inner$S$1_3", "inner$S$4_7"}
+    caller = _find_function(out, "main")
+    caller_text = repr(caller.body)
+    assert "inner$S$1_3" in caller_text and "inner$S$4_7" in caller_text
     verify_module(list(out.functions))
 
 
@@ -174,9 +177,11 @@ def test_nested_dispatch_chain_three_levels() -> None:
     for inner_name in ("inner$S$1_3", "inner$S$4_7"):
         inner_pf = _find_function(out, inner_name)
         assert len(inner_pf.variants) == 0
+        assert "leaf$S$1_3" in repr(inner_pf.body)
 
     main_entry = _find_function(out, "main")
     assert len(main_entry.variants) == 2
+    assert all("inner$S$1_3" in repr(v.body) and "inner$S$4_7" in repr(v.body) for v in main_entry.variants)
 
     for main_name in ("main$S$1_3", "main$S$4_7"):
         main_pf = _find_function(out, main_name)
