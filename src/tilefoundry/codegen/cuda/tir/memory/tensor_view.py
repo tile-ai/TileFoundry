@@ -18,7 +18,7 @@ from tilefoundry.codegen.cuda.tir.reduce import REDUCE_TAG
 from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import (
     mesh_geometry,
     mesh_type,
-    program_topology,
+    program_topologies,
 )
 from tilefoundry.ir.core import Call, Constant
 from tilefoundry.ir.core.kinds import ReduceKind
@@ -173,7 +173,7 @@ def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None, stora
     if storage is StorageKind.RMEM:
         sll = Layout(shape=sll.shape, strides=register_strides(sl))
     ml_shape, ml_strides, ml_base = mesh_geometry(sl.mesh)
-    topo = program_topology(sl.mesh)
+    topo = program_topologies(sl.mesh)[0]
 
     def _static_dim(value, what):
         if not isinstance(value, int):
@@ -253,8 +253,8 @@ def render_shard_layout_value(var_name: str, sl: SL, dim_var_runtime=None, stora
         f"auto {sl_var} = cute::make_layout("
         f"cute::make_shape({sl_shape_args}), cute::make_stride({sl_stride_args}));",
         f"auto {ml_var} = {mesh_layout};",
-        f"tilefoundry::Mesh<tilefoundry::Topology<{scope}>, "
-        f"decltype({ml_var})> {mesh_var}{{{ml_var}}};",
+        f"tilefoundry::Mesh<decltype({ml_var}), {scope}> "
+        f"{mesh_var}{{{ml_var}}};",
     ]
     value_expr = (
         f"tilefoundry::ShardLayout<decltype({sl_var}), cute::tuple<{attrs}>, "
@@ -449,19 +449,21 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
                 f"{tensor_ref}, {global_layout}, {shard_value});"
             )
         else:
-
-
-            local_shape = shard_layout_local_shape(layout)
-            local_shape = tuple(s for s in local_shape if s != 1) or (1,)
-            if len(local_shape) > 1:
-                shape_args = ", ".join(f"cute::Int<{int(s)}>" for s in local_shape)
-                tensor_layout = f"cute::make_layout(cute::Shape<{shape_args}>{{}})"
+            source_layout = getattr(memory_var.type, "layout", None)
+            if isinstance(source_layout, SL):
+                ctx.emit(f"auto {var_name}_tensor = {mem_name}.engine;")
             else:
-                tensor_layout = f"cute::make_layout(cute::Shape<cute::Int<{int(local_shape[0])}>>{{}})"
-            ctx.emit(
-                f"auto {var_name}_tensor = cute::make_tensor("
-                f"{mem_name}, {tensor_layout});"
-            )
+                local_shape = shard_layout_local_shape(layout)
+                local_shape = tuple(s for s in local_shape if s != 1) or (1,)
+                if len(local_shape) > 1:
+                    shape_args = ", ".join(f"cute::Int<{int(s)}>" for s in local_shape)
+                    tensor_layout = f"cute::make_layout(cute::Shape<{shape_args}>{{}})"
+                else:
+                    tensor_layout = f"cute::make_layout(cute::Shape<cute::Int<{int(local_shape[0])}>>{{}})"
+                ctx.emit(
+                    f"auto {var_name}_tensor = cute::make_tensor("
+                    f"{mem_name}, {tensor_layout});"
+                )
             target_total = shape_numel_upper_bound(let.var.type.shape)
             target_global = (
                 f"cute::make_layout(cute::Shape<cute::Int<{target_total}>>{{}})"

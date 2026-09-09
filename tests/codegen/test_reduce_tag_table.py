@@ -5,7 +5,7 @@ call site raised ``KeyError`` at emission time, and ``_render_attr`` answered
 ``shard::P<void>`` for every ``Partial``, so a partial's reduction never
 reached C++ at all. Both are one table now, and these pin it.
 
-See [runtime §3.2](docs/spec/runtime.md#32-tilefoundryopsreduce-reduction-family).
+See [runtime §3](docs/spec/runtime.md#3-runtime-ops).
 """
 
 from __future__ import annotations

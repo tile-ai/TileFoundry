@@ -35,9 +35,8 @@ def _resolved(topology: Topology | str) -> Topology:
     return topology
 
 
-def program_topology(mesh: Mesh) -> Topology:
-    """The first program level *mesh* binds."""
-    return _resolved(mesh.topologies[0])
+def program_topologies(mesh: Mesh) -> tuple[Topology, ...]:
+    return tuple(_resolved(t) for t in mesh.topologies)
 
 
 def _validate_topology(mesh: Mesh, target) -> None:
@@ -91,7 +90,7 @@ def mesh_type(mesh: Mesh) -> str:
     carried: without it every slice would look like the block it came from, and
     ``ops::sync`` reads it to tell the two apart.
     """
-    topo = program_topology(mesh)
+    topos = program_topologies(mesh)
     shape, strides, base = mesh_geometry(mesh)
     shape_types = ", ".join(f"cute::Int<{s}>" for s in shape)
     stride_types = ", ".join(f"cute::Int<{s}>" for s in strides)
@@ -104,8 +103,8 @@ def mesh_type(mesh: Mesh) -> str:
         )
     return (
         f"tilefoundry::Mesh<"
-        f"tilefoundry::Topology<{topology_scope_str(topo.name)}>, "
-        f"{layout}>"
+        f"{layout}, "
+        f"{', '.join(topology_scope_str(t.name) for t in topos)}>"
     )
 
 
@@ -115,7 +114,7 @@ def _is_dynamic_mesh(mesh: Mesh) -> bool:
     A launch-provided (dynamic) CTA mesh: its topology size or a layout axis
     extent is ``None`` and only known at launch time.
     """
-    if program_topology(mesh).size is None:
+    if any(t.size is None for t in program_topologies(mesh)):
         return True
     return any(s is None for s in mesh.layout.shape)
 
@@ -126,7 +125,7 @@ def _emit(node: MeshScope, ctx: CodegenContext) -> None:
         raise RuntimeError("CUDA MeshScope emission requires its Target")
     _validate_topology(node.mesh, ctx.target)
     name = ctx.name_for(node.binding)
-    ctx.emit(f"// mesh scope: {program_topology(node.mesh).name}")
+    ctx.emit(f"// mesh scope: {program_topologies(node.mesh)[0].name}")
 
 
 

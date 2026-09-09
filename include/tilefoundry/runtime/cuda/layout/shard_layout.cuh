@@ -21,10 +21,12 @@ template <TopologyScope Scope> struct Topology {
 /// ``layout_a()(offset() + layout_b()(c))``. A ``Base`` argument would say
 /// that in a second place, free to disagree, where the IR has no field at
 /// all; a plain ``cute::Layout`` is the whole level at offset zero.
-template <class TTopo, class TMeshLayout> struct Mesh {
-    using topology = TTopo;
+template <class TMeshLayout, TopologyScope... Topos> struct Mesh {
     using layout = TMeshLayout;
+    static constexpr auto topologies = cute::make_tuple(Topos...);
+    static constexpr TopologyScope first_scope = cute::get<0>(topologies);
     TMeshLayout layout_value;
+    CUTE_HOST_DEVICE auto local_index() const noexcept;
 };
 
 namespace detail {
@@ -62,6 +64,7 @@ struct mesh_layout_offset<cute::ComposedLayout<A, O, B>> {
 
 }
 
+namespace detail {
 /// The first instance ``TMeshLayout`` covers, in the topology's own numbering.
 template <class TMeshLayout> CUTE_HOST_DEVICE constexpr int mesh_offset() {
     return detail::mesh_layout_offset<cute::remove_cvref_t<TMeshLayout>>::value;
@@ -73,9 +76,38 @@ template <class TMeshLayout> CUTE_HOST_DEVICE constexpr int mesh_offset() {
 /// where the mesh starts and how far it runs -- and because an op that needs it
 /// must not go asking the launch: ``blockDim`` is the block and a mesh may be
 /// narrower than one, so the two agree only where the mesh is the whole level.
-template <class TMesh> CUTE_HOST_DEVICE constexpr int mesh_instances() {
-    return int(decltype(cute::size(
-        typename cute::remove_cvref_t<TMesh>::layout{}))::value);
+template <class TMesh, TopologyScope Scope>
+CUTE_HOST_DEVICE constexpr int mesh_instances();
+
+template <class TMesh, TopologyScope Scope>
+CUTE_HOST_DEVICE constexpr bool mesh_names_level() {
+    return
+        []<TopologyScope... Values>(Mesh<typename TMesh::layout, Values...> *) {
+            return ((Values == Scope) || ...);
+        }(static_cast<TMesh *>(nullptr));
+}
+
+template <class TMesh, TopologyScope... Scopes>
+CUTE_HOST_DEVICE constexpr bool mesh_names_only() {
+    return (mesh_names_level<TMesh, Scopes>() || ...);
+}
+
+template <class TMesh, TopologyScope Scope> struct mesh_axes_of_impl {
+    using type = typename TMesh::layout;
+};
+template <class TMesh, TopologyScope Scope>
+using mesh_axes_of = typename mesh_axes_of_impl<TMesh, Scope>::type;
+
+template <class TMesh> CUTE_HOST_DEVICE constexpr void reject_multi_level() {
+    static_assert(cute::tuple_size<decltype(TMesh::topologies)>::value == 1,
+                  "Mesh: a mesh naming multiple topology levels is temporarily "
+                  "unsupported; its axis assignment is not implemented");
+}
+
+template <class TMesh, TopologyScope Scope>
+CUTE_HOST_DEVICE constexpr int mesh_instances() {
+    reject_multi_level<TMesh>();
+    return int(cute::size(detail::mesh_axes_of<TMesh, Scope>{}));
 }
 
 /// A mesh layout's positions, with its offset taken off.
@@ -96,6 +128,18 @@ CUTE_HOST_DEVICE constexpr auto mesh_positions(L const &layout) {
 template <class L>
 using mesh_positions_t =
     cute::remove_cvref_t<decltype(mesh_positions(std::declval<L const &>()))>;
+
+}
+
+template <class TMesh, TopologyScope... Topos>
+CUTE_HOST_DEVICE auto Mesh<TMesh, Topos...>::local_index() const noexcept {
+    detail::reject_multi_level<Mesh<TMesh, Topos...>>();
+    using levels = decltype(Mesh<TMesh, Topos...>::topologies);
+    constexpr auto scope = Mesh<TMesh, Topos...>::first_scope;
+    auto const positions = detail::mesh_positions(this->layout_value);
+    return positions.get_hier_coord(int(program_id<scope>()) -
+                                    detail::mesh_offset<TMesh>());
+}
 
 /// ShardLayout<layout, attrs_tuple, mesh>: spec 003 shard layout surface.
 template <class TLayout, class TAttrs, class TMesh> struct ShardLayout {
@@ -256,7 +300,7 @@ CUTE_HOST_DEVICE constexpr auto make_mesh(Extents const &extents) {
                 "last instance");
         }
     }
-    return Mesh<Topology<Scope>, decltype(layout)>{layout};
+    return Mesh<decltype(layout), Scope>{layout};
 }
 
 /// `make_shard_layout` is to `ShardLayout` what `cute::make_layout` is to

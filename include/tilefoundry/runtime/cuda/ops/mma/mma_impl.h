@@ -4,7 +4,7 @@
 
 namespace mma_detail {
 
-__device__ uint32_t pack_bf16x2(uint16_t lo, uint16_t hi) {
+__device__ inline uint32_t pack_bf16x2(uint16_t lo, uint16_t hi) {
     return (uint32_t(hi) << 16) | uint32_t(lo);
 }
 

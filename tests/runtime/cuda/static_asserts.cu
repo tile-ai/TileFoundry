@@ -111,7 +111,7 @@ __global__ void k() {
     using base =
         cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>;
     using ml = cute::ComposedLayout<inner, cute::Int<0>, base>;
-    static_assert(mesh_offset<ml>() == 0, "unreachable");
+    static_assert(tilefoundry::detail::mesh_offset<ml>() == 0, "unreachable");
 }
 #endif
 
@@ -121,7 +121,7 @@ __global__ void k() {
     using base =
         cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>;
     using ml = cute::ComposedLayout<cute::identity, int, base>;
-    static_assert(mesh_offset<ml>() == 0, "unreachable");
+    static_assert(tilefoundry::detail::mesh_offset<ml>() == 0, "unreachable");
 }
 #endif
 
@@ -240,7 +240,7 @@ __global__ void k(float *p) {
     float a = p[0], b = 0.f;
     using wlayout =
         cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>;
-    using wmesh = Mesh<Topology<TopologyScope::warp>, wlayout>;
+    using wmesh = Mesh<wlayout, TopologyScope::warp>;
     wmesh mesh{wlayout{}};
     auto sl = cute::make_layout(cute::make_shape(cute::Int<32>{}));
     auto dl = cute::make_layout(cute::make_shape(cute::Int<1>{}));
@@ -363,7 +363,7 @@ __global__ void k(float *p) {
 __global__ void k() {
     using wlayout =
         cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>;
-    Mesh<Topology<TopologyScope::warp>, wlayout> mesh{wlayout{}};
+    Mesh<wlayout, TopologyScope::warp> mesh{wlayout{}};
     sync(mesh);
 }
 #endif
@@ -450,5 +450,17 @@ __global__ void k(float *p, float *q, uint64_t *bar) {
         cute::make_tensor(cute::make_smem_ptr(q), dst_lay), dst_lay,
         make_shard_layout(dst_lay, mesh, cute::make_tuple(shard::B{})));
     tilefoundry::ops::tma_copy(src, dst, bar);
+}
+#endif
+
+#if CASE == 25
+__global__ void k() {
+    using layout = cute::Layout<cute::Shape<cute::Int<2>, cute::Int<32>>,
+                                cute::Stride<cute::Int<64>, cute::Int<1>>>;
+    using mesh = Mesh<layout, TopologyScope::thread>;
+    static_assert(tilefoundry::detail::MeshWarpView<mesh>::warps() == 2);
+    static_assert(tilefoundry::detail::MeshWarpView<mesh>::warp_stride == 2);
+    static_assert(tilefoundry::detail::MeshWarpView<mesh>::warps_contiguous(),
+                  "MeshWarpView: non-contiguous warp set is unsupported");
 }
 #endif

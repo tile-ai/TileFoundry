@@ -263,7 +263,11 @@ struct reduce_dispatch_info {
     /// per-warp workspace slot describes. The arithmetic below would answer
     /// ``warps_per_group == 1`` for it and the fold would stop after a warp.
     bool warp_aligned;
+    bool needs_workspace;
+    bool needs_counter;
+    bool needs_bar_id;
 };
+using plan_t = reduce_dispatch_info;
 
 /// Derive, from the (src, dst) operand ShardLayouts, the active reduction level
 /// and its ``warps_per_group``. Pure compile-time so the caller can select the
@@ -276,8 +280,15 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
     using src_attrs = typename SrcSL::attrs;
     using dst_attrs = typename DstSL::attrs;
     using mesh_t = typename SrcSL::mesh;
-    constexpr auto scope = mesh_t::topology::scope;
-    using m_layout_t = typename mesh_t::layout;
+    static_assert(
+        tilefoundry::detail::mesh_names_only<mesh_t, TopologyScope::thread,
+                                             TopologyScope::cta>(),
+        "ops::reduce: mesh must name cta or thread");
+    constexpr bool is_thread =
+        tilefoundry::detail::mesh_names_level<mesh_t, TopologyScope::thread>();
+    using m_layout_t =
+        typename tilefoundry::detail::mesh_axes_of<mesh_t,
+                                                   TopologyScope::thread>;
     constexpr int m_rank = cute::tuple_size<src_attrs>::value;
     static_assert(tilefoundry::detail::shard_attrs_match_mesh<SrcSL>() &&
                       tilefoundry::detail::shard_attrs_match_mesh<DstSL>(),
@@ -290,11 +301,13 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
         "ops::reduce: the two operands must name one mesh -- axis i "
         "of src's mesh and axis i of dst's are what the reduced set "
         "is the difference of, and two meshes make i mean two things");
-    static_assert(scope == TopologyScope::thread || scope == TopologyScope::cta,
-                  "ops::reduce: a reduce mesh's scope must be cta or thread -- "
-                  "the warp level has no program_id to name a participant with "
-                  "and scope_count is a sentinel, so a warp-sized grouping is "
-                  "an axis of a thread mesh's layout");
+    static_assert(
+        is_thread ||
+            tilefoundry::detail::mesh_names_level<mesh_t, TopologyScope::cta>(),
+        "ops::reduce: a reduce mesh's scope must be cta or thread -- "
+        "the warp level has no program_id to name a participant with "
+        "and scope_count is a sentinel, so a warp-sized grouping is "
+        "an axis of a thread mesh's layout");
 
     int m_ext[m_rank] = {};
     bool reduced[m_rank] = {};
@@ -328,8 +341,9 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
     /// where the block has 8 warps, a workspace read at ``0..255``, and a mean
     /// divided by 32 times too much.
     for (int i = m_rank - 1; i >= 0; --i) {
-        if (scope == TopologyScope::thread) {
-            const int room = kWarpSize / stride;
+        if (is_thread) {
+            const int room =
+                tilefoundry::detail::MeshWarpView<mesh_t>::lane_extent / stride;
             const int lanes =
                 room <= 1 ? 1 : (m_ext[i] < room ? m_ext[i] : room);
             lanes_of[i] = lanes;
@@ -361,8 +375,12 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
         }
         warps_per_group *= warps_of[i];
     }
-    return {lane_reduced, warps_per_group, lanes_reduced, mesh_reduced,
-            warp_aligned};
+    return {lane_reduced, warps_per_group,     lanes_reduced, mesh_reduced,
+            warp_aligned, warps_per_group > 1, false,         false};
+}
+
+template <class SrcSL, class DstSL> CUTE_HOST_DEVICE constexpr plan_t plan() {
+    return reduce_dispatch<SrcSL, DstSL>();
 }
 
 /// Detector for a nested ``typename T::shard_layout_type``. Selects the sharded

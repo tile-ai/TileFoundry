@@ -104,7 +104,7 @@ __device__ float contract(AView const &a, BView const &b, int n) {
 template <class T> CUTE_HOST_DEVICE constexpr int lane_axis_extent() {
     using sl_t = typename cute::remove_cvref_t<T>::shard_layout_type;
     using shape_t = cute::remove_cvref_t<decltype(cute::shape(
-        mesh_positions_t<typename sl_t::mesh::layout>{}))>;
+        tilefoundry::detail::mesh_positions_t<typename sl_t::mesh::layout>{}))>;
     return int(cute::get<cute::tuple_size<shape_t>::value - 1>(shape_t{}));
 }
 
@@ -116,6 +116,8 @@ template <class T> CUTE_HOST_DEVICE constexpr int lane_axis_extent() {
 struct Warp {
     template <class Lhs, class Rhs, class Dst>
     __device__ void operator()(Lhs const &lhs, Rhs const &rhs, Dst &dst) const {
+        static_assert(tilefoundry::shard_mesh_instances<Lhs>() <= kWarpSize,
+                      "ops::dot: a cross-warp mesh requires workspace");
         static_assert(lane_axis_extent<Lhs>() == kWarpSize,
                       "ops::dot (warp tier): the fastest axis of the operands' "
                       "mesh must be exactly one warp of 32 lanes -- the "

@@ -13,6 +13,10 @@ from pathlib import Path
 
 import pytest
 import torch
+import transformers.models.qwen3_5_moe.modeling_qwen3_5_moe as modeling
+from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
+    Qwen3_5MoeTextRotaryEmbedding,
+)
 
 from tests.models.qwen3_5_35b_a3b import reference
 from tests.models.qwen3_5_35b_a3b.model import (
@@ -72,10 +76,6 @@ def test_mrope_degenerates_in_a_text_only_fixture():
     module's output equals an ordinary partial RoPE at ``rotary_dim``, which is
     what these tests therefore cover -- the partial factor, not mrope.
     """
-    from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (  # noqa: PLC0415
-        Qwen3_5MoeTextRotaryEmbedding,
-    )
-
     shape = reference.CONFIG
     partial_rotary_factor = float(shape.rope_parameters["partial_rotary_factor"])
     rotary_dim = int(shape.head_dim * partial_rotary_factor)
@@ -129,8 +129,6 @@ def test_multi_token_prediction_has_no_oracle_in_the_installed_transformers():
     reference would be circular. If transformers gains an oracle, this measured
     gate fails and must be lifted deliberately.
     """
-    import transformers.models.qwen3_5_moe.modeling_qwen3_5_moe as modeling  # noqa: PLC0415
-
     assert reference.CONFIG.mtp_num_hidden_layers == 1
 
     source = Path(inspect.getfile(modeling)).read_text()

@@ -541,6 +541,9 @@ class TensorView(Op):
     multiplied by the view extent.
   - The coordinate count MUST match the logical window rank before any
     shard-owned layout axes are removed locally.
+  - `memory` MAY be an allocated `ShardTensor`; in that case the view
+    reprojects the same storage with a new shard layout, using the tensor's
+    engine rather than its existing shard layout.
 
 ##### Copy
 ```python
@@ -665,7 +668,7 @@ class Reduce(Op):
 `dst = sum(lhs * rhs)` in one statement, and not an `elementwise` followed by a
 `Reduce`: materialising the product first would cost a register per element of
 the row, which is what makes that pair the wrong spelling here ([runtime
-§3.7](./runtime.md#37-tilefoundryopsdot-fused-multiply-contract)).
+§3](./runtime.md#3-runtime-ops)).
 
 ```python
 class Dot(Op):
@@ -1069,7 +1072,7 @@ wait for a tile it did not fetch.
 Which instruction carries it is the runtime's choice from the operand shard
 layouts, not something this op names: a contiguous run takes `cp.async.bulk`,
 anything else takes an element path ([runtime
-§3.5](./runtime.md#35-tilefoundryopstma_copy-barrier-completing-gmemsmem-staging)).
+§3](./runtime.md#3-runtime-ops)).
 Carrying that on the op would be codegen selecting a tier, which
 [§2.3](#23-tir-ops) forbids.
 

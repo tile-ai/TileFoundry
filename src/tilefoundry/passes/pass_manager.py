@@ -5,12 +5,13 @@ function fallback. Active dump scopes receive before and after IR snapshots;
 disabled or absent scopes perform no I/O. See
 [passes §5](docs/spec/passes.md#5-passmanager).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
 from tilefoundry.dump import DumpFlags, DumpScope, dump
-from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.module import Module, module_functions
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.verify import verify_function as verify_hir_function
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -45,24 +46,20 @@ class PassManager:
         object identity changed between ``prev`` and ``curr``. Whole-
         function fallback per [passes §7](docs/spec/passes.md#7-implemented-passes).
         """
-        prev_by_name = {f.name: f for f in prev.functions}
-        prim_fns = [f for f in curr.functions if isinstance(f, PrimFunction)]
-        for fn in curr.functions:
+        prev_by_name = {f.name: f for f in module_functions(prev)}
+        for fn in module_functions(curr):
             if prev_by_name.get(fn.name) is fn:
                 continue
             if isinstance(fn, HirFunction):
                 verify_hir_function(fn)
             elif isinstance(fn, PrimFunction):
-                verify_prim_function(fn, module_fns=prim_fns)
-
+                verify_prim_function(fn, module_fns=curr)
     def _check_requires(self) -> None:
         seen: set[str] = set()
         for p in self.passes:
             for r in p.requires:
                 if r not in seen:
-                    raise ValueError(
-                        f"pass {p.name!r} requires {r!r} not registered before it"
-                    )
+                    raise ValueError(f"pass {p.name!r} requires {r!r} not registered before it")
             seen.add(p.name)
 
 

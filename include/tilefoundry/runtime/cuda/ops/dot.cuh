@@ -13,7 +13,7 @@
 /// With no workspace the contraction lives inside a warp; with one it spans the
 /// block. Either way every participant leaves holding the total, and the load
 /// width is the shard layouts' ([runtime
-/// §3.7](docs/spec/runtime.md#37-tilefoundryopsdot-fused-multiply-contract)).
+/// §3](docs/spec/runtime.md#3-runtime-ops)).
 template <class Lhs, class Rhs, class Dst,
           class Ws = reduce_impl::no_workspace_t>
 __device__ inline void dot(Lhs const &lhs, Rhs const &rhs, Dst &dst,

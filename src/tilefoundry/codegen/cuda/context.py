@@ -34,7 +34,6 @@ def topology_scope_str(name: str) -> str:
     """
     scopes = {
         "cta": "tilefoundry::TopologyScope::cta",
-        "warp": "tilefoundry::TopologyScope::warp",
         "thread": "tilefoundry::TopologyScope::thread",
     }
     try:

@@ -2,6 +2,7 @@
 
 Three public verbs, all accept ``Module`` exclusively.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -25,6 +26,7 @@ class CompilerOptions:
     Serialisation is deterministic: ``target`` + extra fields as
     sorted key-value pairs join by null separator.
     """
+
     target: Target
 
     def __post_init__(self) -> None:
@@ -34,7 +36,6 @@ class CompilerOptions:
         """Deterministic text serialisation for cache-key computation."""
         parts = [f"target={self.target!r}"]
         return "\0".join(parts)
-
 
 
 def normalize_to_module(fn_or_mod: HirFunction | Module) -> Module:
@@ -54,19 +55,19 @@ def normalize_to_module(fn_or_mod: HirFunction | Module) -> Module:
             entry=fn_or_mod.name,
         )
     if isinstance(fn_or_mod, Module):
-
         fn_or_mod.entry_function()
         return fn_or_mod
     raise TypeError(
-        f"normalize_to_module: expected Function or Module, "
-        f"got {type(fn_or_mod).__name__}"
+        f"normalize_to_module: expected Function or Module, got {type(fn_or_mod).__name__}"
     )
+
 
 def _build_default_pipeline() -> PassManager:
     pm = PassManager()
     pm.add(HirToTirPass())
     pm.add(BufferizePass())
     return pm
+
 
 def lower(
     mod: Module,
@@ -88,10 +89,6 @@ def lower(
     if target is not None:
         target = target_instance(target)
 
-
-
-
-
     try:
         module_target = mod.resolve_target()
     except ValueError:
@@ -106,17 +103,23 @@ def lower(
     for topology in mod.effective_topologies():
         module_target.validate_program_topology(topology)
 
-    pm = _build_default_pipeline()
-    result = pm.run(mod)
-    merged = dict(result.metadata)
-    return Module(
-        name=result.name,
-        functions=result.functions,
-        entry=result.entry,
-        target=module_target,
-        topologies=result.topologies,
-        metadata=merged,
-    )
+    def lower_tree(node: Module) -> Module:
+        """Lower descendants first, retaining the tree for parent host entries."""
+        lowered_children = tuple(lower_tree(child) for child in node.modules)
+        result = _build_default_pipeline().run(node)
+        return Module(
+            name=result.name,
+            functions=result.functions,
+            entry=result.entry,
+            modules=lowered_children,
+            target=result.target,
+            topologies=result.topologies,
+            metadata=dict(result.metadata),
+            methods=result.methods,
+        )
+
+    return lower_tree(mod)
+
 
 def build(
     mod: Module,
@@ -130,9 +133,7 @@ def build(
     Raises ``ValueError`` if missing or if explicit *target* conflicts.
     """
     if not isinstance(mod, Module):
-        raise TypeError(
-            f"tilefoundry.build: expected Module, got {type(mod).__name__}."
-        )
+        raise TypeError(f"tilefoundry.build: expected Module, got {type(mod).__name__}.")
     if target is not None:
         target = target_instance(target)
     try:
@@ -146,8 +147,6 @@ def build(
             f"tilefoundry.build: explicit target {_target_summary(target)} "
             f"conflicts with the Module Target {_target_summary(module_target)}"
         )
-
-
 
     workdir = os.path.join(
         tempfile.gettempdir(), f"tilefoundry_build_{mod.entry}_{os.getpid()}_split"
@@ -172,7 +171,7 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
     )
     from tilefoundry.codegen.linker import link_modules  # noqa: PLC0415
     from tilefoundry.codegen.registry import (  # noqa: PLC0415
-        group_functions_by_target,
+        group_modules_by_target,
     )
     from tilefoundry.passes.transforms.host_entry import (  # noqa: PLC0415
         insert_default_host_entry,
@@ -181,19 +180,30 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
     from tilefoundry.runtime.loader import load_linked_module  # noqa: PLC0415
 
     linked = insert_default_host_entry(mod)
-    groups = group_functions_by_target(linked)
+    module_groups = group_modules_by_target(linked)
     from tilefoundry.target import CpuTarget, CudaTarget  # noqa: PLC0415
 
     device_groups = [
-        (target, functions)
-        for target, functions in groups.items()
+        (owner, target, functions)
+        for owner, target, functions in module_groups
         if isinstance(target, CudaTarget)
     ]
-    if len(device_groups) != 1:
-        raise ValueError(
-            f"tilefoundry.build: module {linked.name!r} has no CUDA device functions"
+    if not device_groups:
+        raise ValueError(f"tilefoundry.build: module {linked.name!r} has no CUDA device functions")
+    device_target = device_groups[0][1]
+    if any(target != device_target for _, target, _ in device_groups[1:]):
+        from tilefoundry.target.base import _target_summary  # noqa: PLC0415
+
+        _, first_target, first_functions = device_groups[0]
+        _, second_target, second_functions = next(
+            group for group in device_groups[1:] if group[1] != device_target
         )
-    device_target, cuda_group = device_groups[0]
+        raise ValueError(
+            f"tilefoundry: module {linked.name!r} mixes unequal device Targets: "
+            f"{_target_summary(first_target)} (function {first_functions[0].name!r}) "
+            f"vs {_target_summary(second_target)} (function {second_functions[0].name!r}); "
+            "multiple device translation units are not supported"
+        )
     cpu_entry = linked.entry_function()
     if not isinstance(cpu_entry.target, CpuTarget):
         raise ValueError(
@@ -201,14 +211,11 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
             f"after normalization"
         )
 
-    device_module = device_target.get_code_generator().emit(
-        linked, cuda_group, device_target
+    device_modules = tuple(
+        device_target.get_code_generator().emit(owner, functions, device_target)
+        for owner, _, functions in device_groups
     )
-    host_module = cpu_entry.target.get_code_generator().emit(
-        linked, (cpu_entry,), cpu_entry.target
-    )
-
-
+    host_module = cpu_entry.target.get_code_generator().emit(linked, (cpu_entry,), cpu_entry.target)
 
     entry_buffer_params = tuple(
         p for p in cpu_entry.params if not _is_hidden_shape_scalar(p, cpu_entry.params)
@@ -221,13 +228,14 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
 
     cuda_arch = device_target.arch.removeprefix("sm_")
     linked_module = link_modules(
-        (device_module, host_module),
+        (*device_modules, host_module),
         workdir=workdir,
         lib_name=cpu_entry.name,
         entry=entry_type,
         cuda_arch=cuda_arch,
     )
     return load_linked_module(linked_module)
+
 
 def compile(
     mod: Module,
@@ -241,6 +249,7 @@ def compile(
     """
     lowered = lower(mod, target=target)
     return build(lowered)
+
 
 def _canonical_module_text(mod: Module) -> str:
     """Produce canonical text for cache-key: entry-function source + topologies.
@@ -259,6 +268,7 @@ def _canonical_module_text(mod: Module) -> str:
             topo_lines.append(f"Topology({t.name!r}, {t.size})")
         fn_text += "\n" + "\n".join(topo_lines)
     return fn_text
+
 
 def jit(
     fn_or_mod,
@@ -282,16 +292,12 @@ def jit(
             f"Accepted parameters are: fn_or_mod, target, options."
         )
 
-
     if not isinstance(fn_or_mod, (HirFunction, Module)):
         raise TypeError(
-            f"tilefoundry.jit: expected Function or Module, "
-            f"got {type(fn_or_mod).__name__}"
+            f"tilefoundry.jit: expected Function or Module, got {type(fn_or_mod).__name__}"
         )
 
-
     mod = normalize_to_module(fn_or_mod)
-
 
     if target is None:
         try:
@@ -308,7 +314,6 @@ def jit(
             f"conflicts with the resolved Target {_target_summary(target)}"
         )
 
-
     canonical_text = _canonical_module_text(mod)
     payload = canonical_text + "\0" + repr(target) + "\0" + options.canonical_text()
     key = hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -317,18 +322,23 @@ def jit(
         _jit_cache[key] = compile(mod, target=target)
     return _jit_cache[key]
 
+
 _jit_cache: dict[str, "RuntimeModule"] = {}
+
 
 def _jit_cache_clear() -> None:
     """Clear the jit cache (for testing)."""
     _jit_cache.clear()
 
+
 def _jit_cache_info() -> dict:
     """Return cache stats dict."""
     return {"size": len(_jit_cache)}
 
+
 jit.cache_clear = _jit_cache_clear  # type: ignore[attr-defined]
-jit.cache_info = _jit_cache_info    # type: ignore[attr-defined]
+jit.cache_info = _jit_cache_info  # type: ignore[attr-defined]
+
 
 def _jit_cache_key_payload(
     fn_or_mod: HirFunction | Module,
@@ -356,5 +366,6 @@ def _jit_cache_key_payload(
         repr(target),
         options.canonical_text(),
     )
+
 
 __all__ = ["lower", "build", "compile", "jit", "normalize_to_module", "CompilerOptions"]

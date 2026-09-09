@@ -628,18 +628,6 @@ under `tilefoundry/runtime/cuda/runtime.cuh` (the CPU surface under
 (`runtime/<target>/…`), no intermediate `target/` segment. Generated code MUST
 include only the umbrella header and MUST NOT include target subheaders directly.
 
-`runtime.cuh` also re-exports the CuTe primitives generated code is written in
-terms of — `cute::copy`, `cute::make_tensor` and the layout algebra behind
-`cute::Tensor` ([§2.9](#29-tensor-and-storage)) — so a generated translation
-unit needs no `cute/` include of its own. A re-exported primitive keeps CuTe's
-own contract, which this document does not restate: that `cute::copy` requires
-`size(src) == size(dst)` and compatible element types is CuTe's requirement and
-not one the runtime adds. **A CuTe primitive is not a runtime op** and is not in
-[§3](#3-runtime-ops)'s list; where an op is one of them with the operands
-resolved to this instance's slice first, that op's own entry says so —
-`ops::copy` ([§3.3](#33-tilefoundryopscopy-tile-copy)) is `cute::copy` read that
-way.
-
 ### 2.1 `TopologyScope`
 
 ```cpp
@@ -701,21 +689,18 @@ always a runtime query returning the current execution instance id.
  * @brief Which level of the launch a mesh spreads over. Nothing else.
  * @tparam Scope the program topology level
  */
-template <TopologyScope Scope>
-struct Topology {
-  static constexpr TopologyScope scope = Scope;  ///< the level, and no extent beside it
-};
-
 /**
- * @brief A device mesh: one topology level bound to a CuTe mesh layout.
- * @tparam TTopo a `Topology<Scope>`
+ * @brief A device mesh: a CuTe layout bound to one or more topology levels.
  * @tparam TMeshLayout a `cute::Layout`, or a `cute::ComposedLayout` for a slice
+ * @tparam Topos topology levels named by this mesh
  */
-template <class TTopo, class TMeshLayout>
+template <class TMeshLayout, TopologyScope... Topos>
 struct Mesh {
-  using topology = TTopo;      ///< the level, as a type
   using layout = TMeshLayout;  ///< the positions, as a type
+  static constexpr auto topologies = cute::make_tuple(Topos...);
+  static constexpr TopologyScope first_scope = cute::get<0>(topologies);
   TMeshLayout layout_value;    ///< the positions, as a value
+  CUTE_HOST_DEVICE auto local_index() const noexcept;
 };
 
 /**
@@ -748,7 +733,8 @@ constexpr auto make_mesh(Extents const& extents);
     how many instances a mesh has is `cute::size(Mesh::layout)` and how they
     are shaped is `cute::shape(...)`. `Topology` states no extent, and `Mesh`
     no base.
-  - One level per mesh. An IR mesh naming several levels lowers to the first;
+  - One level per mesh. An IR mesh naming several levels is rejected as
+    temporarily unsupported;
     finer groupings (a warp of a block) are an axis of the layout, not a second
     `Topology`.
   - The stride order of `make_mesh` is what turns a linear instance id into a
@@ -894,62 +880,6 @@ auto make_shard_tensor(T const& tensor, GL global_layout, SL shard_layout)
 - constraints:
   - Factory. `T` must be a CuTe tensor/view; raw pointers rejected at compile time.
 
-### 2.8 `tilefoundry::copy` — Shard-aware Overloads
-
-```cpp
-/**
- * @brief Copy the full tensor, shard → plain.
- * @param src the shard-tensor source
- * @param dst the plain destination tensor
- */
-template <class T, class GL, class SL, class DT>
-void copy(ShardTensor<T, GL, SL> const& src, DT& dst);
-
-/**
- * @brief Copy the full tensor, plain → shard.
- * @param src the plain source tensor
- * @param dst the shard-tensor destination
- */
-template <class ST, class T, class GL, class SL>
-void copy(ST const& src, ShardTensor<T, GL, SL>& dst);
-
-/**
- * @brief Copy this instance's slice, shard → shard.
- * @param src the shard-tensor source
- * @param dst the shard-tensor destination
- */
-template <class TS, class GLS, class SLS, class TD, class GLD, class SLD>
-void copy(ShardTensor<TS, GLS, SLS> const& src, ShardTensor<TD, GLD, SLD>& dst);
-
-/**
- * @brief Copy the full tensor, plain → plain.
- * @param src the source tensor
- * @param dst the destination tensor
- */
-template <class ST, class DT>
-void copy(ST const& src, DT& dst);
-```
-
-- constraints:
-  - Each overload copies what `local()` ([§2.10](#210-local)) leaves this
-    execution instance, so a copy the mesh splits across threads is a
-    thread-scoped shard layout rather than a strided loop at the call site.
-  - **The move width is a property of the layouts, not of the call.** It is the
-    largest power of two both operands run contiguously over —
-    `max_common_vector` of the two *projected* layouts, which
-    [§2.10.2](#2102-computation) derives statically from the shard layout and
-    the mesh — capped so neither side's move exceeds 16 bytes.
-  - A dtype change does not force the width to one element: the wide load still
-    holds and the conversion happens on the way out. The cap follows the wider
-    of the two element types.
-  - Register fragments take the element path. Addressing `&frag(i)` under a loop
-    the compiler cannot unroll spills the fragment to local memory, which costs
-    more than the wider move saves.
-  - Where the shard's offset lands is the one thing a layout cannot state, so
-    the implementation tests the two base pointers against the width's alignment
-    and falls back to the element path when it does not hold. That is one
-    comparison, not a scan.
-
 ### 2.10 `local()`
 
 ```cpp
@@ -1041,18 +971,22 @@ flowchart LR
 
 **What is an op.** An op's behaviour is derivable from the layout system's
 description of its arguments: its operands are `ShardTensor`s or a `Mesh`, and
-its tier is read off their layouts. That admits exactly seven entries, and
-`ops::` holds these and nothing else:
+its tier is read off their layouts. An op is one indivisible dependency chain
+or one per-element map; a composition of two ops is not a third one. What that
+admits is a list and not a count — a number is a fact about today's list, and
+the one time it was written down as the rule it argued a dependency chain into
+`elementwise` to keep the count. `ops::` holds these and nothing else:
 
 | entry | operands the geometry comes from |
 | --- | --- |
-| `elementwise` ([§3.8](#38-tilefoundryopselementwise-pointwise)) | the destination's local domain, and a stride-0 mode wherever a source broadcasts |
-| `copy` ([§3.3](#33-tilefoundryopscopy-tile-copy)) / `copy_async` ([§3.4](#34-tilefoundryopscopy_async-async-gmemsmem-staging)) | both operands' shard layouts: shape, strides, share and move width |
-| `reduce` ([§3.2](#32-tilefoundryopsreduce-reduction-family)) | the axes the destination broadcasts that the source splits |
-| `dot` ([§3.7](#37-tilefoundryopsdot-fused-multiply-contract)) | the axes the operands' meshes contract |
-| `mma` ([§3.6](#36-tilefoundryopsmma-matrix-multiply-accumulate)) | rank-2 static layouts are a tile; the warp count is the accumulator's mesh |
-| `sync` ([§3.1](#31-tilefoundryopssync-mesh-scoped-barrier)) | the mesh's scope, base and count |
-| `tma_copy` ([§3.5](#35-tilefoundryopstma_copy-barrier-completing-gmemsmem-staging)) | both shard layouts, asserted: one contiguous run each, whole tiles, matching element types |
+| `elementwise` | the destination's local domain, and a stride-0 mode wherever a source broadcasts |
+| `copy` / `copy_async` | both operands' shard layouts: shape, strides, share and move width |
+| `reduce` | the axes the destination broadcasts that the source splits |
+| `dot` | the axes the operands' meshes contract |
+| `mma` | rank-2 static layouts are a tile; the warp count is the accumulator's mesh |
+| `rmsnorm` | the row dependency chain and the destination's shard layout |
+| `sync` | the mesh's scope, base and count |
+| `tma_copy` | both shard layouts, asserted: one contiguous run each, whole tiles, matching element types |
 
 Anything that takes a raw pointer, an `int` or a type and answers a question
 about it is not an op but a utility, and belongs outside `ops::` — the
@@ -1070,10 +1004,9 @@ time** from the operand `ShardLayout`s, together with any codegen-static geometr
 passed as template parameters, through a template trait, and is selected inside
 the entry (`if constexpr`). Codegen emits one uniform call per op and never
 selects a tier, computes a per-tier parameter, or carries the selection on the
-TIR op. `ops::reduce` ([§3.2](#32-tilefoundryopsreduce-reduction-family))
-derives its reduction level from the operand shard layouts and `ops::sync`
-([§3.1](#31-tilefoundryopssync-mesh-scoped-barrier)) derives its participant
-predicate from the barrier geometry; both are instances of this principle. A
+TIR op. `ops::reduce` derives its reduction level from the operand shard
+layouts and `ops::sync` derives its participant predicate from the barrier
+geometry; both are instances of this principle. A
 target runtime implementation MAY select an internal optimized load/store path
 (such as a wider vector copy) behind this single entry without changing the
 public entry or its observable result. The codegen side is
@@ -1081,9 +1014,9 @@ public entry or its observable result. The codegen side is
 
 **One pointwise op.** Every elementwise operation — fill, cast, clamp, `relu`,
 add, multiply, and every broadcast shape of those — is the single entry
-`ops::elementwise` ([§3.8](#38-tilefoundryopselementwise-pointwise)). Arity
-is the length of its source pack, the operation is the callable it takes, and a
-broadcast operand is a stride-0 mode on that operand's layout. None of those
+`ops::elementwise`. Arity is the length of its source pack, the operation is
+the callable it takes, and a broadcast operand is a stride-0 mode on that
+operand's layout. None of those
 three is a name: there is no `ops::fill`, `ops::cast`, `ops::unary`,
 `ops::binary`, or `ops::binary_bcast_*`, and adding one would be re-encoding in
 a symbol what an argument already states.
@@ -1092,25 +1025,24 @@ a symbol what an argument already states.
 functors, and op tags MUST be annotated `__device__` (their bodies are
 device-only). `CUTE_HOST_DEVICE` MUST be reserved for tensor-view / layout
 helpers genuinely capable of host compilation (e.g. `local()`,
-`make_shard_tensor`, `tilefoundry::copy`).
+`make_shard_tensor`).
 
-### 3.1 `tilefoundry::ops::sync` (mesh-scoped barrier)
+#### `runtime/cuda/ops/`
+
+Ops are organised by the header they live in; the file is organisation, not a
+separate layer. Each entry below states what its tier is read off, and nothing
+a sibling spec already owns.
+
+##### `sync`
 
 ```cpp
 /**
  * @brief Barrier over every instance of a mesh.
  * @param mesh the participants; its scope and layout pick the barrier
  */
-template <class TTopo, class TLayout>
-__device__ void sync(Mesh<TTopo, TLayout> const& mesh);
-
-/** @param bar the module's two-word grid-barrier counter pair, or nullptr */
-template <class TTopo, class TLayout>
-__device__ void sync(Mesh<TTopo, TLayout> const& mesh, unsigned int* bar);
-
-/** @param id one of the fifteen named hardware barriers, 1..15 */
-template <class TTopo, class TLayout, int Id>
-__device__ void sync(Mesh<TTopo, TLayout> const& mesh, BarrierId<Id> id);
+/** @param resource the counter or named barrier required by the selected tier */
+template <class TMesh, TopologyScope... Topos, class TRes = no_resource_t>
+__device__ void sync(Mesh<TMesh, Topos...> const& mesh, TRes resource = {});
 ```
 
 - constraints:
@@ -1147,7 +1079,7 @@ __device__ void sync(Mesh<TTopo, TLayout> const& mesh, BarrierId<Id> id);
     launch, so the caller passes it; with none, a cooperative launch's grid
     group is used instead.
 
-### 3.2 `tilefoundry::ops::reduce` (reduction family)
+##### `reduce`
 
 ```cpp
 /**
@@ -1179,10 +1111,9 @@ __device__ void reduce(Src const& src, Dst& dst, Ws&& ws = {});
     runtime.
   - A reduction whose reduced axis crosses CTA boundaries is not supported.
 
-### 3.3 `tilefoundry::ops::copy` (tile copy)
+##### `copy`
 
-The op-surface spelling of `tilefoundry::copy` ([§2.8](#28-tilefoundrycopy--shard-aware-overloads)):
-one entry, taking tensors, with the transfer shape, the strides, the element
+One entry, taking tensors, with the transfer shape, the strides, the element
 types, the share this instance owns and the move width all read off the operand
 `ShardLayout`s.
 
@@ -1197,14 +1128,26 @@ __device__ void copy(TSrc const& src, TDst& dst);
 ```
 
 - constraints:
-  - The width rule, the dtype-change rule, the register-fragment rule and the
-    alignment fallback are [§2.8](#28-tilefoundrycopy--shard-aware-overloads)'s
-    and are not restated here.
+  - **The move width is a property of the layouts, not of the call.** It is the
+    largest power of two both operands run contiguously over —
+    `max_common_vector` of the two *projected* layouts, which
+    [§2.10.2](#2102-computation) derives statically from the shard layout and
+    the mesh — capped so neither side's move exceeds 16 bytes.
+  - A dtype change does not force the width to one element: the wide load still
+    holds and the conversion happens on the way out. The cap follows the wider
+    of the two element types.
+  - Register fragments take the element path. Addressing `&frag(i)` under a
+    loop the compiler cannot unroll spills the fragment to local memory, which
+    costs more than the wider move saves.
+  - Where the shard's offset lands is the one thing a layout cannot state, so
+    the implementation tests the two base pointers against the width's
+    alignment and falls back to the element path when it does not hold. That
+    is one comparison, not a scan.
   - The call site names no vector width and no thread index. A copy split across
     a block's threads is a thread-scoped mesh in the operands' shard layouts;
     the entry then copies exactly the slice `local()` hands each thread.
 
-### 3.4 `tilefoundry::ops::copy_async` (async gmem→smem staging)
+##### `copy_async`
 
 ```cpp
 /**
@@ -1220,23 +1163,22 @@ __device__ void copy_async(TSrc const& src, TDst& dst);
   - The call is non-blocking; generated code orders later reads through
     `cp_async_commit` and `cp_async_wait`.
   - The name is the contract: a pair of projected views `cp.async` cannot move
-    a 4-byte-or-wider word of does not compile, and takes `ops::copy`
-    ([§3.3](#33-tilefoundryopscopy-tile-copy)) instead. There is no synchronous
-    tier hiding under this entry for the caller to wait on.
+    a 4-byte-or-wider word of does not compile, and takes `ops::copy` instead.
+    There is no synchronous tier hiding under this entry for the caller to wait
+    on.
   - The two projected slices hold the same number of elements. Where an
     instance owns part of a wider destination, that is the destination's shard
     layout to state; the source's offset is not borrowed for it.
   - Runtime implementation details such as vector width and tail handling live
     in code comments, not this spec entry.
 
-### 3.5 `tilefoundry::ops::tma_copy` (barrier-completing gmem→smem staging)
+##### `tma_copy`
 
 Stage a tile into shared memory and signal an mbarrier when it is readable. It
-is not a tier of `ops::copy_async`
-([§3.4](#34-tilefoundryopscopy_async-async-gmemsmem-staging)): there every
-thread issues its own load and a commit closes the group, so the thread that
-issues is the thread that waits; here completion lands on a barrier, which is
-what lets a consumer wait for a tile it did not fetch.
+is not a tier of `ops::copy_async`: there every thread issues its own load and
+a commit closes the group, so the thread that issues is the thread that waits;
+here completion lands on a barrier, which is what lets a consumer wait for a
+tile it did not fetch.
 
 ```cpp
 /**
@@ -1291,7 +1233,7 @@ __device__ void tma_copy(Src const& src, Dst& dst, uint64_t* bar);
     property of the layout type, so an off-grain extent is a run-time hand-off
     to the element path inside the same entry — same barrier, same result.
 
-### 3.6 `tilefoundry::ops::mma` (matrix multiply-accumulate)
+##### `mma`
 
 `c += a @ b`, one entry, with the tier read off the operand layouts: rank-2
 static shard layouts on `a` and `b` are a tile and the entry loops the atom over
@@ -1328,18 +1270,17 @@ __device__ void mma(TA const& a, TB const& b, TC& c);
     needs the map writes it as modes and attrs, the way it writes any other
     layout, and the tile it moves the fragment to or from is then the same map
     over a buffer — so rescaling a row of the accumulator or storing it out is
-    one `ops::elementwise` ([§3.8](#38-tilefoundryopselementwise-pointwise))
-    between two shards of one layout, with no fragment index at the call site.
+    one `ops::elementwise` between two shards of one layout, with no fragment
+    index at the call site.
   - Today's atom is `SM80_16x8x16_F32BF16BF16F32_TN`: bf16 operands, f32
     accumulate. Another instruction is another atom under the same entry, not
     another entry.
 
-### 3.7 `tilefoundry::ops::dot` (fused multiply-contract)
+##### `dot`
 
 `dst = sum(lhs * rhs)`. A matrix-vector product's inner loop is one statement,
-not an `elementwise` followed by a `reduce`
-([§3.2](#32-tilefoundryopsreduce-reduction-family)): materialising the product
-first would cost a register per element of the row, which is what makes that
+not an `elementwise` followed by a `reduce`: materialising the product first
+would cost a register per element of the row, which is what makes that
 pair the wrong spelling here.
 
 ```cpp
@@ -1360,8 +1301,8 @@ __device__ void dot(Lhs const& lhs, Rhs const& rhs, Dst& dst, Ws&& ws = {});
     each warp posting a partial into a slot. Either way every participant leaves
     holding the total, so a caller never broadcasts it back.
   - The load width is the operands' shard layouts', the same question
-    [§2.8](#28-tilefoundrycopy--shard-aware-overloads) answers for `copy`: the
-    run both sides share, capped by what both are aligned for and by 16 bytes.
+    the `copy` entry answers: the run both sides share, capped by what both are
+    aligned for and by 16 bytes.
     A row split so that a lane owns four contiguous elements loads eight bytes
     at a time; one that leaves it eight loads sixteen. The width appears neither
     at the call site nor on the op surface — the runtime derives it inside the
@@ -1373,7 +1314,7 @@ __device__ void dot(Lhs const& lhs, Rhs const& rhs, Dst& dst, Ws&& ws = {});
     ahead of it: what a warp then waits on is the row's latency, not its bytes.
   - Accumulation is f32 regardless of the operand type.
 
-### 3.8 `tilefoundry::ops::elementwise` (pointwise)
+##### `elementwise`
 
 `dst(i) = fn(src(i)...)` over the destination's local domain. The one pointwise
 op: arity is the pack's length, the operation is `fn`, and a broadcast operand
@@ -1394,9 +1335,10 @@ __device__ void elementwise(TOut& dst, Fn fn, TIn const&... src);
   - **`dst` and `fn` lead**, because the sources are a variadic pack. Zero
     sources is a fill, one is a map, two a combine; the same instantiation
     serves all three.
-  - `fn` is any callable, so the op tags (`mul_op`, `relu_op`, `clamp_op`, …)
-    are valid `fn` values as they stand. There is no separate tag path and
-    lambda path.
+  - `fn` is anything callable. The primitives the runtime ships
+    (`ops/primitive/`) are values, not ops, and are not in this section's list;
+    `reduce` and `dot` take the arity-2 ones too. There is no separate tag path
+    and lambda path.
   - **The extent is `size()` of the projected destination.** No count
     parameter: a hand-passed one is a second statement of a fact the layout
     already holds, free to disagree with it.
@@ -1411,6 +1353,32 @@ __device__ void elementwise(TOut& dst, Fn fn, TIn const&... src);
     through `(N):(0)`. `compose` states this against the operand's own layout,
     so a strided or sharded operand is read where it actually lies.
 
+##### `rmsnorm`
+
+```cpp
+/**
+ * @brief Normalise each row of src by its RMS, then scale by weight.
+ * @param src the source tile
+ * @param dst the destination tile
+ * @param weight the per-column scale
+ * @param eps added to the mean square before the inverse square root
+ */
+template <class TIn, class TOut, class TW>
+__device__ void rmsnorm(TIn const& src, TOut& dst, TW const& weight,
+                        float eps);
+```
+
+- constraints:
+  - An op, not a composition of `reduce` and `elementwise`. The row's sum of
+    squares feeds that same row's rescale, so the fused form carries the row's
+    whole state in one scalar; the decomposed form has to materialise it as an
+    `M * K` per-instance scratch.
+  - `M` and `K` come from the destination's shard layout. Neither is a
+    parameter, and neither is computed by codegen.
+  - Each instance must hold the whole source and destination tile; a mesh that
+    splits either operand needs per-instance `M` and `K`, which this entry does
+    not derive. The weight is a rank-1 vector of length `K`.
+
 ## 4. Warp Primitives
 
 `tilefoundry::shuffle_xor`, `tilefoundry::shuffle_elect` and
@@ -1423,14 +1391,14 @@ their shard layouts ([§3](#3-runtime-ops)). A warp primitive takes a value and 
 lane count — in one case not even that, only the calling thread's own id — so
 there is no layout for a tier selection to read and nothing an operand would
 have stated; each is one instruction or a short run of them, with one
-implementation and no tier at all. That admits exactly three entries, and the
-runtime's warp-scoped surface holds these and nothing else:
+implementation and no tier at all. The runtime's warp-scoped surface holds
+these and nothing else:
 
 | entry | what it takes instead of a layout |
 | --- | --- |
-| `shuffle_xor` ([§4.1](#41-tilefoundryshuffle_xor)) | one lane's value, the lane-id bits to exchange across, the participating lanes |
-| `shuffle_elect` ([§4.2](#42-tilefoundryshuffle_elect)) | nothing; the answer is a fact about the calling thread's id |
-| `warp_reduce` ([§4.3](#43-tilefoundrywarp_reduce)) | one lane's value, a combine functor, and the lanes per fold |
+| `shuffle_xor` | one lane's value, the lane-id bits to exchange across, the participating lanes |
+| `shuffle_elect` | nothing; the answer is a fact about the calling thread's id |
+| `warp_reduce` | one lane's value, a combine functor, and the lanes per fold |
 
 Being outside `ops::` is not licence to grow. A candidate taking a
 `ShardTensor` or a `Mesh` is an op, and belongs in [§3](#3-runtime-ops)'s closed
@@ -1438,16 +1406,20 @@ list or nowhere; a candidate offering a template parameter the hardware then
 clamps to one value is not an entry at all, because a parameter every value but
 one is clamped away from states nothing.
 
-**Why both surfaces exist.** `ops::reduce`
-([§3.2](#32-tilefoundryopsreduce-reduction-family)) is the op for folding a
+**Why both surfaces exist.** `ops::reduce` is the op for folding a
 *tensor* over a mesh, and it is built on the butterfly of
-[§4.3](#43-tilefoundrywarp_reduce) — `utility/warp.cuh` is included before
+`warp_reduce` — `utility/warp.cuh` is included before
 `ops/reduce.cuh` so the intra-warp tier folds through `warp_reduce` rather than
 spelling the butterfly a second time. A caller folding something it just
 computed, rather than something it stored, has no tensor to hand an op and
 reaches for the primitive.
 
-### 4.1 `tilefoundry::shuffle_xor`
+#### `runtime/cuda/utility/`
+
+**Not ops.** These take lanes and a width, not tensors and a mesh, so no
+layout describes them and no tier is read off anything.
+
+##### `shuffle_xor`
 
 ```cpp
 /**
@@ -1468,7 +1440,7 @@ __device__ T shuffle_xor(T value, int lane_mask, unsigned member_mask = 0xFFFFFF
     compile. Which types the intrinsic takes is a code-level fact and lives in
     code comments, not this entry.
 
-### 4.2 `tilefoundry::shuffle_elect`
+##### `shuffle_elect`
 
 ```cpp
 /**
@@ -1490,7 +1462,7 @@ __device__ bool shuffle_elect();
     answers `false` without reaching the warp-scoped election, whose result is
     defined only for the lanes in its member mask.
 
-### 4.3 `tilefoundry::warp_reduce`
+##### `warp_reduce`
 
 ```cpp
 /**
@@ -1512,8 +1484,7 @@ __device__ T warp_reduce(T value);
     reduction over a tile laid out several rows to a warp needs. The
     alternatives are a shared round trip or leaving every lane but one row's
     idle.
-  - `Combine` is invoked as `Combine{}(a, b)` — the spelling `ops::elementwise`
-    ([§3.8](#38-tilefoundryopselementwise-pointwise)) and `ops::reduce`
-    ([§3.2](#32-tilefoundryopsreduce-reduction-family)) use, so a merge is
-    defined once for all three and the op tags are valid `Combine` values as
+  - `Combine` is invoked as `Combine{}(a, b)` — the spelling
+    `ops::elementwise` and `ops::reduce` ([§3](#3-runtime-ops)) use, so a merge
+    is defined once for all three and the op tags are valid `Combine` values as
     they stand.

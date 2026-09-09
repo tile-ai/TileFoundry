@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
 from tilefoundry.codegen.cuda.tir.memory.tensor_view import render_shard_layout_value
-from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import program_topology
+from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import program_topologies
 from tilefoundry.ir.tir.memory import AllocTensor
 from tilefoundry.ir.tir.stmts import LetStmt
 from tilefoundry.ir.types.shape_helpers import (
@@ -102,7 +102,7 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
 
         if (
             storage is StorageKind.SMEM
-            and program_topology(layout_obj.mesh).name == "thread"
+            and program_topologies(layout_obj.mesh)[0].name == "thread"
         ):
             backing_shape = shape_upper_bound(layout_obj.layout.shape)
         else:

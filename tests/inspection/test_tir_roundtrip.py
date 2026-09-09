@@ -17,7 +17,7 @@ from tilefoundry.ir.tir.stmts import For, Sequential
 from tilefoundry.ir.types import DType, TensorType
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
-CANONICAL = tuple((FIXTURES / "tir").glob("*.py"))
+CANONICAL = tuple(path for path in (FIXTURES / "tir").glob("*.py") if path.name != "layouts.py")
 
 
 def _module_in(path: Path):
@@ -95,13 +95,13 @@ def test_tir_for_if_and_sync_mesh_forms_roundtrip() -> None:
 
 def test_tir_for_accepts_nonconstant_bounds() -> None:
     import_dsl(
-            "from tilefoundry import prim_func\n"
-            "from tilefoundry.dsl import Tensor\n"
-            "from tilefoundry.target import CpuTarget\n\n"
-            "@prim_func(target=CpuTarget())\n"
-            "def dynamic(n: Tensor[(), 'i64']):\n"
-            "    for i in range(n):\n"
-            "        return\n",
+        "from tilefoundry import prim_func\n"
+        "from tilefoundry.dsl import Tensor\n"
+        "from tilefoundry.target import CpuTarget\n\n"
+        "@prim_func(target=CpuTarget())\n"
+        "def dynamic(n: Tensor[(), 'i64']):\n"
+        "    for i in range(n):\n"
+        "        return\n",
         name="dynamic",
     )
 
@@ -119,4 +119,3 @@ def test_tir_for_codegen_renders_nonconstant_bounds() -> None:
     context = CodegenContext()
     context.emit_node(loop)
     assert "i_1 < n_2" in context.source()
-

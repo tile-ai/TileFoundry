@@ -69,7 +69,7 @@ def test_the_sliced_mesh_type_and_value_state_the_same_geometry() -> None:
     sliced = _BLOCK[2:4, :]
     numbers = re.compile(r"cute::Int<(-?\d+)>")
     assert numbers.findall(_mesh_layout_line(sliced)) == ["64", "2", "32", "32", "1"]
-    mesh_only = mesh_type(sliced).split("Topology<tilefoundry::TopologyScope::thread>, ")[1]
+    mesh_only = mesh_type(sliced)
     assert numbers.findall(mesh_only) == ["64", "2", "32", "32", "1"]
 
 

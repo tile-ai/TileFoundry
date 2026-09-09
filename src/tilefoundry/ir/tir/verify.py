@@ -59,7 +59,9 @@ from .symbol_ref import SymbolRef
 _PRIM_FUNCTION = "[tir §1.3](docs/spec/tir.md#13-primfunction)"
 
 
-def verify_prim_function(fn: PrimFunction, *, module_fns: Iterable[PrimFunction] = ()) -> None:
+def verify_prim_function(
+    fn: PrimFunction, *, module_fns: Iterable[PrimFunction] | Module = ()
+) -> None:
     """Per [tir §1.3](docs/spec/tir.md#13-primfunction)'s rule list."""
     _check_param_homogeneity(fn)
     if fn.variants:
@@ -77,6 +79,14 @@ def verify_prim_function(fn: PrimFunction, *, module_fns: Iterable[PrimFunction]
     ctx = VerifyContext()
     scope: list[Mesh] = []
 
+    from tilefoundry.ir.core.module import Module, module_functions  # noqa: PLC0415
+
+    if isinstance(module_fns, Module):
+        module_fns = (
+            function
+            for function in module_functions(module_fns)
+            if isinstance(function, PrimFunction)
+        )
     module_fn_map: dict[str, tuple[PrimFunction, ...]] = {}
     for f in module_fns:
         module_fn_map[f.name] = (*module_fn_map.get(f.name, ()), f)
@@ -535,6 +545,10 @@ def verify_module(fns) -> None:
     is never a variant, and every entry is callable (``body is None`` only when
     it carries variants).
     """
+    from tilefoundry.ir.core.module import Module, module_functions  # noqa: PLC0415
+
+    if isinstance(fns, Module):
+        fns = module_functions(fns)
     prim_fns = [f for f in fns if isinstance(f, PrimFunction)]
     prim_fns_with_variants = [
         variant for f in prim_fns for variant in (f, *f.variants)

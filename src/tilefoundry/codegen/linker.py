@@ -29,7 +29,14 @@ class LinkedModule:
     entry: EntryABI
 
 
-def _render_cmakelists(*, name: str, includes: list[str], device_options: str, cuda_arch: str) -> str:
+def _render_cmakelists(
+    *,
+    name: str,
+    includes: list[str],
+    device_options: str,
+    cuda_arch: str,
+    device_sources: list[str],
+) -> str:
     """Render the split-pipeline CMake project from its Jinja template."""
     # noqa lazy: jinja2 is already a codegen dep; import here keeps the linker
 
@@ -45,7 +52,11 @@ def _render_cmakelists(*, name: str, includes: list[str], device_options: str, c
         keep_trailing_newline=True,
     )
     return env.get_template("CMakeLists.txt.j2").render(
-        name=name, includes=includes, device_options=device_options, cuda_arch=cuda_arch
+        name=name,
+        includes=includes,
+        device_options=device_options,
+        cuda_arch=cuda_arch,
+        device_sources=device_sources,
     )
 
 
@@ -70,19 +81,23 @@ def link_modules(
 ) -> LinkedModule:
     """Link modules.
 
-    Separately compile a device ``cu`` module and a host ``cpp`` module, then
+    Separately compile device ``cu`` modules and one host ``cpp`` module, then
     link them into one host-callable shared library; return the ``LinkedModule``.
 
-    Requires exactly one ``cu`` module and exactly one ``cpp`` module. The device
+    Requires at least one ``cu`` module and exactly one ``cpp`` module. Each device
     module compiles with nvcc, the host module with a plain host compiler; the
     final link runs through nvcc (to pull in the CUDA runtime) and statically
     links libstdc++ so the ``.so`` keeps the GLIBCXX-independent load behaviour.
     """
     modules = tuple(modules)
-    if sorted(m.language for m in modules) != ["cpp", "cu"]:
+    if (
+        len(modules) < 2
+        or sum(m.language == "cpp" for m in modules) != 1
+        or sum(m.language == "cu" for m in modules) < 1
+    ):
         received = ", ".join(f"({m.target}, {m.language})" for m in modules)
         raise ValueError(
-            f"link_modules: requires exactly one 'cu' and one 'cpp' "
+            f"link_modules: requires one 'cpp' and at least one 'cu' "
             f"module, got [{received}]"
         )
     cu = [m for m in modules if m.language == "cu"]
@@ -93,7 +108,8 @@ def link_modules(
 
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
-    (workdir / "device.cu").write_text(cu[0].source)
+    for index, device in enumerate(cu):
+        (workdir / f"device_{index}.cu").write_text(device.source)
     (workdir / "host.cpp").write_text(cpp[0].source)
 
 
@@ -109,6 +125,7 @@ def link_modules(
         includes=[str(p) for p in includes],
         device_options=device_options,
         cuda_arch=cuda_arch,
+        device_sources=[f"device_{i}.cu" for i in range(len(cu))],
     )
     (workdir / "CMakeLists.txt").write_text(cmake_text)
 
@@ -125,7 +142,8 @@ def link_modules(
 
     with DumpScope("build"):
         dump("CMakeLists.txt", cmake_text, DumpFlags.BUILD_LOG)
-        dump("module.device.cu", cu[0].source, DumpFlags.BUILD_LOG)
+        for index, device in enumerate(cu):
+            dump(f"module.device_{index}.cu", device.source, DumpFlags.BUILD_LOG)
         dump("module.host.cpp", cpp[0].source, DumpFlags.BUILD_LOG)
         for step, cmd in (("cmake-configure", configure_cmd), ("cmake-build", build_cmd)):
             dump(f"{step}.cmd.txt", " ".join(cmd) + "\n", DumpFlags.BUILD_LOG)
@@ -144,7 +162,7 @@ def link_modules(
 
     source = (
         f"// cpu module\n{cpp[0].source}\n"
-        f"// cuda module\n{cu[0].source}"
+        f"// cuda modules\n{''.join(m.source for m in cu)}"
     )
     return LinkedModule(
         library_path=lib,

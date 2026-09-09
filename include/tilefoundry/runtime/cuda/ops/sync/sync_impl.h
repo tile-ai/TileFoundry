@@ -40,13 +40,22 @@ enum class Tier {
     illegal_ragged,
     illegal_scope
 };
+struct plan_t {
+    Tier tier;
+    int base;
+    int count;
+    bool needs_workspace;
+    bool needs_counter;
+    bool needs_bar_id;
+};
+template <Tier, class...> CUTE_HOST_DEVICE constexpr void reject();
 
 /// How many instances a mesh covers, as a compile-time number.
 ///
 /// Off the layout, like ``base`` below, and through the layout system's own
 /// ``mesh_instances`` rather than a second copy of the expression.
 template <class TMesh> CUTE_HOST_DEVICE constexpr int instances() {
-    return mesh_instances<TMesh>();
+    return tilefoundry::detail::mesh_instances<TMesh, TopologyScope::thread>();
 }
 
 /// The first instance a mesh covers, in its topology's own numbering.
@@ -55,7 +64,7 @@ template <class TMesh> CUTE_HOST_DEVICE constexpr int instances() {
 /// ``ComposedLayout`` whose offset is the slice origin, and an un-sliced one is
 /// a plain layout starting at zero.
 template <class TMesh> CUTE_HOST_DEVICE constexpr int base() {
-    return mesh_offset<typename TMesh::layout>();
+    return tilefoundry::detail::mesh_offset<typename TMesh::layout>();
 }
 
 /// How many instances the launch gives the level ``TMesh`` names.
@@ -67,7 +76,8 @@ template <class TMesh> CUTE_HOST_DEVICE constexpr int base() {
 /// exists -- and nvcc reports "explicit specialization must precede its first
 /// use". Naming it through ``TMesh`` defers the lookup into the kernel.
 template <class TMesh> CUTE_HOST_DEVICE constexpr int level_instances() {
-    return int(program_dim<TMesh::topology::scope>());
+    constexpr auto scope = TMesh::first_scope;
+    return int(program_dim<scope>());
 }
 
 /// The choices ``tir.Sync``'s ``classify`` makes, made the same way, so a
@@ -80,20 +90,20 @@ template <class TMesh> CUTE_HOST_DEVICE constexpr int level_instances() {
 /// coordinate per instance, one contiguous interval, and fitting inside the
 /// block. ``participation`` raises before a line is emitted.
 template <class TMesh> CUTE_HOST_DEVICE constexpr Tier classify() {
-    constexpr auto scope = TMesh::topology::scope;
     constexpr int first = base<TMesh>();
-    if constexpr (scope == TopologyScope::cta) {
+    if constexpr (tilefoundry::detail::mesh_names_level<TMesh,
+                                                        TopologyScope::cta>()) {
         /// A CTA mesh is never asked its size: a launch-sized grid has no
         /// static one, and the grid barrier counts CTAs out of ``gridDim``.
         /// Based past zero it covers only some of the grid, and the CTAs
         /// outside it never arrive.
         return first == 0 ? Tier::grid : Tier::illegal_grid_slice;
-    } else if constexpr (scope == TopologyScope::thread) {
+    } else if constexpr (tilefoundry::detail::mesh_names_level<
+                             TMesh, TopologyScope::thread>()) {
         constexpr int count = instances<TMesh>();
         constexpr int block = level_instances<TMesh>();
-        constexpr bool single_warp =
-            count <= kWarpSize &&
-            first / kWarpSize == (first + count - 1) / kWarpSize;
+        using warp_view = tilefoundry::detail::MeshWarpView<TMesh>;
+        constexpr bool single_warp = warp_view::warps() == 1;
         /// "Covers the whole block" is ``full_cta`` -- based at zero *and* as
         /// wide as the block -- not "based at zero", which is what this asked.
         /// They differ on a mesh narrowed from the front: ``m[0:2,:]`` of a
@@ -103,10 +113,13 @@ template <class TMesh> CUTE_HOST_DEVICE constexpr Tier classify() {
         /// other 64 never do is a hang. The width comes from the launch, so it
         /// cannot drift from it.
         if constexpr (first == 0 && count == block) {
-            return count == kWarpSize ? Tier::warp : Tier::block;
+            return warp_view::whole_warps && warp_view::warps() == 1
+                       ? Tier::warp
+                       : Tier::block;
         } else if constexpr (single_warp) {
             return Tier::warp;
-        } else if constexpr (first % kWarpSize == 0 && count % kWarpSize == 0) {
+        } else if constexpr (warp_view::whole_warps &&
+                             warp_view::warps_contiguous()) {
             /// A warp-aligned run is what the named barrier counts; anything
             /// else cuts a warp in half, part of it inside the barrier and
             /// part outside.
@@ -122,6 +135,12 @@ template <class TMesh> CUTE_HOST_DEVICE constexpr Tier classify() {
         /// handed both of them the block's barrier.
         return Tier::illegal_scope;
     }
+}
+
+template <class TMesh> CUTE_HOST_DEVICE constexpr plan_t plan() {
+    constexpr Tier tier = classify<TMesh>();
+    return {tier,  base<TMesh>(),      instances<TMesh>(),
+            false, tier == Tier::grid, tier == Tier::named};
 }
 
 /// The meshes that name no barrier, refused however they are handed in.
@@ -155,6 +174,10 @@ CUTE_HOST_DEVICE constexpr void reject_barrierless() {
                       "ops::sync: this Tier names a barrier and reached the "
                       "tail that stands for the ones that do not -- an "
                       "overload's dispatch chain is missing a case");
+}
+
+template <Tier P, class... Ts> CUTE_HOST_DEVICE constexpr void reject() {
+    reject_barrierless<P, Ts...>();
 }
 
 /// Every CTA of the launch.

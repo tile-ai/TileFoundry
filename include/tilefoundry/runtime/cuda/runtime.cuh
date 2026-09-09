@@ -93,16 +93,18 @@ template <TopologyScope T> CUTE_HOST_DEVICE size_t program_id() noexcept {
 }
 
 #include "layout/shard_layout.cuh"
+#include "layout/mesh_warp_view.cuh"
 #include "tensor_view/shard_tensor.cuh"
 #include "utility/warp.cuh"
 
 namespace ops {
 
 #include "tensor_view/ops_detail.cuh"
+/// Primitive callables must precede the elementwise, reduce and dot entries
+/// that instantiate or specialise on them.
+#include "ops/primitive/unary.h"
+#include "ops/primitive/binary.h"
 #include "ops/sync.cuh"
-/// elementwise leads: every pointwise op is one loop, and the tags it applies
-/// -- which reduce and dot reuse -- are part of that entry rather than headers
-/// of their own beside it.
 #include "ops/elementwise.cuh"
 #include "ops/copy.cuh"
 
@@ -110,6 +112,7 @@ namespace ops {
 #include "ops/reduce.cuh"
 /// dot after reduce: it reuses reduce's no-workspace tag.
 #include "ops/dot.cuh"
+#include "ops/rmsnorm.cuh"
 #include "ops/mma.cuh"
 
 }

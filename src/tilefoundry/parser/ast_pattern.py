@@ -1162,14 +1162,11 @@ class ModuleBuildContext:
         from tilefoundry.ir.hir.verify import verify_function  # noqa: PLC0415
         from tilefoundry.ir.tir.verify import verify_prim_function  # noqa: PLC0415
 
-        prim_functions = tuple(
-            function for function in functions if isinstance(function, runtime.PrimFunction)
-        )
         for function in functions:
             if isinstance(function, runtime.Function):
                 verify_function(function, module=result)
             elif isinstance(function, runtime.PrimFunction):
-                verify_prim_function(function, module_fns=prim_functions)
+                verify_prim_function(function, module_fns=result)
         return result
 
 

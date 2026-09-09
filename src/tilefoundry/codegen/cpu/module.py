@@ -5,6 +5,7 @@ Dispatch entries use a first-match shape predicate and throw on fallback. Output
 uses only TVM FFI, DLPack, and standard C++; CUDA syntax and types remain in the
 device module and shims.
 """
+
 from __future__ import annotations
 
 from tilefoundry.codegen.cpu.templates import render
@@ -65,8 +66,6 @@ def _static_smem(value) -> int:
     )
 
 
-
-
 _DIM_BINOP_CXX = {
     DimAdd: "+",
     DimSub: "-",
@@ -81,8 +80,7 @@ class _HostIntExprVisitor(ExprVisitor[str]):
         value = static_dim_value(expr)
         if value is None:
             raise ValueError(
-                "emit_host_module: unsupported launch-extent node "
-                f"{type(expr).__name__}"
+                f"emit_host_module: unsupported launch-extent node {type(expr).__name__}"
             )
         return str(value)
 
@@ -101,16 +99,10 @@ class _HostIntExprVisitor(ExprVisitor[str]):
             cb = self.visit(b, ctx)
             cmp = "<" if isinstance(target, DimMin) else ">"
             return f"(({ca}) {cmp} ({cb}) ? ({ca}) : ({cb}))"
-        raise ValueError(
-            f"emit_host_module: unsupported launch-extent op "
-            f"{type(target).__name__}"
-        )
+        raise ValueError(f"emit_host_module: unsupported launch-extent op {type(target).__name__}")
 
     def default_visit(self, expr, ctx=None) -> str:
-        raise ValueError(
-            f"emit_host_module: unsupported launch-extent node "
-            f"{type(expr).__name__}"
-        )
+        raise ValueError(f"emit_host_module: unsupported launch-extent node {type(expr).__name__}")
 
 
 def _emit_host_int_expr(expr) -> str:
@@ -126,10 +118,7 @@ def _emit_host_int_expr(expr) -> str:
         return str(sv)
     if isinstance(expr, (ShapeOf, Call, Constant)):
         return _HostIntExprVisitor().visit(expr)
-    raise ValueError(
-        f"emit_host_module: unsupported launch-extent node "
-        f"{type(expr).__name__}"
-    )
+    raise ValueError(f"emit_host_module: unsupported launch-extent node {type(expr).__name__}")
 
 
 def _hidden_names(params) -> set:
@@ -137,15 +126,25 @@ def _hidden_names(params) -> set:
 
 
 def _is_user_scalar(p, hidden: set) -> bool:
-    return (
-        p.name not in hidden
-        and isinstance(p.type, TensorType)
-        and not p.type.shape
-    )
+    return p.name not in hidden and isinstance(p.type, TensorType) and not p.type.shape
 
 
 def _is_tensor(p, hidden: set) -> bool:
     return p.name not in hidden and not _is_user_scalar(p, hidden)
+
+
+def _extent(c):
+    value = static_dim_value(c)
+    return str(value) if value is not None else f"static_cast<int>({_emit_host_int_expr(c)})"
+
+
+def _call_arg(p, host_names, hidden):
+    name = host_names[p.name]
+    if _is_tensor(p, hidden):
+        return f"{name}.data_ptr()"
+    if p.name in hidden:
+        return name
+    return f"static_cast<long long>({name})"
 
 
 def _placement_line(name: str, storage) -> str:
@@ -185,11 +184,15 @@ def emit_host_module(
     body = entry.body
     if (
         isinstance(body, Sequential)
-        and len(body.body) == 1
-        and isinstance(body.body[0], Evaluate)
-        and isinstance(body.body[0].callable, Launch)
+        and body.body
+        and all(
+            isinstance(stmt, Evaluate) and isinstance(stmt.callable, Launch) for stmt in body.body
+        )
     ):
-        shim_decls, body_lines, sig = _lower_launch(entry, body.body[0], module)
+        if len(body.body) > 1:
+            shim_decls, body_lines, sig = _lower_launches(entry, body.body, module)
+        else:
+            shim_decls, body_lines, sig = _lower_launch(entry, body.body[0], module)
     elif entry.variants:
         pat = entry.variants[0].specializations[0]
         loc_idx = locate_dim_var(entry.params, pat.dim_var)
@@ -198,6 +201,7 @@ def emit_host_module(
             raise ValueError("emit_host_module: cannot derive specialization subject")
         p, axis = loc
         subject = ShapeOf(type=TensorType.scalar(DType.i32), param=p, axis=axis)
+
         def _variant_call(v):
             args = []
             for vp in v.params:
@@ -209,15 +213,18 @@ def emit_host_module(
                     ep = next(p for p in entry.params if p.name == base)
                     args.append(ShapeOf(type=vp.type, param=ep, axis=ax))
             return symbol_call(v, tuple(args))
+
         calls = tuple(_variant_call(v) for v in entry.variants)
         shim_decls, body_lines, sig = _lower_dispatch(
-            entry, module, callee_name=entry.name, subject=subject,
-            variants=entry.variants, calls=calls)
-    else:
-        raise ValueError(
-            f"emit_host_module: entry {entry.name!r} body must be a single "
-            f"Launch"
+            entry,
+            module,
+            callee_name=entry.name,
+            subject=subject,
+            variants=entry.variants,
+            calls=calls,
         )
+    else:
+        raise ValueError(f"emit_host_module: entry {entry.name!r} body must be a single Launch")
     source = render(
         "cpu_module.cpp.j2",
         shim_decls=shim_decls,
@@ -238,7 +245,6 @@ CPU_CODE_GENERATOR = CodeGenerator(emit_host_module)
 
 
 def _lower_launch(entry: PrimFunction, evaluate, module):
-    launch_op = evaluate.callable
     device_fn = module.lookup(evaluate.args[0].name)
     if device_fn.variants:
         dim_name = device_fn.variants[0].specializations[0].dim_var
@@ -249,124 +255,120 @@ def _lower_launch(entry: PrimFunction, evaluate, module):
         p, axis = loc
         subject = ShapeOf(type=TensorType.scalar(DType.i32), param=p, axis=axis)
         calls = tuple(symbol_call(v, tuple(evaluate.args[7:])) for v in device_fn.variants)
-        return _lower_dispatch(entry, module, callee_name=device_fn.name, subject=subject, variants=device_fn.variants, calls=calls)
-    dev_params = device_fn.params
-    _reject_unsupported_config(launch_op)
-
-
-
-
-
-    grid_exprs = evaluate.args[1:4]
-    block_exprs = evaluate.args[4:7]
-    hidden = _hidden_names(dev_params)
-    visible_dev = [p for p in dev_params if p.name not in hidden]
-
-    args = evaluate.args[7:]
-    if len(args) != len(visible_dev):
-        raise ValueError(
-            f"emit_host_module: launch passes {len(args)} args but device "
-            f"function {device_fn.name!r} has {len(visible_dev)} host-visible "
-            f"parameters (hidden shape scalars are derived from tensor shapes)"
+        return _lower_dispatch(
+            entry,
+            module,
+            callee_name=device_fn.name,
+            subject=subject,
+            variants=device_fn.variants,
+            calls=calls,
         )
-    if not all(isinstance(a, Var) for a in args):
-        raise ValueError(
-            "emit_host_module: launch args must be host entry parameters (Var)"
-        )
-    entry_by_id = {id(p): p for p in entry.params}
-    entry_by_name = {p.name: p for p in entry.params}
+    return _lower_launches(entry, (evaluate,), module)
 
-    def _resolve(a: Var) -> Var:
-        if id(a) in entry_by_id:
-            return entry_by_id[id(a)]
-        ep = entry_by_name.get(a.name)
-        if ep is None:
-            raise ValueError(
-                f"emit_host_module: launch arg {a.name!r} is not a parameter "
-                f"of entry {entry.name!r}"
+
+def _lower_launches(entry: PrimFunction, evaluates, module):
+    bindings = []
+    kinds = {}
+    used = set()
+    for evaluate in evaluates:
+        launch_op = evaluate.callable
+        device_fn = module.lookup(evaluate.args[0].name)
+        if device_fn.variants:
+            raise NotImplementedError(
+                "emit_host_module: multi-launch entries do not support variants"
             )
-        return ep
-
-
-
-    bound = [_resolve(a) for a in args]
-    host_name_of: dict[str, str] = {}
-    dev_index_of_entry: dict[int, int] = {}
-    for k, (vp, ep) in enumerate(zip(visible_dev, bound)):
-        host_name_of[vp.name] = ep.name
-        if id(ep) in dev_index_of_entry:
+        dev_params = device_fn.params
+        _reject_unsupported_config(launch_op)
+        hidden = _hidden_names(dev_params)
+        visible_dev = [p for p in dev_params if p.name not in hidden]
+        args = evaluate.args[7:]
+        if len(args) != len(visible_dev):
             raise ValueError(
-                f"emit_host_module: entry parameter {ep.name!r} is launched "
-                f"more than once"
+                f"emit_host_module: launch passes {len(args)} args but device "
+                f"function {device_fn.name!r} has {len(visible_dev)} host-visible "
+                "parameters (hidden shape scalars are derived from tensor shapes)"
             )
-        dev_index_of_entry[id(ep)] = k
-    for p in dev_params:
-        if p.name in hidden:
-            host_name_of[p.name] = p.name
-    host_names = [host_name_of[p.name] for p in dev_params]
-    dev_to_host = host_name_of
-
-
-    wrapper_tokens = []
+        if not all(isinstance(a, Var) for a in args):
+            raise ValueError(
+                "emit_host_module: launch args must be host entry parameters (Var); "
+                "expressions are not accepted"
+            )
+        bound = []
+        for arg in args:
+            ep = next((p for p in entry.params if p.name == arg.name), None)
+            if ep is None:
+                raise ValueError(
+                    f"emit_host_module: launch arg {arg.name!r} is not a parameter "
+                    f"of entry {entry.name!r}"
+                )
+            bound.append(ep)
+        local_seen = set()
+        host_name_of = {}
+        for vp, ep in zip(visible_dev, bound):
+            if id(ep) in local_seen:
+                raise ValueError(
+                    f"emit_host_module: entry parameter {ep.name!r} is bound more "
+                    "than once in one launch"
+                )
+            local_seen.add(id(ep))
+            used.add(id(ep))
+            kind = _is_tensor(vp, hidden)
+            if id(ep) in kinds and kinds[id(ep)] != kind:
+                raise ValueError(
+                    f"emit_host_module: entry parameter {ep.name!r} is bound to "
+                    "incompatible device parameter types across launches"
+                )
+            kinds[id(ep)] = kind
+            host_name_of[vp.name] = ep.name
+        bindings.append((evaluate, device_fn, hidden, host_name_of))
     for ep in entry.params:
-        k = dev_index_of_entry.get(id(ep))
-        if k is None:
+        if id(ep) not in used:
             raise ValueError(
-                f"emit_host_module: entry parameter {ep.name!r} is not used "
-                f"by the launch"
+                f"emit_host_module: entry parameter {ep.name!r} is not used by any "
+                f"launch in {entry.name!r} -- an unused parameter has no device "
+                "type to give the wrapper's signature"
             )
-        vp = visible_dev[k]
-        wrapper_tokens.append(
-            f"int {ep.name}" if _is_user_scalar(vp, hidden)
-            else f"tvm::ffi::Tensor {ep.name}"
-        )
-
     body_lines = []
-    for i, p in enumerate(dev_params):
-        if _is_tensor(p, hidden):
-            body_lines.append(_placement_line(host_names[i], p.type.storage))
-    for i, p in enumerate(dev_params):
-        if p.name not in hidden:
-            continue
-        base, axis = _parse_shape_param_name(p.name)
-        host_base = dev_to_host.get(base)
-        if host_base is None:
-            raise ValueError(
-                f"emit_host_module: hidden shape scalar {p.name!r} references "
-                f"unknown base parameter {base!r}"
-            )
-        body_lines.append(
-            f"long long {host_names[i]} = "
-            f"static_cast<long long>({host_base}.shape()[{axis}]);"
-        )
+    shim_decls = []
 
-    def _call_arg(i, p) -> str:
-        hn = host_names[i]
-        if _is_tensor(p, hidden):
-            return f"{hn}.data_ptr()"
-        if p.name in hidden:
-            return hn
-        return f"static_cast<long long>({hn})"
+    for index, (evaluate, device_fn, hidden, dev_to_host) in enumerate(bindings):
+        dev_params = device_fn.params
+        launch_op = evaluate.callable
+        host_names = {
+            **dev_to_host,
+            **{p.name: f"l{index}__{p.name}" for p in dev_params if p.name in hidden},
+        }
+        for p in dev_params:
+            if _is_tensor(p, hidden):
+                body_lines.append(_placement_line(host_names[p.name], p.type.storage))
+        for p in dev_params:
+            if p.name in hidden:
+                base, axis = _parse_shape_param_name(p.name)
+                host_base = dev_to_host.get(base)
+                if host_base is None:
+                    raise ValueError(
+                        f"emit_host_module: hidden shape scalar {p.name!r} "
+                        f"references unknown base parameter {base!r}"
+                    )
+                body_lines.append(
+                    f"long long {host_names[p.name]} = static_cast<long long>("
+                    f"{host_base}.shape()[{axis}]);"
+                )
 
-
-
-
-
-
-    def _extent(c) -> str:
-        cv = static_dim_value(c)
-        if cv is not None:
-            return str(cv)
-        return f"static_cast<int>({_emit_host_int_expr(c)})"
-
-    grid = tuple(_extent(c) for c in grid_exprs)
-    block = tuple(_extent(c) for c in block_exprs)
-    dynamic_smem = _static_smem(launch_op.dynamic_smem)
-    call_args = [_call_arg(i, p) for i, p in enumerate(dev_params)]
-    call_args += [*grid, *block, str(dynamic_smem)]
-    call_args.append("nullptr")
-    body_lines.append(f"{shim_symbol(device_fn.name)}({', '.join(call_args)});")
-    return [_shim_decl(device_fn)], body_lines, ", ".join(wrapper_tokens)
+        grid = tuple(_extent(c) for c in evaluate.args[1:4])
+        block = tuple(_extent(c) for c in evaluate.args[4:7])
+        call_args = [_call_arg(p, host_names, hidden) for p in dev_params] + [
+            *grid,
+            *block,
+            str(_static_smem(launch_op.dynamic_smem)),
+            "nullptr",
+        ]
+        body_lines.append(f"{shim_symbol(device_fn.name)}({', '.join(call_args)});")
+        shim_decls.append(_shim_decl(device_fn))
+    sig = ", ".join(
+        f"tvm::ffi::Tensor {ep.name}" if kinds[id(ep)] else f"int {ep.name}" for ep in entry.params
+    )
+    return shim_decls, body_lines, sig
 
 
 def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, variants, calls):
@@ -375,10 +377,11 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
             "emit_host_module: dispatch v1 expects exactly one ShapeOf subject"
         )
     for variant in variants:
-        if len(variant.specializations) != 1 or not isinstance(variant.specializations[0], DimVarRangePat):
+        if len(variant.specializations) != 1 or not isinstance(
+            variant.specializations[0], DimVarRangePat
+        ):
             raise NotImplementedError(
-                "emit_host_module: dispatch v1 expects exactly one "
-                "DimVarRangePat per case"
+                "emit_host_module: dispatch v1 expects exactly one DimVarRangePat per case"
             )
 
     entry_params = entry.params
@@ -389,11 +392,9 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
         nm = ref.name if isinstance(ref, Var) else ref.param.name
         if nm not in entry_names:
             raise ValueError(
-                f"emit_host_module: dispatch arg {nm!r} is not a parameter of "
-                f"entry {entry.name!r}"
+                f"emit_host_module: dispatch arg {nm!r} is not a parameter of entry {entry.name!r}"
             )
         return nm
-
 
     wrapper_tokens, body_lines = [], []
     for p in entry_params:
@@ -408,8 +409,7 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
     subj = subject
     s = "__tf_dispatch_subject"
     body_lines.append(
-        f"long long {s} = "
-        f"static_cast<long long>({_host_name(subj)}.shape()[{subj.axis}]);"
+        f"long long {s} = static_cast<long long>({_host_name(subj)}.shape()[{subj.axis}]);"
     )
 
     for variant, call in zip(variants, calls):
@@ -436,12 +436,9 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
             elif vp.name in v_hidden:
                 if not isinstance(arg, ShapeOf):
                     raise NotImplementedError(
-                        f"emit_host_module: hidden shape param {vp.name!r} "
-                        f"expects a ShapeOf arg"
+                        f"emit_host_module: hidden shape param {vp.name!r} expects a ShapeOf arg"
                     )
-                shim_args.append(
-                    f"static_cast<long long>({_host_name(arg)}.shape()[{arg.axis}])"
-                )
+                shim_args.append(f"static_cast<long long>({_host_name(arg)}.shape()[{arg.axis}])")
             else:
                 shim_args.append(f"static_cast<long long>({_host_name(arg)})")
         grid, block = _derive_launch_config(variant.body)
@@ -456,16 +453,14 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
         pred = f"(({pat.lo} <= {s}) && ({s} <= {pat.hi}))"
         prefix = "if" if idx == 0 else "} else if"
         body_lines.append(f"{prefix} ({pred}) {{")
-        body_lines.append(
-            f"  {shim_symbol(variant_symbol)}({', '.join(shim_args)});"
-        )
+        body_lines.append(f"  {shim_symbol(variant_symbol)}({', '.join(shim_args)});")
     body_lines.append("} else {")
     body_lines.append(
-        '  throw std::runtime_error("tilefoundry: no matching dispatch variant for '
-        f'{entry.name}");'
+        f'  throw std::runtime_error("tilefoundry: no matching dispatch variant for {entry.name}");'
     )
     body_lines.append("}")
     return list(shim_decls.values()), body_lines, ", ".join(wrapper_tokens)
+
 
 def _reject_unsupported_config(cfg) -> None:
     if cfg.cluster is not None:
@@ -479,6 +474,7 @@ def _reject_unsupported_config(cfg) -> None:
 def _derive_launch_config(body):
     # noqa lazy: avoid an import cycle with codegen.cuda.emit at module load.
     from tilefoundry.codegen.cuda.emit import _derive_launch_config as _d  # noqa: PLC0415
+
     return _d(body)
 
 

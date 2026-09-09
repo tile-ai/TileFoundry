@@ -14,8 +14,17 @@ from tilefoundry import func, prim_func
 from tilefoundry.dsl import DimVar, ReduceKind, Tensor, tf
 from tilefoundry.dsl.storage import gmem, rmem
 from tilefoundry.dsl.tf import *  # noqa: F401,F403  -- bind bare op names (reshard, relu, ...)
+from tilefoundry.ir.core import Constant, Var, VerifyError
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.tir.launch import Launch
+from tilefoundry.ir.tir.prim_function import PrimFunction
+from tilefoundry.ir.tir.shape import ShapeOf
+from tilefoundry.ir.tir.stmts import Evaluate, Sequential
+from tilefoundry.ir.tir.symbol_ref import SymbolRef
+from tilefoundry.ir.tir.verify import verify_prim_function
+from tilefoundry.ir.types import CallableType, DType, TensorType, UnitType
 from tilefoundry.ir.types.shard import Layout, Mesh, S, ShardLayout, Topology
+from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _ROWS = 128
@@ -144,15 +153,6 @@ def _launch_entry_with_grid_x(extent):
     A CPU host entry whose single launch uses *extent* as ``grid_x`` — for
     exercising the grid/block extent verifier on constructed IR.
     """
-    from tilefoundry.ir.core import Constant, Var  # noqa: PLC0415
-    from tilefoundry.ir.tir.launch import Launch  # noqa: PLC0415
-    from tilefoundry.ir.tir.prim_function import PrimFunction  # noqa: PLC0415
-    from tilefoundry.ir.tir.stmts import Evaluate, Sequential  # noqa: PLC0415
-    from tilefoundry.ir.tir.symbol_ref import SymbolRef  # noqa: PLC0415
-    from tilefoundry.ir.types import CallableType, DType, TensorType, UnitType  # noqa: PLC0415
-    from tilefoundry.ir.types.storage import StorageKind  # noqa: PLC0415
-    from tilefoundry.target import CpuTarget  # noqa: PLC0415
-
     t = TensorType(shape=(8,), dtype=DType.f32, layout=None, storage="gmem")
     a = Var(type=t, name="a")
     i64 = TensorType.scalar(DType.i64, storage=StorageKind.RMEM)
@@ -169,9 +169,6 @@ def test_launch_extent_rejects_raw_dimvar() -> None:
     A grid/block extent slot must be an Expr; a raw ``DimVar`` Op (which is
     not an Expr) is rejected by verify ([tir §1.3](docs/spec/tir.md#13-primfunction)).
     """
-    from tilefoundry.ir.core import VerifyError  # noqa: PLC0415
-    from tilefoundry.ir.tir.verify import verify_prim_function  # noqa: PLC0415
-
     entry = _launch_entry_with_grid_x(DimVar("S", 1, 8))
     with pytest.raises(VerifyError, match="extent"):
         verify_prim_function(entry)
@@ -183,12 +180,6 @@ def test_launch_extent_rejects_external_shapeof() -> None:
     A grid/block ``ShapeOf`` extent must reference a forwarded / entry
     parameter; a ShapeOf of an unrelated Var is rejected by verify.
     """
-    from tilefoundry.ir.core import Var, VerifyError  # noqa: PLC0415
-    from tilefoundry.ir.tir.shape import ShapeOf  # noqa: PLC0415
-    from tilefoundry.ir.tir.verify import verify_prim_function  # noqa: PLC0415
-    from tilefoundry.ir.types import DType, TensorType  # noqa: PLC0415
-    from tilefoundry.ir.types.storage import StorageKind  # noqa: PLC0415
-
     external = Var(
         type=TensorType(shape=(8,), dtype=DType.f32, layout=None, storage="gmem"),
         name="y_external",

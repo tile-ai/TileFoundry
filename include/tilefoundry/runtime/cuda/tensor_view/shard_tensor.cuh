@@ -28,7 +28,7 @@ namespace detail {
 /// The mesh shape a ShardLayout's attrs are indexed against.
 template <class SL>
 using shard_mesh_shape_t = cute::remove_cvref_t<decltype(cute::shape(
-    mesh_positions_t<typename SL::mesh::layout>{}))>;
+    detail::mesh_positions_t<typename SL::mesh::layout>{}))>;
 
 /// The mesh axis that splits tensor axis ``Axis``, or -1 when none does.
 ///
@@ -97,7 +97,8 @@ CUTE_HOST_DEVICE constexpr auto local_extent(ShardLayout<L, A, M> const &sl) {
     if constexpr (m < 0) {
         return ext;
     } else {
-        auto const positions = mesh_positions(sl.mesh_value.layout_value);
+        auto const positions =
+            detail::mesh_positions(sl.mesh_value.layout_value);
         return ext / cute::get<size_t(m)>(cute::shape(positions));
     }
 }
@@ -125,11 +126,7 @@ CUTE_HOST_DEVICE constexpr auto local_stride(ShardLayout<L, A, M> const &sl) {
 /// its neighbour owns.
 template <class L, class A, class M>
 CUTE_HOST_DEVICE auto shard_mesh_coord(ShardLayout<L, A, M> const &sl) {
-    using topo_t = typename M::topology;
-    constexpr auto scope = topo_t::scope;
-    auto const positions = mesh_positions(sl.mesh_value.layout_value);
-    return positions.get_hier_coord(int(program_id<scope>()) -
-                                    mesh_offset<typename M::layout>());
+    return sl.mesh_value.local_index();
 }
 
 /// Mesh axis ``Ax``'s term of the offset sum, and a static zero where it has
@@ -277,8 +274,8 @@ using local_view_t =
 /// tier's participant count comes from: ``ops::mma`` reads its warp count off
 /// the accumulator and ``ops::dot`` off its left operand, both through here.
 template <class T> CUTE_HOST_DEVICE constexpr int shard_mesh_instances() {
-    return mesh_instances<
-        typename cute::remove_cvref_t<T>::shard_layout_type::mesh>();
+    using mesh_t = typename cute::remove_cvref_t<T>::shard_layout_type::mesh;
+    return detail::mesh_instances<mesh_t, TopologyScope::thread>();
 }
 
 /// An index offset inside an already-projected destination view.

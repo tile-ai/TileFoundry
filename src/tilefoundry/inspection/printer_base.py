@@ -183,6 +183,10 @@ class PythonPrinter(ExprFunctor[str]):
 
     def _render_mesh_dataclass(self, mesh, ctx=None):
         if ctx is not None:
+            alias = ctx.mesh_alias(mesh)
+            if alias is not None:
+                return alias
+        if ctx is not None:
             ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Mesh, Topology",), ""))
         values = ", ".join(f'Topology(name="{t.name}", size={self.dim_entry(t.size, ctx)})' for t in mesh.topologies)
         if len(mesh.topologies) == 1:
@@ -195,7 +199,15 @@ class PythonPrinter(ExprFunctor[str]):
 
     def _render_mesh_compact(self, mesh, ctx=None):
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Topology",), ""))
+            alias = ctx.mesh_alias(mesh)
+            if alias is not None:
+                return alias
+        if ctx is not None:
+            ctx.use(
+                PythonExpr(
+                    ("from tilefoundry.ir.types.shard import Mesh, Topology",), ""
+                )
+            )
         values = ", ".join(f'Topology("{t.name}", {self.dim_entry(t.size, ctx)})' for t in mesh.topologies)
         topologies = f"({values}{',' if len(mesh.topologies) == 1 else ''})"
         names = f", names={tuple(mesh.names)!r}" if mesh.names else ""

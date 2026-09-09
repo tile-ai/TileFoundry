@@ -89,19 +89,19 @@ moves, which is the point.
 `tilefoundry.utils.spec_ref.spec_ref_render` renders one as
 `spec runtime §1.1.2` for a refusal message.
 
-**Number sections in order; renumber only behind the refs lint.** A number is
-an address that code, sibling specs and the `spec` command all reach a section
-by. Duplicates are worse than gaps: two `3.1` headings make both unreachable by
-`tilefoundry spec <topic> 3.1`. Removing a section may therefore either leave a
-gap or renumber its siblings, and both are allowed — `docs/spec/runtime.md`
-numbers `2.10` before `2.9`, and §3 was renumbered when the ops list closed.
+**Append a section; do not renumber one.** A number is an address that code,
+sibling specs and the `spec` command all reach a section by. Duplicates are
+worse than gaps: two `3.1` headings make both unreachable by
+`tilefoundry spec <topic> 3.1`. Gaps and out-of-order numbering are the
+accepted cost — `docs/spec/runtime.md` numbers `2.10` before `2.9`. This part is
+habit: the lint catches a renamed heading, not a renumbered one.
 
-Renumbering costs a sweep. `scripts/spec_refs_lint.py` resolves every
-`](file.md#anchor)` reference across `docs/`, `src/`, `tests/` and `include/`,
-so a stale link fails the hook rather than rotting; run it before claiming a
-renumber is clean. What it cannot see is a number written as prose rather than
-as a link — a bare "§3.5" in a comment, a commit message, or a person's
-memory — so cite a section by link wherever a link is possible.
+**A catalog of things that come and go is not numbered.** An op list, a
+primitive list: give the group a numbered section and the members unnumbered
+headings under it, the way [hir §1.3](./spec/hir.md#13-op) does with
+`#### ir/hir/<namespace>/` and `##### <OpName>`. Then adding one renumbers
+nothing, and the relaxation this rule was once given — permitting a renumber
+behind the refs lint — is not needed.
 
 ## Entropy And Close Tracking
 

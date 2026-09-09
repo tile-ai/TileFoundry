@@ -141,11 +141,24 @@ struct Bulk {
         auto s = detail::to_local(src);
         auto &&d = detail::to_local(dst);
         using elem = cute::remove_cvref_t<decltype(d(0))>;
+        constexpr bool static_layout = cute::is_static<
+            typename cute::remove_cvref_t<decltype(cute::layout(s))>>::value;
         const unsigned bytes =
             unsigned(int(cute::size(s))) * unsigned(sizeof(elem));
-        if ((bytes & 15u) != 0u) {
+        constexpr unsigned static_bytes =
+            static_layout
+                ? unsigned(int(cute::size(typename cute::remove_cvref_t<
+                                          decltype(cute::layout(s))>{}))) *
+                      unsigned(sizeof(elem))
+                : 0u;
+        if constexpr (static_layout && ((static_bytes & 15u) != 0u)) {
             Strided{}(src, dst, bar);
             return;
+        } else if constexpr (!static_layout) {
+            if ((bytes & 15u) != 0u) {
+                Strided{}(src, dst, bar);
+                return;
+            }
         }
         if (tilefoundry::shuffle_elect()) {
             asm volatile(

@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 import torch
 
+from tests.models.corpus import CorpusError
 from tests.models.decode_oracle import SEQ_LEN
 from tests.models.kimi_linear_48b_a3b import case, reference
 from tests.models.kimi_linear_48b_a3b.model import KimiLinear48BA3B
@@ -75,8 +76,6 @@ def test_a_block_for_another_reason_would_not_be_accepted():
     an unrelated reason, the gate must complain rather than report the recorded
     limit.
     """
-    from tests.models.corpus import CorpusError  # noqa: PLC0415
-
     gate = case.CASE.reference.gate
 
     def fails_differently():

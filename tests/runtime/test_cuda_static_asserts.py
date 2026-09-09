@@ -47,7 +47,8 @@ CASES: dict[int, str | None] = {
     21: "ops::mma (tile tier): the accumulator's mesh must be a whole number of warps",
     22: "a reduced mesh axis must divide into whole lanes and whole warps",
     23: "two mesh axes name one tensor axis",
-    24: "both operands must leave the tile whole on every "
+    24: "both operands must leave the tile whole on every ",
+    25: "MeshWarpView: non-contiguous warp set is unsupported",
 }
 
 pytestmark = pytest.mark.skipif(
