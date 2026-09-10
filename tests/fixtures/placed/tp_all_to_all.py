@@ -2,7 +2,10 @@
 
 Splitting the same data two ways is an all-to-all: every card keeps the part
 both shards give it and sends the rest. Nothing here executes that exchange --
-the program exists so an analysis can say what it would cost.
+the program exists so an analysis can say what it would cost, which is what
+``tests/analysis/test_analysis_families.py`` asks of it: that the crossing is
+``SENT_BYTES`` for one card and that a unit inside the boundary states no
+share of it.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """``check`` — comparing what an implementation produced against a reference.
 
 Every output states its own predicates and their bounds; there is no default
-bound. See [runtime §1.6](docs/spec/runtime.md#16-check).
+bound. See [runtime §1.9](docs/spec/runtime.md#19-runtimemeasurepy).
 """
 from __future__ import annotations
 

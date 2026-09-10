@@ -294,7 +294,7 @@ A valid participant set maps to exactly one hardware barrier:
 | whole block that is one warp | `__syncwarp()` |
 | a contiguous lane subset within one warp | `__syncwarp(mask)` under a participant predicate |
 | a warp-aligned contiguous multi-warp subset | a named `bar.sync <id>, <count>` under a participant predicate |
-| the full mesh over the `cta` topology (all CTAs of the grid) | the grid-wide software barrier ([runtime §3](./runtime.md#3-runtime-ops)) |
+| the full mesh over the `cta` topology (all CTAs of the grid) | the grid-wide software barrier ([runtime §2.6](./runtime.md#26-cudaops)) |
 
 Codegen MUST guard the `__syncwarp(mask)` and `bar.sync` cases with the
 participant predicate `base <= tid < base+count` (`tid =
@@ -310,7 +310,7 @@ supported barrier and MUST be rejected at verify. The grid barrier's correctness
 requires every CTA of the launch to be co-resident; that co-residency is the
 launch's occupancy contract, not something the barrier can enforce. The
 grid-barrier device helper and its counter protocol are specified in
-[runtime §3](./runtime.md#3-runtime-ops).
+[runtime §2.6](./runtime.md#26-cudaops).
 
 #### Named-barrier id allocation
 
@@ -668,7 +668,7 @@ class Reduce(Op):
 `dst = sum(lhs * rhs)` in one statement, and not an `elementwise` followed by a
 `Reduce`: materialising the product first would cost a register per element of
 the row, which is what makes that pair the wrong spelling here ([runtime
-§3](./runtime.md#3-runtime-ops)).
+§2.6](./runtime.md#26-cudaops)).
 
 ```python
 class Dot(Op):
@@ -1072,7 +1072,7 @@ wait for a tile it did not fetch.
 Which instruction carries it is the runtime's choice from the operand shard
 layouts, not something this op names: a contiguous run takes `cp.async.bulk`,
 anything else takes an element path ([runtime
-§3](./runtime.md#3-runtime-ops)).
+§2.6](./runtime.md#26-cudaops)).
 Carrying that on the op would be codegen selecting a tier, which
 [§2.3](#23-tir-ops) forbids.
 
@@ -1105,7 +1105,7 @@ class TmaCopy(Op):
     the copy; a caller pairing this with its own `MBarrierArriveExpectTx` would
     be declaring a count the op already knows.
   - Lowers to `tilefoundry::ops::tma_copy(src, dst, bar)`
-    ([runtime §3](./runtime.md#3-runtime-ops)). `barrier` is a tensor here
+    ([runtime §2.6](./runtime.md#26-cudaops)). `barrier` is a tensor here
     because that is what TIR names a piece of shared memory with, and a word to
     the runtime, so the emitted call hands over the word's own address.
 
@@ -1121,7 +1121,7 @@ one is not the thread that waits for it.
 **Each lowers to its instruction, not to a runtime entry, and the runtime
 publishes no `ops::` entry for any of them:** an mbarrier is a shared-memory
 word, so nothing here reads a `ShardLayout` and none of it is an op
-([runtime §3](./runtime.md#3-runtime-ops)). Each entry below names the
+([runtime §2.6](./runtime.md#26-cudaops)). Each entry below names the
 `mbarrier.*` instruction its emitter writes at the call site, together with the
 generic-to-shared conversion the instruction takes — they name `.shared::cta`
 explicitly rather than leaving the assembler to redo that window conversion on
@@ -1155,7 +1155,7 @@ class MBarrierInit(Op):
     barrier separates this from the first arrival or wait.
   - Lowers to `mbarrier.init.shared::cta.b64`, written at the call site with
     `arrive_count` as an inline operand: the runtime publishes no entry for it
-    ([runtime §3](./runtime.md#3-runtime-ops)).
+    ([runtime §2.6](./runtime.md#26-cudaops)).
 
 ##### MBarrierArriveExpectTx
 

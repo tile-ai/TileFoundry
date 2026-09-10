@@ -146,7 +146,7 @@ codegen-static participant geometry) as compile-time template parameters. The
 runtime template dispatches on those layouts at compile time; codegen does not
 select a tier, compute a per-tier parameter, or carry the selection on the TIR
 op. This is the codegen side of the runtime-owned dispatch principle, whose
-contract lives in [runtime.md §3](./runtime.md#3-runtime-ops). The target-side
+contract lives in [runtime §2.6](./runtime.md#26-cudaops). The target-side
 emission that produces these calls is owned by [target](./target.md).
 
 ## 4. Codegen products

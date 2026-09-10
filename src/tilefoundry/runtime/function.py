@@ -1,7 +1,7 @@
 """ABI layer — ``EntryABI`` / ``ParamABI`` and ``RuntimeFunction`` (the implementation base class).
 
 ABI layer — ``EntryABI`` / ``ParamABI`` and ``RuntimeFunction`` (the
-implementation base class). See [runtime §1.1.1](docs/spec/runtime.md#111-runtimefunction).
+implementation base class). See [runtime §1.2](docs/spec/runtime.md#12-runtimefunctionpy).
 """
 from __future__ import annotations
 

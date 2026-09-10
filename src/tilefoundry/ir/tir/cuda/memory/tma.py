@@ -1,6 +1,6 @@
 """Effect-form TIR Op for a barrier-completing gmem→smem staging copy.
 
-See [runtime §3](docs/spec/runtime.md#3-runtime-ops).
+See [runtime §2.6](docs/spec/runtime.md#26-cudaops).
 See [tir §2.3](docs/spec/tir.md#23-tir-ops).
 """
 

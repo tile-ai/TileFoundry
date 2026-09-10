@@ -26,7 +26,7 @@ from tilefoundry.target.base import Target, target_instance
 ModuleFunction = Union[HirFunction, PrimFunction]
 
 _MISSING_PREPARED_WEIGHT = (
-    "[runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)"
+    "[runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)"
 )
 
 
@@ -397,7 +397,7 @@ class Module:
         Loading is a pure binding operation. Weight values are read by the
         evaluator at the point a function uses a declared ``ConstTensor``.
 
-        [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)
+        [runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)
         """
         return LoadedModule(
             module=self,
@@ -518,7 +518,7 @@ class Module:
 class LoadedModule:
     """An immutable Module binding and the resource from which it reads.
 
-    [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)
+    [runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)
     """
 
     module: Module

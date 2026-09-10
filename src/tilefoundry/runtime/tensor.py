@@ -5,7 +5,7 @@ the global ``TensorType``, so what a checkpoint hands back is every program's
 data at once. ``to_local`` is the one place that narrows it to the program a
 ``Placement`` names, through the same algebra the device side runs.
 
-See [runtime §1.7](docs/spec/runtime.md#17-shardtensor).
+See [runtime §1.10](docs/spec/runtime.md#110-runtimetensorpy).
 """
 
 from __future__ import annotations

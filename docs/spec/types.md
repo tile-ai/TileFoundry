@@ -590,7 +590,7 @@ class CallableType:
     are not part of the type. Names live on `Function.params`
     (`Var.name`) at the IR level.
   - The host-ABI counterpart in
-    [runtime §1.1.1](./runtime.md#111-runtimefunction) is a separate
+    [runtime §1.2](./runtime.md#12-runtimefunctionpy) is a separate
     construct — `EntryABI` in `tilefoundry.runtime.function` — whose
     `ParamABI` records are `(name, type: TensorType)`: dtype / shape /
     storage / layout are reached through `type` rather than restated. The

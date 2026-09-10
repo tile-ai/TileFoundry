@@ -477,7 +477,7 @@ def _converter(self: HirFunction, weight_name: str):
     """``@base.converter(weight_name)`` — register a per-weight offline converter.
 
     ``@base.converter(weight_name)`` — register a per-weight offline
-    converter. See [runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward).
+    converter. See [runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy).
     """
     _validate_converter_weight_name(self, weight_name)
 

@@ -4,7 +4,7 @@ One call, ``tilefoundry::ops::mma``, whichever tier the operand layouts pick:
 a lane's gathered fragments take the single PTX instruction and a rank-2 tile
 loops the atom over it. The table below is what an atom name is allowed to
 emit, not a tier -- other architecture, dtype and shape combinations need their
-own runtime mapping ([runtime §3](docs/spec/runtime.md#3-runtime-ops)).
+own runtime mapping ([runtime §2.6](docs/spec/runtime.md#26-cudaops)).
 """
 from __future__ import annotations
 

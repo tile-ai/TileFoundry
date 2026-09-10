@@ -1,7 +1,7 @@
 """Provide runtime twins of IR modules.
 
 ``CompiledModule`` is the compiled-path variant bound by the loader. See
-[runtime §1.1](docs/spec/runtime.md#11-runtimemodule).
+[runtime §1.1](docs/spec/runtime.md#11-runtimemodulepy).
 """
 from __future__ import annotations
 

@@ -4,7 +4,7 @@ A stride-0 operand is the whole of broadcast. Beyond it, a tile can be cut by
 two levels at once -- a CTA takes a block of it and a thread takes a row of
 that -- or by two axes of one level, which is the same cut written as a grid.
 
-See [runtime §3](docs/spec/runtime.md#3-runtime-ops).
+See [runtime §2.6](docs/spec/runtime.md#26-cudaops).
 """
 
 from __future__ import annotations

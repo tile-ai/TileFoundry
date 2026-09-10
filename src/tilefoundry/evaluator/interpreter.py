@@ -30,7 +30,7 @@ from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.spec_ref import spec_ref_render
 
 _MISSING_PREPARED_WEIGHT = (
-    "[runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)"
+    "[runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)"
 )
 
 

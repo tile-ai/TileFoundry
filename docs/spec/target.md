@@ -483,7 +483,7 @@ class CpuTarget(Target):
   for Analyze.
 - The compile boundary MAY resolve an omitted Module Target to
   `default_target()` for lowering, because `jit(fn)` on a plain Function is a
-  documented entry point ([runtime §1.3](./runtime.md#13-jit-api)). It MUST
+  documented entry point ([runtime §1.6](./runtime.md#16-jit-in-compilepy)). It MUST
   attach that exact value to the normalized Module before lowering.
 - A lowered TIR `PrimFunction` retains its own `target`: after lowering it
   MUST be the exact Target instance resolved from its Module. It selects the

@@ -204,7 +204,7 @@ def test_the_runner_on_an_authored_module_takes_the_weights_too():
     assert "prepare produces it" in refused
     assert (
         spec_ref_render(
-            "[runtime §1.1.2](docs/spec/runtime.md#112-weight-converter-and-prepare--forward)"
+            "[runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)"
         )
         in refused
     )

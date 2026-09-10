@@ -2,7 +2,7 @@
 
 `Module.load(resource)` reads a weight by its canonical name and expects it
 already in the declared shape; the raw->declared transform lives in the
-per-weight **converters**, which only `Module.prepare` runs (runtime §1.1.2).
+per-weight **converters**, which only `Module.prepare` runs (runtime §1.3).
 Prepare writes a directory, and for this model at the declared f32 that
 directory is ~280 GB of transposes nothing reads twice.
 
@@ -52,7 +52,7 @@ F32_WEIGHTS = frozenset({
 class HFResource:
     """A `RuntimeResource` over the raw checkpoint that answers canonical names.
 
-    Implements the protocol of runtime §1.5 -- `load` / `load_group` / `subtree`
+    Implements the protocol of runtime §1.8 -- `load` / `load_group` / `subtree`
     -- so both a `Module` and its `RuntimeModule` twin can be loaded from it.
     """
 
@@ -218,7 +218,7 @@ def prepare_leaf(node, kind, layer_index, out_dir, ckpt=CKPT, cfg=REAL, *, devic
         ValueError: Module 'Qwen3_5LinearAttention': raw weight 'dt_bias' has
         dtype torch.bfloat16, declared FloatDType(name='f32', ...)
 
-    Reading the whole checkpoint as f32 is exactly what runtime §1.5 says the
+    Reading the whole checkpoint as f32 is exactly what runtime §1.8 says the
     `dtype` argument is for -- "what lets one checkpoint serve modules that
     declare a different precision than it holds" -- and it is cheaper than a
     per-weight converter whose only work is a cast.
