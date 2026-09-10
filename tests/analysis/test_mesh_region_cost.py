@@ -7,6 +7,7 @@ import pytest
 from tests.fixtures.placed.region_boundaries import RegionBoundaries
 from tilefoundry import func, module
 from tilefoundry.analysis import ComputeCostMetadata, analyze
+from tilefoundry.analysis.metadata import shares
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.ir.core import Call, Var, VerifyError, get_metadata
 from tilefoundry.ir.hir.math.binary import Binary
@@ -59,7 +60,10 @@ def _cost(owner) -> tuple[int, int]:
     )
     record = get_metadata(result.function, ComputeCostMetadata)
     assert record is not None
-    return dict(record.flops)["f32"], dict(record.flops_per_unit("thread"))["f32"]
+    return (
+        shares(record.flops, record.topologies)["f32"],
+        shares(record.flops, record.topologies, "thread")["f32"],
+    )
 
 
 def test_scope_positions_turn_per_unit_cost_into_total_cost() -> None:
@@ -78,7 +82,7 @@ def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
     )
     helper_record = get_metadata(helper.function, ComputeCostMetadata)
     assert helper_record is not None
-    helper_flops = dict(helper_record.flops)["f32"]
+    helper_flops = shares(helper_record.flops, helper_record.topologies)["f32"]
     assert helper_flops == 8
 
     result = analyze(
@@ -89,22 +93,20 @@ def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
     )
     record = get_metadata(result.function, ComputeCostMetadata)
     assert record is not None
-    assert dict(record.flops)["f32"] == 40
-    assert dict(record.flops_per_unit("thread"))["f32"] == 6
+    assert shares(record.flops, record.topologies)["f32"] == 40
+    assert shares(record.flops, record.topologies, "thread")["f32"] == 6
     binaries = [
         get_metadata(expr, ComputeCostMetadata)
         for expr in collect_exprs(result.function.body)
         if isinstance(expr, Call) and isinstance(expr.target, Binary)
     ]
-    binary_flops = sorted(dict(item.flops)["f32"] for item in binaries)
+    binary_flops = sorted(shares(item.flops, item.topologies)["f32"] for item in binaries)
     assert binary_flops == [8, helper_flops * 2, 16]
 
 
 def test_analysis_rejects_a_region_body_that_embeds_its_raw_argument() -> None:
     """The isolation invariant is checked on hand-built HIR as an analysis consumer."""
-    value_type = TensorType(
-        shape=(8,), dtype=DType.f32, layout=None, storage=StorageKind.GMEM
-    )
+    value_type = TensorType(shape=(8,), dtype=DType.f32, layout=None, storage=StorageKind.GMEM)
     value = Var(name="value", type=value_type)
     scope = MeshRegion(
         mesh=Mesh((Topology("cta", 1),), Layout((1,), (1,)), ("cta",)),

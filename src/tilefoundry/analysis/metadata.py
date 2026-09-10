@@ -8,65 +8,107 @@ across calls.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from tilefoundry.ir.core.metadata import IRMetadata
-from tilefoundry.ir.core.values import TotalAndPerUnit
 from tilefoundry.visitor_registry.contexts import TrafficBytes
+
+
+@dataclass(frozen=True)
+class Spread[V]:
+    """One quantity, whole and as one unit of each topology level holds it.
+
+    ``per_unit`` runs in the order the record's ``topologies`` states, one
+    entry per level, so a level's name is written once for the whole record
+    rather than once per quantity. A finer level's unit sits inside a coarser
+    one, so its share is the coarser share divided again by whatever the mesh
+    splits between them -- which is why every level is stated rather than only
+    the one an analysis was asked about.
+    """
+
+    total: V
+    per_unit: tuple[V, ...] = ()
+
+    def at(self, index: int) -> V:
+        """One level's share by position, or the total when there is none."""
+        return self.per_unit[index] if index < len(self.per_unit) else self.total
+
+
+@dataclass(frozen=True)
+class Breakdown[V]:
+    """One category's quantities, split by the kind of thing each one is.
+
+    The kind is what the rate pricing it is stated for: a dtype prices flops,
+    a service kind prices what is not floating point, a memory level prices
+    bytes. Two kinds are never summed, because two rates cannot be.
+    """
+
+    kinds: tuple[tuple[str, Spread[V]], ...] = ()
+
+    def of(self, kind: str) -> Spread[V] | None:
+        """This kind's quantity, or ``None`` when the record states none."""
+        return next((value for name, value in self.kinds if name == kind), None)
+
+    def names(self) -> tuple[str, ...]:
+        """Every kind this record states, in the order it states them."""
+        return tuple(name for name, _ in self.kinds)
+
+
+def breakdown[V](
+    total: "Mapping[str, V]", per_unit: "Sequence[Mapping[str, V]]", zero: V
+) -> Breakdown[V]:
+    """Gather one category's kinds, each with its total and every level's share.
+
+    A kind any of them states appears in all of them, at *zero* where it was
+    not stated, so one kind's total and its shares stay one row.
+    """
+    kinds = sorted({*total, *(kind for level in per_unit for kind in level)})
+    return Breakdown(
+        tuple(
+            (
+                kind,
+                Spread(
+                    total.get(kind, zero),
+                    tuple(level.get(kind, zero) for level in per_unit),
+                ),
+            )
+            for kind in kinds
+        )
+    )
+
+
+def shares[V](
+    held: Breakdown[V], topologies: tuple[str, ...], level: "str | None" = None
+) -> dict[str, V]:
+    """Each kind's value for one unit of *level*, or its total without one.
+
+    The only place a level's name is turned back into a position, because
+    ``topologies`` is where the names are written and a ``Spread`` states its
+    shares in that order and carries none of its own. A level the record does
+    not state reads as the total, which is what a record over one unit says.
+    """
+    index = topologies.index(level) if level in topologies else None
+    return {
+        kind: spread.total if index is None else spread.at(index) for kind, spread in held.kinds
+    }
 
 
 @dataclass(frozen=True)
 class ComputeCostMetadata(IRMetadata):
     """Record one occurrence's work, or one Function's total work.
 
-    ``flops`` and ``service`` state global work; their ``*_per_unit`` partners
-    state one unit's, at every topology level the program declares rather than
-    at one chosen for it. ``service`` counts what is not floating point --
-    comparing, selecting, whole-number arithmetic -- by the service it asks
-    for. What an occurrence moves is a separate record, kept by the family that
-    knows where values live. On a Call these state one occurrence; on a
-    Function, loops contribute their trip count.
+    ``service`` counts what is not floating point -- comparing, selecting,
+    whole-number arithmetic -- by the service it asks for, because a predicate
+    priced as a FLOP is a number about a pipe the work never went down. What an
+    occurrence moves is a separate record, kept by the family that knows where
+    values live. On a Call these state one occurrence; on a Function, loops
+    contribute their trip count.
     """
 
-    flops: tuple[tuple[str, int], ...] = ()
-    service: tuple[tuple[str, int], ...] = ()
-    by_unit: tuple[tuple[str, "UnitWork"], ...] = ()
-    unit: str | None = None
-    """The level this analysis was asked about, out of the ones ``by_unit`` holds."""
-
-    def flops_per_unit(self, unit: "str | None" = None):
-        """One unit's flops by dtype, or every level's when *unit* is None."""
-        if unit is None:
-            return tuple((level, work.flops) for level, work in self.by_unit)
-        return _work_at(self.by_unit, unit).flops
-
-    def service_per_unit(self, unit: "str | None" = None):
-        """One unit's service counts by kind, or every level's when *unit* is None."""
-        if unit is None:
-            return tuple((level, work.service) for level, work in self.by_unit)
-        return _work_at(self.by_unit, unit).service
-
-    def asked(self) -> "UnitWork":
-        """What one unit of the level this analysis was asked about does."""
-        return _work_at(self.by_unit, self.unit) if self.unit else UnitWork()
-
-    def service_per_unit_of(self, kind: str, unit: str) -> int:
-        """One unit of *unit*'s count of *kind*, zero when it asks for none."""
-        return next(
-            (value for name, value in self.service_per_unit(unit) if name == kind), 0
-        )
-
-
-@dataclass(frozen=True)
-class UnitWork:
-    """What one unit of a topology level does, by the kind of work it is."""
-
-    flops: tuple[tuple[str, int], ...] = ()
-    service: tuple[tuple[str, int], ...] = ()
-
-
-def _work_at(by_unit: tuple, unit: str) -> "UnitWork":
-    return next((work for level, work in by_unit if level == unit), UnitWork())
+    topologies: tuple[str, ...] = ()
+    flops: Breakdown[int] = Breakdown()
+    service: Breakdown[int] = Breakdown()
 
 
 @dataclass(frozen=True)
@@ -82,47 +124,10 @@ class TrafficMetadata(IRMetadata):
     loops repeat it.
     """
 
-    storage: tuple[tuple[str, tuple[tuple[str, TrafficBytes], ...]], ...] = ()
-    communication: tuple[tuple[str, tuple[tuple[str, TrafficBytes], ...]], ...] = ()
+    topologies: tuple[str, ...] = ()
+    storage: Breakdown[TrafficBytes] = Breakdown()
+    communication: Breakdown[TrafficBytes] = Breakdown()
     operands: tuple[TrafficBytes, ...] = ()
-    unit: str | None = None
-    """The level this analysis was asked about, out of the ones each entry holds."""
-
-    def at(self, level: str, unit: "str | None" = None) -> TrafficBytes:
-        """Bytes at storage *level*, whole, or one unit of *unit*'s share."""
-        return _bytes_at(self.storage, level, unit)
-
-    def across(self, level: str, unit: "str | None" = None) -> TrafficBytes:
-        """Bytes over topology *level*'s boundary, whole or one unit's share.
-
-        Read and write are the unit's own view: what it received and what it
-        sent.
-        """
-        return _bytes_at(self.communication, level, unit)
-
-    def levels(self, unit: "str | None" = None) -> tuple[str, ...]:
-        """Every storage level this occurrence touches, in name order."""
-        return tuple(level for level, shares in self.storage if _share(shares, unit))
-
-
-_WHOLE = ""
-
-
-def _share(shares: tuple, unit: "str | None") -> TrafficBytes:
-    key = _WHOLE if unit is None else unit
-    return next((value for name, value in shares if name == key), TrafficBytes())
-
-
-def _bytes_at(entries: tuple, level: str, unit: "str | None") -> TrafficBytes:
-    shares = next((value for name, value in entries if name == level), ())
-    return _share(shares, unit)
-
-
-def paired(
-    whole: TrafficBytes, per_unit: TrafficBytes
-) -> "TotalAndPerUnit[TrafficBytes]":
-    """One level's bytes, stated whole and for one unit."""
-    return TotalAndPerUnit(whole, per_unit)
 
 
 @dataclass(frozen=True)
@@ -286,6 +291,7 @@ class PerformanceSummaryMetadata(IRMetadata):
 
 __all__ = [
     "AllocationMetadata",
+    "Breakdown",
     "BufferFootprint",
     "ComputeCostMetadata",
     "LevelFootprint",
@@ -294,7 +300,10 @@ __all__ = [
     "PerformanceMetadata",
     "PerformanceSummaryMetadata",
     "RooflineMetadata",
+    "Spread",
     "TimelineMetadata",
     "TrafficBytes",
     "ValueLifetime",
+    "breakdown",
+    "shares",
 ]

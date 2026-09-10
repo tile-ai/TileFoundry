@@ -36,9 +36,11 @@ from .errors import AnalysisError
 from .facts import MemoryHierarchyFacts
 from .metadata import (
     AllocationMetadata,
+    Breakdown,
     LevelFootprint,
     LoopFootprintMetadata,
     MemoryMetadata,
+    Spread,
     TrafficBytes,
     TrafficMetadata,
     ValueLifetime,
@@ -238,10 +240,10 @@ def call_traffic(
         if not key:
             operands = positional
     return TrafficMetadata(
-        storage=_shares(storage),
-        communication=_shares(crossing),
+        topologies=tuple(locals_by_unit),
+        storage=_shares(storage, tuple(locals_by_unit)),
+        communication=_shares(crossing, tuple(locals_by_unit)),
         operands=operands,
-        unit=asked,
     )
 
 
@@ -258,11 +260,29 @@ def _finer_than(unit: str, boundary: str, ordered: "dict[str, CostContext]") -> 
     return names.index(unit) > names.index(boundary)
 
 
-def _shares(held: "dict[str, dict[str, TrafficBytes]]") -> tuple:
-    """One entry per level, each carrying the whole and every unit's share."""
-    return tuple(
-        (level, tuple(sorted(shares.items())))
-        for level, shares in sorted(held.items())
+_WHOLE = ""
+
+
+def _shares(
+    held: "dict[str, dict[str, TrafficBytes]]", topologies: tuple[str, ...]
+) -> "Breakdown[TrafficBytes]":
+    """One entry per level, each carrying the whole and every level's share.
+
+    The shares run in *topologies* order, so a level a move never reached --
+    a unit inside the boundary it crossed -- reads as no bytes rather than as
+    a missing entry.
+    """
+    return Breakdown(
+        tuple(
+            (
+                level,
+                Spread(
+                    shares.get(_WHOLE, TrafficBytes()),
+                    tuple(shares.get(unit, TrafficBytes()) for unit in topologies),
+                ),
+            )
+            for level, shares in sorted(held.items())
+        )
     )
 
 
@@ -274,8 +294,11 @@ def add_traffic(
 ) -> None:
     """Add one occurrence's bytes to a function's, as often as it happens."""
     for into, stated in ((whole, record.storage), (per_unit, record.communication)):
-        for level, shares in stated:
-            for key, moved in shares:
+        for level, spread in stated.kinds:
+            for key, moved in (
+                (_WHOLE, spread.total),
+                *zip(record.topologies, spread.per_unit, strict=False),
+            ):
                 running = into.setdefault(level, {}).get(key, TrafficBytes())
                 into[level][key] = TrafficBytes(
                     running.read + moved.read * trips,
@@ -387,9 +410,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     local = CostContext(scope=FunctionScope(module, function), level=level, topologies=topologies)
     units = tuple(topology.name for topology in topologies) or ((level,) if level else ())
     locals_by_unit = {
-        unit: CostContext(
-            scope=FunctionScope(module, function), level=unit, topologies=topologies
-        )
+        unit: CostContext(scope=FunctionScope(module, function), level=unit, topologies=topologies)
         for unit in units
     }
     memory_context = MemoryContext(
@@ -408,9 +429,9 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     attach(
         function,
         TrafficMetadata(
-            storage=_shares(memory_context.totals),
-            communication=_shares(memory_context.shares),
-            unit=level,
+            topologies=tuple(locals_by_unit),
+            storage=_shares(memory_context.totals, tuple(locals_by_unit)),
+            communication=_shares(memory_context.shares, tuple(locals_by_unit)),
         ),
     )
     lifetimes = _lifetimes(memory_context.values, facts, local)

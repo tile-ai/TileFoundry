@@ -54,8 +54,6 @@ FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 INVENTORY = [pytest.param(case, id=case.id) for case in placed_cases()]
 
 
-
-
 def _aimed():
     """The decode example, aimed at one machine."""
     return replace(
@@ -123,11 +121,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
         runs = span // duration
         available = 1
         owner = next(
-            (
-                scope
-                for scope in scopes
-                if id(expr) in scope.accesses.get("narrow", {})
-            ),
+            (scope for scope in scopes if id(expr) in scope.accesses.get("narrow", {})),
             None,
         )
         if owner is not None:
@@ -140,9 +134,9 @@ def assert_performance_contract(result: AnalysisResult) -> None:
         trips, stride = record.timeline.trips, record.timeline.stride_ns
         assert 1 <= trips <= available and available % trips == 0, describe_expr(expr)
         assert (stride == 0) if trips == 1 else (stride >= span), describe_expr(expr)
-        assert (
-            record.timeline.end_ns + (trips - 1) * stride <= summary.timeline.end_ns
-        ), describe_expr(expr)
+        assert record.timeline.end_ns + (trips - 1) * stride <= summary.timeline.end_ns, (
+            describe_expr(expr)
+        )
     assert bool(timed) is bool(predicted_ns)
     _every_number_counts_something(result)
     for expr in collect_exprs(fn.body):
@@ -168,9 +162,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
     ),
     ids=("paged-kv", "qwen-decode-history", "qwen-prefill-history"),
 )
-def test_more_of_the_same_work_is_never_predicted_to_take_less_time(
-    smaller, larger
-) -> None:
+def test_more_of_the_same_work_is_never_predicted_to_take_less_time(smaller, larger) -> None:
     """A longer cache and a longer history are more of the same program.
 
     Nothing here says how much longer the prediction should be: a model that got
@@ -192,32 +184,35 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
     """
     fn = result.function
     for expr in (fn, *collect_exprs(fn.body)):
-        for record, rows in (
-            (ComputeCostMetadata, ("flops", "service")),
-            (TrafficMetadata, ()),
-            (MemoryMetadata, ()),
-            (RooflineMetadata, ()),
-            (PerformanceMetadata, ()),
+        for record in (
+            ComputeCostMetadata,
+            TrafficMetadata,
+            MemoryMetadata,
+            RooflineMetadata,
+            PerformanceMetadata,
         ):
             held = get_metadata(expr, record)
             if held is None:
                 continue
-            for field in rows:
-                for name, value in getattr(held, field):
-                    assert value >= 0, f"{describe_expr(expr)}: {field}[{name}] = {value}"
             if record is ComputeCostMetadata:
-                for unit, work in held.by_unit:
-                    for field in ("flops", "service"):
-                        for name, value in getattr(work, field):
+                for field in ("flops", "service"):
+                    for kind, spread in getattr(held, field).kinds:
+                        for where, value in (
+                            ("total", spread.total),
+                            *zip(held.topologies, spread.per_unit, strict=False),
+                        ):
                             assert value >= 0, (
-                                f"{describe_expr(expr)}: {unit}.{field}[{name}] = {value}"
+                                f"{describe_expr(expr)}: {field}[{kind}].{where} = {value}"
                             )
             if record is TrafficMetadata:
                 for field in ("storage", "communication"):
-                    for level, shares in getattr(held, field):
-                        for unit, moved in shares:
+                    for level, spread in getattr(held, field).kinds:
+                        for where, moved in (
+                            ("total", spread.total),
+                            *zip(held.topologies, spread.per_unit, strict=False),
+                        ):
                             assert moved.read >= 0 and moved.write >= 0, (
-                                f"{describe_expr(expr)}: {field}[{level}][{unit}] = {moved}"
+                                f"{describe_expr(expr)}: {field}[{level}].{where} = {moved}"
                             )
                 for position, moved in enumerate(held.operands):
                     assert moved.read >= 0 and moved.write >= 0, (
@@ -275,9 +270,7 @@ def test_every_analysis_runs_at_a_stated_size(family: str) -> None:
 
 def _predicted_ns(module, dims=None) -> int:
     """What the four families together say one program takes."""
-    result = analyze(
-        module, module.entry_function(), analysis=FAMILIES, level="cta", dims=dims
-    )
+    result = analyze(module, module.entry_function(), analysis=FAMILIES, level="cta", dims=dims)
     summary = get_metadata(result.function, PerformanceSummaryMetadata)
     assert summary is not None
     return summary.timeline.end_ns - summary.timeline.start_ns

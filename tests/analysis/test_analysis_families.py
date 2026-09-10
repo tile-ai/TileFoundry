@@ -33,13 +33,13 @@ from tilefoundry.analysis import (
     RooflineMetadata,
     ThroughputFacts,
     TrafficMetadata,
-    UnitWork,
 )
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.compute_cost import (
     _local_duration_ns,
 )
 from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.analysis.metadata import Breakdown, Spread, shares
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
 from tilefoundry.ir.core import (
     Call,
@@ -49,7 +49,7 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.target import CudaTarget, UnsupportedCapabilityError
+from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 _ROUNDING_M = 14_593
@@ -178,8 +178,7 @@ def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> Non
 
     cross_scope = results["cross_scope"]
     timed = tuple(
-        (call, get_metadata(call, PerformanceMetadata))
-        for call in _calls(cross_scope.function)
+        (call, get_metadata(call, PerformanceMetadata)) for call in _calls(cross_scope.function)
     )
     scalar_indices = tuple(
         (call, record)
@@ -237,18 +236,14 @@ def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
         summary = get_metadata(result.function, PerformanceSummaryMetadata)
         assert cost is not None and bound is not None and summary is not None
         observed[name] = (
-            dict(cost.service)["integer"],
-            dict(cost.service_per_unit("cta"))["integer"],
+            shares(cost.service, cost.topologies)["integer"],
+            shares(cost.service, cost.topologies, "cta")["integer"],
             bound.ideal_ns,
             summary.timeline.end_ns - summary.timeline.start_ns,
         )
 
-    literal_service, literal_local, literal_roofline, literal_performance = observed[
-        "literal"
-    ]
-    symbolic_service, symbolic_local, symbolic_roofline, symbolic_performance = observed[
-        "symbolic"
-    ]
+    literal_service, literal_local, literal_roofline, literal_performance = observed["literal"]
+    symbolic_service, symbolic_local, symbolic_roofline, symbolic_performance = observed["symbolic"]
     assert literal_roofline == symbolic_roofline == 139_407
     assert symbolic_local - literal_local == 6
     assert symbolic_service - literal_service == 6 * 128
@@ -285,12 +280,8 @@ class _SplitLastAxis:
         w: ConstTensor[(_SPLIT_HIDDEN, _SPLIT_OUT), "bf16"],
     ):
         with Mesh(("cta",), layout=(_SPLIT_GRID,), names=("unit",)) as mesh:
-            rows = tf.reshard(
-                x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem"
-            )
-            strip = tf.reshard(
-                w[0:_SPLIT_BLOCK, :], (_SPLIT_BLOCK, _SPLIT_OUT @ mesh.unit), "smem"
-            )
+            rows = tf.reshard(x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem")
+            strip = tf.reshard(w[0:_SPLIT_BLOCK, :], (_SPLIT_BLOCK, _SPLIT_OUT @ mesh.unit), "smem")
             return tf.matmul(rows, strip)
 
 
@@ -304,9 +295,7 @@ class _SplitStripMajor:
         w: ConstTensor[(_SPLIT_GRID, _SPLIT_HIDDEN, _SPLIT_PER), "bf16"],
     ):
         with Mesh(("cta",), layout=(_SPLIT_GRID,), names=("unit",)) as mesh:
-            rows = tf.reshard(
-                x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem"
-            )
+            rows = tf.reshard(x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem")
             strip = tf.reshard(
                 w[:, 0:_SPLIT_BLOCK, :],
                 (_SPLIT_GRID @ mesh.unit, _SPLIT_BLOCK, _SPLIT_PER),
@@ -335,8 +324,8 @@ def test_a_matmul_counts_its_rows_once_whichever_axis_the_mesh_split() -> None:
         cost = get_metadata(product, ComputeCostMetadata)
         summary = get_metadata(report.function, PerformanceSummaryMetadata)
         per_layout[name] = (
-            dict(cost.flops)["bf16"],
-            dict(cost.flops_per_unit("cta"))["bf16"],
+            shares(cost.flops, cost.topologies)["bf16"],
+            shares(cost.flops, cost.topologies, "cta")["bf16"],
             summary.timeline.end_ns,
         )
 
@@ -416,7 +405,7 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
     work = next(
         record
         for record in records
-        if record is not None and any(v for _n, v in record.flops_per_unit("cta"))
+        if record is not None and any(shares(record.flops, record.topologies, "cta").values())
     )
 
     with pytest.raises(
@@ -428,17 +417,26 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
 
     with pytest.raises(AnalysisError, match=r"unknown compute dtype 'f9e9m9'"):
         _local_duration_ns(
-            replace(work, by_unit=(("cta", UnitWork(flops=(("f9e9m9", 8),))),)),
+            replace(
+                work,
+                topologies=("cta",),
+                flops=Breakdown((("f9e9m9", Spread(8, (8,))),)),
+            ),
             throughput,
             services,
             level="cta",
         )
 
     crossed = TrafficMetadata(
-        storage=(
-            (throughput.bandwidth_level, (("cta", TrafficBytes(read=4096)),)),
+        topologies=("cta",),
+        storage=Breakdown(
+            (
+                (
+                    throughput.bandwidth_level,
+                    Spread(TrafficBytes(read=4096), (TrafficBytes(read=4096),)),
+                ),
+            )
         ),
-        unit="cta",
     )
     with pytest.raises(
         AnalysisError,
@@ -471,10 +469,10 @@ def test_a_level_the_machine_can_answer_about_is_one_it_measures() -> None:
         "thread": "thread",
     }
 
-    work = {
-        level: get_metadata(result.function, ComputeCostMetadata).flops_per_unit(level)
-        for level, result in at.items()
-    }
+    work = {}
+    for level, result in at.items():
+        held = get_metadata(result.function, ComputeCostMetadata)
+        work[level] = shares(held.flops, held.topologies, level)
     assert work["cta"] == work["thread"], work
 
     target = FusedBoundary.resolve_target()
@@ -486,8 +484,9 @@ def test_a_level_the_machine_can_answer_about_is_one_it_measures() -> None:
     for dtype, per_cta in rates["cta"].items():
         assert rates["thread"][dtype] == per_cta // threads_per_cta
 
-    with pytest.raises(UnsupportedCapabilityError, match="device_count"):
-        target.get_facts(ParallelCapacityFacts, "gpu")
+    assert target.get_facts(ParallelCapacityFacts, "gpu").parallel_units == 1, (
+        "a target that never said how many cards is one card"
+    )
 
 
 def test_every_level_is_measured_in_one_pass_and_they_nest() -> None:
@@ -500,12 +499,12 @@ def test_every_level_is_measured_in_one_pass_and_they_nest() -> None:
     result = analyze(FusedBoundary, FusedBoundary.entry_function(), analysis=("compute-cost",))
     cost = get_metadata(result.function, ComputeCostMetadata)
 
-    stated = dict(cost.flops_per_unit())
-    assert set(stated) == {"cta", "thread"}
-    assert dict(cost.flops_per_unit("cta")) == dict(stated["cta"])
+    assert cost.topologies == ("cta", "thread")
 
-    for dtype, coarse in dict(cost.flops_per_unit("cta")).items():
-        fine = dict(cost.flops_per_unit("thread")).get(dtype, 0)
+    coarse_by_dtype = shares(cost.flops, cost.topologies, "cta")
+    fine_by_dtype = shares(cost.flops, cost.topologies, "thread")
+    for dtype, coarse in coarse_by_dtype.items():
+        fine = fine_by_dtype.get(dtype, 0)
         assert fine <= coarse and coarse % max(fine, 1) == 0, dtype
 
 
@@ -522,9 +521,9 @@ def test_a_reshard_that_changes_shards_says_what_left_the_card() -> None:
     )
     moved = get_metadata(result.function, TrafficMetadata)
 
-    assert moved.across("gpu", "gpu") == TrafficBytes(read=SENT_BYTES, write=SENT_BYTES)
-    assert moved.across("gpu") == TrafficBytes(
-        read=SENT_BYTES * GPUS, write=SENT_BYTES * GPUS
-    )
-    assert moved.across("gpu", "cta") == TrafficBytes()
-    assert moved.across("cta") == TrafficBytes()
+    crossing = moved.communication.of("gpu")
+    assert crossing.total == TrafficBytes(read=SENT_BYTES * GPUS, write=SENT_BYTES * GPUS)
+    by_level = dict(zip(moved.topologies, crossing.per_unit, strict=True))
+    assert by_level["gpu"] == TrafficBytes(read=SENT_BYTES, write=SENT_BYTES)
+    assert by_level["cta"] == TrafficBytes()
+    assert moved.communication.of("cta") is None

@@ -244,7 +244,10 @@ def test_a_reached_leaf_is_charged_at_its_own_level_and_the_others_are_not() -> 
 
     both = measured()
     assert both.operands == (TrafficBytes(), TrafficBytes(read=12), TrafficBytes())
-    assert (both.at("gmem"), both.at("rmem")) == (
+    assert (
+        both.storage.of("gmem").total,
+        both.storage.of("rmem").total,
+    ) == (
         TrafficBytes(read=4),
         TrafficBytes(read=8),
     ), "reading both numbers is one charge at each of their levels"
@@ -259,10 +262,13 @@ def test_a_reached_leaf_is_charged_at_its_own_level_and_the_others_are_not() -> 
     assert one.operands == (TrafficBytes(), TrafficBytes(read=8), TrafficBytes()), (
         "the second number is eight bytes wide"
     )
-    assert one.at("rmem") == TrafficBytes(read=8), (
+    assert one.storage.of("rmem").total == TrafficBytes(read=8), (
         "and it lives at rmem, so gmem was not touched at all"
     )
-    assert one.at("rmem", "cta") == one.at("rmem")
+    assert one.storage.of("gmem") is None, "gmem was not touched at all"
+    assert one.storage.of("rmem").per_unit == (TrafficBytes(read=8),), (
+        "one CTA is the only unit, so its share is the whole"
+    )
 
     written = AccessRelations(
         inputs=(),

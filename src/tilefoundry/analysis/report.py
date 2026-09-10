@@ -12,12 +12,14 @@ from typing import Union, get_args, get_origin, get_type_hints
 from tilefoundry.analysis.facts import MemoryHierarchyFacts
 from tilefoundry.analysis.memory import cache_pressure
 from tilefoundry.analysis.metadata import (
+    Breakdown,
     ComputeCostMetadata,
     LoopFootprintMetadata,
     MemoryMetadata,
     PerformanceMetadata,
     PerformanceSummaryMetadata,
     RooflineMetadata,
+    Spread,
     TrafficMetadata,
 )
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
@@ -52,9 +54,7 @@ def family_of(record: type[IRMetadata]) -> str:
     return _FAMILIES.get(record, _derived_family(record))
 
 
-def expr_field(
-    record: type[IRMetadata], key: str, of: Callable[..., object]
-) -> None:
+def expr_field(record: type[IRMetadata], key: str, of: Callable[..., object]) -> None:
     """Read one report field from the expression carrying its record."""
     _EXPR_FIELDS.setdefault(record, {})[key] = of
 
@@ -98,6 +98,15 @@ def _reported_value(value: object, declared: object) -> object:
             for item in fields(declared)
         }
     origin = get_origin(declared)
+    if origin is Breakdown:
+        (item,) = get_args(declared)
+        return {kind: _reported_value(spread, Spread[item]) for kind, spread in value.kinds}
+    if origin is Spread:
+        (item,) = get_args(declared)
+        return {
+            "total": _reported_value(value.total, item),
+            "per_unit": [_reported_value(share, item) for share in value.per_unit],
+        }
     if origin is dict:
         _, value_type = get_args(declared)
         return {key: _reported_value(item, value_type) for key, item in value.items()}
@@ -158,9 +167,7 @@ def _operand_name(operand: object) -> str:
     return type(operand).__name__.lower()
 
 
-def _operands(
-    record: TrafficMetadata, expr: object
-) -> list[dict[str, object]] | None:
+def _operands(record: TrafficMetadata, expr: object) -> list[dict[str, object]] | None:
     """Each recorded amount, against the operand it was charged to."""
     if not isinstance(expr, Call) or not record.operands:
         return None
@@ -237,9 +244,7 @@ def report_data(
     }
     available = set(metadata_types)
     asked = {ComputeCostMetadata, TrafficMetadata}
-    if asked & selected or (
-        "roofline" in analyses and asked & available
-    ):
+    if asked & selected or ("roofline" in analyses and asked & available):
         data["totals"] = _work_totals(function)
     return data
 
@@ -279,11 +284,7 @@ def _loop_records(
         if memory is not None and MemoryMetadata in selected
         else None
     )
-    peaks = (
-        {item.level: item.peak_bytes for item in memory.footprint}
-        if memory is not None
-        else {}
-    )
+    peaks = {item.level: item.peak_bytes for item in memory.footprint} if memory is not None else {}
     rows: list[dict[str, object]] = []
     for expr in collect_exprs(function.body):
         if not isinstance(expr, LoopRegion):
@@ -300,6 +301,22 @@ def _loop_records(
     return rows
 
 
+def _totals_of(held: "Breakdown | None") -> dict[str, object]:
+    """Each kind's whole-program amount, without any level's share.
+
+    A total is what the whole program asks for, so this section states one
+    number per kind; the per-level shares are on the family's own record.
+    """
+    if held is None:
+        return {}
+    return {
+        kind: _reported_value(spread.total, type(spread.total))
+        if is_dataclass(type(spread.total))
+        else spread.total
+        for kind, spread in held.kinds
+    }
+
+
 def _work_totals(function: Function) -> dict[str, object]:
     """The multiplicity-aware work and movement recorded on the Function root.
 
@@ -309,11 +326,9 @@ def _work_totals(function: Function) -> dict[str, object]:
     record = get_metadata(function, ComputeCostMetadata)
     moved = get_metadata(function, TrafficMetadata)
     return {
-        "flops": {} if record is None else render_record(record, function)["flops"],
-        "traffic": {} if moved is None else render_record(moved, function)["storage"],
-        "communication": (
-            {} if moved is None else render_record(moved, function)["communication"]
-        ),
+        "flops": _totals_of(None if record is None else record.flops),
+        "traffic": _totals_of(None if moved is None else moved.storage),
+        "communication": _totals_of(None if moved is None else moved.communication),
     }
 
 

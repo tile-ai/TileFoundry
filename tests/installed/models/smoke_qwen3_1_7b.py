@@ -230,10 +230,12 @@ def test_the_mlp_costs_its_three_matrices(tf, shipped_source) -> None:
     authored = _reported(tf, source, "mlp", None)
     placed = _reported(tf, source, "placed_mlp", None)
     authored_flops = authored["totals"]["flops"][DT]
-    placed_flops = placed["totals"]["flops"][DT]
-    placed_per_unit = placed["function_records"]["compute-cost"]["flops_per_unit"][DT]
+    stated = placed["function_records"]["compute-cost"]["flops"][DT]
+    topologies = placed["function_records"]["compute-cost"]["topologies"]
+    placed_flops = stated["total"]
+    per_unit = dict(zip(topologies, stated["per_unit"]))
 
-    assert placed_flops == placed_per_unit * 128
+    assert placed_flops == per_unit["cta"] * 128
     _holds(authored_flops, _mlp_matmul_flops(), "mlp")
     _holds(placed_flops, _mlp_matmul_flops(), "placed mlp")
 

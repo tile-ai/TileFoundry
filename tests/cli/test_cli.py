@@ -48,15 +48,13 @@ def _copy(source: Path, destination: Path) -> Path:
     return destination
 
 
-def _write_registered_model(
-    path: Path, *, target: str, topology: str
-) -> Path:
+def _write_registered_model(path: Path, *, target: str, topology: str) -> Path:
     path.write_text(
         "import json\n"
         "from tilefoundry import func\n"
         "from tilefoundry.dsl import Tensor, Topology, tf\n"
         "from tilefoundry.target import CudaTarget, registered_targets\n"
-        "_extent = json.loads('{\"extent\": 1}')[\"extent\"]\n"
+        '_extent = json.loads(\'{"extent": 1}\')["extent"]\n'
         f"_target = {target}\n"
         f"@func(target=_target, topologies=(Topology('{topology}', _extent),))\n"
         "def model(source: Tensor[(8,), 'f32']):\n"
@@ -146,17 +144,17 @@ def test_naming_one_root_does_not_ask_about_the_rest_of_its_file(tmp_path, capsy
 
     report_path = tmp_path / "sound.json"
     assert (
-        cli.main(
-            ["analyze", f"{source}:Sound", str(report_path), "--compute-cost", "--json"]
-        )
-        == 0
+        cli.main(["analyze", f"{source}:Sound", str(report_path), "--compute-cost", "--json"]) == 0
     )
     assert capsys.readouterr().out == ""
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["module"] == "Sound"
     assert report["totals"]["flops"]
 
-    assert cli.main(["analyze", str(source), str(tmp_path / "bad.json"), "--compute-cost", "--json"]) == 1
+    assert (
+        cli.main(["analyze", str(source), str(tmp_path / "bad.json"), "--compute-cost", "--json"])
+        == 1
+    )
     assert "nope" in capsys.readouterr().err
 
 
@@ -168,8 +166,7 @@ def test_analyze_help_explains_topology_effects_and_assumptions(capsys) -> None:
     help_text = capsys.readouterr().out
     for family in ("compute-cost", "memory", "roofline", "performance"):
         assert family in help_text
-    assert "flops_per_unit" in help_text
-    assert "per-unit traffic" in help_text
+    assert "every level's per-unit share" in help_text
     assert "global traffic is the device's and counted once" in help_text
     assert "is an observation, not a bound" in help_text
 
@@ -240,10 +237,7 @@ def test_analyze_json_without_a_requested_root_is_a_usage_error(capsys, tmp_path
     refused = capsys.readouterr()
     assert refused.out == ""
     assert refused.err.startswith("usage: tilefoundry analyze")
-    assert (
-        "tilefoundry analyze: error: --json requires at least one analysis flag:"
-        in refused.err
-    )
+    assert "tilefoundry analyze: error: --json requires at least one analysis flag:" in refused.err
     assert "source file not found" not in refused.err
 
 
@@ -259,9 +253,7 @@ def test_target_list_expressions_execute_and_show_accepts_their_identities(
     assert cli.main(["target", "list"]) == 0
     listed = capsys.readouterr()
     namespace: dict[str, object] = {}
-    for import_line in (
-        line for line in listed.out.splitlines() if line.startswith("from ")
-    ):
+    for import_line in (line for line in listed.out.splitlines() if line.startswith("from ")):
         exec(import_line, namespace)
 
     rows = [line.strip() for line in listed.out.splitlines() if "  identity: " in line]
@@ -280,8 +272,7 @@ def test_target_list_expressions_execute_and_show_accepts_their_identities(
             assert shown.out.count("  digest: ") == 2
         else:
             assert shown.out == (
-                f"identity: {identity}\n{expression.rstrip()}\n"
-                "facts: unavailable\n"
+                f"identity: {identity}\n{expression.rstrip()}\nfacts: unavailable\n"
             )
 
     assert {
@@ -380,8 +371,7 @@ def test_named_provider_registers_only_decorated_targets_and_replays_them(
     assert "VendorOne()" in capsys.readouterr().out
     assert "tests.cli.vendor_one" in registered_targets()
     assert all(
-        target_type.__name__ != "_VendorBase"
-        for target_type in registered_targets().values()
+        target_type.__name__ != "_VendorBase" for target_type in registered_targets().values()
     )
 
     assert cli.main([*prefix, "remove", provider_name]) == 0
@@ -417,9 +407,7 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
     )
     assert added_architecture.returncode == 0, added_architecture.stderr
     assert "vendor.sm70" in added_architecture.stdout
-    added_device = _run_cli(
-        registry, tmp_path, "target", "add", "--document", str(device)
-    )
+    added_device = _run_cli(registry, tmp_path, "target", "add", "--document", str(device))
     assert added_device.returncode == 0, added_device.stderr
     assert 'CudaTarget("vendor.v100_sxm2_32gb")' in added_device.stdout
     added_provider = _run_cli(registry, tmp_path, "target", "add", str(provider))
@@ -463,9 +451,7 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
     alternate_provider = tmp_path / "alternate" / provider.name
     alternate_provider.parent.mkdir()
     _copy(provider, alternate_provider)
-    duplicate_module_name = _run_cli(
-        registry, tmp_path, "target", "add", str(alternate_provider)
-    )
+    duplicate_module_name = _run_cli(registry, tmp_path, "target", "add", str(alternate_provider))
     assert duplicate_module_name.returncode == 1
     assert "module name 'vendor_npu' is already added from" in duplicate_module_name.stderr
     assert str(provider) in duplicate_module_name.stderr
@@ -512,14 +498,15 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
     )
     assert analyzed_cuda.returncode == 0, analyzed_cuda.stderr
     assert analyzed_cuda.stdout == ""
-    assert json.loads((tmp_path / "cuda.json").read_text(encoding="utf-8"))["target"] == "vendor.v100_sxm2_32gb"
+    assert (
+        json.loads((tmp_path / "cuda.json").read_text(encoding="utf-8"))["target"]
+        == "vendor.v100_sxm2_32gb"
+    )
 
     removed_module = _run_cli(registry, tmp_path, "target", "remove", "vendor.npu")
     assert removed_module.returncode == 0, removed_module.stderr
     assert "identities: ['vendor.npu']" in removed_module.stdout
-    removed_device = _run_cli(
-        registry, tmp_path, "target", "remove", "vendor.v100_sxm2_32gb"
-    )
+    removed_device = _run_cli(registry, tmp_path, "target", "remove", "vendor.v100_sxm2_32gb")
     assert removed_device.returncode == 0, removed_device.stderr
     after = _run_cli(registry, tmp_path, "target", "list")
     assert after.returncode == 0, after.stderr
@@ -535,12 +522,10 @@ def test_persisted_targets_drive_every_command_without_touching_the_default_regi
 def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
     tmp_path,
 ) -> None:
-    source_architecture = (_SMOKE_TARGET / "hw" / "vendor_sm70.toml").read_text(
+    source_architecture = (_SMOKE_TARGET / "hw" / "vendor_sm70.toml").read_text(encoding="utf-8")
+    source_device = (_SMOKE_TARGET / "hw" / "vendor_v100_sxm2_32gb.toml").read_text(
         encoding="utf-8"
     )
-    source_device = (
-        _SMOKE_TARGET / "hw" / "vendor_v100_sxm2_32gb.toml"
-    ).read_text(encoding="utf-8")
 
     missing_registry = tmp_path / "missing-registry.toml"
     missing_device = tmp_path / "missing_architecture.toml"
@@ -563,13 +548,9 @@ def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
     registry = tmp_path / "registry.toml"
     architecture = tmp_path / "vendor_sm70.toml"
     architecture.write_text(source_architecture, encoding="utf-8")
-    first = _run_cli(
-        registry, tmp_path, "target", "add", "--document", str(architecture)
-    )
+    first = _run_cli(registry, tmp_path, "target", "add", "--document", str(architecture))
     assert first.returncode == 0, first.stderr
-    duplicate = _run_cli(
-        registry, tmp_path, "target", "add", "--document", str(architecture)
-    )
+    duplicate = _run_cli(registry, tmp_path, "target", "add", "--document", str(architecture))
     assert duplicate.returncode == 1
     assert "hardware document 'vendor.sm70' is already registered" in duplicate.stderr
 
@@ -628,9 +609,7 @@ def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
     assert named_list.returncode == 0, named_list.stderr
     assert "identity: vendor.named   added" in named_list.stdout
     named_provider.write_text("raise RuntimeError('provider changed')\n", encoding="utf-8")
-    named_removed = _run_cli(
-        named_registry, tmp_path, "target", "remove", "named_provider"
-    )
+    named_removed = _run_cli(named_registry, tmp_path, "target", "remove", "named_provider")
     assert named_removed.returncode == 0, named_removed.stderr
     assert "module 'named_provider' failed: provider changed" in named_removed.stderr
     assert "identities: []" in named_removed.stdout
@@ -642,13 +621,9 @@ def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
     )
     good_device = tmp_path / "vendor_v100_sxm2_32gb.toml"
     good_device.write_text(source_device, encoding="utf-8")
-    added_bad = _run_cli(
-        registry, tmp_path, "target", "add", "--document", str(bad_architecture)
-    )
+    added_bad = _run_cli(registry, tmp_path, "target", "add", "--document", str(bad_architecture))
     assert added_bad.returncode == 0, added_bad.stderr
-    added_good = _run_cli(
-        registry, tmp_path, "target", "add", "--document", str(good_device)
-    )
+    added_good = _run_cli(registry, tmp_path, "target", "add", "--document", str(good_device))
     assert added_good.returncode == 0, added_good.stderr
     bad_architecture.write_text(
         bad_architecture.read_text(encoding="utf-8") + "\n",
@@ -676,11 +651,12 @@ def test_registration_diagnostics_isolate_bad_entries_and_identity_sources(
     assert analyzed.returncode == 0
     assert "document 'vendor.bad_sm70' content changed" in analyzed.stderr
     assert analyzed.stdout == ""
-    assert json.loads((tmp_path / "repaired.json").read_text(encoding="utf-8"))["target"] == "vendor.v100_sxm2_32gb"
-
-    repaired = _run_cli(
-        registry, tmp_path, "target", "add", "--document", str(bad_architecture)
+    assert (
+        json.loads((tmp_path / "repaired.json").read_text(encoding="utf-8"))["target"]
+        == "vendor.v100_sxm2_32gb"
     )
+
+    repaired = _run_cli(registry, tmp_path, "target", "add", "--document", str(bad_architecture))
     assert repaired.returncode == 0, repaired.stderr
     repaired_list = _run_cli(registry, tmp_path, "target", "list")
     assert repaired_list.returncode == 0, repaired_list.stderr
@@ -693,12 +669,26 @@ def test_analyze_binds_an_extent_on_a_root_that_reaches_a_child(tmp_path, capsys
     source.write_text(composed_leaf_source("n_cli"), encoding="utf-8")
 
     report_path = tmp_path / "composed_report.py"
-    assert cli.main(["analyze", f"{source}:Composed.root", str(report_path), "--dim", "n_cli=4"]) == 0
+    assert (
+        cli.main(["analyze", f"{source}:Composed.root", str(report_path), "--dim", "n_cli=4"]) == 0
+    )
     assert capsys.readouterr().out == ""
     expanded = report_path.read_text(encoding="utf-8")
     assert "def root(" in expanded
     assert "leaf_w: ConstTensor" in expanded
     assert "leaf(" not in expanded
+
+
+def _shares_text(per_unit: list, topologies: list) -> str:
+    """One quantity's per-level shares, as the comment renders a dict."""
+    return ",".join(f"{name}:{value}" for name, value in zip(topologies, per_unit))
+
+
+def _bytes_shares_text(per_unit: list, topologies: list) -> str:
+    """The same for read/write pairs."""
+    return ",".join(
+        f"{name}:r{moved['read']}/w{moved['write']}" for name, moved in zip(topologies, per_unit)
+    )
 
 
 def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) -> None:
@@ -724,21 +714,23 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
     assert "operands=" not in first
     assert "operands=0:r30720/w0,result:r0/w30720" in asked
     assert (
-        cli.main(
-            ["analyze", selector, str(operands_json_path), *flags, "--operands", "--json"]
-        )
+        cli.main(["analyze", selector, str(operands_json_path), *flags, "--operands", "--json"])
         == 0
     )
     assert json.loads(operands_json_path.read_text(encoding="utf-8")) == payload
 
     header, annotated = first.split("\n\n", 1)
     lines = annotated.splitlines()
-    assert payload["requested"] == payload["executed"] == [
-        "compute-cost",
-        "memory",
-        "roofline",
-        "performance",
-    ]
+    assert (
+        payload["requested"]
+        == payload["executed"]
+        == [
+            "compute-cost",
+            "memory",
+            "roofline",
+            "performance",
+        ]
+    )
     assert set(payload["function_records"]) == {
         "compute-cost",
         "traffic",
@@ -765,31 +757,30 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         f"# selection requested={','.join(payload['requested'])} "
         f"executed={','.join(payload['executed'])}",
         "# compute-cost "
-        f"flops=f32:{cost['flops']['f32']}"
-        f"@{cost['by_unit'][cost['unit']]['flops']['f32']}",
+        f"flops=f32:{cost['flops']['f32']['total']}"
+        f"@{_shares_text(cost['flops']['f32']['per_unit'], cost['topologies'])}",
         "# traffic "
-        f"traffic=gmem:r{moved['storage']['gmem']['']['read']}"
-        f"/w{moved['storage']['gmem']['']['write']}"
-        f"@r{moved['storage']['gmem'][moved['unit']]['read']}"
-        f"/w{moved['storage']['gmem'][moved['unit']]['write']}",
+        f"traffic=gmem:r{moved['storage']['gmem']['total']['read']}"
+        f"/w{moved['storage']['gmem']['total']['write']}"
+        f"@{_bytes_shares_text(moved['storage']['gmem']['per_unit'], moved['topologies'])}",
         f"# peak-footprint=gmem:{peak[0]['peak_bytes']}",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# performance root=MoEMegaKernel::experts "
         f"predicted-ns={summary['timeline']['end_ns']} "
         f"waves={summary['waves']}",
     ]
-    assert payload["totals"]["flops"] == cost["flops"]
-    assert payload["totals"]["traffic"] == moved["storage"]
-    assert payload["totals"]["communication"] == moved["communication"]
+    assert payload["totals"]["flops"] == {
+        kind: value["total"] for kind, value in cost["flops"].items()
+    }
+    assert payload["totals"]["traffic"] == {
+        level: value["total"] for level, value in moved["storage"].items()
+    }
+    assert payload["totals"]["communication"] == {
+        level: value["total"] for level, value in moved["communication"].items()
+    }
 
-    hoisted = {
-        line.split(" = ", 1)[0] for line in lines if " = Mesh((Topology(" in line
-    }
-    scoped = {
-        line.lstrip().split()[1]
-        for line in lines
-        if line.lstrip().startswith("with ")
-    }
+    hoisted = {line.split(" = ", 1)[0] for line in lines if " = Mesh((Topology(" in line}
+    scoped = {line.lstrip().split()[1] for line in lines if line.lstrip().startswith("with ")}
     assert hoisted == {"cta", "cta_2"} | scoped
     annotated_types = [
         line.split("  # ", 1)[1].split("; ", 1)[0] for line in lines if "  # Tensor[" in line

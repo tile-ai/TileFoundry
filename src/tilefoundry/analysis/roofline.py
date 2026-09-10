@@ -27,13 +27,15 @@ from .visitor import AnalyzeContext
 SELECTOR = "roofline"
 
 
-
 _NO_BOUND = 0
 
 
-def _compute_ns(
-    flops: tuple[tuple[str, int], ...], facts: ThroughputFacts
-) -> int:
+def _totals(held) -> tuple[tuple[str, int], ...]:
+    """One category's kinds with their whole-program counts."""
+    return tuple((kind, spread.total) for kind, spread in held.kinds)
+
+
+def _compute_ns(flops: tuple[tuple[str, int], ...], facts: ThroughputFacts) -> int:
     """Time the flops need, summed over the dtypes that have a rate.
 
     A dtype the target publishes no rate for contributes nothing. That
@@ -76,16 +78,12 @@ def _bound(compute_ns: int, memory_ns: int, *, has_work: bool) -> RooflineMetada
     if not ideal:
         bound_by = "none"
     elif compute_ns and compute_ns == memory_ns:
-
-
         bound_by = "balanced"
     elif memory_ns > compute_ns:
         bound_by = "memory"
     elif compute_ns:
         bound_by = "compute"
     else:
-
-
         bound_by = "unrated"
     return RooflineMetadata(
         compute_ns=compute_ns,
@@ -107,13 +105,12 @@ def _cost_bound(
     nanosecond is what this could have priced, so a dtype whose rate is missing
     still owes one and a level nobody rated does not.
     """
-    crossed = moved.at(facts.bandwidth_level)
+    reached = moved.storage.of(facts.bandwidth_level)
+    crossed = reached.total if reached is not None else TrafficBytes()
     return _bound(
-        _compute_ns(cost.flops, facts),
+        _compute_ns(_totals(cost.flops), facts),
         _memory_ns(crossed, facts),
-        has_work=bool(
-            any(value for _name, value in cost.flops) or crossed.total_bytes
-        ),
+        has_work=bool(any(value for _name, value in _totals(cost.flops)) or crossed.total_bytes),
     )
 
 

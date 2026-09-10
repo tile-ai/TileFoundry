@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, fields
 from typing import get_type_hints
 
 from tilefoundry.analysis.metadata import (
+    Breakdown,
     ComputeCostMetadata,
     LoopFootprintMetadata,
     MemoryMetadata,
@@ -135,9 +136,7 @@ _COMMENTS: dict[type[IRMetadata], RecordComment] = {}
 def _field_projections(record: type[IRMetadata], names: tuple[str, ...]) -> tuple[Projection, ...]:
     hints = get_type_hints(record)
     defaults = {item.name: item.default for item in fields(record)}
-    return tuple(
-        Projection(name, hints[name], _read(name), defaults[name]) for name in names
-    )
+    return tuple(Projection(name, hints[name], _read(name), defaults[name]) for name in names)
 
 
 def _read(name: str) -> Callable[..., object]:
@@ -161,9 +160,7 @@ def comment(
     """
     declared = emitted or tuple(item.name for item in fields(record))
     emissions = tuple(
-        item
-        if isinstance(item, Projection)
-        else _field_projections(record, (item,))[0]
+        item if isinstance(item, Projection) else _field_projections(record, (item,))[0]
         for item in declared
     )
     declare_record(record, family=family)
@@ -175,9 +172,7 @@ def comment_of(record: type[IRMetadata]) -> RecordComment | None:
     return _COMMENTS.get(record)
 
 
-def render_comment(
-    record: IRMetadata, *, opt_in: frozenset[str] = frozenset()
-) -> str | None:
+def render_comment(record: IRMetadata, *, opt_in: frozenset[str] = frozenset()) -> str | None:
     """One record as one comment, or ``None`` when it does not report.
 
     A key is its declared name with ``_`` written as ``-``; a unit belongs in
@@ -211,38 +206,40 @@ def _says_nothing(value: object, default: object) -> bool:
     return entries is not None and not entries
 
 
-def _paired_flops(record: ComputeCostMetadata) -> dict[str, TotalAndPerUnit[int]]:
-    """Each dtype's work, whole and per unit, as one value."""
-    per_unit = dict(record.asked().flops)
+def _paired[V](
+    held: "Breakdown[V]", topologies: tuple[str, ...]
+) -> dict[str, TotalAndPerUnit[dict[str, V]]]:
+    """Each kind's quantity, whole beside what one unit of each level holds.
+
+    The level names come from the record's own ``topologies``, which is where
+    they are written once; a ``Spread`` states its shares in that order and
+    carries no names of its own.
+    """
     return {
-        dtype: TotalAndPerUnit(total, per_unit.get(dtype, 0))
-        for dtype, total in record.flops
+        kind: TotalAndPerUnit(spread.total, dict(zip(topologies, spread.per_unit, strict=False)))
+        for kind, spread in held.kinds
     }
 
 
-def _paired_service(record: ComputeCostMetadata) -> dict[str, TotalAndPerUnit[int]]:
-    """Each service kind's work, whole and per unit, as one value.
+def _paired_flops(record: ComputeCostMetadata):
+    """Each dtype's work, whole and per unit at every declared level."""
+    return _paired(record.flops, record.topologies)
+
+
+def _paired_service(record: ComputeCostMetadata):
+    """Each service kind's work, whole and per unit at every declared level.
 
     What a machine is asked for that is not floating point: comparing, selecting,
     integer arithmetic, a reciprocal, a local move. Reported beside the flops
     rather than folded into them, because a predicate priced as a FLOP is a
     number about a pipe the work never went down.
     """
-    per_unit = dict(record.asked().service)
-    return {
-        kind: TotalAndPerUnit(total, per_unit.get(kind, 0))
-        for kind, total in record.service
-    }
+    return _paired(record.service, record.topologies)
 
 
-def _paired_traffic(
-    record: TrafficMetadata,
-) -> dict[str, TotalAndPerUnit[TrafficBytes]]:
-    """Each level's traffic, whole and per unit, as one value."""
-    return {
-        level: TotalAndPerUnit(record.at(level), record.at(level, record.unit))
-        for level in record.levels()
-    }
+def _paired_traffic(record: TrafficMetadata):
+    """Each storage level's traffic, whole and per unit at every declared level."""
+    return _paired(record.storage, record.topologies)
 
 
 def _by_operand(record: TrafficMetadata) -> dict[str, TrafficBytes]:
@@ -283,9 +280,7 @@ def _loop_footprint_status(record: LoopFootprintMetadata) -> str:
 def _interval(record: PerformanceMetadata) -> TripInterval:
     """The occurrence's interval, with its repetition folded in."""
     timeline = record.timeline
-    return TripInterval(
-        timeline.start_ns, timeline.end_ns, timeline.stride_ns, timeline.trips
-    )
+    return TripInterval(timeline.start_ns, timeline.end_ns, timeline.stride_ns, timeline.trips)
 
 
 def _predicted_ns(record: PerformanceSummaryMetadata) -> int:
@@ -349,12 +344,16 @@ class PerformanceSummaryView(IRMetadata):
 
 comment(
     ComputeCostMetadata,
-    Projection("flops", dict[str, TotalAndPerUnit[int]], _paired_flops),
-    Projection("service", dict[str, TotalAndPerUnit[int]], _paired_service),
+    Projection("flops", dict[str, TotalAndPerUnit[dict[str, int]]], _paired_flops),
+    Projection("service", dict[str, TotalAndPerUnit[dict[str, int]]], _paired_service),
 )
 comment(
     TrafficMetadata,
-    Projection("traffic", dict[str, TotalAndPerUnit[TrafficBytes]], _paired_traffic),
+    Projection(
+        "traffic",
+        dict[str, TotalAndPerUnit[dict[str, TrafficBytes]]],
+        _paired_traffic,
+    ),
     Projection("operands", dict[str, TrafficBytes], _by_operand, opt_in=True),
 )
 comment(

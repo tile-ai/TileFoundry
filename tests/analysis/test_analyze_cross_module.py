@@ -50,8 +50,8 @@ def _flops(records) -> dict[str, int]:
     total: dict[str, int] = {}
     for item in records:
         record = item[0] if isinstance(item, tuple) else item
-        for name, value in record.flops:
-            total[name] = total.get(name, 0) + value
+        for name, spread in record.flops.kinds:
+            total[name] = total.get(name, 0) + spread.total
     return total
 
 
@@ -59,9 +59,8 @@ def _traffic(records) -> dict[str, int]:
     total: dict[str, int] = {}
     for _record, moved in records:
         assert moved is not None, "traffic was asked of a run that did not measure it"
-        for name in moved.levels():
-            bytes_ = moved.at(name)
-            total[name] = total.get(name, 0) + bytes_.total_bytes
+        for name, spread in moved.storage.kinds:
+            total[name] = total.get(name, 0) + spread.total.total_bytes
     return total
 
 
@@ -98,9 +97,7 @@ def test_a_child_call_a_loop_varies_is_counted_once_per_trip() -> None:
             return acc
 
     one_result = analyze(CrossModule, CrossModule.entry_function(), analysis="compute-cost")
-    looped_result = analyze(
-        _Looped, _Looped.entry_function(), analysis="compute-cost"
-    )
+    looped_result = analyze(_Looped, _Looped.entry_function(), analysis="compute-cost")
     one_occurrence = _matmul_records(one_result)
     looped_occurrence = _matmul_records(looped_result)
     one_root = get_metadata(one_result.function, ComputeCostMetadata)
@@ -123,7 +120,9 @@ def test_the_weight_traffic_of_a_fused_root_is_what_its_callees_read() -> None:
             return tf.matmul(x, w)
 
     direct_result = analyze(_Direct, _Direct.entry_function(), analysis=("compute-cost", "memory"))
-    fused_result = analyze(CrossModule, CrossModule.entry_function(), analysis=("compute-cost", "memory"))
+    fused_result = analyze(
+        CrossModule, CrossModule.entry_function(), analysis=("compute-cost", "memory")
+    )
     direct = _traffic(_matmul_records(direct_result))
     fused = _traffic(_matmul_records(fused_result))
 
@@ -218,5 +217,3 @@ def test_each_placed_branch_keeps_its_slice_on_its_primitive_results() -> None:
         for _op, layout in placed:
             assert layout.outer.shape == shape
             assert layout.offset == offset
-
-
