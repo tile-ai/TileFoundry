@@ -20,6 +20,7 @@ from pathlib import Path
 
 MAX_PROSE_LINES = 8
 MAX_COLUMNS = 100
+MAX_ASSERT_MESSAGE = 100
 EXEMPT_PREFIXES = ("tests/models/", "examples/")
 DIRECTIVE_PREFIXES = ("ruff:", "noqa", "type:", "pragma:", "mypy:", "fmt:", "isort:")
 PYTHON_SUFFIXES = frozenset({".py"})
@@ -269,9 +270,44 @@ def _asserts_explain_themselves(text: str, end_line: int) -> bool:
     return _next_code_line(text, end_line + 1).startswith("static_assert")
 
 
+C_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _assert_messages(text: str):
+    """Each ``static_assert``'s message, joined, with the line it starts on.
+
+    Adjacent literals are one message in C++, and clang-format splits a long
+    one across lines to fit the column limit, so the length that matters is
+    the concatenation rather than any line of it.
+    """
+    for match in re.finditer(r"\bstatic_assert\s*\(", text):
+        depth, index = 1, match.end()
+        while index < len(text) and depth:
+            depth += (text[index] == "(") - (text[index] == ")")
+            index += 1
+        message = "".join(
+            literal[1:-1] for literal in C_STRING.findall(text[match.end() : index])
+        )
+        if message:
+            yield text.count("\n", 0, match.start()) + 1, message
+
+
+def assert_findings(text: str) -> list[tuple[int, str]]:
+    """Assertion messages longer than one sentence's worth."""
+    return [
+        (
+            line,
+            f"static_assert message spends {len(message)} characters; "
+            f"limit is {MAX_ASSERT_MESSAGE}",
+        )
+        for line, message in _assert_messages(text)
+        if len(message) > MAX_ASSERT_MESSAGE
+    ]
+
+
 def c_findings(text: str) -> list[tuple[int, str]]:
-    """Illegal C-family comments and oversized Doxygen prose."""
-    found = []
+    """Illegal C-family comments, oversized Doxygen prose, and long asserts."""
+    found = assert_findings(text)
     narration_lines = []
     line_run: list[tuple[int, str]] = []
 

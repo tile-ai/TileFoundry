@@ -52,8 +52,8 @@ __device__ inline void reduce(Src const &src, Dst &dst, Ws &&ws = {}) {
         } else if constexpr (!has_ws) {
             static_assert(
                 dependent_false_v<Src>,
-                "ops::reduce: these shard layouts spread one value over more "
-                "than one warp; pass a shared-memory workspace");
+                "ops::reduce: these shard layouts spread one value over "
+                "more than one warp");
         } else if constexpr (plan.lane_reduced) {
             reduce_impl::IntraCta<Op, Axes>{}(src, dst, ws,
                                               plan.warps_per_group);

@@ -79,11 +79,9 @@ CUTE_HOST_DEVICE constexpr auto get(Mesh<L, Topos...> const &mesh) {
     if constexpr (sizeof...(Topos) == 1) {
         return mesh;
     } else {
-        static_assert(
-            !cute::is_composed_layout<cute::remove_cvref_t<L>>::value,
-            "get<level>: a mesh naming several levels cannot also be sliced; "
-            "the slice and the level boundary would both be deciding which "
-            "positions these are");
+        static_assert(!cute::is_composed_layout<cute::remove_cvref_t<L>>::value,
+                      "get<level>: a mesh naming several levels cannot also be "
+                      "sliced");
         auto const level = cute::get<at>(mesh.layout);
         return Mesh<cute::remove_cvref_t<decltype(level)>, S>{level};
     }
@@ -187,8 +185,8 @@ CUTE_HOST_DEVICE constexpr bool is_warped(Mesh<L, Topos...> const &mesh) {
 template <class L, TopologyScope... Topos>
 CUTE_HOST_DEVICE constexpr auto as_warped(Mesh<L, Topos...> const &mesh) {
     static_assert(is_warped(Mesh<L, Topos...>{}),
-                  "as_warped: this mesh's ids say nothing about warps; its "
-                  "fastest axis must step by one and run whole warps");
+                  "as_warped: this mesh's fastest axis must step by one "
+                  "and run whole warps");
     using ids_t = cute::remove_cvref_t<decltype(detail::id_axes(mesh.layout))>;
     /// Mode zero is the fastest here, so a warp-sized tile cuts the axis a
     /// warp runs along; the result turns back into the mesh's own order.

@@ -57,7 +57,7 @@ struct CopyAsync {
         constexpr int bytes = async_bytes<decltype(s), decltype(d)>();
         static_assert(bytes > int(sizeof(value_type)),
                       "ops::copy_async: these two views share no run wide "
-                      "enough for cp.async; use ops::copy for a scalar move");
+                      "enough for cp.async");
         static_assert(
             same_slice_size<decltype(s), decltype(d)>(),
             "ops::copy_async: the two projected slices must hold the same "

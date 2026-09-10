@@ -28,11 +28,9 @@ struct RmsNorm {
         static_assert(tilefoundry::detail::shard_layout_is_full_broadcast<
                           typename dst_type::shard_layout_type>(),
                       "ops::rmsnorm: destination must hold the whole tile");
-        static_assert(
-            tilefoundry::detail::shard_layout_is_full_broadcast<
-                typename src_type::shard_layout_type>(),
-            "ops::rmsnorm: source must hold the whole tile because the loops "
-            "index its projected view with the destination's M and K");
+        static_assert(tilefoundry::detail::shard_layout_is_full_broadcast<
+                          typename src_type::shard_layout_type>(),
+                      "ops::rmsnorm: source must hold the whole tile");
         static_assert(decltype(cute::rank(weight_layout{}))::value == 1,
                       "ops::rmsnorm: weight shard layout must be rank 1");
         static_assert(int(cute::size<0>(weight_layout{})) == K,

@@ -31,8 +31,8 @@ template <class Op, class Axes> struct IntraCta {
         using value_type = cute::remove_cvref_t<decltype(d(0))>;
 
         static_assert(kept_cells<Axes, decltype(s)>() == 1,
-                      "ops::reduce (intra-CTA tier): this tier produces one "
-                      "value per instance, so kept axes must form one cell");
+                      "ops::reduce (intra-CTA tier): kept axes must form "
+                      "one cell");
         constexpr int kSpan = reduced_span<Axes, decltype(s)>();
         const float local = local_fold<Op, Axes>(s, 0);
         const float warp_partial =

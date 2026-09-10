@@ -30,7 +30,7 @@ CASES: dict[int, str | None] = {
     10: "the source's projected layout must be a plain cute::Layout",
     11: "the two operands must name one mesh",
     12: "ops::reduce: a reduce mesh's scope must be cta or thread",
-    13: "ops::reduce (intra-CTA tier): this tier produces one value per instance",
+    13: "ops::reduce (intra-CTA tier): kept axes must form one cell",
     14: "these two views share no run wide enough for cp.async",
     15: "the two projected slices must hold the same number of elements",
     16: "ops::dot (warp tier): the fastest axis of the operands' mesh",

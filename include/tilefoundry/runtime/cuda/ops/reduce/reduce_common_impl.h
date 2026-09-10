@@ -73,8 +73,8 @@ CUTE_HOST_DEVICE constexpr void check_reduce_domain() {
         "ops::reduce: the element type must be one float holds exactly");
     static_assert(
         folds_in_float<typename d_view::value_type>(),
-        "ops::reduce: the finalised value is a float, so the destination's "
-        "element type must be one float can be stored into without loss");
+        "ops::reduce: the destination's element type must be one a float "
+        "can be stored into without loss");
     static_assert(
         !cute::is_composed_layout<typename s_view::layout_type>::value,
         "ops::reduce: the source's projected layout must be a plain "
