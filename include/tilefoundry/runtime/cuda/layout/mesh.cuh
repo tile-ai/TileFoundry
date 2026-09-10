@@ -28,6 +28,16 @@ template <class TLayout, TopologyScope... Topos> struct Mesh {
 
 namespace detail {
 
+/// Where ``S`` sits in the pack, and ``sizeof...`` when it names no level.
+template <TopologyScope S, TopologyScope... Ts>
+CUTE_HOST_DEVICE constexpr int level_index() {
+    constexpr bool hit[] = {(Ts == S)...};
+    for (int i = 0; i < int(sizeof...(Ts)); ++i)
+        if (hit[i])
+            return i;
+    return int(sizeof...(Ts));
+}
+
 /// A mesh whose axes span more than one level has no rule assigning them.
 template <class TMesh> CUTE_HOST_DEVICE constexpr void one_level() {
     static_assert(TMesh::level_count == 1,
@@ -57,17 +67,26 @@ template <class L> CUTE_HOST_DEVICE constexpr auto id_axes(L const &l) {
 /// The level's own mesh, out of a mesh that may name several.
 ///
 /// A mesh naming one level is that level's, whole. A mesh naming more states
-/// its axes grouped one nest per level -- ``cute::group`` is what builds that
-/// -- and this is ``cute::get`` of the nest, which is why it shares the name.
+/// its axes grouped one nest per level, each already in that level's own
+/// numbering, and this is ``cute::get`` of the nest -- which is why it shares
+/// the name. The composite is a grouping, not a map: only the nests are
+/// evaluated, so a mesh naming several levels is asked one at a time.
 template <TopologyScope S, class L, TopologyScope... Topos>
 CUTE_HOST_DEVICE constexpr auto get(Mesh<L, Topos...> const &mesh) {
-    static_assert(sizeof...(Topos) == 1,
-                  "get<level>: this mesh names several levels, and its layout "
-                  "does not say which axes are whose; codegen groups the axes "
-                  "one nest per level before the runtime can pick one");
-    static_assert(((Topos == S) && ...),
+    constexpr int at = detail::level_index<S, Topos...>();
+    static_assert(at < int(sizeof...(Topos)),
                   "get<level>: this mesh does not name that level");
-    return mesh;
+    if constexpr (sizeof...(Topos) == 1) {
+        return mesh;
+    } else {
+        static_assert(
+            !cute::is_composed_layout<cute::remove_cvref_t<L>>::value,
+            "get<level>: a mesh naming several levels cannot also be sliced; "
+            "the slice and the level boundary would both be deciding which "
+            "positions these are");
+        auto const level = cute::get<at>(mesh.layout);
+        return Mesh<cute::remove_cvref_t<decltype(level)>, S>{level};
+    }
 }
 
 /// The first id the mesh covers, in its level's own numbering: a slice's

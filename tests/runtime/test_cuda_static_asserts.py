@@ -49,6 +49,7 @@ CASES: dict[int, str | None] = {
     23: "two mesh axes name one tensor axis",
     24: "both operands must leave the tile whole on every ",
     25: "ops::sync: a mesh that skips warps names no barrier",
+    26: "get<level>: this mesh does not name that level",
 }
 
 pytestmark = pytest.mark.skipif(
@@ -90,7 +91,8 @@ def test_the_corrected_arithmetic_still_compiles() -> None:
     Case 0 asserts the reduce dispatch's own answers for a flat ``(256,)``
     thread mesh, a ``(2, 64)`` one that straddles the warp boundary, and the
     ``(1, 32)`` the mega kernel uses -- the three the greedy warp walk this
-    replaced got wrong.
+    replaced got wrong -- then that a sparse mesh knows its own ids, and that
+    a two-level mesh hands each level back on its own.
     """
     proc = _compile(0)
     assert proc.returncode == 0, proc.stderr

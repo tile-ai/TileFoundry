@@ -107,6 +107,22 @@ __global__ void k() {
                                          cute::make_tuple(0, 32)));
     static_assert(!tilefoundry::contains(sparse_mesh{sparse_layout{}},
                                          cute::make_tuple(0, 96)));
+
+    /// A mesh naming two levels: grouped one nest per level, asked one level
+    /// at a time, each nest already in that level's own numbering.
+
+    using grouped =
+        cute::Layout<cute::Shape<cute::Shape<cute::Int<4>, cute::Int<2>>,
+                                 cute::Shape<cute::Int<32>>>,
+                     cute::Stride<cute::Stride<cute::Int<2>, cute::Int<1>>,
+                                  cute::Stride<cute::Int<1>>>>;
+    using mesh = Mesh<grouped, TopologyScope::cta, TopologyScope::thread>;
+    constexpr auto cta = tilefoundry::get<TopologyScope::cta>(mesh{});
+    constexpr auto thread = tilefoundry::get<TopologyScope::thread>(mesh{});
+    static_assert(decltype(cta)::level_count == 1, "one level each");
+    static_assert(int(cute::size(cta.layout)) == 8, "8 CTAs of their own");
+    static_assert(int(cute::size(thread.layout)) == 32, "32 threads of theirs");
+    static_assert(tilefoundry::is_warped(thread), "and that is one warp");
 }
 #endif
 
@@ -461,5 +477,15 @@ __global__ void k() {
     static_assert(int(cute::size(tilefoundry::as_warped(mesh{}).layout)) == 64);
     static_assert(sync_impl::warps_run_together<mesh>(),
                   "ops::sync: a mesh that skips warps names no barrier");
+}
+#endif
+#if CASE == 26
+/// The level a mesh does not name.
+__global__ void k() {
+    using mesh = Mesh<
+        cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>,
+        TopologyScope::thread>;
+    constexpr auto cta = tilefoundry::get<TopologyScope::cta>(mesh{});
+    static_assert(int(cute::size(cta.layout)) == 32, "unreachable");
 }
 #endif
