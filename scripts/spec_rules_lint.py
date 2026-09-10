@@ -58,6 +58,7 @@ def lint_text(text: str) -> list[tuple[int, str]]:
 
 _FENCE = re.compile(r"^\s*```(\w*)\s*$")
 _EXAMPLE_MARK = re.compile(r"^\s*(#|//)\s*example\b", re.IGNORECASE)
+_GENERATED_MARK = re.compile(r"^\s*//\s*include/\S+\.(?:h|cuh)\s*$")
 _CAMEL = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 
 
@@ -213,7 +214,7 @@ def lint_entry_format(text: str, path: str) -> list[tuple[int, str]]:
     violations: list[tuple[int, str]] = []
     for lang, start, body in _fenced_blocks(text):
         first = next((s for s in body if s.strip()), "")
-        if _EXAMPLE_MARK.match(first):
+        if _EXAMPLE_MARK.match(first) or _GENERATED_MARK.match(first):
             continue
         if lang == "python":
             per_block = _lint_python_block("\n".join(body), allow_op_machinery)

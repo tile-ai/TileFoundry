@@ -116,7 +116,7 @@ def _render_shard_layout_type(sl: SL, ctx=None) -> str:
 def _composed_mesh_layout(positions: str, base: int) -> str:
     """A mesh layout value expression, its slice origin folded in.
 
-    See [runtime §2.3](docs/spec/runtime.md#23-tilefoundrymesh).
+    See [runtime §2.3.2](docs/spec/runtime.md#232-layoutmeshcuh).
     """
     if not base:
         return positions
@@ -127,13 +127,11 @@ def register_strides(sl: SL) -> tuple[int, ...]:
     """``sl``'s strides as steps on a *register* engine, not on a shared buffer.
 
     Registers are the distinct-engine-per-instance case of [shard
-    §7.1.2](docs/spec/shard.md#712-layoutstrides), so:
-
-    - a ``Split(k)`` axis gets ``0``, which is what makes [runtime
-      §2.10.2](docs/spec/runtime.md#2102-computation)'s sum come out ``0``;
-    - the rest get the array's own steps -- the compact product over them in
-      mode order, fastest mode first, which is the order ``_emit_plain_alloc``
-      lays the backing array out in. An extent-1 axis names no step.
+    §7.1.2](docs/spec/shard.md#712-layoutstrides): a ``Split(k)`` axis gets
+    ``0``, so the projection offsets no instance along it, and the rest get
+    the array's own steps -- the compact product in mode order, fastest
+    first, which is how ``_emit_plain_alloc`` lays the backing array out. An
+    extent-1 axis names no step.
     """
     local = shard_layout_local_shape(sl, require_static=False)
     split_axes = {int(a.axis) for a in sl.attrs if isinstance(a, Split)}

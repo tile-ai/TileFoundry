@@ -93,10 +93,10 @@ CUTE_HOST_DEVICE auto program_ids() noexcept {
 
 namespace ops {
 
-#include "tensor_view/ops_detail.cuh"
+#include "ops/detail.cuh"
 /// Primitive callables precede entries that instantiate them.
-#include "ops/primitive/unary.h"
-#include "ops/primitive/binary.h"
+#include "primitive/unary.h"
+#include "primitive/binary.h"
 #include "ops/sync.cuh"
 #include "ops/elementwise.cuh"
 #include "ops/copy.cuh"

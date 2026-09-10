@@ -614,394 +614,470 @@ def check(candidate: Callable, reference: Callable | None, inputs: tuple, *,
 
 ## 2. C++ Runtime Surface
 
-Generated CUDA source includes the umbrella runtime header:
+The sections follow `include/tilefoundry/runtime/`, one per header. Each
+declaration block is read out of that header by
+`scripts/runtime_spec_surface.py` and written into its `<!-- generated -->`
+region, so a signature is stated once, where it is compiled. What follows a
+region is written by hand: the terms the declarations are spelled in, and the
+decisions two reasonable implementations would differ on.
 
-```cpp
-#include <tilefoundry/runtime.h>
+### 2.1 `cpu/`
+
+#### 2.1.1 `cpu/runtime.h`
+
+<!-- generated: cpu-runtime -->
+```text
+// include/tilefoundry/runtime/cpu/runtime.h
+// This header declares no surface of its own.
 ```
+<!-- /generated -->
 
-`runtime.h` selects the target-specific runtime by a build-injected target
-macro (exactly one of `TILEFOUNDRY_TARGET_CUDA` / `TILEFOUNDRY_TARGET_CPU`). The CUDA
-runtime surface — topology, mesh, sharding, storage, and op declarations — lives
-under `tilefoundry/runtime/cuda/runtime.cuh` (the CPU surface under
-`tilefoundry/runtime/cpu/runtime.h`); the include tree is target-first
-(`runtime/<target>/…`), no intermediate `target/` segment. Generated code MUST
-include only the umbrella header and MUST NOT include target subheaders directly.
+**Terms.** The CPU target's launch boundary is raw pointers and shape scalars, so this header declares no surface. Host-side tensor compute is future work.
 
-### 2.1 `TopologyScope`
+- constraints:
+  - The CPU target crosses the launch boundary as raw pointers and shape scalars, so nothing here is a type a caller names.
 
+### 2.2 `cuda/`
+
+#### 2.2.1 `cuda/runtime.cuh`
+
+<!-- generated: cuda-runtime -->
 ```cpp
-/**
- * @brief A fixed enumeration of program topology levels.
- */
+// include/tilefoundry/runtime/cuda/runtime.cuh
+inline constexpr int kWarpSize;
+
+template <class...> inline constexpr bool dependent_false_v;
+
 enum class TopologyScope {
-  cta,          ///< maps to blockIdx
-  thread,       ///< maps to threadIdx
-  scope_count,  ///< a sentinel
-};
-```
-
-- constraints:
-  - The enumeration is fixed to the `cta` and `thread` program levels plus the
-    `scope_count` sentinel. Warp-sized groupings live as an axis of a `thread`
-    mesh's layout, not as a topology scope.
-
-### 2.2 Topology Metadata
-
-```cpp
-/**
- * @brief How many instances the launch gives topology level T.
- * @tparam T the topology level
- */
-template <TopologyScope T> constexpr auto program_dim() noexcept;
-
-/**
- * @brief Level T and every level under it, one mode each.
- * @tparam T the topology level
- */
-template <TopologyScope T> constexpr auto program_shape() noexcept;
-
-/**
- * @brief Linearized scalar runtime id of T (current execution instance).
- * @tparam T the topology level
- */
-template <TopologyScope T> size_t program_id() noexcept;
-```
-
-- constraints:
-  - static vs dynamic (launch-provided CTA) behavior and the emission rule are
-    stated below.
-
-One `.cu` is one launch, so each states its own counts and nothing else:
-`program_dim<T>()` is what a translation unit specializes, and
-`program_shape<T>()` is derived from those. A static level's count is a
-compile-time constant; a launch-provided (dynamic) CTA count resolves to the
-grid extent at runtime. The emission rule is owned by
-[target](./target.md). `program_id<T>()` is always a runtime query returning
-the current execution instance id.
-
-`program_shape<cta>()` is `(cta count, thread count)` -- the shape a mesh
-naming several levels is indexed against, so an axis belongs to the level
-whose extents its own multiply up to.
-
-### 2.3 `tilefoundry::Mesh`
-
-```cpp
-/**
- * @brief A device mesh: a CuTe layout bound to one topology level.
- * @tparam TLayout a `cute::Layout`, or a `cute::ComposedLayout` for a slice
- * @tparam Topos topology levels named by this mesh
- */
-template <class TLayout, TopologyScope... Topos>
-struct Mesh {
-  using layout_type = TLayout;   ///< the positions, as a type
-  static constexpr int level_count = sizeof...(Topos);
-  static constexpr TopologyScope scope = /* the pack's first */;
-  TLayout layout;                ///< the positions, as a value
+    cta,
+    thread,
+    scope_count,
 };
 
-/**
- * @brief The level's own mesh, out of a mesh that may name several.
- * @tparam S the topology level
- * @param mesh the mesh
- */
+template <TopologyScope T>
+CUTE_HOST_DEVICE constexpr auto program_dim() noexcept;
+
+template <TopologyScope T>
+CUTE_HOST_DEVICE constexpr auto program_shape() noexcept;
+
+template <TopologyScope T> CUTE_HOST_DEVICE size_t program_id() noexcept;
+
+CUTE_HOST_DEVICE auto program_ids() noexcept;
+```
+<!-- /generated -->
+
+**Terms.** A *level* is one parallel-resource level of the launch: `cta` or `thread`. An *instance* is one id of a level. A *coordinate* is one id per level, which is what `program_ids()` hands back.
+
+- constraints:
+  - The enumeration is fixed to the `cta` and `thread` program levels plus the `scope_count` sentinel. A warp-sized grouping is an axis of a `thread` mesh's layout, not a level of its own.
+  - **Positions are row-major**: the last axis is the fastest. Extents `(8, 32)` give `(id / 32, id % 32)`, so a thread mesh names its warps first and its lanes last. Every layout in this surface is read that way, and CuTe's own algebra is not ([§2.3.1](#231-layoutcute_extcuh)).
+  - One `.cu` is one launch. `program_dim<T>()` is what a translation unit states; `program_shape<T>()` is derived from it as level `T` and every level under it, which is the shape a mesh naming several levels is indexed against. The same mesh compiled into another translation unit belongs to another launch.
+
+### 2.3 `cuda/layout/`
+
+#### 2.3.1 `layout/cute_ext.cuh`
+
+<!-- generated: layout-cute-ext -->
+```cpp
+// include/tilefoundry/runtime/cuda/layout/cute_ext.cuh
+template <class Shape, class Stride>
+CUTE_HOST_DEVICE constexpr auto reverse(cute::Layout<Shape, Stride> const &l);
+```
+<!-- /generated -->
+
+**Terms.** *CuTe order* is CuTe's own reading of a layout, mode zero fastest. A mesh is written row-major, last axis fastest, so the two are reverses of each other and CuTe's algebra reads a mesh backwards until it is turned.
+
+- constraints:
+  - CuTe reads mode zero as the fastest and a mesh is written the other way round, so every CuTe function meaning "next to" reads a mesh backwards: `coalesce` leaves `(2,32):(32,1)`, 64 consecutive threads, unfolded, and `logical_divide` cuts a domain that runs the other way. The runtime reverses a mesh's axes once and uses plain CuTe after that.
+
+#### 2.3.2 `layout/mesh.cuh`
+
+<!-- generated: layout-mesh -->
+```cpp
+// include/tilefoundry/runtime/cuda/layout/mesh.cuh
+template <class TLayout, TopologyScope... Topos> struct Mesh {
+    using layout_type = TLayout;
+    static constexpr int level_count;
+    static constexpr TopologyScope scope;
+    TLayout layout;
+};
+
 template <TopologyScope S, class L, TopologyScope... Topos>
-constexpr auto get(Mesh<L, Topos...> const& mesh);
+CUTE_HOST_DEVICE constexpr auto get(Mesh<L, Topos...> const &mesh);
 
-/**
- * @brief The first id the mesh covers, in its level's own numbering.
- * @param mesh the mesh
- */
 template <class L, TopologyScope... Topos>
-constexpr int offset(Mesh<L, Topos...> const& mesh);
+CUTE_HOST_DEVICE constexpr int offset(Mesh<L, Topos...> const &mesh);
 
-/**
- * @brief Whether `coord` names an instance of `mesh`.
- * @param mesh the mesh
- * @param coord one id per topology level, as `program_ids()` gives them
- */
 template <class L, TopologyScope... Topos, class Coord>
-constexpr bool contains(Mesh<L, Topos...> const& mesh, Coord const& coord);
+CUTE_HOST_DEVICE constexpr bool contains(Mesh<L, Topos...> const &mesh,
+                                         Coord const &coord);
 
-/**
- * @brief Which instance `coord` acts as, as `cute::Layout::get_1d_coord` does.
- * @param mesh the mesh
- * @param coord one id per topology level
- */
 template <class L, TopologyScope... Topos, class Coord>
-constexpr int get_1d_coord(Mesh<L, Topos...> const& mesh, Coord const& coord);
+CUTE_HOST_DEVICE constexpr int get_1d_coord(Mesh<L, Topos...> const &mesh,
+                                            Coord const &coord);
 
-/**
- * @brief Whether the mesh's ids say where the warps are.
- * @param mesh the mesh
- */
 template <class L, TopologyScope... Topos>
-constexpr bool is_warped(Mesh<L, Topos...> const& mesh);
+CUTE_HOST_DEVICE constexpr bool is_warped(Mesh<L, Topos...> const &mesh);
 
-/**
- * @brief The same mesh with its lanes stated as an axis of their own.
- * @param mesh a mesh `is_warped` accepts
- */
 template <class L, TopologyScope... Topos>
-constexpr auto as_warped(Mesh<L, Topos...> const& mesh);
+CUTE_HOST_DEVICE constexpr auto as_warped(Mesh<L, Topos...> const &mesh);
 
-/**
- * @brief A mesh over `extents`, row-major, starting at instance zero.
- * @tparam Scope the program topology level
- * @param extents the per-axis position counts
- */
 template <TopologyScope Scope, class Extents>
-constexpr auto make_mesh(Extents const& extents);
+CUTE_HOST_DEVICE constexpr auto make_mesh(Extents const &extents);
 ```
+<!-- /generated -->
+
+**Terms.** A *mesh* names one or more levels and carries a layout whose values are those levels' ids. A *slice* is a mesh whose layout has a constant term: it covers part of a level, starting at that term. *Warped* describes a thread mesh whose ids run a whole number of warps; its *lane* axis is one warp and its *warp* axis steps between them.
 
 - constraints:
-  - A mesh is the levels it names and the layout whose values are their ids,
-    the same two facts the IR `Mesh` has beside its axis names
-    ([shard §5](./shard.md#5-mesh)). The instance count and shape are
-    `cute::size(mesh.layout)` and `cute::shape(mesh.layout)`, which read
-    through a slice on their own; there is no second extent or base field.
-  - `Mesh::scope` is read off the pack, never off `decltype(topologies){}`: a
-    default-constructed tuple of enums reads back as the zeroth enumerator,
-    which is a different level.
-  - One level per mesh, for now. A mesh naming several states its axes grouped
-    one nest per level, and `get<S>` picks the nest; a mesh that names several
-    without that grouping is rejected, because no rule says which axes are
-    whose. Finer groupings within a level -- a warp of a block -- are an axis
-    of the layout, not a second topology level.
-  - The stride order of `make_mesh` is what turns a linear instance id into a
-    coordinate: extents `(8, 32)` row-major give `(id / 32, id % 32)`, so a
-    thread mesh names its warps first and its lanes last.
-  - `contains` and `get_1d_coord` are not the same question, and on a mesh
-    narrower than its level not the same answer. `idx2crd` is
-    `(id / stride) % extent`, so thread 64 of a 128-thread block is *not* in a
-    32-instance mesh and *does* act as its instance 0: the upper warps repeat
-    what the lowest warp does. A slice does not repeat -- its body runs under
-    `contains` -- so a coord from outside one reaching `get_1d_coord` is a
-    codegen fault.
+  - A mesh is the levels it names and the layout whose values are their ids -- the same two facts the IR `Mesh` carries beside its axis names ([shard §5](./shard.md#5-mesh)). Its instance count and shape are `cute::size` and `cute::shape` of that layout, which read through a slice on their own.
+  - A mesh naming several levels states its axes grouped one nest per level, each already in that level's own numbering, and `get<level>` picks the nest. A mesh that names several without that grouping is refused: no rule says which axes are whose. It cannot also be sliced -- the slice and the level boundary would both be deciding which positions these are.
+  - `contains` and `get_1d_coord` are not the same question, and on a mesh narrower than its level not the same answer. `idx2crd` is `(id / stride) % extent`, so thread 64 of a 128-thread block is not in a 32-instance mesh and does act as its instance 0: the upper warps repeat what the lowest warp does. A slice does not repeat, so a coordinate from outside one reaching `get_1d_coord` is a codegen fault.
+  - A thread mesh has warps only when its ids run a whole number of them. `(32,..)` stepping by one is one warp and the axis beyond it carries the warps; `(128,..)` holds four that `as_warped` splits out. Lanes shorter than a warp, repeated across warps, MUST be refused by name -- they reach neither `bar.sync`, which counts whole warps, nor one `__syncwarp`.
+  - `as_warped` is idempotent: a mesh whose fastest axis is already one warp comes back unchanged.
+  - Only one shape of `cute::ComposedLayout` is a mesh: `cute::identity` over a static offset. A swizzle in the first slot, or a dynamic offset, is a mesh whose first instance is not a compile-time number, and every reader wants it as one.
+  - The offset MUST NOT be dropped. A mesh layout maps a coordinate to an instance *within* the mesh; only the offset turns that into an instance of the launch, and reading a coordinate off a raw id instead hands every instance of a slice the box its neighbour owns. A plain `cute::Layout` is the whole level at offset zero.
 
-A mesh states its positions row-major ([shard §5](./shard.md#5-mesh)), and
-CuTe's algebra reads mode zero as the fastest. Every CuTe function that means
-"next to" therefore reads a mesh backwards: `coalesce` leaves `(2,32):(32,1)`,
-64 consecutive threads, unfolded, and `logical_divide` cuts a domain that runs
-the other way. The runtime reverses a mesh's axes once, in one place, and uses
-plain CuTe after that.
+#### 2.3.3 `layout/shard_layout.cuh`
 
-- constraints:
-  - `is_warped` reads the reversed axes: mode zero must step by one and run a
-    whole number of warps. `(32,..):(1,..)` is one warp exactly and the next
-    axis carries the warps; `(128,..):(1,..)` holds four warps that
-    `as_warped` splits out. `(16,..):(1,..)` is half a warp shared between
-    instances, which reaches neither `bar.sync`, that counts whole warps, nor
-    one `__syncwarp`; the ops that need warps refuse it by name.
-  - `as_warped` is idempotent: a mesh whose fastest axis is already one warp
-    is returned unchanged.
-
-A narrowed mesh — threads 64..127 of a 128-thread block — is not a third field.
-The IR spells the slice `ComposedLayout(inner, offset, outer)`, a layout mapping
-a coordinate to `offset + outer(c)` ([shard §4](./shard.md#4-composedlayout)),
-and the C++ mesh mirrors it with the CuTe type of the same name, whose
-`operator()` is literally `layout_a()(offset() + layout_b()(c))`:
-
+<!-- generated: layout-shard-layout -->
 ```cpp
-// threads 64..127 of a 128-thread block, as (2 warps, 32 lanes)
-using sliced_thread_mesh = Mesh<
-    cute::ComposedLayout<
-        cute::identity, cute::Int<64>,
-        cute::Layout<cute::Shape<cute::Int<2>, cute::Int<32>>,
-                     cute::Stride<cute::Int<32>, cute::Int<1>>>>,
-    TopologyScope::thread>;
-```
-
-- constraints:
-  - Only this shape of `cute::ComposedLayout` is a mesh: `cute::identity` over a
-    static offset. A swizzle in the first slot, or a dynamic offset, is a mesh
-    whose first instance is not a compile-time number, and every reader wants it
-    as one.
-  - `offset(mesh)` is that offset, or `0` for a plain layout, so one spelling
-    serves both at every call site.
-  - The offset MUST NOT be dropped. A mesh layout maps a coordinate to an
-    instance *within* the mesh; only the offset turns that into an instance of
-    the launch. Reading a coordinate off a raw instance id instead hands every
-    instance of a slice the box its neighbour owns.
-  - A plain `cute::Layout` is the whole launch level at offset zero — the case
-    every mesh was before slices existed — and `cute::size` of either is the
-    participant count, since a composed layout's size is `layout_b()`'s.
-
-### 2.4 `tilefoundry::ShardLayout`
-
-```cpp
-/**
- * @brief A layout, its per-axis shard attributes, and the mesh they run over.
- * @tparam TLayout the underlying CuTe layout
- * @tparam TAttrs shard attributes, ordered by mesh axis
- * @tparam TMesh the bound device domain
- */
-template <class TLayout, class TAttrs, class TMesh>
-struct ShardLayout {
-  using layout = TLayout;    ///< the layout, as a type
-  using attrs = TAttrs;      ///< the attributes; a type only, they carry no state
-  using mesh = TMesh;        ///< the mesh, as a type
-  TLayout layout_value;      ///< the layout, as a value (dynamic extents are real)
-  TMesh mesh_value;          ///< the mesh, as a value
+// include/tilefoundry/runtime/cuda/layout/shard_layout.cuh
+template <class TLayout, class TAttrs, class TMesh> struct ShardLayout {
+    using layout = TLayout;
+    using attrs = TAttrs;
+    using mesh = TMesh;
+    TLayout layout_value;
+    TMesh mesh_value;
 };
 
-/**
- * @brief Package a layout, a mesh, and attributes without reinterpreting them.
- * @param layout a CuTe layout, or a shape whose strides come out row-major
- * @param mesh the bound device domain
- */
-template <class TLayout, class TMesh, class Attrs>
-constexpr auto make_shard_layout(TLayout const& layout, TMesh const& mesh, Attrs const&);
+template <int Axis> struct S {
+    static constexpr int axis;
+};
+
+struct B {};
+
+template <class Reduction> struct P {
+    using reduction = Reduction;
+};
+
+struct Dynamic {};
+
+template <class SL> CUTE_HOST_DEVICE constexpr void check_shard_layout();
+
+template <class Shape, class TMesh, class Attrs,
+          __CUTE_REQUIRES(!cute::is_layout<Shape>::value)>
+CUTE_HOST_DEVICE constexpr auto
+make_shard_layout(Shape const &shape, TMesh const &mesh, Attrs const &);
+
+template <class TLayout, class TMesh, class Attrs,
+          __CUTE_REQUIRES(cute::is_layout<TLayout>::value)>
+CUTE_HOST_DEVICE constexpr auto
+make_shard_layout(TLayout const &layout, TMesh const &mesh, Attrs const &);
 ```
+<!-- /generated -->
+
+**Terms.** A *shard layout* is a tensor layout, one *attr* per mesh axis, and the mesh those attrs are indexed against. An attr says what its mesh axis does with the tensor: `S<k>` splits tensor axis `k` across it, `B` broadcasts, and `P<R>` leaves an unreduced partial.
 
 - constraints:
-  - `TAttrs` is a `cute::tuple` of empty tags ([§2.5](#25-tilefoundryshard--shard-attributes)),
-    so the aggregate holds no attribute value; the attributes are read off the
-    type. Every extent and stride that is not a compile-time fact lives in
-    `layout_value` / `mesh_value`.
-  - `make_shard_layout` is to `ShardLayout` what `cute::make_layout` is to
-    `cute::Layout`: the axes are the caller's and the attributes point at them
-    as written. It does not refactor the shape
-    ([shard §7.1.1](./shard.md#711-layoutshape) states that factorisation).
+  - `TAttrs` is a `cute::tuple` of empty tags, so the aggregate holds no attribute value: the attributes are in the type and the layout is what carries data.
+  - One attr per mesh axis. A shard layout that says nothing about an axis leaves the reader to guess whether that axis splits the tensor.
 
-### 2.5 `tilefoundry::shard` — Shard Attributes
+### 2.4 `cuda/tensor_view/`
 
+#### 2.4.1 `tensor_view/shard_tensor.cuh`
+
+<!-- generated: tensor-view-shard-tensor -->
 ```cpp
-namespace tilefoundry::shard {
-  template <int Axis> struct S {};         // Split along axis
-  struct B {};                             // Broadcast (replicate)
-  template <class Reduction> struct P {};  // Partial reduction
-  struct Dynamic {};                       // Dynamic / data-dependent
-}
-```
-
-- constraints: none
-
-Shorthand: `S<Axis>` = Split, `B` = Broadcast, `P<Reduction>` = Partial.
-
-### 2.6 `tilefoundry::ShardTensor`
-
-```cpp
-/**
- * @brief A CuTe tensor/view paired with its runtime shard layout.
- */
+// include/tilefoundry/runtime/cuda/tensor_view/shard_tensor.cuh
 template <class TEngine, class TGlobalLayout, class TShardLayout>
 struct ShardTensor {
-  using engine_type = TEngine;
-  using global_layout_type = TGlobalLayout;
-  using shard_layout_type = TShardLayout;
-  TEngine engine;              ///< CuTe tensor/view (gmem/smem/rmem); raw pointer rejected
-  TShardLayout shard_layout;   ///< runtime shard-layout value (dynamic dims carry real extents)
-  auto data();                 ///< underlying pointer of the wrapped cute tensor
-  auto data() const;
+    using engine_type = TEngine;
+    using global_layout_type = TGlobalLayout;
+    using shard_layout_type = TShardLayout;
+    TEngine engine;
+    TShardLayout shard_layout;
+    CUTE_HOST_DEVICE auto data();
+    CUTE_HOST_DEVICE auto data() const;
+};
+
+template <class T, class GL, class SL>
+CUTE_HOST_DEVICE auto make_shard_tensor(T const &tensor, GL, SL shard_layout);
+
+template <class T> CUTE_HOST_DEVICE constexpr int shard_mesh_instances();
+```
+<!-- /generated -->
+
+**Terms.** A *shard tensor* is an engine, the global layout it came from, and a shard layout. *Projecting* it is resolving it to the slice this instance owns.
+
+- constraints:
+  - `engine` is a CuTe tensor or view, never a raw pointer: residency lives on the engine type, and `data()` drops it.
+  - A tensor whose layout is a `ShardLayout` has distributed semantics -- it is the whole tensor, and each instance owns the slice its shard layout gives it.
+
+### 2.5 `cuda/primitive/`
+
+#### 2.5.1 `primitive/unary.h`
+
+<!-- generated: primitive-unary -->
+```cpp
+// include/tilefoundry/runtime/cuda/primitive/unary.h
+struct rsqrt_op {
+    template <class T> __device__ T operator()(T x) const;
+};
+
+struct neg_op {
+    template <class T> __device__ T operator()(T x) const;
+};
+
+struct relu_op {
+    template <class T> __device__ T operator()(T x) const;
+};
+
+struct square_op {
+    template <class T> __device__ T operator()(T x) const;
+};
+
+struct sigmoid_op {
+    template <class T> __device__ T operator()(T x) const;
+};
+
+struct silu_op {
+    template <class T> __device__ T operator()(T x) const;
+};
+
+struct softplus_op {
+    template <class T> __device__ T operator()(T x) const;
+};
+
+struct exp_op {
+    template <class T> __device__ T operator()(T x) const;
+};
+
+struct log_op {
+    template <class T> __device__ T operator()(T x) const;
+};
+
+struct identity_op {
+    template <class T> __device__ T operator()(T x) const;
+};
+
+struct clamp_op {
+    float min_val, max_val;
+    template <class T> __device__ T operator()(T x) const;
 };
 ```
+<!-- /generated -->
+
+**Terms.** A *primitive* is a callable tag an op instantiates. It takes scalars, not tensors, which is why it is not an op.
 
 - constraints:
-  - `engine` must be a full cute tensor/view, never a raw pointer (residency
-    lives on the engine type); `data()` drops the residency tag. The full
-    residency / raw-pointer rules are stated below.
+  - A primitive takes scalars, not tensors, so it is not an op: it has no shard layout to read a behaviour off. `ops::` closes on the entries that do ([§2.6](#26-cudaops)).
 
-`engine` holds the **full cute tensor/view, not a raw pointer**. The
-gmem / smem / rmem **residency category** lives on the cute engine *type*;
-a raw `T*` loses it (cute mis-classifies a bare pointer as `rmem` even for
-a gmem tensor), which would break residency-aware projection in `local()`
-and residency dispatch in `copy()`. `make_shard_tensor` therefore rejects
-raw pointers at compile time.
+#### 2.5.2 `primitive/binary.h`
 
-`data()` mirrors `cute::Tensor::data()` so a `ShardTensor` and a plain cute
-tensor can be accessed uniformly. Because it returns a raw pointer, it
-**drops the residency tag** and MUST only be used where residency no longer
-matters (e.g. the per-thread MMA register fragment); residency-aware paths
-use `local()` instead.
-
-### 2.7 `tilefoundry::make_shard_tensor`
-
+<!-- generated: primitive-binary -->
 ```cpp
-/**
- * @brief Factory: bind a global layout and a shard layout onto a CuTe tensor.
- * @param tensor a CuTe tensor / view (raw pointers rejected at compile time)
- * @param global_layout the global layout to bind
- * @param shard_layout the shard layout to bind
- */
-template <class T, class GL, class SL>
-auto make_shard_tensor(T const& tensor, GL global_layout, SL shard_layout)
-  -> ShardTensor<T, GL, SL>;
+// include/tilefoundry/runtime/cuda/primitive/binary.h
+struct mul_op {
+    template <class T> __device__ T operator()(T a, T b) const;
+};
+
+struct add_op {
+    template <class T> __device__ T operator()(T a, T b) const;
+};
+
+struct sub_op {
+    template <class T> __device__ T operator()(T a, T b) const;
+};
+
+struct max_op {
+    __device__ float operator()(float a, float b) const;
+    template <class T> __device__ T operator()(T a, T b) const;
+};
+
+struct min_op {
+    __device__ float operator()(float a, float b) const;
+    template <class T> __device__ T operator()(T a, T b) const;
+};
+
+struct div_op {
+    template <class T> __device__ T operator()(T a, T b) const;
+};
 ```
+<!-- /generated -->
+
+- constraints: none beyond the signature.
+
+### 2.6 `cuda/ops/`
+
+#### 2.6.1 `ops/detail.cuh`
+
+<!-- generated: ops-detail -->
+```text
+// include/tilefoundry/runtime/cuda/ops/detail.cuh
+// This header declares no surface of its own.
+```
+<!-- /generated -->
+
+**Terms.** `ops::detail` is the set of tensor-view names an op may reach for. They are defined in `tilefoundry::detail`; this header states which of them cross into `ops`.
 
 - constraints:
-  - Factory. `T` must be a CuTe tensor/view; raw pointers rejected at compile time.
+  - An op reaches for a tensor-view name through `ops::detail` and nowhere else, so what crosses the boundary is stated in one header.
 
-### 2.10 `local()`
+#### 2.6.2 `ops/copy.cuh`
 
+<!-- generated: ops-copy -->
 ```cpp
-/**
- * @brief Project t to this execution instance's local view.
- * @param t the shard tensor to project
- */
-template <class E, class GL, class SL>
-auto local(ShardTensor<E, GL, SL> const& t) noexcept;
+// include/tilefoundry/runtime/cuda/ops/copy.cuh
+template <class TSrc, class TDst>
+__device__ void copy(TSrc const &src, TDst &dst);
+
+template <class TSrc, class TDst>
+__device__ void copy_async(TSrc const &src, TDst &dst);
 ```
+<!-- /generated -->
 
-- constraints:
-  - Returns the cute `Tensor` view this execution instance owns on `t`.
+- constraints: none beyond the signature.
 
-#### 2.10.1 Inputs
+#### 2.6.3 `ops/dot.cuh`
 
-Let `t: ShardTensor`, `sl = t.shard_layout`, `S = sl.layout_value`'s
-strides, `A = SL::attrs`, and `i` the instance this thread acts as:
-`get_1d_coord(sl.mesh_value, program_ids())` ([§2.3](#23-tilefoundrymesh)).
-Subtracting the mesh's offset is what makes a slice's first instance its own
-instance zero.
-
-- `t.engine` is the per-instance cute tensor / view; `t.engine.data()`
-  is the base ptr the current instance already holds.
-- `sl.layout.shape` is the canonical layout shape
-  ([shard §7.1.1](./shard.md#711-layoutshape)).
-- `S` is storage-physical
-  ([shard §7.1.2](./shard.md#712-layoutstrides)).
-
-#### 2.10.2 Computation
-
-    offset = Σ_{m : A[m] = Split(k)}  coord[m] · S[k]
-    ptr    = t.engine.data() + offset
-    shape' = shard_layout_local_shape(sl)
-    return cute::make_tensor(ptr, Layout(shape', S))
-
-- `A[m] ∈ {Broadcast, Partial}` contributes `0` to `offset`.
-- `A[m] = Dynamic` MUST have been resolved before `local()`; otherwise
-  the call is ill-formed.
-
-#### 2.10.3 Single path across storages
-
-For every `A[m] = Split(k)`, by [shard §7.1.2](./shard.md#712-layoutstrides):
-
-    S[k] = 0  ⇒  contribution = 0
-    S[k] > 0  ⇒  contribution = coord[m] · S[k]
-
-The formula is therefore one path across gmem / smem / rmem; no
-storage-specific branching is required.
-
-### 2.9 Tensor And Storage
-
+<!-- generated: ops-dot -->
 ```cpp
-/**
- * @brief A CuTe tensor: an engine plus a layout.
- * @tparam Engine the CuTe engine / iterator / pointer category
- * @tparam Layout a CuTe layout or tilefoundry::ShardLayout
- */
-template <class Engine, class Layout>
-class cute::Tensor;
+// include/tilefoundry/runtime/cuda/ops/dot.cuh
+template <class Lhs, class Rhs, class Dst,
+          class Ws = reduce_impl::no_workspace_t>
+__device__ inline void dot(Lhs const &lhs, Rhs const &rhs, Dst &dst,
+                           Ws &&ws = {});
 ```
+<!-- /generated -->
+
+- constraints: none beyond the signature.
+
+#### 2.6.4 `ops/elementwise.cuh`
+
+<!-- generated: ops-elementwise -->
+```cpp
+// include/tilefoundry/runtime/cuda/ops/elementwise.cuh
+template <class Fn, class TOut, class... TIn>
+__device__ void elementwise(TOut &dst, Fn fn, TIn const &...src);
+```
+<!-- /generated -->
+
+- constraints: none beyond the signature.
+
+#### 2.6.5 `ops/mma.cuh`
+
+<!-- generated: ops-mma -->
+```cpp
+// include/tilefoundry/runtime/cuda/ops/mma.cuh
+template <class TA, class TB, class TC>
+__device__ void mma(TA const &a, TB const &b, TC &c);
+```
+<!-- /generated -->
+
+- constraints: none beyond the signature.
+
+#### 2.6.6 `ops/reduce.cuh`
+
+<!-- generated: ops-reduce -->
+```cpp
+// include/tilefoundry/runtime/cuda/ops/reduce.cuh
+struct mean_op {};
+
+struct absmax_op {};
+
+template <class Op, class Axes, class Src, class Dst,
+          class Ws = reduce_impl::no_workspace_t>
+__device__ inline void reduce(Src const &src, Dst &dst, Ws &&ws = {});
+```
+<!-- /generated -->
+
+- constraints: none beyond the signature.
+
+#### 2.6.7 `ops/rmsnorm.cuh`
+
+<!-- generated: ops-rmsnorm -->
+```cpp
+// include/tilefoundry/runtime/cuda/ops/rmsnorm.cuh
+template <class TIn, class TOut, class TW>
+__device__ void rmsnorm(TIn const &src, TOut &dst, TW const &weight,
+                        float eps);
+```
+<!-- /generated -->
+
+- constraints: none beyond the signature.
+
+#### 2.6.8 `ops/sync.cuh`
+
+<!-- generated: ops-sync -->
+```cpp
+// include/tilefoundry/runtime/cuda/ops/sync.cuh
+template <int Id> struct BarrierId {
+    static constexpr int value;
+};
+
+template <int Id> inline constexpr BarrierId<Id> bar_id;
+
+struct no_resource_t {};
+
+template <class T> struct barrier_id_traits {
+    static constexpr bool value;
+};
+
+template <class TMesh, TopologyScope... Topos, class TRes = no_resource_t>
+__device__ inline void sync(Mesh<TMesh, Topos...> const &mesh,
+                            TRes resource = {});
+```
+<!-- /generated -->
+
+**Terms.** A *tier* is the barrier a mesh reaches: `grid`, `block`, `warp`, or a *named* barrier. A mesh that reaches none is refused by the name of what it lacks.
 
 - constraints:
-  - when `Layout` is `ShardLayout`, the tensor has distributed semantics
+  - A mesh that reaches no barrier is refused by the name of what it lacks, not approximated. Silence would read as "not implemented yet"; the refusal says which of the two it is.
 
-| storage | C++ |
-|---------|-----|
-| `"gmem"` | `T*` / `cute::gmem_ptr<T>` |
-| `"smem"` | `cute::smem_ptr<T>` |
-| `"rmem"` | register-resident engine |
+#### 2.6.9 `ops/tma.cuh`
+
+<!-- generated: ops-tma -->
+```cpp
+// include/tilefoundry/runtime/cuda/ops/tma.cuh
+template <class Src, class Dst>
+__device__ inline void tma_copy(Src const &src, Dst &dst, uint64_t *bar);
+```
+<!-- /generated -->
+
+- constraints: none beyond the signature.
+
+### 2.7 `cuda/utility/`
+
+#### 2.7.1 `utility/warp.cuh`
+
+<!-- generated: utility-warp -->
+```cpp
+// include/tilefoundry/runtime/cuda/utility/warp.cuh
+template <class T>
+inline constexpr bool is_shuffle_native_v;
+
+template <class T> struct ShuffleXor {
+    __device__ T operator()(T value, int lane_mask,
+                                unsigned member_mask) const;
+};
+
+struct Elect {
+    __device__ bool operator()() const;
+};
+
+template <class T>
+__device__ inline T shuffle_xor(T value, int lane_mask,
+                                unsigned member_mask = 0xFFFFFFFFu);
+
+inline bool shuffle_elect();
+
+template <class Combine, int Width = 32, class T>
+__device__ inline T warp_reduce(T value);
+```
+<!-- /generated -->
+
+- constraints: none beyond the signature.
 
 ## 3. Runtime Ops
 
@@ -1101,7 +1177,7 @@ __device__ void sync(Mesh<TMesh, Topos...> const& mesh, TRes resource = {});
     argument: the topology scope says the level, and the mesh layout says both
     how many instances (`size(layout)`) and which instance the run starts at
     (its offset — a sliced mesh is a `cute::ComposedLayout` mapping a coordinate
-    to `offset + outer(c)`, ([§2.3](#23-tilefoundrymesh))).
+    to `offset + outer(c)`, ([§2.3.2](#232-layoutmeshcuh))).
   - The classification MUST agree case for case with `classify` in
     `ir/tir/sync.py`: an un-sliced `cta` mesh takes the grid barrier; a mesh
     covering the whole block takes the warp's convergence when the block is one
@@ -1182,7 +1258,7 @@ __device__ void copy(TSrc const& src, TDst& dst);
   - **The move width is a property of the layouts, not of the call.** It is the
     largest power of two both operands run contiguously over —
     `max_common_vector` of the two *projected* layouts, which
-    [§2.10.2](#2102-computation) derives statically from the shard layout and
+    [§2.4.1](#241-tensor_viewshard_tensorcuh) derives statically from the shard layout and
     the mesh — capped so neither side's move exceeds 16 bytes.
   - A dtype change does not force the width to one element: the wide load still
     holds and the conversion happens on the way out. The cap follows the wider
@@ -1313,7 +1389,7 @@ __device__ void mma(TA const& a, TB const& b, TC& c);
   - Warps split `N`. The warp count comes from the accumulator's mesh — that is
     what `c` being a `ShardTensor` is for — not from `blockDim`.
   - The accumulator's engine is the lane's own registers, which is what
-    `local()` ([§2.10](#210-local)) hands back for register storage, while its
+    `local()` ([§2.4.1](#241-tensor_viewshard_tensorcuh)) hands back for register storage, while its
     `ShardLayout` states which entries of the tile those registers are: the
     fragment map is warp-split over `N` and lane-split within each atom, and
     saying so is the layout's job, not an accessor's. **The runtime publishes no
@@ -1508,7 +1584,7 @@ __device__ bool shuffle_elect();
     32 threads would, and electing among fewer is a different instruction rather
     than a parameter of this one.
   - Which thread is asked is the linearised thread id
-    ([§2.2](#22-topology-metadata)) and not `threadIdx.x`, so ids `0..31` are
+    ([§2.2.1](#221-cudaruntimecuh)) and not `threadIdx.x`, so ids `0..31` are
     the first warp whatever shape the block has. A thread outside that run
     answers `false` without reaching the warp-scoped election, whose result is
     defined only for the lanes in its member mask.

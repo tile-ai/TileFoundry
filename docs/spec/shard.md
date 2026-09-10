@@ -588,7 +588,7 @@ mesh   = Mesh((Topology("thread", 256),), Layout(shape=(2, 4, 32), ...))
 
 `shard_layout_local_shape(sl)` yields `(1, 1, 3, 1, 4)`. Each `Split`
 axis has `local_shape = 1` by construction, so
-[runtime §2.10.2](./runtime.md#2102-computation)'s offset sum
+[runtime §2.4.1](./runtime.md#241-tensor_viewshard_tensorcuh)'s offset sum
 reduces to `0` and every mesh instance receives its own engine
 holding `3 × 4 = 12` elements laid out in C-order.
 

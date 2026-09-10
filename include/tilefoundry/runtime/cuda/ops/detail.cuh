@@ -1,5 +1,5 @@
-/// The tensor-view names ops::detail answers to. They are defined in
-/// tilefoundry::detail; this states which of them an op may reach for.
+/// The names ``ops::detail`` answers to. They are defined in
+/// ``tilefoundry::detail``; this states which of them an op may reach for.
 #pragma once
 
 namespace detail {

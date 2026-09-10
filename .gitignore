@@ -238,3 +238,4 @@ test_results/
 src/tilefoundry/dsl/**/*.pyi
 examples/
 CLAUDE.local.md
+AGENTS.md

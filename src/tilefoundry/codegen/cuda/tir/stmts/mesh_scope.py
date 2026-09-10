@@ -1,7 +1,7 @@
 """Emit CUDA mesh scopes.
 
 Emitter for `tir.MeshScope` — emits a C++ block + comment marker +
-constexpr Mesh type alias ([runtime §2.3](docs/spec/runtime.md#23-tilefoundrymesh)).
+constexpr Mesh type alias ([runtime §2.3.2](docs/spec/runtime.md#232-layoutmeshcuh)).
 """
 
 from __future__ import annotations
