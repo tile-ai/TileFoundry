@@ -204,11 +204,11 @@ class SafetensorsResource:
         self._prefix = prefix
         self._device = device
         self._alias = alias or {}
-        self._open_shards: dict[str, Any] = {}
+        self._open_shards: dict[tuple[str, str], Any] = {}
         self._shard_of_key: dict[str, str] | None = None
-        self._read_tensors: weakref.WeakValueDictionary[str, torch.Tensor] = (
-            weakref.WeakValueDictionary()
-        )
+        self._read_tensors: weakref.WeakValueDictionary[
+            tuple[str, str], torch.Tensor
+        ] = weakref.WeakValueDictionary()
 
     def _index(self) -> dict[str, str]:
         if self._shard_of_key is None:
@@ -240,24 +240,30 @@ class SafetensorsResource:
             return dict.fromkeys(handle.keys(), shard)
 
     def _read_one(self, raw_key: str) -> torch.Tensor:
+        """One tensor, read onto the device this process has selected right now.
+
+        A handle carries the device it was opened with, and the same key read
+        from two cards is two tensors, so both the handle and the tensor are
+        remembered under the resolved device beside the name. Keying either by
+        name alone would hand a reader on one card what another card holds.
+        """
         from pathlib import Path  # noqa: PLC0415
 
         from safetensors import safe_open  # noqa: PLC0415
 
-        hit = self._read_tensors.get(raw_key)
+        device = _resolved_device(self._device)
+        hit = self._read_tensors.get((raw_key, device))
         if hit is not None:
             return hit
         shard = self._index()[raw_key]
-        handle = self._open_shards.get(shard)
+        handle = self._open_shards.get((shard, device))
         if handle is None:
             handle = safe_open(
-                str(Path(self._ckpt_dir) / shard),
-                framework="pt",
-                device=_resolved_device(self._device),
+                str(Path(self._ckpt_dir) / shard), framework="pt", device=device,
             )
-            self._open_shards[shard] = handle
+            self._open_shards[(shard, device)] = handle
         value = handle.get_tensor(raw_key)
-        self._read_tensors[raw_key] = value
+        self._read_tensors[(raw_key, device)] = value
         return value
 
     def load(self, name: str) -> torch.Tensor:

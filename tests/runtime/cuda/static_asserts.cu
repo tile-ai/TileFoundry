@@ -94,19 +94,20 @@ __global__ void k() {
         cute::Layout<cute::Shape<cute::Int<2>, cute::Int<32>>,
                      cute::Stride<cute::Int<64>, cute::Int<1>>>;
     using sparse_mesh = Mesh<sparse_layout, TopologyScope::thread>;
-    constexpr auto sparse_ids = cute::make_tuple(0, 0);
+    /// One id per level, as program_ids() hands them back: gpu, cta, thread.
+    constexpr auto sparse_ids = cute::make_tuple(0, 0, 0);
     static_assert(
         tilefoundry::contains(sparse_mesh{sparse_layout{}}, sparse_ids));
     static_assert(tilefoundry::contains(sparse_mesh{sparse_layout{}},
-                                        cute::make_tuple(0, 31)));
+                                        cute::make_tuple(0, 0, 31)));
     static_assert(tilefoundry::contains(sparse_mesh{sparse_layout{}},
-                                        cute::make_tuple(0, 64)));
+                                        cute::make_tuple(0, 0, 64)));
     static_assert(tilefoundry::contains(sparse_mesh{sparse_layout{}},
-                                        cute::make_tuple(0, 95)));
+                                        cute::make_tuple(0, 0, 95)));
     static_assert(!tilefoundry::contains(sparse_mesh{sparse_layout{}},
-                                         cute::make_tuple(0, 32)));
+                                         cute::make_tuple(0, 0, 32)));
     static_assert(!tilefoundry::contains(sparse_mesh{sparse_layout{}},
-                                         cute::make_tuple(0, 96)));
+                                         cute::make_tuple(0, 0, 96)));
 
     /// A mesh naming two levels: grouped one nest per level, asked one level
     /// at a time, each nest already in that level's own numbering.

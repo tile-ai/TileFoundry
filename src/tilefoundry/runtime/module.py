@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+from tilefoundry.ir.types.shard import Placement
 from tilefoundry.runtime.function import EntryABI
 from tilefoundry.runtime.resource import RuntimeResource
 
@@ -45,14 +46,19 @@ class RuntimeModule:
     def __call__(self, *args):
         return self.forward(*args)
 
-    def load(self, resource: RuntimeResource) -> None:
+    def load(
+        self, resource: RuntimeResource, *, placement: "Placement | None" = None
+    ) -> None:
         """Recurse ``load`` into every child under its own name prefix.
 
         Recurse ``load`` into every child under its own name prefix. Weight
-        values are read lazily by each runtime function on first use.
+        values are read lazily by each runtime function on first use, and
+        *placement* -- which program of the mesh this process is -- reaches
+        every child unchanged, because one process is one program throughout
+        the tree it loaded.
         """
         for child in self.modules:
-            child.load(resource.subtree(child.name))
+            child.load(resource.subtree(child.name), placement=placement)
 
 
 class CompiledModule(RuntimeModule):

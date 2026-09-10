@@ -56,8 +56,8 @@ from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.where import Where
 from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.types import DType, IntegerDType, TensorType, Type, numel, tensor_bytes
-from tilefoundry.ir.types.shard import ShardLayout
-from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis
+from tilefoundry.ir.types.shard import ShardLayout, flatten, level_axes, shard_layout_of
+from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis, split_target_axes
 from tilefoundry.visitor_registry.access_relation import logical_axes_of
 
 from .contexts import Cost, CostContext, TrafficBytes
@@ -524,16 +524,58 @@ def _transpose(call: Call, ctx: CostContext) -> Cost:
     return Cost({}, (TrafficBytes(read=moved), TrafficBytes(write=moved)))
 
 
+def _split_axes(type_) -> "dict[int, int] | None":
+    """Which tensor axis each mesh axis splits, or ``None`` when undistributed."""
+    layout = shard_layout_of(type_.layout)
+    if layout is None:
+        return None
+    return {
+        mesh_axis: tensor_axis
+        for mesh_axis, tensor_axis in enumerate(split_target_axes(layout, type_.shape))
+        if tensor_axis is not None
+    }
+
+
+def _sent(source, destination) -> tuple[tuple[str, TrafficBytes], ...]:
+    """What each level's boundary carries when a reshard changes its shards.
+
+    A unit keeps what both shards give it and sends the rest, so splitting the
+    same data two ways over ``n`` units leaves each one ``1/n`` of the ``1/n``
+    it held. Every unit sends and receives the same amount, and the level
+    named is the one owning the mesh axes whose split changed. Where the
+    exchange lands is a separate question this does not answer: the storage
+    charge stays whatever crossing a storage level would have cost.
+    """
+    before, after = _split_axes(source), _split_axes(destination)
+    if before is None or after is None or before == after:
+        return ()
+    mesh = shard_layout_of(source.layout).mesh
+    extents = flatten(mesh.layout.shape)
+    held = tensor_bytes(source)
+    moved: dict[str, int] = {}
+    for topology, axes in zip(mesh.topologies, level_axes(mesh)):
+        units = 1
+        for mesh_axis in axes:
+            if before.get(mesh_axis) != after.get(mesh_axis):
+                units *= extents[mesh_axis]
+        if units > 1:
+            moved[topology.name] = held - held // units
+    return tuple(
+        (name, TrafficBytes(read=value, write=value)) for name, value in sorted(moved.items())
+    )
+
+
 @register_cost_evaluator(Reshard)
 def _reshard(call: Call, ctx: CostContext) -> Cost:
     source = _input_types(call, ctx)[0]
     destination = _output_type(call, ctx)
+    sent = _sent(source, destination)
     if source.storage == destination.storage:
-        return Cost({}, _idle(call))
+        return Cost({}, _idle(call), sent=sent)
     return Cost({}, (
         TrafficBytes(read=tensor_bytes(source)),
         TrafficBytes(write=tensor_bytes(destination)),
-    ))
+    ), sent=sent)
 
 
 __all__ = ["tensor_bytes"]

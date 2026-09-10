@@ -122,8 +122,8 @@ class PerformanceChecker:
     def check_target_facts(self, ctx: AnalysisCheckContext) -> None:
         """Require a machine whose stated capacity and rates fit the question."""
         try:
-            capacity = ctx.target.get_facts(ParallelCapacityFacts)
-            services = ctx.target.get_facts(PerformanceServiceFacts)
+            capacity = ctx.target.get_facts(ParallelCapacityFacts, ctx.level)
+            services = ctx.target.get_facts(PerformanceServiceFacts, ctx.level)
         except UnsupportedCapabilityError as error:
             raise AnalysisError(f"performance: {error}") from None
         if ctx.level is None:

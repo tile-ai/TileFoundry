@@ -184,6 +184,14 @@ class Cost:
     flops: Mapping[DType, int]
     traffic: tuple[TrafficBytes, ...]
     service: Mapping[str, int] = field(default_factory=dict)
+    sent: tuple[tuple[str, TrafficBytes], ...] = ()
+    """Bytes that left the unit they were on, by the boundary they crossed.
+
+    ``traffic`` says which storage level each operand touched. Data handed
+    between two units of one topology level touches the same storage at both
+    ends and has still gone somewhere, so it is stated against that level's
+    name instead, from the sending unit's own view.
+    """
 
     @property
     def bytes(self) -> int:

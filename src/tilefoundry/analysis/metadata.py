@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tilefoundry.ir.core.metadata import IRMetadata
+from tilefoundry.ir.core.values import TotalAndPerUnit
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 
@@ -19,51 +20,109 @@ class ComputeCostMetadata(IRMetadata):
     """Record one occurrence's work, or one Function's total work.
 
     ``flops`` and ``service`` state global work; their ``*_per_unit`` partners
-    apply shard projection at the requested topology level. ``service`` counts
-    what is not floating point -- comparing, selecting, whole-number arithmetic
-    -- by the service it asks for. What an occurrence moves is a separate
-    record, kept by the family that knows where values live. On a Call these
-    state one occurrence; on a Function, loops contribute their trip count.
+    state one unit's, at every topology level the program declares rather than
+    at one chosen for it. ``service`` counts what is not floating point --
+    comparing, selecting, whole-number arithmetic -- by the service it asks
+    for. What an occurrence moves is a separate record, kept by the family that
+    knows where values live. On a Call these state one occurrence; on a
+    Function, loops contribute their trip count.
     """
 
     flops: tuple[tuple[str, int], ...] = ()
-    flops_per_unit: tuple[tuple[str, int], ...] = ()
     service: tuple[tuple[str, int], ...] = ()
-    service_per_unit: tuple[tuple[str, int], ...] = ()
+    by_unit: tuple[tuple[str, "UnitWork"], ...] = ()
+    unit: str | None = None
+    """The level this analysis was asked about, out of the ones ``by_unit`` holds."""
 
-    def service_per_unit_of(self, kind: str) -> int:
-        """One unit's count of *kind*, zero when the call asks for none."""
-        return next((value for name, value in self.service_per_unit if name == kind), 0)
+    def flops_per_unit(self, unit: "str | None" = None):
+        """One unit's flops by dtype, or every level's when *unit* is None."""
+        if unit is None:
+            return tuple((level, work.flops) for level, work in self.by_unit)
+        return _work_at(self.by_unit, unit).flops
+
+    def service_per_unit(self, unit: "str | None" = None):
+        """One unit's service counts by kind, or every level's when *unit* is None."""
+        if unit is None:
+            return tuple((level, work.service) for level, work in self.by_unit)
+        return _work_at(self.by_unit, unit).service
+
+    def asked(self) -> "UnitWork":
+        """What one unit of the level this analysis was asked about does."""
+        return _work_at(self.by_unit, self.unit) if self.unit else UnitWork()
+
+    def service_per_unit_of(self, kind: str, unit: str) -> int:
+        """One unit of *unit*'s count of *kind*, zero when it asks for none."""
+        return next(
+            (value for name, value in self.service_per_unit(unit) if name == kind), 0
+        )
+
+
+@dataclass(frozen=True)
+class UnitWork:
+    """What one unit of a topology level does, by the kind of work it is."""
+
+    flops: tuple[tuple[str, int], ...] = ()
+    service: tuple[tuple[str, int], ...] = ()
+
+
+def _work_at(by_unit: tuple, unit: str) -> "UnitWork":
+    return next((work for level, work in by_unit if level == unit), UnitWork())
 
 
 @dataclass(frozen=True)
 class TrafficMetadata(IRMetadata):
-    """The bytes one occurrence moves, whole and for one participant.
+    """The bytes one occurrence moves, in the two coordinates a move has.
 
-    Which way a boundary moves is its Op's evaluator's answer and how much is
-    its relation's; the family that decides where values live attaches the
-    record, and where they landed never corrects a crossing. ``operands`` is
-    positional against ``(*call.args, call)`` on a Call and empty on a Function,
-    whose totals count each occurrence as often as its loops repeat it.
+    ``storage`` says where the bytes are; ``communication`` says whose boundary
+    they crossed, which a storage level cannot answer: data handed from one
+    card to another is global memory at both ends and has still gone
+    somewhere. One movement is counted in both, because it spends both.
+    ``operands`` is positional against ``(*call.args, call)`` on a Call and
+    empty on a Function, whose totals count each occurrence as often as its
+    loops repeat it.
     """
 
-    whole: tuple[tuple[str, TrafficBytes], ...] = ()
-    per_unit: tuple[tuple[str, TrafficBytes], ...] = ()
+    storage: tuple[tuple[str, tuple[tuple[str, TrafficBytes], ...]], ...] = ()
+    communication: tuple[tuple[str, tuple[tuple[str, TrafficBytes], ...]], ...] = ()
     operands: tuple[TrafficBytes, ...] = ()
+    unit: str | None = None
+    """The level this analysis was asked about, out of the ones each entry holds."""
 
-    def at(self, level: str) -> TrafficBytes:
-        """Bytes moved at *level*, zero when the occurrence does not touch it."""
-        return next(
-            (value for name, value in self.whole if name == level), TrafficBytes()
-        )
+    def at(self, level: str, unit: "str | None" = None) -> TrafficBytes:
+        """Bytes at storage *level*, whole, or one unit of *unit*'s share."""
+        return _bytes_at(self.storage, level, unit)
 
-    def per_unit_at(self, level: str) -> TrafficBytes:
-        """One unit's bytes at *level*, zero when it does not touch it."""
-        return next(
-            (value for name, value in self.per_unit if name == level), TrafficBytes()
-        )
+    def across(self, level: str, unit: "str | None" = None) -> TrafficBytes:
+        """Bytes over topology *level*'s boundary, whole or one unit's share.
+
+        Read and write are the unit's own view: what it received and what it
+        sent.
+        """
+        return _bytes_at(self.communication, level, unit)
+
+    def levels(self, unit: "str | None" = None) -> tuple[str, ...]:
+        """Every storage level this occurrence touches, in name order."""
+        return tuple(level for level, shares in self.storage if _share(shares, unit))
 
 
+_WHOLE = ""
+
+
+def _share(shares: tuple, unit: "str | None") -> TrafficBytes:
+    key = _WHOLE if unit is None else unit
+    return next((value for name, value in shares if name == key), TrafficBytes())
+
+
+def _bytes_at(entries: tuple, level: str, unit: "str | None") -> TrafficBytes:
+    shares = next((value for name, value in entries if name == level), ())
+    return _share(shares, unit)
+
+
+def paired(
+    whole: TrafficBytes, per_unit: TrafficBytes
+) -> "TotalAndPerUnit[TrafficBytes]":
+    """One level's bytes, stated whole and for one unit."""
+    return TotalAndPerUnit(whole, per_unit)
 
 
 @dataclass(frozen=True)

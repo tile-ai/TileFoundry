@@ -7,14 +7,29 @@ from __future__ import annotations
 
 import inspect
 import types
+from dataclasses import replace
 from typing import Callable
 
 from tilefoundry.ir.core.module import Module, _refuse_bare_call
+from tilefoundry.ir.types.shard import Placement, shard_layout_of
+from tilefoundry.ir.types.tensor_type import TensorType
 from tilefoundry.runtime.function import RuntimeFunction
 from tilefoundry.runtime.module import RuntimeModule
 from tilefoundry.runtime.resource import RuntimeResource
+from tilefoundry.runtime.tensor import ShardTensor
 
 _RUNTIME_FUNC_MARK = "_tilefoundry_runtime_func"
+
+
+def _current_device() -> "int | None":
+    """The CUDA device this process has selected, or ``None`` off a card.
+
+    One weight read on two cards is two tensors, so the device belongs in the
+    key that remembers it alongside the program the slice was taken for.
+    """
+    import torch  # noqa: PLC0415 -- optional runtime dep
+
+    return torch.cuda.current_device() if torch.cuda.is_available() else None
 
 
 
@@ -55,6 +70,9 @@ def _make_kernel_caller(instance: RuntimeModule, ir_fn, body: Callable) -> Calla
 
     Bind *body* into a callable taking activations only: ``is_const`` params
     come from *instance*'s loaded weights by name, the rest positionally.
+    Both arrive already narrowed to this program, so a body -- a Python
+    reference or a launched kernel alike -- only ever sees one program's
+    ``torch.Tensor`` and never the mesh it came out of.
     """
     is_kernel_obj = isinstance(body, RuntimeFunction)
 
@@ -65,8 +83,9 @@ def _make_kernel_caller(instance: RuntimeModule, ir_fn, body: Callable) -> Calla
             if param.is_const:
                 args.append(instance._weight(param.name))
             else:
-                args.append(next(remaining))
-        return body(*args) if is_kernel_obj else body(instance, *args)
+                args.append(instance._unwrap(next(remaining)))
+        out = body(*args) if is_kernel_obj else body(instance, *args)
+        return instance._wrap(out, ir_fn.return_type)
 
     return _call
 
@@ -85,16 +104,60 @@ class _Twin(RuntimeModule):
         """The authored ``Module`` this twin was generated from."""
         return self._ir
 
-    def load(self, resource: RuntimeResource) -> None:
+    def load(
+        self, resource: RuntimeResource, *, placement: "Placement | None" = None
+    ) -> None:
         self._resource = resource
+        self._placement = placement
         self._bound.clear()
         for child in self.modules:
-            child.load(resource.subtree(child.name))
+            child.load(resource.subtree(child.name), placement=placement)
+
+    def _program(self) -> tuple:
+        """This invocation's program ids, or ``()`` when no placement was given."""
+        topologies = self._ir.effective_topologies()
+        if self._placement is None:
+            return ()
+        return self._placement.program_ids(topologies)
+
+    def _unwrap(self, value):
+        """One program's ``torch.Tensor`` out of whatever the caller passed.
+
+        A ``ShardTensor`` names a whole distributed value, so it is narrowed
+        here; anything else is already the thing a body takes.
+        """
+        if isinstance(value, ShardTensor):
+            return value.local(self._ir.effective_topologies(), self._placement)
+        return value
+
+    def _wrap(self, value, declared):
+        """A returned tensor as a ``ShardTensor`` when what it stands for is one.
+
+        Only a function whose return type the mesh divides hands back a
+        distributed value; anything else is one tensor and stays one, so a
+        caller of an undistributed program never has to unwrap what was never
+        wrapped. The type paired with it states the shape the body actually
+        returned and carries no layout: narrowing it again would take a shard
+        of a shard.
+        """
+        import torch  # noqa: PLC0415 -- optional runtime dep
+
+        if not isinstance(value, torch.Tensor) or not isinstance(declared, TensorType):
+            return value
+        if shard_layout_of(declared.layout) is None:
+            return value
+        return ShardTensor(value, replace(declared, shape=tuple(value.shape), layout=None))
 
     def _weight(self, name: str):
-        """Read and strongly memoize one declared weight for this twin."""
+        """Read one declared weight, narrow it to this program, and memoize it.
+
+        A narrowed weight is copied out of the read it came from, so the whole
+        canonical tensor is released once the shard it contributed is held;
+        only a weight the mesh does not divide is kept as the read itself.
+        """
+        key = (name, self._program(), _current_device())
         try:
-            return self._bound[name]
+            return self._bound[key]
         except KeyError:
             pass
         if self._resource is None:
@@ -124,8 +187,11 @@ class _Twin(RuntimeModule):
                 f"{value.dtype}, declared {declared.dtype}; the way out is a weight "
                 "converter on the model, not a flag on the read side"
             )
-        self._bound[name] = value
-        return value
+        local = ShardTensor(value, declared).local(
+            self._ir.effective_topologies(), self._placement
+        )
+        self._bound[key] = local if local is value else local.clone()
+        return self._bound[key]
 
     def forward(self, *acts):
         """Forward.
@@ -217,8 +283,9 @@ def runtime_module(sem: Module) -> Callable[[type], type]:
         def __init__(self, ir: Module | None = None) -> None:
             ir = sem if ir is None else ir
             self._ir = ir
-            self._bound: dict[str, object] = {}
+            self._bound: dict[tuple, object] = {}
             self._resource: RuntimeResource | None = None
+            self._placement: Placement | None = None
 
             children = []
             for child_ir in ir.modules:

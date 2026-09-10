@@ -765,12 +765,13 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         f"# selection requested={','.join(payload['requested'])} "
         f"executed={','.join(payload['executed'])}",
         "# compute-cost "
-        f"flops=f32:{cost['flops']['f32']}@{cost['flops_per_unit']['f32']}",
+        f"flops=f32:{cost['flops']['f32']}"
+        f"@{cost['by_unit'][cost['unit']]['flops']['f32']}",
         "# traffic "
-        f"traffic=gmem:r{moved['whole']['gmem']['read']}"
-        f"/w{moved['whole']['gmem']['write']}"
-        f"@r{moved['per_unit']['gmem']['read']}"
-        f"/w{moved['per_unit']['gmem']['write']}",
+        f"traffic=gmem:r{moved['storage']['gmem']['']['read']}"
+        f"/w{moved['storage']['gmem']['']['write']}"
+        f"@r{moved['storage']['gmem'][moved['unit']]['read']}"
+        f"/w{moved['storage']['gmem'][moved['unit']]['write']}",
         f"# peak-footprint=gmem:{peak[0]['peak_bytes']}",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# performance root=MoEMegaKernel::experts "
@@ -778,7 +779,8 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         f"waves={summary['waves']}",
     ]
     assert payload["totals"]["flops"] == cost["flops"]
-    assert payload["totals"]["traffic"] == moved["whole"]
+    assert payload["totals"]["traffic"] == moved["storage"]
+    assert payload["totals"]["communication"] == moved["communication"]
 
     hoisted = {
         line.split(" = ", 1)[0] for line in lines if " = Mesh((Topology(" in line

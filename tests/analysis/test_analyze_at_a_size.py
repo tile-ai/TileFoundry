@@ -94,7 +94,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
 
     module_target = result.module.resolve_target()
     throughput = module_target.get_facts(ThroughputFacts)
-    services = module_target.get_facts(PerformanceServiceFacts)
+    services = module_target.get_facts(PerformanceServiceFacts, result.level)
     scopes = tuple(walk_scopes(build_scopes(result.module, fn)))
     timed = 0
     for expr in collect_exprs(fn.body):
@@ -193,7 +193,7 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
     fn = result.function
     for expr in (fn, *collect_exprs(fn.body)):
         for record, rows in (
-            (ComputeCostMetadata, ("flops", "flops_per_unit", "service", "service_per_unit")),
+            (ComputeCostMetadata, ("flops", "service")),
             (TrafficMetadata, ()),
             (MemoryMetadata, ()),
             (RooflineMetadata, ()),
@@ -205,12 +205,20 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
             for field in rows:
                 for name, value in getattr(held, field):
                     assert value >= 0, f"{describe_expr(expr)}: {field}[{name}] = {value}"
+            if record is ComputeCostMetadata:
+                for unit, work in held.by_unit:
+                    for field in ("flops", "service"):
+                        for name, value in getattr(work, field):
+                            assert value >= 0, (
+                                f"{describe_expr(expr)}: {unit}.{field}[{name}] = {value}"
+                            )
             if record is TrafficMetadata:
-                for field in ("whole", "per_unit"):
-                    for level, moved in getattr(held, field):
-                        assert moved.read >= 0 and moved.write >= 0, (
-                            f"{describe_expr(expr)}: {field}[{level}] = {moved}"
-                        )
+                for field in ("storage", "communication"):
+                    for level, shares in getattr(held, field):
+                        for unit, moved in shares:
+                            assert moved.read >= 0 and moved.write >= 0, (
+                                f"{describe_expr(expr)}: {field}[{level}][{unit}] = {moved}"
+                            )
                 for position, moved in enumerate(held.operands):
                     assert moved.read >= 0 and moved.write >= 0, (
                         f"{describe_expr(expr)}: operand {position} = {moved}"

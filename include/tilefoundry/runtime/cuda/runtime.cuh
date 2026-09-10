@@ -31,6 +31,7 @@ template <class...> inline constexpr bool dependent_false_v = false;
 
 /// Program topology levels and sentinel.
 enum class TopologyScope {
+    gpu,
     cta,
     thread,
     scope_count,
@@ -56,18 +57,66 @@ CUTE_HOST_DEVICE constexpr auto dims_of() noexcept {
 /// extents its own multiply up to, and a stride counts the levels below it.
 template <TopologyScope T>
 CUTE_HOST_DEVICE constexpr auto program_shape() noexcept {
-    if constexpr (T == TopologyScope::cta)
+    if constexpr (T == TopologyScope::gpu)
+        return detail::dims_of<T, TopologyScope::cta, TopologyScope::thread>();
+    else if constexpr (T == TopologyScope::cta)
         return detail::dims_of<T, TopologyScope::thread>();
     else
         return detail::dims_of<T>();
 }
 
+/**
+ * @brief What a launch is told about the program it belongs to.
+ *
+ * A card has no register naming which of the mesh's cards it is, so the host
+ * that placed it says so. Every level whose position the device reads for
+ * itself leaves its entry unused.
+ */
+struct ProgramMetaData {
+    int program_id[int(TopologyScope::scope_count)];
+};
+
+/**
+ * @brief The block's one copy of what the launch was told about this program.
+ *
+ * Shared rather than global: the name is an offset into whichever block is
+ * running, so one name is one copy per block rather than one per device.
+ */
+CUTE_HOST_DEVICE ProgramMetaData &program_meta() {
+#if defined(__CUDA_ARCH__)
+    __shared__ ProgramMetaData held;
+    return held;
+#else
+    static ProgramMetaData held{};
+    return held;
+#endif
+}
+
+/**
+ * @brief Hand the block what this launch was told.
+ *
+ * Called once, before any divergence: one thread writes and the barrier
+ * orders that write against every read of it.
+ */
+CUTE_HOST_DEVICE void program_meta(ProgramMetaData const &meta) {
+#if defined(__CUDA_ARCH__)
+    if (threadIdx.x == 0)
+        program_meta() = meta;
+    __syncthreads();
+#else
+    program_meta() = meta;
+#endif
+}
+
 /// Linearized id within topology level T.
 template <TopologyScope T> CUTE_HOST_DEVICE size_t program_id() noexcept {
-    static_assert(T == TopologyScope::cta || T == TopologyScope::thread,
-                  "program_id: only cta and thread have an id");
+    static_assert(T == TopologyScope::gpu || T == TopologyScope::cta ||
+                      T == TopologyScope::thread,
+                  "program_id: only gpu, cta and thread have an id");
 #if defined(__CUDA_ARCH__)
-    if constexpr (T == TopologyScope::cta) {
+    if constexpr (T == TopologyScope::gpu) {
+        return size_t(program_meta().program_id[int(TopologyScope::gpu)]);
+    } else if constexpr (T == TopologyScope::cta) {
         return size_t(blockIdx.x) + size_t(blockIdx.y) * size_t(gridDim.x) +
                size_t(blockIdx.z) * size_t(gridDim.x) * size_t(gridDim.y);
     } else {
@@ -79,10 +128,19 @@ template <TopologyScope T> CUTE_HOST_DEVICE size_t program_id() noexcept {
 #endif
 }
 
+namespace detail {
+/// Every scope's id in enum order, so the tuple is as long as there are
+/// scopes rather than as long as somebody remembered to list.
+template <size_t... Is>
+CUTE_HOST_DEVICE auto ids_of(std::index_sequence<Is...>) noexcept {
+    return cute::make_tuple(program_id<TopologyScope(Is)>()...);
+}
+}
+
 /// Every level's id, indexed by TopologyScope.
 CUTE_HOST_DEVICE auto program_ids() noexcept {
-    return cute::make_tuple(program_id<TopologyScope::cta>(),
-                            program_id<TopologyScope::thread>());
+    return detail::ids_of(
+        std::make_index_sequence<size_t(TopologyScope::scope_count)>{});
 }
 
 #include "layout/cute_ext.cuh"
@@ -109,5 +167,4 @@ namespace ops {
 #include "ops/mma.cuh"
 
 }
-
 }

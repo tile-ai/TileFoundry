@@ -330,6 +330,34 @@ name the same topology level, parsing MUST reject that layout at its source
 node. This is a layout-construction rule, independent of `composed()`'s
 scope-composition rules.
 
+### 5.1 `Placement`
+
+A `Mesh` states which positions exist; it does not state which of them the
+process reading a checkpoint occupies, because that is a property of the run
+rather than of the model. `Placement` states exactly that and nothing else.
+
+```python
+class Placement:
+    program_ids_getter: Callable[[tuple[Topology, ...]], Sequence[int | None]]
+
+    def program_ids(self, topologies: tuple[Topology, ...]) -> tuple[int | None, ...]: ...
+```
+
+- constraints:
+  - `program_ids(topologies)` returns one id per ordered `Topology`, read
+    positionally, and MUST refuse an answer of a different length than the
+    levels it was asked about.
+  - `None` at a level means the host has not fixed it. A reader MUST leave that
+    level undivided rather than read `None` as `0`: the device chooses its own
+    `cta` and `thread`, and a host that guessed would hand one thread's data
+    back as the whole card's.
+  - the field and the method are deliberately not the same name. An instance
+    attribute written in `__init__` shadows a method of that name, so the
+    length guard would be bypassed by every caller.
+  - a `Placement` is host-side execution context. It MUST NOT appear in a
+    `TensorType`, a checkpoint, an `EntryABI`, a kernel parameter, or a
+    `forward` argument.
+
 ---
 
 ## 6. `ShardAttr`

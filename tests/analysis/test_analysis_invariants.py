@@ -240,13 +240,13 @@ def test_a_reached_leaf_is_charged_at_its_own_level_and_the_others_are_not() -> 
         )
 
     def measured():
-        return call_traffic(call, CostContext(), CostContext())
+        return call_traffic(call, CostContext(), {"cta": CostContext()}, asked="cta")
 
     both = measured()
     assert both.operands == (TrafficBytes(), TrafficBytes(read=12), TrafficBytes())
-    assert both.whole == (
-        ("gmem", TrafficBytes(read=4)),
-        ("rmem", TrafficBytes(read=8)),
+    assert (both.at("gmem"), both.at("rmem")) == (
+        TrafficBytes(read=4),
+        TrafficBytes(read=8),
     ), "reading both numbers is one charge at each of their levels"
 
     access_relation_registry._map[SliceOp] = reads_the_second_number
@@ -259,10 +259,10 @@ def test_a_reached_leaf_is_charged_at_its_own_level_and_the_others_are_not() -> 
     assert one.operands == (TrafficBytes(), TrafficBytes(read=8), TrafficBytes()), (
         "the second number is eight bytes wide"
     )
-    assert one.whole == (("rmem", TrafficBytes(read=8)),), (
+    assert one.at("rmem") == TrafficBytes(read=8), (
         "and it lives at rmem, so gmem was not touched at all"
     )
-    assert one.per_unit == one.whole
+    assert one.at("rmem", "cta") == one.at("rmem")
 
     written = AccessRelations(
         inputs=(),

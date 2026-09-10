@@ -106,6 +106,17 @@ CUTE_HOST_DEVICE constexpr int offset(Mesh<L, Topos...> const &mesh) {
     }
 }
 
+namespace detail {
+/// A coord states one id per scope, in enum order, which is what
+/// ``program_ids()`` hands back. A shorter one is missing a level rather than
+/// naming a smaller mesh, and reads a neighbour's id if left to index.
+template <class Coord> CUTE_HOST_DEVICE constexpr void one_id_per_scope() {
+    static_assert(cute::tuple_size<cute::remove_cvref_t<Coord>>::value ==
+                      size_t(TopologyScope::scope_count),
+                  "coord: one id per TopologyScope, as program_ids() gives");
+}
+}
+
 /// Whether ``coord`` names an instance of ``mesh``.
 ///
 /// The coord is one id per topology level, which is what ``program_ids()``
@@ -115,6 +126,7 @@ CUTE_HOST_DEVICE constexpr bool contains(Mesh<L, Topos...> const &mesh,
                                          Coord const &coord) {
     using mesh_t = Mesh<L, Topos...>;
     detail::one_level<mesh_t>();
+    detail::one_id_per_scope<Coord>();
     const int rel = int(cute::get<int(mesh_t::scope)>(coord)) - offset(mesh);
     if (rel < 0)
         return false;
@@ -140,6 +152,7 @@ CUTE_HOST_DEVICE constexpr int get_1d_coord(Mesh<L, Topos...> const &mesh,
                                             Coord const &coord) {
     using mesh_t = Mesh<L, Topos...>;
     detail::one_level<mesh_t>();
+    detail::one_id_per_scope<Coord>();
     if constexpr (cute::is_composed_layout<cute::remove_cvref_t<L>>::value)
         assert(contains(mesh, coord));
     const int rel = int(cute::get<int(mesh_t::scope)>(coord)) - offset(mesh);

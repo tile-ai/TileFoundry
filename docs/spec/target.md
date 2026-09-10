@@ -244,8 +244,15 @@ hierarchy stops at those levels; warp, lane, and warpgroup structure belongs in
 thread mesh layouts.
 
 - constraints:
-  - `CudaTarget.topology_levels` MUST be `("cta", "thread")` for this
-    single-device target.
+  - `CudaTarget.topology_levels` MUST be `("gpu", "cta", "thread")`, outermost
+    first. A program names `gpu` when its data is divided across cards. Nothing
+    on one card can answer which position it holds, so that level's positions
+    are chosen by the host rather than read from hardware.
+  - `get_facts(TopologyLimitFacts, "gpu").max_static_extent` MUST be
+    `device_count`, which is `None` unless the caller states it. How many cards
+    a deployment has is not a property of the one card this target describes,
+    so an unstated count admits any extent, exactly as `"cta"` does; a stated
+    one MUST be a positive integer and bounds the level.
   - A declared program topology name MUST be one of its target's
     `topology_levels`. A name outside that set MUST be refused naming the levels
     the target declares.

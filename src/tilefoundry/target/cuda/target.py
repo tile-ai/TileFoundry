@@ -47,6 +47,9 @@ class CudaTarget(Target):
     architecture: Architecture = field(init=False)
     device: Device = field(init=False)
 
+    device_count: int | None = field(default=None, init=False)
+    """How many cards a program of this target may name at its ``gpu`` level."""
+
 
 
 
@@ -75,7 +78,17 @@ class CudaTarget(Target):
         architecture: Architecture | str | Path | None = None,
         *,
         arch: str | None = None,
+        device_count: int | None = None,
     ) -> None:
+        if device_count is not None and (
+            isinstance(device_count, bool)
+            or not isinstance(device_count, int)
+            or device_count < 1
+        ):
+            raise ValueError(
+                f"CudaTarget: device_count {device_count!r} must be a positive int "
+                f"or None, which admits any extent at the gpu level"
+            )
         if architecture is None:
             architecture = _architecture_of(
                 device,
@@ -100,6 +113,7 @@ class CudaTarget(Target):
             )
         if architecture_id is not None and device_id is not None:
             check_compatible(architecture, device)
+        object.__setattr__(self, "device_count", device_count)
         object.__setattr__(self, "architecture", architecture.value)
         object.__setattr__(self, "device", device.value)
         object.__setattr__(self, "architecture_id", architecture_id)
@@ -112,6 +126,10 @@ class CudaTarget(Target):
     def get_facts(self, facts_type: type, query: object | None = None):
         """Project CUDA hardware through the facts this Target owns."""
         if facts_type is TopologyLimitFacts:
+            if query == "gpu":
+                return facts_result(
+                    self, facts_type, TopologyLimitFacts("gpu", self.device_count)
+                )
             if query == "cta":
                 return facts_result(self, facts_type, TopologyLimitFacts("cta", None))
             if query == "thread":
@@ -161,9 +179,12 @@ class CudaTarget(Target):
 
     def to_python(self) -> PythonExpr:
         if type(self) is CudaTarget and self.device_id and self.architecture_id:
+            count = (
+                "" if self.device_count is None else f", device_count={self.device_count}"
+            )
             return PythonExpr(
                 ("from tilefoundry.target import CudaTarget",),
-                f'CudaTarget("{self.device_id}")',
+                f'CudaTarget("{self.device_id}"{count})',
             )
         return super().to_python()
 
@@ -172,10 +193,12 @@ class CudaTarget(Target):
         """Return the architecture name used by compilation."""
         return self.architecture.name
 
-    topology_levels: ClassVar[tuple[str, ...]] = ("cta", "thread")
+    topology_levels: ClassVar[tuple[str, ...]] = ("gpu", "cta", "thread")
 
     def topology_limit(self, name: str) -> int:
         """Return the physical parallel limit for one CUDA topology level."""
+        if name == "gpu":
+            return self.device_count or 1
         if name == "cta":
             return self.device.sm_count
         return self.architecture.topology_limit(name)

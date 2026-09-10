@@ -31,7 +31,7 @@ class RuntimeModule:
     def __init__(self, name, entry=None, modules=()): ...
     def forward(self, *args): ...                # subclass-written orchestration — forward IS the step
     def __call__(self, *args): ...               # delegates to forward
-    def load(self, resource): ...                # remember the source, recursive over children
+    def load(self, resource, *, placement=None): ...  # remember source + program, recursive
 ```
 
 - constraints:
@@ -42,8 +42,15 @@ class RuntimeModule:
     this subclass mechanically from a semantic `Module` and is the normal
     authoring path; a direct subclass remains available for special cases
     (e.g. `CompiledModule`, [§1.1.3](#113-internal-pipeline-compiled-origin)).
-  - `load(resource)` (base class): recurses into each child with
-    `resource.subtree(child.name)`; the base class itself resolves nothing.
+  - `load(resource, *, placement=None)` (base class): recurses into each child
+    with `resource.subtree(child.name)`, handing every one the same
+    *placement*; the base class itself resolves nothing. One process is one
+    program throughout the tree it loaded, so a child MUST NOT be given a
+    placement of its own.
+  - a twin with a sharded weight and no *placement* MUST refuse to read it.
+    Nothing else in the system says which of the mesh's positions this process
+    holds, and returning the whole tensor would silently give every program
+    every other program's data ([§1.7](#17-shardtensor)).
     Weight prefixes follow module paths, matching ir attribute addressing.
     Lifecycle: construct (structure) → `load` (remember source) → call. A
     `RuntimeModule` does **not** run `prepare`; it loads straight from the
@@ -498,6 +505,13 @@ def draw_tensor(declared: TensorType, generator, device: str) -> torch.Tensor: .
     A raw key is cached weakly: repeated reads return the same tensor while a
     caller holds it, and the entry may disappear after the last reference is
     collected; scoped views share the index, shard handles, and tensor cache.
+  - *device* is resolved on every read, and both the shard handles and the
+    tensor cache are keyed by that resolved device alongside the name. A bare
+    `"cuda"` means whichever card the process has selected, which a
+    single-process multi-card host changes between reads; a handle keyed by
+    file alone would stay pinned to the card that first opened it, and a tensor
+    keyed by name alone would hand a reader on one card what another card
+    holds.
   - `DrawnResource` draws a declared weight lazily with `draw_tensor`, keeps
     the result strongly, and shares its generator and drawing ledger across
     `subtree` views without reseeding. The strong ledger is a contract: drawing
@@ -612,6 +626,55 @@ def check(candidate: Callable, reference: Callable | None, inputs: tuple, *,
     `RuntimeModule` bound method, a raw torch callable, or an evaluator
     closure — anything callable on *inputs*.
 
+### 1.7 `ShardTensor`
+
+`Module.prepare` writes one canonical tensor per weight and the HIR keeps the
+global `TensorType`, so a checkpoint read hands back every program's data at
+once. `ShardTensor` pairs that owning tensor with the type that shards it, and
+`local` is the single place the pair is narrowed to one program.
+
+```python
+class ShardTensor:
+    tensor: torch.Tensor
+    type: TensorType
+
+    def local(self, topologies, placement) -> torch.Tensor: ...
+```
+
+- constraints:
+  - `ShardTensor` carries no `Placement`, coordinate, rank or device map. The
+    program is an argument to `local`, so one owning tensor serves every
+    program a host dispatches, and `local` is the only way to a slice.
+  - a `type` with no `ShardLayout` is every program's whole tensor, and so is
+    an axis the mesh only broadcasts over or reduces across.
+  - each `Split` narrows its tensor axis to the one part its level's program id
+    selects. The mesh axis reaches its tensor axis through the same factored
+    mapping the type side uses, not through the raw `Split.axis`, which numbers
+    layout positions rather than logical axes.
+  - the program id of a level is projected to that level's coordinates by the
+    existing layout algebra: the level's shape and normalized strides, applied
+    to the id. Axes of extent one are dropped by that projection and MUST be
+    restored at coordinate zero, so coordinates line up with the mesh-axis
+    numbering the attributes use.
+  - a level whose id is `None` MUST be left undivided
+    ([shard §5.1](shard.md#51-placement)).
+  - once every level of the mesh has an id, the narrowed shape MUST equal what
+    `local_type_of` states one shard of that type is. A partly projected shape
+    is not something the type side names, and is therefore not checked.
+  - a `RuntimeModule`'s public boundary takes and returns `ShardTensor`, while
+    a body -- a Python reference or a launched kernel alike -- only ever
+    receives the local `torch.Tensor`. A returned tensor is already one
+    program's, so the type it is paired with states that shape and carries no
+    layout: narrowing it again would take a shard of a shard.
+  - a weight narrowed on first use is copied out of the read it came from, so
+    the whole canonical tensor is released once every shard it contributes is
+    held. A weight the mesh does not divide is kept as the read itself.
+  - what remembers a read weight is keyed by name, program ids and the current
+    device together. One weight read on two cards is two tensors, and a key of
+    the name alone hands a reader on one card what another card holds.
+
+---
+
 ## 2. C++ Runtime Surface
 
 The sections follow `include/tilefoundry/runtime/`, one per header. Each
@@ -649,6 +712,7 @@ inline constexpr int kWarpSize;
 template <class...> inline constexpr bool dependent_false_v;
 
 enum class TopologyScope {
+    gpu,
     cta,
     thread,
     scope_count,
@@ -660,13 +724,44 @@ CUTE_HOST_DEVICE constexpr auto program_dim() noexcept;
 template <TopologyScope T>
 CUTE_HOST_DEVICE constexpr auto program_shape() noexcept;
 
+struct ProgramMetaData {
+    int program_id[int(TopologyScope::scope_count)];
+};
+
+CUTE_HOST_DEVICE ProgramMetaData &program_meta();
+
+CUTE_HOST_DEVICE void program_meta(ProgramMetaData const &meta);
+
 template <TopologyScope T> CUTE_HOST_DEVICE size_t program_id() noexcept;
 
 CUTE_HOST_DEVICE auto program_ids() noexcept;
 ```
 <!-- /generated -->
 
-**Terms.** A *level* is one parallel-resource level of the launch: `cta` or `thread`. An *instance* is one id of a level. A *coordinate* is one id per level, which is what `program_ids()` hands back.
+**Terms.** A *level* is one parallel-resource level of the launch: `gpu`, `cta` or `thread`. An *instance* is one id of a level. A *coordinate* is one id per level, which is what `program_ids()` hands back.
+
+- constraints:
+  - `gpu` is the level the host places. A card carries no register naming
+    which of the mesh's cards it is, so `program_id<TopologyScope::gpu>()`
+    reads what the launch was told instead, and that value MUST equal the id
+    the host's `Placement` gave the `gpu` level for the same invocation
+    ([§1.7](#17-shardtensor)).
+  - the value reaches the device as a by-value `ProgramMetaData` kernel
+    parameter, and the generated kernel MUST hand it to `program_meta` before
+    any divergence. One thread writes and the barrier orders that write
+    against every read.
+  - `program_meta`'s slot is `__shared__`, so one name is one copy per block
+    rather than one per device: two kernels running at once on one card each
+    read what their own launch was told.
+  - `scope_count` states how many levels there are, and everything indexed by
+    a level MUST derive its length from it: `ProgramMetaData.program_id`, the
+    tuple `program_ids()` returns, and the coord a mesh is asked about. A
+    coord shorter than that is missing a level rather than naming a smaller
+    mesh, and MUST be refused where it is used rather than left to read the
+    neighbouring level's id.
+  - that parameter MUST NOT appear in the wrapper's user-visible signature. A
+    `Placement` itself never reaches a kernel ([§1.7](#17-shardtensor)); the
+    id derived from it is an internal parameter the caller supplies.
 
 - constraints:
   - The enumeration is fixed to the `cta` and `thread` program levels plus the `scope_count` sentinel. A warp-sized grouping is an axis of a `thread` mesh's layout, not a level of its own.

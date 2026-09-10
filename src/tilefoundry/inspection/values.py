@@ -213,7 +213,7 @@ def _says_nothing(value: object, default: object) -> bool:
 
 def _paired_flops(record: ComputeCostMetadata) -> dict[str, TotalAndPerUnit[int]]:
     """Each dtype's work, whole and per unit, as one value."""
-    per_unit = dict(record.flops_per_unit)
+    per_unit = dict(record.asked().flops)
     return {
         dtype: TotalAndPerUnit(total, per_unit.get(dtype, 0))
         for dtype, total in record.flops
@@ -228,7 +228,7 @@ def _paired_service(record: ComputeCostMetadata) -> dict[str, TotalAndPerUnit[in
     rather than folded into them, because a predicate priced as a FLOP is a
     number about a pipe the work never went down.
     """
-    per_unit = dict(record.service_per_unit)
+    per_unit = dict(record.asked().service)
     return {
         kind: TotalAndPerUnit(total, per_unit.get(kind, 0))
         for kind, total in record.service
@@ -239,10 +239,9 @@ def _paired_traffic(
     record: TrafficMetadata,
 ) -> dict[str, TotalAndPerUnit[TrafficBytes]]:
     """Each level's traffic, whole and per unit, as one value."""
-    per_unit = dict(record.per_unit)
     return {
-        level: TotalAndPerUnit(moved, per_unit.get(level, TrafficBytes()))
-        for level, moved in record.whole
+        level: TotalAndPerUnit(record.at(level), record.at(level, record.unit))
+        for level in record.levels()
     }
 
 

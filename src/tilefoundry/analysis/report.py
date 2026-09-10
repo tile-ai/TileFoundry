@@ -310,7 +310,10 @@ def _work_totals(function: Function) -> dict[str, object]:
     moved = get_metadata(function, TrafficMetadata)
     return {
         "flops": {} if record is None else render_record(record, function)["flops"],
-        "traffic": {} if moved is None else render_record(moved, function)["whole"],
+        "traffic": {} if moved is None else render_record(moved, function)["storage"],
+        "communication": (
+            {} if moved is None else render_record(moved, function)["communication"]
+        ),
     }
 
 

@@ -200,7 +200,7 @@ def test_cuda_mesh_topology_validation_uses_the_emission_target() -> None:
     custom = ExtraTopologyCudaTarget("nvidia.h200_sxm")
 
     validate_cuda_topology_levels(custom, ("custom",))
-    with pytest.raises(ValueError, match=r"supports \{cta, thread, custom, unknown\}"):
+    with pytest.raises(ValueError, match=r"supports \{gpu, cta, thread, custom, unknown\}"):
         validate_cuda_topology_levels(custom, ("warp",))
 
 

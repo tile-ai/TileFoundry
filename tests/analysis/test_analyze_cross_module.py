@@ -59,7 +59,8 @@ def _traffic(records) -> dict[str, int]:
     total: dict[str, int] = {}
     for _record, moved in records:
         assert moved is not None, "traffic was asked of a run that did not measure it"
-        for name, bytes_ in moved.whole:
+        for name in moved.levels():
+            bytes_ = moved.at(name)
             total[name] = total.get(name, 0) + bytes_.total_bytes
     return total
 

@@ -78,7 +78,7 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
     if context.level is None:
         raise AnalysisError("performance requires a resolved topology level")
     facts = context.target.get_facts(ThroughputFacts)
-    services = context.target.get_facts(PerformanceServiceFacts)
+    services = context.target.get_facts(PerformanceServiceFacts, context.level)
     performance_context = PerformanceContext(
         module=context.module,
         target=context.target,

@@ -59,7 +59,7 @@ def _cost(owner) -> tuple[int, int]:
     )
     record = get_metadata(result.function, ComputeCostMetadata)
     assert record is not None
-    return dict(record.flops)["f32"], dict(record.flops_per_unit)["f32"]
+    return dict(record.flops)["f32"], dict(record.flops_per_unit("thread"))["f32"]
 
 
 def test_scope_positions_turn_per_unit_cost_into_total_cost() -> None:
@@ -90,7 +90,7 @@ def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
     record = get_metadata(result.function, ComputeCostMetadata)
     assert record is not None
     assert dict(record.flops)["f32"] == 40
-    assert dict(record.flops_per_unit)["f32"] == 6
+    assert dict(record.flops_per_unit("thread"))["f32"] == 6
     binaries = [
         get_metadata(expr, ComputeCostMetadata)
         for expr in collect_exprs(result.function.body)

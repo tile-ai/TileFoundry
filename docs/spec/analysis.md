@@ -170,23 +170,26 @@ class ComputeCostMetadata(IRMetadata):
 
     Attributes:
         flops: attribute; Flop count per compute DType name, sorted by name.
-        flops_per_unit: attribute; Flop count performed by one unit of the analysed topology level.
+        by_unit: attribute; What one unit does, at every declared topology level.
         service: attribute; Result count per service kind, sorted by kind.
-        service_per_unit: attribute; Result count per service kind for one unit of the analysed topology level.
+        unit: attribute; The level this analysis was asked about, out of the ones by_unit holds.
     """
 
     flops: tuple[tuple[str, int], ...] = ()
-    flops_per_unit: tuple[tuple[str, int], ...] = ()
+    by_unit: tuple[tuple[str, UnitWork], ...] = ()
     service: tuple[tuple[str, int], ...] = ()
-    service_per_unit: tuple[tuple[str, int], ...] = ()
+    unit: str | None = None
+
+    def flops_per_unit(self, unit: str | None = None): ...
+    def service_per_unit(self, unit: str | None = None): ...
 ```
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written, then multiply by the enclosing recomputation factor and the number of positions in its execution scope. For a Function Call, take the callee's summed `flops` and multiply by the call site's factor. | No |
 | `service` | For a primitive Call, take its cost evaluator's service counts -- the results it asks a machine for that are not floating point -- and multiply by the same factor and execution-scope position count. A Function Call takes the callee's summed `service`. | No |
-| `service_per_unit` | The same evaluator over the same projected Types, multiplied by the same factor. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
-| `flops_per_unit` | Use the same evaluator over Types projected through authored `Split`s at or coarser than the analysed level, then multiply by the same factor. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `service_per_unit` | The same evaluator over the same projected Types, at every declared level. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `by_unit` | Use the same evaluator over Types projected through authored `Split`s at or coarser than each declared level, once per level. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
 
 Requesting this family adds one summary line, prefixed by `# `: the Function's own
 record, stated exactly as a Call's is. The whole program's work is not a second
@@ -233,13 +236,13 @@ class TrafficMetadata(IRMetadata):
     """What one Call moves, or what one Function moves over all its trips.
 
     Attributes:
-        whole: attribute; TrafficBytes per storage level name.
-        per_unit: attribute; TrafficBytes per storage level name for one unit of the analysed topology level.
+        storage: attribute; TrafficBytes per storage level name, whole and per unit of each declared topology level.
+        communication: attribute; TrafficBytes per topology level name, for the boundary the bytes crossed.
         operands: attribute; TrafficBytes per operand, positional against (*call.args, call); present only for a direct primitive call.
     """
 
-    whole: tuple[tuple[str, TrafficBytes], ...] = ()
-    per_unit: tuple[tuple[str, TrafficBytes], ...] = ()
+    storage: tuple[tuple[str, tuple[tuple[str, TrafficBytes], ...]], ...] = ()
+    communication: tuple[tuple[str, tuple[tuple[str, TrafficBytes], ...]], ...] = ()
     operands: tuple[TrafficBytes, ...] = ()
 
 
@@ -374,7 +377,28 @@ of this analysis.
     domain that fits at once MUST be settled without searching, and one whose
     simultaneously live bytes exceed the capacity MUST be refused without
     searching.
-  - A Call's `whole`, `per_unit` and `operands` MUST state one occurrence. Only
+  - `*_per_unit` and the per-unit share of a traffic level MUST be stated for
+    every declared topology level in one analysis, not only for the level the
+    call selected. A finer level's unit sits inside a coarser one, so its
+    share is the coarser share divided again by whatever the mesh splits
+    between them, and a reader that wants the chain MUST NOT have to run the
+    analysis once per level to get it. Asked for no level, an accessor MUST
+    answer with every level; asked for one, with that one.
+  - A movement has two coordinates and MUST be stated in both. `storage` names
+    the level the bytes entered or left. `communication` names the topology
+    level whose boundary they crossed, which no storage level can answer: data
+    handed from one unit to another is the same storage at both ends and has
+    still gone somewhere. The same bytes MUST appear under both, exactly as a
+    move between two storage levels is read at one and written at the other.
+  - Under `communication`, `read` and `write` are the unit's own view: what it
+    received and what it sent. A unit finer than the boundary MUST state no
+    share of it -- crossing is what the units on either side do, and dividing
+    the move among the units inside one states a move nobody made.
+  - A duration MUST take whichever of compute, storage movement and crossing
+    is longest, and MUST NOT sum them: one movement spends two resources over
+    one span of time. A crossing at a level the target publishes no rate for
+    MUST be stated and left untimed.
+  - A Call's `storage`, `communication` and `operands` MUST state one occurrence. Only
     the Function record counts an occurrence as often as its authored loops
     repeat it, and its `operands` MUST be empty: which operand moved what
     belongs to the occurrence, not to the total.
@@ -408,7 +432,8 @@ of this analysis.
 | `MemoryMetadata.lifetimes` | Every value residency except a `Reshape` or a `Transpose`, each of which describes bytes its operand already holds. | As above |
 | `MemoryMetadata.advisories` | Explicit peak overflow, cache/shared-capacity division, and same-scope authored-loop access-footprint findings. | `MemoryHierarchyFacts` |
 | `TrafficMetadata.whole` | One occurrence's per-boundary movement asked of the Op's access relations in the whole program's window, charged to the storage levels its operand Types name and grouped by level. On a Function, summed over every reachable occurrence, each counted as often as its authored loops repeat it. A Type with leaves at several levels keeps those leaf bytes separate. A `UMAT` leaf has no residency of its own: when it appears in `Call.args`, charge its own bytes at the target's established `rmem` materialization level; when it appears only in an Op attribute, charge nothing. A Function Call takes the callee's grouped total. | No |
-| `TrafficMetadata.per_unit` | The same one occurrence, asked of the same relations in the analysed level's window, charged at the levels the operand's projected Type names. On a Function, summed over occurrences with the same repetition. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `TrafficMetadata.storage` | The same one occurrence, asked of the same relations in each declared level's window, charged at the levels the operand's projected Type names. On a Function, summed over occurrences with the same repetition. A Function Call takes the equivalently projected callee total. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `TrafficMetadata.communication` | What a Reshard sends off the unit it was on, when the shards on its two sides differ across a mesh axis that level owns. Zero where they agree. | No; the share each unit keeps follows from the mesh extents the shards name. |
 | `TrafficMetadata.operands` | One occurrence's per-boundary movement in order `(*call.args, call)`, the same relation-derived amounts `whole` groups. Empty on a Function and on a Function Call, neither of which has a split. | No |
 
 The target-aware loop projection is report data rather than another metadata
@@ -522,7 +547,7 @@ traffic traffic=<level>:r<int>/w<int>@r<int>/w<int>[,...][ operands=<position>:r
 ```
 
 Its JSON projection is under the reported value's `traffic` key, with `whole`,
-`per_unit` and one `operands` entry per position carrying `read` and `write`.
+`communication` and one `operands` entry per position carrying `read` and `write`.
 The `analyze` equation printer emits no memory annotation because that record is
 attached only to the Function. Its full JSON projection is under
 `function_records.memory`:
@@ -698,7 +723,8 @@ as defined in that family's section.
     bandwidth rather than summing traffic across levels.
   - Performance local duration MUST divide `ComputeCostMetadata.flops_per_unit`
     by `unit_flops`, `service_per_unit` by `unit_ops`, and the `bandwidth_level`
-    entry of `TrafficMetadata.per_unit` by `unit_bandwidth`. Compute and
+    entry of `TrafficMetadata.storage` by `unit_bandwidth`, all at the level it
+    was asked about. Compute and
     movement overlap within one occurrence, so its duration is the greater of
     the two sides rather than their sum.
   - Traffic at a level with no stated one-unit bandwidth MUST remain visible in
@@ -707,7 +733,7 @@ as defined in that family's section.
   - Having moved bytes and having work this can time are different questions.
     What decides the second is the quantities a rate exists for: nonzero
     `flops_per_unit`, nonzero `service_per_unit`, or nonzero
-    `TrafficMetadata.per_unit` at `bandwidth_level`. An occurrence with none of
+    `TrafficMetadata.storage` at `bandwidth_level`. An occurrence with none of
     them MUST take zero time, MUST NOT be required to carry an execution
     placement, and MUST still record its movement at any other level: it is
     untimed, not absent. Work of a dtype or kind the target states no one-unit
@@ -869,7 +895,7 @@ model.
     An occurrence
     with no nonzero
     `flops_per_unit`, no nonzero `service_per_unit` and no nonzero
-    `TrafficMetadata.per_unit` at `bandwidth_level` is structural to this
+    `TrafficMetadata.storage` at `bandwidth_level` is structural to this
     model: it needs no execution placement and MUST receive no record, because
     an empty
     interval reads as a measurement rather than as the absence of one. Movement
@@ -1064,9 +1090,21 @@ def analyze(
     first-occurrence order, resolve their union dependency closure, and execute
     every member once.
   - `level` MUST name one effective Module topology. When omitted, it MUST
-    default to the coarsest effective topology; when the Module declares none,
-    it MUST remain `None` and no per-unit projection divides. `AnalysisResult.level`
-    MUST record the resolved answer.
+    default to the coarsest effective topology the target states a
+    `ParallelCapacityFacts` for. A program may name a level the host places
+    rather than the machine runs -- several cards are one deployment's shape,
+    not one card's -- and measuring per such a level would ask the machine for
+    a unit it publishes no rate for. When the target answers for none of the
+    declared levels the coarsest MUST be left selected, so the refusal names
+    the level rather than the absence of one; when the Module declares none,
+    `level` MUST remain `None` and no per-unit projection divides.
+    `AnalysisResult.level` MUST record the resolved answer.
+  - A target MUST answer `PerformanceServiceFacts` and `ParallelCapacityFacts`
+    for the level it is asked about, and MUST refuse a level it publishes no
+    rate for rather than answering for a different one. What one unit gets
+    through is the device peak over however many of that unit the device holds,
+    so the same program measured at two levels states the same work against
+    proportionally different rates.
   - The Function MUST be one the Module owns: one it declares, or a
     specialization variant of one it declares
     ([core-ir §1](./core-ir.md#1-module)). A Function derived by specialising one

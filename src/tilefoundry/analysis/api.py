@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from tilefoundry.analysis.check import _resolve_program_geometry, check_program
 from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.analysis.facts import ParallelCapacityFacts
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.report import render_json, report_data
 from tilefoundry.analysis.scope import ScopeBuilder
@@ -102,6 +103,25 @@ def _closure(target: Target, roots: tuple[str, ...]) -> tuple[Analyzer, ...]:
     return tuple(ordered)
 
 
+def _coarsest_measured_level(target, topologies) -> "str | None":
+    """The coarsest declared level the machine states a parallel capacity for.
+
+    A program may name a level the host places rather than the machine runs --
+    several cards are one deployment's shape, not one card's -- and measuring
+    per such a level asks the machine for a unit it has no rate for. The
+    outermost level it can answer about is the one measured; a machine that
+    answers about none leaves the outermost declared, so the refusal names the
+    level rather than the absence of one.
+    """
+    for topology in topologies:
+        try:
+            if target.get_facts(ParallelCapacityFacts, topology.name):
+                return topology.name
+        except UnsupportedCapabilityError:
+            continue
+    return topologies[0].name if topologies else None
+
+
 def analyze(
     module: Module,
     function: Function,
@@ -147,8 +167,8 @@ def analyze(
 
     target = module.resolve_target()
     topologies = module.effective_topologies()
-    if level is None and topologies:
-        level = topologies[0].name
+    if level is None:
+        level = _coarsest_measured_level(target, topologies)
     closure = _closure(target, roots)
 
     function = check_program(module, function, level=level, analyzers=closure)

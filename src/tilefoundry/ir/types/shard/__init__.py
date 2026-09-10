@@ -14,6 +14,7 @@ from .mesh import (
     level_projection,
     positions_at,
 )
+from .placement import Placement
 from .scope_match import covered_by_scope, storage_reaches
 from .shard_layout import (
     B,
@@ -46,6 +47,7 @@ __all__ = [
     "level_axes",
     "level_projection",
     "positions_at",
+    "Placement",
     "covered_by_scope",
     "storage_reaches",
     "Mesh",

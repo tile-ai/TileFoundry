@@ -14,22 +14,26 @@ from dataclasses import replace
 
 import pytest
 
+from tests.fixtures.placed.fused_boundary import FusedBoundary
 from tests.fixtures.placed.performance_findings import _CrossScopePerformance
 from tests.fixtures.placed.symbolic_offset import (
     _LiteralStoreOffset,
     _SymbolicStoreOffset,
 )
+from tests.fixtures.placed.tp_all_to_all import GPUS, SENT_BYTES, TransposeShard
 from tilefoundry import func, module
 from tilefoundry.analysis import (
     ComputeCostMetadata,
     MemoryHierarchyFacts,
     MemoryMetadata,
+    ParallelCapacityFacts,
     PerformanceMetadata,
     PerformanceServiceFacts,
     PerformanceSummaryMetadata,
     RooflineMetadata,
     ThroughputFacts,
     TrafficMetadata,
+    UnitWork,
 )
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.compute_cost import (
@@ -45,7 +49,7 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.target import CudaTarget
+from tilefoundry.target import CudaTarget, UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 _ROUNDING_M = 14_593
@@ -234,7 +238,7 @@ def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
         assert cost is not None and bound is not None and summary is not None
         observed[name] = (
             dict(cost.service)["integer"],
-            dict(cost.service_per_unit)["integer"],
+            dict(cost.service_per_unit("cta"))["integer"],
             bound.ideal_ns,
             summary.timeline.end_ns - summary.timeline.start_ns,
         )
@@ -332,7 +336,7 @@ def test_a_matmul_counts_its_rows_once_whichever_axis_the_mesh_split() -> None:
         summary = get_metadata(report.function, PerformanceSummaryMetadata)
         per_layout[name] = (
             dict(cost.flops)["bf16"],
-            dict(cost.flops_per_unit)["bf16"],
+            dict(cost.flops_per_unit("cta"))["bf16"],
             summary.timeline.end_ns,
         )
 
@@ -412,7 +416,7 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
     work = next(
         record
         for record in records
-        if record is not None and any(v for _n, v in record.flops_per_unit)
+        if record is not None and any(v for _n, v in record.flops_per_unit("cta"))
     )
 
     with pytest.raises(
@@ -424,14 +428,17 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
 
     with pytest.raises(AnalysisError, match=r"unknown compute dtype 'f9e9m9'"):
         _local_duration_ns(
-            replace(work, flops_per_unit=(("f9e9m9", 8),)),
+            replace(work, by_unit=(("cta", UnitWork(flops=(("f9e9m9", 8),))),)),
             throughput,
             services,
             level="cta",
         )
 
     crossed = TrafficMetadata(
-        per_unit=((throughput.bandwidth_level, TrafficBytes(read=4096)),)
+        storage=(
+            (throughput.bandwidth_level, (("cta", TrafficBytes(read=4096)),)),
+        ),
+        unit="cta",
     )
     with pytest.raises(
         AnalysisError,
@@ -444,3 +451,80 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
             moved=crossed,
             level="cta",
         )
+
+
+def test_a_level_the_machine_can_answer_about_is_one_it_measures() -> None:
+    """The same program at two levels: same work, proportionally different rates.
+
+    What one unit gets through is the device peak over however many of that unit
+    the device holds, so asking about a finer level does not change what the
+    program does -- only what it is held against. A level the machine publishes
+    no rate for is refused by name rather than answered for a different one.
+    """
+    function = FusedBoundary.entry_function()
+    at = {
+        level: analyze(FusedBoundary, function, analysis=("performance",), level=level)
+        for level in ("cta", "thread")
+    }
+    assert {level: result.level for level, result in at.items()} == {
+        "cta": "cta",
+        "thread": "thread",
+    }
+
+    work = {
+        level: get_metadata(result.function, ComputeCostMetadata).flops_per_unit(level)
+        for level, result in at.items()
+    }
+    assert work["cta"] == work["thread"], work
+
+    target = FusedBoundary.resolve_target()
+    rates = {
+        level: dict(target.get_facts(PerformanceServiceFacts, level).unit_flops)
+        for level in ("cta", "thread")
+    }
+    threads_per_cta = target.architecture.max_threads_per_cta
+    for dtype, per_cta in rates["cta"].items():
+        assert rates["thread"][dtype] == per_cta // threads_per_cta
+
+    with pytest.raises(UnsupportedCapabilityError, match="device_count"):
+        target.get_facts(ParallelCapacityFacts, "gpu")
+
+
+def test_every_level_is_measured_in_one_pass_and_they_nest() -> None:
+    """One analysis states one unit's work at each level the program declares.
+
+    A finer level's unit is inside a coarser one, so its share is the coarser
+    share divided again by whatever the mesh splits between them. Reading the
+    chain used to take one analysis per level and a reader who knew to ask.
+    """
+    result = analyze(FusedBoundary, FusedBoundary.entry_function(), analysis=("compute-cost",))
+    cost = get_metadata(result.function, ComputeCostMetadata)
+
+    stated = dict(cost.flops_per_unit())
+    assert set(stated) == {"cta", "thread"}
+    assert dict(cost.flops_per_unit("cta")) == dict(stated["cta"])
+
+    for dtype, coarse in dict(cost.flops_per_unit("cta")).items():
+        fine = dict(cost.flops_per_unit("thread")).get(dtype, 0)
+        assert fine <= coarse and coarse % max(fine, 1) == 0, dtype
+
+
+def test_a_reshard_that_changes_shards_says_what_left_the_card() -> None:
+    """Splitting one tensor two ways is an exchange, and it costs both resources.
+
+    What crosses is counted against the boundary it crossed, which no storage
+    level names: the data is global memory at both ends and has still gone to
+    another card. A unit inside the boundary is not one of the parties, so it
+    states no share of the crossing.
+    """
+    result = analyze(
+        TransposeShard, TransposeShard.entry_function(), analysis=("compute-cost", "memory")
+    )
+    moved = get_metadata(result.function, TrafficMetadata)
+
+    assert moved.across("gpu", "gpu") == TrafficBytes(read=SENT_BYTES, write=SENT_BYTES)
+    assert moved.across("gpu") == TrafficBytes(
+        read=SENT_BYTES * GPUS, write=SENT_BYTES * GPUS
+    )
+    assert moved.across("gpu", "cta") == TrafficBytes()
+    assert moved.across("cta") == TrafficBytes()

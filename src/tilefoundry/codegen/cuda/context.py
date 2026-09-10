@@ -33,6 +33,7 @@ def topology_scope_str(name: str) -> str:
     enumerator. Loud on an unknown level rather than silently defaulting.
     """
     scopes = {
+        "gpu": "tilefoundry::TopologyScope::gpu",
         "cta": "tilefoundry::TopologyScope::cta",
         "thread": "tilefoundry::TopologyScope::thread",
     }
