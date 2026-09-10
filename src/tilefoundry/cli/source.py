@@ -270,7 +270,7 @@ def load_namespace(source: str) -> tuple[dict[str, object], str | None]:
     path, selector = _split_source(source)
     directory = str(path.parent)
     sibling_names = {
-        child.stem for child in path.parent.glob("*.py")
+        child.stem.partition(".")[0] for child in path.parent.glob("*.py")
     } | {
         child.name
         for child in path.parent.iterdir()
