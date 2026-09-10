@@ -22,5 +22,5 @@ def _emit(call, ctx: CodegenContext) -> None:
     dst_name = ctx.name_for(dst)
     ctx.emit(
         f"tilefoundry::ops::elementwise({dst_name}, "
-        f"tilefoundry::ops::relu_op{{}}, {src_name});"
+        f"tilefoundry::primitive::relu_op{{}}, {src_name});"
     )

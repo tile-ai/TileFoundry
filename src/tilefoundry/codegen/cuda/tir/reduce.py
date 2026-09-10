@@ -7,10 +7,10 @@ from tilefoundry.ir.tir.reduce import Reduce, ReduceKind
 
 REDUCE_TAG = {
     ReduceKind.MEAN: "tilefoundry::ops::mean_op",
-    ReduceKind.SUM: "tilefoundry::ops::add_op",
+    ReduceKind.SUM: "tilefoundry::primitive::add_op",
     ReduceKind.ABS_MAX: "tilefoundry::ops::absmax_op",
-    ReduceKind.MAX: "tilefoundry::ops::max_op",
-    ReduceKind.MIN: "tilefoundry::ops::min_op",
+    ReduceKind.MAX: "tilefoundry::primitive::max_op",
+    ReduceKind.MIN: "tilefoundry::primitive::min_op",
 }
 
 

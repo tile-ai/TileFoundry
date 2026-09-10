@@ -21,17 +21,6 @@ from tilefoundry.runtime.tensor import ShardTensor
 _RUNTIME_FUNC_MARK = "_tilefoundry_runtime_func"
 
 
-def _current_device() -> "int | None":
-    """The CUDA device this process has selected, or ``None`` off a card.
-
-    One weight read on two cards is two tensors, so the device belongs in the
-    key that remembers it alongside the program the slice was taken for.
-    """
-    import torch  # noqa: PLC0415 -- optional runtime dep
-
-    return torch.cuda.current_device() if torch.cuda.is_available() else None
-
-
 
 _RESERVED = ("module",)
 
@@ -66,13 +55,14 @@ def _is_child_impl(value: object) -> bool:
 
 
 def _make_kernel_caller(instance: RuntimeModule, ir_fn, body: Callable) -> Callable:
-    """Bind *body* into a callable taking activations only.
+    """Bind *body* into a callable taking activations only, converting both ways.
 
-    Bind *body* into a callable taking activations only: ``is_const`` params
-    come from *instance*'s loaded weights by name, the rest positionally.
-    Both arrive already narrowed to this program, so a body -- a Python
-    reference or a launched kernel alike -- only ever sees one program's
-    ``torch.Tensor`` and never the mesh it came out of.
+    The way in is a ``forward_pre_hook`` and the way out a ``forward_hook``:
+    each ``ShardTensor`` argument is projected to this program's slice and each
+    ``is_const`` param comes from *instance*'s loaded weights by name, already
+    projected, so a body -- a Python reference or a launched kernel alike --
+    only sees ``torch.Tensor`` and never the mesh it came out of. The way out
+    wraps again only where the declared return type carries a ``ShardLayout``.
     """
     is_kernel_obj = isinstance(body, RuntimeFunction)
 
@@ -83,9 +73,9 @@ def _make_kernel_caller(instance: RuntimeModule, ir_fn, body: Callable) -> Calla
             if param.is_const:
                 args.append(instance._weight(param.name))
             else:
-                args.append(instance._unwrap(next(remaining)))
+                args.append(instance._to_local(next(remaining)))
         out = body(*args) if is_kernel_obj else body(instance, *args)
-        return instance._wrap(out, ir_fn.return_type)
+        return instance._from_local(out, ir_fn.return_type)
 
     return _call
 
@@ -113,32 +103,26 @@ class _Twin(RuntimeModule):
         for child in self.modules:
             child.load(resource.subtree(child.name), placement=placement)
 
-    def _program(self) -> tuple:
-        """This invocation's program ids, or ``()`` when no placement was given."""
-        topologies = self._ir.effective_topologies()
-        if self._placement is None:
-            return ()
-        return self._placement.program_ids(topologies)
+    def _to_local(self, value):
+        """Into a body: a ``ShardTensor`` projected to this program's slice.
 
-    def _unwrap(self, value):
-        """One program's ``torch.Tensor`` out of whatever the caller passed.
-
-        A ``ShardTensor`` names a whole distributed value, so it is narrowed
-        here; anything else is already the thing a body takes.
+        Anything the mesh never spread is already what this program holds, so
+        it passes through -- the choice is made once here rather than at each
+        body. Named as ``DTensor.to_local``, which answers the same question.
         """
         if isinstance(value, ShardTensor):
-            return value.local(self._ir.effective_topologies(), self._placement)
+            return value.to_local(self._ir.effective_topologies(), self._placement)
         return value
 
-    def _wrap(self, value, declared):
-        """A returned tensor as a ``ShardTensor`` when what it stands for is one.
+    def _from_local(self, value, declared):
+        """Out of a body: a returned tensor as a ``ShardTensor`` when it is one.
 
-        Only a function whose return type the mesh divides hands back a
-        distributed value; anything else is one tensor and stays one, so a
-        caller of an undistributed program never has to unwrap what was never
-        wrapped. The type paired with it states the shape the body actually
-        returned and carries no layout: narrowing it again would take a shard
-        of a shard.
+        The declared return type decides, not the value: what a body hands
+        back is a bare ``torch.Tensor`` with nothing on it saying whether it is
+        one program's slice or the whole. Only a return type the mesh divides
+        is a distributed value; anything else is one tensor and stays one. The
+        type paired with it states the shape the body actually returned and
+        carries no layout: narrowing it again would take a shard of a shard.
         """
         import torch  # noqa: PLC0415 -- optional runtime dep
 
@@ -155,7 +139,7 @@ class _Twin(RuntimeModule):
         canonical tensor is released once the shard it contributed is held;
         only a weight the mesh does not divide is kept as the read itself.
         """
-        key = (name, self._program(), _current_device())
+        key = name
         try:
             return self._bound[key]
         except KeyError:
@@ -187,7 +171,7 @@ class _Twin(RuntimeModule):
                 f"{value.dtype}, declared {declared.dtype}; the way out is a weight "
                 "converter on the model, not a flag on the read side"
             )
-        local = ShardTensor(value, declared).local(
+        local = ShardTensor(value, declared).to_local(
             self._ir.effective_topologies(), self._placement
         )
         self._bound[key] = local if local is value else local.clone()

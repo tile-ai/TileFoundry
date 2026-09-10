@@ -180,12 +180,18 @@ CUTE_HOST_DEVICE auto program_ids() noexcept {
 #include "tensor_view/shard_tensor.cuh"
 #include "utility/warp.cuh"
 
+/// Beside ops, not inside them: a primitive is a callable an op is handed,
+/// not a layer of the op surface.
+namespace primitive {
+
+#include "primitive/unary.h"
+#include "primitive/binary.h"
+
+}
+
 namespace ops {
 
 #include "ops/detail.cuh"
-/// Primitive callables precede entries that instantiate them.
-#include "primitive/unary.h"
-#include "primitive/binary.h"
 #include "ops/sync.cuh"
 #include "ops/elementwise.cuh"
 #include "ops/copy.cuh"

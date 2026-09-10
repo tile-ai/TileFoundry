@@ -338,25 +338,34 @@ rather than of the model. `Placement` states exactly that and nothing else.
 
 ```python
 class Placement:
-    program_ids_getter: Callable[[tuple[Topology, ...]], Sequence[int | None]]
+    ids: Mapping[str, int]
 
     def program_ids(self, topologies: tuple[Topology, ...]) -> tuple[int | None, ...]: ...
+
+    @classmethod
+    def from_env(cls, level: str = "gpu") -> "Placement": ...
 ```
 
 - constraints:
-  - `program_ids(topologies)` returns one id per ordered `Topology`, read
-    positionally, and MUST refuse an answer of a different length than the
-    levels it was asked about.
-  - `None` at a level means the host has not fixed it. A reader MUST leave that
-    level undivided rather than read `None` as `0`: the device chooses its own
-    `cta` and `thread`, and a host that guessed would hand one thread's data
-    back as the whole card's.
-  - the field and the method are deliberately not the same name. An instance
-    attribute written in `__init__` shadows a method of that name, so the
-    length guard would be bypassed by every caller.
+  - a `Placement` MUST be data, not a callable. Which program a loaded module
+    speaks for is settled when it is loaded, so an answer computed at each
+    call would let one module change identity while holding weights narrowed
+    for the old one, and a weight cache keyed on it would then be describing a
+    property of the process rather than of the data.
+  - `ids` is keyed by level name, so `program_ids(topologies)` answers one id
+    per ordered `Topology` by lookup. A level the mapping does not name is
+    unfixed, which is what makes the answer's length the caller's business
+    rather than the caller's arithmetic.
+  - an unfixed level MUST be left undivided rather than read as `0`: the device
+    chooses its own `cta` and `thread`, and a host that guessed would hand one
+    thread's data back as the whole card's.
   - a `Placement` is host-side execution context. It MUST NOT appear in a
     `TensorType`, a checkpoint, an `EntryABI`, a kernel parameter, or a
     `forward` argument.
+  - one loaded module speaks for one program. A host serving several MUST build
+    one module per program, each told which it is; the current device is
+    thread-local and is set once per thread, so a module MUST NOT read it to
+    decide who it is.
 
 ---
 
@@ -631,6 +640,35 @@ SM80 mma fragment) bypasses this materialization step: the layout
 already has a concrete `strides` tuple, so the `Reshard` typeinfer
 rule ([hir.md §1.3](./hir.md#13-op)) preserves
 it verbatim.
+
+### 7.6 `local_window`
+
+Which part of a sharded tensor one mesh instance holds, answered once and read
+by both sides of a launch.
+
+```python
+def local_window(shard, tensor_shape, ids) -> tuple[tuple[int, int], ...]: ...
+```
+
+- constraints:
+  - a tensor axis is divided by every mesh axis that cuts it, and their extents
+    multiply: two axes of one level cut it into a grid, and so do two levels,
+    one taking a block of what the other left.
+  - the axes cutting one tensor axis are ordered outermost first, so one step
+    of one of them MUST clear everything the axes inside it hold.
+  - an axis nothing cuts is held whole, and so is one cut only by a level whose
+    id is unfixed.
+  - an extent its mesh axis does not divide MUST be refused by name: a shard
+    would then not be one slice.
+  - the answer is a window per tensor axis, not an offset. What each side does
+    with it differs -- a kernel dots it with the shard layout's own strides, a
+    host slices a tensor with strides of its own -- so stating an offset here
+    would state one side's arithmetic as though it were both's.
+  - the C++ half MUST answer the same question under the same name
+    ([runtime §2.3.3](runtime.md#233-layoutshard_layoutcuh)). Two
+    implementations of "which part is mine" that can disagree is what a
+    per-call shape assertion used to be guarding against; one rule stated once
+    is what removes the need.
 
 ---
 

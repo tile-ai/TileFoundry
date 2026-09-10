@@ -17,32 +17,32 @@ inline constexpr no_workspace_t no_workspace{};
 
 /// Reduction traits define initialization, merge, and finalization.
 template <class Op> struct reduce_traits;
-template <> struct reduce_traits<add_op> {
-    using combine_op = add_op;
+template <> struct reduce_traits<primitive::add_op> {
+    using combine_op = primitive::add_op;
     static constexpr float init = 0.f;
     __device__ static float elem(float x) { return x; }
     __device__ static float finalize(float acc, float) { return acc; }
 };
 template <> struct reduce_traits<mean_op> {
-    using combine_op = add_op;
+    using combine_op = primitive::add_op;
     static constexpr float init = 0.f;
     __device__ static float elem(float x) { return x; }
     __device__ static float finalize(float acc, float n) { return acc / n; }
 };
-template <> struct reduce_traits<max_op> {
-    using combine_op = max_op;
+template <> struct reduce_traits<primitive::max_op> {
+    using combine_op = primitive::max_op;
     static constexpr float init = -INFINITY;
     __device__ static float elem(float x) { return x; }
     __device__ static float finalize(float acc, float) { return acc; }
 };
-template <> struct reduce_traits<min_op> {
-    using combine_op = min_op;
+template <> struct reduce_traits<primitive::min_op> {
+    using combine_op = primitive::min_op;
     static constexpr float init = INFINITY;
     __device__ static float elem(float x) { return x; }
     __device__ static float finalize(float acc, float) { return acc; }
 };
 template <> struct reduce_traits<absmax_op> {
-    using combine_op = max_op;
+    using combine_op = primitive::max_op;
     static constexpr float init = 0.f;
     __device__ static float elem(float x) { return fabsf(x); }
     __device__ static float finalize(float acc, float) { return acc; }
@@ -83,9 +83,9 @@ CUTE_HOST_DEVICE constexpr void check_reduce_domain() {
 
 template <class Op>
 inline constexpr bool is_supported_reduce_op_v =
-    std::is_same_v<Op, add_op> || std::is_same_v<Op, mean_op> ||
-    std::is_same_v<Op, absmax_op> || std::is_same_v<Op, max_op> ||
-    std::is_same_v<Op, min_op>;
+    std::is_same_v<Op, primitive::add_op> || std::is_same_v<Op, mean_op> ||
+    std::is_same_v<Op, absmax_op> || std::is_same_v<Op, primitive::max_op> ||
+    std::is_same_v<Op, primitive::min_op>;
 
 /// Whether ``Axis`` is one of the axes ``Axes`` names.
 template <class Axes, int Axis> CUTE_HOST_DEVICE constexpr bool is_reduced() {

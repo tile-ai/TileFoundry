@@ -13,6 +13,6 @@ def _emit(call, ctx: CodegenContext) -> None:
     src_n = ctx.name_for(src)
     dst_n = ctx.name_for(dst)
     ctx.emit(
-        f"tilefoundry::ops::elementwise({dst_n}, tilefoundry::ops::clamp_op{{"
+        f"tilefoundry::ops::elementwise({dst_n}, tilefoundry::primitive::clamp_op{{"
         f"{float(op.min_val)}f, {float(op.max_val)}f}}, {src_n});"
     )

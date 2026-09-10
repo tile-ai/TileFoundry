@@ -14,6 +14,7 @@ CUTE_HOST_DEVICE constexpr auto program_dim<TopologyScope::cta>() noexcept {
 
 using namespace tilefoundry;
 using namespace tilefoundry::ops;
+using namespace tilefoundry::primitive;
 
 template <int... Es> __device__ auto tmesh() {
     return make_mesh<TopologyScope::thread>(

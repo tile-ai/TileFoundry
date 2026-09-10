@@ -97,7 +97,7 @@ struct Warp {
         auto b = detail::local_tensor(rhs);
         auto &&d = detail::local_tensor(dst);
         using value_type = cute::remove_cvref_t<decltype(d(0))>;
-        const float sum = tilefoundry::warp_reduce<add_op>(
+        const float sum = tilefoundry::warp_reduce<primitive::add_op>(
             contract(a, b, int(cute::size(a))));
         d(0) = static_cast<value_type>(sum);
     }
@@ -118,7 +118,7 @@ struct Cta {
                       "ops::dot (block tier): the operands' mesh must be a "
                       "whole number of warps");
         constexpr int warps = instances / kWarpSize;
-        const float part = tilefoundry::warp_reduce<add_op>(
+        const float part = tilefoundry::warp_reduce<primitive::add_op>(
             contract(a, b, int(cute::size(a))));
         const unsigned tid = unsigned(
             tilefoundry::program_id<tilefoundry::TopologyScope::thread>());

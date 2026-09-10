@@ -10,6 +10,8 @@ tensor already held.
 
 from __future__ import annotations
 
+from threading import Thread
+
 import pytest
 import torch
 
@@ -45,7 +47,12 @@ class _Counted:
 
 
 def test_distributed_weight_loading(tmp_path) -> None:
-    """One load, two cards, and each body sees only what its program id selects."""
+    """One thread and one module per card; each body sees only its own shard.
+
+    Two modules rather than one moving between cards: a module is told which
+    program it is when it is loaded, so it cannot answer differently later
+    while holding weights narrowed for the card it was loaded on.
+    """
     if torch.cuda.device_count() < 2:
         pytest.fail(
             "distributed weight loading is a claim about two cards; with one there is "
@@ -59,26 +66,33 @@ def test_distributed_weight_loading(tmp_path) -> None:
         str(tmp_path),
     )
     reads = _Counted(SafetensorsResource(str(tmp_path)))
-    twin = TinyTPDecoderLMTwin()
-    twin.load(
-        reads,
-        placement=Placement(
-            program_ids_getter=lambda topologies: (torch.cuda.current_device(), None)
-        ),
-    )
+    failures: list[BaseException] = []
 
-    selected = torch.cuda.current_device()
-    try:
-        for gpu in (0, 1):
+    def run(gpu: int) -> None:
+        try:
             torch.cuda.set_device(gpu)
+            twin = TinyTPDecoderLMTwin()
+            twin.load(reads, placement=Placement({"gpu": gpu}))
+
             x, row = torch.zeros(R, C, device=gpu), torch.zeros(R, device=gpu)
             first, replicated = twin.forward(x, row, 2)
             again, _ = twin.forward(x, row, 2)
 
             assert first.tensor.device.index == gpu
             assert replicated.tensor.device.index == gpu
-            assert again.tensor.data_ptr() == first.tensor.data_ptr()
-    finally:
-        torch.cuda.set_device(selected)
+            assert again.tensor.data_ptr() == first.tensor.data_ptr(), (
+                "the second call read the weight again instead of the one it held"
+            )
+        except BaseException as error:  # noqa: BLE001 -- reported on the main thread
+            failures.append(error)
 
-    assert reads.counts == {"layer.project_weight": 2, "layer.decode_weight": 2}
+    threads = [Thread(target=run, args=(gpu,)) for gpu in (0, 1)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert not failures, failures[0]
+
+    assert reads.counts == {"layer.project_weight": 2, "layer.decode_weight": 2}, (
+        "each card reads the checkpoint once; neither read it twice"
+    )

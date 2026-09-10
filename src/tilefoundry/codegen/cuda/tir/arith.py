@@ -13,18 +13,18 @@ from tilefoundry.ir.types.shape_helpers import (
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, shard_layout_local_shape
 
 _BINARY_TAG = {
-    BinaryKind.MUL: "tilefoundry::ops::mul_op",
-    BinaryKind.ADD: "tilefoundry::ops::add_op",
-    BinaryKind.SUB: "tilefoundry::ops::sub_op",
-    BinaryKind.DIV: "tilefoundry::ops::div_op",
+    BinaryKind.MUL: "tilefoundry::primitive::mul_op",
+    BinaryKind.ADD: "tilefoundry::primitive::add_op",
+    BinaryKind.SUB: "tilefoundry::primitive::sub_op",
+    BinaryKind.DIV: "tilefoundry::primitive::div_op",
 }
 
 _UNARY_TAG = {
-    UnaryKind.RSQRT: "tilefoundry::ops::rsqrt_op",
-    UnaryKind.NEG: "tilefoundry::ops::neg_op",
-    UnaryKind.RELU: "tilefoundry::ops::relu_op",
-    UnaryKind.SQUARE: "tilefoundry::ops::square_op",
-    UnaryKind.CAST: "tilefoundry::ops::identity_op",
+    UnaryKind.RSQRT: "tilefoundry::primitive::rsqrt_op",
+    UnaryKind.NEG: "tilefoundry::primitive::neg_op",
+    UnaryKind.RELU: "tilefoundry::primitive::relu_op",
+    UnaryKind.SQUARE: "tilefoundry::primitive::square_op",
+    UnaryKind.CAST: "tilefoundry::primitive::identity_op",
 }
 
 

@@ -631,36 +631,30 @@ def check(candidate: Callable, reference: Callable | None, inputs: tuple, *,
 `Module.prepare` writes one canonical tensor per weight and the HIR keeps the
 global `TensorType`, so a checkpoint read hands back every program's data at
 once. `ShardTensor` pairs that owning tensor with the type that shards it, and
-`local` is the single place the pair is narrowed to one program.
+`to_local` is the single place the pair is narrowed to one program.
 
 ```python
 class ShardTensor:
     tensor: torch.Tensor
     type: TensorType
 
-    def local(self, topologies, placement) -> torch.Tensor: ...
+    def to_local(self, topologies, placement) -> torch.Tensor: ...
 ```
 
 - constraints:
   - `ShardTensor` carries no `Placement`, coordinate, rank or device map. The
-    program is an argument to `local`, so one owning tensor serves every
-    program a host dispatches, and `local` is the only way to a slice.
+    program is an argument to `to_local`, so one owning tensor serves every
+    program a host dispatches, and `to_local` is the only way to a slice. Named
+    as `DTensor.to_local`, which answers the same question.
   - a `type` with no `ShardLayout` is every program's whole tensor, and so is
     an axis the mesh only broadcasts over or reduces across.
-  - each `Split` narrows its tensor axis to the one part its level's program id
-    selects. The mesh axis reaches its tensor axis through the same factored
-    mapping the type side uses, not through the raw `Split.axis`, which numbers
-    layout positions rather than logical axes.
-  - the program id of a level is projected to that level's coordinates by the
-    existing layout algebra: the level's shape and normalized strides, applied
-    to the id. Axes of extent one are dropped by that projection and MUST be
-    restored at coordinate zero, so coordinates line up with the mesh-axis
-    numbering the attributes use.
-  - a level whose id is `None` MUST be left undivided
+  - which part is one program's MUST come from `local_window`
+    ([shard §7](shard.md#7-shardlayout)), the same algebra the device side runs
+    under that name, rather than from a second walk over the attrs. A kernel
+    dots the answer with its shard layout's strides and a host slices a tensor
+    with strides of its own, so what is shared is the window, not the offset.
+  - a level whose id is unfixed MUST be left undivided
     ([shard §5.1](shard.md#51-placement)).
-  - once every level of the mesh has an id, the narrowed shape MUST equal what
-    `local_type_of` states one shard of that type is. A partly projected shape
-    is not something the type side names, and is therefore not checked.
   - a `RuntimeModule`'s public boundary takes and returns `ShardTensor`, while
     a body -- a Python reference or a launched kernel alike -- only ever
     receives the local `torch.Tensor`. A returned tensor is already one
