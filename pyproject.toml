@@ -36,7 +36,15 @@ tilefoundry = "tilefoundry.cli:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-xdist>=3", "pytest-cov>=7"]
-dev = ["pre-commit>=3", "ruff>=0.14", "clang-format==18.1.8", "setuptools>=68", "setuptools-scm>=8"]
+dev = [
+    "pre-commit>=3",
+    "ruff>=0.14",
+    "clang-format==18.1.8",
+    # scripts/runtime_spec_surface.py reads the C++ surface for the spec
+    "libclang>=18",
+    "setuptools>=68",
+    "setuptools-scm>=8",
+]
 
 [tool.coverage.run]
 branch = true
