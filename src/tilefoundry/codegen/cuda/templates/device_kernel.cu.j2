@@ -1,4 +1,8 @@
 __global__ void {{ kernel_name }}_kernel({{ kernel_params_sig }}) {
+{%- if places_gpu %}
+  // Before any divergence: one thread writes, the barrier orders the reads.
+  tilefoundry::program_meta(meta);
+{%- endif %}
 {%- for wrap in param_wrappers %}
   {{ wrap }}
 {%- endfor %}

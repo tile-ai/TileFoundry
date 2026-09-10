@@ -32,18 +32,14 @@ CUTE_HOST_DEVICE constexpr int fold_width() {
 /// Independent partial sums, so a row is not one chain of dependent FMAs.
 struct Partials {
     static constexpr int kWays = 8;
-    float p[kWays];
-
-    __device__ Partials() {
-        CUTE_UNROLL
-        for (int i = 0; i < kWays; ++i)
-            p[i] = 0.f;
-    }
-    __device__ float total() const {
-        return ((p[0] + p[1]) + (p[2] + p[3])) +
-               ((p[4] + p[5]) + (p[6] + p[7]));
-    }
+    float p[kWays] = {};
 };
+
+/// The sums added back, in pairs, so the tree stays as shallow as the ways.
+CUTE_HOST_DEVICE float total(Partials const &acc) {
+    return ((acc.p[0] + acc.p[1]) + (acc.p[2] + acc.p[3])) +
+           ((acc.p[4] + acc.p[5]) + (acc.p[6] + acc.p[7]));
+}
 
 /// This lane's share of the product, folded.
 template <class AView, class BView>
@@ -51,7 +47,7 @@ __device__ float contract(AView const &a, BView const &b, int n) {
     using a_val = typename AView::value_type;
     using b_val = typename BView::value_type;
     constexpr int V = fold_width<AView, BView>();
-    Partials acc;
+    Partials acc{};
     if constexpr (V > 1) {
         auto av = cute::recast<cute::uint_bit_t<V *int(sizeof(a_val)) * 8>>(a);
         auto bv = cute::recast<cute::uint_bit_t<V *int(sizeof(b_val)) * 8>>(b);
@@ -71,7 +67,7 @@ __device__ float contract(AView const &a, BView const &b, int n) {
             acc.p[i % Partials::kWays] +=
                 static_cast<float>(a(i)) * static_cast<float>(b(i));
     }
-    return acc.total();
+    return total(acc);
 }
 
 /// Extent of the thread mesh's fastest axis, as the mesh states it.
@@ -83,7 +79,7 @@ __device__ float contract(AView const &a, BView const &b, int n) {
 template <class T> CUTE_HOST_DEVICE constexpr int lane_axis_extent() {
     using mesh_t = typename cute::remove_cvref_t<T>::shard_layout_type::mesh;
     using axes_t = cute::remove_cvref_t<decltype(cute::flatten(
-        tilefoundry::detail::positions_of(typename mesh_t::layout_type{})))>;
+        detail::positions_of(typename mesh_t::layout_type{})))>;
     return int(cute::get<decltype(cute::rank(axes_t{}))::value - 1>(
         cute::shape(axes_t{})));
 }
@@ -97,9 +93,9 @@ struct Warp {
         static_assert(lane_axis_extent<Lhs>() == kWarpSize,
                       "ops::dot (warp tier): the fastest axis of the operands' "
                       "mesh must be exactly one warp of 32 lanes");
-        auto a = detail::to_local(lhs);
-        auto b = detail::to_local(rhs);
-        auto &&d = detail::to_local(dst);
+        auto a = detail::local_tensor(lhs);
+        auto b = detail::local_tensor(rhs);
+        auto &&d = detail::local_tensor(dst);
         using value_type = cute::remove_cvref_t<decltype(d(0))>;
         const float sum = tilefoundry::warp_reduce<add_op>(
             contract(a, b, int(cute::size(a))));
@@ -112,10 +108,10 @@ struct Cta {
     template <class Lhs, class Rhs, class Dst, class Ws>
     __device__ void operator()(Lhs const &lhs, Rhs const &rhs, Dst &dst,
                                Ws &ws) const {
-        auto a = detail::to_local(lhs);
-        auto b = detail::to_local(rhs);
-        auto &&d = detail::to_local(dst);
-        auto &&slots = detail::to_local(ws);
+        auto a = detail::local_tensor(lhs);
+        auto b = detail::local_tensor(rhs);
+        auto &&d = detail::local_tensor(dst);
+        auto &&slots = detail::local_tensor(ws);
         using value_type = cute::remove_cvref_t<decltype(d(0))>;
         constexpr int instances = tilefoundry::shard_mesh_instances<Lhs>();
         static_assert(instances >= kWarpSize && instances % kWarpSize == 0,

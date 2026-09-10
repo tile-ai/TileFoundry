@@ -42,6 +42,20 @@ _discover("tir/nn", "tilefoundry.codegen.cuda.tir.nn.")
 _discover("tir", "tilefoundry.codegen.cuda.tir.")
 
 
+def _program_level(module) -> str:
+    """The coarsest level this module's program names.
+
+    A program names a run of levels ending at the finest one, so the coarsest
+    it names says where its own run begins: what the device reads for itself
+    lies inside, and what the host places lies at or before it.
+    """
+    declared = {topology.name for topology in module.effective_topologies()}
+    for name in ("gpu", "cta", "thread"):
+        if name in declared:
+            return f"tilefoundry::TopologyScope::{name}"
+    return "tilefoundry::TopologyScope::cta"
+
+
 def _topology_dim_specializations(
     grid: tuple[int, int, int], block: tuple[int, int, int]
 ) -> list[dict[str, str]]:

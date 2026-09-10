@@ -23,8 +23,8 @@ template <class Op, class Axes> struct IntraWarp {
         static_assert(plan.warps_per_group == 1,
                       "ops::reduce (intra-warp tier): this reduce mesh spreads "
                       "one value over more than one warp");
-        auto s = detail::to_local(src);
-        auto &&d = detail::to_local(dst);
+        auto s = detail::local_tensor(src);
+        auto &&d = detail::local_tensor(dst);
         using value_type = cute::remove_cvref_t<decltype(d(0))>;
 
         constexpr int kCells = kept_cells<Axes, decltype(s)>();

@@ -90,9 +90,9 @@ struct Tile {
     template <class TA, class TB, class TC>
     __device__ void operator()(TA const &a, TB const &b, TC &c) const {
         using Geo = mma_detail::AtomGeometry;
-        auto av = detail::to_local(a);
-        auto bv = detail::to_local(b);
-        auto &&cv = detail::to_local(c);
+        auto av = detail::local_tensor(a);
+        auto bv = detail::local_tensor(b);
+        auto &&cv = detail::local_tensor(c);
         using a_elem = cute::remove_cvref_t<decltype(av(0, 0))>;
 
         constexpr int threads = acc_threads<TC>();

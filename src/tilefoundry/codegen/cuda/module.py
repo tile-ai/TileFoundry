@@ -37,7 +37,14 @@ _LAUNCH_ABI_PARAMS = (
 )
 
 
-def _emit_kernel_and_shim(fields) -> str:
+def _emit_kernel_and_shim(fields, places_gpu: bool = False) -> str:
+    """One kernel and the shim that launches it.
+
+    A program that names a level the host places takes one more argument than
+    it declares: the ids no card can read for itself. The shim receives them
+    and the kernel hands them to its block, so a callee reads them from there
+    rather than carrying them down.
+    """
     shim_params = []
     shim_casts = []
     call_args = []
@@ -51,11 +58,26 @@ def _emit_kernel_and_shim(fields) -> str:
             shim_params.append(f"long long {p.name}")
             shim_casts.append(f"int {p.name}_i = static_cast<int>({p.name});")
             call_args.append(f"{p.name}_i")
+    if places_gpu:
+        shim_params.insert(0, "long long gpu_program_id")
+        shim_casts.insert(
+            0,
+            "tilefoundry::ProgramMetaData meta{};\n"
+            "  meta.program_id[int(tilefoundry::TopologyScope::gpu)] ="
+            " static_cast<int>(gpu_program_id);",
+        )
+        call_args.insert(0, "meta")
     shim_params_sig = ", ".join((*shim_params, _LAUNCH_ABI_PARAMS))
+    kernel_params_sig = fields.kernel_params_sig
+    if places_gpu:
+        kernel_params_sig = ", ".join(
+            filter(None, ("tilefoundry::ProgramMetaData meta", kernel_params_sig))
+        )
     return render(
         "device_kernel.cu.j2",
         kernel_name=fields.kernel_name,
-        kernel_params_sig=fields.kernel_params_sig,
+        kernel_params_sig=kernel_params_sig,
+        places_gpu=places_gpu,
         param_wrappers=fields.param_wrappers,
         kernel_body=fields.kernel_body,
         shim_name=shim_symbol(fields.kernel_name),
@@ -73,7 +95,10 @@ def emit_cuda_module(
     Emit the device ``.cu`` linkable module for *cuda_fns* (the CUDA-target
     PrimFunctions of a module).
     """
-    from tilefoundry.codegen.cuda.emit import _topology_dim_specializations  # noqa: PLC0415
+    from tilefoundry.codegen.cuda.emit import (  # noqa: PLC0415
+        _program_level,
+        _topology_dim_specializations,
+    )
 
     ctx = CodegenContext(target)
     kernel_texts = []
@@ -81,9 +106,10 @@ def emit_cuda_module(
     expanded_fns = tuple(
         {v.name: v for fn in cuda_fns for v in (fn.variants or (fn,))}.values()
     )
+    places_gpu = _program_level(module).endswith("::gpu")
     for fn in expanded_fns:
         fields = _compute_kernel_fields(fn, ctx)
-        kernel_texts.append(_emit_kernel_and_shim(fields))
+        kernel_texts.append(_emit_kernel_and_shim(fields, places_gpu))
         all_fields.append(fields)
     if not all_fields:
         raise ValueError("emit_cuda_module: no CUDA device kernels")
@@ -105,6 +131,7 @@ def emit_cuda_module(
     source = render(
         "cuda_module.cu.j2",
         topology_dim_specializations=specs,
+        program_level=_program_level(module),
         kernels="\n".join(kernel_texts),
         dynamic_cta=base.grid[0] is None,
         uses_grid_barrier=uses_grid_barrier,

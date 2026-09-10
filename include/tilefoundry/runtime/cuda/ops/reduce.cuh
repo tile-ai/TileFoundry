@@ -2,11 +2,11 @@
 ///
 /// This file is included IN-CONTEXT from runtime.cuh, at the point inside
 /// ``namespace tilefoundry::ops`` where the reduce surface used to live. It
-/// therefore does NOT open ``namespace tilefoundry`` / ``ops`` and pulls in no
-/// system headers — cute/std and the surrounding names (``detail::to_local``,
-/// ``shard::S``/``shard::B``, ``TopologyScope``) are already in scope. The op
-/// tags below must precede the impl-header includes because
-/// ``reduce_impl::reduce_traits<Op>`` specializes on them.
+/// therefore does NOT open ``namespace tilefoundry`` / ``ops`` and pulls in
+/// no system headers — cute/std and the surrounding names
+/// (``detail::local_tensor``, ``shard::S``/``shard::B``, ``TopologyScope``)
+/// are already in scope. The op tags below must precede the impl-header
+/// includes because ``reduce_impl::reduce_traits<Op>`` specializes on them.
 #pragma once
 
 /// Reduce combine-kind tags — pure compile-time markers. Semantics (init

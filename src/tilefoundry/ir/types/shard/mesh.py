@@ -180,7 +180,12 @@ def _positions_layout(mesh: Mesh) -> tuple[tuple, tuple, int]:
 
 @lru_cache(maxsize=None)
 def positions_at(mesh: Mesh, level: str) -> tuple[tuple, tuple]:
-    """Return one named level's shape and normalized strides."""
+    """Return one named level's shape and normalized strides, every axis of it.
+
+    An axis of one position is still that level's axis: dropping it here would
+    leave the level's own layout narrower than the attrs written against those
+    axes, and nothing downstream could say which attr went with which mode.
+    """
     names = tuple(topology.name for topology in mesh.topologies)
     if level not in names:
         raise ValueError(f"mesh names levels {names}, not {level!r}")
@@ -192,13 +197,10 @@ def positions_at(mesh: Mesh, level: str) -> tuple[tuple, tuple]:
     below = 1
     for topology in mesh.topologies[index + 1 :]:
         if not isinstance(topology.size, int) or isinstance(topology.size, bool):
-            raise ValueError(
-                f"mesh level {topology.name!r} has a symbolic level below {level!r}"
-            )
+            raise ValueError(f"mesh level {topology.name!r} has a symbolic level below {level!r}")
         below *= topology.size
-    non_unit_axes = tuple(axis for axis in axes if shape[axis] != 1)
-    normalized = tuple(strides[axis] // below for axis in non_unit_axes)
-    return tuple(shape[axis] for axis in non_unit_axes), normalized
+    normalized = tuple(strides[axis] // below for axis in axes)
+    return tuple(shape[axis] for axis in axes), normalized
 
 
 def composed(meshes: "tuple[Mesh, ...]") -> "Mesh":
@@ -223,10 +225,7 @@ def composed(meshes: "tuple[Mesh, ...]") -> "Mesh":
         outer_shape, outer_strides, outer_offset = _positions_layout(outer)
         inner_shape, inner_strides, inner_offset = _positions_layout(inner)
         for mesh, strides in ((outer, outer_strides), (inner, inner_strides)):
-            if any(
-                not isinstance(stride, int) or isinstance(stride, bool)
-                for stride in strides
-            ):
+            if any(not isinstance(stride, int) or isinstance(stride, bool) for stride in strides):
                 raise ValueError(
                     f"mesh levels {mesh.topologies!r} need concrete strides to compose"
                 )

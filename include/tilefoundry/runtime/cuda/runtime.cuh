@@ -65,19 +65,49 @@ CUTE_HOST_DEVICE constexpr auto program_shape() noexcept {
         return detail::dims_of<T>();
 }
 
+/// The coarsest level this program names. It names a contiguous run of them
+/// ending at the finest, so this one end says which: a single-card program
+/// says ``cta`` and has no ``gpu`` at all.
+///
+/// A translation unit states it by defining TILEFOUNDRY_PROGRAM_LEVEL before
+/// this header, the way the target macro selects a runtime. A macro rather
+/// than a function the .cu defines, because the levels decide how long a
+/// coord is and a length is read while this header is compiled.
+#if !defined(TILEFOUNDRY_PROGRAM_LEVEL)
+#define TILEFOUNDRY_PROGRAM_LEVEL tilefoundry::TopologyScope::cta
+#endif
+
+CUTE_HOST_DEVICE constexpr TopologyScope program_level() noexcept {
+    return TILEFOUNDRY_PROGRAM_LEVEL;
+}
+
+/// How many levels this program names.
+CUTE_HOST_DEVICE constexpr int program_level_count() noexcept {
+    return int(TopologyScope::scope_count) - int(program_level());
+}
+
+/// Where level T sits among the ones this program names.
+template <TopologyScope T>
+CUTE_HOST_DEVICE constexpr int program_level_index() noexcept {
+    static_assert(int(T) >= int(program_level()),
+                  "program_level_index: this program names no such level");
+    return int(T) - int(program_level());
+}
+
 /**
- * @brief What a launch is told about the program it belongs to.
+ * @brief What a launch is told that it cannot read for itself.
  *
  * A card has no register naming which of the mesh's cards it is, so the host
- * that placed it says so. Every level whose position the device reads for
- * itself leaves its entry unused.
+ * that placed it says so. Indexed by TopologyScope, so a slot says which
+ * level it answers for; levels the device reads for itself leave theirs
+ * unused. Only a program that names such a level is given one.
  */
 struct ProgramMetaData {
     int program_id[int(TopologyScope::scope_count)];
 };
 
 /**
- * @brief The block's one copy of what the launch was told about this program.
+ * @brief The block's one copy of what the launch was told.
  *
  * Shared rather than global: the name is an offset into whichever block is
  * running, so one name is one copy per block rather than one per device.
@@ -129,18 +159,19 @@ template <TopologyScope T> CUTE_HOST_DEVICE size_t program_id() noexcept {
 }
 
 namespace detail {
-/// Every scope's id in enum order, so the tuple is as long as there are
-/// scopes rather than as long as somebody remembered to list.
-template <size_t... Is>
+/// One id per level this program names, from the coarsest it names inward.
+template <TopologyScope Start, size_t... Is>
 CUTE_HOST_DEVICE auto ids_of(std::index_sequence<Is...>) noexcept {
-    return cute::make_tuple(program_id<TopologyScope(Is)>()...);
+    return cute::make_tuple(
+        program_id<TopologyScope(int(Start) + int(Is))>()...);
 }
 }
 
-/// Every level's id, indexed by TopologyScope.
+/// Every level's id, indexed by program_level_index.
+///
 CUTE_HOST_DEVICE auto program_ids() noexcept {
-    return detail::ids_of(
-        std::make_index_sequence<size_t(TopologyScope::scope_count)>{});
+    return detail::ids_of<program_level()>(
+        std::make_index_sequence<size_t(program_level_count())>{});
 }
 
 #include "layout/cute_ext.cuh"

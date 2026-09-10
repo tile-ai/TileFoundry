@@ -25,9 +25,9 @@ template <class Op, class Axes> struct IntraCta {
             typename cute::remove_cvref_t<DstT>::shard_layout_type>();
         static_assert(is_supported_reduce_op_v<Op>,
                       "tilefoundry::ops::reduce: unsupported Op");
-        auto s = detail::to_local(src);
-        auto &&d = detail::to_local(dst);
-        auto &&ws = detail::to_local(workspace);
+        auto s = detail::local_tensor(src);
+        auto &&d = detail::local_tensor(dst);
+        auto &&ws = detail::local_tensor(workspace);
         using value_type = cute::remove_cvref_t<decltype(d(0))>;
 
         static_assert(kept_cells<Axes, decltype(s)>() == 1,

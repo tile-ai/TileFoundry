@@ -161,11 +161,27 @@ def _placement_line(name: str, storage) -> str:
     )
 
 
-def _shim_decl(fn: PrimFunction) -> str:
+_GPU_ID_PARAM = "tf_gpu_program_id"
+
+
+def _places_gpu(module: Module) -> bool:
+    """Whether this module's program names a level the host places.
+
+    Such a program is launched once per card and no card can read which one
+    it is, so the id travels from the entry's caller down to the shim.
+    """
+    from tilefoundry.codegen.cuda.emit import _program_level  # noqa: PLC0415
+
+    return _program_level(module).endswith("::gpu")
+
+
+def _shim_decl(fn: PrimFunction, places_gpu: bool = False) -> str:
     """A types-only ``extern "C"`` forward declaration of *fn*'s launch shim."""
     hidden = _hidden_names(fn.params)
     tokens = ["void*" if _is_tensor(p, hidden) else "long long" for p in fn.params]
     tokens += _LAUNCH_ABI_DECL
+    if places_gpu:
+        tokens = ["long long", *tokens]
     return f'extern "C" void {shim_symbol(fn.name)}({", ".join(tokens)});'
 
 
@@ -267,6 +283,7 @@ def _lower_launch(entry: PrimFunction, evaluate, module):
 
 
 def _lower_launches(entry: PrimFunction, evaluates, module):
+    places_gpu = _places_gpu(module)
     bindings = []
     kinds = {}
     used = set()
@@ -363,12 +380,17 @@ def _lower_launches(entry: PrimFunction, evaluates, module):
             str(_static_smem(launch_op.dynamic_smem)),
             "nullptr",
         ]
+        if places_gpu:
+            call_args = [_GPU_ID_PARAM, *call_args]
         body_lines.append(f"{shim_symbol(device_fn.name)}({', '.join(call_args)});")
-        shim_decls.append(_shim_decl(device_fn))
-    sig = ", ".join(
-        f"tvm::ffi::Tensor {ep.name}" if kinds[id(ep)] else f"int {ep.name}" for ep in entry.params
-    )
-    return shim_decls, body_lines, sig
+        shim_decls.append(_shim_decl(device_fn, places_gpu))
+    tokens = [
+        f"tvm::ffi::Tensor {ep.name}" if kinds[id(ep)] else f"int {ep.name}"
+        for ep in entry.params
+    ]
+    if places_gpu:
+        tokens = [f"long long {_GPU_ID_PARAM}", *tokens]
+    return shim_decls, body_lines, ", ".join(tokens)
 
 
 def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, variants, calls):
@@ -384,6 +406,7 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
                 "emit_host_module: dispatch v1 expects exactly one DimVarRangePat per case"
             )
 
+    places_gpu = _places_gpu(module)
     entry_params = entry.params
     entry_names = {p.name for p in entry_params}
     hidden = _hidden_names(entry_params)
@@ -397,6 +420,8 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
         return nm
 
     wrapper_tokens, body_lines = [], []
+    if places_gpu:
+        wrapper_tokens.append(f"long long {_GPU_ID_PARAM}")
     for p in entry_params:
         if p.name in hidden:
             continue
@@ -422,7 +447,7 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
     for idx, (variant, call) in enumerate(zip(variants, calls)):
         pat = variant.specializations[0]
         variant_symbol = variant.name
-        shim_decls[shim_symbol(variant_symbol)] = _shim_decl(variant)
+        shim_decls[shim_symbol(variant_symbol)] = _shim_decl(variant, places_gpu)
         if len(call.args) != len(variant.params):
             raise ValueError(
                 f"emit_host_module: dispatch call to {variant.name!r} passes "
@@ -450,6 +475,8 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
             )
         shim_args += [str(d) for d in (*grid, *block, 0)]
         shim_args.append("nullptr")
+        if places_gpu:
+            shim_args = [_GPU_ID_PARAM, *shim_args]
         pred = f"(({pat.lo} <= {s}) && ({s} <= {pat.hi}))"
         prefix = "if" if idx == 0 else "} else if"
         body_lines.append(f"{prefix} ({pred}) {{")

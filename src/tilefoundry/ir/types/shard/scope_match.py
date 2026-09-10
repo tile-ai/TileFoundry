@@ -40,24 +40,29 @@ def mesh_scope_matches_required_scope(current: Mesh, required: Mesh) -> bool:
     return cur_layout.shape == req_layout.shape and cur_layout.strides == req_layout.strides
 
 
+def _positions(mesh: Mesh, level: str) -> tuple[tuple, tuple]:
+    """One level's positions, with the axes of one position left out.
+
+    An axis of one position names no instance, so two scopes state the same
+    positions whether or not either of them wrote such an axis down.
+    """
+    shape, strides = positions_at(mesh, level)
+    kept = tuple(axis for axis, extent in enumerate(shape) if extent != 1)
+    return tuple(shape[axis] for axis in kept), tuple(strides[axis] for axis in kept)
+
+
 def covered_by_scope(mesh: Mesh, current: Mesh) -> bool:
     """Whether *mesh* names no finer positions than the enclosing scope."""
-    scope = {
-        topology.name: positions_at(current, topology.name)
-        for topology in current.topologies
-    }
+    scope = {topology.name: _positions(current, topology.name) for topology in current.topologies}
     return all(
-        topology.name in scope
-        and positions_at(mesh, topology.name) == scope[topology.name]
+        topology.name in scope and _positions(mesh, topology.name) == scope[topology.name]
         for topology in mesh.topologies
     )
 
 
 def storage_reaches(storage, mesh: Mesh, current: Mesh) -> bool:
     """Whether *storage* reaches across a coarser value-to-scope boundary."""
-    if current.topologies[-1].name in {
-        topology.name for topology in mesh.topologies
-    }:
+    if current.topologies[-1].name in {topology.name for topology in mesh.topologies}:
         return True
     try:
         storage = resolve_storage(storage)

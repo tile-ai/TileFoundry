@@ -724,6 +724,13 @@ CUTE_HOST_DEVICE constexpr auto program_dim() noexcept;
 template <TopologyScope T>
 CUTE_HOST_DEVICE constexpr auto program_shape() noexcept;
 
+CUTE_HOST_DEVICE constexpr TopologyScope program_level() noexcept;
+
+CUTE_HOST_DEVICE constexpr int program_level_count() noexcept;
+
+template <TopologyScope T>
+CUTE_HOST_DEVICE constexpr int program_level_index() noexcept;
+
 struct ProgramMetaData {
     int program_id[int(TopologyScope::scope_count)];
 };
@@ -808,7 +815,7 @@ CUTE_HOST_DEVICE constexpr bool contains(Mesh<L, Topos...> const &mesh,
                                          Coord const &coord);
 
 template <class L, TopologyScope... Topos, class Coord>
-CUTE_HOST_DEVICE constexpr int get_1d_coord(Mesh<L, Topos...> const &mesh,
+CUTE_HOST_DEVICE constexpr auto mesh_coords(Mesh<L, Topos...> const &mesh,
                                             Coord const &coord);
 
 template <class L, TopologyScope... Topos>
@@ -827,7 +834,8 @@ CUTE_HOST_DEVICE constexpr auto make_mesh(Extents const &extents);
 - constraints:
   - A mesh is the levels it names and the layout whose values are their ids -- the same two facts the IR `Mesh` carries beside its axis names ([shard §5](./shard.md#5-mesh)). Its instance count and shape are `cute::size` and `cute::shape` of that layout, which read through a slice on their own.
   - A mesh naming several levels states its axes grouped one nest per level, each already in that level's own numbering, and `get<level>` picks the nest. A mesh that names several without that grouping is refused: no rule says which axes are whose. It cannot also be sliced -- the slice and the level boundary would both be deciding which positions these are.
-  - `contains` and `get_1d_coord` are not the same question, and on a mesh narrower than its level not the same answer. `idx2crd` is `(id / stride) % extent`, so thread 64 of a 128-thread block is not in a 32-instance mesh and does act as its instance 0: the upper warps repeat what the lowest warp does. A slice does not repeat, so a coordinate from outside one reaching `get_1d_coord` is a codegen fault.
+  - `mesh_coords` answers where this program sits in the mesh's own coordinates: one `idx2crd` per level, of that level's id against that level's nest, grouped the way the mesh is. The answer is congruent with `cute::shape` of the mesh's layout whether it names one level or several, so a layout over that shape indexes with it as it stands. The ids it reads are `program_ids()`, one per level this program names, so a coord of another length is refused by name.
+  - `contains` and `mesh_coords` are not the same question, and on a mesh narrower than its level not the same answer. `idx2crd` is `(id / stride) % extent`, so thread 64 of a 128-thread block is not in a 32-instance mesh and does act as its instance 0: the upper warps repeat what the lowest warp does. A slice does not repeat, so a coordinate from outside one reaching `mesh_coords` is a codegen fault. `contains` asks every level the mesh names, because a mesh grouped one nest per level is one instance per level together.
   - A thread mesh has warps only when its ids run a whole number of them. `(32,..)` stepping by one is one warp and the axis beyond it carries the warps; `(128,..)` holds four that `as_warped` splits out. Lanes shorter than a warp, repeated across warps, MUST be refused by name -- they reach neither `bar.sync`, which counts whole warps, nor one `__syncwarp`.
   - `as_warped` is idempotent: a mesh whose fastest axis is already one warp comes back unchanged.
   - Only one shape of `cute::ComposedLayout` is a mesh: `cute::identity` over a static offset. A swizzle in the first slot, or a dynamic offset, is a mesh whose first instance is not a compile-time number, and every reader wants it as one.
@@ -892,7 +900,9 @@ struct ShardTensor {
     using shard_layout_type = TShardLayout;
     TEngine engine;
     TShardLayout shard_layout;
-    CUTE_HOST_DEVICE auto data();
+    /// As ``cute::Tensor`` has it: the engine's own pointer, before any
+        /// instance's slice is projected out of it.
+        CUTE_HOST_DEVICE auto data();
     CUTE_HOST_DEVICE auto data() const;
 };
 
@@ -908,6 +918,9 @@ template <class T> CUTE_HOST_DEVICE constexpr int shard_mesh_instances();
 - constraints:
   - `engine` is a CuTe tensor or view, never a raw pointer: residency lives on the engine type, and `data()` drops it.
   - A tensor whose layout is a `ShardLayout` has distributed semantics -- it is the whole tensor, and each instance owns the slice its shard layout gives it.
+  - One attr per mesh axis, against the mesh's axes flattened: a mesh naming several levels states them grouped one nest per level, and its rank is then how many levels it names rather than how many axes the attrs answer for.
+  - Several mesh axes MAY cut one tensor axis -- two axes of one level as a grid, or two levels one taking a block of what the other left. Each cut divides what the previous one left, so the axis's local extent is the whole divided by all of them, and one step of a mesh axis clears everything the axes inside it hold.
+  - Where an instance's slice begins is that mesh's own shape carrying, on each axis, how far along the tensor one step of it moves the origin: the attrs say which tensor axis and how much of it a step clears, the tensor layout says what that costs in elements. It is congruent with the mesh's shape, grouping and all, so `mesh_coords` indexes it as it stands and reading it is `crd2idx`. It is not `offset(mesh)`, which is the first id a sliced mesh covers.
 
 ### 2.5 `cuda/primitive/`
 
@@ -1014,10 +1027,11 @@ struct div_op {
 ```
 <!-- /generated -->
 
-**Terms.** `ops::detail` is the set of tensor-view names an op may reach for. They are defined in `tilefoundry::detail`; this header states which of them cross into `ops`.
+**Terms.** `ops::detail` is the set of tensor-view names an op may reach for. They are defined in `tilefoundry::detail`; this header states which of them cross into `ops`. *Projecting* an operand is `local_tensor`: a ShardTensor resolved to this instance's slice, and an operand the mesh never spread returned whole.
 
 - constraints:
   - An op reaches for a tensor-view name through `ops::detail` and nowhere else, so what crosses the boundary is stated in one header.
+  - An op projects every operand through `local_tensor`, sharded or not. An operand with no shard layout is not a case to refuse: it is one every instance holds entire, and the op's arithmetic over it is the same. So the choice is made once, where the operand is projected, rather than at each op.
 
 #### 2.6.2 `ops/copy.cuh`
 

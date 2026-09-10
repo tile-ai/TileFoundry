@@ -4,7 +4,7 @@
 /// Included in-context from ``ops/reduce.cuh`` (which is itself included inside
 /// ``namespace tilefoundry::ops`` from runtime.cuh). This header therefore does
 /// NOT open ``namespace tilefoundry`` / ``ops`` and does NOT pull in system
-/// headers — cute/std and the surrounding names (``detail::to_local``,
+/// headers — cute/std and the surrounding names (``detail::local_tensor``,
 /// ``shard::S``/``shard::B``, ``TopologyScope``) are already in scope.
 #pragma once
 
@@ -181,8 +181,9 @@ __device__ float cta_combine_via_workspace(float warp_partial,
 /// Compile-time derivation of the reduction level and ``warps_per_group`` from
 /// the operand shard layouts, consumed by the public ``reduce`` entry.
 /// Classify each mesh axis from the operand shard attributes.
-using tilefoundry::detail::is_partial_attr_v;
-using tilefoundry::detail::is_split_attr_v;
+
+using detail::is_partial_attr_v;
+using detail::is_split_attr_v;
 
 /// An axis whose instances hold pieces of one value, either kind.
 template <class T>
@@ -231,8 +232,8 @@ CUTE_HOST_DEVICE constexpr reduce_dispatch_info reduce_dispatch() {
     constexpr bool is_thread = mesh_t::scope == TopologyScope::thread;
     using m_layout_t = typename mesh_t::layout_type;
     constexpr int m_rank = cute::tuple_size<src_attrs>::value;
-    static_assert(tilefoundry::detail::shard_attrs_match_mesh<SrcSL>() &&
-                      tilefoundry::detail::shard_attrs_match_mesh<DstSL>(),
+    static_assert(detail::shard_attrs_match_mesh<SrcSL>() &&
+                      detail::shard_attrs_match_mesh<DstSL>(),
                   "ops::reduce: both operands need one attr per mesh axis");
     static_assert(std::is_same_v<typename SrcSL::mesh, typename DstSL::mesh>,
                   "ops::reduce: the two operands must name one mesh");

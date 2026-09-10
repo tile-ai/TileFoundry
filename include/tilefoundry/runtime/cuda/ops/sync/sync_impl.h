@@ -44,8 +44,14 @@ struct plan_t {
 template <Tier, class...> CUTE_HOST_DEVICE constexpr void reject();
 
 /// How many instances a mesh covers, as a compile-time number.
+///
+/// One level, because every tier below names threads of one block -- a
+/// barrier counts those, and a mesh naming a coarser level counts programs
+/// no barrier here reaches.
 template <class TMesh> CUTE_HOST_DEVICE constexpr int instances() {
-    tilefoundry::detail::one_level<TMesh>();
+    static_assert(TMesh::level_count == 1,
+                  "ops::sync: a barrier is over one topology level's "
+                  "instances, and this mesh names several");
     return int(cute::size(typename TMesh::layout_type{}));
 }
 
@@ -55,7 +61,7 @@ template <class TMesh> CUTE_HOST_DEVICE constexpr int instances() {
 /// One unbroken run is what ``coalesce`` folds to rank one -- once the axes
 /// are in the order CuTe reads them.
 template <class TMesh> CUTE_HOST_DEVICE constexpr bool warps_run_together() {
-    using ids_t = cute::remove_cvref_t<decltype(tilefoundry::detail::id_axes(
+    using ids_t = cute::remove_cvref_t<decltype(detail::id_axes(
         typename TMesh::layout_type{}))>;
     using run_t = cute::remove_cvref_t<decltype(cute::coalesce(ids_t{}))>;
     return decltype(cute::rank(run_t{}))::value == 1 &&

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from tilefoundry.ir.types.shard import Placement
+from tilefoundry.ir.types.shard import Placement, Topology
 from tilefoundry.runtime.function import EntryABI
 from tilefoundry.runtime.resource import RuntimeResource
 
@@ -74,15 +74,44 @@ class CompiledModule(RuntimeModule):
         super().__init__(name=type.name, entry=type.name)
         self.type = type
         self.fn = fn
+        self._placement: "Placement | None" = None
+
+    def load(
+        self, resource: RuntimeResource, *, placement: "Placement | None" = None
+    ) -> None:
+        """Remember which program this is; a compiled entry holds no weights."""
+        self._placement = placement
+        super().load(resource, placement=placement)
+
+    def _placed_ids(self) -> tuple:
+        """The ids the entry needs told, ahead of its own arguments.
+
+        A level the host places has no register to read, so its id travels
+        with the call. A program that places none is called as it was written.
+        """
+        if not self.type.places:
+            return ()
+        if self._placement is None:
+            raise ValueError(
+                f"{self.type.name}: places {self.type.places} and no Placement "
+                f"says which program this is; pass placement= to load()"
+            )
+        levels = tuple(
+            Topology(name, 1) for name in self.type.topologies
+        )
+        ids = self._placement.program_ids(levels)
+        at = {name: index for index, name in enumerate(self.type.topologies)}
+        return tuple(int(ids[at[name]]) for name in self.type.places)
 
     def forward(self, *args):
+        placed = self._placed_ids()
         n_in = self.type.input_count
         if len(args) == len(self.type.params):
             outs = args[n_in:]
-            self.fn(*args)
+            self.fn(*placed, *args)
         elif len(args) == n_in:
             outs = self._alloc_outputs(args)
-            self.fn(*args, *outs)
+            self.fn(*placed, *args, *outs)
         else:
             raise TypeError(
                 f"{self.type.name}: expected {n_in} inputs (auto-alloc) or "

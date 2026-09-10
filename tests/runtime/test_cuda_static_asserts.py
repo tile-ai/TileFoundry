@@ -40,7 +40,6 @@ CASES: dict[int, str | None] = {
     20: "ops::sync: a CTA mesh needs the module's grid-barrier counter",
     21: "ops::mma (tile tier): the accumulator's mesh must be a whole number of warps",
     22: "a reduced mesh axis must divide into whole lanes and whole warps",
-    23: "two mesh axes name one tensor axis",
     24: "both operands must leave the tile whole on every ",
     25: "ops::sync: a mesh that skips warps names no barrier",
     26: "get<level>: this mesh does not name that level",

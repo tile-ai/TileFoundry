@@ -176,7 +176,7 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
     from tilefoundry.passes.transforms.host_entry import (  # noqa: PLC0415
         insert_default_host_entry,
     )
-    from tilefoundry.runtime.function import EntryABI, param_abi_of  # noqa: PLC0415
+    from tilefoundry.runtime.function import EntryABI, param_abi_of, places_of  # noqa: PLC0415
     from tilefoundry.runtime.loader import load_linked_module  # noqa: PLC0415
 
     linked = insert_default_host_entry(mod)
@@ -224,6 +224,8 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
         name=cpu_entry.name,
         params=tuple(param_abi_of(p) for p in entry_buffer_params),
         output_count=_output_count_from_fn(cpu_entry),
+        topologies=tuple(t.name for t in linked.effective_topologies()),
+        places=places_of(linked),
     )
 
     cuda_arch = device_target.arch.removeprefix("sm_")

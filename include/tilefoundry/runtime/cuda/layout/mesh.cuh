@@ -38,13 +38,6 @@ CUTE_HOST_DEVICE constexpr int level_index() {
     return int(sizeof...(Ts));
 }
 
-/// A mesh whose axes span more than one level has no rule assigning them.
-template <class TMesh> CUTE_HOST_DEVICE constexpr void one_level() {
-    static_assert(TMesh::level_count == 1,
-                  "Mesh: multiple topology levels have ids, but no rule "
-                  "assigns mesh axes to those levels");
-}
-
 /// The plain layout under a slice: what carries ``get_hier_coord``.
 template <class L> CUTE_HOST_DEVICE constexpr auto positions_of(L const &l) {
     if constexpr (cute::is_composed_layout<cute::remove_cvref_t<L>>::value)
@@ -107,58 +100,70 @@ CUTE_HOST_DEVICE constexpr int offset(Mesh<L, Topos...> const &mesh) {
 }
 
 namespace detail {
-/// A coord states one id per scope, in enum order, which is what
-/// ``program_ids()`` hands back. A shorter one is missing a level rather than
-/// naming a smaller mesh, and reads a neighbour's id if left to index.
-template <class Coord> CUTE_HOST_DEVICE constexpr void one_id_per_scope() {
+/// A coord states one id per level this program names, coarsest first,
+/// which is what ``program_ids()`` hands back. A shorter one is missing a
+/// level rather than naming a smaller mesh, and reads a neighbour's id if
+/// left to index.
+template <class Coord> CUTE_HOST_DEVICE constexpr void one_id_per_level() {
     static_assert(cute::tuple_size<cute::remove_cvref_t<Coord>>::value ==
-                      size_t(TopologyScope::scope_count),
-                  "coord: one id per TopologyScope, as program_ids() gives");
+                      size_t(program_level_count()),
+                  "coord: one id per level named, as program_ids() gives");
+}
+
+/// This level's id, counted from the first one the mesh covers.
+template <class L, TopologyScope S, class Coord>
+CUTE_HOST_DEVICE constexpr int level_id(Mesh<L, S> const &mesh,
+                                        Coord const &coord) {
+    return int(cute::get<program_level_index<S>()>(coord)) - offset(mesh);
 }
 }
 
 /// Whether ``coord`` names an instance of ``mesh``.
 ///
-/// The coord is one id per topology level, which is what ``program_ids()``
-/// hands back and what a mesh grouped one nest per level is indexed by.
+/// The coord is one id per level named, which is what ``program_ids()``
+/// hands back. A mesh grouped one nest per level is one instance per level
+/// together, so every level it names has to cover its own id.
 template <class L, TopologyScope... Topos, class Coord>
 CUTE_HOST_DEVICE constexpr bool contains(Mesh<L, Topos...> const &mesh,
                                          Coord const &coord) {
-    using mesh_t = Mesh<L, Topos...>;
-    detail::one_level<mesh_t>();
-    detail::one_id_per_scope<Coord>();
-    const int rel = int(cute::get<int(mesh_t::scope)>(coord)) - offset(mesh);
-    if (rel < 0)
-        return false;
-    auto const positions = detail::positions_of(mesh.layout);
-    auto const at = positions.get_hier_coord(rel);
-    /// idx2crd answers for a hole and for overshoot too; only the value it was
-    /// built to reproduce says the id is one this mesh actually covers.
-    return cute::elem_less(at, cute::shape(positions)) &&
-           int(positions(at)) == rel;
+    detail::one_id_per_level<Coord>();
+    if constexpr (sizeof...(Topos) > 1) {
+        return (contains(tilefoundry::get<Topos>(mesh), coord) && ...);
+    } else {
+        const int rel = detail::level_id(mesh, coord);
+        if (rel < 0)
+            return false;
+        auto const positions = detail::positions_of(mesh.layout);
+        auto const at = positions.get_hier_coord(rel);
+        /// idx2crd answers for a hole and for overshoot too; only the value
+        /// it was built to reproduce says the id is one this mesh covers.
+        return cute::elem_less(at, cute::shape(positions)) &&
+               int(positions(at)) == rel;
+    }
 }
 
-/// Which instance ``coord`` acts as, as a single number -- CuTe's own
-/// ``Layout::get_1d_coord``, so a layout over the same shape takes it.
+/// Which instance ``coord`` acts as, in the mesh's own coordinates.
 ///
-/// Not the same question as ``contains``, and on a mesh narrower than its
-/// level not the same answer: ``idx2crd`` is ``(id / stride) % extent``, so
-/// thread 64 of a 128-thread block acts as instance 0 of a 32-instance mesh
-/// and the upper warps repeat what the lowest warp does. A slice does not
-/// repeat -- its body runs under ``contains`` -- so a coord from outside
-/// one reaching here is a codegen fault, not an instance to fold.
+/// One ``idx2crd`` per level, grouped the way the mesh is: ``get<level>``
+/// makes each nest a mesh of its own, already in that level's numbering, so
+/// the answer is congruent with ``shape(mesh.layout)`` either way.
+///
+/// Not ``contains``: ``idx2crd`` is ``(id / stride) % extent``, so thread 64
+/// of a 128-thread block acts as instance 0 of a 32-instance mesh it is not
+/// in. A slice does not repeat -- its body runs under ``contains`` -- so a
+/// coord from outside one reaching here is a codegen fault.
 template <class L, TopologyScope... Topos, class Coord>
-CUTE_HOST_DEVICE constexpr int get_1d_coord(Mesh<L, Topos...> const &mesh,
+CUTE_HOST_DEVICE constexpr auto mesh_coords(Mesh<L, Topos...> const &mesh,
                                             Coord const &coord) {
-    using mesh_t = Mesh<L, Topos...>;
-    detail::one_level<mesh_t>();
-    detail::one_id_per_scope<Coord>();
+    detail::one_id_per_level<Coord>();
     if constexpr (cute::is_composed_layout<cute::remove_cvref_t<L>>::value)
         assert(contains(mesh, coord));
-    const int rel = int(cute::get<int(mesh_t::scope)>(coord)) - offset(mesh);
-    auto const positions = detail::positions_of(mesh.layout);
-    return int(
-        cute::crd2idx(positions.get_hier_coord(rel), cute::shape(positions)));
+    if constexpr (sizeof...(Topos) > 1)
+        return cute::make_tuple(
+            mesh_coords(tilefoundry::get<Topos>(mesh), coord)...);
+    else
+        return detail::positions_of(mesh.layout)
+            .get_hier_coord(detail::level_id(mesh, coord));
 }
 
 /// Whether the mesh's ids say where the warps are.

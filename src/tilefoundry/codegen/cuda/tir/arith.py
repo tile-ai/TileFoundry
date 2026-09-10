@@ -123,7 +123,7 @@ def broadcast_view(rhs_n: str, modes, ctx: CodegenContext) -> str:
     shape_args = ", ".join(_extent(s) for s in shape)
     stride_args = ", ".join(f"cute::Int<{int(s)}>{{}}" for s in stride)
     ctx.emit(
-        f"auto {name} = tilefoundry::ops::detail::to_local({rhs_n}).compose("
+        f"auto {name} = tilefoundry::ops::detail::local_tensor({rhs_n}).compose("
         f"cute::make_layout(cute::make_shape({shape_args}), "
         f"cute::make_stride({stride_args})));"
     )

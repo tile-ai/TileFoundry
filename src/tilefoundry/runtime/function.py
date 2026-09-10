@@ -28,6 +28,16 @@ class EntryABI:
     name: str
     params: tuple[ParamABI, ...]
     output_count: int = 0
+    topologies: tuple[str, ...] = ()
+    """The levels the program names, outermost first, as a Placement reads them."""
+
+    places: tuple[str, ...] = ()
+    """Levels the host places, whose ids lead the call ahead of ``params``.
+
+    A card cannot read which of the mesh's cards it is, so the caller says so.
+    These are not parameters the program declares and never appear in a user's
+    signature; they are what the entry needs told before its own arguments.
+    """
 
     @property
     def input_count(self) -> int:
@@ -82,8 +92,23 @@ def entry_abi_of(fn) -> EntryABI:
     return EntryABI(name=fn.name, params=params, output_count=0)
 
 
+_PLACED_LEVELS = ("gpu",)
+
+
+def places_of(module) -> tuple[str, ...]:
+    """The levels *module*'s topology leaves to the host to place.
+
+    A program names a run of levels ending at the finest one the device runs.
+    Anything the device cannot read for itself is placed instead, and its id
+    has to arrive with the call rather than out of a register.
+    """
+    declared = tuple(topology.name for topology in module.effective_topologies())
+    return tuple(name for name in declared if name in _PLACED_LEVELS)
+
+
 __all__ = [
     "EntryABI",
+    "places_of",
     "ParamABI",
     "RuntimeFunction",
     "entry_abi_of",

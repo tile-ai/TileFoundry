@@ -8,9 +8,9 @@ struct RmsNorm {
     template <class TIn, class TOut, class TW>
     __device__ void operator()(TIn const &src, TOut &dst, TW const &weight,
                                float eps) const {
-        auto s = detail::to_local(src);
-        auto &&d = detail::to_local(dst);
-        auto w = detail::to_local(weight);
+        auto s = detail::local_tensor(src);
+        auto &&d = detail::local_tensor(dst);
+        auto w = detail::local_tensor(weight);
 
         /// Normalize each row using shard-layout M and K.
         using dst_type = cute::remove_cvref_t<TOut>;
@@ -25,10 +25,10 @@ struct RmsNorm {
         constexpr int K = int(cute::size<1>(dst_layout{}));
         static_assert(decltype(cute::rank(src_layout{}))::value == 2,
                       "ops::rmsnorm: source shard layout must be rank 2");
-        static_assert(tilefoundry::detail::shard_layout_is_full_broadcast<
+        static_assert(detail::shard_layout_is_full_broadcast<
                           typename dst_type::shard_layout_type>(),
                       "ops::rmsnorm: destination must hold the whole tile");
-        static_assert(tilefoundry::detail::shard_layout_is_full_broadcast<
+        static_assert(detail::shard_layout_is_full_broadcast<
                           typename src_type::shard_layout_type>(),
                       "ops::rmsnorm: source must hold the whole tile");
         static_assert(decltype(cute::rank(weight_layout{}))::value == 1,

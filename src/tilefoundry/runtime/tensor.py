@@ -7,6 +7,7 @@ data at once. ``local`` is the one place that narrows it to the program a
 
 See [runtime §1.7](docs/spec/runtime.md#17-shardtensor).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -81,14 +82,12 @@ class ShardTensor:
             program_id = ids[at[topology.name]]
             if program_id is None:
                 continue
-            coord = iter(idx2crd(program_id, *positions_at(shard.mesh, topology.name)))
-            for mesh_axis in mesh_axes:
-                extent = mesh_shape[mesh_axis]
-                position = next(coord) if extent != 1 else 0
+            coord = idx2crd(program_id, *positions_at(shard.mesh, topology.name))
+            for mesh_axis, position in zip(mesh_axes, coord, strict=True):
                 tensor_axis = tensor_axes[mesh_axis]
                 if tensor_axis is None:
                     continue
-                out = _one_of(out, tensor_axis, extent, position)
+                out = _one_of(out, tensor_axis, mesh_shape[mesh_axis], position)
         self._check(out, ids, at)
         return out
 

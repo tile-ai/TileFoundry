@@ -13,8 +13,8 @@ template <class Op, class Axes> struct Plain {
     __device__ void operator()(SrcT const &src, DstT &dst) const {
         static_assert(is_supported_reduce_op_v<Op>,
                       "tilefoundry::ops::reduce: unsupported Op");
-        auto s = detail::to_local(src);
-        auto &&d = detail::to_local(dst);
+        auto s = detail::local_tensor(src);
+        auto &&d = detail::local_tensor(dst);
         using value_type = cute::remove_cvref_t<decltype(d(0))>;
         constexpr int kCells = kept_cells<Axes, decltype(s)>();
         constexpr int kSpan = reduced_span<Axes, decltype(s)>();

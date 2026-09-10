@@ -17,13 +17,13 @@ inline constexpr bool one_run_v = [] {
 }();
 
 template <class T>
-using elem_t = cute::remove_cvref_t<decltype(detail::to_local(
+using elem_t = cute::remove_cvref_t<decltype(detail::local_tensor(
     std::declval<T const &>())(0))>;
 
 /// Whether an operand leaves the tile whole on every instance of its mesh.
 template <class T> CUTE_HOST_DEVICE constexpr bool leaves_tile_whole() {
     if constexpr (tilefoundry::detail::ShardTensorLike<T>)
-        return tilefoundry::detail::shard_layout_is_full_broadcast<
+        return detail::shard_layout_is_full_broadcast<
             typename cute::remove_cvref_t<T>::shard_layout_type>();
     else
         return true;
@@ -67,8 +67,8 @@ template <int Instances> struct StridedCopy {
 struct Strided {
     template <class Src, class Dst>
     __device__ void operator()(Src const &src, Dst &dst, uint64_t *bar) const {
-        auto s = detail::to_local(src);
-        auto &&d = detail::to_local(dst);
+        auto s = detail::local_tensor(src);
+        auto &&d = detail::local_tensor(dst);
         StridedCopy<tilefoundry::shard_mesh_instances<Dst>()>{}(s, d);
         __threadfence_block();
         ops::sync(dst.shard_layout.mesh_value);
@@ -84,8 +84,8 @@ struct Strided {
 struct Bulk {
     template <class Src, class Dst>
     __device__ void operator()(Src const &src, Dst &dst, uint64_t *bar) const {
-        auto s = detail::to_local(src);
-        auto &&d = detail::to_local(dst);
+        auto s = detail::local_tensor(src);
+        auto &&d = detail::local_tensor(dst);
         using elem = cute::remove_cvref_t<decltype(d(0))>;
         constexpr bool static_layout = cute::is_static<
             typename cute::remove_cvref_t<decltype(cute::layout(s))>>::value;
