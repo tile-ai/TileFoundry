@@ -636,33 +636,30 @@ include only the umbrella header and MUST NOT include target subheaders directly
  */
 enum class TopologyScope {
   cta,          ///< maps to blockIdx
-  warp,         ///< a warp of the block; named here, not queryable (below)
   thread,       ///< maps to threadIdx
   scope_count,  ///< a sentinel
 };
 ```
 
 - constraints:
-  - The enumeration is fixed. A level being named here does not make it a
-    program topology level a mesh may bind: codegen admits `cta` and `thread`
-    ([target](./target.md)), and `program_id<warp>()` has no specialization, so
-    a warp-scoped mesh fails to link rather than reading a wrong id. Warp-sized
-    groupings live as an axis of a `thread` mesh's layout.
+  - The enumeration is fixed to the `cta` and `thread` program levels plus the
+    `scope_count` sentinel. Warp-sized groupings live as an axis of a `thread`
+    mesh's layout, not as a topology scope.
 
 ### 2.2 Topology Metadata
 
 ```cpp
 /**
- * @brief Shape of topology level T (e.g. program_shape<cta>() → grid dims).
- * @tparam T the topology level
- */
-template <TopologyScope T> auto program_shape() noexcept;
-
-/**
- * @brief Size of topology level T, as `cute::size(program_shape<T>())`.
+ * @brief How many instances the launch gives topology level T.
  * @tparam T the topology level
  */
 template <TopologyScope T> constexpr auto program_dim() noexcept;
+
+/**
+ * @brief Level T and every level under it, one mode each.
+ * @tparam T the topology level
+ */
+template <TopologyScope T> constexpr auto program_shape() noexcept;
 
 /**
  * @brief Linearized scalar runtime id of T (current execution instance).
@@ -675,47 +672,78 @@ template <TopologyScope T> size_t program_id() noexcept;
   - static vs dynamic (launch-provided CTA) behavior and the emission rule are
     stated below.
 
-For a static topology level, `program_shape<T>()` and `program_dim<T>()` are
-compile-time constants. For a launch-provided (dynamic) CTA count, no constexpr
-`program_shape<cta>` is emitted and `program_dim<cta>()` resolves to the
-launch-provided grid extent at runtime; the emission rule is owned by
-[target](./target.md). `program_id<T>()` is
-always a runtime query returning the current execution instance id.
+One `.cu` is one launch, so each states its own counts and nothing else:
+`program_dim<T>()` is what a translation unit specializes, and
+`program_shape<T>()` is derived from those. A static level's count is a
+compile-time constant; a launch-provided (dynamic) CTA count resolves to the
+grid extent at runtime. The emission rule is owned by
+[target](./target.md). `program_id<T>()` is always a runtime query returning
+the current execution instance id.
+
+`program_shape<cta>()` is `(cta count, thread count)` -- the shape a mesh
+naming several levels is indexed against, so an axis belongs to the level
+whose extents its own multiply up to.
 
 ### 2.3 `tilefoundry::Mesh`
 
 ```cpp
 /**
- * @brief Which level of the launch a mesh spreads over. Nothing else.
- * @tparam Scope the program topology level
- */
-/**
- * @brief A device mesh: a CuTe layout bound to one or more topology levels.
- * @tparam TMeshLayout a `cute::Layout`, or a `cute::ComposedLayout` for a slice
+ * @brief A device mesh: a CuTe layout bound to one topology level.
+ * @tparam TLayout a `cute::Layout`, or a `cute::ComposedLayout` for a slice
  * @tparam Topos topology levels named by this mesh
  */
-template <class TMeshLayout, TopologyScope... Topos>
+template <class TLayout, TopologyScope... Topos>
 struct Mesh {
-  using layout = TMeshLayout;  ///< the positions, as a type
-  static constexpr auto topologies = cute::make_tuple(Topos...);
-  static constexpr TopologyScope first_scope = cute::get<0>(topologies);
-  TMeshLayout layout_value;    ///< the positions, as a value
-  CUTE_HOST_DEVICE auto local_index() const noexcept;
+  using layout_type = TLayout;   ///< the positions, as a type
+  static constexpr int level_count = sizeof...(Topos);
+  static constexpr TopologyScope scope = /* the pack's first */;
+  TLayout layout;                ///< the positions, as a value
 };
 
 /**
- * @brief The first instance a mesh layout covers, in the level's own numbering.
- * @tparam TMeshLayout the mesh layout
+ * @brief The level's own mesh, out of a mesh that may name several.
+ * @tparam S the topology level
+ * @param mesh the mesh
  */
-template <class TMeshLayout>
-constexpr int mesh_offset();
+template <TopologyScope S, class L, TopologyScope... Topos>
+constexpr auto get(Mesh<L, Topos...> const& mesh);
 
 /**
- * @brief A mesh layout's positions, with its offset taken off.
- * @param layout the mesh layout
+ * @brief The first id the mesh covers, in its level's own numbering.
+ * @param mesh the mesh
  */
-template <class L>
-constexpr auto mesh_positions(L const& layout);
+template <class L, TopologyScope... Topos>
+constexpr int offset(Mesh<L, Topos...> const& mesh);
+
+/**
+ * @brief Whether `coord` names an instance of `mesh`.
+ * @param mesh the mesh
+ * @param coord one id per topology level, as `program_ids()` gives them
+ */
+template <class L, TopologyScope... Topos, class Coord>
+constexpr bool contains(Mesh<L, Topos...> const& mesh, Coord const& coord);
+
+/**
+ * @brief Which instance `coord` acts as, as `cute::Layout::get_1d_coord` does.
+ * @param mesh the mesh
+ * @param coord one id per topology level
+ */
+template <class L, TopologyScope... Topos, class Coord>
+constexpr int get_1d_coord(Mesh<L, Topos...> const& mesh, Coord const& coord);
+
+/**
+ * @brief Whether the mesh's ids say where the warps are.
+ * @param mesh the mesh
+ */
+template <class L, TopologyScope... Topos>
+constexpr bool is_warped(Mesh<L, Topos...> const& mesh);
+
+/**
+ * @brief The same mesh with its lanes stated as an axis of their own.
+ * @param mesh a mesh `is_warped` accepts
+ */
+template <class L, TopologyScope... Topos>
+constexpr auto as_warped(Mesh<L, Topos...> const& mesh);
 
 /**
  * @brief A mesh over `extents`, row-major, starting at instance zero.
@@ -727,23 +755,46 @@ constexpr auto make_mesh(Extents const& extents);
 ```
 
 - constraints:
-  - `Mesh` carries a level and a layout, the same two the IR `Mesh` has beside
-    its axis names ([shard §5](./shard.md#5-mesh)). It is an aggregate, so a
-    second statement of the same fact is a second place for it to be wrong:
-    how many instances a mesh has is `cute::size(Mesh::layout)` and how they
-    are shaped is `cute::shape(...)`. `Topology` states no extent, and `Mesh`
-    no base.
-  - One level per mesh. An IR mesh naming several levels is rejected as
-    temporarily unsupported;
-    finer groupings (a warp of a block) are an axis of the layout, not a second
-    `Topology`.
+  - A mesh is the levels it names and the layout whose values are their ids,
+    the same two facts the IR `Mesh` has beside its axis names
+    ([shard §5](./shard.md#5-mesh)). The instance count and shape are
+    `cute::size(mesh.layout)` and `cute::shape(mesh.layout)`, which read
+    through a slice on their own; there is no second extent or base field.
+  - `Mesh::scope` is read off the pack, never off `decltype(topologies){}`: a
+    default-constructed tuple of enums reads back as the zeroth enumerator,
+    which is a different level.
+  - One level per mesh, for now. A mesh naming several states its axes grouped
+    one nest per level, and `get<S>` picks the nest; a mesh that names several
+    without that grouping is rejected, because no rule says which axes are
+    whose. Finer groupings within a level -- a warp of a block -- are an axis
+    of the layout, not a second topology level.
   - The stride order of `make_mesh` is what turns a linear instance id into a
     coordinate: extents `(8, 32)` row-major give `(id / 32, id % 32)`, so a
     thread mesh names its warps first and its lanes last.
-  - No `local_index()`. A mesh coordinate is derived where it is used, from the
-    instance id the level reports: `mesh_positions(layout_value)
-    .get_hier_coord(program_id<topology::scope>() - mesh_offset<layout>())`
-    ([§2.10.1](#2101-inputs)). A mesh holds no runtime state of its own.
+  - `contains` and `get_1d_coord` are not the same question, and on a mesh
+    narrower than its level not the same answer. `idx2crd` is
+    `(id / stride) % extent`, so thread 64 of a 128-thread block is *not* in a
+    32-instance mesh and *does* act as its instance 0: the upper warps repeat
+    what the lowest warp does. A slice does not repeat -- its body runs under
+    `contains` -- so a coord from outside one reaching `get_1d_coord` is a
+    codegen fault.
+
+A mesh states its positions row-major ([shard §5](./shard.md#5-mesh)), and
+CuTe's algebra reads mode zero as the fastest. Every CuTe function that means
+"next to" therefore reads a mesh backwards: `coalesce` leaves `(2,32):(32,1)`,
+64 consecutive threads, unfolded, and `logical_divide` cuts a domain that runs
+the other way. The runtime reverses a mesh's axes once, in one place, and uses
+plain CuTe after that.
+
+- constraints:
+  - `is_warped` reads the reversed axes: mode zero must step by one and run a
+    whole number of warps. `(32,..):(1,..)` is one warp exactly and the next
+    axis carries the warps; `(128,..):(1,..)` holds four warps that
+    `as_warped` splits out. `(16,..):(1,..)` is half a warp shared between
+    instances, which reaches neither `bar.sync`, that counts whole warps, nor
+    one `__syncwarp`; the ops that need warps refuse it by name.
+  - `as_warped` is idempotent: a mesh whose fastest axis is already one warp
+    is returned unchanged.
 
 A narrowed mesh — threads 64..127 of a 128-thread block — is not a third field.
 The IR spells the slice `ComposedLayout(inner, offset, outer)`, a layout mapping
@@ -752,11 +803,13 @@ and the C++ mesh mirrors it with the CuTe type of the same name, whose
 `operator()` is literally `layout_a()(offset() + layout_b()(c))`:
 
 ```cpp
-// example: threads 64..127 of a 128-thread block, as (2 warps, 32 lanes)
-Mesh<Topology<TopologyScope::thread>,
-     cute::ComposedLayout<cute::identity, cute::Int<64>,
-                          cute::Layout<cute::Shape<cute::Int<2>, cute::Int<32>>,
-                                       cute::Stride<cute::Int<32>, cute::Int<1>>>>>
+// threads 64..127 of a 128-thread block, as (2 warps, 32 lanes)
+using sliced_thread_mesh = Mesh<
+    cute::ComposedLayout<
+        cute::identity, cute::Int<64>,
+        cute::Layout<cute::Shape<cute::Int<2>, cute::Int<32>>,
+                     cute::Stride<cute::Int<32>, cute::Int<1>>>>,
+    TopologyScope::thread>;
 ```
 
 - constraints:
@@ -764,10 +817,9 @@ Mesh<Topology<TopologyScope::thread>,
     static offset. A swizzle in the first slot, or a dynamic offset, is a mesh
     whose first instance is not a compile-time number, and every reader wants it
     as one.
-  - `mesh_offset<L>()` is that offset, or `0` for a plain layout;
-    `mesh_positions(l)` is `layout_b()` for a composed layout and `l` itself
-    otherwise, so one spelling serves both at every call site.
-  - The offset MUST NOT be dropped. `mesh_positions` maps a coordinate to an
+  - `offset(mesh)` is that offset, or `0` for a plain layout, so one spelling
+    serves both at every call site.
+  - The offset MUST NOT be dropped. A mesh layout maps a coordinate to an
     instance *within* the mesh; only the offset turns that into an instance of
     the launch. Reading a coordinate off a raw instance id instead hands every
     instance of a slice the box its neighbour owns.
@@ -897,11 +949,10 @@ auto local(ShardTensor<E, GL, SL> const& t) noexcept;
 #### 2.10.1 Inputs
 
 Let `t: ShardTensor`, `sl = t.shard_layout`, `S = sl.layout_value`'s
-strides, `A = SL::attrs`, and `coord` the mesh coordinate of this instance:
-`mesh_positions(sl.mesh_value.layout_value).get_hier_coord(id - offset)` for
-`id = program_id<scope>()` and `offset = mesh_offset<mesh::layout>()`
-([§2.3](#23-tilefoundrymesh)). Subtracting the offset is what makes a slice's
-first instance its own coordinate zero.
+strides, `A = SL::attrs`, and `i` the instance this thread acts as:
+`get_1d_coord(sl.mesh_value, program_ids())` ([§2.3](#23-tilefoundrymesh)).
+Subtracting the mesh's offset is what makes a slice's first instance its own
+instance zero.
 
 - `t.engine` is the per-instance cute tensor / view; `t.engine.data()`
   is the base ptr the current instance already holds.

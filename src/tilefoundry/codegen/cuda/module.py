@@ -73,7 +73,7 @@ def emit_cuda_module(
     Emit the device ``.cu`` linkable module for *cuda_fns* (the CUDA-target
     PrimFunctions of a module).
     """
-    from tilefoundry.codegen.cuda.emit import _topology_shape_specializations  # noqa: PLC0415
+    from tilefoundry.codegen.cuda.emit import _topology_dim_specializations  # noqa: PLC0415
 
     ctx = CodegenContext(target)
     kernel_texts = []
@@ -98,13 +98,13 @@ def emit_cuda_module(
                 f"{base.kernel_name!r} has (grid={base.grid}, block={base.block}) "
                 f"but {f.kernel_name!r} has (grid={f.grid}, block={f.block})"
             )
-    specs = _topology_shape_specializations(base.grid, base.block)
+    specs = _topology_dim_specializations(base.grid, base.block)
 
 
     uses_grid_barrier = any("tf_grid_bar_state" in text for text in kernel_texts)
     source = render(
         "cuda_module.cu.j2",
-        topology_shape_specializations=specs,
+        topology_dim_specializations=specs,
         kernels="\n".join(kernel_texts),
         dynamic_cta=base.grid[0] is None,
         uses_grid_barrier=uses_grid_barrier,

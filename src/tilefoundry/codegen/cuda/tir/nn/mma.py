@@ -12,10 +12,6 @@ from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cu
 from tilefoundry.ir.core import Var
 from tilefoundry.ir.tir.cuda.nn.mma import Mma
 
-_MMA_RUNTIME = {
-    "SM80_16x8x16_F32BF16BF16F32_TN": "tilefoundry::ops::mma",
-}
-
 
 @register_codegen_cuda(Mma)
 def _emit(call, ctx: CodegenContext) -> None:
@@ -30,14 +26,9 @@ def _emit(call, ctx: CodegenContext) -> None:
 
 
     atom = call.target.atom
-    if atom is None:
-        runtime = _MMA_RUNTIME["SM80_16x8x16_F32BF16BF16F32_TN"]
-    else:
-        runtime = _MMA_RUNTIME.get(atom.op.name)
-        if runtime is None:
-            raise RuntimeError(
-                f"tir.cuda.nn.Mma: no codegen handler for MMA op {atom.op.name!r}; "
-                f"add an entry to _MMA_RUNTIME"
-            )
+    if atom is not None and atom.op.name != "SM80_16x8x16_F32BF16BF16F32_TN":
+        raise RuntimeError(
+            f"tir.cuda.nn.Mma: no codegen handler for MMA op {atom.op.name!r}"
+        )
 
-    ctx.emit(f"{runtime}({l}, {r}, {a});")
+    ctx.emit(f"tilefoundry::ops::mma({l}, {r}, {a});")

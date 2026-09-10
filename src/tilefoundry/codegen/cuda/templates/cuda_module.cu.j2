@@ -8,9 +8,9 @@ namespace tilefoundry {
 // self-resets so relaunches and CUDA-graph replays are safe.
 static __device__ unsigned int tf_grid_bar_state[2];
 {%- endif %}
-{%- for spec in topology_shape_specializations %}
-template <> CUTE_HOST_DEVICE constexpr auto program_shape<{{ spec.scope }}>() noexcept {
-  return cute::make_shape({{ spec.shape_args }});
+{%- for spec in topology_dim_specializations %}
+template <> CUTE_HOST_DEVICE constexpr auto program_dim<{{ spec.scope }}>() noexcept {
+  return cute::Int<{{ spec.count }}>{};
 }
 {%- endfor %}
 {%- if dynamic_cta %}

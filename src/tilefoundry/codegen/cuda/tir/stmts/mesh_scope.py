@@ -47,37 +47,7 @@ def _validate_topology(mesh: Mesh, target) -> None:
     program topology level. Defense-in-depth alongside the declared-topology
     check at lowering entry.
     """
-    validate_cuda_topology_levels(
-        target, (_resolved(t).name for t in mesh.topologies)
-    )
-
-
-def mesh_geometry(mesh: Mesh) -> tuple[tuple, tuple, int]:
-    """The shape, the strides, and the first instance a C++ ``Mesh`` covers.
-
-    A sliced mesh keeps the participating sub-box in ``ComposedLayout.outer``
-    and where that box starts in the composed offset, so the two come apart
-    here; an un-sliced mesh is the whole level and starts at zero. The base
-    comes from ``participation`` rather than the offset field so a slice that
-    is not one contiguous run of instances is refused, not emitted.
-    """
-    layout = mesh.layout
-    if isinstance(layout, ComposedLayout):
-        outer = layout.outer
-        if not isinstance(outer, Layout) or outer.strides is None:
-            raise NotImplementedError(
-                f"CUDA mesh emission: a sliced mesh needs its participating box "
-                f"as a strided Layout in ComposedLayout.outer; {outer!r} states "
-                f"an identity box, whose extents are the inner component's and "
-                f"so name no sub-box for the offset to start"
-            )
-        return outer.shape, outer.strides, participation(mesh).base
-    if layout.strides is None:
-        raise NotImplementedError(
-            "CUDA mesh emission: a mesh layout must state its strides; "
-            "None leaves which instance owns which position unsaid"
-        )
-    return layout.shape, layout.strides, 0
+    validate_cuda_topology_levels(target, (_resolved(t).name for t in mesh.topologies))
 
 
 def mesh_type(mesh: Mesh) -> str:
@@ -91,21 +61,25 @@ def mesh_type(mesh: Mesh) -> str:
     ``ops::sync`` reads it to tell the two apart.
     """
     topos = program_topologies(mesh)
-    shape, strides, base = mesh_geometry(mesh)
+    layout_value = mesh.layout
+    if isinstance(layout_value, ComposedLayout):
+        outer = layout_value.outer
+        if not isinstance(outer, Layout) or outer.strides is None:
+            raise NotImplementedError(
+                "CUDA mesh emission: a sliced mesh needs its participating box "
+                "as a strided Layout; this states an identity box, with no sub-box"
+            )
+        shape, strides, base = outer.shape, outer.strides, participation(mesh).base
+    else:
+        if layout_value.strides is None:
+            raise NotImplementedError("CUDA mesh emission: mesh layout needs strides")
+        shape, strides, base = layout_value.shape, layout_value.strides, 0
     shape_types = ", ".join(f"cute::Int<{s}>" for s in shape)
     stride_types = ", ".join(f"cute::Int<{s}>" for s in strides)
-    layout = (
-        f"cute::Layout<cute::Shape<{shape_types}>, cute::Stride<{stride_types}>>"
-    )
+    layout = f"cute::Layout<cute::Shape<{shape_types}>, cute::Stride<{stride_types}>>"
     if base:
-        layout = (
-            f"cute::ComposedLayout<cute::identity, cute::Int<{base}>, {layout}>"
-        )
-    return (
-        f"tilefoundry::Mesh<"
-        f"{layout}, "
-        f"{', '.join(topology_scope_str(t.name) for t in topos)}>"
-    )
+        layout = f"cute::ComposedLayout<cute::identity, cute::Int<{base}>, {layout}>"
+    return f"tilefoundry::Mesh<{layout}, {', '.join(topology_scope_str(t.name) for t in topos)}>"
 
 
 def _is_dynamic_mesh(mesh: Mesh) -> bool:
@@ -121,22 +95,43 @@ def _is_dynamic_mesh(mesh: Mesh) -> bool:
 
 @register_codegen_cuda(MeshScope)
 def _emit(node: MeshScope, ctx: CodegenContext) -> None:
+    """Emit the block a mesh scope is, and the mesh object it states.
+
+    The scope states the mesh once, as the object everything under it reads: a
+    view's shard layout names this one rather than rebuilding an equal mesh of
+    its own beside it. Both names are the C++ block's, so they leave with it --
+    another kernel's scope states an equal mesh under a name this one cannot
+    see, which is why the alias table is saved and restored around the body.
+    """
     if ctx.target is None:
         raise RuntimeError("CUDA MeshScope emission requires its Target")
     _validate_topology(node.mesh, ctx.target)
     name = ctx.name_for(node.binding)
     ctx.emit(f"// mesh scope: {program_topologies(node.mesh)[0].name}")
 
-
-
-
-    if not _is_dynamic_mesh(node.mesh):
-        alias = f"{name}_mesh_t"
-        mesh_type_str = mesh_type(node.mesh)
-        ctx._mesh_aliases[id(node.mesh)] = (alias, mesh_type_str)
-        ctx.emit(f"using {alias} = {mesh_type_str};")
+    is_slice = isinstance(node.mesh.layout, ComposedLayout)
     ctx.emit("{")
     ctx.indent()
-    ctx.emit_node(node.body)
+    outer_aliases = ctx._mesh_aliases
+    ctx._mesh_aliases = dict(outer_aliases)
+    try:
+        if not _is_dynamic_mesh(node.mesh):
+            alias = f"{name}_mesh_t"
+            mesh_type_str = mesh_type(node.mesh)
+            ctx._mesh_aliases[id(node.mesh)] = (alias, mesh_type_str)
+            ctx.emit(f"using {alias} = {mesh_type_str};")
+            ctx.emit(f"constexpr {alias} {name}_mesh{{}};")
+        if is_slice:
+            ctx.emit(
+                f"if (tilefoundry::contains({name}_mesh, "
+                "tilefoundry::program_ids())) {"
+            )
+            ctx.indent()
+        ctx.emit_node(node.body)
+        if is_slice:
+            ctx.dedent()
+            ctx.emit("}")
+    finally:
+        ctx._mesh_aliases = outer_aliases
     ctx.dedent()
     ctx.emit("}")

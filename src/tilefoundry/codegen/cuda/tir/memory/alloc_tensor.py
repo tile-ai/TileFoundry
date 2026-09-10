@@ -122,7 +122,7 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
             f"cute::make_layout(cute::Shape<cute::Int<{global_total}>>{{}})"
         )
         preamble, shard_value = render_shard_layout_value(
-            name, layout_obj, getattr(ctx, "_dim_var_runtime", None), storage
+            name, layout_obj, getattr(ctx, "_dim_var_runtime", None), storage, ctx
         )
         for line in preamble:
             ctx.emit(line)

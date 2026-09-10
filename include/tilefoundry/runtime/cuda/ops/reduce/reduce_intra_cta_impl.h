@@ -32,12 +32,7 @@ template <class Op, class Axes> struct IntraCta {
 
         static_assert(kept_cells<Axes, decltype(s)>() == 1,
                       "ops::reduce (intra-CTA tier): this tier produces one "
-                      "value per instance and broadcasts it, so the source's "
-                      "kept axes must come to a single cell -- it folds cell "
-                      "zero alone and writes that one result over all of the "
-                      "destination, which hands a second kept cell cell zero's "
-                      "answer. A multi-cell source wants the cross-warp tier, "
-                      "which stages one slot per (warp, lane, cell)");
+                      "value per instance, so kept axes must form one cell");
         constexpr int kSpan = reduced_span<Axes, decltype(s)>();
         const float local = local_fold<Op, Axes>(s, 0);
         const float warp_partial =

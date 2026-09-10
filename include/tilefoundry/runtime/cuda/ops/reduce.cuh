@@ -28,13 +28,7 @@ struct absmax_op {};
 
 /// Single public reduce entry: ``dst = reduce_kind(src)`` over ``Axes``.
 ///
-/// Sharded operands select an intra-warp, intra-CTA or cross-warp tier and
-/// **the layouts alone say which**: the (src, dst) attrs give the reduced mesh
-/// axes, and how much of a warp each is gives ``lanes_reduced`` and
-/// ``warps_per_group``. ``ws`` is therefore a resource the layouts *demand*
-/// and not the tier selector -- as the selector, a cross-warp reduce called
-/// without one took the intra-warp tier and returned one warp's partial as the
-/// answer, with no diagnostic. Non-sharded operands take the plain fold.
+/// Dispatch the reduction tier from operand shard layouts.
 template <class Op, class Axes, class Src, class Dst,
           class Ws = reduce_impl::no_workspace_t>
 __device__ inline void reduce(Src const &src, Dst &dst, Ws &&ws = {}) {
@@ -48,26 +42,18 @@ __device__ inline void reduce(Src const &src, Dst &dst, Ws &&ws = {}) {
                                                 reduce_impl::no_workspace_t>;
         static_assert(plan.warp_aligned,
                       "ops::reduce: a reduced mesh axis must divide into whole "
-                      "lanes and whole warps -- 48 instances of one are 32 "
-                      "lanes of a warp and 16 of the next, which is neither a "
-                      "butterfly nor a slot per warp");
+                      "lanes and whole warps");
         if constexpr (!plan.mesh_reduced) {
-            /// Nothing to cross: no axis holds a piece of this value, or
-            /// the destination asked to stay ``P``. Folding what this
-            /// instance holds is then the whole reduction.
+            /// Reduce without crossing mesh instances.
             reduce_impl::Plain<Op, Axes>{}(src, dst);
         } else if constexpr (plan.warps_per_group == 1) {
-            /// One warp holds every piece of a value, so a butterfly over
-            /// ``lanes_reduced`` finishes it and there is nothing to stage.
+            /// Reduce within one warp.
             reduce_impl::IntraWarp<Op, Axes>{}(src, dst);
         } else if constexpr (!has_ws) {
             static_assert(
                 dependent_false_v<Src>,
                 "ops::reduce: these shard layouts spread one value over more "
-                "than one warp, so the reduction cannot finish inside a warp "
-                "-- pass a shared-memory workspace of one float per warp of "
-                "the mesh. Without it this used to take the intra-warp tier "
-                "and return a single warp's partial as the answer");
+                "than one warp; pass a shared-memory workspace");
         } else if constexpr (plan.lane_reduced) {
             reduce_impl::IntraCta<Op, Axes>{}(src, dst, ws,
                                               plan.warps_per_group);

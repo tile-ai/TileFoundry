@@ -22,14 +22,7 @@ template <class Op, class Axes> struct IntraWarp {
             typename cute::remove_cvref_t<DstT>::shard_layout_type>();
         static_assert(plan.warps_per_group == 1,
                       "ops::reduce (intra-warp tier): this reduce mesh spreads "
-                      "one value over more than one warp, and a 32-lane "
-                      "butterfly cannot cross warps -- this tier reads only "
-                      "lanes_reduced off the plan, so one butterfly is the "
-                      "whole reduction only where one warp holds every piece "
-                      "of a value, and over eight warps it would finish after "
-                      "the butterfly and answer with one warp's partial. The "
-                      "intra-CTA or cross-warp tier and a workspace are what "
-                      "finish it");
+                      "one value over more than one warp");
         auto s = detail::to_local(src);
         auto &&d = detail::to_local(dst);
         using value_type = cute::remove_cvref_t<decltype(d(0))>;

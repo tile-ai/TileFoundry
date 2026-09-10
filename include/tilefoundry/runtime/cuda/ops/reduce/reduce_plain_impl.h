@@ -8,12 +8,6 @@
 namespace reduce_impl {
 
 /// Fold what this instance holds, and stop.
-///
-/// The tier for an operand with no mesh to cross -- a plain tensor -- and for a
-/// destination the caller asked to leave ``P``: a partial is exactly the answer
-/// before the instances are combined, so producing one is this and nothing
-/// more. A scalar ``dst`` takes every element of ``src``; an ``M``-cell ``dst``
-/// takes ``size(src) / M`` per cell.
 template <class Op, class Axes> struct Plain {
     template <class SrcT, class DstT>
     __device__ void operator()(SrcT const &src, DstT &dst) const {

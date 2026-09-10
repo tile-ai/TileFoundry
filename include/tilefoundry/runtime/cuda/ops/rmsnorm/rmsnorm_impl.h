@@ -12,10 +12,7 @@ struct RmsNorm {
         auto &&d = detail::to_local(dst);
         auto w = detail::to_local(weight);
 
-        /// M and K come from the destination's shard-layout type. A passed
-        /// value would restate a fact the operand already owns, while ``d`` is
-        /// a runtime object and cannot initialise a constant expression. The
-        /// layout modes retain IR order: mode 0 is M and mode 1 is K.
+        /// Normalize each row using shard-layout M and K.
         using dst_type = cute::remove_cvref_t<TOut>;
         using src_type = cute::remove_cvref_t<TIn>;
         using weight_type = cute::remove_cvref_t<TW>;
@@ -28,14 +25,9 @@ struct RmsNorm {
         constexpr int K = int(cute::size<1>(dst_layout{}));
         static_assert(decltype(cute::rank(src_layout{}))::value == 2,
                       "ops::rmsnorm: source shard layout must be rank 2");
-        static_assert(
-            tilefoundry::detail::shard_layout_is_full_broadcast<
-                typename dst_type::shard_layout_type>(),
-            "ops::rmsnorm: M and K are read off the whole shard layout "
-            "while the loops index the projected view, so this entry "
-            "requires each instance to hold the whole tile. A mesh that "
-            "splits it needs a per-instance M and K, which this entry "
-            "does not derive.");
+        static_assert(tilefoundry::detail::shard_layout_is_full_broadcast<
+                          typename dst_type::shard_layout_type>(),
+                      "ops::rmsnorm: destination must hold the whole tile");
         static_assert(
             tilefoundry::detail::shard_layout_is_full_broadcast<
                 typename src_type::shard_layout_type>(),
@@ -52,16 +44,11 @@ struct RmsNorm {
                     1 &&
                 decltype(cute::rank(typename src_view::layout_type{}))::value ==
                     1,
-            "ops::rmsnorm: the loops index the projected view linearly as "
-            "m * K + k, which means row-major only on a flat rank-1 view; "
-            "a multi-dimensional engine would resolve that index through "
-            "cute's leftmost-mode-fastest order and silently read a "
-            "different element");
+            "ops::rmsnorm: projected source and destination must be rank 1");
         static_assert(
             int(cute::size(typename dst_view::layout_type{})) == M * K &&
                 int(cute::size(typename src_view::layout_type{})) == M * K,
-            "ops::rmsnorm: the projected view must hold exactly M * K "
-            "elements -- M and K are read off the whole shard layout");
+            "ops::rmsnorm: projected views must hold exactly M * K elements");
 
         using value_type = cute::remove_cvref_t<decltype(d(0))>;
         for (int m = 0; m < M; ++m) {

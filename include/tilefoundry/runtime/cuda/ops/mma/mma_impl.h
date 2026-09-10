@@ -14,32 +14,36 @@ template <class T> __device__ uint16_t as_u16(T const &x) {
     return out;
 }
 
-/// Geometry of the ``m16n8k16`` atom, in the order its PTX operands take.
-///
-/// Every index the tile tier computes comes from here rather than from a
-/// literal at the use site, so the four places that agree on this map -- the A
-/// gather, the B gather, the accumulator read and its write-back -- cannot
-/// drift apart.
-struct Sm80_16x8x16 {
-    static constexpr int kM = 16;
-    static constexpr int kN = 8;
-    static constexpr int kK = 16;
-    static constexpr int kAccPerLane = 4;
+/// Geometry of the supported atom, read from CuTe's canonical trait.
+using AtomOp = cute::SM80_16x8x16_F32BF16BF16F32_TN;
+using AtomTraits = cute::MMA_Traits<AtomOp>;
+using AtomCLayout = typename AtomTraits::CLayout;
 
-    __device__ static int row(int lane) { return lane >> 2; }
-    __device__ static int col(int lane) { return (lane & 3) * 2; }
+struct AtomGeometry {
+    using ShapeMNK = typename AtomTraits::Shape_MNK;
+    static constexpr int kM = int(cute::get<0>(ShapeMNK{}));
+    static constexpr int kN = int(cute::get<1>(ShapeMNK{}));
+    static constexpr int kK = int(cute::get<2>(ShapeMNK{}));
+    static constexpr int kAccPerLane =
+        int(cute::size(AtomCLayout{})) / kWarpSize;
+
+    __device__ static int c_coord(int lane, int value = 0) {
+        return int(AtomCLayout{}(cute::make_coord(lane, value)));
+    }
+
+    __device__ static int row(int lane) { return c_coord(lane) % kM; }
+    __device__ static int col(int lane) { return c_coord(lane) / kM; }
 };
 
 }
 
 namespace mma_impl {
 
-/// The single instruction: operands are this lane's fragments, already
-/// gathered.
+/// Execute the atom on this lane's gathered fragments.
 struct Atom {
     template <class TA, class TB, class TC>
     __device__ void operator()(TA const &a, TB const &b, TC &c) const {
-        using CuteAtom = cute::SM80_16x8x16_F32BF16BF16F32_TN;
+        using CuteAtom = mma_detail::AtomOp;
         using namespace mma_detail;
 
         auto a_data = a.data();
@@ -70,9 +74,6 @@ struct Atom {
 };
 
 /// A rank-2 static layout is a tile; anything else is a gathered fragment.
-///
-/// Asked of the slice this instance actually multiplies, not of the whole
-/// tensor: which tier ``mma`` takes is a fact about what a thread holds.
 template <class T>
 inline constexpr bool tile_v = [] {
     using L = typename cute::remove_cvref_t<T>::layout_type;
@@ -85,19 +86,10 @@ template <class TC> CUTE_HOST_DEVICE constexpr int acc_threads() {
 }
 
 /// ``acc += a @ b`` over a whole tile, the atom looped by the tile's shape.
-///
-/// Warps split N; every lane then walks its own atoms. Nothing here reads a
-/// transpose flag: ``b`` is logically ``(N, K)`` and whether the buffer behind
-/// it is k-major or n-major is a stride in its layout, which the indexing picks
-/// up for free.
-///
-/// The accumulator is written back in the fragment's own order, which is what
-/// its ShardLayout states: a caller whose layout says so reads a row of the
-/// fragment off ``local(c)`` and needs no coordinate function beside the entry.
 struct Tile {
     template <class TA, class TB, class TC>
     __device__ void operator()(TA const &a, TB const &b, TC &c) const {
-        using Geo = mma_detail::Sm80_16x8x16;
+        using Geo = mma_detail::AtomGeometry;
         auto av = detail::to_local(a);
         auto bv = detail::to_local(b);
         auto &&cv = detail::to_local(c);
@@ -106,11 +98,7 @@ struct Tile {
         constexpr int threads = acc_threads<TC>();
         static_assert(threads >= kWarpSize && threads % kWarpSize == 0,
                       "ops::mma (tile tier): the accumulator's mesh must be a "
-                      "whole number of warps -- the atom is a warp-wide "
-                      "instruction and the N axis is split between warps by "
-                      "dividing it by that count, so a fraction of a warp "
-                      "either divides by zero or hands a warp part of an "
-                      "atom's columns");
+                      "whole number of warps");
         constexpr int warps = threads / kWarpSize;
         constexpr int M = int(cute::size<0>(
             typename cute::remove_cvref_t<TA>::shard_layout_type::layout{}));
@@ -179,8 +167,7 @@ inline constexpr bool tile_shaped_v =
     tile_v<tilefoundry::detail::local_view_t<TA>> &&
     tile_v<tilefoundry::detail::local_view_t<TB>>;
 
-/// A lane's gathered fragment: a static run of exactly the ``N`` elements the
-/// atom's PTX operand is.
+/// Recognize the atom's per-lane fragment shapes.
 template <class T, int N>
 inline constexpr bool frag_v = [] {
     using L = typename cute::remove_cvref_t<T>::layout_type;
@@ -191,12 +178,6 @@ inline constexpr bool frag_v = [] {
 }();
 
 /// The atom's own operand shapes, stated positively.
-///
-/// ``Atom`` reads eight, four and four elements straight off the operands, so
-/// "not a tile" is not the same claim as "a fragment": a dynamic-extent or
-/// wrong-length operand was neither, and reaching ``Atom`` with one read past
-/// what it holds. Which is what the entry's trailing ``else`` used to do with
-/// anything ``tile_shaped_v`` said no to.
 template <class TA, class TB, class TC>
 inline constexpr bool atom_shaped_v =
     frag_v<tilefoundry::detail::local_view_t<TA>, 8> &&

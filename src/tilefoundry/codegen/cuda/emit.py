@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
 import os
 import pkgutil
 
@@ -41,30 +42,27 @@ _discover("tir/nn", "tilefoundry.codegen.cuda.tir.nn.")
 _discover("tir", "tilefoundry.codegen.cuda.tir.")
 
 
-def _topology_shape_specializations(
+def _topology_dim_specializations(
     grid: tuple[int, int, int], block: tuple[int, int, int]
 ) -> list[dict[str, str]]:
-    def _shape_args(dims: tuple[int, int, int]) -> str:
-        return ", ".join(f"cute::Int<{d}>{{}}" for d in dims)
+    """One instance count per level: what ``program_dim`` states for this .cu.
 
-
-
-
+    ``program_shape`` is derived from these, so a translation unit specializes
+    the counts and nothing else. A launch-provided grid has no count here; the
+    template states that one at run time instead.
+    """
     specializations = []
-
-
-
     if grid[0] is not None:
         specializations.append(
             {
                 "scope": "tilefoundry::TopologyScope::cta",
-                "shape_args": _shape_args(grid),
+                "count": str(math.prod(grid)),
             }
         )
     specializations.append(
         {
             "scope": "tilefoundry::TopologyScope::thread",
-            "shape_args": _shape_args(block),
+            "count": str(math.prod(block)),
         }
     )
     return specializations

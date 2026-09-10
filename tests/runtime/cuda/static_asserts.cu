@@ -1,24 +1,14 @@
 /// The runtime's compile-time refusals, one per translation unit.
-///
-/// Each constraint here was added because the wrong usage used to compile and
-/// answer wrongly, so no GPU test can reach it. What stands in for one is a
-/// compilation that must fail, with the sentence that explains why -- see
-/// ``test_cuda_static_asserts.py``, which runs one ``nvcc -DCASE=n`` per case.
-///
-/// ``CASE 0`` is the positive control and asserts the corrected arithmetic, so
-/// a harness that has stopped compiling anything cannot pass by failing
-/// everywhere. Every other case violates exactly one constraint.
 #include <tilefoundry/runtime/cuda/runtime.cuh>
 
 namespace tilefoundry {
 template <>
-CUTE_HOST_DEVICE constexpr auto
-program_shape<TopologyScope::thread>() noexcept {
-    return cute::make_shape(cute::Int<256>{});
+CUTE_HOST_DEVICE constexpr auto program_dim<TopologyScope::thread>() noexcept {
+    return cute::Int<256>{};
 }
 template <>
-CUTE_HOST_DEVICE constexpr auto program_shape<TopologyScope::cta>() noexcept {
-    return cute::make_shape(cute::Int<8>{});
+CUTE_HOST_DEVICE constexpr auto program_dim<TopologyScope::cta>() noexcept {
+    return cute::Int<8>{};
 }
 }
 
@@ -31,7 +21,6 @@ template <int... Es> __device__ auto tmesh() {
 }
 
 /// One register held by the instances of a (Groups, Lanes) mesh, with Folded
-/// of the axes already crossed -- the kernel's own `fold_cell`.
 template <int Groups, int Lanes, int Folded>
 __device__ auto fold_cell(float *reg) {
     auto mesh = tmesh<Groups, Lanes>();
@@ -75,7 +64,6 @@ template <int Threads, bool Split_> __device__ auto flat_cell(float *reg) {
 
 #if CASE == 0
 /// Positive control for item 2: a flat (256,) thread mesh splits into 32 lanes
-/// and 8 warps, and the old greedy walk called all 256 of it warps.
 __global__ void k() {
     using src_sl = cute::remove_cvref_t<decltype(flat_cell<256, true>(
         nullptr))>::shard_layout_type;
@@ -101,33 +89,52 @@ __global__ void k() {
         nullptr))>::shard_layout_type;
     constexpr auto r = reduce_impl::reduce_dispatch<s3, d3>();
     static_assert(r.warps_per_group == 1 && r.lanes_reduced == 32, "(1,32)");
+
+    using sparse_layout =
+        cute::Layout<cute::Shape<cute::Int<2>, cute::Int<32>>,
+                     cute::Stride<cute::Int<64>, cute::Int<1>>>;
+    using sparse_mesh = Mesh<sparse_layout, TopologyScope::thread>;
+    constexpr auto sparse_ids = cute::make_tuple(0, 0);
+    static_assert(
+        tilefoundry::contains(sparse_mesh{sparse_layout{}}, sparse_ids));
+    static_assert(tilefoundry::contains(sparse_mesh{sparse_layout{}},
+                                        cute::make_tuple(0, 31)));
+    static_assert(tilefoundry::contains(sparse_mesh{sparse_layout{}},
+                                        cute::make_tuple(0, 64)));
+    static_assert(tilefoundry::contains(sparse_mesh{sparse_layout{}},
+                                        cute::make_tuple(0, 95)));
+    static_assert(!tilefoundry::contains(sparse_mesh{sparse_layout{}},
+                                         cute::make_tuple(0, 32)));
+    static_assert(!tilefoundry::contains(sparse_mesh{sparse_layout{}},
+                                         cute::make_tuple(0, 96)));
 }
 #endif
 
 #if CASE == 1
-/// mesh_offset: a swizzle where identity belongs.
+/// Mesh::offset: a swizzle where identity belongs.
 __global__ void k() {
     using inner = cute::Swizzle<1, 0, 1>;
-    using base =
+    using box =
         cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>;
-    using ml = cute::ComposedLayout<inner, cute::Int<0>, base>;
-    static_assert(tilefoundry::detail::mesh_offset<ml>() == 0, "unreachable");
+    using ml = cute::ComposedLayout<inner, cute::Int<0>, box>;
+    using mesh = Mesh<ml, TopologyScope::thread>;
+    static_assert(tilefoundry::offset(mesh{}) == 0, "unreachable");
 }
 #endif
 
 #if CASE == 2
-/// mesh_offset: a run-time slice origin.
+/// Mesh::offset: a run-time slice origin.
 __global__ void k() {
-    using base =
+    using box =
         cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>;
-    using ml = cute::ComposedLayout<cute::identity, int, base>;
-    static_assert(tilefoundry::detail::mesh_offset<ml>() == 0, "unreachable");
+    using ml = cute::ComposedLayout<cute::identity, int, box>;
+    using mesh = Mesh<ml, TopologyScope::thread>;
+    static_assert(tilefoundry::offset(mesh{}) == 0, "unreachable");
 }
 #endif
 
 #if CASE == 3
 /// local(): two attrs for a one-axis mesh, which used to read as a full
-/// broadcast and hand every instance the whole tensor.
 __global__ void k(float *p) {
     auto mesh = tmesh<256>();
     auto layout = cute::make_layout(cute::make_shape(cute::Int<256>{}));
@@ -136,7 +143,7 @@ __global__ void k(float *p) {
                 decltype(mesh)>
         sl{layout, mesh};
     auto st = make_shard_tensor(t, layout, sl);
-    auto v = tilefoundry::local(st);
+    auto v = tilefoundry::detail::local(st);
     v(0) = 1.f;
 }
 #endif
@@ -172,7 +179,7 @@ __global__ void k(float *p) {
     ShardLayout<decltype(layout), cute::tuple<shard::Dynamic>, decltype(mesh)>
         sl{layout, mesh};
     auto st = make_shard_tensor(t, layout, sl);
-    tilefoundry::local(st)(0) = 1.f;
+    tilefoundry::detail::local(st)(0) = 1.f;
 }
 #endif
 
@@ -240,7 +247,7 @@ __global__ void k(float *p) {
     float a = p[0], b = 0.f;
     using wlayout =
         cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>;
-    using wmesh = Mesh<wlayout, TopologyScope::warp>;
+    using wmesh = Mesh<wlayout, TopologyScope::scope_count>;
     wmesh mesh{wlayout{}};
     auto sl = cute::make_layout(cute::make_shape(cute::Int<32>{}));
     auto dl = cute::make_layout(cute::make_shape(cute::Int<1>{}));
@@ -363,7 +370,7 @@ __global__ void k(float *p) {
 __global__ void k() {
     using wlayout =
         cute::Layout<cute::Shape<cute::Int<32>>, cute::Stride<cute::Int<1>>>;
-    Mesh<wlayout, TopologyScope::warp> mesh{wlayout{}};
+    Mesh<wlayout, TopologyScope::scope_count> mesh{wlayout{}};
     sync(mesh);
 }
 #endif
@@ -413,9 +420,6 @@ __global__ void k(float *p) {
 
 #if CASE == 23
 /// Two mesh axes carrying a Split for one tensor axis.
-///
-/// The search answers with the last of them, so ``local_extent`` divides that
-/// axis by one mesh extent while ``shard_offset`` adds a term for both.
 __global__ void k(float *p) {
     auto mesh = tmesh<8, 32>();
     auto lay = cute::make_layout(cute::make_shape(cute::Int<256>{}),
@@ -424,18 +428,12 @@ __global__ void k(float *p) {
         cute::make_tensor(cute::make_gmem_ptr(p), lay), lay,
         make_shard_layout(lay, mesh,
                           cute::make_tuple(shard::S<0>{}, shard::S<0>{})));
-    tilefoundry::local(st)(0) = 1.f;
+    tilefoundry::detail::local(st)(0) = 1.f;
 }
 #endif
 
 #if CASE == 24
 /// A ``tma_copy`` source a mesh really does divide.
-///
-/// This layout used to select the static strided tier -- ``local(src)`` is
-/// ``Shape<4,1> Stride<128,1>``, size four against cosize 385, so it is not
-/// one run -- and that tier then took its count from the destination and read
-/// 511 of 512 elements from past the source's slice. The branch is gone and
-/// the precondition is asserted.
 __global__ void k(float *p, float *q, uint64_t *bar) {
     auto mesh = tmesh<128>();
     auto src_lay =
@@ -454,13 +452,14 @@ __global__ void k(float *p, float *q, uint64_t *bar) {
 #endif
 
 #if CASE == 25
+/// Warps 0 and 2 of a block: two whole warps, and a gap between them.
 __global__ void k() {
     using layout = cute::Layout<cute::Shape<cute::Int<2>, cute::Int<32>>,
                                 cute::Stride<cute::Int<64>, cute::Int<1>>>;
     using mesh = Mesh<layout, TopologyScope::thread>;
-    static_assert(tilefoundry::detail::MeshWarpView<mesh>::warps() == 2);
-    static_assert(tilefoundry::detail::MeshWarpView<mesh>::warp_stride == 2);
-    static_assert(tilefoundry::detail::MeshWarpView<mesh>::warps_contiguous(),
-                  "MeshWarpView: non-contiguous warp set is unsupported");
+    static_assert(tilefoundry::is_warped(mesh{}), "whole warps, so warped");
+    static_assert(int(cute::size(tilefoundry::as_warped(mesh{}).layout)) == 64);
+    static_assert(sync_impl::warps_run_together<mesh>(),
+                  "ops::sync: a mesh that skips warps names no barrier");
 }
 #endif

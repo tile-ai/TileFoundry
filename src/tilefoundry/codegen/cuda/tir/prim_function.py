@@ -67,7 +67,7 @@ def _param_wrapper_shard(
     global_layout = f"cute::make_layout(cute::Shape<cute::Int<{total}>>{{}})"
     tensor_ref = f"{name}_tensor"
     preamble, shard_value = render_shard_layout_value(
-        tensor_ref, shard_layout, dim_var_runtime
+        tensor_ref, shard_layout, dim_var_runtime, None, ctx
     )
     wrapper = (
         f"auto {tensor_ref} = tilefoundry::make_shard_tensor("

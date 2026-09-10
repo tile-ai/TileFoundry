@@ -4,8 +4,7 @@
 
 #include "copy/copy_impl.h"
 
-/// and the only run-time question left is whether the shard's offset landed on
-/// the alignment the width needs.
+/// Copy one projected slice to another.
 template <class TSrc, class TDst>
 __device__ void copy(TSrc const &src, TDst &dst) {
     copy_impl::Copy{}(src, dst);

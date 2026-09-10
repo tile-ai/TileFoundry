@@ -28,7 +28,7 @@ CASES: dict[int, str | None] = {
     2: "a mesh layout's offset must be a compile-time number",
     3: "a shard layout must say what each of its mesh's axes does with the tensor",
     4: "make_shard_layout: one attr per mesh axis",
-    5: "one attr per mesh axis: the sum below has one term per attr",
+    5: "one attr per mesh axis: this layout has one stride per attr",
     6: "this attr neither names a tensor axis",
     7: "these shard layouts spread one value over more than one warp",
     8: "ops::reduce (intra-warp tier): this reduce mesh spreads one value",
@@ -48,7 +48,7 @@ CASES: dict[int, str | None] = {
     22: "a reduced mesh axis must divide into whole lanes and whole warps",
     23: "two mesh axes name one tensor axis",
     24: "both operands must leave the tile whole on every ",
-    25: "MeshWarpView: non-contiguous warp set is unsupported",
+    25: "ops::sync: a mesh that skips warps names no barrier",
 }
 
 pytestmark = pytest.mark.skipif(
