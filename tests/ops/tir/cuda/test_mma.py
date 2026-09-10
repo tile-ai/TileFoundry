@@ -1,12 +1,5 @@
 """``ops::mma``'s tile tier: the atom looped over a whole shared-memory tile.
 
-The entry reads the tier off what a thread *holds*: rank-2 static A and B local
-views are a tile, the atom's ``(8, 4, 4)`` lane fragments are the single
-instruction. The Atom tier is already gated on GPU by
-``tests/integration/test_mma_tir_handwritten.py``; forcing this one takes a
-rank-2 view of the whole ``(M, K)`` and ``(N, K)``, so A and B are shared tiles
-every thread broadcasts.
-
 See [runtime §3](docs/spec/runtime.md#3-runtime-ops).
 """
 
@@ -44,15 +37,7 @@ def test_handwritten_mma_matches_torch() -> None:
 
 @module(entry="tile_host")
 class MmaTile:
-    """A 16x16 by 16x8 product done as one atom, looped by the tile's shape.
-
-    The mesh is the atom's own: one warp as the ``(4, 8)`` the m16n8k16
-    fragment map is written against, so 32 instances is one warp and all of N
-    stays with it. The two tiles are fully broadcast, so each thread's local
-    view is the allocation's rank-2 layout and ``tile_shaped_v`` is true.
-    ``N`` comes off B's first mode, so B is ``(N, K)`` -- ``(8, 16)`` -- in its
-    shape and its shard layout alike.
-    """
+    """A 16x16 by 16x8 product done as one atom, looped by the tile's shape."""
 
     @prim_func(target=_CUDA)
     def tile_device(
@@ -114,15 +99,7 @@ class MmaTile:
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_tile_tier_matches_torch_matmul() -> None:
-    """Selected by rank-2 static A and B local views over the whole tile.
-
-    The two tiles are filled by a linear ``copy`` into a column-major shared
-    allocation, so ``av(m, k)`` is ``a[m + 16k]`` and ``bv(n, k)`` is
-    ``b[n + 8k]``: A is the flat source read column-major, which is
-    ``a.view(16, 16).T``, and B's ``(N, K)`` view of ``b`` is the transpose of
-    the ``(K, N)`` matrix ``b.view(16, 8)``. The product the tier computes is
-    therefore ``a.view(16, 16).T @ b.view(16, 8)``.
-    """
+    """Selected by rank-2 static A and B local views over the whole tile."""
     rm = tilefoundry.compile(MmaTile, target=_CUDA)
     torch.manual_seed(0)
     a = torch.randn(256, dtype=torch.bfloat16, device="cuda")

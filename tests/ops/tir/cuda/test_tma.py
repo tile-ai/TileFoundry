@@ -1,9 +1,5 @@
 """Cover the CUDA staging-copy definition: direction, dtype, shape, and the call.
 
-The op names no tier, so what the emitted line shows is the one entry plus the
-barrier as its own address -- the byte count is the entry's to state on the
-instruction that delivers it.
-
 See [tir §2.3](docs/spec/tir.md#23-tir-ops).
 """
 
@@ -48,11 +44,7 @@ def test_accepts_a_whole_grain_gmem_to_smem_run() -> None:
 
 
 def test_refuses_the_wrong_direction() -> None:
-    """Only gmem into smem is this instruction.
-
-    This stages global into shared; the reverse is a different instruction, not
-    this one with its operands swapped.
-    """
+    """Only gmem into smem is this instruction."""
     with pytest.raises(VerifyError, match="source must be gmem"):
         verify_prim_function(_pf(_ty(8, storage="smem"), _ty(8, storage="smem")))
     with pytest.raises(VerifyError, match="destination must be smem"):
@@ -85,24 +77,14 @@ def test_refuses_a_shape_change() -> None:
 def test_admits_a_transfer_off_the_sixteen_byte_grain(n, dtype) -> None:
     """The grain belongs to one instruction, and the op does not name one.
 
-    20 bytes cannot be a ``cp.async.bulk``, but it is a perfectly good staging
-    copy on the element path. Rejecting it here would be the definition layer
-    carrying a tier that [runtime §3](docs/spec/runtime.md#3-runtime-ops) puts
-    behind the entry.
+    See [runtime §3](docs/spec/runtime.md#3-runtime-ops).
     """
     verify_prim_function(_pf(_ty(n, dtype), _ty(n, dtype, storage="smem")))
 
 
 @module(entry="tma_tiers_host")
 class TmaTiers:
-    """Both staging tiers in one device function, one operand pair each.
-
-    Same layouts on both pairs -- a broadcast contiguous run into a broadcast
-    contiguous tile, which is what ``bulk_eligible_v`` reads -- and only the
-    projected extent differs: 256 floats is a whole number of 16-byte grains
-    and 5 floats is not. That extent is the one thing the bulk tier checks at
-    run time rather than in a type, so it is what splits the two here.
-    """
+    """Both staging tiers in one device function, one operand pair each."""
 
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def tma_tiers_device(
@@ -176,11 +158,7 @@ class TmaTiers:
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_both_tiers_stage_the_input_unchanged() -> None:
-    """One compile behind two assertions, each naming the tier that failed.
-
-    Separate pairs and separate destinations, so a wrong byte is read back from
-    the tier that moved it rather than from the pair of them.
-    """
+    """One compile behind two assertions, each naming the tier that failed."""
     rm = tilefoundry.compile(TmaTiers, target=CudaTarget("nvidia.h200_sxm"))
     torch.manual_seed(0)
     bulk_a = torch.randn(256, dtype=torch.float32, device="cuda")

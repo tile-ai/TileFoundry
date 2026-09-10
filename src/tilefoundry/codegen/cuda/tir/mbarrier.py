@@ -1,13 +1,4 @@
-"""Emitters for the mbarrier TIR ops — each writes its instruction inline.
-
-There is no ``tilefoundry::ops::`` entry to call, so what the emitter writes is
-the instruction on the word's shared-window address -- the shape
-``CpAsyncCommit`` and ``CpAsyncWait`` already take. The text is the one the
-hand-written kernels carry, ``__cvta_generic_to_shared`` included.
-
-``try_wait.parity`` is one non-blocking test under a C++ loop: a label inside
-inline asm is emitted once per instantiation and collides on the second.
-"""
+"""Emitters for the mbarrier TIR ops — each writes its instruction inline."""
 
 from __future__ import annotations
 
@@ -23,14 +14,7 @@ from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 
 
 def barrier_word(var, ctx: CodegenContext) -> str:
-    """The address of the barrier word itself, as a generic pointer.
-
-    The op's operand is a tensor because that is what TIR has to name a piece
-    of shared memory with; the instruction wants the word. A kernel parameter
-    wears the ``_tensor`` view the prologue built, and a sharded barrier is
-    projected first so the address is this instance's own slot rather than the
-    ring's base.
-    """
+    """The address of the barrier word itself, as a generic pointer."""
     base = ctx.name_for(var)
     if ctx.is_kernel_param(var):
         base = f"{base}_tensor"

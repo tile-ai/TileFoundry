@@ -1,9 +1,4 @@
-"""Codegen for ``tir.memory.Fill`` — the zero-source ``elementwise``.
-
-A fill is the arity-0 pointwise op: no sources, and the value comes in as the
-capture of the ``fn`` the loop calls. The count is the destination layout's
-own, so nothing here has to restate it.
-"""
+"""Codegen for ``tir.memory.Fill`` — the zero-source ``elementwise``."""
 from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda

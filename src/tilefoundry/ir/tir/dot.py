@@ -33,13 +33,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 
 def _local_numel(ty) -> int | None:
-    """The elements one participant holds of *ty*, or ``None`` when undecidable.
-
-    The fold walks the *local* view, so a global element count is the wrong
-    question: the canonical matrix-vector call splits a row of the matrix over
-    the mesh and broadcasts the vector, which leaves the two global shapes
-    different and the two local ones equal.
-    """
+    """The elements one participant holds of *ty*, or ``None`` when undecidable."""
     layout = getattr(ty, "layout", None)
     if isinstance(layout, ShardLayout):
         try:

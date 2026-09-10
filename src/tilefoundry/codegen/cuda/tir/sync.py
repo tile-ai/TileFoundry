@@ -19,13 +19,7 @@ _SYNC = "tilefoundry::ops::sync"
 
 
 def _mesh_value(mesh, ctx: CodegenContext) -> str:
-    """*mesh* as a C++ value, through the enclosing scope's alias where it fits.
-
-    A ``Mesh`` carries its whole answer in its type, so the value is an empty
-    one; the alias is preferred only so the emitted line reads as the scope the
-    sync is written inside. A slice has its own base and its own size, so it
-    never wears the enclosing alias.
-    """
+    """*mesh* as a C++ value, through the enclosing scope's alias where it fits."""
     entry = ctx._mesh_aliases.get(id(mesh))
     if entry is not None:
         return f"{entry[0]}{{}}"
@@ -38,15 +32,7 @@ def _mesh_value(mesh, ctx: CodegenContext) -> str:
 
 @register_codegen_cuda(Sync)
 def _emit(call, ctx: CodegenContext) -> None:
-    """Emit the barrier as the mesh it covers, plus whatever that tier needs.
-
-    Two tiers need something the mesh cannot say. A CTA mesh takes the module's
-    own grid-barrier counter: whether a grid barrier is a counter to spin on or
-    a cooperative launch's grid group is a fact about the launch. A run inside
-    the block takes one of the fifteen named barriers: which are free is a fact
-    about the whole kernel. Both are the emitter's to hand over, because both
-    are known here and neither is knowable inside the op.
-    """
+    """Emit the barrier as the mesh it covers, plus whatever that tier needs."""
     mesh = call.target.mesh
     barrier = classify(mesh)
     value = _mesh_value(mesh, ctx)

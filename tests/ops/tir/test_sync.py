@@ -1,10 +1,5 @@
 """Exercise the CUDA barrier forms emitted for ``T.sync``.
 
-The slice cases stage one value per participating thread in shared memory,
-synchronize, then have every participant copy the whole staged slice to its
-own output tile. The numbers therefore depend on every named thread arriving,
-not merely on the kernel returning.
-
 See [tir §1.5](docs/spec/tir.md#15-sync).
 """
 

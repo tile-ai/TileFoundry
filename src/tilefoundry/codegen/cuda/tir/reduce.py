@@ -1,10 +1,4 @@
-"""Codegen for the Reduce TIR stmt — emits the uniform runtime reduce call.
-
-``REDUCE_TAG`` is the one place a ``ReduceKind`` becomes a C++ reduce tag. The
-shard-attr renderer needs the same answer for a ``Partial``'s reduction, whose
-vocabulary is ``ReduceKind``'s own values, so it reads this table rather than
-keeping a second one that nothing would keep equal.
-"""
+"""Codegen for the Reduce TIR stmt — emits the uniform runtime reduce call."""
 
 from __future__ import annotations
 

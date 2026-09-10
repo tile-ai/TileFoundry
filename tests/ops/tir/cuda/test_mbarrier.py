@@ -1,10 +1,5 @@
 """Cover the CUDA mbarrier definitions and the instructions they emit.
 
-There is no runtime entry to look for in the output: an mbarrier is a word in
-shared memory, so nothing here reads a layout and none of it is an op. What the
-emission assertions read is the instruction text itself, plus the shared-window
-conversion each one takes.
-
 See [tir §2.3](docs/spec/tir.md#23-tir-ops).
 """
 
@@ -50,11 +45,7 @@ def test_init_accepts_a_shared_barrier_and_a_positive_count() -> None:
 
 @pytest.mark.parametrize("count", [0, -1])
 def test_init_refuses_a_non_positive_arrive_count(count: int) -> None:
-    """A non-positive arrive count is refused.
-
-    A phase needing zero arrivals is complete before anything is produced, which
-    turns every consumer's wait into a no-op.
-    """
+    """A non-positive arrive count is refused."""
     with pytest.raises(VerifyError, match="arrive_count must be a positive int"):
         verify_prim_function(_pf(MBarrierInit(arrive_count=count), _SMEM_BAR))
 
@@ -73,11 +64,7 @@ def test_invalidate_accepts_a_shared_barrier() -> None:
     ],
 )
 def test_every_entry_refuses_a_barrier_outside_shared_memory(stated) -> None:
-    """A barrier outside shared memory is refused.
-
-    The instructions take a shared-window address, so a barrier in global memory
-    is not a slower barrier -- it is not one at all.
-    """
+    """A barrier outside shared memory is refused."""
     with pytest.raises(VerifyError, match="barrier must be smem"):
         verify_prim_function(stated)
 

@@ -1,11 +1,5 @@
 """Render a sharded operand's ``ShardLayout`` value for a sliced mesh.
 
-A slice lives in the IR as ``ComposedLayout(inner, offset, outer)``, and the
-emitted C++ has to carry both halves: the sub-box the mesh covers and where in
-the launch level it starts. The type renderer already did; these pin the value
-renderer to the same answer, since the runtime reads the offset back off the
-mesh to turn a program id into a mesh coordinate.
-
 See [runtime §2.3](docs/spec/runtime.md#23-tilefoundrymesh).
 """
 
@@ -43,13 +37,7 @@ def _mesh_layout_line(mesh: Mesh) -> str:
 
 
 def test_a_sliced_mesh_value_carries_its_offset_and_sub_box() -> None:
-    """The value spells the slice as CuTe's own composed layout.
-
-    Threads 64..127 are two of the block's four warps, so the mesh the value
-    builds states the sub-box ``(2, 32)`` at the parent's strides, wrapped in
-    the offset 64 that says which two. Emitting the bare positions would leave
-    every instance reading the box its neighbour owns.
-    """
+    """The value spells the slice as CuTe's own composed layout."""
     line = _mesh_layout_line(_BLOCK[2:4, :])
     assert (
         "cute::make_composed_layout(cute::identity{}, cute::Int<64>{}, "
@@ -59,13 +47,7 @@ def test_a_sliced_mesh_value_carries_its_offset_and_sub_box() -> None:
 
 
 def test_the_sliced_mesh_type_and_value_state_the_same_geometry() -> None:
-    """Type and value round-trip through one geometry, not two readings of it.
-
-    ``make_shard_tensor`` takes the value and the runtime reads the type, so a
-    disagreement between them is a silently wrong shard origin rather than a
-    compile error. The integers are the whole geometry: offset, extents,
-    strides.
-    """
+    """Type and value round-trip through one geometry, not two readings of it."""
     sliced = _BLOCK[2:4, :]
     numbers = re.compile(r"cute::Int<(-?\d+)>")
     assert numbers.findall(_mesh_layout_line(sliced)) == ["64", "2", "32", "32", "1"]
@@ -90,13 +72,7 @@ def test_a_non_contiguous_mesh_slice_is_refused() -> None:
 
 
 def test_an_identity_participating_box_is_refused() -> None:
-    """An identity ``outer`` names no sub-box, so no offset can start in one.
-
-    ``ComposedLayout.outer`` is what a mesh slice puts its participating box
-    in; ``None`` there means the extents come from ``inner`` instead, a
-    component a mesh has no other use for. Refusing beats emitting the inner
-    component's box as if the slice had selected it.
-    """
+    """An identity ``outer`` names no sub-box, so no offset can start in one."""
     identity_box = Mesh(
         (Topology("thread", 128),),
         ComposedLayout(inner=Layout(shape=(4, 32), strides=(32, 1)), offset=0, outer=None),

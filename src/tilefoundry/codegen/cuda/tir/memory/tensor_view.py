@@ -48,12 +48,7 @@ def _render_layout(shape, strides) -> str:
 
 
 def _scope_mesh_value(mesh, ctx) -> "str | None":
-    """The name of the enclosing scope's mesh object, when it is this mesh.
-
-    A mesh scope emits one ``constexpr Mesh<...> <name>_mesh{}``; a view under
-    it that names the same mesh reads that object instead of building an equal
-    one, so the scope and its views cannot drift apart.
-    """
+    """The name of the enclosing scope's mesh object, when it is this mesh."""
     if ctx is None or not hasattr(ctx, "_mesh_aliases"):
         return None
     entry = ctx._mesh_aliases.get(id(mesh))
@@ -84,13 +79,7 @@ def _render_mesh_type(mesh, ctx=None) -> str:
 def _partial_reduction_tag(reduction: str) -> str:
     """The C++ reduce tag a ``Partial``'s reduction names.
 
-    ``shard::P<Reduction>`` carries the reduction as its parameter, so it has to
-    be named and not left ``void``: the attr is an unreduced partial value
-    ([shard §6](docs/spec/shard.md#6-shardattr)) and ``ops::reduce`` reads it as
-    the reducible half of a reduce, so a ``P`` whose parameter says nothing
-    keeps the semantics while dropping the kind. ``Partial.reduction`` is a
-    string over ``ReduceKind``'s own values, so ``REDUCE_TAG`` answers this too;
-    anything outside it fails here.
+    See [shard §6](docs/spec/shard.md#6-shardattr).
     """
     try:
         kind = ReduceKind(reduction)
@@ -127,12 +116,7 @@ def _render_shard_layout_type(sl: SL, ctx=None) -> str:
 def _composed_mesh_layout(positions: str, base: int) -> str:
     """A mesh layout value expression, its slice origin folded in.
 
-    The value must say what the type says: ``mesh_type`` renders a narrowed
-    mesh as ``cute::ComposedLayout<cute::identity, cute::Int<base>, ...>``, and
-    the runtime reads the pair back apart with ``Mesh::offset`` /
-    ``positions_of`` ([runtime §2.3](docs/spec/runtime.md#23-tilefoundrymesh)).
-    Emitting the bare positions instead would hand every instance of a slice
-    the box its neighbour owns.
+    See [runtime §2.3](docs/spec/runtime.md#23-tilefoundrymesh).
     """
     if not base:
         return positions

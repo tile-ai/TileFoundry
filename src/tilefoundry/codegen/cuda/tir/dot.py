@@ -1,13 +1,4 @@
-"""Emitter for the ``Dot`` TIR stmt — one uniform runtime call.
-
-The tier is ``ops::dot``'s own answer, read off the operand shard layouts
-together with whether a workspace came with them, so the emitted line passes
-the workspace or does not and names no strategy either way -- the shape
-``reduce``'s emitter already takes.
-
-No axes pack sits beside it: the axes a fold contracts are the ones the
-operands' meshes already contract, so nothing here restates them.
-"""
+"""Emitter for the ``Dot`` TIR stmt — one uniform runtime call."""
 
 from __future__ import annotations
 

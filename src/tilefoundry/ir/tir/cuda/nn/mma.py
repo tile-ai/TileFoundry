@@ -54,15 +54,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 @register_verify_stmt(Mma)
 def _(call: "Call", ctx: "VerifyContext") -> None:
-    """Check the operand shapes ``ops::mma`` will read off these layouts.
-
-    ``b``'s two orders are the two tiers', and ops/mma.cuh scopes its rule to
-    one of them: "*The tile tier* reads a as (M, K) and b as (N, K)".
-    ``mma_impl::Tile`` does that -- N from ``size<0>`` of b's layout, indexed
-    ``bv(n, k)`` -- while the atom tier's B fragment lies over a (K, N) buffer
-    with n contiguous. So the tier decides, read the way ``tile_shaped_v``
-    reads it: a rank-2 shard layout is a tile, anything else a fragment.
-    """
+    """Check the operand shapes ``ops::mma`` will read off these layouts."""
     acc_ty = ctx.type_of(call.args[0])
     lhs_ty = ctx.type_of(call.args[1])
     rhs_ty = ctx.type_of(call.args[2])

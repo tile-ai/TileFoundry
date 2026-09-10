@@ -1,10 +1,5 @@
 """Cover the fused multiply-contract: what it refuses, and the one call it emits.
 
-Both tiers reach the same entry, and the emitted line is the only place a reader
-can see that: with no workspace ``ops::dot`` contracts inside a warp, with one it
-contracts across the block, and neither the tier nor the load width appears at
-the call site.
-
 See [tir §2.3](docs/spec/tir.md#23-tir-ops).
 """
 
@@ -46,11 +41,7 @@ def test_accepts_two_equal_runs_folded_into_one_cell() -> None:
 
 
 def test_accepts_operands_of_different_element_types() -> None:
-    """The fold accumulates in f32 whatever it loads, so the two may differ.
-
-    Requiring a match here would refuse a bf16 row against an f32 vector, which
-    the runtime's cast-then-multiply handles as written.
-    """
+    """The fold accumulates in f32 whatever it loads, so the two may differ."""
     verify_prim_function(_pf(_ty(8, DType.from_name("bf16")), _ty(8), _ty(1)))
 
 
@@ -61,11 +52,7 @@ def test_refuses_operands_that_contract_over_different_lengths() -> None:
 
 
 def test_refuses_a_destination_wider_than_one_cell() -> None:
-    """A contraction leaves a total, and a total is one number.
-
-    Every participant leaves holding it, so a wider destination is not a wider
-    result -- it is cells the op never writes.
-    """
+    """A contraction leaves a total, and a total is one number."""
     with pytest.raises(VerifyError, match="must be one cell"):
         verify_prim_function(_pf(_ty(8), _ty(8), _ty(4)))
 
@@ -77,12 +64,7 @@ def test_refuses_a_workspace_outside_shared_memory() -> None:
 
 
 def test_refuses_a_block_contraction_over_an_unsharded_left_operand() -> None:
-    """The warps that post a partial are the ones lhs's mesh names.
-
-    Both the count to fold and the barrier to fold behind come off that mesh, so
-    a workspace beside a plain operand asks for a block contraction with nothing
-    saying which block.
-    """
+    """The warps that post a partial are the ones lhs's mesh names."""
     with pytest.raises(VerifyError, match="must carry a ShardLayout"):
         verify_prim_function(_pf(_ty(8), _ty(8), _ty(1), _ty(4, storage="smem")))
 
@@ -146,11 +128,7 @@ class DotTiers:
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_both_tiers_answer_what_torch_answers() -> None:
-    """One compile behind two assertions, each naming the tier that failed.
-
-    Separate operand triples and separate destinations, so a wrong total is read
-    back from the tier that produced it rather than from the pair of them.
-    """
+    """One compile behind two assertions, each naming the tier that failed."""
     rm = tilefoundry.compile(DotTiers, target=CudaTarget("nvidia.h200_sxm"))
     torch.manual_seed(0)
     warp_a = torch.randn(32, 32, dtype=torch.float32, device="cuda")

@@ -1,13 +1,6 @@
 """Effect-form TIR Op for a barrier-completing gmem→smem staging copy.
 
-``CopyAsync`` is ``cp.async``: the thread that issues is the thread that waits.
-This completes on an mbarrier, which is what lets a consumer wait for a tile it
-did not fetch. Which instruction carries it is the runtime's choice from the
-operand shard layouts, not a tier this op names.
-
-Lowers to ``tilefoundry::ops::tma_copy(src, dst, bar)``
-([runtime §3](docs/spec/runtime.md#3-runtime-ops)).
-
+See [runtime §3](docs/spec/runtime.md#3-runtime-ops).
 See [tir §2.3](docs/spec/tir.md#23-tir-ops).
 """
 
@@ -26,15 +19,7 @@ __all__ = ["TmaCopy"]
 
 @register_op(dialect="T", category="async", name="tma_copy")
 class TmaCopy(Op):
-    """Stage a tile from global to shared memory, completing on a barrier.
-
-    Nothing blocks: the copy may still be in flight when the issuing thread
-    reaches the next statement. Completion lands on ``barrier``'s current
-    phase, so every consumer waits with ``MBarrierWaitParity``. The arrival
-    that declares the transferred bytes belongs to the implementation, which
-    issues it on the same instruction as the copy; a caller that arrived
-    separately would be declaring a count the op already knows.
-    """
+    """Stage a tile from global to shared memory, completing on a barrier."""
 
     src = ParamDef(kind="input", pattern=Tensor)
     dst = ParamDef(kind="input", pattern=Tensor)

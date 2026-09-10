@@ -1,12 +1,5 @@
 """``ops::copy`` across the storage boundaries and both vector widths, one kernel.
 
-``copy`` names no tier: it resolves both operands to this instance's slice and
-hands the pair to ``cute::copy``. What differs between the crossings is what
-``to_local`` hands over -- a projected gmem window, a shared allocation the
-whole block owns, or a thread's own registers -- and each of those used to be
-got wrong differently. The width falls out of the same shapes, so it rides the
-same kernel: five operand pairs, one module, one compile.
-
 See [runtime §3](docs/spec/runtime.md#3-runtime-ops).
 """
 
@@ -28,15 +21,7 @@ _CUDA = CudaTarget("nvidia.h200_sxm")
 
 @module(entry="copy_storage_host")
 class CopyStorage:
-    """Five operand pairs in one device function, one per thing that can differ.
-
-    The pairs keep the layouts and the storage kinds they had when each was a
-    module of its own, and ``copy`` reads nothing else, so sharing a kernel
-    changes neither a crossing nor a width. The broadcast pair runs on a
-    32-thread mesh under a 128-thread block: a mesh narrower than its level
-    wraps, ``(tid / 1) % 32``, so the upper warps repeat the lowest warp's copy
-    over the same rows and write the same bytes to the same cells.
-    """
+    """Five operand pairs in one device function, one per thing that can differ."""
 
     @prim_func(target=_CUDA)
     def copy_storage_device(
@@ -127,13 +112,7 @@ class CopyStorage:
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_every_crossing_round_trips_the_input_bit_for_bit() -> None:
-    """One compile behind five assertions, each naming the pair that failed.
-
-    Exactly, not approximately: no crossing converts anything, so a difference
-    of any size is an offset or a width read off the wrong side rather than
-    rounding. Each pair has its own destination and its own assertion, so a
-    wrong byte is read back from the crossing that produced it.
-    """
+    """One compile behind five assertions, each naming the pair that failed."""
     rm = tilefoundry.compile(CopyStorage, target=_CUDA)
     torch.manual_seed(0)
     a_smem = torch.randn(128, 4, dtype=torch.float32, device="cuda")

@@ -1,11 +1,4 @@
-"""Codegen for the generic Binary and Unary TIR effect-form Ops.
-
-Both emit the one pointwise runtime entry, ``tilefoundry::ops::elementwise``:
-arity is the argument pack's length, and a broadcast operand is a stride-0
-mode on that operand's layout rather than a differently named call. What the
-kind selects is only the ``fn`` -- an existing op tag when the operands share a
-dtype, and a lambda that states the conversion when they do not.
-"""
+"""Codegen for the generic Binary and Unary TIR effect-form Ops."""
 
 from __future__ import annotations
 
@@ -123,15 +116,7 @@ def _broadcast_modes(dst_shape, rhs_shape, n_dst_runtime) -> tuple | None:
 
 
 def broadcast_view(rhs_n: str, modes, ctx: CodegenContext) -> str:
-    """Bind *rhs_n* read through a stride-0 layout, and name the binding.
-
-    ``compose`` and not ``make_tensor`` on a raw pointer: composition asks the
-    operand's *own* layout for element ``modes(i)``, so a strided or sharded
-    ``rhs`` -- a column of a wider matrix, a slice this instance owns -- is
-    read where it actually lies instead of where a fabricated stride-1 layout
-    would put it. ``to_local`` first, because that is the same projection
-    ``elementwise`` applies to every other operand.
-    """
+    """Bind *rhs_n* read through a stride-0 layout, and name the binding."""
     shape, stride = modes
     ctx._counter += 1
     name = f"bcast_{ctx._counter}"
@@ -146,15 +131,7 @@ def broadcast_view(rhs_n: str, modes, ctx: CodegenContext) -> str:
 
 
 def _dyn_clip(dst, operands, ctx: CodegenContext) -> str | None:
-    """The run-time count a plain dynamic operand set has to be clipped to.
-
-    ``ops::elementwise`` takes no count: it runs over ``size(local(dst))``,
-    which for a plain kernel parameter is the envelope the wrapper chose and
-    not the real extent, so a three-element input was read seven times. The
-    count belongs in the layout, as it does for ``ops::copy``. ``None``
-    whenever an operand is sharded -- a ``ShardLayout``'s local extents are
-    already its own answer.
-    """
+    """The run-time count a plain dynamic operand set has to be clipped to."""
     if any(isinstance(getattr(v.type, "layout", None), ShardLayout)
            for v in (dst, *operands)):
         return None
@@ -164,16 +141,7 @@ def _dyn_clip(dst, operands, ctx: CodegenContext) -> str | None:
 
 
 def _binary_fn(tag: str, dst_t: str, in_ts: tuple[str, ...]) -> str:
-    """The ``fn`` a binary kind calls with: the op tag, or a lambda.
-
-    A tag has one type parameter for both arguments, so it is the whole answer
-    exactly when the operands agree -- the well-formed case, a dtype change in
-    TIR being its own ``Cast`` node. Otherwise the conversion is stated here,
-    where the dtypes are known, rather than guessed inside the runtime loop,
-    and what it states is what ``binary_impl`` did implicitly: both operands
-    enter at the *destination's* dtype. Widening that is a semantic change and
-    belongs in a ``Cast`` node, not in this emitter.
-    """
+    """The ``fn`` a binary kind calls with: the op tag, or a lambda."""
     if len({dst_t, *in_ts}) <= 1:
         return f"{tag}{{}}"
     return (
@@ -221,15 +189,7 @@ def _emit_binary(call, ctx: CodegenContext) -> None:
 
 @register_codegen_cuda(Unary)
 def _emit_unary(call, ctx: CodegenContext) -> None:
-    """One source, always the bare tag -- a unary needs no lambda.
-
-    A tag with one argument deduces its type parameter from that argument, so
-    the map runs in the *source's* dtype and the only conversion is the one
-    ``dst(i) = ...`` performs. That is what the old ``unary_impl`` did too: it
-    cast the result, never the operand. ``UnaryKind.CAST`` is the same
-    statement with nothing in the middle, which is why ``identity_op`` is its
-    tag rather than a separate entry.
-    """
+    """One source, always the bare tag -- a unary needs no lambda."""
     src, dst = call.args
     src_n = _tensor_expr(src, ctx)
     dst_n = _tensor_expr(dst, ctx)

@@ -1,8 +1,4 @@
-"""Codegen for TIR Clamp — the pointwise entry with ``clamp_op`` as its ``fn``.
-
-``clamp_op`` carries its bounds as functor state, so a clamp is a plain
-arity-1 ``elementwise`` and needs no entry of its own.
-"""
+"""Codegen for TIR Clamp — the pointwise entry with ``clamp_op`` as its ``fn``."""
 
 from __future__ import annotations
 

@@ -265,12 +265,7 @@ def _next_code_line(text: str, after: int) -> str:
 
 
 def _asserts_explain_themselves(text: str, end_line: int) -> bool:
-    """Whether the comment ending at *end_line* sits on a ``static_assert``.
-
-    An assertion states its own reason: the message is what a reader sees when
-    it fires, and a comment above it is the same sentence in the place nobody
-    is looking when they need it.
-    """
+    """Whether the comment ending at *end_line* sits on a ``static_assert``."""
     return _next_code_line(text, end_line + 1).startswith("static_assert")
 
 

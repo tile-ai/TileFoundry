@@ -1,12 +1,5 @@
 """Every reduce tier in one kernel, each forced there by its layouts alone.
 
-``ops::reduce`` picks between four tiers from the (src, dst) shard attrs and
-the mesh shape, and nothing at the call site says which. Every tier answers
-with a number, so a mis-selected tier is a wrong answer rather than a failure,
-which is why all four run on GPU against torch. The four pairs share one
-module and one compile because the dispatch reads types only; which tier each
-still selects is what the four emission tests below state, one per tier.
-
 See [runtime §3](docs/spec/runtime.md#3-runtime-ops).
 """
 
@@ -94,12 +87,7 @@ _ENTRY = r"tilefoundry::ops::reduce<tilefoundry::ops::"
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_every_tier_answers_what_torch_answers() -> None:
-    """One compile behind four assertions, each naming the tier that failed.
-
-    Four operand pairs and four destinations, asserted one at a time, so a wrong
-    number is read back from the tier that produced it; a single combined
-    comparison would say only that one of the four is wrong.
-    """
+    """One compile behind four assertions, each naming the tier that failed."""
     rm = tilefoundry.compile(ReduceTiers, target=_CUDA)
     torch.manual_seed(0)
     a_plain = torch.randn(128, 8, dtype=torch.float32, device="cuda")

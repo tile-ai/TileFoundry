@@ -1,13 +1,4 @@
-"""Emitter for ``TmaCopy`` — one line, whichever instruction ends up running.
-
-Which one that is comes off the operand shard layouts inside the entry, so
-neither the byte count nor the vector width appears here: declaring the count
-at the call site is the drift the entry exists to prevent.
-
-The barrier is the one operand the runtime does not see as a tensor -- it is a
-64-bit word -- so it goes over as its own address. ``barrier_word`` is shared
-with the ``mbarrier`` emitters, which arm and wait on the same word.
-"""
+"""Emitter for ``TmaCopy`` — one line, whichever instruction ends up running."""
 
 from __future__ import annotations
 

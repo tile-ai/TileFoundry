@@ -37,12 +37,7 @@ __all__ = ["ReduceKind", "Reduce"]
 
 @register_op
 class Reduce(Op):
-    """Axis reduction over ``x``, one ``ReduceKind`` per runtime reduce tag.
-
-    ``mean`` / ``sum`` / ``abs_max`` / ``max`` / ``min``, which is exactly what
-    ``reduce_impl::reduce_traits`` specialises on: a kind here with no tag there
-    is a ``KeyError`` in the emitter, and a tag with no kind is unreachable.
-    """
+    """Axis reduction over ``x``, one ``ReduceKind`` per runtime reduce tag."""
 
     x = ParamDef(kind="input", pattern=Tensor)
     axes = ParamDef(kind="attribute", annotation=tuple)
@@ -129,11 +124,7 @@ def _least_representable(dtype: "torch.dtype"):
 
 
 def _greatest_representable(dtype: "torch.dtype"):
-    """The largest value *dtype* can hold.
-
-    The mirror of ``_least_representable``: ``True``, ``iinfo.max``, or ``+inf``
-    where the dtype round-trips it and ``finfo.max`` where it does not.
-    """
+    """The largest value *dtype* can hold."""
     if dtype is torch.bool:
         return True
     if not dtype.is_floating_point:

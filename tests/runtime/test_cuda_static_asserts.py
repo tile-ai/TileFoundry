@@ -1,11 +1,5 @@
 """The runtime's compile-time refusals, read as diagnostics.
 
-``cuda/static_asserts.cu`` is one translation unit switched by ``-DCASE=n``:
-case 0 is the positive control and must compile, every other case violates
-exactly one constraint. This driver runs one ``nvcc`` per case and asserts both
-the non-zero exit and the expected sentence, so a case that has started failing
-for a *different* reason is a failure and not a pass.
-
 See [runtime §3](docs/spec/runtime.md#3-runtime-ops).
 """
 
@@ -58,15 +52,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def _compile(case: int) -> subprocess.CompletedProcess:
-    """Compile the one translation unit at ``-DCASE=case``.
-
-    ``-c -o /dev/null``: the assertions all fire in the front end, and no case
-    needs a GPU or an artifact. ``-arch=sm_90a`` because two of them sit under
-    the ``__CUDA_ARCH__ >= 800`` guard ``copy_async`` carries. The includes are
-    the set ``codegen/linker.py`` builds for a device translation unit, less the
-    tvm_ffi headers; nothing else, since a case needing a flag would be pinning
-    the flag rather than the assertion.
-    """
+    """Compile the one translation unit at ``-DCASE=case``."""
     return subprocess.run(
         [
             "nvcc",
@@ -86,26 +72,14 @@ def _compile(case: int) -> subprocess.CompletedProcess:
 
 
 def test_the_corrected_arithmetic_still_compiles() -> None:
-    """The positive control, so that failing everywhere cannot read as passing.
-
-    Case 0 asserts the reduce dispatch's own answers for a flat ``(256,)``
-    thread mesh, a ``(2, 64)`` one that straddles the warp boundary, and the
-    ``(1, 32)`` the mega kernel uses -- the three the greedy warp walk this
-    replaced got wrong -- then that a sparse mesh knows its own ids, and that
-    a two-level mesh hands each level back on its own.
-    """
+    """The positive control, so that failing everywhere cannot read as passing."""
     proc = _compile(0)
     assert proc.returncode == 0, proc.stderr
 
 
 @pytest.mark.parametrize("case", [c for c in CASES if c != 0])
 def test_the_wrong_usage_does_not_compile(case: int) -> None:
-    """Each case violates one constraint and is refused by its own sentence.
-
-    Both halves matter. The non-zero exit says the program was rejected; the
-    sentence says it was rejected for the reason the case is about, which is
-    what keeps a case from passing on an unrelated error introduced later.
-    """
+    """Each case violates one constraint and is refused by its own sentence."""
     proc = _compile(case)
     assert proc.returncode != 0, f"CASE {case} compiled; the constraint is not enforced"
     expected = CASES[case]

@@ -19,14 +19,7 @@ from tilefoundry.target import validate_cuda_topology_levels
 
 
 def _resolved(topology: Topology | str) -> Topology:
-    """*topology* as a ``Topology``, never a bare level name.
-
-    ``Mesh.topologies`` admits a name because the authored surface writes one
-    (``Mesh(("cta",), ...)``) and the parser resolves it against the module's
-    declaration before lowering. One still spelled as a string here never got
-    that resolution, so it states no extent, and codegen has nowhere else to
-    read one from.
-    """
+    """*topology* as a ``Topology``, never a bare level name."""
     if isinstance(topology, str):
         raise RuntimeError(
             f"CUDA mesh emission: mesh level {topology!r} is still a bare name; "
@@ -83,15 +76,7 @@ def _levelwise_layout(mesh: Mesh, topos) -> str:
 
 
 def mesh_type(mesh: Mesh) -> str:
-    """The C++ ``tilefoundry::Mesh`` type for *mesh*, offset included.
-
-    A slice's origin rides in the layout, not beside it: ``ComposedLayout(inner,
-    offset, outer)`` here is ``cute::ComposedLayout<cute::identity,
-    cute::Int<offset>, cute::Layout<...>>``, whose ``operator()`` is
-    ``offset + outer(c)`` -- the same map the IR layout makes. It has to be
-    carried: without it every slice would look like the block it came from, and
-    ``ops::sync`` reads it to tell the two apart.
-    """
+    """The C++ ``tilefoundry::Mesh`` type for *mesh*, offset included."""
     topos = program_topologies(mesh)
     layout_value = mesh.layout
     if isinstance(layout_value, ComposedLayout):
@@ -139,14 +124,7 @@ def _is_dynamic_mesh(mesh: Mesh) -> bool:
 
 @register_codegen_cuda(MeshScope)
 def _emit(node: MeshScope, ctx: CodegenContext) -> None:
-    """Emit the block a mesh scope is, and the mesh object it states.
-
-    The scope states the mesh once, as the object everything under it reads: a
-    view's shard layout names this one rather than rebuilding an equal mesh of
-    its own beside it. Both names are the C++ block's, so they leave with it --
-    another kernel's scope states an equal mesh under a name this one cannot
-    see, which is why the alias table is saved and restored around the body.
-    """
+    """Emit the block a mesh scope is, and the mesh object it states."""
     if ctx.target is None:
         raise RuntimeError("CUDA MeshScope emission requires its Target")
     _validate_topology(node.mesh, ctx.target)

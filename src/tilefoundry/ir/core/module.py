@@ -38,13 +38,7 @@ def subtree(root: "Module"):
 
 
 def module_functions(root: "Module") -> tuple[ModuleFunction, ...]:
-    """Return every function owned by *root* or one of its descendants.
-
-    The order is deterministic: a module's own functions precede its child
-    modules, and children retain their declaration order.  Consumers that
-    resolve symbols or verify calls must use this tree-wide view; looking only
-    at ``root.functions`` would make a parent entry unable to name a child.
-    """
+    """Return every function owned by *root* or one of its descendants."""
     return tuple(function for node in subtree(root) for function in node.functions)
 
 
