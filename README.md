@@ -25,6 +25,7 @@
 
 <p align="center">
   <a href="https://tile-ai.github.io/TileFoundry.github.io/">Documentation</a> &middot;
+  <a href="https://tile-ai.github.io/TileFoundry.github.io/blog/AI-compilers-in-the-agentic-era/">Blog</a> &middot;
   <a href="https://github.com/tile-ai/TileFoundry#quick-start">Quick Start</a> &middot;
   <a href="https://github.com/tile-ai/TileFoundry/tree/main/examples">Examples</a>
 </p>
