@@ -21,16 +21,21 @@ def test_every_reduce_kind_has_a_runtime_tag() -> None:
 @pytest.mark.parametrize(
     ("reduction", "tag"),
     [
-        ("sum", "add_op"),
-        ("mean", "mean_op"),
-        ("max", "max_op"),
-        ("min", "min_op"),
-        ("abs_max", "absmax_op"),
+        ("sum", "primitive::add_op"),
+        ("mean", "ops::mean_op"),
+        ("max", "primitive::max_op"),
+        ("min", "primitive::min_op"),
+        ("abs_max", "ops::absmax_op"),
     ],
 )
 def test_a_partial_carries_its_reduction_into_the_type(reduction: str, tag: str) -> None:
-    """``shard::P``'s parameter is the reduction, not ``void``."""
-    assert _render_attr(Partial(reduction)) == f"tilefoundry::shard::P<tilefoundry::ops::{tag}>"
+    """``shard::P``'s parameter is the reduction, not ``void``.
+
+    Which namespace it comes from says what kind of thing it is: a callable an
+    op is handed lives in ``primitive``, while ``mean`` and ``abs_max`` are
+    reduce's own tags and live with it.
+    """
+    assert _render_attr(Partial(reduction)) == f"tilefoundry::shard::P<tilefoundry::{tag}>"
 
 
 def test_a_reduction_the_runtime_cannot_name_is_refused() -> None:

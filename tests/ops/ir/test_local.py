@@ -49,5 +49,5 @@ def test_local_analyzes_as_a_zero_traffic_topology_view() -> None:
         assert result.level == level
         assert record is not None
         assert record.flops.kinds == ()
-        assert moved.storage == ()
+        assert moved.storage.kinds == ()
         assert moved.operands == (TrafficBytes(), TrafficBytes())
