@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import difflib
 import re
 import subprocess
 import sys
@@ -413,6 +414,13 @@ def main(argv: list[str]) -> int:
     if "--check" in argv:
         if current != updated:
             print(f"{SPEC.relative_to(ROOT)}: stale; run scripts/runtime_spec_surface.py")
+            sys.stdout.writelines(
+                difflib.unified_diff(
+                    current.splitlines(keepends=True),
+                    updated.splitlines(keepends=True),
+                    "spec", "generated",
+                )
+            )
             return 1
         return 0
     if current != updated:
