@@ -14,8 +14,8 @@ from .shard import (
     Split,
     Topology,
     canonical_shard_layout,
-    level_axes,
     shard_layout_of,
+    topology_axes,
 )
 from .shard.layout_algebra import size
 from .shard.shard_layout import split_target_axes
@@ -129,10 +129,10 @@ def bytes_by_storage(
         if tensor.storage is StorageKind.UMAT:
             if umat_level is None:
                 continue
-            level = umat_level
+            memory_level = umat_level
         else:
-            level = str(tensor.storage)
-        result[level] = result.get(level, 0) + tensor_bytes(tensor)
+            memory_level = str(tensor.storage)
+        result[memory_level] = result.get(memory_level, 0) + tensor_bytes(tensor)
     return result
 
 
@@ -192,18 +192,18 @@ def make_shard_tensor_type(
 
 
 def local_type_of(
-    type: Type, *, level: str | None = None, topologies: tuple[Topology, ...] = ()
+    type: Type, *, topology_level: str | None = None, topologies: tuple[Topology, ...] = ()
 ) -> Type:
     """Project every tensor leaf to what one unit holds.
 
-    With ``level``: a ``Split`` at that level or coarser divides, while finer
-    splits, ``Broadcast``, and ``Partial`` do not; logical axes may factor into
-    layout positions, and ``topologies`` supplies the ordered hierarchy.
-    Without ``level``: every ``Split`` divides, the layout is dropped, and the
-    logical rank is preserved. This form is for relations over logical axes,
-    where factoring an axis into layout positions would lose the modeled flow.
+    With ``topology_level``: a ``Split`` at that level or coarser divides, while
+    finer splits, ``Broadcast``, and ``Partial`` do not; logical axes may factor
+    into layout positions, and ``topologies`` supplies the ordered hierarchy.
+    Without it: every ``Split`` divides, the layout is dropped, and the logical
+    rank is preserved. This form is for relations over logical axes, where
+    factoring an axis into layout positions would lose the modeled flow.
     """
-    if level is None:
+    if topology_level is None:
         if not isinstance(type, TensorType):
             return type
         layout = shard_layout_of(type.layout)
@@ -232,10 +232,10 @@ def local_type_of(
         return TensorType(shape=tuple(local), dtype=type.dtype, layout=None, storage=type.storage)
 
     levels = {topology.name: index for index, topology in enumerate(topologies)}
-    if level not in levels:
+    if topology_level not in levels:
         available = ", ".join(levels) or "none"
         raise ValueError(
-            f"local_type_of: topology level {level!r} is not declared; "
+            f"local_type_of: topology level {topology_level!r} is not declared; "
             f"available levels are {available}"
         )
     if len(levels) != len(topologies):
@@ -243,7 +243,8 @@ def local_type_of(
     if isinstance(type, TupleType):
         return TupleType(
             fields=tuple(
-                local_type_of(field, level=level, topologies=topologies) for field in type.fields
+                local_type_of(field, topology_level=topology_level, topologies=topologies)
+                for field in type.fields
             )
         )
     if not isinstance(type, TensorType):
@@ -254,7 +255,9 @@ def local_type_of(
     shard = shard_layout_of(layout)
     if shard is not None:
         return TensorType(
-            shape=_local_layout_shape(shard, selected_level=levels[level], topologies=topologies),
+            shape=_local_layout_shape(
+                shard, selected_topology_level=levels[topology_level], topologies=topologies
+            ),
             dtype=type.dtype,
             layout=layout,
             storage=type.storage,
@@ -275,10 +278,12 @@ def _require_concrete(shape: tuple | list) -> None:
 
 
 def _nested_layout_shape(
-    layout: object, *, selected_level: int, topologies: tuple[Topology, ...]
+    layout: object, *, selected_topology_level: int, topologies: tuple[Topology, ...]
 ) -> tuple:
     if isinstance(layout, ShardLayout):
-        return _local_layout_shape(layout, selected_level=selected_level, topologies=topologies)
+        return _local_layout_shape(
+            layout, selected_topology_level=selected_topology_level, topologies=topologies
+        )
     if isinstance(layout, (Layout, ComposedLayout)):
         return tuple(layout.shape)
     raise ValueError(
@@ -287,26 +292,28 @@ def _nested_layout_shape(
 
 
 def _local_layout_shape(
-    layout: ShardLayout, *, selected_level: int, topologies: tuple[Topology, ...]
+    layout: ShardLayout, *, selected_topology_level: int, topologies: tuple[Topology, ...]
 ) -> tuple[int, ...]:
     shape = list(
-        _nested_layout_shape(layout.layout, selected_level=selected_level, topologies=topologies)
+        _nested_layout_shape(
+            layout.layout, selected_topology_level=selected_topology_level, topologies=topologies
+        )
     )
     declared = {topology.name: index for index, topology in enumerate(topologies)}
-    axis_level: dict[int, int] = {}
-    for topology, axes in zip(layout.mesh.topologies, level_axes(layout.mesh)):
-        level = declared.get(topology.name)
-        if level is None:
+    axis_topology_level: dict[int, int] = {}
+    for topology, axes in zip(layout.mesh.topologies, topology_axes(layout.mesh)):
+        position = declared.get(topology.name)
+        if position is None:
             raise ValueError(
                 f"local_type_of: shard uses undeclared topology level {topology.name!r}"
             )
         for mesh_axis in axes:
-            axis_level[mesh_axis] = level
+            axis_topology_level[mesh_axis] = position
     mesh_shape = layout.mesh.layout.shape
     for mesh_axis, attr in enumerate(layout.attrs):
         if not isinstance(attr, Split):
             continue
-        if axis_level.get(mesh_axis, selected_level) > selected_level:
+        if axis_topology_level.get(mesh_axis, selected_topology_level) > selected_topology_level:
             continue
         if mesh_axis >= len(mesh_shape):
             raise ValueError("local_type_of: shard attribute exceeds mesh layout rank")

@@ -63,7 +63,7 @@ def test_external_v100_documents_analyse_a_copied_installed_model(
     assert report["function_records"]["roofline"]["ideal_ns"] > 0
     gmem = next(
         item for item in report["function_records"]["memory"]["footprint"]
-        if item["level"] == "gmem"
+        if item["memory_level"] == "gmem"
     )
     assert gmem["peak_bytes"] < 32_000_000_000
     record = report["function_records"]["performance"]

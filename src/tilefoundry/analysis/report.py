@@ -221,7 +221,7 @@ def report_data(
     module: Module,
     function: Function,
     analyses: tuple[str, ...],
-    level: str | None,
+    topology_level: str | None,
     executed: tuple[str, ...],
     metadata_types: tuple[type[IRMetadata], ...],
     call_labels: Mapping[int, str] | None = None,
@@ -235,7 +235,7 @@ def report_data(
         "target": target.identity,
         "module": module.name,
         "function": function.name,
-        "topology": level,
+        "topology": topology_level,
         "requested": list(analyses),
         "executed": list(executed),
         "function_records": function_records,
@@ -284,7 +284,11 @@ def _loop_records(
         if memory is not None and MemoryMetadata in selected
         else None
     )
-    peaks = {item.level: item.peak_bytes for item in memory.footprint} if memory is not None else {}
+    peaks = (
+        {item.memory_level: item.peak_bytes for item in memory.footprint}
+        if memory is not None
+        else {}
+    )
     rows: list[dict[str, object]] = []
     for expr in collect_exprs(function.body):
         if not isinstance(expr, LoopRegion):

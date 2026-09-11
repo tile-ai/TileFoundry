@@ -14,7 +14,7 @@ class AnalyzeContext:
 
     module: Module
     target: Target
-    level: str | None
+    topology_level: str | None
     options: object | None
     root: "Scope"
     current: "Scope"

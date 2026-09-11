@@ -25,7 +25,11 @@ from tilefoundry.target.cuda.spec import (
     build_cuda_architecture,
     build_cuda_device,
 )
-from tilefoundry.target.facts import TopologyLimitFacts, facts_result
+from tilefoundry.target.facts import (
+    TopologyFacts,
+    TopologyLimitFacts,
+    facts_result,
+)
 from tilefoundry.target.hardware.envelope import HardwareDocument
 from tilefoundry.target.services import CodeGenerator
 from tilefoundry.utils.python_source import PythonExpr
@@ -123,23 +127,31 @@ class CudaTarget(Target):
         object.__setattr__(self, "_architecture_document", architecture.document)
         object.__setattr__(self, "_device_document", device.document)
 
+    def _topology_facts(self) -> TopologyFacts:
+        """The three CUDA levels, coarsest first.
+
+        Only ``gpu`` comes from the target instance: how many cards a deployment
+        has is stated by whoever constructs the target, and no card can read
+        which of them it is.
+        """
+        return TopologyFacts(
+            (
+                TopologyLimitFacts("gpu", self.device_count, from_target=True),
+                TopologyLimitFacts("cta", None),
+                TopologyLimitFacts(
+                    "thread", self.architecture.topology_limit("thread")
+                ),
+            )
+        )
+
     def get_facts(self, facts_type: type, query: object | None = None):
         """Project CUDA hardware through the facts this Target owns."""
+        if facts_type is TopologyFacts and query is None:
+            return facts_result(self, facts_type, self._topology_facts())
         if facts_type is TopologyLimitFacts:
-            if query == "gpu":
-                return facts_result(
-                    self, facts_type, TopologyLimitFacts("gpu", self.device_count)
-                )
-            if query == "cta":
-                return facts_result(self, facts_type, TopologyLimitFacts("cta", None))
-            if query == "thread":
-                return facts_result(
-                    self,
-                    facts_type,
-                    TopologyLimitFacts(
-                        "thread", self.architecture.topology_limit("thread")
-                    ),
-                )
+            for level in self._topology_facts().topologies:
+                if level.name == query:
+                    return facts_result(self, facts_type, level)
             return super().get_facts(facts_type, query)
 
         from tilefoundry.analysis.facts import (  # noqa: PLC0415
@@ -192,8 +204,6 @@ class CudaTarget(Target):
     def arch(self) -> str:
         """Return the architecture name used by compilation."""
         return self.architecture.name
-
-    topology_levels: ClassVar[tuple[str, ...]] = ("gpu", "cta", "thread")
 
     def topology_limit(self, name: str) -> int:
         """Return the physical parallel limit for one CUDA topology level."""

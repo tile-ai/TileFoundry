@@ -22,7 +22,7 @@ class CostCase:
     flops: Mapping[DType, int] = field(default_factory=dict)
     service: Mapping[str, int] = field(default_factory=dict)
     traffic: tuple[TrafficBytes, ...] = ()
-    level: str | None = None
+    topology_level: str | None = None
     topologies: tuple[Topology, ...] = ()
 
 
@@ -37,7 +37,7 @@ def run_cost_case(case: CostCase) -> None:
     ctx = CostContext(
         selected_types=selected_types,
         selected_output_type=result_type,
-        level=case.level,
+        topology_level=case.topology_level,
         topologies=case.topologies,
     )
 

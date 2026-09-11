@@ -43,55 +43,60 @@ template <TopologyScope T>
 CUTE_HOST_DEVICE constexpr auto program_dim() noexcept;
 
 namespace detail {
-/// Named levels as one shape. Each count is a dependent call, so the counts
-/// are read where the shape is asked for and not where it is written -- a
-/// translation unit states them after this header.
-template <TopologyScope... Ts>
-CUTE_HOST_DEVICE constexpr auto dims_of() noexcept {
-    return cute::make_shape(program_dim<Ts>()...);
+/// Start and every level under it, coarsest first, one constant each. A
+/// tuple rather than a count, so that how many there are and where one
+/// sits are cute::rank and cute::find instead of arithmetic of our own.
+template <TopologyScope Start, size_t... Is>
+CUTE_HOST_DEVICE constexpr auto
+topologies_from(std::index_sequence<Is...>) noexcept {
+    return cute::make_tuple(cute::C<TopologyScope(int(Start) + int(Is))>{}...);
+}
+
+template <TopologyScope Start>
+CUTE_HOST_DEVICE constexpr auto topologies_from() noexcept {
+    return topologies_from<Start>(
+        std::make_index_sequence<size_t(int(TopologyScope::scope_count) -
+                                        int(Start))>{});
 }
 }
 
 /// Level T and every level under it, one mode each. A mesh naming several
 /// levels is indexed against this shape: an axis belongs to the level whose
 /// extents its own multiply up to, and a stride counts the levels below it.
+///
+/// Each count is a dependent call, so the counts are read where the shape is
+/// asked for and not where it is written -- a translation unit states them
+/// after this header.
 template <TopologyScope T>
 CUTE_HOST_DEVICE constexpr auto program_shape() noexcept {
-    if constexpr (T == TopologyScope::gpu)
-        return detail::dims_of<T, TopologyScope::cta, TopologyScope::thread>();
-    else if constexpr (T == TopologyScope::cta)
-        return detail::dims_of<T, TopologyScope::thread>();
-    else
-        return detail::dims_of<T>();
+    return cute::transform(
+        detail::topologies_from<T>(),
+        []<TopologyScope S>(cute::C<S>) { return program_dim<S>(); });
 }
 
 /// The coarsest level this program names. It names a contiguous run of them
 /// ending at the finest, so this one end says which: a single-card program
 /// says ``cta`` and has no ``gpu`` at all.
 ///
-/// A translation unit states it by defining TILEFOUNDRY_PROGRAM_LEVEL before
-/// this header, the way the target macro selects a runtime. A macro rather
-/// than a function the .cu defines, because the levels decide how long a
-/// coord is and a length is read while this header is compiled.
-#if !defined(TILEFOUNDRY_PROGRAM_LEVEL)
-#define TILEFOUNDRY_PROGRAM_LEVEL tilefoundry::TopologyScope::cta
+/// A translation unit states it by defining TILEFOUNDRY_PROGRAM_TOPOLOGY
+/// before this header, the way the target macro selects a runtime. A macro
+/// rather than a function the .cu defines, because the levels decide how long
+/// a coord is and a length is read while this header is compiled.
+#if !defined(TILEFOUNDRY_PROGRAM_TOPOLOGY)
+#define TILEFOUNDRY_PROGRAM_TOPOLOGY tilefoundry::TopologyScope::cta
 #endif
 
-CUTE_HOST_DEVICE constexpr TopologyScope program_level() noexcept {
-    return TILEFOUNDRY_PROGRAM_LEVEL;
+CUTE_HOST_DEVICE constexpr TopologyScope program_topology() noexcept {
+    return TILEFOUNDRY_PROGRAM_TOPOLOGY;
 }
 
-/// How many levels this program names.
-CUTE_HOST_DEVICE constexpr int program_level_count() noexcept {
-    return int(TopologyScope::scope_count) - int(program_level());
-}
-
-/// Where level T sits among the ones this program names.
-template <TopologyScope T>
-CUTE_HOST_DEVICE constexpr int program_level_index() noexcept {
-    static_assert(int(T) >= int(program_level()),
-                  "program_level_index: this program names no such level");
-    return int(T) - int(program_level());
+/// The topology levels this program names, coarsest first.
+///
+/// How many there are is cute::rank of it, and where level S sits among them
+/// is cute::find(program_topologies(), cute::C<S>{}) -- both are questions
+/// CuTe already answers about a tuple, so neither has a name of its own.
+CUTE_HOST_DEVICE constexpr auto program_topologies() noexcept {
+    return detail::topologies_from<program_topology()>();
 }
 
 /**
@@ -167,11 +172,10 @@ CUTE_HOST_DEVICE auto ids_of(std::index_sequence<Is...>) noexcept {
 }
 }
 
-/// Every level's id, indexed by program_level_index.
-///
+/// Every level's id, indexed the way program_topologies() is.
 CUTE_HOST_DEVICE auto program_ids() noexcept {
-    return detail::ids_of<program_level()>(
-        std::make_index_sequence<size_t(program_level_count())>{});
+    return detail::ids_of<program_topology()>(
+        std::make_index_sequence<size_t(cute::rank(program_topologies()))>{});
 }
 
 #include "layout/cute_ext.cuh"

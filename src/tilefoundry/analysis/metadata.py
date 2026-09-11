@@ -63,14 +63,14 @@ def breakdown[V](
     A kind any of them states appears in all of them, at *zero* where it was
     not stated, so one kind's total and its shares stay one row.
     """
-    kinds = sorted({*total, *(kind for level in per_unit for kind in level)})
+    kinds = sorted({*total, *(kind for share in per_unit for kind in share)})
     return Breakdown(
         tuple(
             (
                 kind,
                 Spread(
                     total.get(kind, zero),
-                    tuple(level.get(kind, zero) for level in per_unit),
+                    tuple(share.get(kind, zero) for share in per_unit),
                 ),
             )
             for kind in kinds
@@ -79,16 +79,16 @@ def breakdown[V](
 
 
 def shares[V](
-    held: Breakdown[V], topologies: tuple[str, ...], level: "str | None" = None
+    held: Breakdown[V], topologies: tuple[str, ...], topology_level: "str | None" = None
 ) -> dict[str, V]:
-    """Each kind's value for one unit of *level*, or its total without one.
+    """Each kind's value for one unit of *topology_level*, or its total without one.
 
     The only place a level's name is turned back into a position, because
     ``topologies`` is where the names are written and a ``Spread`` states its
     shares in that order and carries none of its own. A level the record does
     not state reads as the total, which is what a record over one unit says.
     """
-    index = topologies.index(level) if level in topologies else None
+    index = topologies.index(topology_level) if topology_level in topologies else None
     return {
         kind: spread.total if index is None else spread.at(index) for kind, spread in held.kinds
     }
@@ -131,14 +131,14 @@ class TrafficMetadata(IRMetadata):
 
 
 @dataclass(frozen=True)
-class LevelFootprint:
+class MemoryLevelFootprint:
     """How much of one memory level a function needs at its peak.
 
     ``persistent_bytes`` is the part that cannot be reclaimed within the
     function, so it is the floor the peak can never fall below.
     """
 
-    level: str
+    memory_level: str
     peak_bytes: int
     persistent_bytes: int
     capacity_bytes: int | None = None
@@ -154,7 +154,7 @@ class BufferFootprint:
     """Per-position, device-wide, and repeated bytes touched in one buffer."""
 
     buffer: str
-    level: str
+    memory_level: str
     bytes: int
     device_bytes: int
     repeated_bytes: int
@@ -185,7 +185,7 @@ class ValueLifetime:
     """
 
     binding: str
-    level: str
+    memory_level: str
     bytes: int
     defined_at: int
     last_used_at: int
@@ -217,14 +217,14 @@ class MemoryMetadata(IRMetadata):
     placed one: nothing was decided, so nothing is claimed.
     """
 
-    footprint: tuple[LevelFootprint, ...] = ()
+    footprint: tuple[MemoryLevelFootprint, ...] = ()
     lifetimes: tuple[ValueLifetime, ...] = ()
     advisories: tuple[str, ...] = ()
     allocation: "AllocationMetadata | None" = None
 
-    def level(self, name: str) -> LevelFootprint | None:
+    def memory_level(self, name: str) -> MemoryLevelFootprint | None:
         """The footprint recorded for *name*, if the function touches it."""
-        return next((item for item in self.footprint if item.level == name), None)
+        return next((item for item in self.footprint if item.memory_level == name), None)
 
 
 @dataclass(frozen=True)
@@ -294,8 +294,8 @@ __all__ = [
     "Breakdown",
     "BufferFootprint",
     "ComputeCostMetadata",
-    "LevelFootprint",
     "LoopFootprintMetadata",
+    "MemoryLevelFootprint",
     "MemoryMetadata",
     "PerformanceMetadata",
     "PerformanceSummaryMetadata",

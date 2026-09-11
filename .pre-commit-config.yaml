@@ -29,6 +29,14 @@ repos:
         entry: python scripts/spec_refs_lint.py
         language: system
         files: ^(docs/spec/.*\.md|src/.*\.py|tests/.*\.py|include/.*\.(h|cuh))$
+      # The spec states the runtime surface by reading it; this reports a spec
+      # that no longer matches the headers and files it is read from.
+      - id: runtime-spec-surface
+        name: runtime-spec-surface
+        entry: python scripts/runtime_spec_surface.py --check
+        language: system
+        pass_filenames: false
+        files: ^(docs/spec/runtime\.md|include/tilefoundry/runtime/.*|src/tilefoundry/(runtime/.*|compile)\.py)$
       - id: spec-entropy-lint
         name: spec-entropy-lint
         entry: python scripts/spec_entropy_lint.py

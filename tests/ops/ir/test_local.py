@@ -37,8 +37,13 @@ def test_local_analyzes_as_a_zero_traffic_topology_view() -> None:
     assert local.type.shape == (2,)
     assert isinstance(local.type.layout, Layout)
 
-    for level in ("cta", "thread"):
-        result = analyze(_LocalProgram, entry, analysis=("compute-cost", "memory"), level=level)
+    for topology_level in ("cta", "thread"):
+        result = analyze(
+            _LocalProgram,
+            entry,
+            analysis=("compute-cost", "memory"),
+            topology_level=topology_level,
+        )
         analysed_local = next(
             expr
             for expr in collect_exprs(result.function.body)
@@ -46,7 +51,7 @@ def test_local_analyzes_as_a_zero_traffic_topology_view() -> None:
         )
         record = get_metadata(analysed_local, ComputeCostMetadata)
         moved = get_metadata(analysed_local, TrafficMetadata)
-        assert result.level == level
+        assert result.topology_level == topology_level
         assert record is not None
         assert record.flops.kinds == ()
         assert moved.storage.kinds == ()

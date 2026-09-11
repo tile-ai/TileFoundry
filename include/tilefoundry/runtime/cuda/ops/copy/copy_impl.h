@@ -8,8 +8,8 @@ namespace copy_impl {
 struct Copy {
     template <class TSrc, class TDst>
     __device__ void operator()(TSrc const &src, TDst &dst) const {
-        auto &&s = detail::local_tensor(src);
-        auto &&d = detail::local_tensor(dst);
+        auto &&s = tilefoundry::local_tensor(src);
+        auto &&d = tilefoundry::local_tensor(dst);
         cute::copy(s, d);
     }
 };
@@ -50,8 +50,8 @@ CUTE_HOST_DEVICE constexpr int async_bytes() {
 struct CopyAsync {
     template <class TSrc, class TDst>
     __device__ void operator()(TSrc const &src, TDst &dst) const {
-        auto &&s = detail::local_tensor(src);
-        auto &&d = detail::local_tensor(dst);
+        auto &&s = tilefoundry::local_tensor(src);
+        auto &&d = tilefoundry::local_tensor(dst);
         using value_type =
             typename cute::remove_cvref_t<decltype(d)>::value_type;
         constexpr int bytes = async_bytes<decltype(s), decltype(d)>();

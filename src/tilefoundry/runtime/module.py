@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from typing import Callable
 
-from tilefoundry.ir.types.shard import Placement, Topology
-from tilefoundry.runtime.function import EntryABI
+from tilefoundry.codegen.signature import CallableSignature
+from tilefoundry.ir.types.shard import Placement
 from tilefoundry.runtime.resource import RuntimeResource
 
 __all__ = ["CompiledModule", "RuntimeModule"]
@@ -21,10 +21,18 @@ class RuntimeModule:
     ending with ``super().load``).
     """
 
+    name: str
+    """Mirrors the IR ``Module`` node name."""
+
+    entry: str | None
+    """Mirrors the IR ``Module`` entry."""
+
+    modules: tuple["RuntimeModule", ...]
+    """The children, registered explicitly in ``__init__``."""
+
     def __init__(
         self, name: str, entry: str | None = None, modules: tuple["RuntimeModule", ...] = ()
     ) -> None:
-
         self.name = name
         self.entry = entry
         self.modules = tuple(modules)
@@ -70,7 +78,7 @@ class CompiledModule(RuntimeModule):
     ``rm(x, out)`` writes into the ones given.
     """
 
-    def __init__(self, type: EntryABI, fn: Callable) -> None:
+    def __init__(self, type: CallableSignature, fn: Callable) -> None:
         super().__init__(name=type.name, entry=type.name)
         self.type = type
         self.fn = fn
@@ -87,21 +95,19 @@ class CompiledModule(RuntimeModule):
         """The ids the entry needs told, ahead of its own arguments.
 
         A level the host places has no register to read, so its id travels
-        with the call. A program that places none is called as it was written.
+        with the call, and each leading parameter is named for the level it
+        places -- which is how a ``Placement`` is keyed. A program that places
+        none is called as it was written.
         """
-        if not self.type.places:
+        if not self.type.leading:
             return ()
+        places = tuple(p.name for p in self.type.leading)
         if self._placement is None:
             raise ValueError(
-                f"{self.type.name}: places {self.type.places} and no Placement "
+                f"{self.type.name}: places {places} and no Placement "
                 f"says which program this is; pass placement= to load()"
             )
-        levels = tuple(
-            Topology(name, 1) for name in self.type.topologies
-        )
-        ids = self._placement.program_ids(levels)
-        at = {name: index for index, name in enumerate(self.type.topologies)}
-        return tuple(int(ids[at[name]]) for name in self.type.places)
+        return tuple(int(self._placement.ids[p.name]) for p in self.type.leading)
 
     def forward(self, *args):
         placed = self._placed_ids()

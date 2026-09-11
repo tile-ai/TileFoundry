@@ -2,9 +2,8 @@
 
 Importing this module loads every registered per-Op emitter under ``cuda/tir/``
 so its ``@register_codegen_cuda`` handler is active before codegen runs, and
-exposes the launch-config helper shared by the split-pipeline emitters. Param
-ABI derivation lives in ``runtime.function.param_abi_of`` (shared with
-``entry_abi_of``), not here.
+exposes the launch-config helper shared by the split-pipeline emitters.
+Parameter signatures are derived in ``codegen.signature``, not here.
 """
 from __future__ import annotations
 
@@ -14,6 +13,7 @@ import math
 import os
 import pkgutil
 
+from tilefoundry.codegen.topology import coarsest_topology
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.tir.shape import ShapeOf
@@ -42,18 +42,9 @@ _discover("tir/nn", "tilefoundry.codegen.cuda.tir.nn.")
 _discover("tir", "tilefoundry.codegen.cuda.tir.")
 
 
-def _program_level(module) -> str:
-    """The coarsest level this module's program names.
-
-    A program names a run of levels ending at the finest one, so the coarsest
-    it names says where its own run begins: what the device reads for itself
-    lies inside, and what the host places lies at or before it.
-    """
-    declared = {topology.name for topology in module.effective_topologies()}
-    for name in ("gpu", "cta", "thread"):
-        if name in declared:
-            return f"tilefoundry::TopologyScope::{name}"
-    return "tilefoundry::TopologyScope::cta"
+def _program_topology(module) -> str:
+    """The C++ ``TopologyScope`` enumerator for this program's coarsest level."""
+    return f"tilefoundry::TopologyScope::{coarsest_topology(module)}"
 
 
 def _topology_dim_specializations(
@@ -86,7 +77,7 @@ def _output_count_from_fn(fn) -> int:
     """Read output_count from the lowered PrimFunction metadata.
 
     The HIR-to-TIR lowering pass records output_count on the PrimFunction so
-    codegen can pass it through to EntryABI without guessing.
+    codegen can pass it through to the entry's signature without guessing.
     """
     return getattr(fn, "output_count", 1)
 

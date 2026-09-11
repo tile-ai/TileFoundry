@@ -93,9 +93,9 @@ struct Warp {
         static_assert(lane_axis_extent<Lhs>() == kWarpSize,
                       "ops::dot (warp tier): the fastest axis of the operands' "
                       "mesh must be exactly one warp of 32 lanes");
-        auto a = detail::local_tensor(lhs);
-        auto b = detail::local_tensor(rhs);
-        auto &&d = detail::local_tensor(dst);
+        auto a = tilefoundry::local_tensor(lhs);
+        auto b = tilefoundry::local_tensor(rhs);
+        auto &&d = tilefoundry::local_tensor(dst);
         using value_type = cute::remove_cvref_t<decltype(d(0))>;
         const float sum = tilefoundry::warp_reduce<primitive::add_op>(
             contract(a, b, int(cute::size(a))));
@@ -108,10 +108,10 @@ struct Cta {
     template <class Lhs, class Rhs, class Dst, class Ws>
     __device__ void operator()(Lhs const &lhs, Rhs const &rhs, Dst &dst,
                                Ws &ws) const {
-        auto a = detail::local_tensor(lhs);
-        auto b = detail::local_tensor(rhs);
-        auto &&d = detail::local_tensor(dst);
-        auto &&slots = detail::local_tensor(ws);
+        auto a = tilefoundry::local_tensor(lhs);
+        auto b = tilefoundry::local_tensor(rhs);
+        auto &&d = tilefoundry::local_tensor(dst);
+        auto &&slots = tilefoundry::local_tensor(ws);
         using value_type = cute::remove_cvref_t<decltype(d(0))>;
         constexpr int instances = tilefoundry::shard_mesh_instances<Lhs>();
         static_assert(instances >= kWarpSize && instances % kWarpSize == 0,

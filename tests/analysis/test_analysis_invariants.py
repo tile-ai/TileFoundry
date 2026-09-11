@@ -140,7 +140,7 @@ def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed() ->
             Constant(type=make_tensor_type((), DType.i64), value=2),
         ),
     )
-    ctx = CostContext(level="cta", topologies=(cta,))
+    ctx = CostContext(topology_level="cta", topologies=(cta,))
 
     stated = relations_of(call, ctx)
     reads = relation_of(stated.inputs[1].pattern)

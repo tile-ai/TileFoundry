@@ -359,7 +359,7 @@ def test_a_program_whose_buffers_have_nowhere_to_sit_is_refused() -> None:
     held = get_metadata(
         analyze(_SharedTile, unrestated, analysis="memory").function, MemoryMetadata
     ).footprint
-    assert next(item.peak_bytes for item in held if item.level == "smem") == 422_400
+    assert next(item.peak_bytes for item in held if item.memory_level == "smem") == 422_400
 
     fits = analyze(
         roomy,
@@ -378,10 +378,10 @@ def test_a_program_whose_buffers_have_nowhere_to_sit_is_refused() -> None:
         analysis="memory",
     )
     assert [
-        (item.binding, item.level, item.bytes, item.defined_at, item.last_used_at)
+        (item.binding, item.memory_level, item.bytes, item.defined_at, item.last_used_at)
         for item in get_metadata(fits.function, MemoryMetadata).lifetimes
     ] == [
-        (item.binding, item.level, item.bytes, item.defined_at, item.last_used_at)
+        (item.binding, item.memory_level, item.bytes, item.defined_at, item.last_used_at)
         for item in get_metadata(relieved.function, MemoryMetadata).lifetimes
     ]
 
@@ -413,7 +413,7 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
         match=r"^performance: selected topology level 'thread', but the target's "
         r"one-unit throughputs are stated for 'cta'$",
     ):
-        _local_duration_ns(work, throughput, services, level="thread")
+        _local_duration_ns(work, throughput, services, topology_level="thread")
 
     with pytest.raises(AnalysisError, match=r"unknown compute dtype 'f9e9m9'"):
         _local_duration_ns(
@@ -424,7 +424,7 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
             ),
             throughput,
             services,
-            level="cta",
+            topology_level="cta",
         )
 
     crossed = TrafficMetadata(
@@ -447,7 +447,7 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
             throughput,
             replace(services, unit_bandwidth=()),
             moved=crossed,
-            level="cta",
+            topology_level="cta",
         )
 
 
@@ -461,10 +461,10 @@ def test_a_level_the_machine_can_answer_about_is_one_it_measures() -> None:
     """
     function = FusedBoundary.entry_function()
     at = {
-        level: analyze(FusedBoundary, function, analysis=("performance",), level=level)
+        level: analyze(FusedBoundary, function, analysis=("performance",), topology_level=level)
         for level in ("cta", "thread")
     }
-    assert {level: result.level for level, result in at.items()} == {
+    assert {level: result.topology_level for level, result in at.items()} == {
         "cta": "cta",
         "thread": "thread",
     }

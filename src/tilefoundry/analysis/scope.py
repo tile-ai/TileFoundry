@@ -196,18 +196,18 @@ class Scope:
         entries = list(rows.items())
         labels = value_labels(buffer for _, (buffer, _, _, _) in entries)
         ordered = sorted(
-            (label, level, local, device)
-            for label, ((_, level), (_, _, local, device)) in zip(labels, entries)
+            (label, memory_level, local, device)
+            for label, ((_, memory_level), (_, _, local, device)) in zip(labels, entries)
         )
         footprints = tuple(
             BufferFootprint(
                 buffer=label,
-                level=level,
+                memory_level=memory_level,
                 bytes=local,
                 device_bytes=device,
                 repeated_bytes=local * self.trips(),
             )
-            for label, level, local, device in ordered
+            for label, memory_level, local, device in ordered
         )
         return LoopFootprintMetadata(
             footprints=footprints,

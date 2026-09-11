@@ -208,7 +208,7 @@ runs codegen → toolchain link → loader and returns a
 `RuntimeModule` ([runtime](./runtime.md)).
 
 `compile` is `build(lower(mod, ...))`. The `jit` convenience and cache contract
-are owned by [runtime §1.6](./runtime.md#16-jit-in-compilepy).
+are owned by [runtime §1.6](./runtime.md#16-compilepy).
 
 ### Dirty-scope retype / verify
 

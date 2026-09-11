@@ -17,7 +17,6 @@ class Target:
     """Identify a compilation backend."""
 
     name: ClassVar[str]
-    topology_levels: ClassVar[tuple[str, ...]]
 
     @property
     def identity(self) -> str: ...
@@ -56,7 +55,7 @@ def registered_targets() -> Mapping[str, type[Target]]: ...
     only requested Facts, so a backend reuses them by answering `get_facts`, not
     by inheriting a backend-specific analysis base class. A missing Facts
     projection MUST fail when the selected analyzer requests it.
-  - `facts_result`, `TargetFactsError`, `TopologyLimitFacts`,
+  - `facts_result`, `TargetFactsError`, `TopologyFacts`, `TopologyLimitFacts`,
     `MemoryHierarchyFacts`, `ThroughputFacts`, `PerformanceServiceFacts`, and
     `ParallelCapacityFacts` MUST be importable from `tilefoundry.target` for
     provider implementations.
@@ -83,10 +82,14 @@ def registered_targets() -> Mapping[str, type[Target]]: ...
   - Target values MUST remain immutable hardware values. Their service getters
     select immutable descriptors and Facts; normal Python inheritance carries
     those selections to a subclass unless it overrides or refuses them.
-  - `validate_program_topology` MUST reject a level outside `topology_levels`
-    and any resolved static extent that is not positive or exceeds the finite
-    `TopologyLimitFacts` bound for that level. The shared program check MUST use
-    this method rather than reproduce a backend's topology limits.
+  - `get_facts(TopologyFacts)` MUST list every topology level the Target
+    admits, coarsest first, as the `TopologyLimitFacts` of each. A Target that
+    states none MUST answer the empty tuple: it runs one program per call.
+  - `validate_program_topology` MUST reject a level outside
+    `get_facts(TopologyFacts)` and any resolved static extent that is not
+    positive or exceeds that level's finite `max_static_extent`. The shared
+    program check MUST use this method rather than reproduce a backend's
+    topology limits.
   - A provider MAY import `Analyzer` from `tilefoundry.target` to construct
     getter results. That package MUST NOT expose `CodeGenerator`
     or `LinkableModule` as provider API.
@@ -161,7 +164,6 @@ class CudaTarget(Target):
     architecture_digest: str | None
     device_digest: str | None
     arch: str
-    topology_levels: tuple[str, ...]
 
     def __init__(
         self,
@@ -244,18 +246,15 @@ hierarchy stops at those levels; warp, lane, and warpgroup structure belongs in
 thread mesh layouts.
 
 - constraints:
-  - `CudaTarget.topology_levels` MUST be `("gpu", "cta", "thread")`, outermost
-    first. A program names `gpu` when its data is divided across cards. Nothing
-    on one card can answer which position it holds, so that level's positions
-    are chosen by the host rather than read from hardware.
-  - `get_facts(TopologyLimitFacts, "gpu").max_static_extent` MUST be
-    `device_count`, which is `None` unless the caller states it. How many cards
-    a deployment has is not a property of the one card this target describes,
-    so an unstated count admits any extent, exactly as `"cta"` does; a stated
-    one MUST be a positive integer and bounds the level.
-  - A declared program topology name MUST be one of its target's
-    `topology_levels`. A name outside that set MUST be refused naming the levels
-    the target declares.
+  - `get_facts(TopologyFacts).topologies` MUST name `("gpu", "cta", "thread")`,
+    outermost first. A program names `gpu` when its data is divided across
+    cards.
+  - A topology level whose `from_target` is set takes its extent and its
+    program ids from the target instance rather than from the hardware
+    document or a register. `"gpu"` MUST be the only CUDA level that sets it.
+  - A declared program topology name MUST be one of the levels its target
+    states. A name outside that set MUST be refused naming the levels the
+    target declares.
   - `get_facts(TopologyLimitFacts, "cta").max_static_extent` MUST be `None`:
     the CUDA grid is a launch shape rather than an SM allocation, so its static
     extent is unbounded here. The `"thread"` Facts projection MUST equal
@@ -483,7 +482,7 @@ class CpuTarget(Target):
   for Analyze.
 - The compile boundary MAY resolve an omitted Module Target to
   `default_target()` for lowering, because `jit(fn)` on a plain Function is a
-  documented entry point ([runtime §1.6](./runtime.md#16-jit-in-compilepy)). It MUST
+  documented entry point ([runtime §1.6](./runtime.md#16-compilepy)). It MUST
   attach that exact value to the normalized Module before lowering.
 - A lowered TIR `PrimFunction` retains its own `target`: after lowering it
   MUST be the exact Target instance resolved from its Module. It selects the
@@ -587,7 +586,6 @@ class AmxTarget(Target):
     architecture_digest: str | None
     device_digest: str | None
     arch: str
-    topology_levels: tuple[str, ...]
 
     def __init__(
         self,
@@ -613,8 +611,9 @@ class AmxTarget(Target):
   - `AmxTarget.available()` MUST contain one value per device document whose
     sole compatible architecture document is available. Its `identity` MUST be
     that device document's ID.
-  - `topology_levels` MUST be `("core", "amx")`: the performance core one tile
-    stream runs on, and the AMX unit inside that core which issues one atom.
+  - `get_facts(TopologyFacts).topologies` MUST name `("core", "amx")`: the
+    performance core one tile stream runs on, and the AMX unit inside that core
+    which issues one atom. Neither level sets `from_target`.
   - `topology_limit("core")` MUST equal `device.performance_core_count` and
     `topology_limit("amx")` MUST equal `architecture.amx_units_per_core`.
   - Declared topology extents MUST be positive static integers within their

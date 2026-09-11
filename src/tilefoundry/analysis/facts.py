@@ -165,9 +165,12 @@ class PerformanceServiceFacts:
         """What one unit gets through of *kind*, or ``None`` when unstated."""
         return next((stated for named, stated in self.unit_ops if named == kind), None)
 
-    def bandwidth(self, level: str) -> int | None:
-        """What one unit moves at *level*, or ``None`` when unstated."""
-        return next((stated for named, stated in self.unit_bandwidth if named == level), None)
+    def bandwidth(self, memory_level: str) -> int | None:
+        """What one unit moves at *memory_level*, or ``None`` when unstated."""
+        return next(
+            (stated for named, stated in self.unit_bandwidth if named == memory_level),
+            None,
+        )
 
 
 @dataclass(frozen=True)

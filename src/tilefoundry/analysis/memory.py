@@ -37,8 +37,8 @@ from .facts import MemoryHierarchyFacts
 from .metadata import (
     AllocationMetadata,
     Breakdown,
-    LevelFootprint,
     LoopFootprintMetadata,
+    MemoryLevelFootprint,
     MemoryMetadata,
     Spread,
     TrafficBytes,
@@ -73,7 +73,7 @@ def _reached_bytes(
     level's traffic unless the caller says where this occurrence puts it.
     """
     total = 0
-    by_level: dict[str, int] = {}
+    by_memory_level: dict[str, int] = {}
     for held, pattern in boundaries:
         leaves = leaves_of(held)
         if not leaves:
@@ -90,10 +90,10 @@ def _reached_bytes(
                 return None
             total += size
             leaf = leaves[index]
-            level = umat_level if leaf.storage is StorageKind.UMAT else str(leaf.storage)
-            if level is not None:
-                by_level[level] = by_level.get(level, 0) + size
-    return total, by_level
+            memory_level = umat_level if leaf.storage is StorageKind.UMAT else str(leaf.storage)
+            if memory_level is not None:
+                by_memory_level[memory_level] = by_memory_level.get(memory_level, 0) + size
+    return total, by_memory_level
 
 
 def _bytes_for(held: Type, elements: int | None) -> int | None:
@@ -168,33 +168,33 @@ def _movement(
                     (field_, local_relations.outputs[position].pattern)
                     for position, field_ in enumerate(fields)
                 )
-                level = None
+                memory_level = None
             else:
                 asked = ((types[index], local_relations.inputs[index].pattern),)
-                level = _UMAT_CONSUMPTION_LEVEL
-            answer = _reached_bytes(asked, level)
+                memory_level = _UMAT_CONSUMPTION_LEVEL
+            answer = _reached_bytes(asked, memory_level)
             if answer is None:
                 raise AnalysisError(
                     f"{describe_expr(call)}: boundary {index} reaches coordinates "
                     "nothing here can charge in bytes"
                 )
-            moving, by_level = answer
+            moving, by_memory_level = answer
             amounts.append(TrafficBytes(moving if moved.read else 0, moving if moved.write else 0))
-            charged.append(by_level)
+            charged.append(by_memory_level)
         traffic = tuple(amounts)
     reads: dict[str, int] = {}
     writes: dict[str, int] = {}
     for moved, split in zip(traffic, charged):
-        for level, value in split.items():
+        for memory_level, value in split.items():
             if moved.read:
-                reads[level] = reads.get(level, 0) + value
+                reads[memory_level] = reads.get(memory_level, 0) + value
             if moved.write:
-                writes[level] = writes.get(level, 0) + value
+                writes[memory_level] = writes.get(memory_level, 0) + value
     moving = any(item.read or item.write for item in traffic)
     levels = (
         tuple(
-            (level, TrafficBytes(reads.get(level, 0), writes.get(level, 0)))
-            for level in sorted(set(reads) | set(writes))
+            (name, TrafficBytes(reads.get(name, 0), writes.get(name, 0)))
+            for name in sorted(set(reads) | set(writes))
         )
         if moving
         else ()
@@ -231,12 +231,12 @@ def call_traffic(
             ctx.local_type_of(expr),
         )
         levels, positional = _movement(expr, cost, ctx, types, stated_relations)
-        for level, moved in levels:
-            storage.setdefault(level, {})[key] = moved
-        for level, moved in cost.sent:
-            if key and _finer_than(key, level, locals_by_unit):
+        for memory_level, moved in levels:
+            storage.setdefault(memory_level, {})[key] = moved
+        for boundary, moved in cost.sent:
+            if key and _finer_than(key, boundary, locals_by_unit):
                 continue
-            crossing.setdefault(level, {})[key] = moved
+            crossing.setdefault(boundary, {})[key] = moved
         if not key:
             operands = positional
     return TrafficMetadata(
@@ -275,13 +275,13 @@ def _shares(
     return Breakdown(
         tuple(
             (
-                level,
+                name,
                 Spread(
                     shares.get(_WHOLE, TrafficBytes()),
                     tuple(shares.get(unit, TrafficBytes()) for unit in topologies),
                 ),
             )
-            for level, shares in sorted(held.items())
+            for name, shares in sorted(held.items())
         )
     )
 
@@ -294,13 +294,13 @@ def add_traffic(
 ) -> None:
     """Add one occurrence's bytes to a function's, as often as it happens."""
     for into, stated in ((whole, record.storage), (per_unit, record.communication)):
-        for level, spread in stated.kinds:
+        for name, spread in stated.kinds:
             for key, moved in (
                 (_WHOLE, spread.total),
                 *zip(record.topologies, spread.per_unit, strict=False),
             ):
-                running = into.setdefault(level, {}).get(key, TrafficBytes())
-                into[level][key] = TrafficBytes(
+                running = into.setdefault(name, {}).get(key, TrafficBytes())
+                into[name][key] = TrafficBytes(
                     running.read + moved.read * trips,
                     running.write + moved.write * trips,
                 )
@@ -324,13 +324,13 @@ def _lifetimes(
     result: list[ValueLifetime] = []
     labels = value_labels(values)
     for index, expr in enumerate(values):
-        for level, amount in bytes_by_storage(local.local_type_of(expr)).items():
-            if facts.explicit(level) is None:
+        for memory_level, amount in bytes_by_storage(local.local_type_of(expr)).items():
+            if facts.explicit(memory_level) is None:
                 continue
             result.append(
                 ValueLifetime(
                     binding=labels[index],
-                    level=level,
+                    memory_level=memory_level,
                     bytes=amount,
                     defined_at=index,
                     last_used_at=(
@@ -383,7 +383,7 @@ class MemoryVisitor(ExprVisitor[None]):
                 ctx.whole,
                 ctx.locals_by_unit,
                 ctx.current.stated_relations(expr, ctx.whole),
-                ctx.level,
+                ctx.topology_level,
             )
             if recorded
             else TrafficMetadata()
@@ -403,20 +403,30 @@ class MemoryVisitor(ExprVisitor[None]):
 def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     """Attach traffic and per-loop footprints from the shared Scope tree."""
     module = context.module
-    level = context.level
+    topology_level = context.topology_level
     facts = context.target.get_facts(MemoryHierarchyFacts)
     topologies = module.effective_topologies()
     whole = CostContext(scope=FunctionScope(module, function))
-    local = CostContext(scope=FunctionScope(module, function), level=level, topologies=topologies)
-    units = tuple(topology.name for topology in topologies) or ((level,) if level else ())
+    local = CostContext(
+        scope=FunctionScope(module, function),
+        topology_level=topology_level,
+        topologies=topologies,
+    )
+    units = tuple(topology.name for topology in topologies) or (
+        (topology_level,) if topology_level else ()
+    )
     locals_by_unit = {
-        unit: CostContext(scope=FunctionScope(module, function), level=unit, topologies=topologies)
+        unit: CostContext(
+            scope=FunctionScope(module, function),
+            topology_level=unit,
+            topologies=topologies,
+        )
         for unit in units
     }
     memory_context = MemoryContext(
         module=module,
         target=context.target,
-        level=level,
+        topology_level=topology_level,
         options=context.options,
         root=context.root,
         current=context.current,
@@ -435,10 +445,10 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         ),
     )
     lifetimes = _lifetimes(memory_context.values, facts, local)
-    levels_list: list[LevelFootprint] = []
-    for name in sorted({item.level for item in lifetimes} | set(memory_context.totals)):
+    levels_list: list[MemoryLevelFootprint] = []
+    for name in sorted({item.memory_level for item in lifetimes} | set(memory_context.totals)):
         declared = facts.explicit(name)
-        rows = [item for item in lifetimes if item.level == name]
+        rows = [item for item in lifetimes if item.memory_level == name]
         peak = 0
         for point in range(len(lifetimes) + 1):
             peak = max(
@@ -446,8 +456,8 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 sum(item.bytes for item in rows if item.defined_at <= point <= item.last_used_at),
             )
         levels_list.append(
-            LevelFootprint(
-                level=name,
+            MemoryLevelFootprint(
+                memory_level=name,
                 peak_bytes=peak,
                 persistent_bytes=sum(item.bytes for item in rows if item.persistent),
                 capacity_bytes=declared.capacity_bytes if declared is not None else None,
@@ -455,12 +465,12 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         )
     levels = tuple(levels_list)
     for item in lifetimes:
-        declared = facts.explicit(item.level)
+        declared = facts.explicit(item.memory_level)
         capacity = None if declared is None else declared.capacity_bytes
         if capacity is not None and item.bytes > capacity:
             raise AnalysisError(
                 f"function {function.name!r}: value {item.binding!r} needs "
-                f"{item.bytes} B in {item.level}, which exceeds the "
+                f"{item.bytes} B in {item.memory_level}, which exceeds the "
                 f"{capacity} B the target states for that level"
             )
     attach(
@@ -480,17 +490,17 @@ def cache_pressure(
 ) -> tuple[dict[str, object], ...]:
     """Compare one scope's device footprint with same-scope implicit caches."""
     rows: list[dict[str, object]] = []
-    for level in facts.implicit_levels:
-        backing_name = facts.backing_level(level.name)
+    for cache in facts.implicit_levels:
+        backing_name = facts.backing_level(cache.name)
         backing = facts.explicit(backing_name)
-        if backing is None or backing.scope != level.scope:
+        if backing is None or backing.scope != cache.scope:
             continue
-        accesses = tuple(item for item in record.footprints if item.level == backing_name)
+        accesses = tuple(item for item in record.footprints if item.memory_level == backing_name)
         if not accesses or any(item.device_bytes < item.bytes for item in accesses):
             continue
         working_set = sum(item.device_bytes for item in accesses)
-        capacity = level.capacity_bytes
-        for peer, shared_bytes in facts.capacity_sharers(level.name):
+        capacity = cache.capacity_bytes
+        for peer, shared_bytes in facts.capacity_sharers(cache.name):
             if shared_bytes is None:
                 continue
             remaining = shared_bytes - peaks.get(peer, 0)
@@ -506,7 +516,7 @@ def cache_pressure(
         )
         rows.append(
             {
-                "cache_level": level.name,
+                "cache_level": cache.name,
                 "backing_level": backing_name,
                 "device_bytes": working_set,
                 "capacity_bytes": capacity,

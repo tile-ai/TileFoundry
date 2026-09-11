@@ -253,7 +253,7 @@ def _by_operand(record: TrafficMetadata) -> dict[str, TrafficBytes]:
 
 def peak_footprint(record: MemoryMetadata) -> dict[str, int]:
     """How much of each level the function holds at its peak."""
-    return {item.level: item.peak_bytes for item in record.footprint}
+    return {item.memory_level: item.peak_bytes for item in record.footprint}
 
 
 def _persistent_bytes(record: MemoryMetadata) -> int:
@@ -268,7 +268,9 @@ def _advisory_count(record: MemoryMetadata) -> int:
 
 def _loop_footprints(record: LoopFootprintMetadata) -> dict[str, str]:
     return {
-        f"{item.buffer}@{item.level}": f"{item.bytes}/{item.device_bytes}/{item.repeated_bytes}"
+        f"{item.buffer}@{item.memory_level}": (
+            f"{item.bytes}/{item.device_bytes}/{item.repeated_bytes}"
+        )
         for item in record.footprints
     }
 

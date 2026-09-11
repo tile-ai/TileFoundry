@@ -74,7 +74,7 @@ COST_CASES = [
             TrafficBytes(read=1 * 4 * 3 * 4),
             TrafficBytes(write=1 * 1 * 3 * 4),
         ),
-        level="cta",
+        topology_level="cta",
         topologies=(_CTA,),
     ),
     CostCase(
@@ -100,7 +100,7 @@ COST_CASES = [
             TrafficBytes(read=3 * 2 * 4),
             TrafficBytes(write=4 * 3 * 4),
         ),
-        level="cta",
+        topology_level="cta",
         topologies=(_CTA,),
     ),
 ]

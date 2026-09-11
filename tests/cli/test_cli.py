@@ -356,7 +356,7 @@ def test_named_provider_registers_only_decorated_targets_and_replays_them(
         "from tilefoundry.target import Target, register_target\n"
         "@dataclass(frozen=True)\n"
         "class _VendorBase(Target):\n"
-        "    topology_levels = ('core',)\n"
+        "    pass\n"
         "@register_target\n"
         "@dataclass(frozen=True)\n"
         "class VendorOne(_VendorBase):\n"

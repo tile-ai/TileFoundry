@@ -19,7 +19,7 @@ from tilefoundry.ir.types.shard import (
     Topology,
     shard_layout_of,
 )
-from tilefoundry.ir.types.shard.local import local_window
+from tilefoundry.ir.types.shard.local import local_layout_and_offset
 from tilefoundry.ir.types.tensor_type import TensorType
 
 
@@ -36,11 +36,11 @@ class ShardTensor:
         """The slice this invocation's program ids select out of ``tensor``.
 
         The same algebra the device side runs, asked with a ``Placement``
-        instead of a hardware id: ``local_window`` says which part of each
-        tensor axis is this instance's, and one basic slice takes it. A weight
-        with no distribution is every program's whole tensor, and so is a level
-        the placement leaves unfixed -- ``cta`` and ``thread`` are the device's
-        to divide.
+        instead of a hardware id: ``local_layout_and_offset`` says what this
+        instance holds and where it begins, and one strided view takes it. A
+        weight with no distribution is every program's whole tensor, and so is
+        a level the placement leaves unfixed -- ``cta`` and ``thread`` are the
+        device's to divide.
         """
         shard = shard_layout_of(self.type.layout)
         if shard is None:
@@ -60,12 +60,18 @@ class ShardTensor:
             )
         at = {name: index for index, name in enumerate(declared)}
         ids = placement.program_ids(topologies)
-        window = local_window(
+        layout, offset = local_layout_and_offset(
             shard, tuple(self.type.shape), tuple(ids[at[name]] for name in levels)
         )
-        return self.tensor[
-            tuple(slice(start, start + held) for start, held in window)
-        ]
+        if tuple(self.tensor.stride()) != tuple(layout.strides):
+            raise ValueError(
+                f"ShardTensor: the tensor is laid out {tuple(self.tensor.stride())} "
+                f"while its type says {tuple(layout.strides)}; the offset is counted "
+                f"in the type's strides, so the tensor must be laid out in them"
+            )
+        return self.tensor.as_strided(
+            layout.shape, layout.strides, storage_offset=self.tensor.storage_offset() + offset
+        )
 
 
 __all__ = ["ShardTensor"]

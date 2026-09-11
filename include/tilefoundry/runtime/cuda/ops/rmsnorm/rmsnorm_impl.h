@@ -8,9 +8,9 @@ struct RmsNorm {
     template <class TIn, class TOut, class TW>
     __device__ void operator()(TIn const &src, TOut &dst, TW const &weight,
                                float eps) const {
-        auto s = detail::local_tensor(src);
-        auto &&d = detail::local_tensor(dst);
-        auto w = detail::local_tensor(weight);
+        auto s = tilefoundry::local_tensor(src);
+        auto &&d = tilefoundry::local_tensor(dst);
+        auto w = tilefoundry::local_tensor(weight);
 
         /// Normalize each row using shard-layout M and K.
         using dst_type = cute::remove_cvref_t<TOut>;
@@ -35,8 +35,8 @@ struct RmsNorm {
                       "ops::rmsnorm: weight shard layout must be rank 1");
         static_assert(int(cute::size<0>(weight_layout{})) == K,
                       "ops::rmsnorm: weight must be a vector of length K");
-        using dst_view = tilefoundry::detail::local_view_t<TOut>;
-        using src_view = tilefoundry::detail::local_view_t<TIn>;
+        using dst_view = tilefoundry::local_view_t<TOut>;
+        using src_view = tilefoundry::local_view_t<TIn>;
         static_assert(
             decltype(cute::rank(typename dst_view::layout_type{}))::value ==
                     1 &&

@@ -36,6 +36,7 @@ from tilefoundry.target import (
     Target,
     TargetFactsError,
     ThroughputFacts,
+    TopologyFacts,
     TopologyLimitFacts,
     UnsupportedCapabilityError,
     facts_result,
@@ -73,11 +74,16 @@ class _NoBandwidthUnitRateCudaTarget(CudaTarget):
 
 class ExtraTopologyCudaTarget(CudaTarget):
     name = "tests.target.extra_topology_cuda"
-    topology_levels = (*CudaTarget.topology_levels, "custom", "unknown")
+    extra_levels = (TopologyLimitFacts("custom", 1), TopologyLimitFacts("unknown", 1))
 
     def get_facts(self, facts_type: type, query: object | None = None):
-        if facts_type is TopologyLimitFacts and query in {"custom", "unknown"}:
-            return TopologyLimitFacts(query, 1)
+        if facts_type is TopologyFacts and query is None:
+            inherited = super().get_facts(facts_type, query).topologies
+            return TopologyFacts((*inherited, *self.extra_levels))
+        if facts_type is TopologyLimitFacts:
+            for level in self.extra_levels:
+                if level.name == query:
+                    return level
         return super().get_facts(facts_type, query)
 
 

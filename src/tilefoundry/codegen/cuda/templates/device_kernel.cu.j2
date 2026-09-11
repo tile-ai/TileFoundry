@@ -1,7 +1,7 @@
-__global__ void {{ kernel_name }}_kernel({{ kernel_params_sig }}) {
+__global__ void {{ kernel_name }}({{ kernel_params_sig }}) {
 {%- if places_gpu %}
   // Before any divergence: one thread writes, the barrier orders the reads.
-  tilefoundry::program_meta(meta);
+  tilefoundry::program_meta({{ meta_param }});
 {%- endif %}
 {%- for wrap in param_wrappers %}
   {{ wrap }}
@@ -15,5 +15,5 @@ extern "C" void {{ shim_name }}({{ shim_params_sig }}) {
 {%- endfor %}
   dim3 grid(grid_x, grid_y, grid_z);
   dim3 block(block_x, block_y, block_z);
-  {{ kernel_name }}_kernel<<<grid, block, dynamic_smem, (cudaStream_t)stream>>>({{ kernel_call_args }});
+  {{ kernel_name }}<<<grid, block, dynamic_smem, (cudaStream_t)stream>>>({{ kernel_call_args }});
 }

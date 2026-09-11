@@ -5,7 +5,7 @@ This spec owns TileFoundry's fact layer: everything a later stage decides
 
 | Surface | Entry | What it states |
 |---|---|---|
-| Program check | `check_program(module, function, level=..., budget=..., analyzers=...)` | an inlined Function view after validating one authored program, its declared topology, and what each requested analysis needs of it |
+| Program check | `check_program(module, function, topology_level=..., budget=..., analyzers=...)` | an inlined Function view after validating one authored program, its declared topology, and what each requested analysis needs of it |
 | Composed measurement | `analyze(module, function, analysis=...)` | one or more root analyses and their union dependency closure, leaving typed Metadata on the IR |
 
 Per-Op semantic derivation — typeinfer, the forward access relation, shard
@@ -268,17 +268,17 @@ class TrafficMetadata(IRMetadata):
     operands: tuple[TrafficBytes, ...] = ()
 
 
-class LevelFootprint:
+class MemoryLevelFootprint:
     """How much of one memory level a function needs at its peak.
 
     Attributes:
-        level: attribute; The memory level name.
+        memory_level: attribute; The memory level name.
         peak_bytes: attribute; The largest simultaneous claim on the level.
         persistent_bytes: attribute; The part that cannot be reclaimed.
         capacity_bytes: attribute; The stated capacity, or None when unknown.
     """
 
-    level: str
+    memory_level: str
     peak_bytes: int
     persistent_bytes: int
     capacity_bytes: int | None = None
@@ -288,14 +288,14 @@ class BufferFootprint:
 
     Attributes:
         buffer: attribute; The stable value name of the source buffer.
-        level: attribute; The storage level containing that buffer.
+        memory_level: attribute; The storage level containing that buffer.
         bytes: attribute; Deduplicated bytes reached by one logical position.
         device_bytes: attribute; Deduplicated bytes in the union across positions.
         repeated_bytes: attribute; Per-position bytes without deduplicating repeated access.
     """
 
     buffer: str
-    level: str
+    memory_level: str
     bytes: int
     device_bytes: int
     repeated_bytes: int
@@ -316,7 +316,7 @@ class ValueLifetime:
 
     Attributes:
         binding: attribute; The parameter or authored binding name, unique in the function.
-        level: attribute; The memory level the value occupies.
+        memory_level: attribute; The memory level the value occupies.
         bytes: attribute; Bytes the value occupies at that level.
         defined_at: attribute; Position the value becomes resident.
         last_used_at: attribute; Position it may be released.
@@ -324,7 +324,7 @@ class ValueLifetime:
     """
 
     binding: str
-    level: str
+    memory_level: str
     bytes: int
     defined_at: int
     last_used_at: int
@@ -349,7 +349,7 @@ class MemoryMetadata(IRMetadata):
         allocation: attribute; What showing the addressable buffers fit came to.
     """
 
-    footprint: tuple[LevelFootprint, ...] = ()
+    footprint: tuple[MemoryLevelFootprint, ...] = ()
     lifetimes: tuple[ValueLifetime, ...] = ()
     advisories: tuple[str, ...] = ()
     allocation: AllocationMetadata | None = None
@@ -430,23 +430,23 @@ of this analysis.
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `BufferFootprint.buffer` | The label value lifetimes use for that value, from the same derivation. Grouping stays by buffer identity, because two structurally equal buffers are distinct allocations; the label never reads an address. | No |
-| `BufferFootprint.level` | Read the source buffer's declared storage level. | No |
+| `BufferFootprint.memory_level` | Read the source buffer's declared storage level. | No |
 | `BufferFootprint.bytes` | Build relations from rank-preserving per-position Types, union the loop-prefixed access images, count the union's integer points, multiply by the dtype bit width, then round the whole buffer reading up to bytes. If the count is not an integer or exceeds `repeated_bytes`, that buffer reading is unavailable. | No |
 | `BufferFootprint.device_bytes` | Repeat the same exact union measurement from authored Types without shard narrowing, giving the union across logical positions in bytes. | No |
 | `BufferFootprint.repeated_bytes` | Multiply each operand's per-position element count by its enclosing trip counts, sum accesses to the same buffer, multiply by dtype bit width, then round the whole buffer reading up to bytes. | No |
 | `LoopFootprintMetadata.footprints` | One `BufferFootprint` per known source buffer and storage level, sorted by buffer then level. When `known` is false these rows are the available lower bound rather than an empty replacement. | No |
 | `LoopFootprintMetadata.known` | False when an access in the loop or a descendant loop lacks a representable forward relation, marking `footprints` as a lower bound; true otherwise. | No |
 | `ValueLifetime.binding` | Use the parameter or binding name, suffixed with `:` and the line of the value's source span when it has one. Repeated names already differ by the printer's numeric suffix in definition order; the line locates the row in authored source, which a suffix cannot. A value with neither name nor span is `<value N>` in definition order. | No |
-| `ValueLifetime.level` | Emit one lifetime per storage level occupied by the value's Type. | No |
+| `ValueLifetime.memory_level` | Emit one lifetime per storage level occupied by the value's Type. | No |
 | `ValueLifetime.bytes` | Project the Type through every authored split at or coarser than the explicit level's `owner`, then take its logical bytes; a target-owned or undeclared level remains global. | `MemoryHierarchyFacts.explicit_levels[].owner` |
 | `ValueLifetime.defined_at` | Position in the order of parameters followed by body Calls and Constants in SSA postorder. | No |
 | `ValueLifetime.last_used_at` | Greatest recorded consumer position; the last position for a parameter, and also for the Function body when that body is itself a recorded value. | No |
 | `ValueLifetime.persistent` | True for parameters and false for body allocations. | No |
-| `LevelFootprint.level` | Each storage level with at least one lifetime, sorted by name. | No |
-| `LevelFootprint.peak_bytes` | Largest sum of simultaneously live bytes at that level over the value order. | No |
-| `LevelFootprint.persistent_bytes` | Sum of persistent lifetimes at that level. | No |
-| `LevelFootprint.capacity_bytes` | Capacity of the matching explicit level, or `None` when it is unknown or undeclared. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
-| `MemoryMetadata.footprint` | One `LevelFootprint` per occupied storage level. | As above |
+| `MemoryLevelFootprint.memory_level` | Each storage level with at least one lifetime, sorted by name. | No |
+| `MemoryLevelFootprint.peak_bytes` | Largest sum of simultaneously live bytes at that level over the value order. | No |
+| `MemoryLevelFootprint.persistent_bytes` | Sum of persistent lifetimes at that level. | No |
+| `MemoryLevelFootprint.capacity_bytes` | Capacity of the matching explicit level, or `None` when it is unknown or undeclared. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
+| `MemoryMetadata.footprint` | One `MemoryLevelFootprint` per occupied storage level. | As above |
 | `MemoryMetadata.lifetimes` | Every value residency except a `Reshape` or a `Transpose`, each of which describes bytes its operand already holds. | As above |
 | `MemoryMetadata.advisories` | Explicit peak overflow, cache/shared-capacity division, and same-scope authored-loop access-footprint findings. | `MemoryHierarchyFacts` |
 | `TrafficMetadata.storage` | One occurrence's per-boundary movement asked of the Op's access relations, charged to the storage levels its operand Types name. The total is asked in the whole program's window and each level's share in that level's, over Types projected through the authored `Split`s at or coarser than it. On a Function, summed over every reachable occurrence, each counted as often as its authored loops repeat it. A Type with leaves at several levels keeps those leaf bytes separate. A `UMAT` leaf has no residency of its own: when it appears in `Call.args`, charge its own bytes at the target's established `rmem` materialization level; when it appears only in an Op attribute, charge nothing. A Function Call takes the callee's grouped total. | No; projection reads resolved Mesh and effective Module topology extents. |
@@ -570,10 +570,10 @@ attached only to the Function. Its full JSON projection is under
 `function_records.memory`:
 
 ```text
-{"footprint": [{"level": <level>, "peak_bytes": <int>,
+{"footprint": [{"memory_level": <level>, "peak_bytes": <int>,
                 "persistent_bytes": <int>, "capacity_bytes": <int|null>}, ...],
  "traffic": {<level>: {"read": <int>, "write": <int>}},
- "lifetimes": [{"binding": <name>, "level": <level>, "bytes": <int>,
+ "lifetimes": [{"binding": <name>, "memory_level": <level>, "bytes": <int>,
                 "defined_at": <int>, "last_used_at": <int>,
                 "persistent": <bool>}, ...],
  "advisories": [<text>, ...]}
@@ -688,7 +688,7 @@ class PerformanceServiceFacts:
 
     def flops(self, dtype: DType) -> int | None: ...
     def ops(self, kind: str) -> int | None: ...
-    def bandwidth(self, level: str) -> int | None: ...
+    def bandwidth(self, memory_level: str) -> int | None: ...
 ```
 
 The service kinds a target states are `integer`, `predicate`, `select` and
@@ -724,7 +724,7 @@ Reported Call and Function records use the same projection under their
 
 When roofline is requested without its dependencies being requested, `totals`
 carries only exact `flops` and `traffic` sums, and `function_records.memory`
-carries only `level` and `peak_bytes` per footprint row. Persistent bytes,
+carries only `memory_level` and `peak_bytes` per footprint row. Persistent bytes,
 capacities, advisories, lifetimes, operand splits, and dependency annotations do
 not enter that view. Independently requesting a dependency selects its full form
 as defined in that family's section.
@@ -981,14 +981,14 @@ def check_program(
     module: "Module",
     function: "Function",
     *,
-    level: str | None = None,
+    topology_level: str | None = None,
     budget: int = _INLINE_NODES,
     analyzers: tuple["Analyzer", ...] = (),
 ) -> "Function": ...
 
 
 class AnalysisCheckContext:
-    """What every input check reads: the program, the machine, and the level.
+    """What every input check reads: the program, the machine, and the topology level.
 
     Costing here is a question, not a record: nothing a context computes is
     attached.
@@ -997,7 +997,7 @@ class AnalysisCheckContext:
     module: "Module"
     function: "Function"
     target: "Target"
-    level: str | None
+    topology_level: str | None
     whole: CostContext
     local: CostContext
 
@@ -1016,7 +1016,7 @@ class AnalysisCheckContext:
     supports. A resolved static extent MUST be positive and within that level's
     finite hardware limit. A rejection MUST name the level, its extent, and the
     reason.
-  - A non-`None` `level` MUST name exactly one effective Module topology.
+  - A non-`None` `topology_level` MUST name exactly one effective Module topology.
   - Analyze MUST call this operation before any consuming algorithm, and
     MUST pass the whole resolved dependency closure as
     `analyzers`, so every analysis about to run states its input contract here.
@@ -1078,7 +1078,7 @@ class AnalysisResult:
         module: attribute; Source Module.
         function: attribute; Function that received records.
         analyses: attribute; Requested root analyses in first-occurrence order.
-        level: attribute; Topology level whose unit the per-unit quantities describe, or None.
+        topology_level: attribute; Topology level whose unit the per-unit quantities describe, or None.
         executed: attribute; Analyses executed in dependency order.
         metadata_types: attribute; Metadata classes actually written.
     """
@@ -1086,7 +1086,7 @@ class AnalysisResult:
     module: "Module"
     function: "Function"
     analyses: tuple[str, ...]
-    level: str | None
+    topology_level: str | None
     executed: tuple[str, ...]
     metadata_types: tuple[type[IRMetadata], ...]
 
@@ -1096,7 +1096,7 @@ def analyze(
     function: "Function",
     *,
     analysis: str | Iterable[str],
-    level: str | None = None,
+    topology_level: str | None = None,
     options: object | None = None,
     dims: "Mapping[str, int] | None" = None,
 ) -> AnalysisResult: ...
@@ -1106,16 +1106,16 @@ def analyze(
   - One call MUST select one or more root analyses. It MUST preserve their
     first-occurrence order, resolve their union dependency closure, and execute
     every member once.
-  - `level` MUST name one effective Module topology. When omitted, it MUST
-    default to the coarsest effective topology the target states a
+  - `topology_level` MUST name one effective Module topology. When omitted, it
+    MUST default to the coarsest effective topology the target states a
     `ParallelCapacityFacts` for. A program may name a level the host places
     rather than the machine runs -- several cards are one deployment's shape,
     not one card's -- and measuring per such a level would ask the machine for
     a unit it publishes no rate for. When the target answers for none of the
     declared levels the coarsest MUST be left selected, so the refusal names
     the level rather than the absence of one; when the Module declares none,
-    `level` MUST remain `None` and no per-unit projection divides.
-    `AnalysisResult.level` MUST record the resolved answer.
+    `topology_level` MUST remain `None` and no per-unit projection divides.
+    `AnalysisResult.topology_level` MUST record the resolved answer.
   - A target MUST answer `PerformanceServiceFacts` and `ParallelCapacityFacts`
     for the level it is asked about, and MUST refuse a level it publishes no
     rate for rather than answering for a different one. What one unit gets
@@ -1206,7 +1206,7 @@ call site.
 class AnalyzeContext:
     module: Module
     target: Target
-    level: str | None
+    topology_level: str | None
     options: object | None
     root: Scope
     current: Scope
@@ -1253,8 +1253,9 @@ class Target:
 - constraints:
   - `AnalysisCallable` MUST receive the normalized Function graph and one
     `AnalyzeContext` carrying the exact Module, Target, resolved topology level,
-    caller options, and the shared root/current `Scope` view. The level MAY be
-    `None` only when the Module declares no topology; options MAY be `None`.
+    caller options, and the shared root/current `Scope` view. The
+    `topology_level` MAY be `None` only when the Module declares no topology;
+    options MAY be `None`.
   - Analyze MUST obtain every root and dependency from the same exact Target
     instance through `get_analyzer`.
   - A Target subclass MUST inherit its base Analyzers through normal Python

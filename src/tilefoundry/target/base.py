@@ -12,7 +12,7 @@ from typing import Any, ClassVar, Mapping, TypeVar
 
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.target.facts import TopologyLimitFacts
+from tilefoundry.target.facts import TopologyFacts, facts_result
 from tilefoundry.target.hardware.envelope import (
     DuplicateRegistrationError,
     HardwareDocument,
@@ -200,7 +200,6 @@ class Target:
     """
 
     name: ClassVar[str]
-    topology_levels: ClassVar[tuple[str, ...]] = ()
 
     @property
     def identity(self) -> str:
@@ -238,7 +237,13 @@ class Target:
     def get_facts(
         self, facts_type: type[FactsT], query: object | None = None
     ) -> FactsT:
-        """Return one immutable hardware-facts aggregate for this Target."""
+        """Return one immutable hardware-facts aggregate for this Target.
+
+        A backend that states no topology levels runs one program per call, so
+        the empty level list is the default rather than a missing projection.
+        """
+        if facts_type is TopologyFacts and query is None:
+            return facts_result(self, facts_type, TopologyFacts(()))
         raise UnsupportedCapabilityError(
             f"{_target_summary(self)}: no Facts projection for "
             f"{getattr(facts_type, '__name__', facts_type)!r}"
@@ -247,14 +252,14 @@ class Target:
     def validate_program_topology(self, topology: Topology) -> None:
         """Validate one declared topology against this Target's Facts."""
         target_summary = _target_summary(self)
-        if topology.name not in self.topology_levels:
+        levels = self.get_facts(TopologyFacts).topologies
+        limits = {level.name: level.max_static_extent for level in levels}
+        if topology.name not in limits:
             raise ValueError(
                 f"{target_summary}: unsupported topology level {topology.name!r}; "
-                f"supported levels are {self.topology_levels}"
+                f"supported levels are {tuple(limits)}"
             )
-        limit = self.get_facts(
-            TopologyLimitFacts, topology.name
-        ).max_static_extent
+        limit = limits[topology.name]
         if isinstance(topology.size, bool):
             raise ValueError(
                 f"{target_summary}: topology {topology.name!r} extent {topology.size!r} "

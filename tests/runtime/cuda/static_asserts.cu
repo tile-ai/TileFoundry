@@ -162,7 +162,7 @@ __global__ void k(float *p) {
                 decltype(mesh)>
         sl{layout, mesh};
     auto st = make_shard_tensor(t, layout, sl);
-    auto v = tilefoundry::detail::local_tensor(st);
+    auto v = tilefoundry::local_tensor(st);
     v(0) = 1.f;
 }
 #endif
@@ -200,7 +200,7 @@ __global__ void k(float *p) {
     ShardLayout<decltype(layout), cute::tuple<shard::Dynamic>, decltype(mesh)>
         sl{layout, mesh};
     auto st = make_shard_tensor(t, layout, sl);
-    tilefoundry::detail::local_tensor(st)(0) = 1.f;
+    tilefoundry::local_tensor(st)(0) = 1.f;
 }
 #endif
 

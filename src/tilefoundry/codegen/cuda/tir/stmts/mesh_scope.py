@@ -47,10 +47,10 @@ def _group_mesh_layout(mesh: Mesh, topos) -> str:
     """One nest per topology level, each in that level's own numbering.
 
     A flat shape says nothing about which axes are whose, so the runtime's
-    ``get<level>`` needs the boundary stated. ``level_axes`` hands the axes to
-    the levels left to right and ``positions_at`` divides each level's strides
-    by what the levels under it contribute, so a nest reads as the layout that
-    level would have alone. The composite is a grouping, not a map: only the
+    ``get<level>`` needs the boundary stated. ``topology_axes`` hands the
+    axes to the levels left to right and ``positions_at`` divides each level's
+    strides by what the levels under it contribute, so a nest reads as the
+    layout that level would have alone. The composite is a grouping, not a map: only the
     nests are evaluated. A level every instance shares keeps a mode of one, so
     that ``get<level>`` still has something to pick.
     """

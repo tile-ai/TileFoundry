@@ -75,7 +75,7 @@ _ResourceKey = tuple[str, str]
 
 @dataclass
 class AnalysisCheckContext:
-    """What every input check reads: the program, the machine, and the level.
+    """What every input check reads: the program, the machine, and the topology level.
 
     The context is bound to the derived Function the analyses will read, so a
     check answers about the same program they do. Nothing a check reads is a
@@ -85,28 +85,28 @@ class AnalysisCheckContext:
     module: Module
     function: Function
     target: object
-    level: str | None
+    topology_level: str | None
 
     @property
     def selected_topology(self) -> Topology:
         """The topology level the analyses were asked about."""
-        if self.level is None:
+        if self.topology_level is None:
             raise AnalysisError(
                 "no topology level was selected, so results cannot carry an "
                 "execution placement"
             )
-        return self.module.resolve_topology(self.level)
+        return self.module.resolve_topology(self.topology_level)
 
 
 def analysis_check_context(
-    module: Module, function: Function, level: str | None
+    module: Module, function: Function, topology_level: str | None
 ) -> AnalysisCheckContext:
     """Bind one context to the derived Function the analyses will read."""
     return AnalysisCheckContext(
         module=module,
         function=function,
         target=module.resolve_target(),
-        level=level,
+        topology_level=topology_level,
     )
 
 
@@ -122,19 +122,19 @@ class PerformanceChecker:
     def check_target_facts(self, ctx: AnalysisCheckContext) -> None:
         """Require a machine whose stated capacity and rates fit the question."""
         try:
-            capacity = ctx.target.get_facts(ParallelCapacityFacts, ctx.level)
-            services = ctx.target.get_facts(PerformanceServiceFacts, ctx.level)
+            capacity = ctx.target.get_facts(ParallelCapacityFacts, ctx.topology_level)
+            services = ctx.target.get_facts(PerformanceServiceFacts, ctx.topology_level)
         except UnsupportedCapabilityError as error:
             raise AnalysisError(f"performance: {error}") from None
-        if ctx.level is None:
+        if ctx.topology_level is None:
             raise AnalysisError(
                 "performance: no topology level was selected, so there is no "
                 "unit for a rate to be stated per"
             )
-        if capacity.topology != ctx.level:
+        if capacity.topology != ctx.topology_level:
             raise AnalysisError(
-                f"performance: selected topology level {ctx.level!r}, but the "
-                f"target's parallel capacity is stated for {capacity.topology!r}"
+                f"performance: selected topology level {ctx.topology_level!r}, but "
+                f"the target's parallel capacity is stated for {capacity.topology!r}"
             )
         units = capacity.parallel_units
         if isinstance(units, bool) or not isinstance(units, int) or units <= 0:
@@ -142,10 +142,10 @@ class PerformanceChecker:
                 "performance: the target must publish a positive parallel-unit "
                 f"capacity, got {units!r}"
             )
-        if services.unit != ctx.level:
+        if services.unit != ctx.topology_level:
             raise AnalysisError(
-                f"performance: selected topology level {ctx.level!r}, but the "
-                f"target's one-unit throughputs are stated for {services.unit!r}"
+                f"performance: selected topology level {ctx.topology_level!r}, but "
+                f"the target's one-unit throughputs are stated for {services.unit!r}"
             )
 
     def visit(self, expr: Expr, ctx: AnalysisCheckContext) -> None:
@@ -576,7 +576,7 @@ def check_program(
     module: Module,
     function: Function,
     *,
-    level: str | None = None,
+    topology_level: str | None = None,
     budget: int = _INLINE_NODES,
     analyzers: tuple[object, ...] = (),
 ) -> Function:
@@ -606,16 +606,16 @@ def check_program(
                 f"program topology level {topology.name!r} with extent "
                 f"{topology.size!r} is invalid: {error}"
             ) from None
-    if level is not None:
+    if topology_level is not None:
         try:
-            module.resolve_topology(level)
+            module.resolve_topology(topology_level)
         except ValueError as error:
             raise AnalysisError(
-                f"program topology level {level!r} is invalid: {error}"
+                f"program topology level {topology_level!r} is invalid: {error}"
             ) from None
 
     validate_call_context(module, reachable_functions(function))
-    ctx = analysis_check_context(module, derived, level)
+    ctx = analysis_check_context(module, derived, topology_level)
     for analyzer in analyzers:
         checker = analyzer.get_checker()
         if checker is None:

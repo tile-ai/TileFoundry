@@ -58,7 +58,7 @@ def lint_text(text: str) -> list[tuple[int, str]]:
 
 _FENCE = re.compile(r"^\s*```(\w*)\s*$")
 _EXAMPLE_MARK = re.compile(r"^\s*(#|//)\s*example\b", re.IGNORECASE)
-_GENERATED_MARK = re.compile(r"^\s*//\s*include/\S+\.(?:h|cuh)\s*$")
+_GENERATED_MARK = re.compile(r"^\s*(//\s*include/\S+\.(?:h|cuh)|#\s*src/\S+\.py)\s*$")
 _CAMEL = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 
 

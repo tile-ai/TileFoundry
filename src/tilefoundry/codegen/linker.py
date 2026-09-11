@@ -2,7 +2,7 @@
 
 Separately compiles each target's :class:`~tilefoundry.codegen.linkable.LinkableModule`
 translation unit and links them into one host-callable shared library, returning
-a ``LinkedModule`` (artifact + host-visible ABI metadata) for the runtime loader
+a ``LinkedModule`` (artifact + the entry's signature) for the runtime loader
 to turn into a ``RuntimeModule``.
 """
 from __future__ import annotations
@@ -12,8 +12,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from tilefoundry.codegen.signature import CallableSignature
 from tilefoundry.dump import DumpFlags, DumpScope, dump
-from tilefoundry.runtime.function import EntryABI
 
 _TILEFOUNDRY_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_INCLUDE = _TILEFOUNDRY_ROOT / "include"
@@ -23,10 +23,10 @@ _CMAKE_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates" / "cmake"
 
 @dataclass(frozen=True)
 class LinkedModule:
-    """Linked .so + host-visible ABI metadata. Consumed by the runtime loader."""
+    """Linked .so + the entry's signature. Consumed by the runtime loader."""
     library_path: Path
     source: str
-    entry: EntryABI
+    entry: CallableSignature
 
 
 def _render_cmakelists(
@@ -72,7 +72,7 @@ def link_modules(
     *,
     workdir: str | Path,
     lib_name: str,
-    entry: EntryABI,
+    entry: CallableSignature,
     nvcc: str = "nvcc",
     host_cxx: str = "g++",
     extra_nvcc_flags: tuple[str, ...] = (),

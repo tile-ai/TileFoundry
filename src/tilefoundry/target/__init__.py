@@ -16,6 +16,7 @@ from tilefoundry.target.cuda import CudaArchitecture, CudaDevice, CudaTarget
 from tilefoundry.target.cuda.spec import H200_SXM_ID
 from tilefoundry.target.facts import (
     TargetFactsError,
+    TopologyFacts,
     TopologyLimitFacts,
     facts_result,
 )
@@ -52,10 +53,13 @@ def validate_cuda_topology_levels(target: Target, names) -> None:
 
     See docs/spec/target.md § Topology levels.
     """
+    supported = tuple(
+        level.name for level in target.get_facts(TopologyFacts).topologies
+    )
     for name in names:
-        if name not in target.topology_levels:
+        if name not in supported:
             raise ValueError(
-                f"cuda target supports {{{', '.join(target.topology_levels)}}} "
+                f"cuda target supports {{{', '.join(supported)}}} "
                 f"topology levels; got {name!r}"
             )
 
@@ -76,6 +80,7 @@ __all__ = [
     "PerformanceServiceFacts",
     "Target",
     "TargetFactsError",
+    "TopologyFacts",
     "TopologyLimitFacts",
     "ThroughputFacts",
     "UnsupportedCapabilityError",

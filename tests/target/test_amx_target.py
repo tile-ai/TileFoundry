@@ -12,7 +12,12 @@ import pytest
 from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.target import AmxTarget, TopologyLimitFacts, UnsupportedCapabilityError
+from tilefoundry.target import (
+    AmxTarget,
+    TopologyFacts,
+    TopologyLimitFacts,
+    UnsupportedCapabilityError,
+)
 
 
 def test_amx_target_reports_and_validates_its_own_topology_levels():
@@ -28,10 +33,12 @@ def test_amx_target_reports_and_validates_its_own_topology_levels():
     than accepted and counted later.
     """
     target = AmxTarget()
-    assert target.topology_levels == ("core", "amx")
+    levels = target.get_facts(TopologyFacts).topologies
+    assert tuple(level.name for level in levels) == ("core", "amx")
+    assert not any(level.from_target for level in levels)
     assert target.get_facts(TopologyLimitFacts, "core").max_static_extent == 8
     assert target.get_facts(TopologyLimitFacts, "amx").max_static_extent == 1
-    assert AmxTarget().topology_levels == target.topology_levels
+    assert AmxTarget().get_facts(TopologyFacts) == target.get_facts(TopologyFacts)
     assert AmxTarget("apple.m2_pro") == target
     assert target.to_python().text == 'AmxTarget("apple.m2_pro")'
 

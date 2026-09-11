@@ -18,6 +18,7 @@ from tilefoundry.target import (
     AmxTarget,
     CudaTarget,
     Target,
+    TopologyFacts,
     TopologyLimitFacts,
     UnsupportedCapabilityError,
 )
@@ -95,9 +96,10 @@ def test_topology_limits_are_target_facts_and_base_validation_is_inherited() -> 
     @dataclass(frozen=True)
     class _DirectTarget(Target):
         name: ClassVar[str] = "test.direct-topology"
-        topology_levels: ClassVar[tuple[str, ...]] = ("unit",)
 
         def get_facts(self, facts_type: type, query: object | None = None):
+            if facts_type is TopologyFacts and query is None:
+                return TopologyFacts((TopologyLimitFacts("unit", 4),))
             if facts_type is TopologyLimitFacts and query == "unit":
                 return TopologyLimitFacts("unit", 4)
             return super().get_facts(facts_type, query)

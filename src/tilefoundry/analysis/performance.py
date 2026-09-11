@@ -68,21 +68,21 @@ class PerformanceVisitor(ExprVisitor[None]):
             ctx.facts,
             ctx.services,
             moved=moved,
-            level=ctx.level,
+            topology_level=ctx.topology_level,
         )
         ctx.occurrences.append((scope, expr, duration))
 
 
 def analyze_performance(function: Function, context: AnalyzeContext) -> None:
     """Attach flat occurrence intervals and one function envelope."""
-    if context.level is None:
+    if context.topology_level is None:
         raise AnalysisError("performance requires a resolved topology level")
     facts = context.target.get_facts(ThroughputFacts)
-    services = context.target.get_facts(PerformanceServiceFacts, context.level)
+    services = context.target.get_facts(PerformanceServiceFacts, context.topology_level)
     performance_context = PerformanceContext(
         module=context.module,
         target=context.target,
-        level=context.level,
+        topology_level=context.topology_level,
         options=context.options,
         root=context.root,
         current=context.current,

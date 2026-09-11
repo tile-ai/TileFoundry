@@ -8,6 +8,7 @@ stay inside this translation unit.
 """
 from __future__ import annotations
 
+from tilefoundry.codegen import names
 from tilefoundry.codegen.cuda.context import CodegenContext
 from tilefoundry.codegen.cuda.templates import render
 from tilefoundry.codegen.cuda.tir.prim_function import (
@@ -15,26 +16,41 @@ from tilefoundry.codegen.cuda.tir.prim_function import (
 )
 from tilefoundry.codegen.linkable import LinkableFunction, LinkableModule
 from tilefoundry.codegen.registry import CodeGenerator
+from tilefoundry.codegen.signature import (
+    GPU_ID,
+    LAUNCH_ABI,
+    META,
+    CallableSignature,
+    TensorSignature,
+    declare,
+    tensor_signature_of,
+)
+from tilefoundry.codegen.topology import places_any
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.target import Target
 
 
-def shim_symbol(kernel_name: str) -> str:
-    """The ``extern "C"`` launch-shim symbol for *kernel_name*.
+def _shim_ctype(fields):
+    """A shim takes everything through the C ABI: a pointer or an integer."""
 
-    The ``extern "C"`` launch-shim symbol for *kernel_name* (a plain C
-    identifier; mangled-variant ``$`` is replaced).
-    """
-    return "tilefoundry_" + kernel_name.replace("$", "__") + "_launch"
+    def ctype(param: TensorSignature) -> str:
+        if fields.param_kinds[param.name] == "tensor":
+            return "void*"
+        return "long long"
+
+    return ctype
 
 
+def _kernel_ctype(fields):
+    """A kernel takes its buffers typed, so the body can index them."""
 
-_LAUNCH_ABI_PARAMS = (
-    "int grid_x, int grid_y, int grid_z, "
-    "int block_x, int block_y, int block_z, "
-    "int dynamic_smem, void* stream"
-)
+    def ctype(param: TensorSignature) -> str:
+        if fields.param_kinds[param.name] != "tensor":
+            return "int"
+        return f"{fields.param_cpp_types[param.name]}*"
+
+    return ctype
 
 
 def _emit_kernel_and_shim(fields, places_gpu: bool = False) -> str:
@@ -45,43 +61,46 @@ def _emit_kernel_and_shim(fields, places_gpu: bool = False) -> str:
     and the kernel hands them to its block, so a callee reads them from there
     rather than carrying them down.
     """
-    shim_params = []
+    params = tuple(tensor_signature_of(p) for p in fields.params)
+    shim = CallableSignature(
+        name=names.launch_shim(fields.kernel_name),
+        params=params,
+        leading=(GPU_ID,) if places_gpu else (),
+        trailing=LAUNCH_ABI,
+    )
+    kernel = CallableSignature(
+        name=names.device_kernel(fields.kernel_name),
+        params=params,
+        leading=(META,) if places_gpu else (),
+    )
     shim_casts = []
     call_args = []
     for p in fields.params:
         if fields.param_kinds[p.name] == "tensor":
             cpp = fields.param_cpp_types[p.name]
-            shim_params.append(f"void* {p.name}")
             shim_casts.append(f"{cpp}* {p.name}_p = static_cast<{cpp}*>({p.name});")
             call_args.append(f"{p.name}_p")
         else:
-            shim_params.append(f"long long {p.name}")
             shim_casts.append(f"int {p.name}_i = static_cast<int>({p.name});")
             call_args.append(f"{p.name}_i")
     if places_gpu:
-        shim_params.insert(0, "long long gpu_program_id")
         shim_casts.insert(
             0,
-            "tilefoundry::ProgramMetaData meta{};\n"
-            "  meta.program_id[int(tilefoundry::TopologyScope::gpu)] ="
-            " static_cast<int>(gpu_program_id);",
+            f"{META.ctype} {META.name}{{}};\n"
+            f"  {META.name}.program_id[int(tilefoundry::TopologyScope::gpu)] ="
+            f" static_cast<int>({GPU_ID.name});",
         )
-        call_args.insert(0, "meta")
-    shim_params_sig = ", ".join((*shim_params, _LAUNCH_ABI_PARAMS))
-    kernel_params_sig = fields.kernel_params_sig
-    if places_gpu:
-        kernel_params_sig = ", ".join(
-            filter(None, ("tilefoundry::ProgramMetaData meta", kernel_params_sig))
-        )
+        call_args.insert(0, META.name)
     return render(
         "device_kernel.cu.j2",
-        kernel_name=fields.kernel_name,
-        kernel_params_sig=kernel_params_sig,
+        kernel_name=kernel.name,
+        kernel_params_sig=declare(kernel.all_params, _kernel_ctype(fields)),
         places_gpu=places_gpu,
+        meta_param=META.name,
         param_wrappers=fields.param_wrappers,
         kernel_body=fields.kernel_body,
-        shim_name=shim_symbol(fields.kernel_name),
-        shim_params_sig=shim_params_sig,
+        shim_name=shim.name,
+        shim_params_sig=declare(shim.all_params, _shim_ctype(fields)),
         shim_casts=shim_casts,
         kernel_call_args=", ".join(call_args),
     )
@@ -96,7 +115,7 @@ def emit_cuda_module(
     PrimFunctions of a module).
     """
     from tilefoundry.codegen.cuda.emit import (  # noqa: PLC0415
-        _program_level,
+        _program_topology,
         _topology_dim_specializations,
     )
 
@@ -106,7 +125,7 @@ def emit_cuda_module(
     expanded_fns = tuple(
         {v.name: v for fn in cuda_fns for v in (fn.variants or (fn,))}.values()
     )
-    places_gpu = _program_level(module).endswith("::gpu")
+    places_gpu = places_any(module, target)
     for fn in expanded_fns:
         fields = _compute_kernel_fields(fn, ctx)
         kernel_texts.append(_emit_kernel_and_shim(fields, places_gpu))
@@ -131,7 +150,7 @@ def emit_cuda_module(
     source = render(
         "cuda_module.cu.j2",
         topology_dim_specializations=specs,
-        program_level=_program_level(module),
+        program_topology=_program_topology(module),
         kernels="\n".join(kernel_texts),
         dynamic_cta=base.grid[0] is None,
         uses_grid_barrier=uses_grid_barrier,
@@ -148,4 +167,4 @@ def emit_cuda_module(
 CUDA_CODE_GENERATOR = CodeGenerator(emit_cuda_module)
 
 
-__all__ = ["CUDA_CODE_GENERATOR", "emit_cuda_module", "shim_symbol"]
+__all__ = ["CUDA_CODE_GENERATOR", "emit_cuda_module"]

@@ -56,7 +56,7 @@ def _cost(owner) -> tuple[int, int]:
         owner,
         owner.entry_function(),
         analysis="compute-cost",
-        level="thread",
+        topology_level="thread",
     )
     record = get_metadata(result.function, ComputeCostMetadata)
     assert record is not None
@@ -78,7 +78,7 @@ def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
         RegionBoundaries,
         RegionBoundaries.lookup("helper"),
         analysis="compute-cost",
-        level="thread",
+        topology_level="thread",
     )
     helper_record = get_metadata(helper.function, ComputeCostMetadata)
     assert helper_record is not None
@@ -89,7 +89,7 @@ def test_region_boundaries_price_calls_per_position_and_values_once() -> None:
         RegionBoundaries,
         RegionBoundaries.entry_function(),
         analysis="compute-cost",
-        level="thread",
+        topology_level="thread",
     )
     record = get_metadata(result.function, ComputeCostMetadata)
     assert record is not None

@@ -36,6 +36,12 @@ bodies (a method appears as its `...`-terminated signature). An Op's inputs
 and attributes appear as annotated fields, one per line, using the source
 field names; attribute defaults are kept (they are interface).
 
+A block inside a `<!-- generated -->` region is read out of the source by a
+script rather than written here, and states what the source states. It keeps
+its decorators: nobody chose them for the page, and `@dataclass(frozen=True)`
+or `@property` is a contract its caller is held to. Its first line names the
+file it was read from, which is how it is recognised.
+
 Documentation inside a block follows the industry style of its language, so it
 is mechanically checkable:
 

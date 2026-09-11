@@ -475,7 +475,7 @@ def placed_cases(level: str = "cta") -> tuple[ConcreteCase, ...]:
     named by the inventory guard instead: a CPU program is not a CTA program
     that failed.
     """
-    from tilefoundry.target import CudaTarget
+    from tilefoundry.target import CudaTarget, TopologyFacts
 
     cases: list[ConcreteCase] = []
     for file, name, published in placed_fixture_roots():
@@ -484,7 +484,8 @@ def placed_cases(level: str = "cta") -> tuple[ConcreteCase, ...]:
             root.resolve_target()
         except Exception:  # noqa: BLE001 -- a root that names no machine
             root = replace(root, target=CudaTarget(_UNBOUND_MACHINE))
-        if level not in root.resolve_target().topology_levels:
+        facts = root.resolve_target().get_facts(TopologyFacts)
+        if level not in tuple(t.name for t in facts.topologies):
             continue
         for selector, function in function_selectors(root):
             owner = select(root, selector)

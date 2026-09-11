@@ -4,7 +4,7 @@
 /// Included in-context from ``ops/reduce.cuh`` (which is itself included inside
 /// ``namespace tilefoundry::ops`` from runtime.cuh). This header therefore does
 /// NOT open ``namespace tilefoundry`` / ``ops`` and does NOT pull in system
-/// headers — cute/std and the surrounding names (``detail::local_tensor``,
+/// headers — cute/std and the surrounding names (``tilefoundry::local_tensor``,
 /// ``shard::S``/``shard::B``, ``TopologyScope``) are already in scope.
 #pragma once
 
@@ -66,8 +66,8 @@ template <class T> CUTE_HOST_DEVICE constexpr bool folds_in_float() {
 /// What both operands have to be for any tier to be able to run.
 template <class Src, class Dst>
 CUTE_HOST_DEVICE constexpr void check_reduce_domain() {
-    using s_view = tilefoundry::detail::local_view_t<Src>;
-    using d_view = tilefoundry::detail::local_view_t<Dst>;
+    using s_view = tilefoundry::local_view_t<Src>;
+    using d_view = tilefoundry::local_view_t<Dst>;
     static_assert(
         folds_in_float<typename s_view::value_type>(),
         "ops::reduce: the element type must be one float holds exactly");

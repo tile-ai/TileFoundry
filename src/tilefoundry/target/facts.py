@@ -15,11 +15,25 @@ class TopologyLimitFacts:
     """The static extent ceiling one topology level admits.
 
     ``None`` means that the level has no static ceiling and may defer its extent
-    to launch.
+    to launch. ``from_target`` marks a level whose extent and program ids both
+    come from the target instance rather than from a hardware document or a
+    register the device can read.
     """
 
-    topology: str
+    name: str
     max_static_extent: int | None
+    from_target: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class TopologyFacts:
+    """The topology levels one Target admits, coarsest first.
+
+    The names a program may declare are exactly the names listed here, so the
+    level vocabulary of a backend has one place to be stated.
+    """
+
+    topologies: tuple[TopologyLimitFacts, ...]
 
 
 class TargetFactsError(Exception):
@@ -52,6 +66,7 @@ __all__ = [
     "FactsT",
     "TARGET_MEMORY_OWNER",
     "TargetFactsError",
+    "TopologyFacts",
     "TopologyLimitFacts",
     "facts_result",
 ]

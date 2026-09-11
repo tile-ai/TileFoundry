@@ -11,9 +11,8 @@ class CallableType:
 
     Carries the parameter types and the return type. Parameter names
     are not part of the type — at the IR level they live on
-    ``Function.params`` (each ``Var.name``); at the host-ABI level
-    they live on ``tilefoundry.runtime.module.CallableType`` /
-    ``ParamABI``, which is a separate layer.
+    ``Function.params`` (each ``Var.name``); on the C++ side they live on
+    ``tilefoundry.codegen.signature.CallableSignature``, a separate layer.
     """
 
     return_type: Type

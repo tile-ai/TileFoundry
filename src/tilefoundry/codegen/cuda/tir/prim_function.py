@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from tilefoundry.codegen import names
 from tilefoundry.codegen.cuda.context import CodegenContext
 from tilefoundry.codegen.cuda.tir.memory.tensor_view import render_shard_layout_value
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -27,17 +28,6 @@ from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shape_helpers import shape_numel_upper_bound
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
-
-
-def _internal_wrapper_symbol(kernel_name: str) -> str:
-    """Map a user-facing kernel name to its internal C++ wrapper symbol.
-
-    The user-facing name may be ``main`` (collides with ``::main``) or
-    a mangled variant like ``main$S$1_4`` (``$`` is a GCC extension,
-    not portable). The internal symbol is always a plain C++ identifier
-    so the generated source compiles under strict toolchains.
-    """
-    return "__tilefoundry_" + kernel_name.replace("$", "__") + "_host"
 
 
 def _param_wrapper(name: str, total: int, cpp_type: str) -> str:
@@ -107,7 +97,6 @@ class _KernelFields:
     params: tuple
     param_cpp_types: dict
     param_kinds: dict
-    kernel_params_sig: str
     wrapper_params_sig: str
     user_params: tuple
     launch_args: str
@@ -179,13 +168,6 @@ def _compute_kernel_fields(node: PrimFunction, ctx: CodegenContext) -> _KernelFi
 
     param_kinds = {p.name: _kind(p) for p in node.params}
 
-    def _kernel_sig_token(p) -> str:
-        if param_kinds[p.name] != "tensor":
-            return f"int {p.name}"
-        return f"{param_cpp_types[p.name]}* {p.name}"
-
-    kernel_params_sig = ", ".join(_kernel_sig_token(p) for p in node.params)
-
 
 
 
@@ -237,11 +219,10 @@ def _compute_kernel_fields(node: PrimFunction, ctx: CodegenContext) -> _KernelFi
     codegen_name = node.name
     return _KernelFields(
         kernel_name=codegen_name,
-        internal_wrapper_name=_internal_wrapper_symbol(codegen_name),
+        internal_wrapper_name=names.host_entry(codegen_name),
         params=node.params,
         param_cpp_types=param_cpp_types,
         param_kinds=param_kinds,
-        kernel_params_sig=kernel_params_sig,
         wrapper_params_sig=wrapper_params_sig,
         user_params=user_params,
         launch_args=launch_args,

@@ -101,14 +101,14 @@ dispatch is described in
 
 ```python
 def local_type_of(
-    type: Type, *, level: str | None = None, topologies: tuple[Topology, ...] = ()
+    type: Type, *, topology_level: str | None = None, topologies: tuple[Topology, ...] = ()
 ) -> Type:
     """Project every tensor leaf to what one unit holds.
 
     Args:
         type: Type to project.
-        level: Topology level whose unit is being projected. When omitted,
-            every Split divides and the logical rank is preserved.
+        topology_level: Topology level whose unit is being projected. When
+            omitted, every Split divides and the logical rank is preserved.
         topologies: Ordered declared topology levels with resolved extents.
 
     Returns:
@@ -118,10 +118,11 @@ def local_type_of(
 ```
 
 - constraints:
-  - With `level`, `local_type_of` MUST recursively project every tensor leaf and
-    rebuild `TupleType` structure. A `Split` at `level` or a coarser topology
-    level MUST divide; a finer `Split`, `Broadcast`, and `Partial` MUST NOT.
-  - Without `level`, every `Split` MUST divide, the returned tensor layout MUST
+  - With `topology_level`, `local_type_of` MUST recursively project every tensor
+    leaf and rebuild `TupleType` structure. A `Split` at `topology_level` or a
+    coarser topology level MUST divide; a finer `Split`, `Broadcast`, and
+    `Partial` MUST NOT.
+  - Without `topology_level`, every `Split` MUST divide, the returned tensor layout MUST
     be `None`, and the tensor's logical rank MUST remain unchanged. This form
     is the logical-axis projection used by relation construction.
   - Each resolved nested `ShardLayout` MUST be applied exactly once per layer.
@@ -589,10 +590,10 @@ class CallableType:
   - `parameters` is a tuple of parameter **types**; parameter names
     are not part of the type. Names live on `Function.params`
     (`Var.name`) at the IR level.
-  - The host-ABI counterpart in
-    [runtime §1.2](./runtime.md#12-runtimefunctionpy) is a separate
-    construct — `EntryABI` in `tilefoundry.runtime.function` — whose
-    `ParamABI` records are `(name, type: TensorType)`: dtype / shape /
+  - The C++ counterpart in
+    [codegen §4.4](./codegen.md#44-signatures) is a separate construct —
+    `CallableSignature` in `tilefoundry.codegen.signature` — whose
+    `TensorSignature` records are `(name, type: TensorType)`: dtype / shape /
     storage / layout are reached through `type` rather than restated. The
     two live in different layers and are disambiguated by import path; do
     not conflate them.

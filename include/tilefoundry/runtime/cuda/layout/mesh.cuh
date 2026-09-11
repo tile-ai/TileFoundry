@@ -106,7 +106,7 @@ namespace detail {
 /// left to index.
 template <class Coord> CUTE_HOST_DEVICE constexpr void one_id_per_level() {
     static_assert(cute::tuple_size<cute::remove_cvref_t<Coord>>::value ==
-                      size_t(program_level_count()),
+                      size_t(cute::rank(program_topologies())),
                   "coord: one id per level named, as program_ids() gives");
 }
 
@@ -114,7 +114,8 @@ template <class Coord> CUTE_HOST_DEVICE constexpr void one_id_per_level() {
 template <class L, TopologyScope S, class Coord>
 CUTE_HOST_DEVICE constexpr int level_id(Mesh<L, S> const &mesh,
                                         Coord const &coord) {
-    return int(cute::get<program_level_index<S>()>(coord)) - offset(mesh);
+    constexpr auto at = cute::find(program_topologies(), cute::C<S>{});
+    return int(cute::get<at>(coord)) - offset(mesh);
 }
 }
 

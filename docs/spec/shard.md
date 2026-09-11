@@ -343,7 +343,7 @@ class Placement:
     def program_ids(self, topologies: tuple[Topology, ...]) -> tuple[int | None, ...]: ...
 
     @classmethod
-    def from_env(cls, level: str = "gpu") -> "Placement": ...
+    def from_env(cls, topology_level: str = "gpu") -> "Placement": ...
 ```
 
 - constraints:
@@ -360,8 +360,8 @@ class Placement:
     chooses its own `cta` and `thread`, and a host that guessed would hand one
     thread's data back as the whole card's.
   - a `Placement` is host-side execution context. It MUST NOT appear in a
-    `TensorType`, a checkpoint, an `EntryABI`, a kernel parameter, or a
-    `forward` argument.
+    `TensorType`, a checkpoint, a `CallableSignature`, a kernel parameter, or
+    a `forward` argument.
   - one loaded module speaks for one program. A host serving several MUST build
     one module per program, each told which it is; the current device is
     thread-local and is set once per thread, so a module MUST NOT read it to
@@ -641,13 +641,14 @@ already has a concrete `strides` tuple, so the `Reshard` typeinfer
 rule ([hir.md §1.3](./hir.md#13-op)) preserves
 it verbatim.
 
-### 7.6 `local_window`
+### 7.6 `local_layout`
 
 Which part of a sharded tensor one mesh instance holds, answered once and read
 by both sides of a launch.
 
 ```python
-def local_window(shard, tensor_shape, ids) -> tuple[tuple[int, int], ...]: ...
+def local_layout(shard, tensor_shape, ids) -> Layout: ...
+def local_layout_and_offset(shard, tensor_shape, ids) -> tuple[Layout, int]: ...
 ```
 
 - constraints:
@@ -655,20 +656,29 @@ def local_window(shard, tensor_shape, ids) -> tuple[tuple[int, int], ...]: ...
     multiply: two axes of one level cut it into a grid, and so do two levels,
     one taking a block of what the other left.
   - the axes cutting one tensor axis are ordered outermost first, so one step
-    of one of them MUST clear everything the axes inside it hold.
+    of one of them MUST clear everything the axes inside it hold, whether or
+    not the level owning them was given an id.
   - an axis nothing cuts is held whole, and so is one cut only by a level whose
     id is unfixed.
   - an extent its mesh axis does not divide MUST be refused by name: a shard
     would then not be one slice.
-  - the answer is a window per tensor axis, not an offset. What each side does
-    with it differs -- a kernel dots it with the shard layout's own strides, a
-    host slices a tensor with strides of its own -- so stating an offset here
-    would state one side's arithmetic as though it were both's.
-  - the C++ half MUST answer the same question under the same name
-    ([runtime §2.3.3](runtime.md#233-layoutshard_layoutcuh)). Two
-    implementations of "which part is mine" that can disagree is what a
-    per-call shape assertion used to be guarding against; one rule stated once
-    is what removes the need.
+  - `local_layout` MUST keep the whole tensor's strides: what one instance
+    holds is the same rows the same distance apart, begun further in.
+  - `local_layout_and_offset` counts its offset in exactly those strides, so a
+    host tensor laid out otherwise MUST be refused by name rather than read at
+    the offset's word: `as_strided` would silently read elsewhere.
+  - the host states `tensor_shape` and `ids`, which the device reads off its
+    own layout and its hardware: [§7.1.1](#711-layoutshape) factors a split
+    axis, so the layout's rank is not the tensor's, and a `Placement` may leave
+    `cta` / `thread` for the device to divide.
+  - both halves MUST answer under the same two names
+    ([runtime §2.3.3](runtime.md#233-layoutshard_layoutcuh)). Naming the host's
+    answer a window rather than a layout and an offset stated one stopped-short
+    arithmetic as though it were a second algorithm: both sides compute
+    `coord x local_extent x inner`, and only the host's last multiplication by
+    a stride was missing. Two implementations of "which part is mine" that can
+    disagree is what a per-call shape assertion used to be guarding against;
+    one rule stated once is what removes the need.
 
 ---
 

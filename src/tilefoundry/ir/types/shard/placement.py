@@ -38,7 +38,7 @@ class Placement:
         return tuple(self.ids.get(topology.name) for topology in topologies)
 
     @classmethod
-    def from_env(cls, level: str = "gpu") -> "Placement":
+    def from_env(cls, topology_level: str = "gpu") -> "Placement":
         """The peer this process is, out of the ones a launcher started.
 
         ``torchrun``, ``deepspeed`` and ``mpirun`` all put the local rank in
@@ -49,9 +49,9 @@ class Placement:
         if rank is None:
             raise ValueError(
                 "Placement.from_env: no LOCAL_RANK in the environment; a launcher "
-                "sets it, so pass Placement({level!r}: rank) yourself instead"
+                "sets it, so pass Placement({topology_level!r}: rank) yourself instead"
             )
-        return cls({level: int(rank)})
+        return cls({topology_level: int(rank)})
 
 
 __all__ = ["Placement"]

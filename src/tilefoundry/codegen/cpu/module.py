@@ -8,15 +8,23 @@ device module and shims.
 
 from __future__ import annotations
 
+from tilefoundry.codegen import names
 from tilefoundry.codegen.cpu.templates import render
-from tilefoundry.codegen.cuda.module import shim_symbol
 from tilefoundry.codegen.cuda.tir.prim_function import (
-    _internal_wrapper_symbol,
     _is_hidden_shape_scalar,
     _parse_shape_param_name,
 )
 from tilefoundry.codegen.linkable import LinkableFunction, LinkableModule
 from tilefoundry.codegen.registry import CodeGenerator
+from tilefoundry.codegen.signature import (
+    GPU_ID,
+    LAUNCH_ABI,
+    CallableSignature,
+    declare,
+    declare_types,
+    tensor_signature_of,
+)
+from tilefoundry.codegen.topology import places_any
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, locate_dim_var
@@ -44,9 +52,6 @@ _STORAGE_DEVICE_TYPE = {
     StorageKind.GMEM: "kDLCUDA",
     StorageKind.HOST: "kDLCPU",
 }
-
-
-_LAUNCH_ABI_DECL = ["int", "int", "int", "int", "int", "int", "int", "void*"]
 
 
 def _static_smem(value) -> int:
@@ -161,28 +166,19 @@ def _placement_line(name: str, storage) -> str:
     )
 
 
-_GPU_ID_PARAM = "tf_gpu_program_id"
-
-
-def _places_gpu(module: Module) -> bool:
-    """Whether this module's program names a level the host places.
-
-    Such a program is launched once per card and no card can read which one
-    it is, so the id travels from the entry's caller down to the shim.
-    """
-    from tilefoundry.codegen.cuda.emit import _program_level  # noqa: PLC0415
-
-    return _program_level(module).endswith("::gpu")
-
-
 def _shim_decl(fn: PrimFunction, places_gpu: bool = False) -> str:
     """A types-only ``extern "C"`` forward declaration of *fn*'s launch shim."""
     hidden = _hidden_names(fn.params)
-    tokens = ["void*" if _is_tensor(p, hidden) else "long long" for p in fn.params]
-    tokens += _LAUNCH_ABI_DECL
-    if places_gpu:
-        tokens = ["long long", *tokens]
-    return f'extern "C" void {shim_symbol(fn.name)}({", ".join(tokens)});'
+    shim = CallableSignature(
+        name=names.launch_shim(fn.name),
+        params=tuple(tensor_signature_of(p) for p in fn.params),
+        leading=(GPU_ID,) if places_gpu else (),
+        trailing=LAUNCH_ABI,
+    )
+    tokens = declare_types(
+        shim.all_params, lambda p: "void*" if _is_tensor(p, hidden) else "long long"
+    )
+    return f'extern "C" void {shim.name}({tokens});'
 
 
 def emit_host_module(
@@ -244,7 +240,7 @@ def emit_host_module(
     source = render(
         "cpu_module.cpp.j2",
         shim_decls=shim_decls,
-        internal_host_symbol=_internal_wrapper_symbol(entry.name),
+        internal_host_symbol=names.host_entry(entry.name),
         wrapper_params_sig=sig,
         body_lines=body_lines,
         entry_name=entry.name,
@@ -283,7 +279,13 @@ def _lower_launch(entry: PrimFunction, evaluate, module):
 
 
 def _lower_launches(entry: PrimFunction, evaluates, module):
-    places_gpu = _places_gpu(module)
+    """Lower one or more ``Launch`` statements of a host entry.
+
+    The levels the host places are the launched kernel's, not the host entry's:
+    a CPU target names no topology level at all.
+    """
+    launched = module.lookup(evaluates[0].args[0].name)
+    places_gpu = places_any(module, launched.target)
     bindings = []
     kinds = {}
     used = set()
@@ -381,16 +383,18 @@ def _lower_launches(entry: PrimFunction, evaluates, module):
             "nullptr",
         ]
         if places_gpu:
-            call_args = [_GPU_ID_PARAM, *call_args]
-        body_lines.append(f"{shim_symbol(device_fn.name)}({', '.join(call_args)});")
+            call_args = [GPU_ID.name, *call_args]
+        body_lines.append(f"{names.launch_shim(device_fn.name)}({', '.join(call_args)});")
         shim_decls.append(_shim_decl(device_fn, places_gpu))
-    tokens = [
-        f"tvm::ffi::Tensor {ep.name}" if kinds[id(ep)] else f"int {ep.name}"
-        for ep in entry.params
-    ]
-    if places_gpu:
-        tokens = [f"long long {_GPU_ID_PARAM}", *tokens]
-    return shim_decls, body_lines, ", ".join(tokens)
+    wrapper = CallableSignature(
+        name=names.host_entry(entry.name),
+        params=tuple(tensor_signature_of(ep) for ep in entry.params),
+        leading=(GPU_ID,) if places_gpu else (),
+    )
+    host_ctype = {
+        ep.name: "tvm::ffi::Tensor" if kinds[id(ep)] else "int" for ep in entry.params
+    }
+    return shim_decls, body_lines, declare(wrapper.all_params, lambda p: host_ctype[p.name])
 
 
 def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, variants, calls):
@@ -406,7 +410,7 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
                 "emit_host_module: dispatch v1 expects exactly one DimVarRangePat per case"
             )
 
-    places_gpu = _places_gpu(module)
+    places_gpu = places_any(module, variants[0].target)
     entry_params = entry.params
     entry_names = {p.name for p in entry_params}
     hidden = _hidden_names(entry_params)
@@ -419,16 +423,15 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
             )
         return nm
 
-    wrapper_tokens, body_lines = [], []
-    if places_gpu:
-        wrapper_tokens.append(f"long long {_GPU_ID_PARAM}")
-    for p in entry_params:
-        if p.name in hidden:
-            continue
-        if _is_user_scalar(p, hidden):
-            wrapper_tokens.append(f"int {p.name}")
-        else:
-            wrapper_tokens.append(f"tvm::ffi::Tensor {p.name}")
+    visible = tuple(p for p in entry_params if p.name not in hidden)
+    wrapper = CallableSignature(
+        name=names.host_entry(entry.name),
+        params=tuple(tensor_signature_of(p) for p in visible),
+        leading=(GPU_ID,) if places_gpu else (),
+    )
+    body_lines = []
+    for p in visible:
+        if not _is_user_scalar(p, hidden):
             body_lines.append(_placement_line(p.name, p.type.storage))
 
     subj = subject
@@ -447,7 +450,7 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
     for idx, (variant, call) in enumerate(zip(variants, calls)):
         pat = variant.specializations[0]
         variant_symbol = variant.name
-        shim_decls[shim_symbol(variant_symbol)] = _shim_decl(variant, places_gpu)
+        shim_decls[names.launch_shim(variant_symbol)] = _shim_decl(variant, places_gpu)
         if len(call.args) != len(variant.params):
             raise ValueError(
                 f"emit_host_module: dispatch call to {variant.name!r} passes "
@@ -476,17 +479,21 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
         shim_args += [str(d) for d in (*grid, *block, 0)]
         shim_args.append("nullptr")
         if places_gpu:
-            shim_args = [_GPU_ID_PARAM, *shim_args]
+            shim_args = [GPU_ID.name, *shim_args]
         pred = f"(({pat.lo} <= {s}) && ({s} <= {pat.hi}))"
         prefix = "if" if idx == 0 else "} else if"
         body_lines.append(f"{prefix} ({pred}) {{")
-        body_lines.append(f"  {shim_symbol(variant_symbol)}({', '.join(shim_args)});")
+        body_lines.append(f"  {names.launch_shim(variant_symbol)}({', '.join(shim_args)});")
     body_lines.append("} else {")
     body_lines.append(
         f'  throw std::runtime_error("tilefoundry: no matching dispatch variant for {entry.name}");'
     )
     body_lines.append("}")
-    return list(shim_decls.values()), body_lines, ", ".join(wrapper_tokens)
+    wrapper_sig = declare(
+        wrapper.all_params,
+        lambda p: "int" if _is_user_scalar(p, hidden) else "tvm::ffi::Tensor",
+    )
+    return list(shim_decls.values()), body_lines, wrapper_sig
 
 
 def _reject_unsupported_config(cfg) -> None:

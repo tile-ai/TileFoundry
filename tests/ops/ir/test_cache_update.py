@@ -205,7 +205,7 @@ def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
     cta_ctx = CostContext(
         selected_types=selected_types,
         selected_output_type=update.type,
-        level="cta",
+        topology_level="cta",
         topologies=(_CTA,),
     )
     assert cta_ctx.local_type_of(update.args[3]).shape == (1, 4, 4, 8)
@@ -218,7 +218,9 @@ def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
         TrafficBytes(write=_WINDOW_BYTES // 2),
     )
 
-    result = analyze(_KVCacheAppend, entry, analysis=("compute-cost", "memory"), level="cta")
+    result = analyze(
+        _KVCacheAppend, entry, analysis=("compute-cost", "memory"), topology_level="cta"
+    )
     analysed_update = next(
         expr
         for expr in collect_exprs(result.function.body)
@@ -226,7 +228,7 @@ def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
     )
     record = get_metadata(analysed_update, ComputeCostMetadata)
     moved = get_metadata(analysed_update, TrafficMetadata)
-    assert result.level == "cta"
+    assert result.topology_level == "cta"
     assert record is not None
     assert record.flops.kinds == ()
     row_bytes = _WINDOW_BYTES // 4

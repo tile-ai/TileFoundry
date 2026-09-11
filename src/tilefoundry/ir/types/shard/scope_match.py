@@ -40,13 +40,13 @@ def mesh_scope_matches_required_scope(current: Mesh, required: Mesh) -> bool:
     return cur_layout.shape == req_layout.shape and cur_layout.strides == req_layout.strides
 
 
-def _positions(mesh: Mesh, level: str) -> tuple[tuple, tuple]:
+def _positions(mesh: Mesh, topology_level: str) -> tuple[tuple, tuple]:
     """One level's positions, with the axes of one position left out.
 
     An axis of one position names no instance, so two scopes state the same
     positions whether or not either of them wrote such an axis down.
     """
-    shape, strides = positions_at(mesh, level)
+    shape, strides = positions_at(mesh, topology_level)
     kept = tuple(axis for axis, extent in enumerate(shape) if extent != 1)
     return tuple(shape[axis] for axis in kept), tuple(strides[axis] for axis in kept)
 

@@ -70,7 +70,7 @@ def render_analysis(
         module=result.module,
         function=result.function,
         analyses=result.analyses,
-        level=result.level,
+        topology_level=result.topology_level,
         executed=result.executed,
         metadata_types=result.metadata_types,
         call_labels=labels,

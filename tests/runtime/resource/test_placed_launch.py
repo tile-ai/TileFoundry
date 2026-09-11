@@ -41,7 +41,8 @@ def test_a_placed_kernel_writes_the_rows_its_card_holds() -> None:
             "nothing to place, so a skip here would report a pass it never earned"
         )
 
-    assert tilefoundry.compile(GpuPlacedRows).type.places == ("gpu",)
+    entry = tilefoundry.compile(GpuPlacedRows).type
+    assert tuple(p.name for p in entry.leading) == ("gpu",)
     failures: list[BaseException] = []
 
     def run(card: int) -> None:

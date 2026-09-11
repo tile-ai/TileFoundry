@@ -565,13 +565,13 @@ class CostContext(TypeInferContext):
     Attributes:
         selected_types: attribute; selected ``id(expr)`` to ``Type`` mapping.
         selected_output_type: attribute; selected output type, when supplied.
-        level: attribute; topology window to project through, or None for types as written.
+        topology_level: attribute; topology window to project through, or None for types as written.
         topologies: attribute; ordered topology levels with resolved extents.
     """
 
     selected_types: Mapping[int, Type] = field(default_factory=dict)
     selected_output_type: Type | None = None
-    level: str | None = None
+    topology_level: str | None = None
     topologies: tuple[Topology, ...] = ()
 
     def local_type_of(self, expr: Expr) -> Type: ...  # read expr.type, then project
@@ -633,8 +633,8 @@ class CostEvaluator(ExprWalker[Cost]):
     moves nothing, a `Slice` moves nothing of its tensor source or result and
     reads the numbers placing it, and a `Transpose` reads and writes because its
     evaluator materialises the permutation.
-  - With no level, `CostContext.local_type_of` MUST return the selected Type as
-    written. With a level, it MUST apply `local_type_of` using the context's
+  - With no `topology_level`, `CostContext.local_type_of` MUST return the selected
+    Type as written. With one, it MUST apply `local_type_of` using the context's
     topology hierarchy and MUST reject unresolved or non-concrete local extents
     at the point where the evaluator requires them.
 

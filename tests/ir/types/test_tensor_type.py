@@ -67,7 +67,10 @@ def test_zero_extent_has_zero_logical_and_local_size() -> None:
     assert tensor_bytes(type) == 0
 
     sharded = make_shard_tensor_type((0,), mesh=make_mesh((2,)), attrs=(Split(0),))
-    assert local_type_of(sharded, level="gpu", topologies=(Topology("gpu", 2),)).shape == (1, 0)
+    assert local_type_of(sharded, topology_level="gpu", topologies=(Topology("gpu", 2),)).shape == (
+        1,
+        0,
+    )
 
 
 def test_size_rejects_symbolic_and_negative_extents() -> None:
@@ -90,7 +93,7 @@ def test_local_type_rejects_a_zero_mesh_extent() -> None:
     type = TensorType(shape=(0,), dtype=DType.f32, layout=layout, storage="gmem")
 
     with pytest.raises(ValueError, match="mesh extent is not a concrete positive integer"):
-        local_type_of(type, level="gpu", topologies=(Topology("gpu", 0),))
+        local_type_of(type, topology_level="gpu", topologies=(Topology("gpu", 0),))
 
 
 def _cta_mesh(extent: int) -> Mesh:
@@ -113,7 +116,8 @@ def test_local_type_preserves_canonical_split_projection(
     tensor = make_shard_tensor_type(shape, mesh=_cta_mesh(extent), attrs=(Split(1),))
 
     assert (
-        local_type_of(tensor, level="cta", topologies=(Topology("cta", extent),)).shape == expected
+        local_type_of(tensor, topology_level="cta", topologies=(Topology("cta", extent),)).shape
+        == expected
     )
 
 
@@ -128,9 +132,7 @@ def test_local_type_projects_a_static_offset_sharded_view():
         storage=sharded.storage,
     )
 
-    local = local_type_of(
-        view, level="cta", topologies=(Topology("cta", 8),)
-    )
+    local = local_type_of(view, topology_level="cta", topologies=(Topology("cta", 8),))
 
     assert local.shape == (64, 1, 1, 16)
     assert local.layout is view.layout
@@ -163,7 +165,7 @@ def test_local_type_projects_every_axis_of_a_single_topology_mesh(
 
     local = local_type_of(
         tensor,
-        level="cta",
+        topology_level="cta",
         topologies=(Topology("cta", topology_extent),),
     )
 
@@ -185,7 +187,7 @@ def test_local_type_rejects_dynamic_split_against_fixed_mesh(axis: object) -> No
     tensor = make_shard_tensor_type((1, axis, 128, 2048), mesh=_cta_mesh(132), attrs=(Split(1),))
 
     with pytest.raises(ValueError, match="bind the axis before local projection"):
-        local_type_of(tensor, level="cta", topologies=(Topology("cta", 132),))
+        local_type_of(tensor, topology_level="cta", topologies=(Topology("cta", 132),))
 
 
 def test_local_type_rejects_unfactorized_inexact_split_with_two_loop_form() -> None:
@@ -195,7 +197,7 @@ def test_local_type_rejects_unfactorized_inexact_split_with_two_loop_form() -> N
     tensor = TensorType(shape=(10,), dtype=DType.f32, layout=layout, storage="gmem")
 
     with pytest.raises(ValueError, match=r"two loops out as \(ceildiv\(N, T\), T\)"):
-        local_type_of(type=tensor, level="cta", topologies=(Topology("cta", 3),))
+        local_type_of(type=tensor, topology_level="cta", topologies=(Topology("cta", 3),))
 
 
 def test_local_type_stops_before_a_finer_split() -> None:
@@ -220,12 +222,12 @@ def test_local_type_stops_before_a_finer_split() -> None:
 
     cta = local_type_of(
         tensor,
-        level="cta",
+        topology_level="cta",
         topologies=(Topology("cta", 2), Topology("thread", 4)),
     )
     thread = local_type_of(
         tensor,
-        level="thread",
+        topology_level="thread",
         topologies=(Topology("cta", 2), Topology("thread", 4)),
     )
 
@@ -237,6 +239,6 @@ def test_local_type_stops_before_a_finer_split() -> None:
 def test_local_type_does_not_divide_replicated_or_partial_values(attr) -> None:
     tensor = make_shard_tensor_type((256,), mesh=_cta_mesh(4), attrs=(attr,))
 
-    local = local_type_of(tensor, level="cta", topologies=(Topology("cta", 4),))
+    local = local_type_of(tensor, topology_level="cta", topologies=(Topology("cta", 4),))
 
     assert numel(local) == 256

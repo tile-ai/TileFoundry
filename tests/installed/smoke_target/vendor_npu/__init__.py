@@ -13,6 +13,7 @@ from tilefoundry.target import (
     PerformanceServiceFacts,
     Target,
     ThroughputFacts,
+    TopologyFacts,
     TopologyLimitFacts,
     facts_result,
     register_target,
@@ -25,10 +26,11 @@ class VendorNpuTarget(Target):
     """A small backend whose capabilities are expressed directly as Facts."""
 
     name: ClassVar[str] = "vendor.npu"
-    topology_levels: ClassVar[tuple[str, ...]] = ("core",)
 
     def get_facts(self, facts_type: type, query: object | None = None):
-        if facts_type is TopologyLimitFacts and query == "core":
+        if facts_type is TopologyFacts and query is None:
+            value = TopologyFacts((TopologyLimitFacts("core", 256),))
+        elif facts_type is TopologyLimitFacts and query == "core":
             value = TopologyLimitFacts("core", 256)
         elif facts_type is MemoryHierarchyFacts:
             value = MemoryHierarchyFacts(

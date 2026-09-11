@@ -32,9 +32,14 @@ template <class T> struct is_shard_tensor : std::false_type {};
 template <class E, class GL, class SL>
 struct is_shard_tensor<ShardTensor<E, GL, SL>> : std::true_type {};
 
-/// The one test for "is this operand sharded".
+}
+
+/// The one test for "is this operand sharded". Public, because it is the
+/// word an op writes its own constraints in; ``detail::is_shard_tensor`` is
+/// how the test is made and stays behind the gate.
 template <class T>
-concept ShardTensorLike = is_shard_tensor<cute::remove_cvref_t<T>>::value;
+concept ShardTensorLike =
+    detail::is_shard_tensor<cute::remove_cvref_t<T>>::value;
 
 /// ``t`` as the tensor this instance holds, in CuTe's ``local_tile`` /
 /// ``local_partition`` sense: a ShardTensor projected to its own slice, and
@@ -42,18 +47,18 @@ concept ShardTensorLike = is_shard_tensor<cute::remove_cvref_t<T>>::value;
 /// operand with no shard layout is not a case to reject, it is one every
 /// instance holds entire -- and its arithmetic is the same either way.
 ///
-/// A shard layout no mesh axis splits leaves every instance the whole tensor
-/// too, so there is nothing to project. This is the one place a hardware id
-/// is read.
+/// Public, because every op projects every operand through it: a step none
+/// may skip is no implementation detail. A layout no mesh axis splits leaves
+/// every instance the whole tensor, so this is the only place an id is read.
 template <class T> CUTE_HOST_DEVICE decltype(auto) local_tensor(T &&t) {
     using t_t = cute::remove_cvref_t<T>;
-    if constexpr (!is_shard_tensor<t_t>::value) {
+    if constexpr (!detail::is_shard_tensor<t_t>::value) {
         return std::forward<T>(t);
-    } else if constexpr (shard_layout_is_full_broadcast<
+    } else if constexpr (detail::shard_layout_is_full_broadcast<
                              typename t_t::shard_layout_type>()) {
         return t.engine;
     } else {
-        auto const [loc_layout, off] = local_layout_and_offset(
+        auto const [loc_layout, off] = detail::local_layout_and_offset(
             t.shard_layout,
             tilefoundry::mesh_coords(t.shard_layout.mesh_value,
                                      tilefoundry::program_ids()));
@@ -65,12 +70,11 @@ template <class T> CUTE_HOST_DEVICE decltype(auto) local_tensor(T &&t) {
 }
 
 /// The same answer as a type, for a constraint written before there is a
-/// value to project.
+/// value to project. Public with ``local_tensor``, of which it is the
+/// type-level half.
 template <class T>
 using local_view_t =
     cute::remove_cvref_t<decltype(local_tensor(std::declval<T const &>()))>;
-
-}
 
 /// How many instances the mesh of ``T``'s shard layout spreads it over.
 template <class T> CUTE_HOST_DEVICE constexpr int shard_mesh_instances() {

@@ -92,7 +92,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
 
     module_target = result.module.resolve_target()
     throughput = module_target.get_facts(ThroughputFacts)
-    services = module_target.get_facts(PerformanceServiceFacts, result.level)
+    services = module_target.get_facts(PerformanceServiceFacts, result.topology_level)
     scopes = tuple(walk_scopes(build_scopes(result.module, fn)))
     timed = 0
     for expr in collect_exprs(fn.body):
@@ -105,7 +105,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
             throughput,
             services,
             moved=get_metadata(expr, TrafficMetadata),
-            level=result.level,
+            topology_level=result.topology_level,
         )
         record = get_metadata(expr, PerformanceMetadata)
         if not duration:
@@ -232,7 +232,7 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
         record = get_metadata(expr, LoopFootprintMetadata)
         if record is None:
             continue
-        rows = [(item.buffer, item.level) for item in record.footprints]
+        rows = [(item.buffer, item.memory_level) for item in record.footprints]
         assert rows == sorted(rows), describe_expr(expr)
         assert len(rows) == len(set(rows)), describe_expr(expr)
         for item in record.footprints:
@@ -270,7 +270,9 @@ def test_every_analysis_runs_at_a_stated_size(family: str) -> None:
 
 def _predicted_ns(module, dims=None) -> int:
     """What the four families together say one program takes."""
-    result = analyze(module, module.entry_function(), analysis=FAMILIES, level="cta", dims=dims)
+    result = analyze(
+        module, module.entry_function(), analysis=FAMILIES, topology_level="cta", dims=dims
+    )
     summary = get_metadata(result.function, PerformanceSummaryMetadata)
     assert summary is not None
     return summary.timeline.end_ns - summary.timeline.start_ns

@@ -25,7 +25,11 @@ from tilefoundry.target.base import (
     register_target,
     select,
 )
-from tilefoundry.target.facts import TopologyLimitFacts, facts_result
+from tilefoundry.target.facts import (
+    TopologyFacts,
+    TopologyLimitFacts,
+    facts_result,
+)
 from tilefoundry.target.hardware.envelope import HardwareDocument
 from tilefoundry.utils.python_source import PythonExpr
 
@@ -106,25 +110,27 @@ class AmxTarget(Target):
         object.__setattr__(self, "_architecture_document", architecture.document)
         object.__setattr__(self, "_device_document", device.document)
 
+    def _topology_facts(self) -> TopologyFacts:
+        """The two AMX levels, coarsest first.
+
+        Both extents are hardware totals, so neither level takes anything from
+        the target instance.
+        """
+        return TopologyFacts(
+            (
+                TopologyLimitFacts("core", self.device.performance_core_count),
+                TopologyLimitFacts("amx", self.architecture.topology_limit("amx")),
+            )
+        )
+
     def get_facts(self, facts_type: type, query: object | None = None):
         """Project AMX hardware through the facts this Target owns."""
+        if facts_type is TopologyFacts and query is None:
+            return facts_result(self, facts_type, self._topology_facts())
         if facts_type is TopologyLimitFacts:
-            if query == "core":
-                return facts_result(
-                    self,
-                    facts_type,
-                    TopologyLimitFacts(
-                        "core", self.device.performance_core_count
-                    ),
-                )
-            if query == "amx":
-                return facts_result(
-                    self,
-                    facts_type,
-                    TopologyLimitFacts(
-                        "amx", self.architecture.topology_limit("amx")
-                    ),
-                )
+            for level in self._topology_facts().topologies:
+                if level.name == query:
+                    return facts_result(self, facts_type, level)
             return super().get_facts(facts_type, query)
 
         from tilefoundry.analysis.facts import (  # noqa: PLC0415
@@ -163,8 +169,6 @@ class AmxTarget(Target):
     def arch(self) -> str:
         """Return the architecture name used by compilation."""
         return self.architecture.name
-
-    topology_levels: ClassVar[tuple[str, ...]] = ("core", "amx")
 
 
 __all__ = ["AmxTarget"]

@@ -6,7 +6,7 @@ from functools import lru_cache
 from tilefoundry.ir.types.shape_dim import ShapeDim
 from tilefoundry.ir.types.shard.int_tuple import flatten
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
-from tilefoundry.ir.types.shard.layout_algebra import c_order_strides
+from tilefoundry.ir.types.shard.layout_algebra import c_order_strides, unflatten
 
 
 @dataclass(frozen=True)
@@ -114,7 +114,7 @@ class Mesh:
         )
 
 
-def level_axes(mesh: "Mesh") -> tuple[tuple[int, ...], ...]:
+def topology_axes(mesh: "Mesh") -> tuple[tuple[int, ...], ...]:
     """Which of *mesh*'s layout axes belong to each level it names, in order.
 
     The axes are handed to the levels left to right, and a level takes them
@@ -179,28 +179,64 @@ def _positions_layout(mesh: Mesh) -> tuple[tuple, tuple, int]:
 
 
 @lru_cache(maxsize=None)
-def positions_at(mesh: Mesh, level: str) -> tuple[tuple, tuple]:
+def grouped_layout(mesh: Mesh) -> Layout:
+    """*mesh*'s positions with one mode per level it names, in mesh numbering.
+
+    The grouping only says which axes are whose; the strides still count
+    positions of the whole mesh. What one level alone would call them is that
+    mode divided by :func:`positions_below`.
+    """
+    shape, strides, _offset = _positions_layout(mesh)
+    if any(stride is None for stride in strides):
+        strides = c_order_strides(shape)
+    profile = topology_axes(mesh)
+    return Layout(shape=unflatten(shape, profile), strides=unflatten(strides, profile))
+
+
+def positions_below(mesh: Mesh, index: int) -> int:
+    """How many positions the levels under the one at *index* contribute."""
+    below = 1
+    for topology in mesh.topologies[index + 1 :]:
+        if not isinstance(topology.size, int) or isinstance(topology.size, bool):
+            raise ValueError(
+                f"mesh level {mesh.topologies[index].name!r} has a symbolic level below it"
+            )
+        below *= topology.size
+    return below
+
+
+def _index_of(mesh: Mesh, topology_level: str) -> int:
+    names = tuple(topology.name for topology in mesh.topologies)
+    if topology_level not in names:
+        raise ValueError(f"mesh names levels {names}, not {topology_level!r}")
+    return names.index(topology_level)
+
+
+def _divided(strides: tuple, below: int, topology_level: str) -> tuple[int, ...]:
+    """*strides* read as the level's own, or a refusal that they are not."""
+    divided: list[int] = []
+    for axis, stride in enumerate(strides):
+        if not isinstance(stride, int) or isinstance(stride, bool) or stride % below:
+            raise ValueError(
+                f"mesh axis {axis} has stride {stride!r}, which the {below} positions "
+                f"below {topology_level!r} do not divide; its positions are not that level's"
+            )
+        divided.append(stride // below)
+    return tuple(divided)
+
+
+def positions_at(mesh: Mesh, topology_level: str) -> tuple[tuple, tuple]:
     """Return one named level's shape and normalized strides, every axis of it.
 
     An axis of one position is still that level's axis: dropping it here would
     leave the level's own layout narrower than the attrs written against those
     axes, and nothing downstream could say which attr went with which mode.
     """
-    names = tuple(topology.name for topology in mesh.topologies)
-    if level not in names:
-        raise ValueError(f"mesh names levels {names}, not {level!r}")
-    shape, strides, _offset = _positions_layout(mesh)
-    if any(stride is None for stride in strides):
-        strides = c_order_strides(shape)
-    index = names.index(level)
-    axes = level_axes(mesh)[index]
-    below = 1
-    for topology in mesh.topologies[index + 1 :]:
-        if not isinstance(topology.size, int) or isinstance(topology.size, bool):
-            raise ValueError(f"mesh level {topology.name!r} has a symbolic level below {level!r}")
-        below *= topology.size
-    normalized = tuple(strides[axis] // below for axis in axes)
-    return tuple(shape[axis] for axis in axes), normalized
+    index = _index_of(mesh, topology_level)
+    grouped = grouped_layout(mesh)
+    below = positions_below(mesh, index)
+    shape = flatten(grouped.shape[index])
+    return shape, _divided(flatten(grouped.strides[index]), below, topology_level)
 
 
 def composed(meshes: "tuple[Mesh, ...]") -> "Mesh":
@@ -274,7 +310,7 @@ def check_topology(mesh: Mesh) -> None:
     if isinstance(mesh.layout, ComposedLayout):
         return
     shape, _strides, _offset = _positions_layout(mesh)
-    for topology, axes in zip(mesh.topologies, level_axes(mesh)):
+    for topology, axes in zip(mesh.topologies, topology_axes(mesh)):
         if not isinstance(topology.size, int) or isinstance(topology.size, bool):
             continue
         count = 1
@@ -290,7 +326,7 @@ def check_topology(mesh: Mesh) -> None:
             )
 
 
-def level_projection(mesh: "Mesh", level: str) -> Layout:
+def topology_projection(mesh: "Mesh", topology_level: str) -> Layout:
     """The layout of the positions *level* has, out of a mesh that names more.
 
     A position at one level is a position within its parent, so the projection
@@ -298,9 +334,7 @@ def level_projection(mesh: "Mesh", level: str) -> Layout:
     strides by what the deeper levels contribute. Asking a single-level mesh
     returns its own layout untouched.
     """
-    names = tuple(topology.name for topology in mesh.topologies)
-    if level not in names:
-        raise ValueError(f"mesh names levels {names}, not {level!r}")
+    index = _index_of(mesh, topology_level)
     if len(mesh.topologies) == 1:
         if isinstance(mesh.layout, Layout):
             return mesh.layout
@@ -310,32 +344,21 @@ def level_projection(mesh: "Mesh", level: str) -> Layout:
             "a mesh naming several levels cannot also be sliced; the slice and the "
             "level boundary would both be deciding which positions these are"
         )
-    segments = level_axes(mesh)
-    index = names.index(level)
-    deeper = 1
-    for topology in mesh.topologies[index + 1 :]:
-        deeper *= topology.size
-    axes = tuple(item for segment in segments[: index + 1] for item in segment)
-    shape = flatten(mesh.layout.shape)
-    strides = flatten(mesh.layout.strides)
-    kept: list[int] = []
-    for item in axes:
-        stride = strides[item]
-        if not isinstance(stride, int) or isinstance(stride, bool) or stride % deeper:
-            raise ValueError(
-                f"mesh axis {item} has stride {stride!r}, which the {deeper} positions "
-                f"below {level!r} do not divide; its positions are not that level's"
-            )
-        kept.append(stride // deeper)
-    return Layout(shape=tuple(shape[item] for item in axes), strides=tuple(kept))
+    grouped = grouped_layout(mesh)
+    below = positions_below(mesh, index)
+    shape = flatten(grouped.shape[: index + 1])
+    strides = _divided(flatten(grouped.strides[: index + 1]), below, topology_level)
+    return Layout(shape=shape, strides=strides)
 
 
 __all__ = [
     "Mesh",
     "Topology",
     "composed",
-    "level_axes",
-    "level_projection",
+    "grouped_layout",
     "positions_at",
+    "positions_below",
+    "topology_axes",
+    "topology_projection",
     "check_topology",
 ]

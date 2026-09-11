@@ -90,9 +90,9 @@ struct Tile {
     template <class TA, class TB, class TC>
     __device__ void operator()(TA const &a, TB const &b, TC &c) const {
         using Geo = mma_detail::AtomGeometry;
-        auto av = detail::local_tensor(a);
-        auto bv = detail::local_tensor(b);
-        auto &&cv = detail::local_tensor(c);
+        auto av = tilefoundry::local_tensor(a);
+        auto bv = tilefoundry::local_tensor(b);
+        auto &&cv = tilefoundry::local_tensor(c);
         using a_elem = cute::remove_cvref_t<decltype(av(0, 0))>;
 
         constexpr int threads = acc_threads<TC>();
@@ -163,9 +163,8 @@ struct Tile {
 };
 
 template <class TA, class TB, class TC>
-inline constexpr bool tile_shaped_v =
-    tile_v<tilefoundry::detail::local_view_t<TA>> &&
-    tile_v<tilefoundry::detail::local_view_t<TB>>;
+inline constexpr bool tile_shaped_v = tile_v<tilefoundry::local_view_t<TA>> &&
+                                      tile_v<tilefoundry::local_view_t<TB>>;
 
 /// Recognize the atom's per-lane fragment shapes.
 template <class T, int N>
@@ -180,8 +179,8 @@ inline constexpr bool frag_v = [] {
 /// The atom's own operand shapes, stated positively.
 template <class TA, class TB, class TC>
 inline constexpr bool atom_shaped_v =
-    frag_v<tilefoundry::detail::local_view_t<TA>, 8> &&
-    frag_v<tilefoundry::detail::local_view_t<TB>, 4> &&
-    frag_v<tilefoundry::detail::local_view_t<TC>, 4>;
+    frag_v<tilefoundry::local_view_t<TA>, 8> &&
+    frag_v<tilefoundry::local_view_t<TB>, 4> &&
+    frag_v<tilefoundry::local_view_t<TC>, 4>;
 
 }
