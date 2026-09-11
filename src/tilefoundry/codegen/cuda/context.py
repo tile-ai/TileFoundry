@@ -59,12 +59,10 @@ class CodegenContext:
         self._kernel_param_ids: set[int] = set()
         self._mesh_aliases: dict[int, tuple[str, str]] = {}
 
-
-
-
-
         self._dim_var_runtime: dict[str, str] = {}
         self._next_barrier_id = 1
+        self.needs_grid_barrier_state = False
+        """Set while emitting a grid barrier, which the module declares state for."""
 
     def reset_barrier_ids(self) -> None:
         """Reset the named-barrier id counter at the start of a kernel body."""
@@ -93,9 +91,7 @@ class CodegenContext:
     def dtype_to_cpp(self, dtype_name: str) -> str:
         t = _CUDA_CPP.get(dtype_name)
         if t is None:
-            raise ValueError(
-                f"unsupported dtype for CUDA codegen: {dtype_name!r}"
-            )
+            raise ValueError(f"unsupported dtype for CUDA codegen: {dtype_name!r}")
         return t
 
     def register_kernel_param(self, var) -> None:
@@ -154,24 +150,18 @@ class CodegenContext:
 
     def emit_node(self, node) -> None:
 
-
-
         if isinstance(node, Evaluate):
             op = node.callable
             op_cls = type(op)
             fn = lookup(op_cls)
             if fn is None:
-                raise RuntimeError(
-                    f"no @register_codegen_cuda for Op {op_cls.__name__}"
-                )
+                raise RuntimeError(f"no @register_codegen_cuda for Op {op_cls.__name__}")
             call = Call(type=UnitType(), target=op, args=node.args)
             fn(call, self)
             return
         fn = lookup(type(node))
         if fn is None:
-            raise RuntimeError(
-                f"no @register_codegen_cuda for {type(node).__name__}"
-            )
+            raise RuntimeError(f"no @register_codegen_cuda for {type(node).__name__}")
         fn(node, self)
 
 

@@ -166,19 +166,17 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
     # noqa lazy: keep these heavy codegen/runtime imports off the module load
 
     from tilefoundry.codegen.cuda.emit import _output_count_from_fn  # noqa: PLC0415
-    from tilefoundry.codegen.cuda.tir.prim_function import (  # noqa: PLC0415
-        _is_hidden_shape_scalar,
-    )
     from tilefoundry.codegen.linker import link_modules  # noqa: PLC0415
     from tilefoundry.codegen.registry import (  # noqa: PLC0415
         group_modules_by_target,
     )
     from tilefoundry.codegen.signature import (  # noqa: PLC0415
         CallableSignature,
-        placed_ids,
         tensor_signature_of,
     )
-    from tilefoundry.codegen.topology import places_of  # noqa: PLC0415
+    from tilefoundry.ir.tir.shape import (  # noqa: PLC0415
+        is_hidden_shape_scalar as _is_hidden_shape_scalar,
+    )
     from tilefoundry.passes.transforms.host_entry import (  # noqa: PLC0415
         insert_default_host_entry,
     )
@@ -229,7 +227,6 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
         name=cpu_entry.name,
         params=tuple(tensor_signature_of(p) for p in entry_buffer_params),
         output_count=_output_count_from_fn(cpu_entry),
-        leading=placed_ids(places_of(linked, device_target)),
     )
 
     cuda_arch = device_target.arch.removeprefix("sm_")

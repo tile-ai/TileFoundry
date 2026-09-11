@@ -10,27 +10,29 @@ from __future__ import annotations
 
 from tilefoundry.codegen import names
 from tilefoundry.codegen.cpu.templates import render
-from tilefoundry.codegen.cuda.tir.prim_function import (
-    _is_hidden_shape_scalar,
-    _parse_shape_param_name,
-)
 from tilefoundry.codegen.linkable import LinkableFunction, LinkableModule
 from tilefoundry.codegen.registry import CodeGenerator
 from tilefoundry.codegen.signature import (
-    GPU_ID,
     LAUNCH_ABI,
     CallableSignature,
     declare,
     declare_types,
     tensor_signature_of,
 )
-from tilefoundry.codegen.topology import places_any
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.pattern import DimVarRangePat, locate_dim_var
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.shape import ShapeOf
+from tilefoundry.ir.tir.shape import (
+    ShapeOf,
+)
+from tilefoundry.ir.tir.shape import (
+    is_hidden_shape_scalar as _is_hidden_shape_scalar,
+)
+from tilefoundry.ir.tir.shape import (
+    parse_shape_var_name as _parse_shape_param_name,
+)
 from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.ir.tir.symbol_ref import symbol_call
 from tilefoundry.ir.types import DType, TensorType
@@ -166,13 +168,12 @@ def _placement_line(name: str, storage) -> str:
     )
 
 
-def _shim_decl(fn: PrimFunction, places_gpu: bool = False) -> str:
+def _shim_decl(fn: PrimFunction) -> str:
     """A types-only ``extern "C"`` forward declaration of *fn*'s launch shim."""
     hidden = _hidden_names(fn.params)
     shim = CallableSignature(
         name=names.launch_shim(fn.name),
         params=tuple(tensor_signature_of(p) for p in fn.params),
-        leading=(GPU_ID,) if places_gpu else (),
         trailing=LAUNCH_ABI,
     )
     tokens = declare_types(
@@ -279,13 +280,7 @@ def _lower_launch(entry: PrimFunction, evaluate, module):
 
 
 def _lower_launches(entry: PrimFunction, evaluates, module):
-    """Lower one or more ``Launch`` statements of a host entry.
-
-    The levels the host places are the launched kernel's, not the host entry's:
-    a CPU target names no topology level at all.
-    """
-    launched = module.lookup(evaluates[0].args[0].name)
-    places_gpu = places_any(module, launched.target)
+    """Lower one or more ``Launch`` statements of a host entry."""
     bindings = []
     kinds = {}
     used = set()
@@ -382,18 +377,13 @@ def _lower_launches(entry: PrimFunction, evaluates, module):
             str(_static_smem(launch_op.dynamic_smem)),
             "nullptr",
         ]
-        if places_gpu:
-            call_args = [GPU_ID.name, *call_args]
         body_lines.append(f"{names.launch_shim(device_fn.name)}({', '.join(call_args)});")
-        shim_decls.append(_shim_decl(device_fn, places_gpu))
+        shim_decls.append(_shim_decl(device_fn))
     wrapper = CallableSignature(
         name=names.host_entry(entry.name),
         params=tuple(tensor_signature_of(ep) for ep in entry.params),
-        leading=(GPU_ID,) if places_gpu else (),
     )
-    host_ctype = {
-        ep.name: "tvm::ffi::Tensor" if kinds[id(ep)] else "int" for ep in entry.params
-    }
+    host_ctype = {ep.name: "tvm::ffi::Tensor" if kinds[id(ep)] else "int" for ep in entry.params}
     return shim_decls, body_lines, declare(wrapper.all_params, lambda p: host_ctype[p.name])
 
 
@@ -410,7 +400,6 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
                 "emit_host_module: dispatch v1 expects exactly one DimVarRangePat per case"
             )
 
-    places_gpu = places_any(module, variants[0].target)
     entry_params = entry.params
     entry_names = {p.name for p in entry_params}
     hidden = _hidden_names(entry_params)
@@ -427,7 +416,6 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
     wrapper = CallableSignature(
         name=names.host_entry(entry.name),
         params=tuple(tensor_signature_of(p) for p in visible),
-        leading=(GPU_ID,) if places_gpu else (),
     )
     body_lines = []
     for p in visible:
@@ -450,7 +438,7 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
     for idx, (variant, call) in enumerate(zip(variants, calls)):
         pat = variant.specializations[0]
         variant_symbol = variant.name
-        shim_decls[names.launch_shim(variant_symbol)] = _shim_decl(variant, places_gpu)
+        shim_decls[names.launch_shim(variant_symbol)] = _shim_decl(variant)
         if len(call.args) != len(variant.params):
             raise ValueError(
                 f"emit_host_module: dispatch call to {variant.name!r} passes "
@@ -469,6 +457,10 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
                 shim_args.append(f"static_cast<long long>({_host_name(arg)}.shape()[{arg.axis}])")
             else:
                 shim_args.append(f"static_cast<long long>({_host_name(arg)})")
+        from tilefoundry.codegen.cuda.emit import (  # noqa: PLC0415
+            _derive_launch_config,
+        )
+
         grid, block = _derive_launch_config(variant.body)
         if grid[0] is None:
             raise ValueError(
@@ -478,8 +470,6 @@ def _lower_dispatch(entry: PrimFunction, module, *, callee_name, subject, varian
             )
         shim_args += [str(d) for d in (*grid, *block, 0)]
         shim_args.append("nullptr")
-        if places_gpu:
-            shim_args = [GPU_ID.name, *shim_args]
         pred = f"(({pat.lo} <= {s}) && ({s} <= {pat.hi}))"
         prefix = "if" if idx == 0 else "} else if"
         body_lines.append(f"{prefix} ({pred}) {{")
@@ -503,13 +493,6 @@ def _reject_unsupported_config(cfg) -> None:
         raise NotImplementedError("emit_host_module: launch `stream` is not supported yet")
     if cfg.attrs.entries:
         raise NotImplementedError("emit_host_module: launch `attrs` are not supported yet")
-
-
-def _derive_launch_config(body):
-    # noqa lazy: avoid an import cycle with codegen.cuda.emit at module load.
-    from tilefoundry.codegen.cuda.emit import _derive_launch_config as _d  # noqa: PLC0415
-
-    return _d(body)
 
 
 __all__ = ["emit_host_module"]

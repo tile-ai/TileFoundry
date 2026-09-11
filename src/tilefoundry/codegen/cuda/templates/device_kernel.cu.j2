@@ -1,5 +1,5 @@
 __global__ void {{ kernel_name }}({{ kernel_params_sig }}) {
-{%- if places_gpu %}
+{%- if places_ids %}
   // Before any divergence: one thread writes, the barrier orders the reads.
   tilefoundry::program_meta({{ meta_param }});
 {%- endif %}

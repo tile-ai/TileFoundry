@@ -42,7 +42,7 @@ def test_a_placed_kernel_writes_the_rows_its_card_holds() -> None:
         )
 
     entry = tilefoundry.compile(GpuPlacedRows).type
-    assert tuple(p.name for p in entry.leading) == ("gpu",)
+    assert tuple(p.topology_level for p in entry.leading) == ("gpu",)
     failures: list[BaseException] = []
 
     def run(card: int) -> None:
@@ -51,9 +51,7 @@ def test_a_placed_kernel_writes_the_rows_its_card_holds() -> None:
             compiled = tilefoundry.compile(GpuPlacedRows)
             compiled.load(DictResource({}), placement=Placement({"gpu": card}))
 
-            source = torch.arange(
-                ROWS * COLS, dtype=torch.float32, device=card
-            ).reshape(ROWS, COLS)
+            source = torch.arange(ROWS * COLS, dtype=torch.float32, device=card).reshape(ROWS, COLS)
             written = torch.zeros_like(source)
 
             compiled(source, written)

@@ -9,6 +9,7 @@ cannot leave a stale barrier behind at the call site.
 cross-warp subset are deadlocks, and a ``VerifyError`` before codegen says so
 better than the ``static_assert`` that backs it up inside nvcc.
 """
+
 from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
@@ -37,6 +38,7 @@ def _emit(call, ctx: CodegenContext) -> None:
     barrier = classify(mesh)
     value = _mesh_value(mesh, ctx)
     if barrier is SyncBarrier.GRID:
+        ctx.needs_grid_barrier_state = True
         ctx.emit(f"{_SYNC}({value}, tilefoundry::tf_grid_bar_state);")
         return
     if barrier is SyncBarrier.BAR_SYNC:

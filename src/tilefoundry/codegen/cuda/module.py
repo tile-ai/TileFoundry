@@ -6,26 +6,14 @@ performs the ``<<<grid, block, smem, stream>>>`` launch. Grid / block / smem /
 stream arrive as plain C ABI arguments from the host module, so all CUDA types
 stay inside this translation unit.
 """
+
 from __future__ import annotations
 
-from tilefoundry.codegen import names
-from tilefoundry.codegen.cuda.context import CodegenContext
-from tilefoundry.codegen.cuda.templates import render
-from tilefoundry.codegen.cuda.tir.prim_function import (
-    _compute_kernel_fields,
-)
-from tilefoundry.codegen.linkable import LinkableFunction, LinkableModule
+from tilefoundry.codegen.linkable import LinkableModule
 from tilefoundry.codegen.registry import CodeGenerator
 from tilefoundry.codegen.signature import (
-    GPU_ID,
-    LAUNCH_ABI,
-    META,
-    CallableSignature,
     TensorSignature,
-    declare,
-    tensor_signature_of,
 )
-from tilefoundry.codegen.topology import places_any
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.target import Target
@@ -53,114 +41,15 @@ def _kernel_ctype(fields):
     return ctype
 
 
-def _emit_kernel_and_shim(fields, places_gpu: bool = False) -> str:
-    """One kernel and the shim that launches it.
-
-    A program that names a level the host places takes one more argument than
-    it declares: the ids no card can read for itself. The shim receives them
-    and the kernel hands them to its block, so a callee reads them from there
-    rather than carrying them down.
-    """
-    params = tuple(tensor_signature_of(p) for p in fields.params)
-    shim = CallableSignature(
-        name=names.launch_shim(fields.kernel_name),
-        params=params,
-        leading=(GPU_ID,) if places_gpu else (),
-        trailing=LAUNCH_ABI,
-    )
-    kernel = CallableSignature(
-        name=names.device_kernel(fields.kernel_name),
-        params=params,
-        leading=(META,) if places_gpu else (),
-    )
-    shim_casts = []
-    call_args = []
-    for p in fields.params:
-        if fields.param_kinds[p.name] == "tensor":
-            cpp = fields.param_cpp_types[p.name]
-            shim_casts.append(f"{cpp}* {p.name}_p = static_cast<{cpp}*>({p.name});")
-            call_args.append(f"{p.name}_p")
-        else:
-            shim_casts.append(f"int {p.name}_i = static_cast<int>({p.name});")
-            call_args.append(f"{p.name}_i")
-    if places_gpu:
-        shim_casts.insert(
-            0,
-            f"{META.ctype} {META.name}{{}};\n"
-            f"  {META.name}.program_id[int(tilefoundry::TopologyScope::gpu)] ="
-            f" static_cast<int>({GPU_ID.name});",
-        )
-        call_args.insert(0, META.name)
-    return render(
-        "device_kernel.cu.j2",
-        kernel_name=kernel.name,
-        kernel_params_sig=declare(kernel.all_params, _kernel_ctype(fields)),
-        places_gpu=places_gpu,
-        meta_param=META.name,
-        param_wrappers=fields.param_wrappers,
-        kernel_body=fields.kernel_body,
-        shim_name=shim.name,
-        shim_params_sig=declare(shim.all_params, _shim_ctype(fields)),
-        shim_casts=shim_casts,
-        kernel_call_args=", ".join(call_args),
-    )
-
-
 def emit_cuda_module(
     module: Module, cuda_fns: tuple[PrimFunction, ...], target: Target
 ) -> LinkableModule:
-    """Emit the device ``.cu`` linkable module for *cuda_fns*.
-
-    Emit the device ``.cu`` linkable module for *cuda_fns* (the CUDA-target
-    PrimFunctions of a module).
-    """
-    from tilefoundry.codegen.cuda.emit import (  # noqa: PLC0415
-        _program_topology,
-        _topology_dim_specializations,
-    )
-
-    ctx = CodegenContext(target)
-    kernel_texts = []
-    all_fields = []
-    expanded_fns = tuple(
-        {v.name: v for fn in cuda_fns for v in (fn.variants or (fn,))}.values()
-    )
-    places_gpu = places_any(module, target)
-    for fn in expanded_fns:
-        fields = _compute_kernel_fields(fn, ctx)
-        kernel_texts.append(_emit_kernel_and_shim(fields, places_gpu))
-        all_fields.append(fields)
-    if not all_fields:
-        raise ValueError("emit_cuda_module: no CUDA device kernels")
-
-
-
-    base = all_fields[0]
-    for f in all_fields[1:]:
-        if (f.grid, f.block) != (base.grid, base.block):
-            raise ValueError(
-                "emit_cuda_module: kernels disagree on launch topology — "
-                f"{base.kernel_name!r} has (grid={base.grid}, block={base.block}) "
-                f"but {f.kernel_name!r} has (grid={f.grid}, block={f.block})"
-            )
-    specs = _topology_dim_specializations(base.grid, base.block)
-
-
-    uses_grid_barrier = any("tf_grid_bar_state" in text for text in kernel_texts)
-    source = render(
-        "cuda_module.cu.j2",
-        topology_dim_specializations=specs,
-        program_topology=_program_topology(module),
-        kernels="\n".join(kernel_texts),
-        dynamic_cta=base.grid[0] is None,
-        uses_grid_barrier=uses_grid_barrier,
-    )
-    functions = tuple(
-        LinkableFunction(name=f.kernel_name, source=text)
-        for f, text in zip(all_fields, kernel_texts)
-    )
-    return LinkableModule(
-        target="cuda", language="cu", source=source, functions=functions
+    """Emit the device ``.cu`` linkable module for *cuda_fns*."""
+    raise NotImplementedError(
+        "emit_cuda_module: the device emitter is being rebuilt. What was here "
+        "precomputed a bag of fields per function and rendered a template from "
+        "it; the visitor that walks the body is the emitter, and the call "
+        "conventions are signatures, so neither needs the bag."
     )
 
 

@@ -31,14 +31,4 @@ def device_kernel(name: str) -> str:
     return f"{PREFIX}{_identifier(name)}_kernel"
 
 
-def placed_id_param() -> str:
-    """The parameter carrying the card's id, which no card can read for itself."""
-    return f"{PREFIX}gpu_program_id"
-
-
-def meta_param() -> str:
-    """The parameter carrying the ids a placed kernel hands its block."""
-    return f"{PREFIX}meta"
-
-
-__all__ = ["PREFIX", "device_kernel", "host_entry", "launch_shim", "meta_param", "placed_id_param"]
+__all__ = ["PREFIX", "device_kernel", "host_entry", "launch_shim"]

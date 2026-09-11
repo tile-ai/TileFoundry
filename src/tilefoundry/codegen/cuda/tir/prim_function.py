@@ -6,36 +6,18 @@ containing only dispatch emits no global kernel; its host wrapper selects and
 calls variant wrappers because CUDA kernels cannot call host code.
 See [codegen §1](docs/spec/codegen.md#1-pipeline).
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from tilefoundry.codegen import names
 from tilefoundry.codegen.cuda.context import CodegenContext
 from tilefoundry.codegen.cuda.tir.memory.tensor_view import render_shard_layout_value
-from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.shape import (
-    is_hidden_shape_scalar as _is_hidden_shape_scalar,
-)
-from tilefoundry.ir.tir.shape import (
-    parse_shape_var_name as _parse_shape_param_name,
-)
-from tilefoundry.ir.tir.shape import (
-    shape_var_name,
-)
-from tilefoundry.ir.tir.stmts import Sequential
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shape_helpers import shape_numel_upper_bound
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 
 
 def _param_wrapper(name: str, total: int, cpp_type: str) -> str:
     layout = f"cute::make_layout(cute::Shape<cute::Int<{total}>>{{}})"
-    return (
-        f"auto {name}_tensor = cute::make_tensor("
-        f"cute::make_gmem_ptr({name}), {layout});"
-    )
+    return f"auto {name}_tensor = cute::make_tensor(cute::make_gmem_ptr({name}), {layout});"
 
 
 def _param_cpp_types(params: tuple, ctx: CodegenContext) -> dict[str, str]:
@@ -65,171 +47,3 @@ def _param_wrapper_shard(
         f"{global_layout}, {shard_value});"
     )
     return "\n".join([*preamble, wrapper])
-
-
-def _collect_mesh_dims(body: Sequential) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
-    """Return the ``(grid, block)`` launch config for ``body``.
-
-    Forwards to ``_derive_launch_config`` in
-    ``tilefoundry.codegen.cuda.emit`` so the multi-topology walk is not
-    duplicated here.
-    """
-    # noqa cycle: emit.py auto-discovers this module via importlib, so
-
-    from tilefoundry.codegen.cuda.emit import _derive_launch_config  # noqa: PLC0415
-
-
-
-
-    return _derive_launch_config(body)
-
-
-@dataclass(frozen=True)
-class _KernelFields:
-    """Represent KernelFields.
-
-    Per-PrimFunction codegen pieces shared by the single-source kernel
-    emitter and the split device / host fragment emitters.
-    """
-
-    kernel_name: str
-    internal_wrapper_name: str
-    params: tuple
-    param_cpp_types: dict
-    param_kinds: dict
-    wrapper_params_sig: str
-    user_params: tuple
-    launch_args: str
-    param_wrappers: list
-    wrapper_locals: list
-    kernel_body: str
-    grid: tuple
-    block: tuple
-    entry_host_only: bool
-
-
-def _compute_kernel_fields(node: PrimFunction, ctx: CodegenContext) -> _KernelFields:
-    if node.variants:
-        raise ValueError(
-            f"PrimFunction {node.name!r} is a specialization prototype; "
-            "codegen must dispatch variants instead of emitting an empty kernel"
-        )
-    for p in node.params:
-        ctx.register_kernel_param(p)
-
-
-
-
-
-
-    ctx._dim_var_runtime = {}
-    for p in node.params:
-        ty = p.type
-        if not isinstance(ty, TensorType):
-            continue
-        for axis, dim in enumerate(ty.shape):
-            if isinstance(dim, DimVar) and dim.name not in ctx._dim_var_runtime:
-                ctx._dim_var_runtime[dim.name] = shape_var_name(p.name, axis)
-
-    ctx.reset_barrier_ids()
-
-    entry_host_only = bool(node.variants)
-
-
-
-    def _emit_body(inner: CodegenContext) -> None:
-        inner.emit_node(node.body)
-
-    body = ctx.capture(_emit_body)
-
-    param_cpp_types = _param_cpp_types(node.params, ctx)
-    hidden_shape = tuple(
-        p for p in node.params if _is_hidden_shape_scalar(p, node.params)
-    )
-    hidden_names = {p.name for p in hidden_shape}
-    user_params = tuple(p for p in node.params if p.name not in hidden_names)
-
-
-
-
-    def _is_user_scalar(p) -> bool:
-        return (
-            p.name not in hidden_names
-            and isinstance(p.type, TensorType)
-            and not p.type.shape
-        )
-
-    def _kind(p) -> str:
-        if p.name in hidden_names:
-            return "hidden_scalar"
-        if _is_user_scalar(p):
-            return "user_scalar"
-        return "tensor"
-
-    param_kinds = {p.name: _kind(p) for p in node.params}
-
-
-
-
-    def _wrapper_param_token(p) -> str:
-        if param_kinds[p.name] == "user_scalar":
-            return f"int {p.name}"
-        return f"tvm::ffi::Tensor {p.name}"
-
-    wrapper_params_sig = ", ".join(_wrapper_param_token(p) for p in user_params)
-    wrapper_locals = []
-    for p in hidden_shape:
-        parsed = _parse_shape_param_name(p.name)
-
-        assert parsed is not None
-        base, axis = parsed
-        wrapper_locals.append(
-            f"int {p.name} = static_cast<int>({base}.shape()[{axis}]);"
-        )
-
-
-
-    def _launch_arg(p) -> str:
-        if param_kinds[p.name] != "tensor":
-            return p.name
-        return f"static_cast<{param_cpp_types[p.name]}*>({p.name}.data_ptr())"
-
-    launch_args = ", ".join(_launch_arg(p) for p in node.params)
-
-
-
-    buffer_params = tuple(
-        p for p in user_params if param_kinds[p.name] == "tensor"
-    )
-    param_wrappers = []
-    for p in buffer_params:
-        total = shape_numel_upper_bound(p.type.shape)
-        sl = getattr(p.type, "layout", None)
-        if isinstance(sl, ShardLayout):
-            param_wrappers.append(
-                _param_wrapper_shard(p.name, total, sl, ctx._dim_var_runtime)
-            )
-        else:
-            param_wrappers.append(
-                _param_wrapper(p.name, total, param_cpp_types[p.name])
-            )
-
-    grid, block = _collect_mesh_dims(node.body)
-
-    codegen_name = node.name
-    return _KernelFields(
-        kernel_name=codegen_name,
-        internal_wrapper_name=names.host_entry(codegen_name),
-        params=node.params,
-        param_cpp_types=param_cpp_types,
-        param_kinds=param_kinds,
-        wrapper_params_sig=wrapper_params_sig,
-        user_params=user_params,
-        launch_args=launch_args,
-        param_wrappers=param_wrappers,
-        wrapper_locals=wrapper_locals,
-        kernel_body=body,
-        grid=grid,
-        block=block,
-        entry_host_only=entry_host_only,
-    )

@@ -3,6 +3,7 @@
 It copies device parameters and the existing static launch configuration;
 dynamic grids remain unsupported.
 """
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -43,21 +44,12 @@ def insert_default_host_entry(module: Module) -> Module:
     if isinstance(entry_fn.target, CpuTarget):
         return module
 
-
-
     if any(isinstance(fn.target, CpuTarget) for fn in module.functions):
         raise ValueError(
             "insert_default_host_entry: module has a CPU function that is not "
             "the entry; refusing to guess the host entry"
         )
 
-
-    if entry_fn.variants:
-        cpu_entry = replace(entry_fn, target=CpuTarget())
-        new_functions = tuple(
-            cpu_entry if fn is entry_fn else fn for fn in module.functions
-        )
-        return replace(module, functions=new_functions)
     device_fns = [
         fn
         for fn in module.functions
@@ -70,7 +62,6 @@ def insert_default_host_entry(module: Module) -> Module:
             f"{len(device_fns)} device functions"
         )
     device_fn = device_fns[0]
-
 
     entry_params = tuple(Var(type=p.type, name=p.name) for p in device_fn.params)
     grid, block = _derive_launch_config(device_fn.body)

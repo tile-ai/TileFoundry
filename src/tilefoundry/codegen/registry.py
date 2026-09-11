@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.core.module import Module, module_functions, subtree
+from tilefoundry.ir.core.module import Module, module_functions
 from tilefoundry.target.base import Target, _target_summary
 from tilefoundry.target.services import CodeGenerator
 
@@ -51,31 +51,6 @@ def group_functions_by_target(
     return {target: tuple(functions) for target, functions in groups.items()}
 
 
-def group_modules_by_target(module: Module):
-    """Group functions by their nearest declared topology domain and Target."""
-    from tilefoundry.ir.tir.prim_function import PrimFunction  # noqa: PLC0415
-
-    domains: dict[int, tuple[Module, list[PrimFunction]]] = {}
-    for node in subtree(module):
-        domain = node
-        while domain is not module and domain.topologies is None:
-            assert domain._parent is not None
-            domain = domain._parent
-        bucket = domains.setdefault(id(domain), (domain, []))[1]
-        for function in node.functions:
-            if not isinstance(function, PrimFunction):
-                continue
-            bucket.append(function)
-
-    result = []
-    for domain, functions in domains.values():
-        if not functions:
-            continue
-        for target, grouped in _group_local_functions(domain, functions).items():
-            result.append((domain, target, grouped))
-    return tuple(result)
-
-
 def _group_local_functions(module: Module, functions):
     """Group an already selected topology domain without descending again."""
     from tilefoundry.ir.tir.prim_function import PrimFunction  # noqa: PLC0415
@@ -95,4 +70,4 @@ def _group_local_functions(module: Module, functions):
     return {target: tuple(items) for target, items in groups.items()}
 
 
-__all__ = ["CodeGenerator", "group_functions_by_target", "group_modules_by_target"]
+__all__ = ["CodeGenerator", "group_functions_by_target"]

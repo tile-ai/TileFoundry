@@ -11,7 +11,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from tilefoundry.codegen import names
 from tilefoundry.ir.types import TensorType
 
 
@@ -98,23 +97,6 @@ LAUNCH_ABI = (
 )
 """What a launch shim is told beyond the kernel's own arguments."""
 
-GPU_ID = ScalarSignature(names.placed_id_param(), "long long")
-"""The card's id: the host knows which card it called, the card does not."""
-
-META = ScalarSignature(names.meta_param(), "tilefoundry::ProgramMetaData")
-"""The ids a placed kernel hands its block."""
-
-
-def placed_ids(topology_levels: Iterable[str]) -> tuple[ScalarSignature, ...]:
-    """The ids a loaded entry is told, named by the level each one places.
-
-    Its caller is Python and passes them positionally, then reads each id out
-    of a ``Placement`` -- which is keyed by level. So this instance of the
-    convention names them for that lookup, where the two C++ instances name
-    them for their declaration.
-    """
-    return tuple(ScalarSignature(level, GPU_ID.ctype) for level in topology_levels)
-
 
 def _ctype(param: Signature, tensor_ctype: Callable[[TensorSignature], str]) -> str:
     """The C++ type of one parameter; a tensor's depends on the convention."""
@@ -157,9 +139,7 @@ def callable_signature_of(fn) -> CallableSignature:
 
 
 __all__ = [
-    "GPU_ID",
     "LAUNCH_ABI",
-    "META",
     "CallableSignature",
     "ScalarSignature",
     "Signature",
@@ -169,6 +149,5 @@ __all__ = [
     "callable_signature_of",
     "declare",
     "declare_types",
-    "placed_ids",
     "tensor_signature_of",
 ]

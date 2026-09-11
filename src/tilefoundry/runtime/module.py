@@ -3,6 +3,7 @@
 ``CompiledModule`` is the compiled-path variant bound by the loader. See
 [runtime §1.1](docs/spec/runtime.md#11-runtimemodulepy).
 """
+
 from __future__ import annotations
 
 from typing import Callable
@@ -47,16 +48,12 @@ class RuntimeModule:
         return None
 
     def forward(self, *args):
-        raise NotImplementedError(
-            f"RuntimeModule {self.name!r}: subclass must implement forward()"
-        )
+        raise NotImplementedError(f"RuntimeModule {self.name!r}: subclass must implement forward()")
 
     def __call__(self, *args):
         return self.forward(*args)
 
-    def load(
-        self, resource: RuntimeResource, *, placement: "Placement | None" = None
-    ) -> None:
+    def load(self, resource: RuntimeResource, *, placement: "Placement | None" = None) -> None:
         """Recurse ``load`` into every child under its own name prefix.
 
         Recurse ``load`` into every child under its own name prefix. Weight
@@ -84,40 +81,19 @@ class CompiledModule(RuntimeModule):
         self.fn = fn
         self._placement: "Placement | None" = None
 
-    def load(
-        self, resource: RuntimeResource, *, placement: "Placement | None" = None
-    ) -> None:
+    def load(self, resource: RuntimeResource, *, placement: "Placement | None" = None) -> None:
         """Remember which program this is; a compiled entry holds no weights."""
         self._placement = placement
         super().load(resource, placement=placement)
 
-    def _placed_ids(self) -> tuple:
-        """The ids the entry needs told, ahead of its own arguments.
-
-        A level the host places has no register to read, so its id travels
-        with the call, and each leading parameter is named for the level it
-        places -- which is how a ``Placement`` is keyed. A program that places
-        none is called as it was written.
-        """
-        if not self.type.leading:
-            return ()
-        places = tuple(p.name for p in self.type.leading)
-        if self._placement is None:
-            raise ValueError(
-                f"{self.type.name}: places {places} and no Placement "
-                f"says which program this is; pass placement= to load()"
-            )
-        return tuple(int(self._placement.ids[p.name]) for p in self.type.leading)
-
     def forward(self, *args):
-        placed = self._placed_ids()
         n_in = self.type.input_count
         if len(args) == len(self.type.params):
             outs = args[n_in:]
-            self.fn(*placed, *args)
+            self.fn(*args)
         elif len(args) == n_in:
             outs = self._alloc_outputs(args)
-            self.fn(*placed, *args, *outs)
+            self.fn(*args, *outs)
         else:
             raise TypeError(
                 f"{self.type.name}: expected {n_in} inputs (auto-alloc) or "
@@ -133,8 +109,7 @@ class CompiledModule(RuntimeModule):
         device = next((a.device for a in args if isinstance(a, torch.Tensor)), None)
         if device is None:
             raise TypeError(
-                f"{self.type.name}: cannot infer device for auto-alloc; "
-                f"no torch.Tensor in inputs"
+                f"{self.type.name}: cannot infer device for auto-alloc; no torch.Tensor in inputs"
             )
         return tuple(
             torch.empty(p.type.shape, dtype=to_torch_dtype(p.type.dtype), device=device)
