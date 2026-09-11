@@ -134,7 +134,7 @@ def _memory_evidence(report: dict) -> str | None:
     placement = record.get("allocation")
     if placement is None or placement["solver_status"] not in ("optimal", "feasible"):
         return f"allocation is {placement!r}"
-    gmem = report["function_records"]["traffic"]["whole"]["gmem"]
+    gmem = report["totals"]["traffic"]["gmem"]
     if not gmem.get("read", 0) > 0:
         return f"reported no gmem read ({gmem!r})"
     if not record["lifetimes"]:
@@ -215,7 +215,7 @@ def lifetimes(
 def traffic_read(tf, source: Path, case: ModelCase, selector: str, dims: Mapping[str, int]) -> int:
     """How many bytes the memory analysis says one function reads from gmem."""
     report = reported(tf, source, case, selector, ("memory",), dims)
-    return report["function_records"]["traffic"]["whole"]["gmem"]["read"]
+    return report["totals"]["traffic"]["gmem"]["read"]
 
 
 def one_rounding(want) -> tuple[str, dict[str, float]]:

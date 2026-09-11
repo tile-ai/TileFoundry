@@ -11,6 +11,8 @@ from typing import Callable, ClassVar, Mapping, Sequence
 import torch
 
 from tilefoundry.evaluator.value import from_torch_dtype
+from tilefoundry.ir.types.shard import shard_layout_of
+from tilefoundry.runtime.tensor import ShardTensor
 
 _NEAR_ZERO = 1e-12
 
@@ -266,7 +268,16 @@ def flatten_outputs(x, path: str = "output") -> list[tuple[str, torch.Tensor]]:
 
     Flatten a tensor or nested tuple-of-tensors into ``[(path, tensor), ...]``;
     the path list doubles as a structural signature for comparing outputs.
+    A ``ShardTensor`` a module returned is already one program's, so what is
+    compared is the tensor it carries ([runtime §1.10](docs/spec/runtime.md#110-runtimetensorpy)).
     """
+    if isinstance(x, ShardTensor):
+        if shard_layout_of(x.type.layout) is not None:
+            raise TypeError(
+                f"check: {path} is every program's data at once, not one program's; "
+                "narrow it with to_local() before comparing it against a reference"
+            )
+        return flatten_outputs(x.tensor, path)
     if isinstance(x, torch.Tensor):
         return [(path, x)]
     if isinstance(x, tuple):
