@@ -25,6 +25,7 @@ HEADERS = ROOT / "include/tilefoundry/runtime"
 PACKAGE = ROOT / "src/tilefoundry"
 SPEC = ROOT / "docs/spec/runtime.md"
 LIBCLANG = ("/usr/lib/x86_64-linux-gnu/libclang-18.so.1", "/usr/lib/llvm-18/lib/libclang.so.1")
+"""Where a system install puts it; the ``libclang`` wheel is asked first."""
 
 REGIONS: dict[str, str] = {
     "py-module-RuntimeModule": "runtime/module.py::RuntimeModule",
@@ -114,11 +115,20 @@ template <class> inline constexpr bool dependent_false_v = false;
 
 
 def _configure() -> None:
-    for path in LIBCLANG:
-        if Path(path).exists():
-            CI.Config.set_library_file(path)
+    """Point the bindings at a libclang, wherever this machine keeps one.
+
+    The ``libclang`` wheel ships one beside the bindings and a distribution
+    ships one in ``/usr/lib``; a machine may have either, so both are asked.
+    """
+    bundled = Path(CI.__file__).parent / "native" / "libclang.so"
+    for path in (bundled, *map(Path, LIBCLANG)):
+        if path.exists():
+            CI.Config.set_library_file(str(path))
             return
-    raise SystemExit("runtime_spec_surface: no libclang found")
+    raise SystemExit(
+        "runtime_spec_surface: no libclang found; install the project's dev "
+        "extra, which asks for the libclang wheel"
+    )
 
 
 def _declarations(header: str) -> list[str]:
