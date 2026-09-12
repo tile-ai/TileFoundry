@@ -374,9 +374,6 @@ class CompilerOptions:
 def normalize_to_module(fn_or_mod: HirFunction | Module) -> Module: ...
 
 
-def lower(mod: Module, /, *, target: Target | None = None) -> Module: ...
-
-
 def build(mod: Module, /, *, target: Target | None = None) -> "RuntimeModule": ...
 
 
@@ -410,9 +407,9 @@ entry point.  It accepts a `hir.Function` or `Module`, normalizes to a
 - Mesh layout is expressed in the DSL with lexical `with Mesh(...) as mesh` scopes.
 - `jit()` has no `cta_mesh` / `thread_mesh` parameters.
 
-**Pipeline**: `jit()` reuses [passes §6](./passes.md#6-top-level-api)'s
-`lower()` → `build()` pipeline (`compile()`). It auto-wraps a bare `Function` input into a single-function
-`Module` that declares no execution context.
+**Pipeline**: `jit()` reuses [passes §6](./passes.md#6-top-level-api)'s `build()`
+pipeline (`compile()`). It auto-wraps a bare `Function` input into a
+single-function `Module` that declares no execution context.
 
 **Cache**: in-process dict cache keyed by
 `sha256(canonical_module_text + target_text + canonical_options_text)`.

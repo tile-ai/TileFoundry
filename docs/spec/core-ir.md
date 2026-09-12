@@ -184,7 +184,7 @@ step.
 
 - constraints:
   - When `entry` is present, it MUST name a function in `functions`.
-    `entry_function()` MUST return that function, and `tilefoundry.lower(...)`
+    `entry_function()` MUST return that function, and `tilefoundry.build(...)`
     and the emitter MUST start there. Other functions enter the output only when
     reachable from `entry`.
   - When `entry` is omitted (`None`), the Module MUST have no default step.

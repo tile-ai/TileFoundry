@@ -80,7 +80,7 @@ from tilefoundry.script import func, intrinsic, prim_func
 from tilefoundry.module import module
 
 
-from tilefoundry.compile import build, compile, jit, lower, normalize_to_module, CompilerOptions
+from tilefoundry.compile import build, compile, jit, normalize_to_module, CompilerOptions
 from tilefoundry.inspection.viewer import Viewer as _Viewer
 
 
@@ -114,7 +114,7 @@ __all__ = [
 
     "func", "prim_func", "intrinsic", "module",
 
-    "lower", "build", "compile", "jit",
+    "build", "compile", "jit",
     "normalize_to_module", "CompilerOptions",
     "view",
 ]

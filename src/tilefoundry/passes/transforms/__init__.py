@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from .bufferize import BufferizePass
-from .hir_to_tir import HirToTirPass
+from .host_entry import InsertHostEntryPass, insert_default_host_entry
 
-__all__ = ["HirToTirPass", "BufferizePass"]
+__all__ = ["InsertHostEntryPass", "insert_default_host_entry"]

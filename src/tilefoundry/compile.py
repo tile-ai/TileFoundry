@@ -1,4 +1,4 @@
-"""Top-level ``tilefoundry.lower`` / ``tilefoundry.build`` / ``tilefoundry.compile`` entries.
+"""Top-level ``tilefoundry.build`` / ``tilefoundry.compile`` entries.
 
 Three public verbs, all accept ``Module`` exclusively.
 """
@@ -8,13 +8,13 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from tilefoundry.inspection import as_script as _as_script
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.passes.pass_manager import PassManager
-from tilefoundry.passes.transforms import BufferizePass, HirToTirPass
+from tilefoundry.passes.transforms import InsertHostEntryPass
 from tilefoundry.target import Target, default_target
 from tilefoundry.target.base import _target_summary, target_instance
 
@@ -64,61 +64,8 @@ def normalize_to_module(fn_or_mod: HirFunction | Module) -> Module:
 
 def _build_default_pipeline() -> PassManager:
     pm = PassManager()
-    pm.add(HirToTirPass())
-    pm.add(BufferizePass())
+    pm.add(InsertHostEntryPass())
     return pm
-
-
-def lower(
-    mod: Module,
-    /,
-    *,
-    target: Target | None = None,
-) -> Module:
-    """Run the default pass pipeline on *mod* and return a lowered ``Module`` (TIR).
-
-    *mod* must be a ``Module``.  Meshes are derived from the HIR body
-    (``ShardLayout.mesh`` attributes on reshard ops), not from external
-    parameters.
-    """
-    if not isinstance(mod, Module):
-        raise TypeError(
-            f"tilefoundry.lower: expected Module, got {type(mod).__name__}. "
-            f"Construct Module(name=..., functions=(fn,), entry=fn.name) explicitly."
-        )
-    if target is not None:
-        target = target_instance(target)
-
-    try:
-        module_target = mod.resolve_target()
-    except ValueError:
-        module_target = default_target() if target is None else target
-        mod = replace(mod, target=module_target)
-    else:
-        if target is not None and target != module_target:
-            raise ValueError(
-                f"tilefoundry.lower: explicit target {_target_summary(target)} "
-                f"conflicts with the Module Target {_target_summary(module_target)}"
-            )
-    for topology in mod.effective_topologies():
-        module_target.validate_program_topology(topology)
-
-    def lower_tree(node: Module) -> Module:
-        """Lower descendants first, retaining the tree for parent host entries."""
-        lowered_children = tuple(lower_tree(child) for child in node.modules)
-        result = _build_default_pipeline().run(node)
-        return Module(
-            name=result.name,
-            functions=result.functions,
-            entry=result.entry,
-            modules=lowered_children,
-            target=result.target,
-            topologies=result.topologies,
-            metadata=dict(result.metadata),
-            methods=result.methods,
-        )
-
-    return lower_tree(mod)
 
 
 def build(
@@ -148,6 +95,7 @@ def build(
             f"conflicts with the Module Target {_target_summary(module_target)}"
         )
 
+    mod = _build_default_pipeline().run(mod)
     workdir = os.path.join(
         tempfile.gettempdir(), f"tilefoundry_build_{mod.entry}_{os.getpid()}_split"
     )
@@ -177,12 +125,9 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
     from tilefoundry.ir.tir.shape import (  # noqa: PLC0415
         is_hidden_shape_scalar as _is_hidden_shape_scalar,
     )
-    from tilefoundry.passes.transforms.host_entry import (  # noqa: PLC0415
-        insert_default_host_entry,
-    )
     from tilefoundry.runtime.loader import load_linked_module  # noqa: PLC0415
 
-    linked = insert_default_host_entry(mod)
+    linked = mod
     module_groups = group_modules_by_target(linked)
     from tilefoundry.target import CpuTarget, CudaTarget  # noqa: PLC0415
 
@@ -246,12 +191,11 @@ def compile(
     *,
     target: Target | None = None,
 ) -> "RuntimeModule":
-    """``build(lower(mod, target=target))`` — full compile shortcut.
+    """``build(mod, target=target)`` -- the full compile entry.
 
     *mod* must be a ``Module``.  Meshes are derived from the IR body.
     """
-    lowered = lower(mod, target=target)
-    return build(lowered)
+    return build(mod, target=target)
 
 
 def _canonical_module_text(mod: Module) -> str:
@@ -371,4 +315,4 @@ def _jit_cache_key_payload(
     )
 
 
-__all__ = ["lower", "build", "compile", "jit", "normalize_to_module", "CompilerOptions"]
+__all__ = ["build", "compile", "jit", "normalize_to_module", "CompilerOptions"]

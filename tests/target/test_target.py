@@ -17,9 +17,8 @@ import pytest
 
 from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tests.fixtures.placed.rmsnorm import RmsnormModule
-from tests.fixtures.placed.square_cuda import Model as SquareCudaModel
 from tests.installed.smoke_target.vendor_npu import VendorNpuTarget
-from tilefoundry import CompilerOptions, DType, build, jit, lower, module
+from tilefoundry import CompilerOptions, DType, build, jit, module
 from tilefoundry.analysis import AnalysisError, analyze
 from tilefoundry.codegen.registry import group_functions_by_target
 from tilefoundry.dsl import DimVar
@@ -266,13 +265,6 @@ def test_authored_target_boundaries_accept_unregistered_target_instances() -> No
     assert Decorated.target is target
 
 
-def test_lower_rejects_a_topology_level_unsupported_by_the_target() -> None:
-    unsupported = replace(SquareCudaModel, topologies=(Topology("warp", 4),))
-
-    with pytest.raises(ValueError, match="unsupported topology level 'warp'"):
-        lower(unsupported)
-
-
 def test_program_topologies_use_target_resource_facts() -> None:
     """A declared extent is validated against the level's own resource fact.
 
@@ -381,7 +373,6 @@ def test_target_conflict_diagnostics_use_stable_summaries() -> None:
     )
 
     for invoke, operation in (
-        (lambda: lower(module_value, target=explicit_target), "lower"),
         (lambda: build(module_value, target=explicit_target), "build"),
         (
             lambda: jit(

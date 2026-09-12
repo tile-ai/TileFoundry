@@ -14,6 +14,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
+from tilefoundry.passes.pass_base import ModulePass
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _DEFAULT_ENTRY_NAME = "main"
@@ -83,4 +84,18 @@ def insert_default_host_entry(module: Module) -> Module:
     return replace(module, functions=(*module.functions, entry), entry=name)
 
 
-__all__ = ["insert_default_host_entry"]
+class InsertHostEntryPass(ModulePass):
+    """Give a device-only module a host-callable entry.
+
+    The only pass a TIR module needs: everything else it is made of was
+    settled before it became TIR.
+    """
+
+    name: str = "insert_host_entry"
+    requires: tuple[str, ...] = ()
+
+    def run(self, module: Module) -> Module:
+        return insert_default_host_entry(module)
+
+
+__all__ = ["InsertHostEntryPass", "insert_default_host_entry"]

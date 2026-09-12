@@ -1,7 +1,7 @@
 """Coverage for tilefoundry.passes — Pass / PassManager orchestration.
 
 Per-transform behaviour lives in the transform's own test file, and the default
-``tilefoundry.lower`` pipeline is exercised end to end by every test that
+``tilefoundry.build`` pipeline is exercised end to end by every test that
 compiles and runs a kernel: a pipeline that stopped wiring itself up cannot
 produce CUDA at all, so it needs no separate assertion here.
 """

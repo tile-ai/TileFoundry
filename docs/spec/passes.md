@@ -189,26 +189,17 @@ class CompilerOptions:
     def canonical_text(self) -> str: ...
 
 
-def lower(mod: Module, /, *, target: Target | None = None) -> Module: ...
 def build(mod: Module, /, *, target: Target | None = None) -> RuntimeModule: ...
 def compile(mod: Module, /, *, target: Target | None = None) -> RuntimeModule: ...
 ```
 
-`lower` runs the default pipeline (`HirToTirPass → BufferizePass →
-…`) and returns a lowered TIR `Module`. Mesh bindings come from
-the HIR body's `MeshRegion` regions — the verbs do not accept
-`cta_mesh` / `thread_mesh` kwargs.
+`build` takes a TIR `Module`, runs the pipeline over it, then codegen →
+toolchain link → loader, and returns a `RuntimeModule`
+([runtime](./runtime.md)). It requires the Module to own its Target; an
+explicit Target that disagrees with the declared one is an error.
 
-`lower` uses the Module-owned Target when present. At an undeclared root it
-attaches either the explicit Target instance or `default_target()` before any
-pass runs. An explicit Target that disagrees with a declared Module Target is
-an error. `build` requires the lowered Module to own its Target and applies the
-same explicit-conflict rule. Internally it
-runs codegen → toolchain link → loader and returns a
-`RuntimeModule` ([runtime](./runtime.md)).
-
-`compile` is `build(lower(mod, ...))`. The `jit` convenience and cache contract
-are owned by [runtime §1.6](./runtime.md#16-compilepy).
+`compile` is `build`. The `jit` convenience and cache contract are owned by
+[runtime §1.6](./runtime.md#16-compilepy).
 
 ### Dirty-scope retype / verify
 
