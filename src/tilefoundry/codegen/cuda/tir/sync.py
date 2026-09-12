@@ -12,14 +12,16 @@ better than the ``static_assert`` that backs it up inside nvcc.
 
 from __future__ import annotations
 
-from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
+from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import mesh_type
 from tilefoundry.ir.tir.sync import Sync, SyncBarrier, classify
+from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry.registries import Role, register_codegen
 
 _SYNC = "tilefoundry::ops::sync"
 
 
-def _mesh_value(mesh, ctx: CodegenContext) -> str:
+def _mesh_value(mesh, ctx: CudaCodegenContext) -> str:
     """*mesh* as a C++ value, through the enclosing scope's alias where it fits."""
     entry = ctx._mesh_aliases.get(id(mesh))
     if entry is not None:
@@ -31,15 +33,15 @@ def _mesh_value(mesh, ctx: CodegenContext) -> str:
     return f"{inline}{{}}"
 
 
-@register_codegen_cuda(Sync)
-def _emit(call, ctx: CodegenContext) -> None:
+@register_codegen(CudaTarget, Role.EMIT, Sync)
+def _emit(call, ctx: CudaCodegenContext) -> None:
     """Emit the barrier as the mesh it covers, plus whatever that tier needs."""
     mesh = call.target.mesh
     barrier = classify(mesh)
     value = _mesh_value(mesh, ctx)
     if barrier is SyncBarrier.GRID:
         ctx.needs_grid_barrier_state = True
-        ctx.emit(f"{_SYNC}({value}, tilefoundry::tf_grid_bar_state);")
+        ctx.emit(f"{_SYNC}({value}, tilefoundry_grid_bar_state);")
         return
     if barrier is SyncBarrier.BAR_SYNC:
         bid = ctx.alloc_barrier_id()

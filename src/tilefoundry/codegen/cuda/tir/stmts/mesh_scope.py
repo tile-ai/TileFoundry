@@ -7,15 +7,15 @@ constexpr Mesh type alias ([runtime §2.3.2](docs/spec/runtime.md#232-layoutmesh
 from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import (
-    CodegenContext,
-    register_codegen_cuda,
+    CudaCodegenContext,
     topology_scope_str,
 )
 from tilefoundry.ir.tir.stmts import MeshScope
 from tilefoundry.ir.tir.sync import participation
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
 from tilefoundry.ir.types.shard.mesh import Mesh, Topology, positions_at
-from tilefoundry.target import validate_cuda_topology_levels
+from tilefoundry.target import CudaTarget, validate_cuda_topology_levels
+from tilefoundry.visitor_registry.registries import Role, register_codegen
 
 
 def _resolved(topology: Topology | str) -> Topology:
@@ -108,8 +108,8 @@ def _is_dynamic_mesh(mesh: Mesh) -> bool:
     return any(s is None for s in mesh.layout.shape)
 
 
-@register_codegen_cuda(MeshScope)
-def _emit(node: MeshScope, ctx: CodegenContext) -> None:
+@register_codegen(CudaTarget, Role.EMIT, MeshScope)
+def _emit(node: MeshScope, ctx: CudaCodegenContext) -> None:
     """Emit the block a mesh scope is, and the mesh object it states."""
     if ctx.target is None:
         raise RuntimeError("CUDA MeshScope emission requires its Target")

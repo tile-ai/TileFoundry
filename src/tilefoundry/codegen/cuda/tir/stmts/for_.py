@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
+from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.ir.tir.stmts import For
+from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry.registries import Role, register_codegen
 
 from .scalar_expr import render_scalar_expr
 
 
-@register_codegen_cuda(For)
-def _emit(node: For, ctx: CodegenContext) -> None:
+@register_codegen(CudaTarget, Role.EMIT, For)
+def _emit(node: For, ctx: CudaCodegenContext) -> None:
     iv_name = ctx.name_for(node.induction_var)
     start = render_scalar_expr(node.start, ctx)
     stop = render_scalar_expr(node.stop, ctx)

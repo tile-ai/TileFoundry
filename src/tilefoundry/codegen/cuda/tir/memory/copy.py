@@ -10,17 +10,19 @@ whose layout is the run-time length. That is what the retired
 
 from __future__ import annotations
 
-from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
+from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.ir.tir.memory.copy import Copy
 from tilefoundry.ir.types.shape_helpers import shape_has_dim_var, shape_runtime_total
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry.registries import Role, register_codegen
 
 
 def _is_shard(var) -> bool:
     return isinstance(getattr(var.type, "layout", None), ShardLayout)
 
 
-def _tensor_expr(var, ctx: CodegenContext) -> str:
+def _tensor_expr(var, ctx: CudaCodegenContext) -> str:
     base = ctx.name_for(var)
     return f"{base}_tensor" if ctx.is_kernel_param(var) else base
 
@@ -30,8 +32,8 @@ def _has_dyn_shape(var) -> bool:
     return shape_has_dim_var(shape)
 
 
-@register_codegen_cuda(Copy)
-def _emit(call, ctx: CodegenContext) -> None:
+@register_codegen(CudaTarget, Role.EMIT, Copy)
+def _emit(call, ctx: CudaCodegenContext) -> None:
     source, destination = call.args[0], call.args[1]
     src_shard = _is_shard(source)
     dst_shard = _is_shard(destination)
@@ -39,15 +41,15 @@ def _emit(call, ctx: CodegenContext) -> None:
     src = _tensor_expr(source, ctx)
     dst = _tensor_expr(destination, ctx)
     if dyn and not src_shard and not dst_shard:
-        n = shape_runtime_total(destination.type.shape, ctx._dim_var_runtime)
+        n = shape_runtime_total(destination.type.shape, ctx.dynamic_extents)
 
 
         ctx.emit("{")
         ctx.indent()
-        ctx.emit(f"auto tf_copy_n = cute::make_layout({n});")
-        ctx.emit(f"auto tf_copy_src = cute::make_tensor({src}.data(), tf_copy_n);")
-        ctx.emit(f"auto tf_copy_dst = cute::make_tensor({dst}.data(), tf_copy_n);")
-        ctx.emit("tilefoundry::ops::copy(tf_copy_src, tf_copy_dst);")
+        ctx.emit(f"auto tilefoundry_copy_n = cute::make_layout({n});")
+        ctx.emit(f"auto tilefoundry_copy_src = cute::make_tensor({src}.data(), tilefoundry_copy_n);")
+        ctx.emit(f"auto tilefoundry_copy_dst = cute::make_tensor({dst}.data(), tilefoundry_copy_n);")
+        ctx.emit("tilefoundry::ops::copy(tilefoundry_copy_src, tilefoundry_copy_dst);")
         ctx.dedent()
         ctx.emit("}")
         return

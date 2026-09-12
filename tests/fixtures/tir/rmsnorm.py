@@ -6,7 +6,7 @@ from tilefoundry.ir.types.shard import B, Layout, Mesh, ShardLayout, Topology
 from tilefoundry.target import CpuTarget, CudaTarget
 
 
-@module(entry="rmsnorm_host")
+@module(entry="rmsnorm_host", target=CudaTarget("nvidia.h200_sxm"))
 class TirRmsnorm:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def rmsnorm_device(x: Tensor[(1, 128), "f32"], weight: Tensor[(128,), "f32"], out: Tensor[(1, 128), "f32"]):

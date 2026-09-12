@@ -2,9 +2,8 @@
 
 The derived-visitor pattern: every `analysis` / `verify` / `codegen`
 walker is the same template — **base visitor + custom Context +
-per-class registry**. This spec defines the template and its five
-instances (`typeinfer` / `verify` / `codegen_<target>` / `cost` /
-`hir_lowering`).
+per-class registry**. This spec defines the template and its four
+instances (`typeinfer` / `verify` / `codegen` / `cost`).
 
 The settled split:
 
@@ -30,7 +29,7 @@ flowchart LR
     end
 
     subgraph registry["visitor-registry"]
-        Reg["<b>AnalysisRegistry</b>"]
+        Reg["<b>DispatchRegistry</b>"]
         TypeVis["<b>TypeInferVisitor</b>"]
         VerifyVis["<b>VerifyVisitor</b>"]
         CodegenVis["<b>CodegenVisitor</b>"]
@@ -67,7 +66,7 @@ same template:
 
 1. inherit a `Visitor` / `Mutator` base,
 2. carry a custom `Context` (mutable state + caches + helpers),
-3. inside `visit_<ClassName>` consult an `AnalysisRegistry` to find
+3. inside `visit_<ClassName>` consult a `DispatchRegistry` to find
    the handler and invoke `fn(node, ctx)`.
 
 ### 1.1 Registry is not a property of `StmtVisitor` / `ExprVisitor`
@@ -86,7 +85,7 @@ that adds an explicit registry binding point.
 
 `@register_verify_stmt(Copy)` writes a handler into
 `verify_stmt_registry`; `VerifyVisitor.generic_visit` reads from the
-**same module-level `AnalysisRegistry` instance**. That shared
+**same module-level `DispatchRegistry` instance**. That shared
 reference is the only thing pairing the two — swap the registry and
 you swap the analysis.
 
@@ -96,7 +95,7 @@ you swap the analysis.
   hand-write `visit_Call` / `visit_For` / … overrides. No registry
   needed. Use this for "rules pinned to one place, no third-party
   extension expected" passes (e.g. a one-shot rewrite).
-- **Extensible visitor.** Define a `Context` + `AnalysisRegistry` +
+- **Extensible visitor.** Define a `Context` + `DispatchRegistry` +
   `register_*` decorator, and have the visitor consult its own
   registry inside `generic_visit`. Use this when third-party code
   should be able to plug in handlers per node class
@@ -117,16 +116,17 @@ Two node shapes can be registry-dispatched:
   flow, binding, `Evaluate`, user `@intrinsic`. The Stmt subclass is
   the registry key; handler signature is `(stmt: Stmt, ctx) -> T`.
 
-A given analysis registry keys exactly one of the two. The
-instances split as follows:
+A registry that asks about a node alone keys exactly one of the two.
+Code generation asks about more than the node, so its key carries the
+class alongside the other two things the answer depends on
+([§6](#6-instance-3--codegen)). The instances split as follows:
 
 | Instance | Op-branch handler | Stmt-branch handler | Notes |
 |---|---|---|---|
 | **typeinfer** | `(Call, TypeInferContext) -> Type` | — | Call result typing, including `UnitType` for effect Ops |
 | **verify** | — | `(Stmt, VerifyContext) -> None` | Effect-side constraints; for `Evaluate(op, args)`, dispatch keys on the Op class — see [§5](#5-instance-2--verify) |
-| **codegen_\<target\>** | `(Call, CodegenContext) -> str` | `(Stmt, CodegenContext) -> None` | Both sides are emitted |
+| **codegen** | `(Call, CodegenContext) -> str` | `(Stmt, CodegenContext) -> None` | Both sides are emitted; the key also carries the target and the position — see [§6](#6-instance-3--codegen) |
 | **cost** | `(Call, CostContext) -> Cost` | `(Stmt, CostContext) -> Cost` (optional) | Recursive-local logical work |
-| **hir_lowering** | `(lowerer, Op, Call) -> Var` | — | HIR-to-TIR lowering; see [§11](#11-instance-5--hir_lowering) |
 
 Generic control-flow / binding Stmts (`For` / `If` / `While` /
 `LetStmt` / `Sequential` / `MeshScope` / `Return`) are handled by
@@ -134,24 +134,32 @@ the visitor base's `generic_visit` recursion and are not routed
 through any registry — their semantic rules are owned by
 [tir](./tir.md) / [hir](./hir.md), not by this spec.
 
-## 3. `AnalysisRegistry`
+## 3. `DispatchRegistry`
 
-Every instance shares one registry implementation. It is a
-class-keyed dict with a duplicate-registration guard.
+Every instance shares one registry implementation: a key → handler dict
+with a duplicate-registration guard. What the key is depends on the
+question the instance answers, which is why the class is named for the
+dispatch and not for any one of its users.
 
 ```python
-class AnalysisRegistry(Generic[Key]):          # Key = type[Op] or type[Stmt]
-    def __init__(self, name: str): ...
-    def register(self, cls: Key, fn: Callable) -> None: ...   # raises on duplicate
-    def lookup(self, cls: Key) -> Callable | None: ...        # None on miss
-    def has(self, cls: Key) -> bool: ...
+class DispatchRegistry[Key]:
+    """Key → handler map. Double registration raises; lookup miss returns None."""
+
+    def __init__(self, name: str) -> None: ...
+    def register(self, key: Key, fn: Callable) -> None: ...
+    def lookup(self, key: Key) -> Callable | None: ...
+    def has(self, key: Key) -> bool: ...
+    def decorator(self) -> Callable[[type], Callable[[Callable], Callable]]: ...
 ```
 
 - constraints:
-  - A registry MUST raise on double registration of the same class;
+  - A registry MUST raise on double registration of the same key;
     subclasses do not inherit a parent's handler. Each concrete
     `Op` / `Stmt` subclass either registers itself explicitly or is
     caught by the visitor's `generic_visit` fallback.
+  - `decorator` returns the conventional `register_X(cls)` form for a
+    registry whose key is a class alone. An instance whose key is wider
+    states its own registration function ([§6](#6-instance-3--codegen)).
   - `lookup` returns `None` on a miss. The caller decides whether a
     miss is an error or a fallback. `VerifyVisitor` falls back to
     `generic_visit` on a miss (an unregistered Stmt simply has no
@@ -225,7 +233,7 @@ nothing of that kind rather than guessing.
 Registry + decorator:
 
 ```python
-typeinfer_registry: AnalysisRegistry[type[Op]]   # module-level registry keyed by type[Op]
+typeinfer_registry: DispatchRegistry[type[Op]]   # module-level registry keyed by type[Op]
 def register_typeinfer(op_cls: type[Op]): ...     # decorator: register a typeinfer handler for one Op class
 ```
 
@@ -329,7 +337,7 @@ def relations_of(call, ctx) -> AccessRelations: ...
 Registry + decorator:
 
 ```python
-access_relation_registry: AnalysisRegistry     # keyed by type[Op]
+access_relation_registry: DispatchRegistry     # keyed by type[Op]
 def register_access_relation(op_cls: type): ...
 ```
 
@@ -399,7 +407,7 @@ class VerifyContext(TypeInferContext):   # inherits scope / current_mesh / child
 Registry + decorator:
 
 ```python
-verify_stmt_registry: AnalysisRegistry[type]   # module-level registry keyed by Stmt/Op class
+verify_stmt_registry: DispatchRegistry[type]   # module-level registry keyed by Stmt/Op class
 def register_verify_stmt(cls: type): ...        # decorator: register a verify handler keyed on the Stmt/Op class
 ```
 
@@ -435,7 +443,7 @@ Visitor:
 
 ```python
 class VerifyVisitor(StmtVisitor[None]):
-    def __init__(self, ctx: VerifyContext, registry: AnalysisRegistry = verify_stmt_registry): ...   # ctx + injected verify registry
+    def __init__(self, ctx: VerifyContext, registry: DispatchRegistry = verify_stmt_registry): ...   # ctx + injected verify registry
     def generic_visit(self, stmt: Stmt) -> None: ...   # try the registry, fall back to base recursion on a miss
     def visit_MeshScope(self, stmt): ...               # push/pop mesh_scope around recursion
 ```
@@ -452,69 +460,102 @@ fallback; their semantic constraints (e.g. `For.step != 0`,
 `If.cond` is `bool`, `LetStmt` binding rules) are owned by
 [tir](./tir.md) and registered there, not in this spec.
 
-## 6. Instance 3 — `codegen_<target>`
+## 6. Instance 3 — `codegen`
 
 The concrete `CodegenContext` interface is owned by
 [codegen §2.3](./codegen.md#23-codegencontext). This section owns only the
 registry-dispatch contract that consumes that context.
 
-Registry per target:
+One registry, shared by every target. A generated line depends on three things
+at once — whose language it is written in, which position of a call it is
+written at, and which class is being asked about — so all three are the key:
 
 ```python
-codegen_cuda_registry: AnalysisRegistry[type]        # one registry per target (cuda / cpu / ...)
-def register_codegen_cuda(cls: type[Op] | type[Stmt]): ...   # decorator: register a per-target handler
+class Role(Enum):
+    """Which position of a call a code-generation handler answers for.
+
+    Attributes:
+        EMIT: attribute; the node is written where it stands.
+        CALLEE: attribute; the parameters a function declares.
+        CALLER: attribute; the arguments a scope supplies for them.
+    """
+
+    EMIT = "emit"
+    CALLEE = "callee"
+    CALLER = "caller"
+
+
+codegen_registry: DispatchRegistry[tuple[type[Target], Role, type]]
+
+
+def register_codegen(
+    target: type[Target], role: Role, cls: type
+) -> Callable[[Callable], Callable]: ...
 ```
 
 - constraints:
-  - each target has its own registry; keys may be `type[Op]` (TIR-owned Expr Op
-    handlers) or `type[Stmt]`.
+  - There is one code-generation registry. A target is a dimension of its key,
+    never a registry of its own: a translation unit that writes a call to a
+    function of another target MUST reach that target's answer without
+    importing its code generator.
+  - The target a key names is the one whose language the answer is written in.
+    For a call that is the **callee's**: how a call to it is spelled is its own
+    convention, and the calling scope fills in only the names it already holds.
+  - `EMIT` keys on a node class: `type[Op]` for an Op reached through its
+    `Call`, or `type[Stmt]`. `CALLEE` and `CALLER` key on a signature class
+    ([codegen §4.4](./codegen.md#44-signatures)); they read one signature from
+    opposite ends, which is why they are one key apart rather than two
+    registries apart.
+  - A lookup miss is an error naming the whole key. Codegen has no fallback
+    emission: a node or signature nothing answers for MUST NOT be written.
 
 Handler signatures:
 
-- Op-branch: `(call: Call, ctx: CodegenContext) -> str` — returns a
-  target code fragment (used as a sub-expression by an outer Stmt
-  emitter).
-- Stmt-branch: `(stmt: Stmt, ctx: CodegenContext) -> None` — emits
-  one or more lines into `ctx.output`.
+- `EMIT`: `(node, ctx: CodegenContext) -> None` — writes its lines through
+  `ctx.emit`, and reaches its operands through the context rather than
+  returning a fragment. `node` is the `Call` for an Op, the Stmt itself
+  otherwise.
+- `CALLEE`: `(signature: Signature, ctx: CodegenContext) -> tuple[str, ...]` —
+  the C++ parameters this one logical parameter declares. Any derived name it
+  invents there is its own and is never parsed back.
+- `CALLER`: `(signature: Signature, ctx: CodegenContext) -> tuple[str, ...]` —
+  the arguments the writing scope passes for it, in the order and count the
+  callee declared.
 
 ```python
 # example
-# Op-branch handler returns a code fragment; Stmt-branch handler emits lines:
-@register_codegen_cuda(TirScalarReLU)
-def _(call: Call, ctx: CodegenContext) -> str: ...
-@register_codegen_cuda(Copy)
-def _(stmt: Copy, ctx: CodegenContext) -> None: ...
+# one handler per (target, position, class):
+@register_codegen(CudaTarget, Role.EMIT, ReLU)
+def _(call: Call, ctx: CudaCodegenContext) -> None: ...
+@register_codegen(CudaTarget, Role.EMIT, For)
+def _(node: For, ctx: CudaCodegenContext) -> None: ...
+@register_codegen(CudaTarget, Role.CALLEE, TensorSignature)
+def _(sig: TensorSignature, ctx: CodegenContext) -> tuple[str, ...]: ...
 ```
 
 Visitor:
 
 ```python
 class CodegenVisitor:
-    def __init__(
-        self,
-        ctx: CodegenContext,
-        registry: AnalysisRegistry,
-        *,
-        backend: str,
-    ): ...
-    def emit_stmt(self, stmt: Stmt) -> None: ...   # Stmt-side entry; unregistered Stmt falls back to target default emit
-    def emit_expr(self, expr: Expr) -> str: ...    # Op-side entry; unregistered Op raises
+    """Dispatch a node to the handler that writes it, for a caller holding a registry."""
+
+    def __init__(self, ctx, registry: DispatchRegistry, *, target: type): ...
+    def emit_stmt(self, stmt: Stmt) -> None: ...   # Stmt-side entry
+    def emit_expr(self, expr: Expr) -> None: ...   # Op-side entry, through the Call
 ```
 
 - constraints:
-  - combines the `StmtVisitor` + `ExprVisitor` sides; routes per node class through
-    the concrete generator's registry; an unregistered Op raises, an unregistered Stmt falls
-    back to the target-owned default emit.
-  - `backend` is diagnostic text only. It MUST NOT select a registry or a Target.
+  - the two entries exist because a Stmt is reached by its own class and an Op
+    through the `Call` carrying it; `target` is the key's first dimension, not
+    diagnostic text. A leaf `Expr` has no emission of its own and raises.
 
 User extension path — adding a new Stmt `MyIntrinsic`:
 
 1. `ir/tir/<cat>/my_intrinsic.py`: define `MyIntrinsic(Stmt)` and
    `@register_verify_stmt(MyIntrinsic)`.
 2. `codegen/cuda/tir/<cat>/my_intrinsic.py`:
-   `@register_codegen_cuda(MyIntrinsic)`.
-3. For a new target (cpu, …): add the corresponding
-   `@register_codegen_cpu(MyIntrinsic)` in
+   `@register_codegen(CudaTarget, Role.EMIT, MyIntrinsic)`.
+3. For a new target (cpu, …): register the same class against that target in
    `codegen/cpu/tir/<cat>/my_intrinsic.py`.
 
 The visitor / pass pipeline / parser do not change.
@@ -577,11 +618,11 @@ class CostContext(TypeInferContext):
     def local_type_of(self, expr: Expr) -> Type: ...  # read expr.type, then project
     def local_output_type(self, call: Call) -> Type: ...
 
-cost_evaluator_registry: AnalysisRegistry[type[Op]]
+cost_evaluator_registry: DispatchRegistry[type[Op]]
 def register_cost_evaluator(op_cls: type[Op]): ...
 
 class CostEvaluator(ExprWalker[Cost]):
-    def __init__(self, registry: AnalysisRegistry = cost_evaluator_registry): ...
+    def __init__(self, registry: DispatchRegistry = cost_evaluator_registry): ...
     def visit_Call(self, call: Call, ctx: CostContext) -> Cost: ...
 ```
 
@@ -663,7 +704,7 @@ submodule is imported and every `@register_*` runs.
 
 `import tilefoundry` triggers the walk once; every registry is fully
 populated. Re-imports are idempotent (Python caches the module;
-`AnalysisRegistry.register` does not re-run the import-time body).
+`DispatchRegistry.register` does not re-run the import-time body).
 
 ## 10. Defining a new extensible analysis
 
@@ -684,7 +725,7 @@ class LivenessContext(TypeInferContext):
 
 ```python
 # example
-liveness_registry: AnalysisRegistry[type[Op]]   # the new analysis's registry
+liveness_registry: DispatchRegistry[type[Op]]   # the new analysis's registry
 def register_liveness(op_cls: type[Op]): ...     # decorator: register a handler for one Op class
 ```
 
@@ -697,7 +738,7 @@ needed.
 ```python
 # example
 class AliasVisitor(ExprVisitor[None]):
-    def __init__(self, registry: AnalysisRegistry = liveness_registry): ...
+    def __init__(self, registry: DispatchRegistry = liveness_registry): ...
     def visit_Call(self, call: Call, ctx: LivenessContext) -> None: ...
 ```
 
@@ -714,28 +755,8 @@ These four steps are what the extensible instances in this spec are doing.
 A new analysis is **peer**
 to them — no existing visitor / registry / dispatch code changes.
 
-The contract: callers own their `AnalysisRegistry`, their `Visitor`
+The contract: callers own their `DispatchRegistry`, their `Visitor`
 subclass (built on
 [visitor-mutator](./visitor-mutator.md)), and their `Context`
 dataclass. Composition is explicit; there is no hidden
 framework-side magic that auto-binds them.
-
-## 11. Instance 5 — `hir_lowering`
-
-`hir_lowering_registry` dispatches each HIR `Call` to the handler that lowers
-that op to TIR. The pass-owned lowerer is the first handler argument.
-
-```python
-hir_lowering_registry: AnalysisRegistry[type[Op]]
-def register_hir_lowering(op_cls: type[Op]): ...
-```
-
-- constraints:
-  - Handler signature is
-    `(lowerer: _Lowerer, target: Op, expr: Call) -> Var`.
-  - `HirToTirPass` performs the lookup on `type(expr.target)` and invokes the
-    handler as `handler(lowerer, expr.target, expr)`; a missing handler is a
-    lowering error naming the op class.
-  - The registry and decorator are public from `tilefoundry.visitor_registry`.
-    Concrete handlers remain beside the pass or target-owned op that defines
-    the lowering; see [passes §7.1](./passes.md#71-hirtotirpass).

@@ -1,27 +1,42 @@
-"""Canonical home for AnalysisRegistry + per-analysis registry instances."""
+"""Canonical home for DispatchRegistry and the registry instances built on it.
+
+A registry is one key -> handler map; what the key is depends on the question
+it answers. Type inference, verification and cost key on a class alone. Code
+generation keys on three things at once: which target's language the answer is
+written in, which position of a call it is written at, and the class asked
+about.
+"""
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Callable
 
 
-class AnalysisRegistry[Key]:
-    """Class → handler map. Double registration raises; lookup miss returns None."""
+def spelled(key: object) -> str:
+    """A key as a message names it: a class by its name, a tuple by its parts."""
+    if isinstance(key, tuple):
+        return "(" + ", ".join(spelled(part) for part in key) + ")"
+    return key.__name__ if isinstance(key, type) else str(key)
+
+
+class DispatchRegistry[Key]:
+    """Key → handler map. Double registration raises; lookup miss returns None."""
 
     def __init__(self, name: str) -> None:
         self.name = name
         self._map: dict[Key, Callable] = {}
 
-    def register(self, cls: Key, fn: Callable) -> None:
-        if cls in self._map:
-            raise RuntimeError(f"{self.name}: {cls.__name__} already registered")
-        self._map[cls] = fn
+    def register(self, key: Key, fn: Callable) -> None:
+        if key in self._map:
+            raise RuntimeError(f"{self.name}: {spelled(key)} already registered")
+        self._map[key] = fn
 
-    def lookup(self, cls: Key) -> Callable | None:
-        return self._map.get(cls)
+    def lookup(self, key: Key) -> Callable | None:
+        return self._map.get(key)
 
-    def has(self, cls: Key) -> bool:
-        return cls in self._map
+    def has(self, key: Key) -> bool:
+        return key in self._map
 
     def decorator(self) -> Callable[[type], Callable[[Callable], Callable]]:
         """``@registry.decorator()`` factory.
@@ -40,39 +55,60 @@ class AnalysisRegistry[Key]:
         return register_for
 
 
+class Role(Enum):
+    """Which position of a call a code-generation handler answers for.
+
+    A node is emitted where it stands. A callee declares the parameters it
+    takes; a caller supplies the arguments for them. Those two read the same
+    signature from opposite sides, which is why they are one key apart rather
+    than two registries apart.
+    """
+
+    EMIT = "emit"
+    CALLEE = "callee"
+    CALLER = "caller"
 
 
-typeinfer_registry: AnalysisRegistry = AnalysisRegistry("typeinfer")
-verify_stmt_registry: AnalysisRegistry = AnalysisRegistry("verify_stmt")
-codegen_cuda_registry: AnalysisRegistry = AnalysisRegistry("codegen_cuda")
-codegen_cpu_registry: AnalysisRegistry = AnalysisRegistry("codegen_cpu")
-cost_evaluator_registry: AnalysisRegistry = AnalysisRegistry("cost_evaluator")
+typeinfer_registry: DispatchRegistry = DispatchRegistry("typeinfer")
+verify_stmt_registry: DispatchRegistry = DispatchRegistry("verify_stmt")
+cost_evaluator_registry: DispatchRegistry = DispatchRegistry("cost_evaluator")
 
-
-
-hir_lowering_registry: AnalysisRegistry = AnalysisRegistry("hir_lowering")
+codegen_registry: DispatchRegistry = DispatchRegistry("codegen")
+"""Keyed by ``(target, role, class)``; see :func:`register_codegen`."""
 
 
 register_typeinfer = typeinfer_registry.decorator()
 register_verify_stmt = verify_stmt_registry.decorator()
-register_codegen_cuda = codegen_cuda_registry.decorator()
-register_codegen_cpu = codegen_cpu_registry.decorator()
 register_cost_evaluator = cost_evaluator_registry.decorator()
-register_hir_lowering = hir_lowering_registry.decorator()
+
+
+def register_codegen(
+    target: type["Target"], role: Role, cls: type
+) -> Callable[[Callable], Callable]:
+    """Register *fn* as how *target* writes *cls* at *role*'s position.
+
+    *target* is the one whose language the answer is written in, which for a
+    call is the callee's: how a call to it is spelled is its own convention,
+    and a caller of another target fills in only the names it holds.
+    """
+
+    def decorator(fn: Callable) -> Callable:
+        codegen_registry.register((target, role, cls), fn)
+        return fn
+
+    return decorator
 
 
 __all__ = [
-    "AnalysisRegistry",
-    "typeinfer_registry",
-    "verify_stmt_registry",
-    "codegen_cuda_registry",
-    "codegen_cpu_registry",
+    "DispatchRegistry",
+    "Role",
+    "codegen_registry",
     "cost_evaluator_registry",
-    "hir_lowering_registry",
+    "register_codegen",
+    "register_cost_evaluator",
     "register_typeinfer",
     "register_verify_stmt",
-    "register_codegen_cuda",
-    "register_codegen_cpu",
-    "register_cost_evaluator",
-    "register_hir_lowering",
+    "spelled",
+    "typeinfer_registry",
+    "verify_stmt_registry",
 ]

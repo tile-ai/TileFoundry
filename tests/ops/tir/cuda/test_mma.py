@@ -35,7 +35,7 @@ def test_handwritten_mma_matches_torch() -> None:
     torch.testing.assert_close(out, torch.matmul(a.float(), b.float()), rtol=2e-2, atol=2e-2)
 
 
-@module(entry="tile_host")
+@module(entry="tile_host", target=_CUDA)
 class MmaTile:
     """A 16x16 by 16x8 product done as one atom, looped by the tile's shape."""
 

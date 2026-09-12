@@ -1,29 +1,21 @@
-"""CUDA emitter handler autodiscovery + shared codegen helpers.
+"""CUDA emitter handler autodiscovery.
 
 Importing this module loads every registered per-Op emitter under ``cuda/tir/``
-so its ``@register_codegen_cuda`` handler is active before codegen runs, and
-exposes the launch-config helper shared by the split-pipeline emitters.
-Parameter signatures are derived in ``codegen.signature``, not here.
+so its handler is registered against this target before codegen runs. What a
+function is called and what it takes are answered in ``codegen.signature`` and
+``codegen.cuda.abi``, not here.
 """
+
 from __future__ import annotations
 
 import importlib
 import logging
-import math
 import os
 import pkgutil
 
-from tilefoundry.codegen.topology import coarsest_topology
-from tilefoundry.ir.core import Call, Constant, Tuple, Var
-from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.tir.shape import ShapeOf
-from tilefoundry.ir.tir.stmts import LetStmt, MeshScope, Sequential
-from tilefoundry.ir.tir.symbol_ref import SymbolRef
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
-from tilefoundry.ir.visitor import ExprWalker
-
 _log = logging.getLogger(__name__)
 _tir_path = os.path.dirname(__file__)
+
 
 def _discover(subdir: str, prefix: str) -> None:
     full = os.path.join(_tir_path, subdir)
@@ -40,155 +32,3 @@ _discover("tir/stmts", "tilefoundry.codegen.cuda.tir.stmts.")
 _discover("tir/memory", "tilefoundry.codegen.cuda.tir.memory.")
 _discover("tir/nn", "tilefoundry.codegen.cuda.tir.nn.")
 _discover("tir", "tilefoundry.codegen.cuda.tir.")
-
-
-def _program_topology(module) -> str:
-    """The C++ ``TopologyScope`` enumerator for this program's coarsest level."""
-    return f"tilefoundry::TopologyScope::{coarsest_topology(module)}"
-
-
-def _topology_dim_specializations(
-    grid: tuple[int, int, int], block: tuple[int, int, int]
-) -> list[dict[str, str]]:
-    """One instance count per level: what ``program_dim`` states for this .cu.
-
-    ``program_shape`` is derived from these, so a translation unit specializes
-    the counts and nothing else. A launch-provided grid has no count here; the
-    template states that one at run time instead.
-    """
-    specializations = []
-    if grid[0] is not None:
-        specializations.append(
-            {
-                "scope": "tilefoundry::TopologyScope::cta",
-                "count": str(math.prod(grid)),
-            }
-        )
-    specializations.append(
-        {
-            "scope": "tilefoundry::TopologyScope::thread",
-            "count": str(math.prod(block)),
-        }
-    )
-    return specializations
-
-
-def _output_count_from_fn(fn) -> int:
-    """Read output_count from the lowered PrimFunction metadata.
-
-    The HIR-to-TIR lowering pass records output_count on the PrimFunction so
-    codegen can pass it through to the entry's signature without guessing.
-    """
-    return getattr(fn, "output_count", 1)
-
-
-def _derive_launch_config(
-    body: Sequential,
-) -> tuple[tuple[int | None, int, int], tuple[int, int, int]]:
-    """Derive grid and block dimensions from body mesh topologies.
-
-    CTA topology sizes multiply into ``grid.x`` and thread sizes into
-    ``block.x``; warp axes do not contribute. A launch-provided CTA extent
-    yields ``grid.x = None`` for static callers to reject. Other dimensions
-    remain one until a public convention exists.
-    """
-    grid_x = 1
-    block_x = 1
-    cta_dynamic = False
-
-    def _topo_dims(mesh) -> tuple[int, int]:
-        """Return grid and block contributions for *mesh*.
-
-        Return ``(grid_size_contribution, block_size_contribution)``
-        for *mesh*'s full topology list.
-        """
-        nonlocal cta_dynamic
-        g = 1
-        b = 1
-        for t in mesh.topologies:
-            tname = t.name
-            size = t.size
-            if not isinstance(size, int):
-                if tname == "cta":
-
-
-
-
-
-                    cta_dynamic = True
-                    continue
-                raise ValueError(
-                    f"_derive_launch_config: topology {tname!r} has a "
-                    f"dynamic/scalar extent ({size!r}) that cannot be converted "
-                    f"to a static launch config; only a 'cta' level may be "
-                    f"launch-provided"
-                )
-            tsize = size
-            if tname == "cta":
-                g *= tsize
-            else:
-                b *= tsize
-        return g, b
-
-    def _harvest_from_layout(layout) -> None:
-        nonlocal grid_x, block_x
-        if isinstance(layout, ShardLayout):
-            g, b = _topo_dims(layout.mesh)
-            grid_x = max(grid_x, g)
-            block_x = max(block_x, b)
-
-    class _LayoutVisitor(ExprWalker[None]):
-        def _record(self, expr) -> None:
-            _harvest_from_layout(getattr(getattr(expr, "type", None), "layout", None))
-
-        def visit_Call(self, expr: Call, ctx=None) -> None:
-            self._record(expr)
-            self.visit_operands(expr, ctx)
-
-        def visit_Tuple(self, expr: Tuple, ctx=None) -> None:
-            self._record(expr)
-
-        def visit_LoopRegion(self, expr: LoopRegion, ctx=None) -> None:
-            self._record(expr)
-
-        def visit_Var(self, expr: Var, ctx=None) -> None:
-            self._record(expr)
-
-        def visit_Constant(self, expr: Constant, ctx=None) -> None:
-            self._record(expr)
-
-        def visit_SymbolRef(self, expr: SymbolRef, ctx=None) -> None:
-            self._record(expr)
-
-        def visit_ShapeOf(self, expr: ShapeOf, ctx=None) -> None:
-            self._record(expr)
-
-        def default_visit(self, expr, ctx=None) -> None:
-            self._record(expr)
-
-    def walk(stmt) -> None:
-        nonlocal grid_x, block_x
-        match stmt:
-            case MeshScope():
-                g, b = _topo_dims(stmt.mesh)
-
-
-                grid_x = max(grid_x, g)
-                block_x = max(block_x, b)
-                walk(stmt.body)
-            case Sequential():
-                for s in stmt.body:
-                    walk(s)
-            case LetStmt():
-
-
-
-                if hasattr(stmt, "value"):
-                    _LayoutVisitor().visit(stmt.value)
-                if hasattr(stmt, "var") and getattr(stmt.var, "type", None) is not None:
-                    _harvest_from_layout(getattr(stmt.var.type, "layout", None))
-                walk(stmt.body)
-
-    walk(body)
-    grid = (None, 1, 1) if cta_dynamic else (grid_x, 1, 1)
-    return grid, (block_x, 1, 1)

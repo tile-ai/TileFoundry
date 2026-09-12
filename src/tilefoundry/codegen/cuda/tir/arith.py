@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
+from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.ir.tir.arith import Binary, BinaryKind, Unary, UnaryKind
 from tilefoundry.ir.types.shape_helpers import (
     shape_has_dim_var,
@@ -11,6 +11,8 @@ from tilefoundry.ir.types.shape_helpers import (
     shape_upper_bound,
 )
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, shard_layout_local_shape
+from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry.registries import Role, register_codegen
 
 _BINARY_TAG = {
     BinaryKind.MUL: "tilefoundry::primitive::mul_op",
@@ -58,17 +60,17 @@ def _materialised_shape_dyn(ty) -> tuple:
     return tuple(ty.shape)
 
 
-def _runtime_total(ty, ctx: CodegenContext) -> object:
+def _runtime_total(ty, ctx: CudaCodegenContext) -> object:
     """Runtime element count for *ty* — int or C++ expression string.
 
     Uses the kernel's DimVar runtime scalars registered by the
     PrimFunction emitter so dynamic dims drive loop counts at launch
     time instead of the static envelope upper bound.
     """
-    return shape_runtime_total(_materialised_shape_dyn(ty), ctx._dim_var_runtime)
+    return shape_runtime_total(_materialised_shape_dyn(ty), ctx.dynamic_extents)
 
 
-def _tensor_expr(var, ctx: CodegenContext) -> str:
+def _tensor_expr(var, ctx: CudaCodegenContext) -> str:
     """Tensor expr.
 
     Kernel-param tensor operands are accessed through the cute wrap
@@ -115,7 +117,7 @@ def _broadcast_modes(dst_shape, rhs_shape, n_dst_runtime) -> tuple | None:
     return None
 
 
-def broadcast_view(rhs_n: str, modes, ctx: CodegenContext) -> str:
+def broadcast_view(rhs_n: str, modes, ctx: CudaCodegenContext) -> str:
     """Bind *rhs_n* read through a stride-0 layout, and name the binding."""
     shape, stride = modes
     ctx._counter += 1
@@ -130,14 +132,14 @@ def broadcast_view(rhs_n: str, modes, ctx: CodegenContext) -> str:
     return name
 
 
-def _dyn_clip(dst, operands, ctx: CodegenContext) -> str | None:
+def _dyn_clip(dst, operands, ctx: CudaCodegenContext) -> str | None:
     """The run-time count a plain dynamic operand set has to be clipped to."""
     if any(isinstance(getattr(v.type, "layout", None), ShardLayout)
            for v in (dst, *operands)):
         return None
     if not shape_has_dim_var(dst.type.shape):
         return None
-    return str(shape_runtime_total(dst.type.shape, ctx._dim_var_runtime))
+    return str(shape_runtime_total(dst.type.shape, ctx.dynamic_extents))
 
 
 def _binary_fn(tag: str, dst_t: str, in_ts: tuple[str, ...]) -> str:
@@ -149,12 +151,12 @@ def _binary_fn(tag: str, dst_t: str, in_ts: tuple[str, ...]) -> str:
     )
 
 
-def _cpp_dtype(ty, ctx: CodegenContext) -> str:
+def _cpp_dtype(ty, ctx: CudaCodegenContext) -> str:
     return ctx.dtype_to_cpp(ty.dtype.name)
 
 
-@register_codegen_cuda(Binary)
-def _emit_binary(call, ctx: CodegenContext) -> None:
+@register_codegen(CudaTarget, Role.EMIT, Binary)
+def _emit_binary(call, ctx: CudaCodegenContext) -> None:
     lhs, rhs, dst = call.args
     lhs_n = _tensor_expr(lhs, ctx)
     rhs_n = _tensor_expr(rhs, ctx)
@@ -179,16 +181,16 @@ def _emit_binary(call, ctx: CodegenContext) -> None:
         return
     ctx.emit("{")
     ctx.indent()
-    ctx.emit(f"auto tf_ew_n = cute::make_layout({n});")
-    for view, base in (("tf_ew_dst", dst_n), ("tf_ew_a", lhs_n), ("tf_ew_b", rhs_n)):
-        ctx.emit(f"auto {view} = cute::make_tensor({base}.data(), tf_ew_n);")
-    ctx.emit(f"tilefoundry::ops::elementwise(tf_ew_dst, {fn}, tf_ew_a, tf_ew_b);")
+    ctx.emit(f"auto tilefoundry_elementwise_n = cute::make_layout({n});")
+    for view, base in (("tilefoundry_elementwise_dst", dst_n), ("tilefoundry_elementwise_a", lhs_n), ("tilefoundry_elementwise_b", rhs_n)):
+        ctx.emit(f"auto {view} = cute::make_tensor({base}.data(), tilefoundry_elementwise_n);")
+    ctx.emit(f"tilefoundry::ops::elementwise(tilefoundry_elementwise_dst, {fn}, tilefoundry_elementwise_a, tilefoundry_elementwise_b);")
     ctx.dedent()
     ctx.emit("}")
 
 
-@register_codegen_cuda(Unary)
-def _emit_unary(call, ctx: CodegenContext) -> None:
+@register_codegen(CudaTarget, Role.EMIT, Unary)
+def _emit_unary(call, ctx: CudaCodegenContext) -> None:
     """One source, always the bare tag -- a unary needs no lambda."""
     src, dst = call.args
     src_n = _tensor_expr(src, ctx)
@@ -200,9 +202,9 @@ def _emit_unary(call, ctx: CodegenContext) -> None:
         return
     ctx.emit("{")
     ctx.indent()
-    ctx.emit(f"auto tf_ew_n = cute::make_layout({n});")
-    ctx.emit(f"auto tf_ew_dst = cute::make_tensor({dst_n}.data(), tf_ew_n);")
-    ctx.emit(f"auto tf_ew_src = cute::make_tensor({src_n}.data(), tf_ew_n);")
-    ctx.emit(f"tilefoundry::ops::elementwise(tf_ew_dst, {tag}{{}}, tf_ew_src);")
+    ctx.emit(f"auto tilefoundry_elementwise_n = cute::make_layout({n});")
+    ctx.emit(f"auto tilefoundry_elementwise_dst = cute::make_tensor({dst_n}.data(), tilefoundry_elementwise_n);")
+    ctx.emit(f"auto tilefoundry_elementwise_src = cute::make_tensor({src_n}.data(), tilefoundry_elementwise_n);")
+    ctx.emit(f"tilefoundry::ops::elementwise(tilefoundry_elementwise_dst, {tag}{{}}, tilefoundry_elementwise_src);")
     ctx.dedent()
     ctx.emit("}")

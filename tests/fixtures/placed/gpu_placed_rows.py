@@ -34,7 +34,7 @@ def _split_rows(mesh) -> ShardLayout:
     )
 
 
-@module(entry="copy_rows_host", topologies=_TOPOLOGIES)
+@module(entry="copy_rows_host", topologies=_TOPOLOGIES, target=_CUDA)
 class GpuPlacedRows:
     """A copy whose source and destination are both one thread's share."""
 

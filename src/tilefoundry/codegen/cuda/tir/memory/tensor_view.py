@@ -10,8 +10,7 @@ from functools import reduce
 from operator import mul
 
 from tilefoundry.codegen.cuda.context import (
-    CodegenContext,
-    register_codegen_cuda,
+    CudaCodegenContext,
     topology_scope_str,
 )
 from tilefoundry.codegen.cuda.tir.reduce import REDUCE_TAG
@@ -38,6 +37,8 @@ from tilefoundry.ir.types.shard.shard_layout import (
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout as SL
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import ExprVisitor
+from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry.registries import Role, register_codegen
 
 
 def _render_layout(shape, strides) -> str:
@@ -148,7 +149,7 @@ def register_strides(sl: SL) -> tuple[int, ...]:
 
 
 def render_shard_layout_value(
-    var_name: str, sl: SL, dim_var_runtime=None, storage=None, ctx=None
+    var_name: str, sl: SL, dynamic_extents=None, storage=None, ctx=None
 ):
     """Render a shard layout as runtime C++ preamble and value expression.
 
@@ -194,12 +195,12 @@ def render_shard_layout_value(
         if isinstance(d, int):
             return f"cute::Int<{d}>{{}}"
         if isinstance(d, DimVar):
-            if not dim_var_runtime:
+            if not dynamic_extents:
                 raise NotImplementedError(
                     f"render_shard_layout_value: dynamic layout dim {d.name!r} "
                     f"requires a runtime shape mapping"
                 )
-            scalar = dim_var_runtime.get(d.name)
+            scalar = dynamic_extents.get(d.name)
             if scalar is None:
                 raise ValueError(
                     f"render_shard_layout_value: dynamic layout dim {d.name!r} "
@@ -219,7 +220,7 @@ def render_shard_layout_value(
             f"render_shard_layout_value: a dynamic (None) mesh extent is only "
             f"valid on a 'cta' topology, got {topo.name!r}"
         )
-    if n_dynamic == 1 and not dim_var_runtime:
+    if n_dynamic == 1 and not dynamic_extents:
         raise NotImplementedError(
             "render_shard_layout_value: a dynamic CTA mesh extent requires a runtime shape mapping"
         )
@@ -268,17 +269,17 @@ _COORD_OPERATORS = {DimAdd: "+", DimSub: "-", DimMul: "*"}
 
 
 class _CoordinateVisitor(ExprVisitor[str]):
-    def visit_Constant(self, expr: Constant, ctx: CodegenContext) -> str:
+    def visit_Constant(self, expr: Constant, ctx: CudaCodegenContext) -> str:
         return str(int(expr.value))
 
-    def visit_Call(self, expr: Call, ctx: CodegenContext) -> str:
+    def visit_Call(self, expr: Call, ctx: CudaCodegenContext) -> str:
         operator = _COORD_OPERATORS.get(type(expr.target))
         if operator is not None:
             lhs, rhs = (self.visit(arg, ctx) for arg in expr.args)
             return f"({lhs} {operator} {rhs})"
         return self._leaf(expr, ctx)
 
-    def _leaf(self, expr, ctx: CodegenContext) -> str:
+    def _leaf(self, expr, ctx: CudaCodegenContext) -> str:
         name = ctx.name_for(expr)
         shape = getattr(getattr(expr, "type", None), "shape", ()) or ()
         dims = tuple(getattr(d, "value", d) for d in shape)
@@ -290,11 +291,11 @@ class _CoordinateVisitor(ExprVisitor[str]):
             f"local_tile coordinate from a rank-{len(dims)} offset {dims} is not supported"
         )
 
-    def default_visit(self, expr, ctx: CodegenContext) -> str:
+    def default_visit(self, expr, ctx: CudaCodegenContext) -> str:
         return self._leaf(expr, ctx)
 
 
-def _coord_ref(index_var, ctx: CodegenContext) -> str:
+def _coord_ref(index_var, ctx: CudaCodegenContext) -> str:
     """Render a compile-time, scalar, or one-element absolute coordinate.
 
     Integer literals become static coordinates; rank-zero scalars use their
@@ -306,8 +307,8 @@ def _coord_ref(index_var, ctx: CodegenContext) -> str:
     return _CoordinateVisitor().visit(index_var, ctx)
 
 
-@register_codegen_cuda(TensorView)
-def _emit(let: LetStmt, ctx: CodegenContext) -> None:
+@register_codegen(CudaTarget, Role.EMIT, TensorView)
+def _emit(let: LetStmt, ctx: CudaCodegenContext) -> None:
     call = let.value
     memory_var = call.args[0]
     var_name = ctx.name_for(let.var)
@@ -418,7 +419,7 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
             preamble, shard_value = render_shard_layout_value(
                 var_name,
                 layout,
-                getattr(ctx, "_dim_var_runtime", None),
+                ctx.dynamic_extents,
                 getattr(let.var.type, "storage", None),
                 ctx,
             )
@@ -450,7 +451,7 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
             preamble, shard_value = render_shard_layout_value(
                 var_name,
                 layout,
-                getattr(ctx, "_dim_var_runtime", None),
+                ctx.dynamic_extents,
                 getattr(let.var.type, "storage", None),
                 ctx,
             )

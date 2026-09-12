@@ -6,7 +6,7 @@ from tilefoundry.ir.types.shard import Layout, Mesh, S, ShardLayout, Topology
 from tilefoundry.target import CpuTarget, CudaTarget
 
 
-@module(entry="async_stage_host")
+@module(entry="async_stage_host", target=CudaTarget("nvidia.h200_sxm"))
 class AsyncStage:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def async_stage_device(a: Tensor[(128, 4), "f32"], b: Tensor[(128, 4), "f32"]):

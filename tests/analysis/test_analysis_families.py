@@ -451,61 +451,51 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
         )
 
 
-def test_a_level_the_machine_can_answer_about_is_one_it_measures() -> None:
-    """The same program at two levels: same work, proportionally different rates.
+def test_one_pass_states_the_work_at_every_level_and_prices_it_there() -> None:
+    """The numbers this program reports at each level it declares, not the relations.
 
-    What one unit gets through is the device peak over however many of that unit
-    the device holds, so asking about a finer level does not change what the
-    program does -- only what it is held against. A level the machine publishes
-    no rate for is refused by name rather than answered for a different one.
+    One analysis states one unit's work at every declared level, and what one
+    unit gets through is the device peak over however many of that unit the
+    device holds, so a thread is priced far slower than a CTA for the same
+    share. Nothing here is sharded across ``thread``, so a thread repeats its
+    CTA's share rather than dividing it: asking at ``thread`` unrolls that
+    repetition into the whole-program total and leaves the shares alone.
     """
     function = FusedBoundary.entry_function()
-    at = {
-        level: analyze(FusedBoundary, function, analysis=("performance",), topology_level=level)
-        for level in ("cta", "thread")
+    reported = {}
+    for level in ("cta", "thread"):
+        result = analyze(FusedBoundary, function, analysis=("performance",), topology_level=level)
+        cost = get_metadata(result.function, ComputeCostMetadata)
+        summary = get_metadata(result.function, PerformanceSummaryMetadata)
+        reported[level] = {
+            "answered_at": result.topology_level,
+            "levels": cost.topologies,
+            "whole_program": shares(cost.flops, cost.topologies),
+            "per_cta": shares(cost.flops, cost.topologies, "cta"),
+            "per_thread": shares(cost.flops, cost.topologies, "thread"),
+            "end_ns": summary.timeline.end_ns,
+        }
+
+    assert reported == {
+        "cta": {
+            "answered_at": "cta",
+            "levels": ("cta", "thread"),
+            "whole_program": {"bf16": 576, "f32": 128},
+            "per_cta": {"bf16": 72, "f32": 16},
+            "per_thread": {"bf16": 72, "f32": 16},
+            "end_ns": 6,
+        },
+        "thread": {
+            "answered_at": "thread",
+            "levels": ("cta", "thread"),
+            "whole_program": {"bf16": 576, "f32": 2112},
+            "per_cta": {"bf16": 72, "f32": 16},
+            "per_thread": {"bf16": 72, "f32": 16},
+            "end_ns": 1849,
+        },
     }
-    assert {level: result.topology_level for level, result in at.items()} == {
-        "cta": "cta",
-        "thread": "thread",
-    }
-
-    work = {}
-    for level, result in at.items():
-        held = get_metadata(result.function, ComputeCostMetadata)
-        work[level] = shares(held.flops, held.topologies, level)
-    assert work["cta"] == work["thread"], work
-
-    target = FusedBoundary.resolve_target()
-    rates = {
-        level: dict(target.get_facts(PerformanceServiceFacts, level).unit_flops)
-        for level in ("cta", "thread")
-    }
-    threads_per_cta = target.architecture.max_threads_per_cta
-    for dtype, per_cta in rates["cta"].items():
-        assert rates["thread"][dtype] == per_cta // threads_per_cta
-
-    assert target.get_facts(ParallelCapacityFacts, "gpu").parallel_units == 1, (
-        "a target that never said how many cards is one card"
-    )
-
-
-def test_every_level_is_measured_in_one_pass_and_they_nest() -> None:
-    """One analysis states one unit's work at each level the program declares.
-
-    A finer level's unit is inside a coarser one, so its share is the coarser
-    share divided again by whatever the mesh splits between them. Reading the
-    chain used to take one analysis per level and a reader who knew to ask.
-    """
-    result = analyze(FusedBoundary, FusedBoundary.entry_function(), analysis=("compute-cost",))
-    cost = get_metadata(result.function, ComputeCostMetadata)
-
-    assert cost.topologies == ("cta", "thread")
-
-    coarse_by_dtype = shares(cost.flops, cost.topologies, "cta")
-    fine_by_dtype = shares(cost.flops, cost.topologies, "thread")
-    for dtype, coarse in coarse_by_dtype.items():
-        fine = fine_by_dtype.get(dtype, 0)
-        assert fine <= coarse and coarse % max(fine, 1) == 0, dtype
+    capacity = FusedBoundary.resolve_target().get_facts(ParallelCapacityFacts, "gpu")
+    assert capacity.parallel_units == 1, "a target that never said how many cards is one card"
 
 
 def test_a_reshard_that_changes_shards_says_what_left_the_card() -> None:

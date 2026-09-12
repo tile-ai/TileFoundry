@@ -1,6 +1,6 @@
 """Derived Visitors — TypeInferVisitor / VerifyVisitor / CodegenVisitor / CostEvaluator.
 
-`AnalysisRegistry` instance with a traversal skeleton from
+`DispatchRegistry` instance with a traversal skeleton from
 tilefoundry.ir.visitor.
 
 The `registry` is exposed as an advanced constructor param (default: the
@@ -10,6 +10,7 @@ extension point for sandbox tests or grouped dispatch.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 
 from tilefoundry.ir.core.expr import Call, Constant, Expr, Tuple, Var
@@ -35,8 +36,10 @@ from .contexts import (
     VerifyContext,
 )
 from .registries import (
-    AnalysisRegistry,
+    DispatchRegistry,
+    Role,
     cost_evaluator_registry,
+    spelled,
     typeinfer_registry,
     verify_stmt_registry,
 )
@@ -254,7 +257,7 @@ class VerifyVisitor(StmtVisitor[None]):
     def __init__(
         self,
         ctx: VerifyContext,
-        registry: AnalysisRegistry = verify_stmt_registry,
+        registry: DispatchRegistry = verify_stmt_registry,
     ) -> None:
 
 
@@ -289,51 +292,43 @@ class VerifyVisitor(StmtVisitor[None]):
 
 
 class CodegenVisitor:
-    """Dual-path dispatch: Op (via Call) → str fragment; Stmt → emit into ctx.
+    """Dispatch a node to the handler that writes it, for a caller holding a registry.
 
-    Not a subclass of StmtVisitor/ExprVisitor — codegen's two paths return
-    different types (str for Op, None for Stmt) and need different entries.
-    Uses `visit_<ClassName>` lookup style for API consistency with the rest
-    of the visitor family.
+    Not a subclass of StmtVisitor/ExprVisitor: a Stmt is reached by its own
+    class and an Op through the ``Call`` carrying it, so the two arrive by
+    different entries. *target* is the Target class being written, which the
+    registry key carries.
     """
 
     def __init__(
         self,
         ctx,
-        registry: AnalysisRegistry,
+        registry: DispatchRegistry,
         *,
-        backend: str,
+        target: type,
     ) -> None:
         super().__init__()
         self.ctx = ctx
-        self.backend = backend
+        self.target = target
         self.registry = registry
 
-    def emit_stmt(self, stmt: Stmt) -> None:
-        fn = self.registry.lookup(type(stmt))
+    def _handler(self, cls: type) -> Callable:
+        key = (self.target, Role.EMIT, cls)
+        fn = self.registry.lookup(key)
         if fn is None:
+            raise RuntimeError(f"{self.registry.name}: nothing registered for {spelled(key)}")
+        return fn
+
+    def emit_stmt(self, stmt: Stmt) -> None:
+        self._handler(type(stmt))(stmt, self.ctx)
+
+    def emit_expr(self, expr: Expr) -> None:
+        if not isinstance(expr, Call):
             raise RuntimeError(
-                f"no @register_codegen_{self.backend} for Stmt "
-                f"{type(stmt).__name__}"
+                f"CodegenVisitor.emit_expr: leaf Expr {type(expr).__name__} "
+                "has no emission of its own; a handler reaches it through the context."
             )
-        fn(stmt, self.ctx)
-
-    def emit_expr(self, expr: Expr) -> str:
-        if isinstance(expr, Call):
-            fn = self.registry.lookup(type(expr.target))
-            if fn is None:
-                raise RuntimeError(
-                    f"no @register_codegen_{self.backend} for Op "
-                    f"{type(expr.target).__name__}"
-                )
-            return fn(expr, self.ctx)
-
-
-
-        raise RuntimeError(
-            f"CodegenVisitor.emit_expr: leaf Expr {type(expr).__name__} "
-            "has no default emission; handle via target ctx helpers."
-        )
+        self._handler(type(expr.target))(expr, self.ctx)
 
 
 class CostEvaluator(ExprWalker[Cost]):
@@ -345,7 +340,7 @@ class CostEvaluator(ExprWalker[Cost]):
 
     def __init__(
         self,
-        registry: AnalysisRegistry = cost_evaluator_registry,
+        registry: DispatchRegistry = cost_evaluator_registry,
     ) -> None:
         super().__init__()
         self.registry = registry

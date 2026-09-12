@@ -35,9 +35,9 @@ flowchart LR
   C-ABI launch shims. The host module invokes device code only through that
   C-ABI shim.
 
-The target-specific generator behavior — how a CPU vs CUDA function emits, the
-dispatch and shape-scalar ABI, program-shape / dynamic-CTA accessors, and the
-`ShardLayout` runtime mapping — is owned by [target](./target.md).
+The target-specific generator behavior — how a CPU vs CUDA function emits,
+program-shape / dynamic-CTA accessors, and the `ShardLayout` runtime mapping —
+is owned by [target](./target.md).
 
 ## 2. CodeGenerator
 
@@ -49,7 +49,7 @@ metadata the link step needs.
 ```python
 class CodeGenerator:
     emit: Callable[
-        [Module, tuple[PrimFunction, ...], Target], LinkableModule
+        [Module, tuple[PrimFunction, ...], Target, CodegenContext], LinkableModule
     ]
 
 
@@ -61,13 +61,20 @@ def emit_cuda_module(
     module: Module,
     functions: tuple[PrimFunction, ...],
     target: Target,
+    ctx: CodegenContext,
 ) -> LinkableModule: ...
 ```
 
 - constraints:
   - A Target MUST return one immutable CodeGenerator descriptor. A subclass MAY
     inherit its base generator without another registration step.
-  - All generators MUST share the `(module, functions, target)` callable shape.
+  - All generators MUST share the `(module, functions, target, ctx)` callable
+    shape. The context is built once per compile and carries what every
+    generator has to agree on ([§2.3](#23-codegencontext)); a generator MUST
+    NOT settle any of it for itself.
+  - A generator writes each function twice and no more: once as the
+    declaration a caller sees, without entering the body, and once as the
+    definition, by walking it.
   - Generator selection MUST NOT branch on `Target.name`. There MUST be no
     emitter registry or string-to-emitter lookup.
   - A second unequal CUDA Target group MUST fail before any generator emits;
@@ -86,12 +93,12 @@ def handler(call: Call, ctx: CodegenContext) -> None: ...
 ```
 
 - constraints:
-  - a handler is registered inside a concrete generator with the per-backend
-    `register_codegen_*` decorator ([visitor-registry §6](./visitor-registry.md#6-instance-3--codegen_));
+  - a handler is registered inside a concrete generator against its own target
+    ([visitor-registry §6](./visitor-registry.md#6-instance-3--codegen));
     dispatch (matching `Evaluate` and selecting the handler) is owned by
     visitor-registry.
 
-Dispatch is owned by [visitor-registry §6](./visitor-registry.md#6-instance-3--codegen_). A handler
+Dispatch is owned by [visitor-registry §6](./visitor-registry.md#6-instance-3--codegen). A handler
 receives the `Call` (the wrapped Op inside `Evaluate`) plus a `CodegenContext`,
 and MUST emit through `ctx.emit(...)`; raw `print` / direct file writes are
 prohibited.
@@ -100,11 +107,12 @@ prohibited.
 
 ```python
 class CodegenContext:
-    """Mutable CUDA source builder passed to registered handlers."""
+    """The context one compile writes through, whatever targets it writes for."""
 
-    def reset_barrier_ids(self) -> None: ...
-    def alloc_barrier_id(self) -> int: ...
-    def dtype_to_cpp(self, dtype_name: str) -> str: ...
+    symbols: Mapping[int, CallableSignature]
+    exported: bool
+
+    def signature_of(self, fn) -> CallableSignature: ...
     def register_kernel_param(self, var) -> None: ...
     def is_kernel_param(self, var) -> bool: ...
     def emit(self, line: str) -> None: ...
@@ -115,20 +123,67 @@ class CodegenContext:
     def source(self) -> str: ...
     def capture(self, fn) -> str: ...
     def emit_node(self, node) -> None: ...
+    def declare(
+        self, signature, callee_target=None, *, exported: bool = False
+    ) -> tuple[str, ...]: ...
+    def parameters(
+        self, signature, callee_target=None, *, exported: bool = False
+    ) -> str: ...
+    def argument(self, signature, callee_target) -> tuple[str, ...]: ...
+    def arguments(self, signature, callee_target) -> str: ...
+    def local_value(self, signature) -> str: ...
+    def local_extent(self, signature, axis: int) -> str: ...
+
+
+class CudaCodegenContext(CodegenContext):
+    """A compile writing CUDA: the shared context plus what only CUDA states."""
+
+    launches: Mapping[int, Geometry]
+    dynamic_extents: dict[str, str]
+
+    def bind_extents(self, params) -> None: ...
+    def reset_barrier_ids(self) -> None: ...
+    def alloc_barrier_id(self) -> int: ...
+    def dtype_to_cpp(self, dtype_name: str) -> str: ...
+
+
+class CpuCodegenContext(CodegenContext):
+    """A compile writing the host unit: the shared context plus what a tensor is here."""
 ```
 
 - constraints:
-  - This is the concrete CUDA context; it has a zero-argument constructor and
-    keeps its output, indentation, symbol table, and counters private.
+  - One context spans one whole compile rather than one translation unit: the
+    symbol table it carries is read by every emitter, and the boundary of the
+    unit being written is drawn by `capture`. There MUST NOT be a second
+    per-unit context object.
+  - `signature_of` answers from `symbols` ([§4.4](#44-signatures)) and from
+    nowhere else; it MUST raise when the function has no row there.
   - `emit_node` dispatches `Evaluate(op, args)` by the wrapped Op class; all
     other nodes dispatch by their own class.
   - `source` returns accumulated source text, and `capture` temporarily isolates
     only the output buffer while preserving indentation and symbol bindings.
-  - The context is the single source of truth for target-side type strings, so
-    handlers do not read the IR for them directly.
-
-A handler MUST NOT reach into the IR for type strings on its own; the context is
-the single source of truth. Other helpers MAY be added per target.
+  - `declare` and `argument` are the two sides of one call and key on the
+    callee's target ([visitor-registry §6](./visitor-registry.md#6-instance-3--codegen)):
+    `declare` states the parameters the callee takes, `argument` the values
+    this scope passes for them. `declare` defaults to this context's own
+    target, so a unit declaring a foreign symbol and the unit defining it
+    reach the one handler and cannot come to disagree.
+  - `exported` is set while a parameter list another translation unit will read
+    is being written. A target whose types are its own MUST answer with what
+    plain C states while it is set, because that is all the reading unit can
+    spell.
+  - `local_value` and `local_extent` are what the writing scope calls the value
+    and the extent it passes; a scope that holds something richer than a plain
+    parameter — a host entry holding a runtime tensor — states so by overriding
+    them. They are the only place a caller's own vocabulary enters a call.
+  - `dynamic_extents` says where the kernel being written reads each open
+    dimension's extent, and is filled by `bind_extents` from the parameter
+    types alone. `launches` is the geometry each device function is called at,
+    keyed by `id(fn)`, settled where the `Launch` was written
+    ([passes §7.3](./passes.md#73-insert_default_host_entry)).
+  - A target subclass owns the type strings and hardware counters only it can
+    state; a handler MUST reach them through the context rather than reading
+    the IR for them. Other helpers MAY be added per target.
 
 ### 2.4 Effect Op dispatch
 
@@ -154,23 +209,27 @@ emission that produces these calls is owned by [target](./target.md).
 ### 4.1 `LinkableFunction`
 
 
-One lowered function's pre-link source.
+One lowered function's pre-link source, in both of its positions.
 
 ```python
 class LinkableFunction:
-    """One lowered function's pre-link source.
+    """One lowered function's pre-link source, in both of its positions.
 
     Attributes:
         name: attribute; function or kernel symbol.
-        source: attribute; emitted function text.
+        declaration: attribute; what a caller of this function must see.
+        definition: attribute; the function's own implementation.
     """
 
     name: str
-    source: str
+    declaration: str
+    definition: str
 ```
 
 - constraints:
-  - No additional constraints.
+  - `declaration` and `definition` MUST both be written from the one
+    `CallableSignature` ([§4.4](#44-signatures)) that the compile settled for
+    this function, so the two cannot state different parameters.
 
 ### 4.2 `LinkableModule`
 
@@ -178,19 +237,21 @@ One target's pre-link translation unit.
 
 ```python
 class LinkableModule:
-    """One target's pre-link translation unit.
+    """One target's pre-link translation unit, assembled from its functions.
 
     Attributes:
         target: attribute; generator/linker backend label.
         language: attribute; source language.
-        source: attribute; assembled translation-unit text.
+        preamble: attribute; the part of the unit that is not a function.
         functions: attribute; constituent linkable functions in emission order.
     """
 
     target: str
     language: str
-    source: str
+    preamble: str
     functions: tuple[LinkableFunction, ...] = field(default_factory=tuple)
+
+    def source(self) -> str: ...
 ```
 
 - constraints:
@@ -199,6 +260,14 @@ class LinkableModule:
   - MUST be the source language: `cu` for a CUDA translation unit, `cpp` for a
     host translation unit.
   - MUST list the module's constituent `LinkableFunction`s, in emission order.
+  - `preamble` MUST carry what the unit states outside any function: includes,
+    macros, unit-level template specializations, and device state emitted only
+    where a function used it. It is a field because it is settled only once
+    every function of the unit has been walked.
+  - `source` is a read-only property and MUST be the only place a translation
+    unit is assembled: the preamble, then every declaration, then every
+    definition. A generator MUST NOT emit the unit a second time alongside
+    `functions`.
 
 A `LinkableModule` is a build artifact, not a runtime object and not a
 user-callable.
@@ -248,13 +317,27 @@ class Signature:
     """One parameter, or one whole call, as C++ spells it."""
 
 class TensorSignature(Signature):
-    """A declared tensor parameter."""
+    """A declared tensor: its pointer, and the extents its type leaves open."""
 
     name: str
     type: TensorType                # dtype / shape / storage / layout come from here
 
-class ScalarSignature(Signature):
-    """A parameter with no IR type: named and typed in C++ only."""
+    @property
+    def dynamic_axes(self) -> tuple[int, ...]: ...
+
+class ProgramIdSignature(Signature):
+    """The id of one topology level, told to a program that cannot read it."""
+
+    name: str
+    topology_level: str
+
+class ProgramMetaSignature(Signature):
+    """The block of ids a kernel hands to the runtime it was compiled against."""
+
+    name: str
+
+class LaunchSignature(Signature):
+    """One of the geometry arguments a launch is told beyond the kernel's own."""
 
     name: str
     ctype: str
@@ -285,20 +368,76 @@ class CallableSignature(Signature):
     order the C++ declaration lists.
   - a `TensorSignature` reuses the IR type system instead of restating it: a
     dynamic dim is whatever `type.shape` carries (e.g. a `DimVar`), and there
-    is no separate dynamic-dim sentinel.
-  - a `ScalarSignature` has no IR counterpart on purpose: those parameters do
-    not exist in the IR at all, which is what makes them hidden.
+    is no separate dynamic-dim sentinel. `dynamic_axes` are the axes it carries
+    as a `DimVar`, and only those extents travel with the pointer.
+  - a program id, a program-meta block and a launch argument have no IR
+    counterpart on purpose: those parameters do not exist in the IR at all,
+    which is what makes them hidden. Each is its own class, so whoever writes
+    one out dispatches on the type instead of reading the name.
   - one compiled function has three C++ conventions — the host entry, the
     launch shim and the device kernel — and they differ only in `leading` and
     `trailing`. They MUST be three `CallableSignature` values; the class MUST
-    NOT be subclassed.
-  - every identifier codegen generates is spelled by `codegen/names.py` and
-    carries the `tilefoundry_` prefix: the three symbols and the parameters
-    codegen inserts. A user's own parameter names are never prefixed, and a
-    name that reaches C++ through one of these is a plain C identifier -- a
-    mangled variant's `$` is not one.
+    NOT be subclassed. Only the first two are reachable by name; the kernel's
+    is derived inside the unit that defines it and is not in the table.
+  - every identifier codegen generates carries the `tilefoundry_` prefix: the
+    three symbols, the parameters codegen inserts, and any state a unit emits
+    for itself. How one is spelled belongs to the target whose language it is
+    written in, so each target states its own; there is no neutral module
+    spelling names for all of them. A user's own parameter names are never
+    prefixed, and a name that reaches C++ through one of these is a plain C
+    identifier -- a mangled variant's `$` is not one.
   - the entry the loader is handed ([§4.3](#43-linkedmodule)) is a fourth
     value of the same shape: its `name` is the exported symbol, and each
-    `leading` entry is named for the topology level whose id the host must
-    supply, because that caller reads the id out of a `Placement`
-    ([shard §5](./shard.md#5-mesh)) instead of writing a C++ declaration.
+    `leading` entry is a `ProgramIdSignature` whose `topology_level` names the
+    level whose id the host must supply, because that caller reads the id out
+    of a `Placement` ([shard §5](./shard.md#5-mesh)) instead of writing a C++
+    declaration.
+
+```python
+def program_id_params(
+    module: Module, target: Target
+) -> tuple[ProgramIdSignature, ...]:
+    """The ids a call into *module* has to carry for *target* to run it."""
+    ...
+
+
+def symbol_table(module: Module, target: Target) -> Mapping[int, CallableSignature]:
+    """What every function in the tree is called by, before anything is emitted."""
+    ...
+```
+
+- constraints:
+  - `program_id_params` is the one place that asks which levels supply their
+    own program ids: the levels whose `TopologyFacts` entry is `from_target`
+    ([target §1](./target.md#1-target)), intersected with the levels
+    the module's program names. A level stated that way has no register the
+    device can read, so its id arrives with the call.
+  - `symbol_table` states one `CallableSignature` per function in the tree,
+    keyed by `id(fn)`, so a call site holds its callee and never asks which
+    module the callee lives in. A specialization variant gets no row: nothing
+    calls one, because its prototype compiles to the one symbol and picks
+    between the variants inside it ([§5](#5-specialization-dispatch)).
+  - a row is what a caller must write and nothing about what an emitter
+    produced. A device function appears as its launch shim, because that is
+    the only convention a caller can reach; the kernel's own convention is not
+    in the table.
+
+## 5. Specialization dispatch
+
+A specialization prototype and its variants compile to one symbol, and which
+variant runs is decided on the device.
+
+- constraints:
+  - The variants of one prototype MUST agree on launch geometry. A translation
+    unit states its program dimensions once for every kernel in it
+    ([target](./target.md)), so variants that disagreed could not share one
+    unit -- and they have nothing else to disagree about that a launch could
+    express.
+  - Because the geometry is one, the host MUST NOT choose between variants: it
+    writes the one call the symbol table names ([§4.4](#44-signatures)). There
+    is no host-side chain over N shims and no per-variant shim.
+  - The prototype's kernel holds every variant as a branch, taken on the extent
+    the call already carries -- the parameter the open axis expands into. A
+    shape outside every variant's range is a call-contract violation and the
+    kernel traps.
+

@@ -1,0 +1,7 @@
+void {{ host_symbol }}({{ params }}) {
+{%- for line in body_lines %}
+  {{ line }}
+{%- endfor %}
+}
+
+TVM_FFI_DLL_EXPORT_TYPED_FUNC({{ entry_name }}, {{ host_symbol }});

@@ -2,10 +2,9 @@
 
 The pass framework: `Pass` / `ModulePass` / `FunctionPass` /
 `PrimFuncPass` / `PassManager`. A `Pass` is the unit the compiler
-schedules over a `Module`; lowering is one stage in this pipeline,
+schedules over a `Module`; a transform is one stage in this pipeline,
 not a free function. After the framework, this spec lists the
-implemented passes and their per-pass contracts (HIR → TIR
-lowering rules, buffer planning, …).
+implemented passes and their per-pass contracts.
 
 ```mermaid
 flowchart TB
@@ -71,8 +70,8 @@ class Pass(ABC):
 
 Runs over the whole `Module` and may add / remove / reorder
 functions. Examples: module-level inline, dead-function elimination,
-HIR → TIR replacement (substitute `tir.PrimFunction` for
-`hir.Function`).
+synthesizing an entry the module does not yet declare
+([§7.3](#73-insert_default_host_entry)).
 
 ```python
 class ModulePass(Pass):
@@ -223,167 +222,28 @@ unified retype / verify is scheduled by `PassManager`.
 
 ## 7. Implemented passes
 
-### 7.1 `HirToTirPass`
-
-```python
-class HirToTirPass(ModulePass):                     # replaces every hir.Function with a tir.PrimFunction
-    name = "hir_to_tir"
-```
-
-- constraints:
-  - TIR has no return-tensor form; HIR outputs become trailing params. The
-    per-op / mesh / `Reshard` / dispatch lowering rules are in the subsections
-    below.
-
-`ModulePass`. Replaces every `hir.Function` with a
-`tir.PrimFunction`, materialising the HIR `Function(params) →
-tensor` calling convention into the TIR explicit-output-param form
-`PrimFunction(params=(inputs..., outputs...), body=...)`. TIR has
-no return-tensor form. After this pass, `PassManager` reruns HIR
-`typeinfer` / TIR `verify` on the dirty scope.
-
-#### Per-op lowering dispatch
-
-Per-op lowering is **registry-dispatched**, not a hand-written `isinstance`
-chain ([§4](#4-transform-pass-idiom)): each HIR op registers its lowering handler keyed by op class
-(`register_hir_lowering(OpClass)`), and the pass looks the handler up by
-`type(call.target)`. An op with a lowering-specific contract (e.g. HIR
-`Reshard`) registers its own lowering, so the pass core depends on the registry
-contract, not on importing target-specific op classes.
-
-A handler is a free function `handler(ctx, target, expr) -> Var`, where
-`ctx` is the lowering context and `target` is the dispatched `Op`
-instance. A handler SHOULD interact with `ctx` only through its public ABI:
-
-- `ctx.lower(expr) -> Var` — recursively lower a nested sub-expression;
-- `ctx.fresh(type, hint) -> Var` — a fresh Var name (no binding emitted);
-- `ctx.alloc(type, hint) -> Var` — a fresh Var bound to a new `AllocTensor`;
-- `ctx.emit(stmt)` — append a raw Stmt to the pending lowered sequence;
-- `ctx.emit_bind(var, value)` — append a let-binding `var = value`.
-
-A target-owned op's handler MUST use only this public ABI — it has no
-standing to reach into pass-internal state. A core op whose lowering
-depends on pass-internal cooperation (dispatch-group resolution, the
-reshard cross-CTA sync fence, tuple-carry field lookup) MAY call other
-`_Lowerer` methods directly; this is the exception, not the norm.
-
-A unit-stride HIR `Slice` lowers to a `TensorView` at the per-axis absolute
-element starts; `InsertSlice` uses the same coordinate convention. Neither
-multiplies an already-absolute coordinate by a window extent. A start that is dim
-arithmetic over literals and scalar Vars is an address the emitter computes, so
-lowering MUST carry it to the coordinate site rather than lower it as a value. A
-coordinate that an **op** computes MUST be refused: materializing it produces a
-buffer, and a buffer is not a scalar index. A
-non-divisible tile loop whose body consumes such a fixed-shape window MUST raise
-until a handwritten residual-tail lowering is supplied; a window moved by a
-compile-time offset is still that loop's window for this rule.
-
-#### Mesh structure derivation
-
-`HirToTirPass` MUST preserve the HIR execution regions when deriving TIR
-structure. It MAY derive target-specific mesh information from
-`ShardLayout.mesh` references in the body, but it MUST NOT fabricate a
-synthetic `MeshScope` for a missing reference. Each HIR `MeshRegion` lowers to
-the corresponding TIR scope around its body.
-
-#### `Reshard` lowering — dual semantics
-
-The rewrite of `Reshard(x, layout, storage)` selects a different
-TIR shape based on whether `storage` is provided:
-
-- **No storage** (`storage == ""`): emit a `TensorView(x,
-  layout)` — a pure shard tensor view, no allocation, no copy. The
-  result is a `Var` carrying the new `ShardLayout` type.
-- **With storage** (`storage != ""`): emit
-  `dst = AllocTensor(plain_type, storage=...)` followed by
-  `Evaluate(Copy, (TensorView(x, layout), dst))` — allocate
-  a plain tensor (no `ShardLayout`) and copy from the shard view
-  into the plain storage.
-
-#### Dispatch lowering
-
-The pass lowers each `Module.functions` entry by its shape
-([hir.md §1.1](./hir.md#11-function)):
-
-- A normal function (`variants == ()`) lowers on the default
-  single-body path.
-- A dispatch prototype (`variants != ()`, `body is None`) lowers
-  through the dispatch path:
-  1. Each variant lowers to its own `tir.PrimFunction` under the
-     mangled symbol `f"{name}${dim_var}${lo}_{hi}"`. Variant params
-     keep the original `TensorType` envelope; the dispatched range
-     is carried by the variant's `specializations` and the mangled
-     symbol, not by narrowed param types.
-  2. The prototype emits one entry `tir.PrimFunction` under the unmangled
-     `name`; its `variants` preserve the specialization group in source order.
-
-A `Call(target=hir_fn)` whose callee is a dispatch prototype
-(`variants != ()`) lowers to a nested `tir.If` chain covering the
-**reachable set** — callee variants whose specialization range
-intersects the caller-side range carried by the call argument at the
-callee's canonical `(param_index, axis)`. The caller-side range is
-derived from `call.args[param_index].type.shape[axis]`:
-
-- a static integer `k` → singleton half-open `[k, k+1)`;
-- a `DimVar(name, lo, hi)` → caller half-open range `[lo, hi)` read directly
-  from the dim;
-- any other form → compile-time error.
-
-An empty reachable set is a compile-time error. Coverage and
-disjointness of the variants over the dispatch envelope are verified
-statically (the partition rule, [hir.md §1.1](./hir.md#11-function)),
-so an in-envelope shape always selects exactly one variant. The
-the final `Abort` fallback is reached only by an
-out-of-envelope shape — a call-contract violation.
-
-Each lowered `PrimFunction` that references `ShapeOf(param, axis)`
-gains a hidden scalar parameter named `<param.name>_shape_<axis>` of
-`TensorType((), i32)`. The CUDA host wrapper extracts the value from
-the runtime tensor's shape; the parameter is invisible at the user
-FFI surface (see [target](./target.md)).
-
-### 7.2 `BufferizePass`
-
-`PrimFuncPass`. Runs after `HirToTirPass`, before codegen. The input
-is already an explicit-buffer-param `PrimFunction`; this pass does
-**not** perform an MLIR-style value → buffer IR conversion.
-
-Responsibility: collect logical-buffer lifetimes and run the placement-policy
-hook. The independent-allocation policy is already represented by one
-`AllocTensor` per logical buffer, so the pass returns the `PrimFunction`
-unchanged and does not write placement records into `tir.memory.*` descriptors.
-
-```python
-class BufferizePass(PrimFuncPass):
-    """Collect lifetimes and validate independent allocation placement.
-
-    Attributes:
-        collector: attribute; lifetime collector, defaulted during initialization.
-        scheduler: attribute; placement scheduler, defaulted during initialization.
-        name: attribute; pass name.
-        requires: attribute; required predecessor passes.
-    """
-
-    collector: LifetimeCollector = None
-    scheduler: BufferScheduler = None
-    name: str = "bufferize"
-    requires: tuple[str, ...] = ("hir_to_tir",)
-```
-
-- constraints:
-  - every logical buffer gets an independent physical allocation; no reuse, pool,
-    or lifetime overlap. Buffer planning is not a codegen responsibility.
-  - The scheduler's placement result is advisory under this policy;
-    `run_prim_func` MUST return the input function unchanged.
-
 ### 7.3 `insert_default_host_entry`
 
 ```python
+class InsertHostEntryPass(ModulePass):
+    """Give a device-only module a host-callable entry.
+
+    Attributes:
+        name: attribute; Stable dump and log name.
+        requires: attribute; Ordered dependency assertion.
+    """
+
+    name: str = "insert_host_entry"
+    requires: tuple[str, ...] = ()
+
+    def run(self, module: Module) -> Module: ...
+
+
 def insert_default_host_entry(module: Module) -> Module:
     """Return a Module whose entry is host-callable.
 
     Args:
-        module: Lowered Module to normalize.
+        module: Module to normalize.
 
     Returns:
         The unchanged or host-entry-normalized Module.
@@ -392,15 +252,23 @@ def insert_default_host_entry(module: Module) -> Module:
 ```
 
 - constraints:
+  - The pass is the scheduled form of the transform and states no rule of its
+    own. It is the one pass `build` ([§6](#6-top-level-api)) registers.
   - A CPU entry MUST pass through unchanged.
-  - A dispatch entry MUST be retargeted to CPU while its launched variants
-    remain device functions.
   - With no CPU entry and exactly one CUDA device function, the transform MUST
-    synthesize a CPU entry that mirrors the parameters and launches that
-    function. It MUST reject ambiguous device-function sets, a non-entry CPU
-    function, or a launch-provided dynamic CTA extent.
+    synthesize a CPU entry that mirrors that function's parameters and launches
+    it. One rule covers both device shapes: whether the call reads as a launch
+    or as a dispatch follows from the callee's own shape, a lone kernel and a
+    specialization prototype taking the same route here.
+  - It MUST NOT rewrite the Target any function records. Which target a
+    function runs on is what its author wrote.
+  - The launch geometry MUST be settled here and written into the `Launch`, so
+    nothing downstream derives it again. A prototype states no body of its own,
+    so its variants state its geometry and they MUST agree.
+  - It MUST reject ambiguous device-function sets, a non-entry CPU function, or
+    a launch-provided dynamic CTA extent.
 
 ## 8. Directory layout
 
-File layout is implementation-owned. Analysis registry ownership is defined by
+File layout is implementation-owned. Dispatch registry ownership is defined by
 [visitor-registry](./visitor-registry.md).

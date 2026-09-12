@@ -6,13 +6,15 @@ row-wise reduction and rescaling live in the runtime header.
 
 from __future__ import annotations
 
-from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
+from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.ir.core import Var
 from tilefoundry.ir.tir.nn.rms_norm import RMSNorm
+from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry.registries import Role, register_codegen
 
 
-@register_codegen_cuda(RMSNorm)
-def _emit(call, ctx: CodegenContext) -> None:
+@register_codegen(CudaTarget, Role.EMIT, RMSNorm)
+def _emit(call, ctx: CudaCodegenContext) -> None:
     src, dst, weight = call.args[0], call.args[1], call.args[2]
     if not isinstance(src, Var) or not isinstance(dst, Var) or not isinstance(weight, Var):
         raise RuntimeError("tir.nn.RMSNorm: demo path expects Var operands for src/dst/weight")

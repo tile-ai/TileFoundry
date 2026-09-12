@@ -1,4 +1,9 @@
-from . import emit as _emit  # noqa: F401 -- imported for emitter autodiscovery side effect
-from .context import CodegenContext, register_codegen_cuda
+"""CUDA target codegen: the device translation unit and CUDA's side of a call."""
 
-__all__ = ["CodegenContext", "register_codegen_cuda"]
+from __future__ import annotations
+
+from tilefoundry.codegen.cuda import abi as _abi  # noqa: F401 -- registers CUDA's side
+from tilefoundry.codegen.cuda import emit as _emit  # noqa: F401 -- emitter autodiscovery
+from tilefoundry.codegen.cuda.context import CudaCodegenContext
+
+__all__ = ["CudaCodegenContext"]

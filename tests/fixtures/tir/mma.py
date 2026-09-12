@@ -6,7 +6,7 @@ from tilefoundry.ir.types.shard import Layout, Mesh, S, ShardLayout, Topology
 from tilefoundry.target import CpuTarget, CudaTarget
 
 
-@module(entry="mm_host")
+@module(entry="mm_host", target=CudaTarget("nvidia.h200_sxm"))
 class MmHandwritten:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def mm_device(a: Tensor[(16, 16), "bf16"], b: Tensor[(16, 8), "bf16"], c: Tensor[(16, 8), "f32"]):

@@ -8,15 +8,12 @@ lightweight registry bits. Contexts and Visitors live in submodules
 from __future__ import annotations
 
 from .registries import (
-    AnalysisRegistry,
-    codegen_cpu_registry,
-    codegen_cuda_registry,
+    DispatchRegistry,
+    Role,
+    codegen_registry,
     cost_evaluator_registry,
-    hir_lowering_registry,
-    register_codegen_cpu,
-    register_codegen_cuda,
+    register_codegen,
     register_cost_evaluator,
-    register_hir_lowering,
     register_typeinfer,
     register_verify_stmt,
     typeinfer_registry,
@@ -24,17 +21,14 @@ from .registries import (
 )
 
 __all__ = [
-    "AnalysisRegistry",
-    "typeinfer_registry",
-    "verify_stmt_registry",
-    "codegen_cuda_registry",
-    "codegen_cpu_registry",
+    "DispatchRegistry",
+    "Role",
+    "codegen_registry",
     "cost_evaluator_registry",
-    "hir_lowering_registry",
+    "register_codegen",
+    "register_cost_evaluator",
     "register_typeinfer",
     "register_verify_stmt",
-    "register_codegen_cuda",
-    "register_codegen_cpu",
-    "register_cost_evaluator",
-    "register_hir_lowering",
+    "typeinfer_registry",
+    "verify_stmt_registry",
 ]

@@ -1,6 +1,6 @@
 """Emitter for ``tir.memory.AllocTensor`` (Expr Op) anchored by a LetStmt.
 
-Handler signature: ``(let_stmt: LetStmt, ctx: CodegenContext) -> None``.
+Handler signature: ``(let_stmt: LetStmt, ctx: CudaCodegenContext) -> None``.
 Materialises a CuTe tensor bound to the storage class indicated by the
 LetStmt's var TensorType.
 
@@ -11,7 +11,7 @@ materialisation path.
 """
 from __future__ import annotations
 
-from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
+from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.cuda.tir.memory.tensor_view import render_shard_layout_value
 from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import program_topologies
 from tilefoundry.ir.tir.memory import AllocTensor
@@ -23,10 +23,12 @@ from tilefoundry.ir.types.shape_helpers import (
 )
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, shard_layout_local_shape
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry.registries import Role, register_codegen
 
 
 def _emit_plain_alloc(
-    ctx: CodegenContext,
+    ctx: CudaCodegenContext,
     var,
     name: str,
     storage: StorageKind,
@@ -76,8 +78,8 @@ def _emit_plain_alloc(
     return name
 
 
-@register_codegen_cuda(AllocTensor)
-def _emit(let: LetStmt, ctx: CodegenContext) -> None:
+@register_codegen(CudaTarget, Role.EMIT, AllocTensor)
+def _emit(let: LetStmt, ctx: CudaCodegenContext) -> None:
     """Materialize plain or sharded storage for one allocation.
 
     Shard layout shapes are global and backing storage uses their derived local
@@ -122,7 +124,7 @@ def _emit(let: LetStmt, ctx: CodegenContext) -> None:
             f"cute::make_layout(cute::Shape<cute::Int<{global_total}>>{{}})"
         )
         preamble, shard_value = render_shard_layout_value(
-            name, layout_obj, getattr(ctx, "_dim_var_runtime", None), storage, ctx
+            name, layout_obj, ctx.dynamic_extents, storage, ctx
         )
         for line in preamble:
             ctx.emit(line)

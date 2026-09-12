@@ -45,14 +45,14 @@ class ShardTensor:
         shard = shard_layout_of(self.type.layout)
         if shard is None:
             return self.tensor
-        levels = tuple(topology.name for topology in shard.mesh.topologies)
+        topology_levels = tuple(topology.name for topology in shard.mesh.topologies)
         if placement is None:
             raise ValueError(
-                f"ShardTensor: {tuple(self.type.shape)} is sharded over {levels}, and "
+                f"ShardTensor: {tuple(self.type.shape)} is sharded over {topology_levels}, and "
                 f"no Placement says which program this is; pass placement= to load()"
             )
         declared = tuple(topology.name for topology in topologies)
-        missing = tuple(name for name in levels if name not in declared)
+        missing = tuple(name for name in topology_levels if name not in declared)
         if missing:
             raise ValueError(
                 f"ShardTensor: the mesh shards over level {missing[0]!r}, which the "
@@ -61,7 +61,7 @@ class ShardTensor:
         at = {name: index for index, name in enumerate(declared)}
         ids = placement.program_ids(topologies)
         layout, offset = local_layout_and_offset(
-            shard, tuple(self.type.shape), tuple(ids[at[name]] for name in levels)
+            shard, tuple(self.type.shape), tuple(ids[at[name]] for name in topology_levels)
         )
         if tuple(self.tensor.stride()) != tuple(layout.strides):
             raise ValueError(

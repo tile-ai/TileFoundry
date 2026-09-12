@@ -1,4 +1,4 @@
-"""Verify ``tir.ShapeOf`` construction + ``shape_var_name`` helper."""
+"""Verify ``tir.ShapeOf`` construction."""
 
 from __future__ import annotations
 

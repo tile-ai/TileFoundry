@@ -10,7 +10,7 @@ from tilefoundry.target import CpuTarget, CudaTarget
 _S = DimVar("S", 1, 256)
 
 
-@module(entry="square_host")
+@module(entry="square_host", target=CudaTarget("nvidia.h200_sxm"))
 class TirSquare:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def square_device(x: Tensor[(_S,), "f32"]):

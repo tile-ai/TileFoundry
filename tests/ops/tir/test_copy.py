@@ -19,7 +19,7 @@ from tilefoundry.target import CpuTarget, CudaTarget
 _CUDA = CudaTarget("nvidia.h200_sxm")
 
 
-@module(entry="copy_storage_host")
+@module(entry="copy_storage_host", target=_CUDA)
 class CopyStorage:
     """Five operand pairs in one device function, one per thing that can differ."""
 

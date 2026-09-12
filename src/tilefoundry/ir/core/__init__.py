@@ -22,7 +22,7 @@ from .metadata import (
 from .op import Op, ParameterInfo
 from .values import TotalAndPerUnit, TripInterval
 from tilefoundry.visitor_registry.registries import (
-    AnalysisRegistry,
+    DispatchRegistry,
     cost_evaluator_registry,
     register_cost_evaluator,
     register_typeinfer,
@@ -55,7 +55,7 @@ __all__ = [
     "ParameterInfo",
     "TotalAndPerUnit",
     "TripInterval",
-    "AnalysisRegistry",
+    "DispatchRegistry",
     "typeinfer_registry",
     "verify_stmt_registry",
     "cost_evaluator_registry",

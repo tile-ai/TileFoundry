@@ -86,14 +86,33 @@ class CompiledModule(RuntimeModule):
         self._placement = placement
         super().load(resource, placement=placement)
 
+    def _program_ids(self) -> tuple:
+        """The ids the entry needs told, ahead of its own arguments.
+
+        A level no register on the device answers for has to be told, so its
+        id travels with the call; each leading parameter states which level it
+        carries, which is how a ``Placement`` is keyed. A program whose levels
+        are all answered on the device is called as it was written.
+        """
+        if not self.type.leading:
+            return ()
+        topology_levels = tuple(p.topology_level for p in self.type.leading)
+        if self._placement is None:
+            raise ValueError(
+                f"{self.type.name}: needs the ids of {topology_levels} and no Placement "
+                f"says which program this is; pass placement= to load()"
+            )
+        return tuple(int(self._placement.ids[topology_level]) for topology_level in topology_levels)
+
     def forward(self, *args):
+        leading = self._program_ids()
         n_in = self.type.input_count
         if len(args) == len(self.type.params):
             outs = args[n_in:]
-            self.fn(*args)
+            self.fn(*leading, *args)
         elif len(args) == n_in:
             outs = self._alloc_outputs(args)
-            self.fn(*args, *outs)
+            self.fn(*leading, *args, *outs)
         else:
             raise TypeError(
                 f"{self.type.name}: expected {n_in} inputs (auto-alloc) or "

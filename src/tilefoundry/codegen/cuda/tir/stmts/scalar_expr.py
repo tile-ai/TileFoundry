@@ -1,5 +1,5 @@
 """Shared scalar Expr to C renderer for TIR statement emitters."""
-from tilefoundry.codegen.cuda.context import CodegenContext
+from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.visitor import ExprVisitor
@@ -7,7 +7,7 @@ from tilefoundry.ir.visitor import ExprVisitor
 _SCALAR_BINARY_OP = {BinaryKind.EQ: "==", BinaryKind.NE: "!=", BinaryKind.LT: "<", BinaryKind.LE: "<=", BinaryKind.GT: ">", BinaryKind.GE: ">=", BinaryKind.AND: "&&"}
 
 class _PredicateVisitor(ExprVisitor[str]):
-    def visit_Constant(self, expr: Constant, ctx: CodegenContext) -> str:
+    def visit_Constant(self, expr: Constant, ctx: CudaCodegenContext) -> str:
         if isinstance(expr.value, bool):
             return "true" if expr.value else "false"
         if isinstance(expr.value, int):
@@ -16,9 +16,9 @@ class _PredicateVisitor(ExprVisitor[str]):
             f"render_scalar_expr: Constant value of type {type(expr.value).__name__!r} "
             "is not supported (only int / bool)."
         )
-    def visit_Var(self, expr: Var, ctx: CodegenContext) -> str:
+    def visit_Var(self, expr: Var, ctx: CudaCodegenContext) -> str:
         return ctx.name_for(expr)
-    def visit_Call(self, expr: Call, ctx: CodegenContext) -> str:
+    def visit_Call(self, expr: Call, ctx: CudaCodegenContext) -> str:
         kind = getattr(expr.target, "kind", None)
         if not isinstance(kind, BinaryKind) or kind not in _SCALAR_BINARY_OP:
             raise NotImplementedError(
@@ -32,10 +32,10 @@ class _PredicateVisitor(ExprVisitor[str]):
             )
         lhs, rhs = (self.visit(arg, ctx) for arg in expr.args)
         return f"({lhs}) {_SCALAR_BINARY_OP[kind]} ({rhs})"
-    def default_visit(self, expr, ctx: CodegenContext) -> str:
+    def default_visit(self, expr, ctx: CudaCodegenContext) -> str:
         raise NotImplementedError(
             f"render_scalar_expr: Expr type {type(expr).__name__!r} is not supported."
         )
 
-def render_scalar_expr(expr, ctx: CodegenContext) -> str:
+def render_scalar_expr(expr, ctx: CudaCodegenContext) -> str:
     return _PredicateVisitor().visit(expr, ctx)

@@ -11,28 +11,20 @@ body. Dispatch is two-step:
 """
 from __future__ import annotations
 
-from tilefoundry.codegen.cuda.context import (
-    CodegenContext,
-    lookup,
-    register_codegen_cuda,
-)
+from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.ir.core import Call
 from tilefoundry.ir.tir.stmts import LetStmt
+from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry.registries import Role, register_codegen
 
 
-@register_codegen_cuda(LetStmt)
-def _emit(node: LetStmt, ctx: CodegenContext) -> None:
+@register_codegen(CudaTarget, Role.EMIT, LetStmt)
+def _emit(node: LetStmt, ctx: CudaCodegenContext) -> None:
     if not isinstance(node.value, Call):
         raise RuntimeError(
             f"LetStmt.value must be a Call (TIR-owned Expr Op), "
             f"got {type(node.value).__name__}"
         )
     op = node.value.target
-    handler = lookup(type(op))
-    if handler is None:
-        raise RuntimeError(
-            f"no @register_codegen_cuda for Op {type(op).__name__} "
-            f"(LetStmt value target)"
-        )
-    handler(node, ctx)
+    ctx.handler_for(type(op))(node, ctx)
     ctx.emit_node(node.body)

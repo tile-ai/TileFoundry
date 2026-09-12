@@ -7,7 +7,7 @@ from tilefoundry.ir.types.shard import ComposedLayout, Layout, Mesh, S, ShardLay
 from tilefoundry.target import CpuTarget, CudaTarget
 
 
-@module(entry="sync_square_host")
+@module(entry="sync_square_host", target=CudaTarget("nvidia.h200_sxm"))
 class SyncSquare:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def sync_square_device(a: Tensor[(4, 32), "f32"]):

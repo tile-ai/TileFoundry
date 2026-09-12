@@ -1,7 +1,7 @@
 """Jinja2 templates for CUDA codegen boilerplate.
 
 Only module/kernel wrappers are rendered here; stmt/op emission stays in
-the Python walker (``@register_codegen_cuda(...)``).
+the Python walker (``@register_codegen(CudaTarget, Role.EMIT, ...)``).
 """
 from __future__ import annotations
 

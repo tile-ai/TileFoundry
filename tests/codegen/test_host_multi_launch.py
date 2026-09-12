@@ -7,7 +7,9 @@ import torch
 
 import tilefoundry
 from tilefoundry import module, prim_func
+from tilefoundry.codegen.cpu.context import CpuCodegenContext
 from tilefoundry.codegen.cpu.module import emit_host_module
+from tilefoundry.codegen.signature import symbol_table
 from tilefoundry.dsl import T, Tensor
 from tilefoundry.ir.core import Constant, Var
 from tilefoundry.ir.core.module import Module
@@ -21,7 +23,7 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import CpuTarget, CudaTarget
 
 
-@module(entry="host")
+@module(entry="host", target=CudaTarget("nvidia.h200_sxm"))
 class _TwoCopyLaunches:
     """Two concrete kernels used by the end-to-end multi-launch check."""
 
@@ -77,7 +79,7 @@ class _TwoCopyLaunches:
         out1: Tensor[(1, 128), "f32"],
     ):
         launch(first, x0, out0, grid=(1, 1, 1), block=(1, 1, 1))  # noqa: F821
-        launch(second, x1, out1, grid=(1, 1, 1), block=(2, 1, 1))  # noqa: F821
+        launch(second, x1, out1, grid=(1, 1, 1), block=(1, 1, 1))  # noqa: F821
 
 
 def _tensor(name: str, shape=(8,)) -> Var:
@@ -92,22 +94,10 @@ def _tensor(name: str, shape=(8,)) -> Var:
     )
 
 
-def _scalar(name: str) -> Var:
-    return Var(
-        name=name,
-        type=TensorType.scalar(DType.i32, storage=StorageKind.RMEM),
-    )
-
-
-def _device(name: str, *, hidden: bool = False, scalar: bool = False) -> PrimFunction:
-    params = [_tensor("a")]
-    if scalar:
-        params = [_scalar("a")]
-    if hidden:
-        params.append(_scalar("a_shape_0"))
+def _device(name: str) -> PrimFunction:
     return PrimFunction(
         name=name,
-        params=tuple(params),
+        params=(_tensor("a"),),
         body=Sequential(body=()),
         target=CudaTarget("nvidia.h200_sxm"),
     )
@@ -139,7 +129,10 @@ def _module(devices, launches, params) -> tuple[Module, PrimFunction]:
 
 def _source(devices, launches, params) -> str:
     mod, host = _module(devices, launches, params)
-    return emit_host_module(mod, (host,), CpuTarget()).source
+    ctx = CpuCodegenContext(
+        symbols=symbol_table(mod, CudaTarget("nvidia.h200_sxm")), target=host.target
+    )
+    return emit_host_module(mod, (host,), host.target, ctx).source
 
 
 def test_two_launches_keep_order_and_each_block_size() -> None:
@@ -176,31 +169,33 @@ def test_same_entry_parameter_may_feed_two_launches() -> None:
     assert source.count("a.data_ptr()") == 2
 
 
-def test_unused_entry_parameter_is_rejected_with_signature_reason() -> None:
-    a, unused = _tensor("a"), _tensor("unused")
+def test_a_launch_arg_the_entry_does_not_declare_is_rejected() -> None:
     device = _device("device")
-    with pytest.raises(ValueError, match="no device type to give the wrapper's signature"):
-        _source((device,), (_launch(device, a),), (a, unused))
+    outside = _tensor("outside")
+    with pytest.raises(ValueError, match="is not a parameter of entry"):
+        _source((device,), (_launch(device, outside),), (_tensor("a"),))
 
 
 def test_same_device_function_can_be_launched_twice() -> None:
     a = _tensor("a")
     device = _device("device")
     source = _source((device,), (_launch(device, a, block=32), _launch(device, a, block=64)), (a,))
-    assert source.count('extern "C" void tilefoundry_device_launch') == 2
+    assert source.count('extern "C" void tilefoundry_device_launch') == 1
+    assert source.count("tilefoundry_device_launch(a.data_ptr()") == 2
 
 
-def test_hidden_shape_scalars_are_unique_per_launch() -> None:
-    a, b = _tensor("a"), _tensor("b")
-    first = _device("first", hidden=True)
-    second = _device("second", hidden=True)
-    source = _source(
-        (first, second),
-        (_launch(first, a), _launch(second, b)),
-        (a, b),
+def test_a_parameter_named_like_an_extent_is_still_a_parameter() -> None:
+    """An open axis is stated by the type, so no name is reserved for one."""
+    a, looks_hidden = _tensor("a"), _tensor("a_shape_0")
+    device = PrimFunction(
+        name="device",
+        params=(a, looks_hidden),
+        body=Sequential(body=()),
+        target=CudaTarget("nvidia.h200_sxm"),
     )
-    assert "long long l0__a_shape_0" in source
-    assert "long long l1__a_shape_0" in source
+    source = _source((device,), (_launch(device, a, looks_hidden),), (a, looks_hidden))
+    assert "tvm::ffi::Tensor a_shape_0" in source
+    assert "tilefoundry_device_launch(a.data_ptr(), a_shape_0.data_ptr()" in source
 
 
 def test_single_launch_path_remains_available() -> None:

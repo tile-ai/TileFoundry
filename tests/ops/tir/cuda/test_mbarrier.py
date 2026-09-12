@@ -83,7 +83,7 @@ def test_wait_parity_accepts_a_shared_barrier_and_a_phase() -> None:
     verify_prim_function(_pf(MBarrierWaitParity(), _SMEM_BAR, _PHASE))
 
 
-@module(entry="mbarrier_ring_host")
+@module(entry="mbarrier_ring_host", target=CudaTarget("nvidia.h200_sxm"))
 class MBarrierRing:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def mbarrier_ring_device(a: Tensor[(4,), "f32"]):

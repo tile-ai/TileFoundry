@@ -2,16 +2,23 @@
 
 An IR function returns a value; in C++ the outputs are trailing parameters and
 the call carries ids the IR never declared, so the two layers need separate
-vocabulary. One class per IR ``Type``, plus ``ScalarSignature`` for a parameter
-that exists in C++ only -- having no IR type is what makes it hidden.
+vocabulary. One class per IR ``Type``, and one per parameter a convention adds
+of its own -- a kind is what a caller dispatches on, so nothing has to read a
+name and guess what it stands for.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Mapping
 from dataclasses import dataclass
 
+from tilefoundry.ir.core.module import Module, module_functions
+from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.target import Target
+from tilefoundry.target.facts import TopologyFacts
+from tilefoundry.visitor_registry.registries import Role, codegen_registry, spelled
 
 
 @dataclass(frozen=True)
@@ -21,7 +28,7 @@ class Signature:
 
 @dataclass(frozen=True)
 class TensorSignature(Signature):
-    """A declared tensor parameter: its name and the IR type it carries.
+    """A declared tensor: its pointer, and the extents its type leaves open.
 
     Dtype, shape, storage and layout are reached through ``type`` rather than
     restated here.
@@ -30,10 +37,42 @@ class TensorSignature(Signature):
     name: str
     type: TensorType
 
+    @property
+    def dynamic_axes(self) -> tuple[int, ...]:
+        """The axes the type states as a ``DimVar``, whose extents travel with the pointer.
+
+        A static extent is a compile-time constant on both sides of the call,
+        so only these axes cost the convention anything.
+        """
+        return tuple(axis for axis, dim in enumerate(self.type.shape) if isinstance(dim, DimVar))
+
+    def extent_name(self, axis: int) -> str:
+        """What a declaration calls this tensor's extent along *axis*.
+
+        Invented here and read nowhere else: a caller writes whatever its own
+        scope calls that extent, so nothing ever parses this name back.
+        """
+        return f"{self.name}_shape_{axis}"
+
 
 @dataclass(frozen=True)
-class ScalarSignature(Signature):
-    """A parameter with no IR type: named and typed in C++ only."""
+class ProgramIdSignature(Signature):
+    """The id of one topology level, told to a program that cannot read it."""
+
+    name: str
+    topology_level: str
+
+
+@dataclass(frozen=True)
+class ProgramMetaSignature(Signature):
+    """The block of ids a kernel hands to the runtime it was compiled against."""
+
+    name: str
+
+
+@dataclass(frozen=True)
+class LaunchSignature(Signature):
+    """One of the geometry arguments a launch is told beyond the kernel's own."""
 
     name: str
     ctype: str
@@ -58,7 +97,9 @@ class CallableSignature(Signature):
     ``params`` are the parameters the IR declares, outputs last; ``leading``
     and ``trailing`` are what the convention adds around them. That data is
     the whole difference between a host entry, a launch shim and a kernel, so
-    a fourth convention is a fourth instance, not a fourth subclass.
+    a fourth convention is a fourth instance, not a fourth subclass. It is a
+    list of signatures and nothing more: how many C++ parameters one of them
+    becomes is answered where that one is written out.
     """
 
     name: str
@@ -86,37 +127,16 @@ class CallableSignature(Signature):
 
 
 LAUNCH_ABI = (
-    ScalarSignature("grid_x", "int"),
-    ScalarSignature("grid_y", "int"),
-    ScalarSignature("grid_z", "int"),
-    ScalarSignature("block_x", "int"),
-    ScalarSignature("block_y", "int"),
-    ScalarSignature("block_z", "int"),
-    ScalarSignature("dynamic_smem", "int"),
-    ScalarSignature("stream", "void*"),
+    LaunchSignature("grid_x", "int"),
+    LaunchSignature("grid_y", "int"),
+    LaunchSignature("grid_z", "int"),
+    LaunchSignature("block_x", "int"),
+    LaunchSignature("block_y", "int"),
+    LaunchSignature("block_z", "int"),
+    LaunchSignature("dynamic_smem", "int"),
+    LaunchSignature("stream", "void*"),
 )
 """What a launch shim is told beyond the kernel's own arguments."""
-
-
-def _ctype(param: Signature, tensor_ctype: Callable[[TensorSignature], str]) -> str:
-    """The C++ type of one parameter; a tensor's depends on the convention."""
-    if isinstance(param, ScalarSignature):
-        return param.ctype
-    if isinstance(param, TensorSignature):
-        return tensor_ctype(param)
-    raise ValueError(f"{type(param).__name__} has no C++ parameter spelling")
-
-
-def declare(params: Iterable[Signature], tensor_ctype: Callable[[TensorSignature], str]) -> str:
-    """The parameter list a definition writes: a C++ type and a name each."""
-    return ", ".join(f"{_ctype(p, tensor_ctype)} {p.name}" for p in params)
-
-
-def declare_types(
-    params: Iterable[Signature], tensor_ctype: Callable[[TensorSignature], str]
-) -> str:
-    """The same list as a forward declaration writes it: types only."""
-    return ", ".join(_ctype(p, tensor_ctype) for p in params)
 
 
 def tensor_signature_of(var) -> TensorSignature:
@@ -128,26 +148,69 @@ def tensor_signature_of(var) -> TensorSignature:
     return TensorSignature(name=var.name, type=ty)
 
 
-def callable_signature_of(fn) -> CallableSignature:
-    """The C++ side of a HIR ``Function``: one signature per declared parameter.
+def program_id_params(module: Module, target: Target) -> tuple[ProgramIdSignature, ...]:
+    """One id per level of *module*'s program whose ids *target* states.
 
-    ``output_count=0`` -- a value-returning implementation, not an entry whose
-    outputs are trailing parameters.
+    A level the target states has no register the device can read, so its id
+    has to arrive with the call. This is the one place the question is asked,
+    so a host entry and the shim it calls cannot answer it differently.
     """
-    params = tuple(tensor_signature_of(var) for var in fn.params)
-    return CallableSignature(name=fn.name, params=params, output_count=0)
+    stated = {
+        topology_level.name
+        for topology_level in target.get_facts(TopologyFacts).topologies
+        if topology_level.from_target
+    }
+    return tuple(
+        ProgramIdSignature(
+            name=f"tilefoundry_{topology.name}_program_id",
+            topology_level=topology.name,
+        )
+        for topology in module.effective_topologies()
+        if topology.name in stated
+    )
+
+
+def called_as(fn, program_ids: tuple[ProgramIdSignature, ...] = ()) -> CallableSignature:
+    """How *fn* is called, as *fn*'s own target states it.
+
+    What a symbol is named and what is added around its parameters is the
+    target's convention, so the answer comes from the target's handlers and
+    a caller of another target reaches it without naming them.
+    """
+    key = (type(fn.target), Role.CALLEE, PrimFunction)
+    convention = codegen_registry.lookup(key)
+    if convention is None:
+        raise RuntimeError(
+            f"codegen: nothing registered for {spelled(key)}, so nothing states "
+            f"how {fn.name!r} is called"
+        )
+    return convention(fn, program_ids)
+
+
+def symbol_table(module: Module, target: Target) -> Mapping[int, CallableSignature]:
+    """What every function in the tree is called by, before anything is emitted.
+
+    Keyed by ``id(fn)``: a call site holds the callee itself and never asks
+    which module it lives in. A specialization variant gets no row, because
+    nothing calls one: its prototype compiles to the one symbol, and which
+    variant runs is decided inside it.
+    """
+    program_ids = program_id_params(module, target)
+    return {id(fn): called_as(fn, program_ids) for fn in module_functions(module)}
 
 
 __all__ = [
     "LAUNCH_ABI",
     "CallableSignature",
-    "ScalarSignature",
+    "LaunchSignature",
+    "ProgramIdSignature",
+    "ProgramMetaSignature",
     "Signature",
     "TensorSignature",
     "TupleSignature",
     "UnitSignature",
-    "callable_signature_of",
-    "declare",
-    "declare_types",
+    "called_as",
+    "program_id_params",
+    "symbol_table",
     "tensor_signature_of",
 ]

@@ -7,7 +7,7 @@ from .abort import Abort
 from .async_copy import CopyAsync, CpAsyncCommit, CpAsyncWait
 from .launch import Launch
 from .prim_function import PrimFunction
-from .shape import ShapeOf, shape_var_name
+from .shape import ShapeOf
 from .stmts import (
     For,
     If,
@@ -41,7 +41,6 @@ __all__ = [
     "Abort",
     "Launch",
     "ShapeOf",
-    "shape_var_name",
     "SymbolRef",
     "Sync",
     "SyncBarrier",

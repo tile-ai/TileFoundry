@@ -1,20 +1,23 @@
-"""Shared codegen context for the CUDA target.
+"""What the shared codegen context does not know: CUDA's types and counters.
 
-A lightweight source builder with backend-specific helpers (dtype mapping,
-etc.). Emitter registration lives in tilefoundry.visitor_registry (the
-canonical ``codegen_cuda_registry``); this module re-exports the decorator
-+ a convenience ``lookup`` for back-compat.
+Everything a compile carries regardless of target lives in
+:class:`tilefoundry.codegen.context.CodegenContext`; what is added here is
+CUDA's alone -- the dtype spelling, the named-barrier ids the hardware counts,
+and the device state a kernel asks for while it is being written. Handler
+registration lives in ``tilefoundry.visitor_registry``, keyed by this target.
 """
 
 from __future__ import annotations
 
-from tilefoundry.ir.core.expr import Call
-from tilefoundry.ir.tir.stmts import Evaluate
-from tilefoundry.ir.types import UnitType
-from tilefoundry.visitor_registry.registries import (
-    codegen_cuda_registry,
-    register_codegen_cuda,
-)
+from collections.abc import Iterable, Mapping
+
+from tilefoundry.codegen.context import CodegenContext
+from tilefoundry.codegen.signature import CallableSignature, TensorSignature
+from tilefoundry.codegen.topology import Geometry
+from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.target import CudaTarget
+from tilefoundry.target.base import Target
+from tilefoundry.visitor_registry.registries import codegen_registry
 
 _CUDA_CPP: dict[str, str] = {
     "f32": "float",
@@ -29,8 +32,7 @@ _CUDA_CPP: dict[str, str] = {
 def topology_scope_str(name: str) -> str:
     """Map a topology level name to its C++ ``tilefoundry::TopologyScope`` enumerator.
 
-    Map a topology level name to its C++ ``tilefoundry::TopologyScope``
-    enumerator. Loud on an unknown level rather than silently defaulting.
+    Loud on an unknown level rather than silently defaulting.
     """
     scopes = {
         "gpu": "tilefoundry::TopologyScope::gpu",
@@ -45,24 +47,39 @@ def topology_scope_str(name: str) -> str:
         ) from None
 
 
-def lookup(node_type: type):
-    return codegen_cuda_registry.lookup(node_type)
+class CudaCodegenContext(CodegenContext):
+    """A compile writing CUDA: the shared context plus what only CUDA states."""
 
+    target_kind = CudaTarget
 
-class CodegenContext:
-    def __init__(self, target: object | None = None) -> None:
-        self.target = target
-        self._lines: list[str] = []
-        self._indent = 0
-        self._var_names: dict[int, str] = {}
-        self._counter = 0
-        self._kernel_param_ids: set[int] = set()
+    def __init__(
+        self,
+        *,
+        symbols: Mapping[int, CallableSignature] | None = None,
+        target: Target | None = None,
+        launches: Mapping[int, Geometry] | None = None,
+    ) -> None:
+        super().__init__(codegen_registry, symbols=symbols, target=target)
         self._mesh_aliases: dict[int, tuple[str, str]] = {}
-
-        self._dim_var_runtime: dict[str, str] = {}
+        self.launches: Mapping[int, Geometry] = {} if launches is None else launches
+        """The geometry each device function is launched at, keyed by ``id(fn)``."""
+        self.dynamic_extents: dict[str, str] = {}
+        """Where the kernel being written reads each open dimension's extent."""
         self._next_barrier_id = 1
         self.needs_grid_barrier_state = False
         """Set while emitting a grid barrier, which the module declares state for."""
+
+    def bind_extents(self, params: Iterable[TensorSignature]) -> None:
+        """Say where the kernel reads the extent of every dimension its types leave open.
+
+        The type is the only record of an open dimension, so the extent beside
+        the pointer is where a body reads it; the first parameter naming a
+        dimension is the one it is read from.
+        """
+        for signature in params:
+            for axis, dim in enumerate(signature.type.shape):
+                if isinstance(dim, DimVar):
+                    self.dynamic_extents.setdefault(dim.name, self.local_extent(signature, axis))
 
     def reset_barrier_ids(self) -> None:
         """Reset the named-barrier id counter at the start of a kernel body."""
@@ -94,75 +111,5 @@ class CodegenContext:
             raise ValueError(f"unsupported dtype for CUDA codegen: {dtype_name!r}")
         return t
 
-    def register_kernel_param(self, var) -> None:
-        """Called by PrimFunction emitter before emitting the body.
 
-        Called by PrimFunction emitter before emitting the body — binds
-        the param's original name and marks it as a pointer (float*).
-        """
-        key = id(var)
-        self._var_names[key] = var.name
-        self._kernel_param_ids.add(key)
-
-    def is_kernel_param(self, var) -> bool:
-        return id(var) in self._kernel_param_ids
-
-    def emit(self, line: str) -> None:
-        self._lines.append("  " * self._indent + line)
-
-    def blank(self) -> None:
-        self._lines.append("")
-
-    def indent(self) -> None:
-        self._indent += 1
-
-    def dedent(self) -> None:
-        self._indent -= 1
-
-    def name_for(self, var) -> str:
-        key = id(var)
-        if key in self._var_names:
-            return self._var_names[key]
-        self._counter += 1
-        n = f"{var.name}_{self._counter}"
-        self._var_names[key] = n
-        return n
-
-    def source(self) -> str:
-        return "\n".join(self._lines) + "\n"
-
-    def capture(self, fn) -> str:
-        """Capture.
-
-        Run ``fn(ctx)`` with ``ctx._lines`` temporarily swapped for a
-        fresh buffer, returning the text emitted during the call. Indent
-        and symbol tables are preserved across the swap; only the output
-        buffer is isolated. Use this to render a stmt sub-sequence into a
-        string that a Jinja template can splice in.
-        """
-        saved_lines = self._lines
-        self._lines = []
-        try:
-            fn(self)
-            return "\n".join(self._lines)
-        finally:
-            self._lines = saved_lines
-
-    def emit_node(self, node) -> None:
-
-        if isinstance(node, Evaluate):
-            op = node.callable
-            op_cls = type(op)
-            fn = lookup(op_cls)
-            if fn is None:
-                raise RuntimeError(f"no @register_codegen_cuda for Op {op_cls.__name__}")
-            call = Call(type=UnitType(), target=op, args=node.args)
-            fn(call, self)
-            return
-        fn = lookup(type(node))
-        if fn is None:
-            raise RuntimeError(f"no @register_codegen_cuda for {type(node).__name__}")
-        fn(node, self)
-
-
-__all__ = ["CodegenContext", "register_codegen_cuda", "lookup"]
+__all__ = ["CudaCodegenContext", "topology_scope_str"]

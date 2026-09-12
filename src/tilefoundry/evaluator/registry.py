@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from typing import Callable
 
-from tilefoundry.visitor_registry.registries import AnalysisRegistry
+from tilefoundry.visitor_registry.registries import DispatchRegistry
 
-eval_registry: AnalysisRegistry = AnalysisRegistry("eval")
+eval_registry: DispatchRegistry = DispatchRegistry("eval")
 
 
 def register_eval(op_cls: type) -> Callable[[Callable], Callable]:

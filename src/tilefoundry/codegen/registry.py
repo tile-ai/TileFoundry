@@ -51,23 +51,4 @@ def group_functions_by_target(
     return {target: tuple(functions) for target, functions in groups.items()}
 
 
-def _group_local_functions(module: Module, functions):
-    """Group an already selected topology domain without descending again."""
-    from tilefoundry.ir.tir.prim_function import PrimFunction  # noqa: PLC0415
-
-    groups: dict[Target, list[PrimFunction]] = {}
-    for function in functions:
-        if function.target is None:
-            raise ValueError(
-                f"tilefoundry: function {function.name!r} has no resolved Target "
-                "at codegen grouping"
-            )
-        groups.setdefault(function.target, []).append(function)
-        for variant in function.variants:
-            if variant.target is None:
-                raise ValueError(f"tilefoundry: variant {variant.name!r} has no resolved Target")
-            groups.setdefault(variant.target, []).append(variant)
-    return {target: tuple(items) for target, items in groups.items()}
-
-
 __all__ = ["CodeGenerator", "group_functions_by_target"]

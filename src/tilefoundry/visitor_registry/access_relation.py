@@ -21,7 +21,7 @@ from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis
 from tilefoundry.utils.isl_utils import cardinality
 
-from .registries import AnalysisRegistry
+from .registries import DispatchRegistry
 
 
 @dataclass(frozen=True)
@@ -113,7 +113,7 @@ class AccessRelations:
             raise ValueError("an operation produces at least one value to describe")
 
 
-access_relation_registry: AnalysisRegistry = AnalysisRegistry("access_relation")
+access_relation_registry: DispatchRegistry = DispatchRegistry("access_relation")
 
 
 def _field_of(type_: "Type", index: int) -> "Type | None":

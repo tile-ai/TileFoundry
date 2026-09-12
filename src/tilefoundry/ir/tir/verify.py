@@ -43,7 +43,7 @@ from tilefoundry.visitor_registry.contexts import VerifyContext
 from .launch import Launch
 from .memory import AllocTensor as AllocTensorOp
 from .prim_function import PrimFunction
-from .shape import ShapeOf, is_hidden_shape_scalar, is_shape_scalar, parse_shape_var_name
+from .shape import ShapeOf
 from .stmts import (
     Evaluate,
     For,
@@ -459,51 +459,17 @@ def _verify_launch(stmt: Evaluate, fn, module_fn_map, ctx):
             f"callee CallableType {expected}"
         )
 
-    for p in callee.params:
-        if not is_shape_scalar(p):
-            continue
-        parsed = parse_shape_var_name(p.name)
-        if parsed is None:
-            continue
-        base, axis = parsed
-        bt = next(
-            (
-                q
-                for q in callee.params
-                if q.name == base and isinstance(q.type, TensorType) and q.type.shape
-            ),
-            None,
-        )
-        if bt is not None and not (0 <= axis < len(bt.type.shape)):
-            raise VerifyError(
-                f"Launch of {callee.name!r}: shape scalar {p.name!r} references "
-                f"axis {axis} of {base!r}, which has rank {len(bt.type.shape)}"
-            )
-
-    visible = [p for p in callee.params if not is_hidden_shape_scalar(p, callee.params)]
-    if len(forwarded) != len(visible):
+    if len(forwarded) != len(callee.params):
         raise VerifyError(
             f"Launch of {callee.name!r}: forwarded arg count {len(forwarded)} != "
-            f"visible param count {len(visible)} (hidden shape scalars are "
-            f"derived host-side, not passed)"
+            f"param count {len(callee.params)}"
         )
-    for i, (arg, param) in enumerate(zip(forwarded, visible)):
+    for i, (arg, param) in enumerate(zip(forwarded, callee.params)):
         arg_ty = ctx.type_of(arg)
         if arg_ty != param.type:
             raise VerifyError(
                 f"Launch of {callee.name!r}: forwarded arg[{i}] type {arg_ty} != "
-                f"visible param {param.name!r} type {param.type}"
-            )
-
-    visible_tensors = {p.name for p in visible if isinstance(p.type, TensorType) and p.type.shape}
-    for p in callee.params:
-        if not is_hidden_shape_scalar(p, callee.params):
-            continue
-        base, _axis = parse_shape_var_name(p.name)
-        if base not in visible_tensors:
-            raise VerifyError(
-                f"Launch of {callee.name!r}: hidden shape scalar {p.name!r} "
-                f"derives from {base!r}, which is not a launched tensor argument"
+                f"param {param.name!r} type {param.type}"
             )
 
 

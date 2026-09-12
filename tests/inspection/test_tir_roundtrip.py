@@ -9,7 +9,7 @@ import pytest
 
 import tilefoundry.codegen.cuda  # noqa: F401
 from tests._source import import_dsl
-from tilefoundry.codegen.cuda.context import CodegenContext
+from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Constant, Var
 from tilefoundry.ir.core.module import Module
@@ -116,6 +116,6 @@ def test_tir_for_codegen_renders_nonconstant_bounds() -> None:
         step=Constant(type=scalar, value=1),
         body=Sequential(()),
     )
-    context = CodegenContext()
+    context = CudaCodegenContext()
     context.emit_node(loop)
     assert "i_1 < n_2" in context.source()

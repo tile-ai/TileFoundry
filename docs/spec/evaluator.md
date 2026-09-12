@@ -129,12 +129,12 @@ corresponding positional input:
 
 Each op's value semantics are a handler registered against the op
 class. The registry is local to the evaluator (it reuses the
-`AnalysisRegistry` container of
-[visitor-registry §2](./visitor-registry.md#2-core-contract) but is not one of that
-spec's module-level instances).
+`DispatchRegistry` container of
+[visitor-registry §3](./visitor-registry.md#3-dispatchregistry) but is not one of
+that spec's module-level instances).
 
 ```python
-eval_registry: AnalysisRegistry[type[Op]]
+eval_registry: DispatchRegistry[type[Op]]
 
 def register_eval(op_cls: type[Op]):
     """Return the evaluator registration decorator for an Op class."""

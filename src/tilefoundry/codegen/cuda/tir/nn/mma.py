@@ -8,13 +8,15 @@ own runtime mapping ([runtime §2.6](docs/spec/runtime.md#26-cudaops)).
 """
 from __future__ import annotations
 
-from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
+from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.ir.core import Var
 from tilefoundry.ir.tir.cuda.nn.mma import Mma
+from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry.registries import Role, register_codegen
 
 
-@register_codegen_cuda(Mma)
-def _emit(call, ctx: CodegenContext) -> None:
+@register_codegen(CudaTarget, Role.EMIT, Mma)
+def _emit(call, ctx: CudaCodegenContext) -> None:
     acc, lhs, rhs = call.args[0], call.args[1], call.args[2]
     if not isinstance(lhs, Var) or not isinstance(rhs, Var) or not isinstance(acc, Var):
         raise RuntimeError(

@@ -480,13 +480,14 @@ class CpuTarget(Target):
   `metadata["target"]` the compile pipeline carries is the codegen boundary's
   own record ([passes §6](./passes.md#6-top-level-api)), not a Target source
   for Analyze.
-- The compile boundary MAY resolve an omitted Module Target to
-  `default_target()` for lowering, because `jit(fn)` on a plain Function is a
-  documented entry point ([runtime §1.6](./runtime.md#16-compilepy)). It MUST
-  attach that exact value to the normalized Module before lowering.
-- A lowered TIR `PrimFunction` retains its own `target`: after lowering it
-  MUST be the exact Target instance resolved from its Module. It selects the
-  CodeGenerator service that emits it. A synthesized host entry carries a
+- The compile boundary resolves no default: `build` reports a Module that
+  declares no Target ([passes §6](./passes.md#6-top-level-api)) rather than
+  compiling it against a guess. `default_target()` is the omitted-target policy
+  of the authoring surface — the value a `PrimFunction` constructed without one
+  takes — not a Target the compile supplies.
+- A TIR `PrimFunction` retains its own `target`: it MUST be the exact Target
+  instance resolved from its Module, and no later stage rewrites it. It selects
+  the CodeGenerator service that emits it. A synthesized host entry carries a
   `CpuTarget()`.
 - CUDA Functions are grouped by equal Target values in source order. More than
   one unequal CUDA Target group MUST fail before any generator runs.

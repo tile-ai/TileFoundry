@@ -1,8 +1,7 @@
 # TileFoundry Spec — tir (`@prim_func` imperative IR)
 
 TIR is the imperative target IR. A `@tilefoundry.prim_func` body parses
-into TIR; the lowering pass `HirToTirPass` ([passes](./passes.md))
-also produces TIR. TIR has no value return; effect-form Ops carry
+into TIR. TIR has no value return; effect-form Ops carry
 the work, structural Stmts carry control flow.
 
 - **Container**: `tir.PrimFunction(name, params, body, output_count, target)`.
@@ -16,8 +15,8 @@ the work, structural Stmts carry control flow.
 - **Value Ops** (`AllocTensor`, `MemorySpan`, `PtrOf`, `TensorView`)
   are anchored by `LetStmt` so their result `Var` has stable
   identity.
-- **No HIR Ops** reach TIR; HIR-to-TIR rewriting is owned by the
-  pass layer.
+- **No HIR Ops** reach TIR. A program is TIR before the pass pipeline
+  ([passes](./passes.md)) reads it.
 
 ## 1. TIR Stmt hierarchy
 
@@ -428,29 +427,16 @@ class ShapeOf(Expr):
 ```
 
 - constraints:
-  - `type` is a rank-0 `i32` `TensorType` (scalar); it is the runtime-extent ABI
-    for a dynamic tensor dimension. Per-field and ABI rules below.
-
-- `ShapeOf.type` is rank-0 `TensorType` of dtype `i32` (a scalar).
-- `param` MUST resolve to a parameter `Var` of the enclosing
-  `PrimFunction`; `axis` MUST be a valid axis index of `param.type`.
-- The CUDA emitter lowers `ShapeOf(param, axis)` to a kernel scalar
-  parameter named `f"{param.name}_shape_{axis}"`. The host wrapper
-  reads the value from the runtime tensor's shape and forwards it to
-  the kernel.
-
-The `<param>_shape_<axis>` i32 scalar is the runtime-extent ABI for a
-dynamic tensor dimension, independent of how the `PrimFunction` was
-produced:
-
-- A device (CUDA) `PrimFunction` whose body references a dynamic tensor
-  dimension (a `DimVar` axis of a tensor parameter) MUST carry the
-  corresponding hidden `<param>_shape_<axis>` i32 scalar parameter, in
-  addition to the tensor parameter. The dimension maps to the first
-  tensor parameter / axis in which it occurs.
-- A CPU host entry MUST NOT expose such a scalar at its user-facing
-  surface — it reads the extent from its tensor argument's runtime shape
-  and forwards it ([§2.3](#23-tir-ops)).
+  - `type` is a rank-0 `i32` `TensorType` (scalar): one runtime tensor extent.
+  - `param` MUST resolve to a parameter `Var` of the enclosing
+    `PrimFunction`; `axis` MUST be a valid axis index of `param.type`.
+  - the type is the only record that an axis is open. A `PrimFunction` MUST
+    NOT carry a second parameter standing for an extent its own types already
+    state as a `DimVar`; the convention expands the tensor parameter into a
+    pointer plus one extent per open axis
+    ([codegen §4.4](./codegen.md#44-signatures)), so no parameter name is
+    reserved and a user parameter named `<something>_shape_<n>` is an ordinary
+    parameter.
 
 ### 2.3 TIR Ops
 
@@ -468,12 +454,10 @@ named enum members with the owning enum imported by the printed program.
 - `TensorType.storage` is a `StorageKind` ([types §2](./types.md#2-tensortype)).
   A memory-resident TIR tensor MUST carry a concrete level; the unmaterialized
   `umat` ([types §2](./types.md#2-tensortype)) is an HIR-only value and MUST
-  already be materialized to a concrete level by the time `HirToTirPass`
-  produces TIR — it never appears in TIR.
-- `Reshard` does not appear in TIR. HIR-side `Reshard` without a storage change
-  lowers to a `TensorView` and performs no allocation or copy; a storage change
-  lowers to `LetStmt(AllocTensor)` plus `Evaluate(Copy, ...)` during
-  `HirToTirPass` ([passes §7.1](./passes.md#71-hirtotirpass)).
+  already be materialized to a concrete level in TIR — it never appears there.
+- `Reshard` ([hir §1.3](./hir.md#13-op)) does not appear in TIR. A layout change
+  is a `TensorView` here and allocates and copies nothing; a storage change is a
+  `LetStmt(AllocTensor)` plus `Evaluate(Copy, ...)`.
 
 #### Memory Ops (`tir.memory.*`)
 
@@ -848,10 +832,11 @@ block_y, block_z, *forwarded_args)`:
   launch configuration, not kernel parameters: the device observes geometry
   through `gridDim` / `blockIdx` (the codegen `program_dim` / `program_shape`
   accessors), never as arguments.
-- **forwarded args**: the remaining `args` bind the callee's host-visible
-  parameters in declaration order. They MUST NOT include the hidden
-  `<param>_shape_<axis>` scalar parameters ([§2.2](#22-shapeof)) — the host fills
-  those from a tensor argument's runtime shape.
+- **forwarded args**: the remaining `args` bind the callee's parameters, one
+  each, in declaration order. An extent the callee's types leave open is not
+  among them: it travels with the pointer the convention expands that
+  parameter into ([codegen §4.4](./codegen.md#44-signatures)), read off the
+  tensor the host holds.
 - **attributes**: `cluster`, `dynamic_smem`, `stream`, and `attrs` carry the
   non-grid/block launch configuration. A `cluster` / `stream` / `attrs` value
   the active CUDA target does not support MUST be rejected in target lowering.

@@ -82,7 +82,7 @@ def test_admits_a_transfer_off_the_sixteen_byte_grain(n, dtype) -> None:
     verify_prim_function(_pf(_ty(n, dtype), _ty(n, dtype, storage="smem")))
 
 
-@module(entry="tma_tiers_host")
+@module(entry="tma_tiers_host", target=CudaTarget("nvidia.h200_sxm"))
 class TmaTiers:
     """Both staging tiers in one device function, one operand pair each."""
 

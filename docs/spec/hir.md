@@ -98,9 +98,8 @@ signature and dispatch envelope only, and its variants carry the
 implementations (see **Shape dispatch and specializations** below).
 
 `Function` always returns by value; explicit output parameters are
-TIR-only (see [tir](./tir.md)). `HirToTirPass` materialises the HIR
-return value into a TIR explicit output buffer parameter at the
-HIR → TIR boundary.
+TIR-only (see [tir](./tir.md)). Crossing that boundary materialises the
+HIR return value into a TIR explicit output buffer parameter.
 
 The return type MAY carry a `Partial(reduction)` in a `TensorType`, or in any
 tensor field of a nested `TupleType`. Function construction, type inference,

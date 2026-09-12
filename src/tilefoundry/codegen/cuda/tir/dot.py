@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-from tilefoundry.codegen.cuda.context import CodegenContext, register_codegen_cuda
+from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.ir.tir.dot import Dot
+from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry.registries import Role, register_codegen
 
 _DOT = "tilefoundry::ops::dot"
 
 
-def _tensor_expr(var, ctx: CodegenContext) -> str:
+def _tensor_expr(var, ctx: CudaCodegenContext) -> str:
     base = ctx.name_for(var)
     return f"{base}_tensor" if ctx.is_kernel_param(var) else base
 
 
-@register_codegen_cuda(Dot)
-def _emit(call, ctx: CodegenContext) -> None:
+@register_codegen(CudaTarget, Role.EMIT, Dot)
+def _emit(call, ctx: CudaCodegenContext) -> None:
     if not 3 <= len(call.args) <= 4:
         raise ValueError(
             f"tir.tensor.Dot: three operands plus an optional workspace, "

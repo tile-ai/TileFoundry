@@ -8,11 +8,3 @@
 {%- for decl in shim_decls %}
 {{ decl }}
 {%- endfor %}
-
-void {{ internal_host_symbol }}({{ wrapper_params_sig }}) {
-{%- for line in body_lines %}
-  {{ line }}
-{%- endfor %}
-}
-
-TVM_FFI_DLL_EXPORT_TYPED_FUNC({{ entry_name }}, {{ internal_host_symbol }});
