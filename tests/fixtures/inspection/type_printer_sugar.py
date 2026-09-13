@@ -4,14 +4,14 @@ One entry per combination the sugar has to survive: a mesh level alone and two
 levels composed on one value, splits on one and on several tensor axes, every
 value state a mesh axis can hold, contiguous and explicitly strided layouts
 over the same logical shape, and a loop whose carried fields are placed
-differently from each other.
+differently. The last entry holds the two placements sugar cannot state at all.
 """
 
 from __future__ import annotations
 
 from tilefoundry import func, module
 from tilefoundry.dsl import Tensor, tf
-from tilefoundry.ir.types.shard import B, Layout, Mesh, P, Topology
+from tilefoundry.ir.types.shard import B, Layout, Mesh, P, S, ShardLayout, Topology
 from tilefoundry.target import CudaTarget
 
 _H200 = CudaTarget("nvidia.h200_sxm")
@@ -20,6 +20,12 @@ _TOPOLOGIES = (Topology("cta", 4), Topology("thread", 8))
 _TILE = Mesh((Topology("cta", 4),), Layout((4,), (1,)), names=("tile",))
 _WARP_LANE = Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=("warp", "lane"))
 _LANES = Mesh((Topology("thread", 8),), Layout((8,), (1,)), names=("lane",))
+
+_FRAGMENT = ShardLayout(
+    layout=Layout((2, 4, 2), (8, 2, 1)),
+    attrs=(S(0), S(1)),
+    mesh=_WARP_LANE,
+)
 
 
 @module(entry="composed_mesh_pipeline", target=_H200, topologies=_TOPOLOGIES)
@@ -83,3 +89,21 @@ class TypePrinterSugar:
                 tf.reshard(whole, (8, 16), "gmem"),
                 unfolded,
             )
+
+    @func(mesh=_TILE)
+    def named_and_out_of_scope(
+        x: Tensor[(8, 16), "f32"],
+        held: Tensor[(8, 16), "f32", (8 @ mesh.tile, 16), "rmem"],  # noqa: F821
+        frag: Tensor[(16,), "f32", _FRAGMENT, "rmem"],
+    ):
+        """The two placements sugar cannot state.
+
+        ``frag`` is a layout the author names rather than spells: its content is
+        dictated elsewhere, so writing it out here would copy a constant into
+        the program text. ``escaped`` is resharded onto a mesh this scope never
+        enters -- a reshard is the one operation allowed to cross that boundary,
+        so its target names a mesh that is not the scope it runs in.
+        """
+        mine = tf.reshard(x, (8 @ mesh.tile, 16), "rmem")  # noqa: F821
+        escaped = tf.reshard(x, ((8 @ _WARP_LANE.warp, 16), {_WARP_LANE.lane @ B()}), "rmem")
+        return tf.reshard(mine, (8, 16), "gmem"), held, frag, escaped

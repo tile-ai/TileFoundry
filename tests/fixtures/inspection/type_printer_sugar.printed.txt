@@ -10,8 +10,8 @@ from tilefoundry.ir.types.shard import B, Layout, Mesh, P, S, ShardLayout, Topol
 
 thread = Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane'))
 thread_2 = Mesh((Topology("thread", 8),), Layout((8,), (1,)), names=('lane',))
-cta = Mesh((Topology("cta", 4), Topology("thread", 8)), Layout((4, 2, 4), (8, 4, 1)), names=('tile', 'warp', 'lane'))
-cta_2 = Mesh((Topology("cta", 4),), Layout((4,), (1,)), names=('tile',))
+cta = Mesh((Topology("cta", 4),), Layout((4,), (1,)), names=('tile',))
+cta_2 = Mesh((Topology("cta", 4), Topology("thread", 8)), Layout((4, 2, 4), (8, 4, 1)), names=('tile', 'warp', 'lane'))
 
 @module(entry="composed_mesh_pipeline", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4), Topology("thread", 8),))
 class TypePrinterSugar:
@@ -36,21 +36,33 @@ class TypePrinterSugar:
             return (v1, v2, unfolded)
 
     @func
+    def named_and_out_of_scope(
+        x: Tensor[(8, 16), "f32"],
+        held: Tensor[(8, 16), "f32", (4 @ cta.tile, 2, 16), "rmem"],
+        frag: Tensor[(16,), "f32", ((2 @ thread.warp, 4 @ thread.lane, 2), (8, 2, 1)), "rmem"]
+    ):
+        with cta as _cta:
+            mine = reshard(x, layout=(4 @ cta.tile, 2, 16), storage=rmem)
+            v0 = reshard(mine, layout=Layout((8, 16), (16, 1)), storage=gmem)
+            escaped = reshard(x, layout=(2 @ thread.warp, 4, 16), storage=rmem)
+            return (v0, held, frag, escaped)
+
+    @func
     def composed_mesh_pipeline(
         x: Tensor[(8, 4, 16), "f32"],
         acc: Tensor[(8, 16), "f32", ((2 @ thread.warp, 4, 16), {thread.lane @ P("sum")}), "rmem"],
-        mixed: Tensor[(8, 16), "f32", ((4 @ cta.tile, 2, 16), {cta.lane @ P("sum")}), "rmem"]
+        mixed: Tensor[(8, 16), "f32", ((4 @ cta_2.tile, 2, 16), {cta_2.lane @ P("sum")}), "rmem"]
     ):
-        with cta_2 as _cta_2:
+        with cta as _cta:
             with thread as _thread:
-                composed = reshard(x, layout=(4 @ cta.tile, 2, 2 @ cta.warp, 2, 4 @ cta.lane, 4), storage=rmem)
+                composed = reshard(x, layout=(4 @ cta_2.tile, 2, 2 @ cta_2.warp, 2, 4 @ cta_2.lane, 4), storage=rmem)
                 v0 = unary(composed, kind="square")
-                staged = reshard(v0, layout=(4 @ cta_2.tile, 2, 4, 16), storage=smem)
+                staged = reshard(v0, layout=(4 @ cta.tile, 2, 4, 16), storage=smem)
                 narrowed = cast(staged, dtype="bf16")
                 swapped = transpose(narrowed, perm=(0, 2, 1))
                 gathered = reshard(swapped, layout=((8, 16, 4), (64, 4, 1), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)
                 folded = reshard(acc, layout=(2 @ thread.warp, 4, 4 @ thread.lane, 4), storage=rmem)
-                summed = reshard(mixed, layout=((8, 16), {cta.tile @ B(), cta.warp @ B(), cta.lane @ B()}), storage=rmem)
+                summed = reshard(mixed, layout=((8, 16), {cta_2.tile @ B(), cta_2.warp @ B(), cta_2.lane @ B()}), storage=rmem)
                 for _ in range(3):
                     summed_2 = add(summed, summed)
                     folded_2 = unary(folded, kind="square")
