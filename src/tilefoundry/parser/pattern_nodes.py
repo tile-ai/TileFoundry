@@ -68,7 +68,6 @@ from .ast_pattern import (
     ParseError,
     ParserTypeInferContext,
     PatternFailure,
-    PlacedShapeRule,
     PredicatePattern,
     ReferencePattern,
     RepeatPattern,
@@ -569,6 +568,24 @@ def _value_state_parts(node: ast.AST):
     return None
 
 
+@dataclass(frozen=True)
+class PlacementAnswerRule:
+    """A placement answers both halves: the shape written, and where it goes."""
+
+    STATEMENT: ClassVar[str] = (
+        "Placement sugar states both the shape as written and the layout it implies."
+    )
+
+    def apply(self, value, *, match, context):
+        if not isinstance(value, PlacedLayout):
+            raise ParseError.from_node(match.node, context, "placement did not answer a placement")
+        if not isinstance(value.shape, tuple):
+            raise ParseError.from_node(match.node, context, "placement shape is not a tuple")
+        if not isinstance(value.layout, runtime.LayoutBase):
+            raise ParseError.from_node(match.node, context, "placement did not carry a LayoutBase")
+        return value
+
+
 class PlacedLayoutPattern(ElementPattern):
     """The layout a placement states: split dims, strides, and value states.
 
@@ -736,7 +753,9 @@ class PlacedLayoutPattern(ElementPattern):
                 raise ParseError.from_node(
                     match.node, context, "layout shape/stride rank mismatch"
                 )
-            return runtime.Layout(shape=shape, strides=strides)
+            return PlacedLayout(
+                shape=shape, layout=runtime.Layout(shape=shape, strides=strides)
+            )
         referenced_ids = {id(entry[0]) for entry in (*splits, *states)}
         if context.function is None:
             raise ParseError.from_node(
@@ -786,16 +805,16 @@ class PlacedLayoutPattern(ElementPattern):
             raise ParseError.from_node(match.node, context, str(error)) from error
         if strides is not None and len(canonical.layout.shape) != len(strides):
             raise ParseError.from_node(match.node, context, "layout shape/stride rank mismatch")
-        return runtime.ShardLayout(
-            layout=runtime.Layout(shape=canonical.layout.shape, strides=strides),
-            attrs=canonical.attrs,
-            mesh=canonical.mesh,
+        return PlacedLayout(
+            shape=shape,
+            layout=runtime.ShardLayout(
+                layout=runtime.Layout(shape=canonical.layout.shape, strides=strides),
+                attrs=canonical.attrs,
+                mesh=canonical.mesh,
+            ),
         )
 
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = (
-        LayoutShapeRule(),
-        LayoutPositionRule(),
-    )
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = (PlacementAnswerRule(),)
 
 
 class LayoutPattern(ElementPattern):
@@ -948,36 +967,11 @@ def _states_a_layout_slot(elts: object, context: "MatchContext") -> bool:
         return False
 
 
-class PlacedShapePattern(ElementPattern):
-    """Placement sugar read by a slot that states a shape rather than a layout.
-
-    Same syntax as `PlacedLayoutPattern`, different answer. That pattern serves
-    the layout slot, whose question is only where a value goes, so a layout is
-    the whole answer. A shape slot has no operand to read a shape from, and the
-    layout's own shape is the divided one, so it needs the extents as written
-    kept beside the layout instead of recovered from it.
-    """
-
-    element_name = "placed_shape"
-    syntax = LazyPattern(lambda: PlacedLayoutPattern().syntax)
-
-    @staticmethod
-    def construct(match, children, context):
-        layout = PlacedLayoutPattern.construct(match, children, context)
-        rank = match.captures["rank"]
-        return PlacedLayout(
-            shape=tuple(children[f"extent_{axis}"] for axis in range(rank)),
-            layout=layout,
-        )
-
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = (PlacedShapeRule(),)
-
-
 class TensorShapeLayoutPattern(ElementPattern):
     element_name = "tensor_shape_layout"
     syntax = LazyPattern(
         lambda: ChoicePattern(
-            PlacedShapePattern(),
+            PlacedLayoutPattern(),
             ShapePattern(),
         )
     )
@@ -1126,6 +1120,8 @@ class TensorPattern(ElementPattern):
                 shape, layout = placed, None
         else:
             shape, layout = children["shape"], children["layout"]
+        if isinstance(layout, PlacedLayout):
+            layout = layout.layout
         storage = children.get("storage")
         return runtime.TensorType(
             shape=shape,
@@ -2538,7 +2534,9 @@ class CallPattern(ElementPattern):
                     value for name, value in children.items() if name.startswith("input_")
                 )
             attrs = {
-                name.removeprefix("attr_"): value
+                name.removeprefix("attr_"): (
+                    value.layout if isinstance(value, PlacedLayout) else value
+                )
                 for name, value in children.items()
                 if name.startswith("attr_")
             }
