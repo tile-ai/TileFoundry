@@ -205,6 +205,11 @@ still renders verbose, so no annotation loses information. The annotation is
 **display-only** ([§2.7](#27-round-trip-contract)); what round-trips is the
 emitted code, not its comments.
 
+All canonical type values are dispatched through the shared `TypeFunctor` /
+`PythonTypePrinter` implementation. HIR and TIR retain their own function and
+statement printers, but `render_mode()` MUST NOT change the syntax of a
+`TensorType`, `ShardLayout`, `Layout`, `Mesh`, or shard attribute child value.
+
 Canonical DType text is the descriptor's `name`. Tensor annotations and DType
 op attributes MUST emit that name as a quoted DSL string. Compact labels MAY
 omit the quotes, but MUST NOT use the descriptor's raw `repr()`.

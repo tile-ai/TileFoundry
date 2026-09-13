@@ -266,7 +266,16 @@ def _advisory_count(record: MemoryMetadata) -> int:
     return len(record.advisories)
 
 
-def _loop_footprints(record: LoopFootprintMetadata) -> dict[str, str]:
+def _loop_footprints(record: LoopFootprintMetadata) -> dict[str, int]:
+    """Aggregate the default loop projection by storage level."""
+    totals: dict[str, int] = {}
+    for item in record.footprints:
+        totals[item.level] = totals.get(item.level, 0) + item.bytes
+    return totals
+
+
+def _loop_footprint_details(record: LoopFootprintMetadata) -> dict[str, str]:
+    """Expose buffer-level readings only for an explicit inspection opt-in."""
     return {
         f"{item.buffer}@{item.memory_level}": (
             f"{item.bytes}/{item.device_bytes}/{item.repeated_bytes}"
@@ -366,8 +375,9 @@ comment(
 )
 comment(
     LoopFootprintMetadata,
-    Projection("footprints", dict[str, str], _loop_footprints),
+    Projection("footprints", dict[str, int], _loop_footprints),
     Projection("status", str, _loop_footprint_status),
+    Projection("details", dict[str, str], _loop_footprint_details, opt_in=True),
 )
 comment(RooflineMetadata, "ideal_ns", "bound_by")
 comment(

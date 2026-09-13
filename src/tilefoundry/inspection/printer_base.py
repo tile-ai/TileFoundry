@@ -12,51 +12,43 @@ import enum
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase
+from tilefoundry.ir.types.shard.layout import LayoutBase
 from tilefoundry.ir.types.shard.mesh import Mesh
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, ShardLayout, Split
-from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.ir.visitor import ExprFunctor
 from tilefoundry.target import Target
 from tilefoundry.utils.python_source import PythonExpr
+
+from .python_type_printer import PythonTypePrinter
 
 
 class PythonPrinter(ExprFunctor[str]):
     """Shared expression/value visitor base for HIR and TIR printers."""
 
+    def __init__(self) -> None:
+        super().__init__()
+        self.type_printer = PythonTypePrinter(self)
+
     def dim_entry(self, value, ctx=None) -> str:
         return str(value)
 
     def shard_surface(self, value, ctx=None):
-        return None
+        """Use the HIR sugar classifier through this shared HIR/TIR hook."""
+        from .python_printer import _shard_layout_surface_str  # noqa: PLC0415
+
+        mesh_name = ctx.mesh_alias(value.mesh) if ctx is not None else None
+        if mesh_name is None or not value.mesh.names:
+            return None
+        count = ctx.mesh_count() if ctx is not None and hasattr(ctx, "mesh_count") else 1
+        return _shard_layout_surface_str(value, mesh_name=mesh_name, mesh_unique=count == 1)
 
     def atom_reference(self, value, ctx=None) -> str:
         return f"T.cuda.mma.atom(op=T.cuda.mma.{value.op.name})"
 
     def render_value(self, value, ctx=None, indent: str = "") -> str:
         """Render a DSL value and register every import needed by it."""
-        if isinstance(value, ShardLayout) and ctx is not None and ctx.render_mode() == "tir":
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import ShardLayout",), ""))
-            attrs = ", ".join(self._shard_attr_str(a, ctx) for a in value.attrs)
-            if len(value.attrs) == 1:
-                attrs += ","
-            mesh = self._render_mesh_dataclass(value.mesh, ctx)
-            return f"ShardLayout(layout={self.render_layout(value.layout, ctx)}, attrs=({attrs}), mesh={mesh})"
-        if isinstance(value, Mesh) and ctx is not None and ctx.render_mode() == "tir":
-            alias = ctx.mesh_alias(value)
-            if alias is not None:
-                return alias
-            return self._render_mesh_dataclass(value, ctx)
-        if isinstance(value, Mesh) and ctx is not None:
-            alias = ctx.mesh_alias(value)
-            if alias is not None:
-                return alias
-        if isinstance(value, TensorType):
-            return self.render_tensor_type(value, ctx, indent)
-        if isinstance(value, Mesh):
-            return self.render_mesh(value, ctx, indent)
-        if isinstance(value, LayoutBase):
-            return self.render_layout(value, ctx, indent)
+        if isinstance(value, (TensorType, Mesh, LayoutBase, DType)):
+            return self.type_printer.render(value, ctx, indent)
         if isinstance(value, MmaAtom):
             if ctx is not None:
                 ctx.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
@@ -85,133 +77,28 @@ class PythonPrinter(ExprFunctor[str]):
         return f"({values[0]},)" if len(values) == 1 else "(" + ", ".join(values) + ")"
 
     def _shard_attr_str(self, attr, ctx=None) -> str:
-        if isinstance(attr, Broadcast):
-            if ctx is not None:
-                ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import B",), "B"))
-            return "B()"
-        if isinstance(attr, Split):
-            if ctx is not None:
-                ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import S",), "S"))
-            return f"S({attr.axis})"
-        if isinstance(attr, Partial):
-            if ctx is not None:
-                ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import P",), "P"))
-            return f'P("{attr.reduction}")'
-        raise TypeError(f"unsupported shard attribute: {type(attr).__name__}")
+        return self.type_printer._shard_attr_str(attr, ctx)
 
     def render_layout(self, layout: LayoutBase | None, ctx=None, indent: str = "") -> str:
-        if layout is None:
-            return "None"
-        if isinstance(layout, Layout):
-            strides = self.shape_tuple(layout.strides, ctx) if layout.strides is not None else "None"
-            if ctx is not None and ctx.render_mode() == "tir":
-                if ctx is not None:
-                    ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Layout",), ""))
-                return f"Layout(shape={self.shape_tuple(layout.shape, ctx)}, strides={strides})"
-            return f"Layout({self.shape_tuple(layout.shape, ctx)}, {strides})"
-        if isinstance(layout, ShardLayout):
-            return self.render_shard_layout(layout, ctx, indent)
-        if isinstance(layout, ComposedLayout):
-            if ctx is not None:
-                ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import ComposedLayout",), ""))
-            if ctx is not None and ctx.render_mode() == "tir":
-                inner = "None" if layout.inner is None else self.render_layout(layout.inner, ctx, indent)
-                outer = "None" if layout.outer is None else self.render_layout(layout.outer, ctx, indent)
-                return f"ComposedLayout(inner={inner}, offset={layout.offset}, outer={outer})"
-            child = indent + "    "
-            return (
-                "ComposedLayout(\n"
-                f"{child}inner={self.render_layout(layout.inner, ctx, child)},\n"
-                f"{child}offset={self.dim_entry(layout.offset, ctx)},\n"
-                f"{child}outer={self.render_layout(layout.outer, ctx, child)},\n"
-                f"{indent})"
-            )
-        raise TypeError(f"unsupported layout type: {type(layout).__name__}")
+        return self.type_printer.render_layout(layout, ctx, indent)
 
     def render_mesh(self, mesh: Mesh, ctx=None, indent: str = "") -> str:
-        if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Layout, Mesh, Topology",), ""))
-        values = ", ".join(
-            f'Topology("{topology.name}", {self.dim_entry(topology.size, ctx)})'
-            for topology in mesh.topologies
-        )
-        topologies = f"({values}{',' if len(mesh.topologies) == 1 else ''})"
-        result = f"Mesh({topologies}, {self.render_layout(mesh.layout, ctx, indent)}"
-        if mesh.names:
-            result += f", names={tuple(mesh.names)!r}"
-        return result + ")"
+        return self.type_printer.render_mesh(mesh, ctx, indent)
 
     def render_shard_layout(self, layout: ShardLayout, ctx=None, indent: str = "", *, mesh_ref=None) -> str:
-        if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import ShardLayout",), ""))
-        child = indent + "    "
-        attrs = ", ".join(self._shard_attr_str(attr, ctx) for attr in layout.attrs)
-        if len(layout.attrs) == 1:
-            attrs += ","
-        if ctx is not None and ctx.render_mode() == "tir":
-            mesh_text = mesh_ref if mesh_ref is not None else self._render_mesh_compact(layout.mesh, ctx)
-            layout_text = self._render_layout_positional(layout.layout, ctx)
-        else:
-            mesh_text = mesh_ref if mesh_ref is not None else self.render_mesh(layout.mesh, ctx, child)
-            layout_text = self.render_layout(layout.layout, ctx, child)
-        return (
-            "ShardLayout(\n"
-            f"{child}layout={layout_text},\n"
-            f"{child}attrs=({attrs}),\n"
-            f"{child}mesh={mesh_text},\n"
-            f"{indent})"
-        )
+        return self.type_printer.render_shard_layout(layout, ctx, indent, mesh_ref=mesh_ref)
 
     def render_tensor_type(self, ty: TensorType, ctx=None, indent: str = "", is_const=False) -> str:
-        head = "ConstTensor" if is_const else "Tensor"
-        result = f'{head}[{self.shape_tuple(ty.shape, ctx)}, "{self.dtype_str(ty.dtype, ctx)}"'
-        if isinstance(ty.layout, ShardLayout):
-            surface = self.shard_surface(ty.layout, ctx)
-            if surface is not None:
-                result += f", {surface}"
-            else:
-                result += f",\n{indent}    {self.render_shard_layout(ty.layout, ctx, indent + '    ')}"
-        if ty.storage is not StorageKind.GMEM:
-            result += f', "{ty.storage.name.lower()}"'
-        return result + "]"
+        return self.type_printer.render_tensor_type(ty, ctx, indent, is_const)
 
     def _render_layout_positional(self, layout, ctx=None):
-        if isinstance(layout, Layout):
-            strides = self.shape_tuple(layout.strides, ctx) if layout.strides is not None else "None"
-            return f"Layout({self.shape_tuple(layout.shape, ctx)}, {strides})"
-        return self.render_layout(layout, ctx)
+        return self.type_printer._render_layout_positional(layout, ctx)
 
     def _render_mesh_dataclass(self, mesh, ctx=None):
-        if ctx is not None:
-            alias = ctx.mesh_alias(mesh)
-            if alias is not None:
-                return alias
-        if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Mesh, Topology",), ""))
-        values = ", ".join(f'Topology(name="{t.name}", size={self.dim_entry(t.size, ctx)})' for t in mesh.topologies)
-        if len(mesh.topologies) == 1:
-            values += ","
-        names = ", ".join(f'"{n}"' for n in mesh.names)
-        if len(mesh.names) == 1:
-            names += ","
-        layout = self.render_layout(mesh.layout, ctx)
-        return f"Mesh(topologies=({values}), layout={layout}, names=({names}))"
+        return self.type_printer._render_mesh_dataclass(mesh, ctx)
 
     def _render_mesh_compact(self, mesh, ctx=None):
-        if ctx is not None:
-            alias = ctx.mesh_alias(mesh)
-            if alias is not None:
-                return alias
-        if ctx is not None:
-            ctx.use(
-                PythonExpr(
-                    ("from tilefoundry.ir.types.shard import Mesh, Topology",), ""
-                )
-            )
-        values = ", ".join(f'Topology("{t.name}", {self.dim_entry(t.size, ctx)})' for t in mesh.topologies)
-        topologies = f"({values}{',' if len(mesh.topologies) == 1 else ''})"
-        names = f", names={tuple(mesh.names)!r}" if mesh.names else ""
-        return f"Mesh({topologies}, {self._render_layout_positional(mesh.layout, ctx)}{names})"
+        return self.type_printer._render_mesh_compact(mesh, ctx)
 
     def render_pattern(self, pattern: Pattern, ctx=None) -> str:
         if isinstance(pattern, DimVarRangePat):

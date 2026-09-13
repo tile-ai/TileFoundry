@@ -1,0 +1,29 @@
+from __future__ import annotations
+
+from tilefoundry import func
+from tilefoundry.dsl.tf import *  # noqa: F401, F403
+from tilefoundry.dsl import Tensor
+from tilefoundry.dsl.storage import gmem, host, rmem, smem, tmem  # noqa: F401
+from tilefoundry.ir.types.shard import B, Layout, Mesh, S, ShardLayout, Topology
+
+thread = Mesh((Topology("thread", 4),), Layout((4,), (1,)), names=('lane',))
+
+@func
+def loop_nest(
+    x: Tensor[(8,), "f32"]
+) -> Tensor[(8,), "f32", (8,)]:
+    with thread as _thread:  # Tensor[(8,), "f32", (8,)]
+        carried = reshard(x, layout=ShardLayout(
+                layout=Layout((4, 2), None),
+                attrs=(S(0),),
+                mesh=thread,
+            ), storage=rmem)  # Tensor[(8,), "f32", ((4 @ thread.lane, 2), (0, 1)), "rmem"]; compute-cost; traffic traffic=gmem:r32/w0@r32/w0,rmem:r0/w32@r0/w32
+        for _ in range(2):  # Tensor[(8,), "f32", ((4 @ thread.lane, 2), (0, 1)), "rmem"]; loop-footprint footprints=rmem:64 status=complete
+            v1 = unary(carried, kind="square")  # Tensor[(8,), "f32", ((4 @ thread.lane, 2), (0, 1)), "rmem"]; compute-cost flops=f32:8@8; traffic traffic=rmem:r32/w32@r32/w32
+            carried = v1
+        v2 = reshard(carried, layout=ShardLayout(
+                layout=Layout((8,), (1,)),
+                attrs=(B(),),
+                mesh=thread,
+            ), storage=gmem)  # Tensor[(8,), "f32", (8,)]; compute-cost; traffic traffic=gmem:r0/w32@r0/w32,rmem:r32/w0@r32/w0
+        return v2

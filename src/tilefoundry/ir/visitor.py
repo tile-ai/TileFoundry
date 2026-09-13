@@ -33,6 +33,7 @@ from tilefoundry.ir.tir.symbol_ref import SymbolRef
 
 __all__ = [
     "ExprFunctor",
+    "TypeFunctor",
     "ExprVisitor",
     "ExprWalker",
     "ExprCollector",
@@ -211,6 +212,28 @@ class ExprFunctor[T]:
 
     def clear(self) -> None:
         self._root = None
+
+
+class TypeFunctor[T]:
+    """Dispatch read-only operations over IR type and layout values.
+
+    Types are immutable value objects rather than expressions, so they need a
+    separate dispatch surface.  Keeping this visitor independent from the
+    expression visitor prevents printers and analysis consumers from growing
+    parallel ``isinstance`` ladders for the same type family.
+    """
+
+    def visit(self, value: Any, ctx: Any = None) -> T:
+        return self.dispatch_visit(value, ctx)
+
+    def dispatch_visit(self, value: Any, ctx: Any) -> T:
+        method = getattr(self, f"visit_{type(value).__name__}", None)
+        if method is not None:
+            return method(value, ctx)
+        return self.default_visit(value, ctx)
+
+    def default_visit(self, value: Any, ctx: Any) -> T:
+        raise NotImplementedError(f"no type visit routine for {type(value).__name__}")
 
 
 class ExprVisitor[T](ExprFunctor[T]):

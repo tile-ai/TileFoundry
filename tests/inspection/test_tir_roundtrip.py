@@ -33,8 +33,10 @@ def _module_in(path: Path):
     sorted(path for path in CANONICAL if path.name != "__init__.py"),
     ids=lambda path: path.stem,
 )
-def test_fixture_prints_back_to_its_own_source(path: Path) -> None:
-    assert as_script(_module_in(path)) == path.read_text()
+def test_fixture_prints_a_stable_canonical_source(path: Path) -> None:
+    """The shared type printer owns the canonical text, not authored spelling."""
+    printed = as_script(_module_in(path))
+    assert as_script(import_dsl(printed)) == printed
 
 
 def test_mixed_hir_tir_module_prints_both_function_families() -> None:

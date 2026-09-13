@@ -1,0 +1,29 @@
+from __future__ import annotations
+
+from tilefoundry import func
+from tilefoundry.dsl.tf import *  # noqa: F401, F403
+from tilefoundry.dsl import Tensor
+from tilefoundry.dsl.storage import gmem, host, rmem, smem, tmem  # noqa: F401
+from tilefoundry.ir.types.shard import B, Layout, Mesh, S, ShardLayout, Topology
+
+thread = Mesh((Topology("thread", 4),), Layout((4,), (1,)), names=('lane',))
+
+@func
+def loop_nest(
+    x: Tensor[(8,), "f32"]
+) -> Tensor[(8,), "f32", (8,)]:
+    with thread as _thread:
+        carried = reshard(x, layout=ShardLayout(
+                layout=Layout((4, 2), None),
+                attrs=(S(0),),
+                mesh=thread,
+            ), storage=rmem)
+        for _ in range(2):
+            v1 = unary(carried, kind="square")
+            carried = v1
+        v2 = reshard(carried, layout=ShardLayout(
+                layout=Layout((8,), (1,)),
+                attrs=(B(),),
+                mesh=thread,
+            ), storage=gmem)
+        return v2
