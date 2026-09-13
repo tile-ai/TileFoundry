@@ -19,8 +19,8 @@ class TirSquare:
     @square_device.specialize(DimVarRangePat("S", 1, 127))
     def square_small(x: Tensor[(_S,), "f32"]):
         with Mesh((Topology("thread", 128),), Layout((128,), (1,)), names=('t',)) as thread:
-            view = T.tensor_view(x, layout=(128 @ thread.t,))
-            reg = T.alloc_tensor(tensor_type=Tensor[(128,), "f32", (128 @ thread.t,), "rmem"])
+            view = T.tensor_view(x, layout=((128 @ thread.t,), (1,)))
+            reg = T.alloc_tensor(tensor_type=Tensor[(128,), "f32", ((128 @ thread.t,), (1,)), "rmem"])
             for phase in range(0, 2, 1):
                 if phase < 1:
                     T.copy(view, reg)
@@ -32,8 +32,8 @@ class TirSquare:
     @square_device.specialize(DimVarRangePat("S", 128, 255))
     def square_large(x: Tensor[(_S,), "f32"]):
         with Mesh((Topology("thread", 128),), Layout((128,), (1,)), names=('t',)) as thread:
-            view = T.tensor_view(x, layout=(128 @ thread.t,))
-            reg = T.alloc_tensor(tensor_type=Tensor[(128,), "f32", (128 @ thread.t,), "rmem"])
+            view = T.tensor_view(x, layout=((128 @ thread.t,), (1,)))
+            reg = T.alloc_tensor(tensor_type=Tensor[(128,), "f32", ((128 @ thread.t,), (1,)), "rmem"])
             for phase in range(0, 2, 1):
                 if phase < 1:
                     T.copy(view, reg)

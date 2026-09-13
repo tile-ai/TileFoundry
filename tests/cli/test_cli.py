@@ -785,8 +785,9 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
     annotated_types = [
         line.split("  # ", 1)[1].split("; ", 1)[0] for line in lines if "  # Tensor[" in line
     ]
-    assert 'Tensor[(120, 64), "f32", (120 @ cta_2.tile, 64)]' in annotated_types
-    assert 'Tensor[(120, 64), "f32", (12 @ cta_3.tile, 10, 64)]' in annotated_types
+    assert 'Tensor[(120, 64), "f32", ((120 @ cta_2.tile, 64), (64, 1))]' in annotated_types
+    assert 'Tensor[(120, 64), "f32", ((12 @ cta_3.tile, 10, 64), (640, 64, 1))]' in annotated_types
+    assert 'Tensor[(120, 64), "f32", ((120, 64), (64, 1), {cta.tile @ B()})]' in annotated_types
 
     rows = payload["calls"]
     assert len(rows) == 7

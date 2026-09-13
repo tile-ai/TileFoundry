@@ -61,7 +61,6 @@ from tilefoundry.ir.types.dim import (
     DimSub,
     DimVar,
 )
-from tilefoundry.ir.types.shard import try_c_order_strides
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import (
@@ -301,14 +300,13 @@ def _classify_shard_attrs(
 def _shard_layout_surface_str(sl: ShardLayout, mesh_name: str = "gpu", ctx=None) -> str | None:
     """Render canonical parser sugar for a shard layout.
 
-    Inline splits on layout dimensions and state the remaining value states as
-    a set. Broadcasts are the parser's default for an unstated mesh axis, so
-    they are written only when nothing else would name the mesh. Include
-    explicit strides only when present. Return ``None`` when sugar cannot
-    express the layout so callers use verbose fallback.
-
-    A symbolic shape has no static C-order strides to compare against, so the
-    ones it states are emitted rather than assumed contiguous.
+    Splits inline on the layout dimension they divide; the remaining value
+    states form a set, in which a broadcast appears only when nothing else
+    would name the mesh, because the parser reads an unstated axis that way.
+    The stride tuple is written whenever the layout has one: an unstated one
+    is not C-order shorthand but the sugar default a ``Reshard`` materializes
+    from the storage it moves between. Return ``None`` when sugar cannot
+    express the layout, so callers use the verbose fallback.
     """
     layout = sl.layout
     if not isinstance(layout, Layout):
@@ -320,11 +318,8 @@ def _shard_layout_surface_str(sl: ShardLayout, mesh_name: str = "gpu", ctx=None)
     states, state_import = (partials, "P") if (splits or partials) else (broadcasts, "B")
     if not splits and not states:
         return None
-    if states and ctx is not None:
-        ctx.use(PythonExpr((f"from tilefoundry.ir.types.shard import {state_import}",), state_import))
 
-    c_strides = try_c_order_strides(layout.shape)
-    explicit = layout.strides is not None and layout.strides != c_strides
+    explicit = layout.strides is not None
     if explicit and any(
         i in splits and _shape_entry_str(dim, nested=True) != shape_entry_str(dim)
         for i, dim in enumerate(layout.shape)
@@ -343,7 +338,15 @@ def _shard_layout_surface_str(sl: ShardLayout, mesh_name: str = "gpu", ctx=None)
     axis_tuple = f"({dim_str})"
 
     stride_str = _shape_tuple(layout.strides) if explicit else None
-    value_set = "{" + ", ".join(states) + "}" if states else None
+    value_set = None
+    if states:
+        value_set = "{" + ", ".join(states) + "}"
+        if ctx is not None:
+            ctx.use(
+                PythonExpr(
+                    (f"from tilefoundry.ir.types.shard import {state_import}",), state_import
+                )
+            )
 
     if stride_str is None and value_set is None:
         return axis_tuple

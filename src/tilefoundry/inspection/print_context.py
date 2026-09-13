@@ -9,9 +9,6 @@ class PrintContext:
     def __init__(self) -> None:
         self.imports: set[str] = set()
 
-    def mesh_count(self) -> int:
-        return 0
-
     def use(self, rendered: PythonExpr | str) -> str:
         if isinstance(rendered, PythonExpr):
             self.imports.update(rendered.imports)
@@ -20,9 +17,6 @@ class PrintContext:
 
     def mesh_alias(self, mesh) -> str | None:
         return None
-
-    def render_mode(self) -> str:
-        return "hir"
 
 
 class HirPrintContext(PrintContext):
@@ -33,17 +27,11 @@ class HirPrintContext(PrintContext):
     def mesh_alias(self, mesh) -> str | None:
         return self.mesh_name_map.get(id(mesh))
 
-    def mesh_count(self) -> int:
-        return len(self.mesh_name_map)
-
 
 class TirPrintContext(PrintContext):
     def __init__(self) -> None:
         super().__init__()
         self._mesh_aliases: list[dict[int, str]] = []
-
-    def render_mode(self) -> str:
-        return "tir"
 
     def push_mesh(self, mesh, name: str) -> None:
         self._mesh_aliases.append({id(mesh): name})

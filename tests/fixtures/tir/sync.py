@@ -12,8 +12,8 @@ class SyncSquare:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def sync_square_device(a: Tensor[(4, 32), "f32"]):
         with Mesh((Topology("thread", 128),), Layout((4, 32), (32, 1)), names=('w', 't')) as m:
-            view = T.tensor_view(a, layout=(4 @ m.w, 32 @ m.t))
-            reg = T.alloc_tensor(tensor_type=Tensor[(4, 32), "f32", (4 @ m.w, 32 @ m.t), "rmem"])
+            view = T.tensor_view(a, layout=((4 @ m.w, 32 @ m.t), (32, 1)))
+            reg = T.alloc_tensor(tensor_type=Tensor[(4, 32), "f32", ((4 @ m.w, 32 @ m.t), (32, 1)), "rmem"])
             T.copy(view, reg)
             T.sync(m)
             T.sync(Mesh((Topology("thread", 128),), ComposedLayout(

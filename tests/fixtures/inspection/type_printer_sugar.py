@@ -47,7 +47,7 @@ class TypePrinterSugar:
                 narrowed = tf.cast(staged, dtype="bf16")
                 swapped = tf.transpose(narrowed, perm=(0, 2, 1))
                 gathered = tf.reshard(swapped, (8, 16, 4), "gmem")
-                folded = tf.reshard(acc, ((8 @ thr.warp, 16 @ thr.lane)), "rmem")
+                folded = tf.reshard(acc, (8 @ thr.warp, 16 @ thr.lane), "rmem")
                 summed = tf.reshard(
                     mixed, ((8, 16), {cta.tile @ B(), thr.warp @ B(), thr.lane @ B()}), "rmem"
                 )
@@ -74,8 +74,9 @@ class TypePrinterSugar:
                 split = tf.square(split)
                 whole = tf.add(whole, whole)
             with _WARP_LANE as thr:
+                per_warp = tf.reshard(weight, (8 @ thr.warp, 16), "rmem")
                 unfolded = tf.reshard(
-                    weight, ((8, 16), {thr.warp @ B(), thr.lane @ B()}), "gmem"
+                    per_warp, ((8, 16), {thr.warp @ B(), thr.lane @ B()}), "gmem"
                 )
             return (
                 tf.reshard(split, (8, 16), "gmem"),

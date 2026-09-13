@@ -11,9 +11,9 @@ class AsyncStage:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def async_stage_device(a: Tensor[(128, 4), "f32"], b: Tensor[(128, 4), "f32"]):
         with Mesh((Topology("thread", 128),), Layout((128,), (1,)), names=('t',)) as m:
-            a_view = T.tensor_view(a, layout=(128 @ m.t, 4))
-            shared = T.alloc_tensor(tensor_type=Tensor[(128, 4), "f32", (128 @ m.t, 4), "smem"])
-            b_view = T.tensor_view(b, layout=(128 @ m.t, 4))
+            a_view = T.tensor_view(a, layout=((128 @ m.t, 4), (4, 1)))
+            shared = T.alloc_tensor(tensor_type=Tensor[(128, 4), "f32", ((128 @ m.t, 4), (4, 1)), "smem"])
+            b_view = T.tensor_view(b, layout=((128 @ m.t, 4), (4, 1)))
             T.copy_async(a_view, shared)
             T.cp_async_commit()
             T.cp_async_wait(n=0)

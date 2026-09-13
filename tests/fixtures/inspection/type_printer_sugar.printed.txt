@@ -28,10 +28,11 @@ class TypePrinterSugar:
                 split_2 = unary(split, kind="square")
                 split = split_2
                 whole = whole_2
-            v1 = reshard(split, layout=((8, 16), {thread_2.lane @ B()}), storage=gmem)
-            v2 = reshard(whole, layout=((8, 16), {thread_2.lane @ B()}), storage=gmem)
+            v1 = reshard(split, layout=((8, 16), (16, 1), {thread_2.lane @ B()}), storage=gmem)
+            v2 = reshard(whole, layout=((8, 16), (16, 1), {thread_2.lane @ B()}), storage=gmem)
             with thread as _thread:
-                unfolded = reshard(weight, layout=((8, 16), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)
+                per_warp = reshard(weight, layout=(2 @ thread.warp, 4, 16), storage=rmem)
+                unfolded = reshard(per_warp, layout=((8, 16), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)
             return (v1, v2, unfolded)
 
     @func
@@ -47,7 +48,7 @@ class TypePrinterSugar:
                 staged = reshard(v0, layout=(4 @ cta_2.tile, 2, 4, 16), storage=smem)
                 narrowed = cast(staged, dtype="bf16")
                 swapped = transpose(narrowed, perm=(0, 2, 1))
-                gathered = reshard(swapped, layout=((8, 16, 4), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)
+                gathered = reshard(swapped, layout=((8, 16, 4), (64, 4, 1), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)
                 folded = reshard(acc, layout=(2 @ thread.warp, 4, 4 @ thread.lane, 4), storage=rmem)
                 summed = reshard(mixed, layout=((8, 16), {cta.tile @ B(), cta.warp @ B(), cta.lane @ B()}), storage=rmem)
                 for _ in range(3):
@@ -55,6 +56,6 @@ class TypePrinterSugar:
                     folded_2 = unary(folded, kind="square")
                     folded = folded_2
                     summed = summed_2
-                v2 = reshard(folded, layout=((8, 16), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)
-                v3 = reshard(summed, layout=((8, 16), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)
+                v2 = reshard(folded, layout=((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)
+                v3 = reshard(summed, layout=((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)
                 return (gathered, v2, v3)
