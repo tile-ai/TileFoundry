@@ -13,11 +13,12 @@ cta_2 = Mesh((Topology("cta", 4),), Layout((4,), (1,)), names=('tile',))
 @func
 def composed_mesh_pipeline(
     x: Tensor[(8, 4, 16), "f32"],
+    seed: Tensor[(16,), "f32"],
     acc: Tensor[(8, 16), "f32", ((2 @ thread.warp, 4, 16), {thread.lane @ P("sum")}), "rmem"],
     mixed: Tensor[(8, 16), "f32", ((4 @ cta.tile, 2, 16), {cta.lane @ P("sum")}), "rmem"]
 ):
-    with cta_2 as _cta_2:  # Tuple[Tensor[(8, 16, 4), "bf16", ((8, 16, 4), (64, 4, 1), {thread.warp @ B(), thread.lane @ B()})], Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()})], Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()})]]
-        with thread as _thread:  # Tuple[Tensor[(8, 16, 4), "bf16", ((8, 16, 4), (64, 4, 1), {thread.warp @ B(), thread.lane @ B()})], Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()})], Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()})]]
+    with cta_2 as _cta_2:  # Tuple[Tensor[(8, 16, 4), "bf16", ((8, 16, 4), (64, 4, 1), {thread.warp @ B(), thread.lane @ B()})], Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()})], Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()})], Tensor[(16,), "f32", ((16,), (1,), {thread.warp @ B(), thread.lane @ B()})]]
+        with thread as _thread:  # Tuple[Tensor[(8, 16, 4), "bf16", ((8, 16, 4), (64, 4, 1), {thread.warp @ B(), thread.lane @ B()})], Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()})], Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()})], Tensor[(16,), "f32", ((16,), (1,), {thread.warp @ B(), thread.lane @ B()})]]
             v0 = reshard(x, layout=(4 @ cta.tile, 2, 2 @ cta.warp, 2, 4 @ cta.lane, 4), storage=rmem)  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 2 @ cta.warp, 2, 4 @ cta.lane, 4), (0, 8, 0, 4, 0, 1)), "rmem"]; compute-cost; traffic traffic=gmem:r2048/w0@cta:r512/w0,thread:r64/w0,rmem:r0/w2048@cta:r0/w512,thread:r0/w64
             v1 = unary(v0, kind="square")  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 2 @ cta.warp, 2, 4 @ cta.lane, 4), (0, 8, 0, 4, 0, 1)), "rmem"]; compute-cost flops=f32:512@cta:128,thread:16; traffic traffic=rmem:r2048/w2048@cta:r512/w512,thread:r64/w64
             v2 = reshard(v1, layout=(4 @ cta_2.tile, 2, 4, 16), storage=smem)  # Tensor[(8, 4, 16), "f32", ((4 @ cta_2.tile, 2, 4, 16), (128, 64, 16, 1)), "smem"]; compute-cost; traffic traffic=rmem:r2048/w0@cta:r512/w0,thread:r64/w0,smem:r0/w2048@cta:r0/w512,thread:r0/w64
@@ -33,4 +34,6 @@ def composed_mesh_pipeline(
                 summed = v8
             v11 = reshard(folded, layout=((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()})]; compute-cost; traffic traffic=gmem:r0/w512@cta:r0/w512,thread:r0/w64,rmem:r512/w0@cta:r512/w0,thread:r64/w0
             v13 = reshard(summed, layout=((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()})]; compute-cost; traffic traffic=gmem:r0/w512@cta:r0/w512,thread:r0/w512,rmem:r512/w0@cta:r512/w0,thread:r512/w0
-            return (v5, v11, v13)
+            v14 = reshard(seed, layout=((2 @ thread.warp, 4 @ thread.lane, 2), (8, 2, 1)), storage=rmem)  # Tensor[(16,), "f32", ((2 @ thread.warp, 4 @ thread.lane, 2), (8, 2, 1)), "rmem"]; compute-cost; traffic traffic=gmem:r64/w0@cta:r64/w0,thread:r8/w0,rmem:r0/w64@cta:r0/w64,thread:r0/w8
+            v15 = reshard(v14, layout=((16,), (1,), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)  # Tensor[(16,), "f32", ((16,), (1,), {thread.warp @ B(), thread.lane @ B()})]; compute-cost; traffic traffic=gmem:r0/w64@cta:r0/w64,thread:r0/w8,rmem:r64/w0@cta:r64/w0,thread:r8/w0
+            return (v5, v11, v13, v15)

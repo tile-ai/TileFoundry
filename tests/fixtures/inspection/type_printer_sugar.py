@@ -4,7 +4,8 @@ One entry per combination the sugar has to survive: a mesh level alone and two
 levels composed on one value, splits on one and on several tensor axes, every
 value state a mesh axis can hold, contiguous and explicitly strided layouts
 over the same logical shape, and a loop whose carried fields are placed
-differently. The last entry holds the two placements sugar cannot state at all.
+differently. `_FRAGMENT` is reshard-ed to from both entries: one enters its
+mesh, the other never does, so only the first has a binding sugar could name.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ class TypePrinterSugar:
     @func
     def composed_mesh_pipeline(
         x: Tensor[(8, 4, 16), "f32"],
+        seed: Tensor[(16,), "f32"],
         acc: Tensor[
             (8, 16), "f32",
             ((2 @ _WARP_LANE.warp, 4, 16), {_WARP_LANE.lane @ P("sum")}),
@@ -53,6 +55,7 @@ class TypePrinterSugar:
                 narrowed = tf.cast(staged, dtype="bf16")
                 swapped = tf.transpose(narrowed, perm=(0, 2, 1))
                 gathered = tf.reshard(swapped, (8, 16, 4), "gmem")
+                seeded = tf.reshard(seed, _FRAGMENT, "rmem")
                 folded = tf.reshard(acc, (8 @ thr.warp, 16 @ thr.lane), "rmem")
                 summed = tf.reshard(
                     mixed, ((8, 16), {cta.tile @ B(), thr.warp @ B(), thr.lane @ B()}), "rmem"
@@ -64,6 +67,7 @@ class TypePrinterSugar:
                     gathered,
                     tf.reshard(folded, (8, 16), "gmem"),
                     tf.reshard(summed, (8, 16), "gmem"),
+                    tf.reshard(seeded, (16,), "gmem"),
                 )
 
     @func
@@ -98,11 +102,11 @@ class TypePrinterSugar:
     ):
         """The two placements sugar cannot state.
 
-        ``frag`` is a layout the author names rather than spells: its content is
-        dictated elsewhere, so writing it out here would copy a constant into
-        the program text. ``escaped`` is resharded onto a mesh this scope never
-        enters -- a reshard is the one operation allowed to cross that boundary,
-        so its target names a mesh that is not the scope it runs in.
+        ``frag`` holds the same constant `composed_mesh_pipeline` reshards to,
+        but this function never enters that constant's mesh, so nothing here
+        binds a name sugar could use. ``escaped`` is resharded onto a mesh this
+        scope never enters -- a reshard is the one operation allowed to cross
+        that boundary, so its target names a mesh that is not its own scope.
         """
         mine = tf.reshard(x, (8 @ mesh.tile, 16), "rmem")  # noqa: F821
         escaped = tf.reshard(x, ((8 @ _WARP_LANE.warp, 16), {_WARP_LANE.lane @ B()}), "rmem")

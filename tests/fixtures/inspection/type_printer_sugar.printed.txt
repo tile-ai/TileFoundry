@@ -50,6 +50,7 @@ class TypePrinterSugar:
     @func
     def composed_mesh_pipeline(
         x: Tensor[(8, 4, 16), "f32"],
+        seed: Tensor[(16,), "f32"],
         acc: Tensor[(8, 16), "f32", ((2 @ thread.warp, 4, 16), {thread.lane @ P("sum")}), "rmem"],
         mixed: Tensor[(8, 16), "f32", ((4 @ cta_2.tile, 2, 16), {cta_2.lane @ P("sum")}), "rmem"]
     ):
@@ -70,4 +71,6 @@ class TypePrinterSugar:
                     summed = summed_2
                 v2 = reshard(folded, layout=((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)
                 v3 = reshard(summed, layout=((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)
-                return (gathered, v2, v3)
+                seeded = reshard(seed, layout=((2 @ thread.warp, 4 @ thread.lane, 2), (8, 2, 1)), storage=rmem)
+                v4 = reshard(seeded, layout=((16,), (1,), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)
+                return (gathered, v2, v3, v4)
