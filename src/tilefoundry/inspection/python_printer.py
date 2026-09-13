@@ -266,13 +266,13 @@ def _ceildiv_args(entry: Call) -> tuple[object, object] | None:
 
 def _classify_shard_attrs(
     sl: ShardLayout, mesh_name: str
-) -> tuple[dict[int, list[str]], list[str]] | None:
-    """Classify shard attributes into layout-axis splits and partials.
+) -> tuple[dict[int, list[str]], list[str], list[str]] | None:
+    """Classify shard attributes into layout-axis splits, partials, broadcasts.
 
-    Preserve mesh-axis order, allow nested axes to split one layout axis, and
-    omit broadcasts. Return ``None`` for rank mismatch, invalid axes, or unknown
-    attributes so callers use verbose fallback. Surface and compact renderers
-    share the result, with the latter remapping splits onto tensor axes.
+    Preserve mesh-axis order and allow nested axes to split one layout axis.
+    Return ``None`` for rank mismatch, invalid axes, or unknown attributes so
+    callers use verbose fallback. Surface and compact renderers share the
+    result, with the latter remapping splits onto tensor axes.
     """
     layout = sl.layout
     if not isinstance(layout, Layout) or len(sl.attrs) != len(sl.mesh.layout.shape):
@@ -281,6 +281,7 @@ def _classify_shard_attrs(
     names = sl.mesh.names if hasattr(sl.mesh, "names") and sl.mesh.names else ()
     splits: dict[int, list[str]] = {}
     partials: list[str] = []
+    broadcasts: list[str] = []
     for mesh_axis_idx, attr in enumerate(sl.attrs):
         axis_name = names[mesh_axis_idx] if mesh_axis_idx < len(names) else f"ax{mesh_axis_idx}"
         axis_ref = f"{mesh_name}.{axis_name}"
@@ -290,22 +291,21 @@ def _classify_shard_attrs(
             splits.setdefault(attr.axis, []).append(axis_ref)
         elif isinstance(attr, Partial):
             partials.append(f'{axis_ref} @ P("{attr.reduction or "sum"}")')
-        elif not isinstance(attr, Broadcast):
+        elif isinstance(attr, Broadcast):
+            broadcasts.append(f"{axis_ref} @ B()")
+        else:
             return None
-    return splits, partials
+    return splits, partials, broadcasts
 
 
-def _shard_layout_surface_str(
-    sl: ShardLayout,
-    mesh_name: str = "gpu",
-    *,
-    mesh_unique: bool = False,
-) -> str | None:
+def _shard_layout_surface_str(sl: ShardLayout, mesh_name: str = "gpu", ctx=None) -> str | None:
     """Render canonical parser sugar for a shard layout.
 
-    Inline splits on layout dimensions, emit partial value states as a set, and
-    omit broadcasts. Include explicit strides only when present. Return ``None``
-    when sugar cannot express the layout so callers use verbose fallback.
+    Inline splits on layout dimensions and state the remaining value states as
+    a set. Broadcasts are the parser's default for an unstated mesh axis, so
+    they are written only when nothing else would name the mesh. Include
+    explicit strides only when present. Return ``None`` when sugar cannot
+    express the layout so callers use verbose fallback.
 
     A symbolic shape has no static C-order strides to compare against, so the
     ones it states are emitted rather than assumed contiguous.
@@ -316,10 +316,12 @@ def _shard_layout_surface_str(
     classified = _classify_shard_attrs(sl, mesh_name)
     if classified is None:
         return None
-    splits, partials = classified
-
-    if not splits and not partials and not mesh_unique:
+    splits, partials, broadcasts = classified
+    states, state_import = (partials, "P") if (splits or partials) else (broadcasts, "B")
+    if not splits and not states:
         return None
+    if states and ctx is not None:
+        ctx.use(PythonExpr((f"from tilefoundry.ir.types.shard import {state_import}",), state_import))
 
     c_strides = try_c_order_strides(layout.shape)
     explicit = layout.strides is not None and layout.strides != c_strides
@@ -341,7 +343,7 @@ def _shard_layout_surface_str(
     axis_tuple = f"({dim_str})"
 
     stride_str = _shape_tuple(layout.strides) if explicit else None
-    value_set = "{" + ", ".join(partials) + "}" if partials else None
+    value_set = "{" + ", ".join(states) + "}" if states else None
 
     if stride_str is None and value_set is None:
         return axis_tuple
@@ -369,7 +371,7 @@ def shard_compact_inline(
     classified = _classify_shard_attrs(sl, mesh_name)
     if classified is None:
         return None
-    splits, partials = classified
+    splits, partials, _broadcasts = classified
     la2ta = layout_axis_to_tensor_axis(layout.shape, tensor_shape)
     split_ref: dict[int, str] = {}
     for layout_axis, refs in splits.items():
@@ -969,13 +971,7 @@ def _emit_def(
             layout_kw = ""
             if isinstance(target.layout, ShardLayout):
                 layout_text = _shard_layout_str(
-                    target.layout,
-                    indent=indent_here + "    ",
-                    mesh_ref=(
-                        mesh_map.get(id(target.layout.mesh))
-                        if target.layout.mesh.names
-                        else None
-                    ),
+                    target.layout, indent=indent_here + "    ", mesh_map=mesh_map
                 )
                 layout_kw = ", layout=" + layout_text
             elif target.layout is not None:
@@ -1063,7 +1059,9 @@ def _emit_def(
                     literal = repr(value)
                 attr_strs.append(f"{param.name}={literal}")
             elif isinstance(value, ShardLayout):
-                sl_str = _shard_layout_str(value, indent=indent_here + "        ")
+                sl_str = _shard_layout_str(
+                    value, indent=indent_here + "        ", mesh_map=mesh_map
+                )
                 attr_strs.append(f"{param.name}={sl_str}")
             elif isinstance(value, TensorType):
                 attr_strs.append(f"{param.name}={_compact_type(value, {})}")
@@ -1268,7 +1266,6 @@ def _emit_def(
 
 _HIR_RENDERER = HirPrinter()
 _dtype_str = _HIR_RENDERER.dtype_str
-_mesh_name_map = _HIR_RENDERER.mesh_name_map
 _pattern_ctor = _HIR_RENDERER.render_pattern
 
 
@@ -1298,30 +1295,13 @@ def _mesh_str(mesh: Mesh, indent: str = "") -> str:
     return _type_str(mesh, indent=indent)
 
 
-def _shard_layout_str(sl: ShardLayout, indent: str = "", *, mesh_ref=None) -> str:
-    ctx = HirPrintContext({id(sl.mesh): mesh_ref} if mesh_ref is not None else None)
-    return _type_str(sl, ctx, indent)
+def _shard_layout_str(sl: ShardLayout, indent: str = "", *, mesh_map=None) -> str:
+    """A shard layout in an attribute slot, named from the printed mesh prelude."""
+    return _type_str(sl, HirPrintContext(mesh_map), indent)
 
 
 def _tensor_annotation(ty: TensorType, *, mesh_name_map=None, indent="", is_const=False) -> str:
     return _type_str(ty, HirPrintContext(mesh_name_map), indent, is_const=is_const)
-
-
-def _bound_mesh_aliases(
-    names: dict[int, str], meshes: dict[int, Mesh], scope_mesh_ids: set[int]
-) -> dict[int, str]:
-    """Keep only the aliases the mesh prelude actually binds.
-
-    A mesh with no named axes that no scope enters gets no prelude line, so
-    naming it inside a printed type would emit an undefined reference. Names
-    are assigned over every mesh first, so dropping the unbound ones here does
-    not renumber the meshes that remain.
-    """
-    return {
-        mid: name
-        for mid, name in names.items()
-        if meshes[mid].names or mid in scope_mesh_ids
-    }
 
 
 def _collect_all_meshes(
@@ -1342,15 +1322,48 @@ def _collect_all_meshes(
     return type_meshes, scope_meshes
 
 
-def _dedup_meshes(meshes: dict[int, Mesh]) -> dict[int, Mesh]:
-    """Collapse structurally identical descriptors before naming hoisted meshes."""
-    result: dict[int, Mesh] = {}
+def _mesh_name_map(meshes: dict[int, Mesh]) -> dict[int, str]:
+    """Name every mesh identity, sharing one name per structural descriptor.
+
+    A composed mesh is rebuilt at each use site, so one descriptor reaches the
+    printer under several identities. Naming those apart would emit a prelude
+    line per copy and make the annotations read as if they named different
+    meshes.
+    """
+    used: set[str] = set()
+    by_signature: dict[str, str] = {}
+    result: dict[int, str] = {}
     for identity, mesh in meshes.items():
         signature = _mesh_str(mesh)
-        if any(signature == _mesh_str(existing) for existing in result.values()):
-            continue
-        result[identity] = mesh
+        name = by_signature.get(signature)
+        if name is None:
+            base = mesh.topologies[0].name if mesh.topologies else "mesh"
+            name, suffix = base, 2
+            while name in used:
+                name = f"{base}_{suffix}"
+                suffix += 1
+            used.add(name)
+            by_signature[signature] = name
+        result[identity] = name
     return result
+
+
+def _bound_mesh_aliases(
+    names: dict[int, str], meshes: dict[int, Mesh], scope_mesh_ids: set[int]
+) -> dict[int, str]:
+    """Keep only the aliases the mesh prelude actually binds.
+
+    A mesh with no named axes that no scope enters gets no prelude line, so
+    naming it inside a printed type would emit an undefined reference. Names
+    are assigned over every mesh first, so dropping the unbound ones here does
+    not renumber the meshes that remain.
+    """
+    bound = {
+        names[identity]
+        for identity, mesh in meshes.items()
+        if mesh.names or identity in scope_mesh_ids
+    }
+    return {identity: name for identity, name in names.items() if name in bound}
 
 
 def _emit_header(
@@ -1443,20 +1456,21 @@ def _emit_header(
         lines.append("")
 
 
-    if any(mesh.names or mid in (scope_mesh_ids or ()) for mid, mesh in meshes.items()):
-        for mid, mesh in meshes.items():
-            if not mesh.names and mid not in (scope_mesh_ids or ()):
-                continue
-            name = mesh_map[mid]
-            topologies = _topologies_str(mesh)
-            names_repr = repr(tuple(mesh.names)) if mesh.names else "()"
-            lines.append(
-                f"{name} = Mesh("
-                f"{topologies}, "
-                f"{_layout_str(mesh.layout)}, "
-                f"names={names_repr}"
-                f")"
-            )
+    prelude: dict[str, Mesh] = {}
+    for identity, mesh in meshes.items():
+        name = mesh_map.get(identity)
+        if name is not None:
+            prelude.setdefault(name, mesh)
+    for name, mesh in prelude.items():
+        names_repr = repr(tuple(mesh.names)) if mesh.names else "()"
+        lines.append(
+            f"{name} = Mesh("
+            f"{_topologies_str(mesh)}, "
+            f"{_layout_str(mesh.layout)}, "
+            f"names={names_repr}"
+            f")"
+        )
+    if prelude:
         lines.append("")
     return lines
 
@@ -1589,7 +1603,21 @@ def module_to_python(fn: HirFunction, module_name: str = "M") -> str:
 
 def _module_hir_functions(mod: Module) -> tuple[HirFunction, ...]:
     """The Module's HIR functions."""
-    return tuple(fn for fn in mod.functions if isinstance(fn, HirFunction))
+    return tuple(fn for fn in _emission_order(mod) if isinstance(fn, HirFunction))
+
+
+def _emission_order(mod: Module) -> tuple:
+    """A Module's functions in the order the printed class body binds them.
+
+    The entry goes last: a body calling a sibling names the attribute the class
+    body already bound, so every callee must be written before it. Mesh
+    collection reads the same order, so the printed mesh prelude does not
+    depend on the order the authored source happened to use.
+    """
+    functions = mod.functions
+    entry = mod.entry_function() if functions and mod.entry is not None else None
+    ordered = tuple(fn for fn in functions if fn is not entry)
+    return ordered + (entry,) if entry is not None else ordered
 
 
 def _module_tree_functions(mod: Module) -> tuple[HirFunction, ...]:
@@ -1629,12 +1657,8 @@ def _emit_module_class(
     Children first, because a body calling one names the attribute it is bound
     to and a class body binds in the order it is written.
     """
-    functions = mod.functions
-    entry = mod.entry_function() if functions and mod.entry is not None else None
     lines = [_module_decorator_line(mod, mod.entry), f"class {module_name}:"]
-    ordered = tuple(fn for fn in functions if fn is not entry)
-    if entry is not None:
-        ordered += (entry,)
+    ordered = _emission_order(mod)
     child_entries = {
         id(child.entry_function()): child.name
         for child in mod.modules

@@ -94,9 +94,23 @@ dim-expr              ::= integer-literal
                           | dim-expr ('+' | '-' | '*' | '//' | '%') dim-expr
                           | (identifier | primary '.' identifier) '(' (dim-expr (',' dim-expr)*)?
                             ')'
-placed-shape          ::= '(' ((expression '@' ('(' mesh-axis (',' mesh-axis)* ')' | mesh-axis) |
-                          dim-expr) (',' (expression '@' ('(' mesh-axis (',' mesh-axis)* ')' |
-                          mesh-axis) | dim-expr))*)? ')'
+placed-shape          ::= '(' '(' ((expression '@' ('(' mesh-axis (',' mesh-axis)* ')' | mesh-axis)
+                            | dim-expr) (',' (expression '@' ('(' mesh-axis (',' mesh-axis)* ')' |
+                            mesh-axis) | dim-expr))*)? ')' ',' '(' (dim-expr (',' dim-expr)*)? ')'
+                            ',' '{' mesh-axis '@' ('B' '(' ')' | 'P' '(' string-literal ')') (','
+                            mesh-axis '@' ('B' '(' ')' | 'P' '(' string-literal ')'))* '}' ')'
+                          | '(' '(' ((expression '@' ('(' mesh-axis (',' mesh-axis)* ')' |
+                            mesh-axis) | dim-expr) (',' (expression '@' ('(' mesh-axis (','
+                            mesh-axis)* ')' | mesh-axis) | dim-expr))*)? ')' ',' '(' (dim-expr (','
+                            dim-expr)*)? ')' ')'
+                          | '(' '(' ((expression '@' ('(' mesh-axis (',' mesh-axis)* ')' |
+                            mesh-axis) | dim-expr) (',' (expression '@' ('(' mesh-axis (','
+                            mesh-axis)* ')' | mesh-axis) | dim-expr))*)? ')' ',' '{' mesh-axis '@'
+                            ('B' '(' ')' | 'P' '(' string-literal ')') (',' mesh-axis '@' ('B' '('
+                            ')' | 'P' '(' string-literal ')'))* '}' ')'
+                          | '(' ((expression '@' ('(' mesh-axis (',' mesh-axis)* ')' | mesh-axis) |
+                            dim-expr) (',' (expression '@' ('(' mesh-axis (',' mesh-axis)* ')' |
+                            mesh-axis) | dim-expr))*)? ')'
 shape                 ::= '(' (dim-expr (',' dim-expr)*)? ')'
                           | identifier
                           | primary '.' identifier
@@ -133,15 +147,27 @@ expression            ::= literal
                           | subscript
 call                  ::= expression '(' ((expression | keyword-name '=' expression) (','
                           (expression | keyword-name '=' expression))*)? ')'
-explicit-layout       ::= '(' (tensor-shape-layout | shape) ',' shape ')'
-placed-layout         ::= '(' ((expression '@' ('(' mesh-axis (',' mesh-axis)* ')' | mesh-axis) |
-                          dim-expr) (',' (expression '@' ('(' mesh-axis (',' mesh-axis)* ')' |
-                          mesh-axis) | dim-expr))*)? ')'
+placed-layout         ::= '(' '(' ((expression '@' ('(' mesh-axis (',' mesh-axis)* ')' | mesh-axis)
+                            | dim-expr) (',' (expression '@' ('(' mesh-axis (',' mesh-axis)* ')' |
+                            mesh-axis) | dim-expr))*)? ')' ',' '(' (dim-expr (',' dim-expr)*)? ')'
+                            ',' '{' mesh-axis '@' ('B' '(' ')' | 'P' '(' string-literal ')') (','
+                            mesh-axis '@' ('B' '(' ')' | 'P' '(' string-literal ')'))* '}' ')'
+                          | '(' '(' ((expression '@' ('(' mesh-axis (',' mesh-axis)* ')' |
+                            mesh-axis) | dim-expr) (',' (expression '@' ('(' mesh-axis (','
+                            mesh-axis)* ')' | mesh-axis) | dim-expr))*)? ')' ',' '(' (dim-expr (','
+                            dim-expr)*)? ')' ')'
+                          | '(' '(' ((expression '@' ('(' mesh-axis (',' mesh-axis)* ')' |
+                            mesh-axis) | dim-expr) (',' (expression '@' ('(' mesh-axis (','
+                            mesh-axis)* ')' | mesh-axis) | dim-expr))*)? ')' ',' '{' mesh-axis '@'
+                            ('B' '(' ')' | 'P' '(' string-literal ')') (',' mesh-axis '@' ('B' '('
+                            ')' | 'P' '(' string-literal ')'))* '}' ')'
+                          | '(' ((expression '@' ('(' mesh-axis (',' mesh-axis)* ')' | mesh-axis) |
+                            dim-expr) (',' (expression '@' ('(' mesh-axis (',' mesh-axis)* ')' |
+                            mesh-axis) | dim-expr))*)? ')'
 plain-layout          ::= '(' (dim-expr (',' dim-expr)*)? ')'
 layout                ::= None
                           | primary
                           | call
-                          | explicit-layout
                           | placed-layout
                           | plain-layout
 storage               ::= string-literal
@@ -242,10 +268,8 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | --- | --- | --- | --- | --- |
 | binary_expression, matmul_expression, op_call, unary_expression | expression, slice_endpoint, subscript_index | CallBindingRule | A call must bind its arguments into a Call tuple. | src/tilefoundry/parser/pattern_nodes.py |
 | binary_expression, matmul_expression, op_call, unary_expression | expression, slice_endpoint, subscript_index | CallTypeInferenceRule | A call's result type must be inferred from its binding. | src/tilefoundry/parser/pattern_nodes.py |
-| dim_expr | dim_expr, layout_extent, layout_shape, tensor_dim_expr, tensor_optional_slot, tensor_shape | ShapeDimRule | A shape dimension must be an integer, DimVar, or expression. | src/tilefoundry/parser/ast_pattern.py |
+| dim_expr | dim_expr, layout_extent, tensor_dim_expr, tensor_optional_slot, tensor_shape | ShapeDimRule | A shape dimension must be an integer, DimVar, or expression. | src/tilefoundry/parser/ast_pattern.py |
 | dtype | tensor_dtype | CanonicalDTypeRule | A dtype must resolve to a canonical DType. | src/tilefoundry/parser/ast_pattern.py |
-| explicit_layout, layout, placed_layout, plain_layout | tensor_optional_slot | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
-| explicit_layout, layout, placed_layout, plain_layout | tensor_optional_slot | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
 | function | function | FunctionDialectRule | A function kind and constructed value must agree with the active dialect. | src/tilefoundry/parser/pattern_nodes.py |
 | function | function | FunctionRegistrationRule | A validated function must be registered exactly once in its owning scope. | src/tilefoundry/parser/pattern_nodes.py |
 | function | function | FunctionReturnCompatibilityRule | A HIR body with a return annotation must satisfy that annotation; a dispatch prototype must declare one, and each variant body must satisfy the prototype return contract. | src/tilefoundry/parser/pattern_nodes.py |
@@ -253,12 +277,14 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | function | function | FunctionSignatureRule | A function must construct an ordered parameter tuple. | src/tilefoundry/parser/pattern_nodes.py |
 | if, while | loop_statement, statement | TirOnlyStatementRule | A TIR-only statement must appear in a prim_func. | src/tilefoundry/parser/pattern_nodes.py |
 | index_slice | subscript_index | TileWindowSliceBoundRule | A tile window cannot be used as a slice bound. | src/tilefoundry/parser/pattern_nodes.py |
+| layout, placed_layout, plain_layout | tensor_optional_slot | LayoutPositionRule | A layout must be legal for its parser position. | src/tilefoundry/parser/ast_pattern.py |
+| layout, placed_layout, plain_layout | tensor_optional_slot | LayoutShapeRule | A layout must have a valid non-boolean shape. | src/tilefoundry/parser/ast_pattern.py |
 | module | module_finalization | ModuleFinalizationRule | A module declaration must contain valid unique members and a resolvable entry. | src/tilefoundry/parser/ast_pattern.py |
 | module | module_function | ModuleFunctionRegistrationRule | A validated module function must be recorded in declaration order. | src/tilefoundry/parser/ast_pattern.py |
 | module | module_function | ModuleFunctionValidationRule | A module function must satisfy its root, variant, or converter role before mutation. | src/tilefoundry/parser/ast_pattern.py |
 | op_call | expression, slice_endpoint, subscript_index | CallVariadicInputFormRule | A variadic call must use one explicit list, tuple, or supported static list comprehension. | src/tilefoundry/parser/pattern_nodes.py |
-| placed_shape | layout_shape, tensor_shape | PlacedShapeRule | Placement sugar in a shape slot states both a shape and a layout. | src/tilefoundry/parser/ast_pattern.py |
-| shape | layout_shape, layout_strides, tensor_shape | ShapeTupleRule | A shape must construct a tuple of dimensions. | src/tilefoundry/parser/ast_pattern.py |
+| placed_shape | tensor_shape | PlacedShapeRule | Placement sugar in a shape slot states both a shape and a layout. | src/tilefoundry/parser/ast_pattern.py |
+| shape | tensor_shape | ShapeTupleRule | A shape must construct a tuple of dimensions. | src/tilefoundry/parser/ast_pattern.py |
 | storage | tensor_optional_slot | StorageValueRule | Storage must resolve to a StorageKind. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | annotation, expression, slice_endpoint, subscript_index, type_annotation | TensorLayoutStorageRule | A tensor type must contain compatible layout and storage values. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | annotation, expression, slice_endpoint, subscript_index, type_annotation | TensorPositionRule | A tensor type's storage must be legal for its dialect and position. | src/tilefoundry/parser/ast_pattern.py |

@@ -17,7 +17,7 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard import c_order_strides
-from tilefoundry.ir.types.shard.layout import Layout
+from tilefoundry.ir.types.shard.layout import Layout, LayoutBase
 from tilefoundry.visitor_registry import register_typeinfer
 
 
@@ -31,7 +31,7 @@ class TensorView(Op):
     """
 
     memory = ParamDef(kind="input", pattern=Tensor)
-    layout = ParamDef(kind="attribute", annotation=object)
+    layout = ParamDef(kind="attribute", annotation=LayoutBase)
     shape = ParamDef(kind="attribute", annotation=tuple, default=None)
 
 

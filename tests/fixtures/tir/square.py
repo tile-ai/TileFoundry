@@ -4,7 +4,7 @@ from tilefoundry import module, prim_func
 from tilefoundry.dsl import DimVar, T, Tensor
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.pattern import DimVarRangePat
-from tilefoundry.ir.types.shard import Layout, Mesh, S, ShardLayout, Topology
+from tilefoundry.ir.types.shard import Layout, Mesh, Topology
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _S = DimVar("S", 1, 256)
@@ -18,14 +18,9 @@ class TirSquare:
 
     @square_device.specialize(DimVarRangePat("S", 1, 127))
     def square_small(x: Tensor[(_S,), "f32"]):
-        with Mesh((Topology("thread", 128),), Layout((128,), (1,))) as thread:
-            view = T.tensor_view(x, layout=ShardLayout(layout=Layout(shape=(128,), strides=(1,)), attrs=(S(0),), mesh=Mesh(topologies=(Topology(name="thread", size=128),), layout=Layout(shape=(128,), strides=(1,)), names=())))
-            reg = T.alloc_tensor(tensor_type=Tensor[(128,), "f32",
-                ShardLayout(
-                    layout=Layout((128,), (1,)),
-                    attrs=(S(0),),
-                    mesh=Mesh((Topology("thread", 128),), Layout((128,), (1,))),
-                ), "rmem"])
+        with Mesh((Topology("thread", 128),), Layout((128,), (1,)), names=('t',)) as thread:
+            view = T.tensor_view(x, layout=(128 @ thread.t,))
+            reg = T.alloc_tensor(tensor_type=Tensor[(128,), "f32", (128 @ thread.t,), "rmem"])
             for phase in range(0, 2, 1):
                 if phase < 1:
                     T.copy(view, reg)
@@ -36,14 +31,9 @@ class TirSquare:
 
     @square_device.specialize(DimVarRangePat("S", 128, 255))
     def square_large(x: Tensor[(_S,), "f32"]):
-        with Mesh((Topology("thread", 128),), Layout((128,), (1,))) as thread:
-            view = T.tensor_view(x, layout=ShardLayout(layout=Layout(shape=(128,), strides=(1,)), attrs=(S(0),), mesh=Mesh(topologies=(Topology(name="thread", size=128),), layout=Layout(shape=(128,), strides=(1,)), names=())))
-            reg = T.alloc_tensor(tensor_type=Tensor[(128,), "f32",
-                ShardLayout(
-                    layout=Layout((128,), (1,)),
-                    attrs=(S(0),),
-                    mesh=Mesh((Topology("thread", 128),), Layout((128,), (1,))),
-                ), "rmem"])
+        with Mesh((Topology("thread", 128),), Layout((128,), (1,)), names=('t',)) as thread:
+            view = T.tensor_view(x, layout=(128 @ thread.t,))
+            reg = T.alloc_tensor(tensor_type=Tensor[(128,), "f32", (128 @ thread.t,), "rmem"])
             for phase in range(0, 2, 1):
                 if phase < 1:
                     T.copy(view, reg)

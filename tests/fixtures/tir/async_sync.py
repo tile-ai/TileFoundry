@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
-from tilefoundry.ir.types.shard import Layout, Mesh, S, ShardLayout, Topology
+from tilefoundry.ir.types.shard import Layout, Mesh, Topology
 from tilefoundry.target import CpuTarget, CudaTarget
 
 
@@ -11,14 +11,9 @@ class AsyncStage:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def async_stage_device(a: Tensor[(128, 4), "f32"], b: Tensor[(128, 4), "f32"]):
         with Mesh((Topology("thread", 128),), Layout((128,), (1,)), names=('t',)) as m:
-            a_view = T.tensor_view(a, layout=ShardLayout(layout=Layout(shape=(128, 4), strides=(4, 1)), attrs=(S(0),), mesh=Mesh(topologies=(Topology(name="thread", size=128),), layout=Layout(shape=(128,), strides=(1,)), names=("t",))))
-            shared = T.alloc_tensor(tensor_type=Tensor[(128, 4), "f32",
-                ShardLayout(
-                    layout=Layout((128, 4), (4, 1)),
-                    attrs=(S(0),),
-                    mesh=Mesh((Topology("thread", 128),), Layout((128,), (1,)), names=('t',)),
-                ), "smem"])
-            b_view = T.tensor_view(b, layout=ShardLayout(layout=Layout(shape=(128, 4), strides=(4, 1)), attrs=(S(0),), mesh=Mesh(topologies=(Topology(name="thread", size=128),), layout=Layout(shape=(128,), strides=(1,)), names=("t",))))
+            a_view = T.tensor_view(a, layout=(128 @ m.t, 4))
+            shared = T.alloc_tensor(tensor_type=Tensor[(128, 4), "f32", (128 @ m.t, 4), "smem"])
+            b_view = T.tensor_view(b, layout=(128 @ m.t, 4))
             T.copy_async(a_view, shared)
             T.cp_async_commit()
             T.cp_async_wait(n=0)

@@ -67,8 +67,7 @@ class PythonTypePrinter(TypeFunctor[str]):
         mesh_name = ctx.mesh_alias(value.mesh) if ctx is not None else None
         if mesh_name is None or not value.mesh.names:
             return None
-        count = ctx.mesh_count() if ctx is not None and hasattr(ctx, "mesh_count") else 1
-        return _shard_layout_surface_str(value, mesh_name=mesh_name, mesh_unique=count == 1)
+        return _shard_layout_surface_str(value, mesh_name=mesh_name, ctx=ctx)
 
     def visit_TensorType(self, value: TensorType, ctx=None) -> str:
         result = (
@@ -138,6 +137,9 @@ class PythonTypePrinter(TypeFunctor[str]):
         )
 
     def visit_ShardLayout(self, value: ShardLayout, ctx=None) -> str:
+        surface = self.shard_surface(value, ctx)
+        if surface is not None:
+            return surface
         if ctx is not None:
             ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import ShardLayout",), ""))
         outer, child = self._indent, self._indent + "    "

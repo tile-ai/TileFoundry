@@ -69,15 +69,3 @@ class PythonPrinter(PythonTypePrinter, ExprFunctor[str]):
             return f'DimVarRangePat("{pattern.dim_var}", {pattern.lo}, {pattern.hi})'
         return repr(pattern)
 
-    def mesh_name_map(self, meshes: dict[int, Mesh]) -> dict[int, str]:
-        used: set[str] = set()
-        result: dict[int, str] = {}
-        for identity, mesh in meshes.items():
-            base = mesh.topologies[0].name if mesh.topologies else "mesh"
-            name, suffix = base, 2
-            while name in used:
-                name = f"{base}_{suffix}"
-                suffix += 1
-            used.add(name)
-            result[identity] = name
-        return result

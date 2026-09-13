@@ -305,81 +305,6 @@ class DTypePattern(ElementPattern):
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (CanonicalDTypeRule(),)
 
 
-class ExplicitLayoutPattern(ElementPattern):
-    element_name = "explicit_layout"
-    syntax = LazyPattern(
-        lambda: BranchPattern(
-            "explicit_layout",
-            AstNodePattern(
-                ast.Tuple,
-                FieldPattern(
-                    "elts",
-                    SequencePattern(
-                        AstNodePattern(
-                            ast.Tuple,
-                            ChoicePattern(
-                                ConditionPattern(
-                                    "active Mesh",
-                                    lambda node, context: (
-                                        context.function is not None
-                                        and bool(context.function.state.mesh_stack)
-                                    ),
-                                    ChildPattern(
-                                        "shape",
-                                        lambda: TensorShapeLayoutPattern(),
-                                        "layout_shape",
-                                        "layout_shape",
-                                    ),
-                                ),
-                                ChildPattern(
-                                    "shape",
-                                    lambda: ShapePattern(),
-                                    "layout_shape",
-                                    "layout_shape",
-                                ),
-                            ),
-                        ),
-                        AstNodePattern(
-                            ast.Tuple,
-                            ChildPattern(
-                                "strides",
-                                lambda: ShapePattern(),
-                                "layout_strides",
-                                "layout_strides",
-                            ),
-                        ),
-                    ),
-                ),
-            ),
-            pattern_id="tensor.layout.explicit",
-        )
-    )
-
-    @staticmethod
-    def construct(match, children, context):
-        shape_or_layout = children["shape"]
-        strides = children["strides"]
-        if isinstance(shape_or_layout, runtime.ShardLayout):
-            shape = shape_or_layout.layout.shape
-        else:
-            shape = shape_or_layout
-        if len(shape) != len(strides):
-            raise ParseError.from_node(match.node, context, "layout shape/stride rank mismatch")
-        layout = runtime.Layout(shape=shape, strides=strides)
-        if isinstance(shape_or_layout, runtime.ShardLayout):
-            return runtime.ShardLayout(
-                layout=layout,
-                attrs=shape_or_layout.attrs,
-                mesh=shape_or_layout.mesh,
-            )
-        return layout
-
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = (
-        LayoutShapeRule(),
-        LayoutPositionRule(),
-    )
-
-
 class PlainLayoutPattern(ElementPattern):
     element_name = "plain_layout"
     syntax = LazyPattern(
@@ -514,41 +439,167 @@ class PlacedLayout:
     layout: object
 
 
-class PlacedLayoutPattern(ElementPattern):
-    element_name = "placed_layout"
-    syntax = LazyPattern(
-        lambda: BindPattern(
-            AstNodePattern(
-                ast.Tuple,
-                FieldPattern(
-                    "elts",
-                    RepeatPattern(
+def _layout_dims() -> AstPattern[Any]:
+    """``(extent, extent @ axis, ...)`` — the layout's own divided dimensions."""
+    return AstNodePattern(
+        ast.Tuple,
+        FieldPattern(
+            "elts",
+            RepeatPattern(
+                ChoicePattern(
+                    AstNodePattern(
+                        ast.BinOp,
+                        FieldPattern("op", AstNodePattern(ast.MatMult)),
+                        FieldPattern("left", AstNodePattern(ast.expr)),
+                        FieldPattern(
+                            "right",
+                            ChoicePattern(
+                                AstNodePattern(
+                                    ast.Tuple,
+                                    FieldPattern(
+                                        "elts", RepeatPattern(MeshAxisPattern(), minimum=1)
+                                    ),
+                                ),
+                                MeshAxisPattern(),
+                            ),
+                        ),
+                    ),
+                    DimExprPattern(),
+                )
+            ),
+        ),
+    )
+
+
+def _layout_strides() -> AstPattern[Any]:
+    """``(stride, ...)`` — how the divided positions are addressed."""
+    return AstNodePattern(ast.Tuple, FieldPattern("elts", RepeatPattern(DimExprPattern())))
+
+
+def _value_states() -> AstPattern[Any]:
+    """``{axis @ B(), axis @ P("sum")}`` — what unsplit mesh axes hold."""
+    return AstNodePattern(
+        ast.Set,
+        FieldPattern(
+            "elts",
+            RepeatPattern(
+                AstNodePattern(
+                    ast.BinOp,
+                    FieldPattern("op", AstNodePattern(ast.MatMult)),
+                    FieldPattern("left", MeshAxisPattern()),
+                    FieldPattern(
+                        "right",
                         ChoicePattern(
                             AstNodePattern(
-                                ast.BinOp,
-                                FieldPattern("op", AstNodePattern(ast.MatMult)),
-                                FieldPattern("left", AstNodePattern(ast.expr)),
+                                ast.Call,
                                 FieldPattern(
-                                    "right",
-                                    ChoicePattern(
+                                    "func",
+                                    AstNodePattern(
+                                        ast.Name, FieldPattern("id", LiteralPattern("B"))
+                                    ),
+                                ),
+                                FieldPattern("args", SequencePattern()),
+                            ),
+                            AstNodePattern(
+                                ast.Call,
+                                FieldPattern(
+                                    "func",
+                                    AstNodePattern(
+                                        ast.Name, FieldPattern("id", LiteralPattern("P"))
+                                    ),
+                                ),
+                                FieldPattern(
+                                    "args",
+                                    SequencePattern(
                                         AstNodePattern(
-                                            ast.Tuple,
-                                            FieldPattern(
-                                                "elts",
-                                                RepeatPattern(
-                                                    MeshAxisPattern(),
-                                                    minimum=1,
-                                                ),
-                                            ),
-                                        ),
-                                        MeshAxisPattern(),
+                                            ast.Constant,
+                                            FieldPattern("value", LiteralPattern(value_type=str)),
+                                        )
                                     ),
                                 ),
                             ),
-                            DimExprPattern(),
-                        )
+                        ),
                     ),
                 ),
+                minimum=1,
+            ),
+        ),
+    )
+
+
+def _layout_sugar_parts(node: object):
+    """Split layout sugar into its dims, its strides, and its value states.
+
+    ``(d, ...)`` states dims alone. Wrapping the dims in a tuple adds an
+    optional stride tuple and an optional ``{axis @ B(), axis @ P("sum")}``
+    set, in that order, so one production reads every form the printer emits.
+    Return ``None`` when the node is not layout sugar at all.
+    """
+    if not isinstance(node, ast.Tuple) or not node.elts:
+        return None
+    head, *extras = node.elts
+    if not extras or not isinstance(head, ast.Tuple):
+        return node, None, None
+    strides: ast.Tuple | None = None
+    states: ast.Set | None = None
+    for extra in extras:
+        if isinstance(extra, ast.Tuple) and strides is None and states is None:
+            strides = extra
+        elif isinstance(extra, ast.Set) and states is None:
+            states = extra
+        else:
+            return None
+    return head, strides, states
+
+
+def _value_state_parts(node: ast.AST):
+    """Read ``axis @ B()`` or ``axis @ P("reduction")`` as axis node and state."""
+    if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.MatMult):
+        return None
+    call = node.right
+    if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name) or call.keywords:
+        return None
+    if call.func.id == "B" and not call.args:
+        return node.left, "B", None
+    if call.func.id == "P" and len(call.args) == 1:
+        reduction = call.args[0]
+        if isinstance(reduction, ast.Constant) and isinstance(reduction.value, str):
+            if reduction.value:
+                return node.left, "P", reduction.value
+    return None
+
+
+class PlacedLayoutPattern(ElementPattern):
+    """The layout a placement states: split dims, strides, and value states.
+
+    One production covers the whole sugar surface because the parts are not
+    independent answers: the dims say how the layout is divided, the strides
+    say how the divided positions are addressed, and the value-state set says
+    what every mesh axis the dims did not split holds. Splitting them across
+    patterns is what let the printer emit a stride tuple beside a placement
+    that nothing could read back.
+    """
+
+    element_name = "placed_layout"
+    syntax = LazyPattern(
+        lambda: BindPattern(
+            ChoicePattern(
+                AstNodePattern(
+                    ast.Tuple,
+                    FieldPattern(
+                        "elts",
+                        SequencePattern(_layout_dims(), _layout_strides(), _value_states()),
+                    ),
+                ),
+                AstNodePattern(
+                    ast.Tuple,
+                    FieldPattern("elts", SequencePattern(_layout_dims(), _layout_strides())),
+                ),
+                AstNodePattern(
+                    ast.Tuple,
+                    FieldPattern("elts", SequencePattern(_layout_dims(), _value_states())),
+                ),
+                _layout_dims(),
             ),
             PlacedLayoutPattern._bind,
         )
@@ -570,11 +621,15 @@ class PlacedLayoutPattern(ElementPattern):
 
     @staticmethod
     def _bind(node: object, context: MatchContext, matched: AstMatch[Any]) -> AstMatch[Any] | None:
-        assert isinstance(node, ast.Tuple)
+        parts = _layout_sugar_parts(node)
+        if parts is None:
+            return None
+        dims_node, strides_node, states_node = parts
         children: list[AstChild] = []
         bindings: list[tuple[str, int]] = []
+        states: list[tuple[str, str, str | None]] = []
         found_placement = False
-        for tensor_axis, item in enumerate(node.elts):
+        for tensor_axis, item in enumerate(dims_node.elts):
             placement = PlacedLayoutPattern._placement_parts(item)
             extent_node = item
             axis_nodes: tuple[ast.AST, ...] = ()
@@ -608,7 +663,41 @@ class PlacedLayoutPattern(ElementPattern):
                         "mesh_axis",
                     )
                 )
-        if not found_placement:
+        if strides_node is not None:
+            for index, item in enumerate(strides_node.elts):
+                stride_context = context.child(situation="layout_strides", role="layout_strides")
+                if DimExprPattern().match(item, stride_context) is None:
+                    return None
+                children.append(
+                    AstChild(
+                        f"stride_{index}",
+                        DimExprPattern(),
+                        item,
+                        "layout_strides",
+                        "layout_strides",
+                    )
+                )
+        if states_node is not None:
+            for index, item in enumerate(states_node.elts):
+                state = _value_state_parts(item)
+                if state is None:
+                    return None
+                axis_node, kind, reduction = state
+                axis_context = context.child(situation="mesh_axis", role="mesh_axis")
+                if MeshAxisPattern().match(axis_node, axis_context) is None:
+                    return None
+                child_name = f"state_{index}"
+                states.append((child_name, kind, reduction))
+                children.append(
+                    AstChild(
+                        child_name,
+                        MeshAxisPattern(),
+                        axis_node,
+                        "mesh_axis",
+                        "mesh_axis",
+                    )
+                )
+        if not found_placement and not states and strides_node is None:
             return None
         return dataclasses.replace(
             matched,
@@ -616,8 +705,10 @@ class PlacedLayoutPattern(ElementPattern):
             branch_id="placed_layout",
             captures={
                 **matched.captures,
-                "rank": len(node.elts),
+                "rank": len(dims_node.elts),
+                "stride_rank": None if strides_node is None else len(strides_node.elts),
                 "bindings": tuple(bindings),
+                "states": tuple(states),
             },
             children=tuple(children),
         )
@@ -626,11 +717,27 @@ class PlacedLayoutPattern(ElementPattern):
     def construct(match, children, context):
         rank = match.captures["rank"]
         shape = tuple(children[f"extent_{axis}"] for axis in range(rank))
-        bindings = tuple(
+        stride_rank = match.captures.get("stride_rank")
+        strides = (
+            None
+            if stride_rank is None
+            else tuple(children[f"stride_{index}"] for index in range(stride_rank))
+        )
+        splits = tuple(
             (*children[child_name], tensor_axis)
             for child_name, tensor_axis in match.captures["bindings"]
         )
-        referenced_ids = {id(mesh) for mesh, _, _ in bindings}
+        states = tuple(
+            (*children[child_name], kind, reduction)
+            for child_name, kind, reduction in match.captures.get("states", ())
+        )
+        if not splits and not states:
+            if strides is not None and len(shape) != len(strides):
+                raise ParseError.from_node(
+                    match.node, context, "layout shape/stride rank mismatch"
+                )
+            return runtime.Layout(shape=shape, strides=strides)
+        referenced_ids = {id(entry[0]) for entry in (*splits, *states)}
         if context.function is None:
             raise ParseError.from_node(
                 match.node, context, "placed layout requires function context"
@@ -639,7 +746,7 @@ class PlacedLayoutPattern(ElementPattern):
             mesh for mesh in context.function.state.mesh_stack if id(mesh) in referenced_ids
         )
         if len(meshes) != len(referenced_ids):
-            meshes = tuple(dict.fromkeys(mesh for mesh, _, _ in bindings))
+            meshes = tuple(dict.fromkeys(entry[0] for entry in (*splits, *states)))
             if len(meshes) != len(referenced_ids):
                 raise ParseError.from_node(
                     match.node, context, "placement references an inactive Mesh"
@@ -659,20 +766,31 @@ class PlacedLayoutPattern(ElementPattern):
             source_offsets[id(source)] = offset
             offset += len(source.layout.shape)
         attrs: list[object] = [runtime.Broadcast() for _ in mesh.layout.shape]
-        for source, source_axis, tensor_axis in bindings:
+        bound: set[int] = set()
+
+        def claim(source, source_axis: int) -> int:
             target_axis = source_offsets[id(source)] + source_axis
-            if not isinstance(attrs[target_axis], runtime.Broadcast):
+            if target_axis in bound:
                 raise ParseError.from_node(match.node, context, "mesh axis is bound more than once")
-            attrs[target_axis] = runtime.Split(tensor_axis)
+            bound.add(target_axis)
+            return target_axis
+
+        for source, source_axis, tensor_axis in splits:
+            attrs[claim(source, source_axis)] = runtime.Split(tensor_axis)
+        for source, source_axis, kind, reduction in states:
+            target_axis = claim(source, source_axis)
+            attrs[target_axis] = Broadcast() if kind == "B" else Partial(reduction)
         try:
             canonical = runtime.canonical_shard_layout(shape, mesh, tuple(attrs))
-            return runtime.ShardLayout(
-                layout=runtime.Layout(shape=canonical.layout.shape, strides=None),
-                attrs=canonical.attrs,
-                mesh=canonical.mesh,
-            )
         except (TypeError, ValueError) as error:
             raise ParseError.from_node(match.node, context, str(error)) from error
+        if strides is not None and len(canonical.layout.shape) != len(strides):
+            raise ParseError.from_node(match.node, context, "layout shape/stride rank mismatch")
+        return runtime.ShardLayout(
+            layout=runtime.Layout(shape=canonical.layout.shape, strides=strides),
+            attrs=canonical.attrs,
+            mesh=canonical.mesh,
+        )
 
     RULES: ClassVar[tuple[AstRule[Any], ...]] = (
         LayoutShapeRule(),
@@ -711,7 +829,6 @@ class LayoutPattern(ElementPattern):
                 ),
                 pattern_id="tensor.layout.call",
             ),
-            ExplicitLayoutPattern(),
             PlacedLayoutPattern(),
             PlainLayoutPattern(),
         )
@@ -4846,7 +4963,6 @@ __all__ = [
     "ConstantPattern",
     "DTypePattern",
     "DimExprPattern",
-    "ExplicitLayoutPattern",
     "ExpressionPattern",
     "ForPattern",
     "FunctionDialectRule",

@@ -85,7 +85,7 @@ def test_an_annotated_layout_sugar_cannot_say_stays_verbose():
 
     Sugar names a mesh axis, so a mesh with no named axes has nothing to name
     and stays verbose without dropping what the verbose form carries. The mesh
-    slot still names a mesh the prelude binds, and spells out one it does not.
+    slot still names the mesh the prelude binds rather than restating it.
     """
     unnamed_axes = as_script(GqaOnline, options=PythonPrintOptions(show_types=True))
     verbose = [
@@ -98,8 +98,11 @@ def test_an_annotated_layout_sugar_cannot_say_stays_verbose():
         assert "layout=Layout(" in annotation and "attrs=(" in annotation
         assert "names=" not in line
         assert "@ " not in annotation
-    assert any("mesh=cta_2," in line for line in verbose)
-    assert any('mesh=Mesh((Topology("cta", ' in line for line in verbose)
+    hoisted = _hoisted_meshes(unnamed_axes)
+    assert hoisted
+    assert all(
+        any(f"mesh={name}," in line for name in hoisted) for line in verbose
+    )
 
     several_meshes = as_script(
         MoEMegaKernel, options=PythonPrintOptions(show_types=True)

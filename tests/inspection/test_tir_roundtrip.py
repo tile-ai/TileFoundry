@@ -18,6 +18,7 @@ from tilefoundry.ir.types import DType, TensorType
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 CANONICAL = tuple(path for path in (FIXTURES / "tir").glob("*.py") if path.name != "layouts.py")
+SUGAR = FIXTURES / "inspection" / "type_printer_sugar.py"
 
 
 def _module_in(path: Path):
@@ -33,10 +34,22 @@ def _module_in(path: Path):
     sorted(path for path in CANONICAL if path.name != "__init__.py"),
     ids=lambda path: path.stem,
 )
-def test_fixture_prints_a_stable_canonical_source(path: Path) -> None:
-    """The shared type printer owns the canonical text, not authored spelling."""
-    printed = as_script(_module_in(path))
-    assert as_script(import_dsl(printed)) == printed
+def test_fixture_prints_back_to_its_own_source(path: Path) -> None:
+    assert as_script(_module_in(path)) == path.read_text()
+
+
+def test_placed_types_print_and_reparse_as_layout_sugar() -> None:
+    """Placement sugar is the whole type surface, and it parses back to itself.
+
+    The golden is the review surface: a value the sugar cannot state would
+    appear here as the verbose ``ShardLayout(...)`` form instead, and a mesh
+    axis the sugar named wrongly would not survive the reparse.
+    """
+    printed = as_script(_module_in(SUGAR))
+
+    assert printed == SUGAR.with_suffix(".printed.txt").read_text()
+    assert "ShardLayout(" not in printed
+    assert as_script(import_dsl(printed, name="TypePrinterSugar")) == printed
 
 
 def test_mixed_hir_tir_module_prints_both_function_families() -> None:

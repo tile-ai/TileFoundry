@@ -178,8 +178,19 @@ executed. A Target subclass with a different constructor customizes ordinary
 DSL text forms for tensor / layout / shard annotations are owned by
 [parser](./parser.md). The printer reuses those forms only when they
 round-trip without losing mesh / layout / storage information;
-otherwise it falls back to the verbose `ShardLayout(...)`. Printer
-output supports two modes derived from the same pretty-print core:
+otherwise it falls back to the verbose `ShardLayout(...)`.
+
+A `ShardLayout` over a plain `Layout` whose `Mesh` has named axes and a
+prelude name ([§2.5](#25-mesh-name-map)) MUST use the placement sugar of
+[parser §2.1](./parser.md#21-syntax), in both type slots and op-attribute
+slots. That sugar states the layout's own dimensions with each `Split` written
+on the dimension it divides, adds the stride tuple when the strides are not
+C-order over those dimensions, and states the remaining mesh axes in a
+`{axis @ ...}` set. Because the parser reads an unstated mesh axis as
+`Broadcast`, the set carries every `Partial` and carries `Broadcast` only when
+no `Split` or `Partial` would otherwise name the mesh.
+
+Printer output supports two modes derived from the same pretty-print core:
 
 - `canonical` — round-trippable text used by `as_script()`, pass
   dumps, and viewer detail `code` blocks: the `Tensor[...]` form of
@@ -204,11 +215,6 @@ is unchanged — a mesh with no named axes, or a layout the sugar cannot express
 still renders verbose, so no annotation loses information. The annotation is
 **display-only** ([§2.7](#27-round-trip-contract)); what round-trips is the
 emitted code, not its comments.
-
-All canonical type values are dispatched through the shared `TypeFunctor` /
-`PythonTypePrinter` implementation. HIR and TIR retain their own function and
-statement printers, but `render_mode()` MUST NOT change the syntax of a
-`TensorType`, `ShardLayout`, `Layout`, `Mesh`, or shard attribute child value.
 
 Canonical DType text is the descriptor's `name`. Tensor annotations and DType
 op attributes MUST emit that name as a quoted DSL string. Compact labels MAY
@@ -236,6 +242,12 @@ The printer collects unique `Mesh` objects from all `ShardLayout`
 references in the function (params, return type, body `Reshard` ops)
 and assigns variable names from the first declared topology's name. Mesh
 definitions are emitted in the module prelude / standalone header.
+
+Two `Mesh` values with the same printed descriptor MUST share one name and one
+prelude definition: a composed mesh is rebuilt at each use site, so naming its
+copies apart would claim the value's parts are placed on different meshes. A
+mesh the prelude does not define MUST NOT be named by a printed type; it is
+restated in full there instead.
 
 ### 2.6 Specialization printing
 
