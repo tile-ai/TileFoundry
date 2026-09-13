@@ -59,7 +59,7 @@ def render_analysis(
         options=PythonPrintOptions(
             show_types=True,
             comment_metadata_types=selected_types_,
-            comment_opt_in=frozenset({"operands", "details"}) if operands else frozenset(),
+            comment_opt_in=frozenset({"operands"}) if operands else frozenset(),
         ),
     )
     labels = {

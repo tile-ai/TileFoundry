@@ -1,1 +1,0 @@
-"""HIR printer fixtures."""
