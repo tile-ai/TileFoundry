@@ -6,6 +6,7 @@ import re
 
 from tilefoundry.inspection.print_context import TirPrintContext
 from tilefoundry.inspection.printer_base import PythonPrinter
+from tilefoundry.inspection.python_type_printer import PythonTypePrinter
 from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
@@ -13,6 +14,7 @@ from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
+from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import (
     Evaluate,
 )
@@ -43,8 +45,16 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
     def dim_entry(self, value, ctx=None) -> str:
         return f"_{value.name}" if hasattr(value, "name") else str(value)
 
-    def visit(self, stmt, ctx=None):  # type: ignore[override]
-        return StmtVisitor.visit(self, stmt)
+    def visit(self, node, ctx=None):  # type: ignore[override]
+        """One dispatch root for the two functor families this printer implements.
+
+        Statements reach the statement visitor; every other value is a type and
+        reaches the inherited type visitor, so ``self.visit(expr.type, ctx)``
+        stays the only way a type is printed.
+        """
+        if isinstance(node, Stmt):
+            return StmtVisitor.visit(self, node)
+        return PythonTypePrinter.visit(self, node, ctx)
 
     def visit_Sequential(self, stmt):
         return [line for child in stmt.body for line in self.visit(child)]
@@ -56,7 +66,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         return self._emit_evaluate(stmt)
 
     def visit_MeshScope(self, stmt):
-        lines = [f"{self.indent}with {self._render_mesh_compact(stmt.mesh, self.context)} as {stmt.binding.name}:"]
+        lines = [f"{self.indent}with {self.visit(stmt.mesh, self.context)} as {stmt.binding.name}:"]
         self.context.push_mesh(stmt.mesh, stmt.binding.name)
         lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body))
         self.context.pop_mesh()
@@ -177,7 +187,7 @@ def _function_block(fn: PrimFunction) -> list[str]:
     lines = [f'_{d.name} = DimVar("{d.name}", {d.lo}, {d.hi})' for d in dim_vars.values()]
     lines.append("@prim_func(target=" + target + ")")
     params = ", ".join(
-        f"{p.name}: {TirPrinter(context=ctx).render_value(p.type, ctx) if isinstance(p.type, TensorType) else repr(p.type)}"
+        f"{p.name}: {TirPrinter(context=ctx).visit(p.type, ctx) if isinstance(p.type, TensorType) else repr(p.type)}"
         for p in fn.params
     )
     lines.append(f"def {_binding_name(fn.name)}({params}):")

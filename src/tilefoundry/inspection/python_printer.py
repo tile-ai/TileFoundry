@@ -105,6 +105,7 @@ class HirPrinter(PythonPrinter):
     def dim_entry(self, value, ctx=None) -> str:
         return shape_entry_str(value)
 
+
 @dataclass(frozen=True)
 class PythonPrintOptions:
     """Optional non-canonical annotations for inspection output."""
@@ -1283,23 +1284,44 @@ def _shape_tuple(shape: tuple) -> str:
     return _HIR_RENDERER.shape_tuple(shape)
 
 
+def _type_str(value, ctx=None, indent: str = "", *, is_const: bool = False) -> str:
+    """Enter the shared type visitor with the caller's block indentation."""
+    with _HIR_RENDERER.type_surface(indent=indent, const=is_const):
+        return _HIR_RENDERER.visit(value, ctx if ctx is not None else HirPrintContext())
+
+
 def _layout_str(layout: LayoutBase | None, indent: str = "") -> str:
-    return _HIR_RENDERER.render_layout(layout, HirPrintContext(), indent)
+    return "None" if layout is None else _type_str(layout, indent=indent)
 
 
 def _mesh_str(mesh: Mesh, indent: str = "") -> str:
-    return _HIR_RENDERER.render_mesh(mesh, HirPrintContext(), indent)
+    return _type_str(mesh, indent=indent)
 
 
 def _shard_layout_str(sl: ShardLayout, indent: str = "", *, mesh_ref=None) -> str:
     ctx = HirPrintContext({id(sl.mesh): mesh_ref} if mesh_ref is not None else None)
-    return _HIR_RENDERER.render_shard_layout(sl, ctx, indent, mesh_ref=mesh_ref)
+    return _type_str(sl, ctx, indent)
 
 
 def _tensor_annotation(ty: TensorType, *, mesh_name_map=None, indent="", is_const=False) -> str:
-    return _HIR_RENDERER.render_tensor_type(
-        ty, HirPrintContext(mesh_name_map), indent, is_const
-    )
+    return _type_str(ty, HirPrintContext(mesh_name_map), indent, is_const=is_const)
+
+
+def _bound_mesh_aliases(
+    names: dict[int, str], meshes: dict[int, Mesh], scope_mesh_ids: set[int]
+) -> dict[int, str]:
+    """Keep only the aliases the mesh prelude actually binds.
+
+    A mesh with no named axes that no scope enters gets no prelude line, so
+    naming it inside a printed type would emit an undefined reference. Names
+    are assigned over every mesh first, so dropping the unbound ones here does
+    not renumber the meshes that remain.
+    """
+    return {
+        mid: name
+        for mid, name in names.items()
+        if meshes[mid].names or mid in scope_mesh_ids
+    }
 
 
 def _collect_all_meshes(
@@ -1507,7 +1529,7 @@ def _render_hir_function(
     indent = "    "
     type_meshes, scope_meshes = _collect_all_meshes(fn)
     meshes = {**type_meshes, **scope_meshes}
-    mesh_map = _mesh_name_map(meshes)
+    mesh_map = _bound_mesh_aliases(_mesh_name_map(meshes), meshes, set(scope_meshes))
     lines = _emit_header(
         fn,
         meshes,
@@ -1668,9 +1690,7 @@ def _module_to_python(
         type_meshes.update(types)
         scope_meshes.update(scopes)
     meshes = {**type_meshes, **scope_meshes}
-    mesh_map = _mesh_name_map(meshes)
-
-
+    mesh_map = _bound_mesh_aliases(_mesh_name_map(meshes), meshes, set(scope_meshes))
 
     dim_vars: dict[str, object] = {}
     for fn in functions:
