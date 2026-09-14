@@ -46,7 +46,11 @@ class MmaTile:
         c: Tensor[(128,), "f32"],
     ):
         atom = T.cuda.mma.atom(op=_OP)
-        with Mesh((Topology("thread", 32),), _MESH_LAYOUT) as m:
+        with Mesh(
+            (Topology("thread", 32),),
+            _MESH_LAYOUT,
+            names=("warp", "lane"),
+        ) as m:
             a_view = T.tensor_view(
                 a,
                 layout=ShardLayout(
