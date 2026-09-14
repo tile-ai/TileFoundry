@@ -1,39 +1,44 @@
 from __future__ import annotations
 
 from tilefoundry import func
-from tilefoundry.dsl.tf import *  # noqa: F401, F403
 from tilefoundry.dsl import Tensor
-from tilefoundry.dsl.storage import gmem, host, rmem, smem, tmem  # noqa: F401
+from tilefoundry.dsl.storage import gmem, rmem, smem
+from tilefoundry.dsl.tf import *  # noqa: F401, F403
 from tilefoundry.ir.types.shard import B, Layout, Mesh, P, S, ShardLayout, Topology
 
-thread = Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane'))
-cta = Mesh((Topology("cta", 4), Topology("thread", 8)), Layout((4, 2, 4), (8, 4, 1)), names=('tile', 'warp', 'lane'))
-cta_2 = Mesh((Topology("cta", 4),), Layout((4,), (1,)), names=('tile',))
-
-@func
+@func(mesh=Mesh((Topology("cta", 4),), Layout((4,), (1,)), names=('tile',)))
 def composed_mesh_pipeline(
     x: Tensor[(8, 4, 16), "f32"],
     seed: Tensor[(16,), "f32"],
-    acc: Tensor[(8, 16), "f32", ((2 @ thread.warp, 4, 16), {thread.lane @ P("sum")}), "rmem"],
-    mixed: Tensor[(8, 16), "f32", ((4 @ cta.tile, 2, 16), {cta.lane @ P("sum")}), "rmem"]
+    acc: Tensor[(8, 16), "f32",
+        ShardLayout(
+            layout=Layout((2, 4, 16), None),
+            attrs=(S(0), P("sum")),
+            mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane')),
+        ), "rmem"],
+    mixed: Tensor[(8, 16), "f32",
+        ShardLayout(
+            layout=Layout((4, 2, 16), None),
+            attrs=(S(0), B(), P("sum")),
+            mesh=Mesh((Topology("cta", 4), Topology("thread", 8)), Layout((4, 2, 4), (8, 4, 1)), names=('tile', 'warp', 'lane')),
+        ), "rmem"]
 ):
-    with cta_2 as _cta_2:  # Tuple[Tensor[(8, 16, 4), "bf16", ((8, 16, 4), (64, 4, 1), {thread.warp @ B(), thread.lane @ B()})], Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()})], Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()})], Tensor[(16,), "f32", ((16,), (1,), {thread.warp @ B(), thread.lane @ B()})]]
-        with thread as _thread:  # Tuple[Tensor[(8, 16, 4), "bf16", ((8, 16, 4), (64, 4, 1), {thread.warp @ B(), thread.lane @ B()})], Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()})], Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()})], Tensor[(16,), "f32", ((16,), (1,), {thread.warp @ B(), thread.lane @ B()})]]
-            v0 = reshard(x, layout=(4 @ cta.tile, 2, 2 @ cta.warp, 2, 4 @ cta.lane, 4), storage=rmem)  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 2 @ cta.warp, 2, 4 @ cta.lane, 4), (0, 8, 0, 4, 0, 1)), "rmem"]; compute-cost; traffic traffic=gmem:r2048/w0@cta:r512/w0,thread:r64/w0,rmem:r0/w2048@cta:r0/w512,thread:r0/w64
-            v1 = unary(v0, kind="square")  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 2 @ cta.warp, 2, 4 @ cta.lane, 4), (0, 8, 0, 4, 0, 1)), "rmem"]; compute-cost flops=f32:512@cta:128,thread:16; traffic traffic=rmem:r2048/w2048@cta:r512/w512,thread:r64/w64
-            v2 = reshard(v1, layout=(4 @ cta_2.tile, 2, 4, 16), storage=smem)  # Tensor[(8, 4, 16), "f32", ((4 @ cta_2.tile, 2, 4, 16), (128, 64, 16, 1)), "smem"]; compute-cost; traffic traffic=rmem:r2048/w0@cta:r512/w0,thread:r64/w0,smem:r0/w2048@cta:r0/w512,thread:r0/w64
-            v3 = cast(v2, dtype="bf16")  # Tensor[(8, 4, 16), "bf16", ((4 @ cta_2.tile, 2, 4, 16), (128, 64, 16, 1)), "smem"]; compute-cost flops=bf16:512@cta:128,thread:128; traffic traffic=smem:r2048/w1024@cta:r512/w256,thread:r512/w256
-            v4 = transpose(v3, perm=(0, 2, 1))  # Tensor[(8, 16, 4), "bf16", ((4 @ cta_2.tile, 2, 16, 4), (128, 64, 1, 16)), "smem"]; compute-cost; traffic traffic=smem:r1024/w1024@cta:r256/w256,thread:r256/w256
-            v5 = reshard(v4, layout=((8, 16, 4), (64, 4, 1), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)  # Tensor[(8, 16, 4), "bf16", ((8, 16, 4), (64, 4, 1), {thread.warp @ B(), thread.lane @ B()})]; compute-cost; traffic traffic=gmem:r0/w1024@cta:r0/w256,thread:r0/w256,smem:r1024/w0@cta:r256/w0,thread:r256/w0
-            folded = reshard(acc, layout=(2 @ thread.warp, 4, 4 @ thread.lane, 4), storage=rmem)  # Tensor[(8, 16), "f32", ((2 @ thread.warp, 4, 4 @ thread.lane, 4), (64, 16, 4, 1)), "rmem"]; compute-cost; traffic
-            summed = reshard(mixed, layout=((8, 16), {cta.tile @ B(), cta.warp @ B(), cta.lane @ B()}), storage=rmem)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {cta.tile @ B(), cta.warp @ B(), cta.lane @ B()}), "rmem"]; compute-cost; traffic
-            for _ in range(3):  # Tuple[Tensor[(8, 16), "f32", ((2 @ thread.warp, 4, 4 @ thread.lane, 4), (64, 16, 4, 1)), "rmem"], Tensor[(8, 16), "f32", ((8, 16), (16, 1), {cta.tile @ B(), cta.warp @ B(), cta.lane @ B()}), "rmem"]]; loop-footprint footprints=folded@rmem:8192/196608/24576,summed@rmem:131072/393216/393216 status=complete
-                v8 = add(summed, summed)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {cta.tile @ B(), cta.warp @ B(), cta.lane @ B()}), "rmem"]; compute-cost flops=f32:512@cta:128,thread:128; traffic traffic=rmem:r1024/w512@cta:r1024/w512,thread:r1024/w512
-                v9 = unary(folded, kind="square")  # Tensor[(8, 16), "f32", ((2 @ thread.warp, 4, 4 @ thread.lane, 4), (64, 16, 4, 1)), "rmem"]; compute-cost flops=f32:512@cta:128,thread:16; traffic traffic=rmem:r512/w512@cta:r512/w512,thread:r64/w64
-                folded = v9
-                summed = v8
-            v11 = reshard(folded, layout=((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()})]; compute-cost; traffic traffic=gmem:r0/w512@cta:r0/w512,thread:r0/w64,rmem:r512/w0@cta:r512/w0,thread:r64/w0
-            v13 = reshard(summed, layout=((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B(), thread.lane @ B()})]; compute-cost; traffic traffic=gmem:r0/w512@cta:r0/w512,thread:r0/w512,rmem:r512/w0@cta:r512/w0,thread:r512/w0
-            v14 = reshard(seed, layout=((2 @ thread.warp, 4 @ thread.lane, 2), (8, 2, 1)), storage=rmem)  # Tensor[(16,), "f32", ((2 @ thread.warp, 4 @ thread.lane, 2), (8, 2, 1)), "rmem"]; compute-cost; traffic traffic=gmem:r64/w0@cta:r64/w0,thread:r8/w0,rmem:r0/w64@cta:r0/w64,thread:r0/w8
-            v15 = reshard(v14, layout=((16,), (1,), {thread.warp @ B(), thread.lane @ B()}), storage=gmem)  # Tensor[(16,), "f32", ((16,), (1,), {thread.warp @ B(), thread.lane @ B()})]; compute-cost; traffic traffic=gmem:r0/w64@cta:r0/w64,thread:r0/w8,rmem:r64/w0@cta:r64/w0,thread:r8/w0
-            return (v5, v11, v13, v15)
+    with Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane')) as thread:  # Tuple[Tensor[(8, 16, 4), "bf16", ShardLayout( layout=Layout((8, 16, 4), (64, 4, 1)), attrs=(B(), B()), mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane')), )], Tensor[(8, 16), "f32", ShardLayout( layout=Layout((8, 16), (16, 1)), attrs=(B(), B()), mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane')), )], Tensor[(8, 16), "f32", ShardLayout( layout=Layout((8, 16), (16, 1)), attrs=(B(), B()), mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane')), )], Tensor[(16,), "f32", ShardLayout( layout=Layout((16,), (1,)), attrs=(B(), B()), mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane')), )]]
+        v0 = reshard(x, layout=(4 @ mesh.tile, 2, 2 @ thread.warp, 2, 4 @ thread.lane, 4), storage=rmem)  # Tensor[(8, 4, 16), "f32", ((4 @ mesh.tile, 2, 2 @ thread.warp, 2, 4 @ thread.lane, 4), (0, 8, 0, 4, 0, 1)), "rmem"]; compute-cost; traffic traffic=gmem:r2048/w0@cta:r512/w0,thread:r64/w0,rmem:r0/w2048@cta:r0/w512,thread:r0/w64
+        v1 = unary(v0, kind="square")  # Tensor[(8, 4, 16), "f32", ((4 @ mesh.tile, 2, 2 @ thread.warp, 2, 4 @ thread.lane, 4), (0, 8, 0, 4, 0, 1)), "rmem"]; compute-cost flops=f32:512@cta:128,thread:16; traffic traffic=rmem:r2048/w2048@cta:r512/w512,thread:r64/w64
+        v2 = reshard(v1, layout=(4 @ mesh.tile, 2, 4, 16), storage=smem)  # Tensor[(8, 4, 16), "f32", ((4 @ mesh.tile, 2, 4, 16), (128, 64, 16, 1)), "smem"]; compute-cost; traffic traffic=rmem:r2048/w0@cta:r512/w0,thread:r64/w0,smem:r0/w2048@cta:r0/w512,thread:r0/w64
+        v3 = cast(v2, dtype="bf16")  # Tensor[(8, 4, 16), "bf16", ((4 @ mesh.tile, 2, 4, 16), (128, 64, 16, 1)), "smem"]; compute-cost flops=bf16:512@cta:128,thread:128; traffic traffic=smem:r2048/w1024@cta:r512/w256,thread:r512/w256
+        v4 = transpose(v3, perm=(0, 2, 1))  # Tensor[(8, 16, 4), "bf16", ((4 @ mesh.tile, 2, 16, 4), (128, 64, 1, 16)), "smem"]; compute-cost; traffic traffic=smem:r1024/w1024@cta:r256/w256,thread:r256/w256
+        v5 = reshard(v4, layout=((8, 16, 4), (64, 4, 1), {thread.warp @ B()}), storage=gmem)  # Tensor[(8, 16, 4), "bf16", ((8, 16, 4), (64, 4, 1), {thread.warp @ B()})]; compute-cost; traffic traffic=gmem:r0/w1024@cta:r0/w256,thread:r0/w256,smem:r1024/w0@cta:r256/w0,thread:r256/w0
+        folded = reshard(acc, layout=(2 @ thread.warp, 4, 4 @ thread.lane, 4), storage=rmem)  # Tensor[(8, 16), "f32", ((2 @ thread.warp, 4, 4 @ thread.lane, 4), (64, 16, 4, 1)), "rmem"]; compute-cost; traffic
+        summed = reshard(mixed, layout=((8, 16), {mesh.tile @ B(), thread.warp @ B()}), storage=rmem)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {mesh.tile @ B(), thread.warp @ B()}), "rmem"]; compute-cost; traffic
+        for _ in range(3):  # Tuple[Tensor[(8, 16), "f32", ((2 @ thread.warp, 4, 4 @ thread.lane, 4), (64, 16, 4, 1)), "rmem"], Tensor[(8, 16), "f32", ((8, 16), (16, 1), {mesh.tile @ B(), thread.warp @ B()}), "rmem"]]; loop-footprint footprints=folded@rmem:8192/196608/24576,summed@rmem:131072/393216/393216 status=complete
+            v8 = add(summed, summed)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {mesh.tile @ B(), thread.warp @ B()}), "rmem"]; compute-cost flops=f32:512@cta:128,thread:128; traffic traffic=rmem:r1024/w512@cta:r1024/w512,thread:r1024/w512
+            v9 = unary(folded, kind="square")  # Tensor[(8, 16), "f32", ((2 @ thread.warp, 4, 4 @ thread.lane, 4), (64, 16, 4, 1)), "rmem"]; compute-cost flops=f32:512@cta:128,thread:16; traffic traffic=rmem:r512/w512@cta:r512/w512,thread:r64/w64
+            folded = v9
+            summed = v8
+        v11 = reshard(folded, layout=((8, 16), (16, 1), {thread.warp @ B()}), storage=gmem)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B()})]; compute-cost; traffic traffic=gmem:r0/w512@cta:r0/w512,thread:r0/w64,rmem:r512/w0@cta:r512/w0,thread:r64/w0
+        v13 = reshard(summed, layout=((8, 16), (16, 1), {thread.warp @ B()}), storage=gmem)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {thread.warp @ B()})]; compute-cost; traffic traffic=gmem:r0/w512@cta:r0/w512,thread:r0/w512,rmem:r512/w0@cta:r512/w0,thread:r512/w0
+        v14 = reshard(seed, layout=((2 @ thread.warp, 4 @ thread.lane, 2), (8, 2, 1)), storage=rmem)  # Tensor[(16,), "f32", ((2 @ thread.warp, 4 @ thread.lane, 2), (8, 2, 1)), "rmem"]; compute-cost; traffic traffic=gmem:r64/w0@cta:r64/w0,thread:r8/w0,rmem:r0/w64@cta:r0/w64,thread:r0/w8
+        v15 = reshard(v14, layout=((16,), (1,), {thread.warp @ B()}), storage=gmem)  # Tensor[(16,), "f32", ((16,), (1,), {thread.warp @ B()})]; compute-cost; traffic traffic=gmem:r0/w64@cta:r0/w64,thread:r0/w8,rmem:r64/w0@cta:r64/w0,thread:r8/w0
+    return (v5, v11, v13, v15)

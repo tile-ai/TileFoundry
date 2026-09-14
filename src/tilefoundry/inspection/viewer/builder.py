@@ -6,31 +6,18 @@ from typing import Any
 
 import graphviz
 
-from tilefoundry.inspection.python_printer import (
-    _DIM_FUNC_OPS,
-    _DIM_INFIX_OPS,
-    _collect_meshes,
-    _mesh_name_map,
-    _op_display_name,
-    _shard_layout_str,
-    _shard_layout_surface_str,
-    _tensor_annotation,
-    shape_entry_str,
-    shard_compact_inline,
-)
+from tilefoundry.inspection.print_context import HirPrintContext
+from tilefoundry.inspection.printer_base import PythonPrinter
 from tilefoundry.ir.core import Tuple as HirTuple
 from tilefoundry.ir.core.expr import Call, Constant, Var
 from tilefoundry.ir.hir.function import Function as HirFunction
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType
-from tilefoundry.ir.visitor import ExprVisitor
 
 from .htmltable import Cell, Span, Table
 from .palette import (
-    DIMVAR_COLOR,
     HAIR,
     INK,
     MUTED,
@@ -38,7 +25,6 @@ from .palette import (
     depth_border,
     depth_fill,
     exprkind_color,
-    storage_color,
 )
 
 
@@ -68,25 +54,6 @@ def _renderable_functions(root) -> list[tuple[str, "HirFunction"]]:
     return out
 
 
-def _collect_view_meshes(root) -> dict[int, "Mesh"]:
-    """Collect unique ``Mesh`` objects referenced anywhere in *root*.
-
-    Collect unique ``Mesh`` objects referenced anywhere in *root* — params,
-    return type, every node's result type, and ``Reshard`` layout attrs.
-
-    The viewer renders shard sugar on intermediate node result types too, so it
-    needs a wider mesh-name map than the printer's param/return/Reshard scan:
-    built on the shared ``python_printer._collect_meshes`` with
-    ``include_node_types=True``.
-    """
-    meshes: dict[int, Mesh] = {}
-    for _label, fn in _renderable_functions(root):
-        type_meshes, scope_meshes = _collect_meshes(fn, include_node_types=True)
-        meshes.update(type_meshes)
-        meshes.update(scope_meshes)
-    return meshes
-
-
 @dataclass
 class DetailRef:
     """Minimal click-lookup reference. NOT a graph/IR model.
@@ -105,11 +72,11 @@ class DetailRef:
 class DetailIndex:
     """Detail lookup index only. ``dict[visual_id, DetailRef]``.
 
-    Carries the per-view ``mesh_name_map`` so the on-demand detail endpoint can
-    render shard sugar with the same stable mesh names as the graph.
+    Carries the per-view print context so detail text uses the same bindings
+    as the graph.
     """
     entries: dict[str, DetailRef] = field(default_factory=dict)
-    mesh_name_map: dict[int, str] = field(default_factory=dict)
+    context: HirPrintContext = field(default_factory=HirPrintContext)
 
     def add(self, visual_id: str, ref: DetailRef) -> None:
 
@@ -128,286 +95,124 @@ _CONST_DTYPE_SUFFIX: dict[str, str] = {
 
 
 def _format_constant(c: Constant) -> str:
-    """Compact constant rendering (ported from the old viewer's pretty view).
-
-    Compact constant rendering (ported from the old viewer's pretty
-    view). Scalars: ``const(1)`` / ``const(1.0f)``; sequences:
-    ``const([1.0f, 2.0f, ...])`` truncated to the first 8 elements.
-    """
     ty = getattr(c, "type", None)
     suffix = (
         _CONST_DTYPE_SUFFIX.get(ty.dtype.name, "")
-        if isinstance(ty, TensorType) and isinstance(ty.dtype, DType) else ""
+        if isinstance(ty, TensorType) and isinstance(ty.dtype, DType)
+        else ""
     )
 
-    def _fmt(v) -> str:
-        if isinstance(v, bool):
-            return repr(v)
-        if isinstance(v, float):
-            return f"{v}{suffix}"
-        return repr(v)
+    def format_value(value):
+        if isinstance(value, bool):
+            return repr(value)
+        if isinstance(value, float):
+            return f"{value}{suffix}"
+        return repr(value)
 
-    val = c.value
+    value = c.value
     if isinstance(ty, TensorType) and ty.shape == ():
-        return f"const({_fmt(val)})"
+        return f"const({format_value(value)})"
     try:
-        items = list(val)
+        items = list(value)
     except TypeError:
-        return f"const({_fmt(val)})"
-    head = ", ".join(_fmt(v) for v in items[:8])
+        return f"const({format_value(value)})"
+    head = ", ".join(format_value(item) for item in items[:8])
     tail = ", ..." if len(items) > 8 else ""
     return f"const([{head}{tail}])"
 
 
-def _shard_layout_text(sl: ShardLayout, mesh_name_map: dict[int, str] | None) -> str:
-    """Shard layout text.
-
-    Render a bare ``ShardLayout`` attr (e.g. a ``Reshard`` layout) through the
-    canonical sugar core, falling back to the verbose ``ShardLayout(...)`` form
-    when the mesh is unnamed or the layout is not sugar-expressible.
-    """
-    mesh_name = mesh_name_map.get(id(sl.mesh)) if mesh_name_map else None
-    if mesh_name and getattr(sl.mesh, "names", None):
-        mesh_unique = mesh_name_map is not None and len(mesh_name_map) == 1
-        sugar = _shard_layout_surface_str(sl, mesh_name=mesh_name, mesh_unique=mesh_unique)
-        if sugar is not None:
-            return sugar
-    return _shard_layout_str(sl)
+def _type_text(ty, context=None) -> str:
+    printer = PythonPrinter()
+    if context is None:
+        context = HirPrintContext()
+    with printer.type_surface():
+        return printer.visit(ty, context)
 
 
-def _pretty_attr_value(value, *, full: bool = False, mesh_name_map: dict[int, str] | None = None) -> str:
-    """Readable rendering of an Op attribute value.
-
-    Readable rendering of an Op attribute value — pretty constants /
-    tuples / lists / types instead of raw ``repr``. ``full`` selects the
-    canonical type form (detail panel) vs the compact one (graph label).
-    """
+def _pretty_attr_value(value, *, context=None) -> str:
     if isinstance(value, Constant):
         return _format_constant(value)
     if isinstance(value, DType):
         return value.name
-    if isinstance(value, (TensorType, TupleType)):
-        return (
-            type_to_canonical_pretty(value, mesh_name_map=mesh_name_map)
-            if full
-            else type_to_compact_pretty(value, mesh_name_map=mesh_name_map)
-        )
-    if isinstance(value, ShardLayout):
-        return _shard_layout_text(value, mesh_name_map)
+    if isinstance(value, (TensorType, TupleType, ShardLayout)):
+        return _type_text(value, context)
     if isinstance(value, tuple):
-        inner = ", ".join(_pretty_attr_value(v, full=full, mesh_name_map=mesh_name_map) for v in value)
+        inner = ", ".join(_pretty_attr_value(v, context=context) for v in value)
         return f"({inner}{',' if len(value) == 1 else ''})"
     if isinstance(value, list):
-        return "[" + ", ".join(_pretty_attr_value(v, full=full, mesh_name_map=mesh_name_map) for v in value) + "]"
+        return "[" + ", ".join(_pretty_attr_value(v, context=context) for v in value) + "]"
     if isinstance(value, str):
         return value
     return repr(value)
 
 
-def _op_attributes(
-    target, *, full: bool = False, mesh_name_map: dict[int, str] | None = None
-) -> list[tuple[str, str]]:
-    """Op attributes.
-
-    The Op's non-input (attribute) params as ``(name, pretty-value)``
-    pairs — e.g. ``("axis", "2")`` / ``("begin", "(const(0), ...)")``.
-    ``full`` selects canonical (detail) vs compact (graph) type text.
-    Empty when the Op has no attributes or doesn't expose ``params()``.
-    """
+def _op_attributes(target, *, context=None) -> list[tuple[str, str]]:
     try:
         pdefs = type(target).params()
     except (AttributeError, TypeError):
         return []
-    out = []
-    for p in pdefs:
-        if getattr(p, "kind", None) == "attribute":
-            out.append((
-                p.name,
-                _pretty_attr_value(getattr(target, p.name, None), full=full, mesh_name_map=mesh_name_map),
-            ))
-    return out
+    return [
+        (p.name, _pretty_attr_value(getattr(target, p.name, None), context=context))
+        for p in pdefs
+        if getattr(p, "kind", None) == "attribute"
+    ]
 
 
-class _DimSpanVisitor(ExprVisitor[list[Span]]):
-    def visit_DimVar(self, dim: DimVar, ctx=None) -> list[Span]:
-        return [Span(text=dim.name, color=DIMVAR_COLOR, bold=True)]
-
-    def visit_Constant(self, dim: Constant, ctx=None) -> list[Span]:
-        return [Span(text=str(dim.value))]
-
-    def visit_Call(self, dim: Call, ctx=None) -> list[Span]:
-        target = dim.target
-        for op_cls, sym in _DIM_INFIX_OPS.items():
-            if isinstance(target, op_cls):
-                spans = list(self.visit(dim.args[0], ctx))
-                spans.append(Span(text=f" {sym} "))
-                spans.extend(self.visit(dim.args[1], ctx))
-                return spans
-        for op_cls, fname in _DIM_FUNC_OPS.items():
-            if isinstance(target, op_cls):
-                spans = [Span(text=f"{fname}(")]
-                for i, arg in enumerate(dim.args):
-                    if i:
-                        spans.append(Span(text=", "))
-                    spans.extend(self.visit(arg, ctx))
-                spans.append(Span(text=")"))
-                return spans
-        return [Span(text=shape_entry_str(dim))]
-
-    def default_visit(self, dim, ctx=None) -> list[Span]:
-        return [Span(text=shape_entry_str(dim))]
-
-
-def _format_dim(dim) -> list[Span]:
-    """Render a shape dimension as inline viewer spans.
-
-    Share arithmetic syntax with the canonical Python printer. Dimension
-    variables use one token-class color while their text and detail identify the
-    symbol; integers remain plain.
-    See [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms).
-    """
-    return _DimSpanVisitor().visit(dim)
-
-
-def _shard_inline(ty: TensorType, mesh_name_map: dict[int, str] | None):
-    """Compact shard decomposition for *ty*.
-
-    Compact shard decomposition for *ty*: ``(split_ref_by_tensor_axis,
-    partials)`` or ``None`` when there is no named sugar-expressible shard
-    layout (caller renders the plain shape).
-    """
-    layout = getattr(ty, "layout", None)
-    if not isinstance(layout, ShardLayout):
-        return None
-    mesh_name = mesh_name_map.get(id(layout.mesh)) if mesh_name_map else None
-    if not (mesh_name and getattr(layout.mesh, "names", None)):
-        return None
-    return shard_compact_inline(layout, mesh_name, ty.shape)
-
-
-def _compact_type_spans(ty, mesh_name_map: dict[int, str] | None = None) -> list[Span]:
-    """Render compact graph-label types as colored inline spans.
-
-    Tint dimension variables and storage, inline shard splits on tensor axes,
-    and append partial states. Layouts that cannot be inlined use canonical
-    annotation text. ``type_to_compact_pretty`` joins spans as plain text.
-    See [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms).
-    """
-    if isinstance(ty, TensorType):
-        inline = _shard_inline(ty, mesh_name_map)
-        if isinstance(ty.layout, ShardLayout) and inline is None:
-
-            return [Span(text=type_to_canonical_pretty(ty, mesh_name_map=mesh_name_map))]
-        split_ref, partials = inline if inline is not None else ({}, [])
-        dtype = ty.dtype.name if hasattr(ty.dtype, "name") else str(ty.dtype)
-        spans: list[Span] = [Span(text=f"{dtype}[")]
-        for i, d in enumerate(ty.shape):
-            if i:
-                spans.append(Span(text=", "))
-            spans.extend(_format_dim(d))
-            if i in split_ref:
-                spans.append(Span(text=f" @ {split_ref[i]}"))
-        spans.append(Span(text="]"))
-        if partials:
-            spans.append(Span(text=" {" + ", ".join(partials) + "}"))
-        storage = getattr(ty, "storage", None)
-        if storage:
-            spans.append(Span(text=" @"))
-            spans.append(Span(text=str(storage), color=storage_color(str(storage)), bold=True))
-        return spans
-    if isinstance(ty, TupleType):
-
-
-        spans: list[Span] = [Span(text="⟨")]
-        for i, sub in enumerate(ty.fields):
-            if i:
-                spans.append(Span(text=", "))
-            spans.extend(_compact_type_spans(sub, mesh_name_map))
-        spans.append(Span(text="⟩"))
-        return spans
-    return [Span(text=str(ty))]
-
-
-def type_to_compact_pretty(ty, mesh_name_map: dict[int, str] | None = None) -> str:
-    """Render [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms) compact text."""
-    return "".join(s.text for s in _compact_type_spans(ty, mesh_name_map))
-
-
-def type_to_canonical_pretty(ty, mesh_name_map: dict[int, str] | None = None) -> str:
-    """Render [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms) canonical text."""
-    if isinstance(ty, TensorType):
-        return _tensor_annotation(ty, mesh_name_map=mesh_name_map)
-    if isinstance(ty, TupleType):
-        return "(" + ", ".join(type_to_canonical_pretty(f, mesh_name_map) for f in ty.fields) + ")"
-    return str(ty)
-
-
-def _returns_of(ty, mesh_name_map: dict[int, str] | None = None) -> list[dict]:
+def _returns_of(ty, context=None) -> list[dict]:
     if isinstance(ty, TupleType):
         return [
-            {"idx": i, "type": type_to_canonical_pretty(f, mesh_name_map)}
-            for i, f in enumerate(ty.fields)
+            {"idx": i, "type": _type_text(field, context)}
+            for i, field in enumerate(ty.fields)
         ]
     if ty is None:
         return []
-    return [{"idx": 0, "type": type_to_canonical_pretty(ty, mesh_name_map)}]
+    return [{"idx": 0, "type": _type_text(ty, context)}]
 
 
 def format_detail(
-    visual_id: str, ref: "DetailRef", mesh_name_map: dict[int, str] | None = None
+    visual_id: str, ref: "DetailRef", context: HirPrintContext | None = None
 ) -> dict:
-    """Format a detail-panel payload from a ``DetailRef`` on demand.
-
-    Format a detail-panel payload from a ``DetailRef`` on demand (no
-    pre-baked JSON in the index). Shape:
-    ``{id, kind, name, params:[{name,type}], returns:[{idx,type}], attrs:[{key,value}]}``.
-
-    ``mesh_name_map`` (the per-view map carried on ``DetailIndex``) lets the
-    canonical type text render shard sugar with the same stable mesh names as
-    the graph.
-    """
+    """Format a detail-panel payload from a live HIR reference."""
+    context = context or HirPrintContext()
     expr = ref.hir_expr
     name = ref.kind
     params: list[dict] = []
     attrs: list[dict] = []
     returns: list[dict] = []
-    mm = mesh_name_map
 
     if isinstance(expr, HirFunction):
         name = expr.name
-        params = [{"name": p.name, "type": type_to_canonical_pretty(p.type, mm)} for p in expr.params]
-        returns = _returns_of(expr.return_type, mm)
+        params = [{"name": p.name, "type": _type_text(p.type, context)} for p in expr.params]
+        returns = _returns_of(expr.return_type, context)
     elif isinstance(expr, Var):
         name = expr.name
-        returns = _returns_of(expr.type, mm)
+        returns = _returns_of(expr.type, context)
     elif isinstance(expr, Constant):
         name = _format_constant(expr)
-        returns = _returns_of(expr.type, mm)
+        returns = _returns_of(expr.type, context)
     elif isinstance(expr, HirTuple):
         name = "Tuple"
-        params = [{"name": f"e{i}", "type": type_to_canonical_pretty(el.type, mm)}
-                  for i, el in enumerate(expr.elements)]
-        returns = _returns_of(expr.type, mm)
+        params = [{"name": f"e{i}", "type": _type_text(item.type, context)} for i, item in enumerate(expr.elements)]
+        returns = _returns_of(expr.type, context)
     elif isinstance(expr, Call):
-        tgt = expr.target
-        if isinstance(tgt, HirFunction):
-            name = tgt.name
-            pnames = [p.name for p in tgt.params]
+        target = expr.target
+        if isinstance(target, HirFunction):
+            name = target.name
+            pnames = [p.name for p in target.params]
         else:
-            name = _op_display_name(tgt)
+            name = _op_display_name(target)
             try:
-                pnames = [p.name for p in type(tgt).params() if p.kind == "input"]
+                pnames = [p.name for p in type(target).params() if p.kind == "input"]
             except (AttributeError, TypeError):
                 pnames = []
-            attrs = [{"key": k, "value": v} for k, v in _op_attributes(tgt, full=True, mesh_name_map=mm)]
+            attrs = [{"key": key, "value": value} for key, value in _op_attributes(target, context=context)]
         params = [
-            {"name": pnames[i] if i < len(pnames) else f"in{i}",
-             "type": type_to_canonical_pretty(a.type, mm)}
-            for i, a in enumerate(expr.args)
+            {"name": pnames[i] if i < len(pnames) else f"in{i}", "type": _type_text(arg.type, context)}
+            for i, arg in enumerate(expr.args)
         ]
-        returns = _returns_of(expr.type, mm)
+        returns = _returns_of(expr.type, context)
     else:
-        returns = _returns_of(getattr(expr, "type", None), mm)
+        returns = _returns_of(getattr(expr, "type", None), context)
 
     return {"id": visual_id, "kind": ref.kind, "name": name,
             "params": params, "returns": returns, "attrs": attrs}
@@ -427,8 +232,11 @@ class ViewerBuilder:
         self.collapsed = set(collapsed or ())
 
 
-        self.mesh_name_map = _mesh_name_map(_collect_view_meshes(root))
-        self.index = DetailIndex(mesh_name_map=self.mesh_name_map)
+        self.printer = PythonPrinter()
+        self.context = HirPrintContext()
+        if isinstance(root, HirFunction) and isinstance(root.body, MeshRegion):
+            self.context.push_mesh(root.body.mesh, "mesh")
+        self.index = DetailIndex(context=self.context)
 
 
 
@@ -660,7 +468,7 @@ class ViewerBuilder:
         width = 2 + n_params
         title.add_row(
             Cell(
-                spans=tuple(_compact_type_spans(fn.return_type, self.mesh_name_map)),
+                spans=(Span(text=_type_text(fn.return_type, self.context)),),
                 colspan=width, color=INK, bold=True, font_size=12,
             )
         )
@@ -716,7 +524,7 @@ class ViewerBuilder:
                 Cell(text=f"Var {expr.name}", href="javascript:void(0)", title=f"expr:{vid}",
                      bgcolor=exprkind_color("Var"), color="#ffffff", bold=True)
             )
-            tbl.add_row(Cell(spans=tuple(_compact_type_spans(expr.type, self.mesh_name_map)), color=MUTED, font_size=11))
+            tbl.add_row(Cell(spans=(Span(text=_type_text(expr.type, self.context)),), color=MUTED, font_size=11))
             if output_slot is not None:
                 tbl.add_row(self._output_marker_row(output_slot, 1))
             g.node(vid, label=tbl.to_html())
@@ -733,7 +541,7 @@ class ViewerBuilder:
                 Cell(text=_format_constant(expr), href="javascript:void(0)", title=f"expr:{vid}",
                      bgcolor=exprkind_color("Constant"), color="#ffffff", bold=True)
             )
-            tbl.add_row(Cell(spans=tuple(_compact_type_spans(expr.type, self.mesh_name_map)), color=MUTED, font_size=11))
+            tbl.add_row(Cell(spans=(Span(text=_type_text(expr.type, self.context)),), color=MUTED, font_size=11))
             if output_slot is not None:
                 tbl.add_row(self._output_marker_row(output_slot, 1))
             g.node(vid, label=tbl.to_html())
@@ -847,14 +655,14 @@ class ViewerBuilder:
 
 
 
-        for key, val in _op_attributes(call.target, mesh_name_map=self.mesh_name_map):
+        for key, val in _op_attributes(call.target, context=self.context):
             tbl.add_row(
                 Cell(text=f"{key}: {val}", colspan=width, color=MUTED,
                      font_size=11, align="LEFT")
             )
         tbl.add_row(
             Cell(
-                spans=tuple(_compact_type_spans(call.type, self.mesh_name_map)),
+                spans=(Span(text=_type_text(call.type, self.context)),),
                 colspan=width,
                 color=INK,
                 bold=True,
@@ -963,5 +771,5 @@ class ViewerBuilder:
 
 __all__ = [
     "DetailIndex", "DetailRef", "ViewerBuilder",
-    "format_detail", "type_to_compact_pretty", "type_to_canonical_pretty",
+    "format_detail",
 ]

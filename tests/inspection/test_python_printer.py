@@ -6,13 +6,9 @@ left-hand side carries, and the target header, whose value must rebuild the
 *same* Target when the emitted source is executed.
 """
 
-import re
 from dataclasses import dataclass, fields, replace
 
 from tests._source import import_dsl
-from tests.fixtures.placed.gqa_decode import GqaOnline
-from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
-from tests.fixtures.placed.prefill_decode_attention import PrefillDecodeAttention
 from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tilefoundry.inspection import PythonPrintOptions, as_script
 from tilefoundry.inspection.analysis_report import _type_text
@@ -49,71 +45,6 @@ def test_inspection_types_are_opt_in_same_line_comments():
     assert all(
         line.split("# Tensor[")[0].strip() for line in annotated.splitlines() if "# Tensor[" in line
     )
-
-
-def _hoisted_meshes(source: str) -> set[str]:
-    return {
-        line.split(" = ", 1)[0] for line in source.splitlines() if " = Mesh((Topology(" in line
-    }
-
-
-def test_annotated_tuple_fields_each_name_the_hoisted_mesh():
-    """Every field of a tuple-typed annotation reaches the prelude's mesh name.
-
-    A loop carrying several tensors annotates a ``Tuple[...]``, so the field
-    walk has to carry the same mesh name map the signature is rendered from. A
-    field that lost it would restate the whole mesh as ``ShardLayout(...)``.
-    """
-    annotated = as_script(
-        PrefillDecodeAttention, options=PythonPrintOptions(show_types=True)
-    )
-    hoisted = _hoisted_meshes(annotated)
-    tuples = [
-        line.split("  # ", 1)[1] for line in annotated.splitlines() if "  # Tuple[" in line
-    ]
-
-    assert len(tuples) == 2
-    for annotation in tuples:
-        assert "ShardLayout(" not in annotation
-        named = set(re.findall(r"@ (\w+)\.", annotation))
-        assert named
-        assert named <= hoisted
-
-
-def test_an_annotated_layout_sugar_cannot_say_stays_verbose():
-    """The fallback keeps the whole layout, and it coexists with sugar.
-
-    Sugar names a mesh axis, so a mesh with no named axes has nothing to name
-    and stays verbose without dropping what the verbose form carries. The mesh
-    slot still names the mesh the prelude binds rather than restating it.
-    """
-    unnamed_axes = as_script(GqaOnline, options=PythonPrintOptions(show_types=True))
-    verbose = [
-        line for line in unnamed_axes.splitlines() if "  # " in line and "ShardLayout(" in line
-    ]
-
-    assert verbose
-    for line in verbose:
-        annotation = line.split("  # ", 1)[1]
-        assert "layout=Layout(" in annotation and "attrs=(" in annotation
-        assert "names=" not in line
-        assert "@ " not in annotation
-    hoisted = _hoisted_meshes(unnamed_axes)
-    assert hoisted
-    assert all(
-        any(f"mesh={name}," in line for name in hoisted) for line in verbose
-    )
-
-    several_meshes = as_script(
-        MoEMegaKernel, options=PythonPrintOptions(show_types=True)
-    )
-    annotations = [
-        line.split("  # ", 1)[1].split("; ", 1)[0]
-        for line in several_meshes.splitlines()
-        if "  # Tensor[" in line
-    ]
-
-    assert any("@ cta_2.tile" in annotation for annotation in annotations)
 
 
 def test_binding_metadata_names_the_emitted_binding():

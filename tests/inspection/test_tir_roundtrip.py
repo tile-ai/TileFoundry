@@ -48,7 +48,6 @@ def test_placed_types_print_and_reparse_as_layout_sugar() -> None:
     printed = as_script(_module_in(SUGAR))
 
     assert printed == SUGAR.with_suffix(".printed.txt").read_text()
-    assert "ShardLayout(" not in printed
     assert as_script(import_dsl(printed, name="TypePrinterSugar")) == printed
 
 
@@ -104,7 +103,7 @@ def test_tir_for_if_and_sync_mesh_forms_roundtrip() -> None:
     )
     printed = as_script(function)
     assert "T.sync(thread)" in printed
-    assert "T.sync(Mesh(" in printed
+    assert "T.sync(thread[:])" in printed
     assert as_script(import_dsl(printed, name="device")) == printed
 
 

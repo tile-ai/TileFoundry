@@ -3,7 +3,7 @@ from __future__ import annotations
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
 from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.types.shard import ComposedLayout, Layout, Mesh, Topology
+from tilefoundry.ir.types.shard import Layout, Mesh, Topology
 from tilefoundry.target import CpuTarget, CudaTarget
 
 
@@ -16,21 +16,9 @@ class SyncSquare:
             reg = T.alloc_tensor(tensor_type=Tensor[(4, 32), "f32", ((4 @ m.w, 32 @ m.t), (32, 1)), "rmem"])
             T.copy(view, reg)
             T.sync(m)
-            T.sync(Mesh((Topology("thread", 128),), ComposedLayout(
-                inner=None,
-                offset=0,
-                outer=Layout((1, 32), (32, 1)),
-            ), names=('w', 't')))
-            T.sync(Mesh((Topology("thread", 128),), ComposedLayout(
-                inner=None,
-                offset=0,
-                outer=Layout((2, 32), (32, 1)),
-            ), names=('w', 't')))
-            T.sync(Mesh((Topology("thread", 128),), ComposedLayout(
-                inner=None,
-                offset=64,
-                outer=Layout((2, 32), (32, 1)),
-            ), names=('w', 't')))
+            T.sync(m[:1])
+            T.sync(m[:2])
+            T.sync(m[2:])
             T.binary(reg, reg, reg, kind=BinaryKind.MUL)
             T.copy(reg, view)
 

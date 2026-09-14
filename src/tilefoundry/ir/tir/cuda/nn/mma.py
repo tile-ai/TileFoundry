@@ -109,6 +109,7 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
 _SM80_THREAD_MESH = Mesh(
     topologies=(Topology("thread", 32),),
     layout=Layout(shape=(4, 8), strides=(1, 4)),
+    names=("warp", "lane"),
 )
 
 

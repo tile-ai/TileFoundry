@@ -1,8 +1,8 @@
 """Canonical Python DSL printer for HIR Functions.
 
 Converts a ``hir.Function`` to executable Python source using the
-``@func`` DSL.  When meshes have named axes, compact sugar annotations
-are emitted; otherwise the verbose ``ShardLayout(...)`` form is used.
+``@func`` DSL. Placement sugar names only explicit mesh-scope bindings;
+otherwise the verbose ``ShardLayout(...)`` form is used.
 """
 
 from __future__ import annotations
@@ -41,7 +41,6 @@ from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.specialize import (
     canonical_specialization_signature,
-    dim_vars_reached,
     display_name,
     origin_of,
 )
@@ -50,28 +49,14 @@ from tilefoundry.ir.hir.tensor.slice import Slice, window_base
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types import DType, TensorType, TupleType
-from tilefoundry.ir.types.dim import (
-    DimAdd,
-    DimConst,
-    DimFloorDiv,
-    DimMax,
-    DimMin,
-    DimMod,
-    DimMul,
-    DimSub,
-    DimVar,
-)
-from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase
-from tilefoundry.ir.types.shard.mesh import Mesh
+from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
     Partial,
     ShardLayout,
     Split,
-    layout_axis_to_tensor_axis,
 )
-from tilefoundry.ir.types.substitute import dim_vars_by_name
-from tilefoundry.ir.visitor import ExprFunctor, expr_children
+from tilefoundry.ir.visitor import expr_children
 from tilefoundry.utils.python_source import PythonExpr
 
 from .print_context import HirPrintContext
@@ -80,29 +65,184 @@ from .tir_printer import _function_block as _tir_function_block
 from .tir_printer import tir_function_to_python, tir_module_to_python
 from .values import PARTS, render_comment
 
-_DIM_INFIX_OPS: dict[type, str] = {
-    DimAdd: "+",
-    DimSub: "-",
-    DimMul: "*",
-    DimFloorDiv: "//",
-    DimMod: "%",
-}
-
-
-_DIM_FUNC_OPS: dict[type, str] = {
-    DimMin: "min",
-    DimMax: "max",
-}
-
 
 class HirPrinter(PythonPrinter):
-    """HIR façade retaining the historical canonical rendering entry point."""
+    """Canonical HIR expression, type, and function printer."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._names: dict[int, str] = {}
+        self._param_alias: dict[int, Expr] = {}
+        self._child_entries: dict[int, str] = {}
+        self._moved_window = lambda start, size, stride: None
 
     def print(self, fn: HirFunction, *, options=None) -> str:
-        return _render_hir_function(fn, options=options).source
+        return self.render(fn, options=options).source
 
-    def dim_entry(self, value, ctx=None) -> str:
-        return shape_entry_str(value)
+    def render(self, fn: HirFunction, *, options=None) -> _PythonRendering:
+        return _render_hir_function(fn, options=options)
+
+    def bind_def(
+        self,
+        names: dict[int, str],
+        param_alias: dict[int, Expr],
+        child_entries: dict[int, str],
+        moved_window,
+    ) -> None:
+        """Install the value-naming environment for one function definition."""
+        self._names = names
+        self._param_alias = param_alias
+        self._child_entries = child_entries
+        self._moved_window = moved_window
+
+    def tuple_reference(self, elements) -> str:
+        inner = ", ".join(
+            repr(element.value)
+            if isinstance(element, Constant)
+            else self.reference(element)
+            for element in elements
+        )
+        return f"({inner}{',' if len(elements) == 1 else ''})"
+
+    def reference(self, expr: Expr) -> str:
+        """Return the binding that denotes one value in the current definition."""
+        if isinstance(expr, Tuple):
+            return self.tuple_reference(expr.elements)
+        if id(expr) in self._param_alias:
+            return self.reference(self._param_alias[id(expr)])
+        projection = _region_projection(expr)
+        if isinstance(projection, LoopRegion):
+            return self._names[id(projection.carried_args[expr.target.index])]
+        if isinstance(expr, LoopRegion):
+            carried = tuple(self._names[id(carry)] for carry in expr.carried_args)
+            return carried[0] if len(carried) == 1 else "(" + ", ".join(carried) + ")"
+        if isinstance(projection, MeshRegion):
+            return self.reference(projection.body.elements[expr.target.index])
+        if isinstance(expr, MeshRegion):
+            return self.reference(expr.body)
+        return self._names[id(expr)]
+
+    def _slice_start(self, start, size, stride) -> str:
+        moved = self._moved_window(start, size, stride)
+        if moved is None:
+            return repr(start.value) if isinstance(start, Constant) else self.reference(start)
+        window, offset = moved
+        return _moved_window_ref(self.reference(window), offset)
+
+    def visit_program_call(self, expr: Call, ctx=None) -> str:
+        """Render one HIR call after expression-level dispatch selected it."""
+        target = expr.target
+        args_text = ", ".join(self.reference(arg) for arg in expr.args)
+        if isinstance(target, Reshard):
+            if ctx is not None:
+                ctx.imports.add("from tilefoundry.dsl.tf import *")
+            layout_kw = ""
+            if target.layout is not None:
+                with self.type_surface(indent=self._indent + "    "):
+                    layout_kw = ", layout=" + self.visit(target.layout, ctx)
+            storage = ""
+            if target.storage is not None:
+                storage_name = target.storage.name.lower()
+                if ctx is not None:
+                    ctx.use(
+                        PythonExpr(
+                            (f"from tilefoundry.dsl.storage import {storage_name}",),
+                            storage_name,
+                        )
+                    )
+                storage = f", storage={storage_name}"
+            return f"reshard({args_text}{layout_kw}{storage})"
+        if isinstance(target, HirFunction):
+            binding = _module_callee_binding(target, self._child_entries)
+            return f"{binding or target.name}({args_text})"
+        if isinstance(target, Slice):
+            starts = expr.args[1]
+            if not isinstance(starts, Tuple):
+                raise ValueError("canonical_source: Slice starts must be a Tuple")
+            indexers: list[str] = []
+            runtime_starts = False
+            for axis, (start, size, stride) in enumerate(
+                zip(starts.elements, target.sizes, target.strides)
+            ):
+                if self._moved_window(start, size, stride) is not None:
+                    indexers.append(self._slice_start(start, size, stride))
+                    continue
+                dim = expr.args[0].type.shape[axis]
+                if (
+                    isinstance(start, Constant)
+                    and start.value == 0
+                    and size == dim
+                    and stride == 1
+                ):
+                    indexers.append(":")
+                    continue
+                if not (
+                    isinstance(start, Constant)
+                    and isinstance(start.value, int)
+                    and isinstance(size, int)
+                    and isinstance(stride, int)
+                ):
+                    runtime_starts = True
+                    break
+                begin = int(start.value)
+                stop = begin + size * stride
+                indexers.append(
+                    f"{begin}:{stop}" if stride == 1 else f"{begin}:{stop}:{stride}"
+                )
+            if runtime_starts:
+                if ctx is not None:
+                    ctx.imports.add("from tilefoundry.dsl.tf import *")
+                start_refs = ", ".join(
+                    self._slice_start(start, size, stride)
+                    for start, size, stride in zip(
+                        starts.elements, target.sizes, target.strides
+                    )
+                )
+                if len(starts.elements) == 1:
+                    start_refs += ","
+                return (
+                    f"slice({self.reference(expr.args[0])}, ({start_refs}), "
+                    f"sizes={_attr_tuple_str(target.sizes, self, ctx)}, "
+                    f"strides={_attr_tuple_str(target.strides, self, ctx)})"
+                )
+            return f"{self.reference(expr.args[0])}[{', '.join(indexers)}]"
+
+        if ctx is not None:
+            ctx.imports.add("from tilefoundry.dsl.tf import *")
+        alias_name = _kinded_alias_name(target)
+        suppressed = {"kind"} if alias_name is not None else set()
+        attrs: list[str] = []
+        for param in type(target).params():
+            if param.kind != "attribute":
+                continue
+            value = getattr(target, param.name, None)
+            if value is None or param.name in suppressed or param.name == "layout":
+                continue
+            if isinstance(value, str):
+                attrs.append(f'{param.name}="{value}"')
+            elif isinstance(value, DType):
+                attrs.append(f'{param.name}="{value.name}"')
+            elif isinstance(value, enum.Enum) and isinstance(value.value, str):
+                attrs.append(f'{param.name}="{value.value}"')
+            elif isinstance(value, float):
+                if math.isinf(value):
+                    literal = "-1e999" if value < 0 else "1e999"
+                elif math.isnan(value):
+                    literal = "(1e999 - 1e999)"
+                else:
+                    literal = repr(value)
+                attrs.append(f"{param.name}={literal}")
+            elif isinstance(value, (ShardLayout, TensorType)):
+                with self.type_surface(indent=self._indent + "        "):
+                    rendered = self.visit(value, ctx)
+                if isinstance(value, TensorType):
+                    rendered = " ".join(rendered.split())
+                attrs.append(f"{param.name}={rendered}")
+            elif isinstance(value, tuple):
+                attrs.append(f"{param.name}={_attr_tuple_str(value, self, ctx)}")
+            else:
+                attrs.append(f"{param.name}={value}")
+        return f"{_op_name(target)}({', '.join([*(self.reference(arg) for arg in expr.args), *attrs])})"
 
 
 @dataclass(frozen=True)
@@ -134,22 +274,16 @@ def _physical_line_count(lines: list[str]) -> int:
     return sum(line.count("\n") + 1 for line in lines)
 
 
-def _compact_type(ty: object, mesh_name_map: dict[int, str]) -> str:
-    """One physical-line, DSL-shaped type annotation for inspection output.
-
-    Takes the same mesh-name map the signature and mesh prelude are rendered
-    from, so an annotated layout names the hoisted mesh instead of restating it.
-    """
-    if isinstance(ty, TensorType):
-        rendered = _tensor_annotation(ty, mesh_name_map=mesh_name_map)
+def _compact_type(ty: object, printer: PythonPrinter, ctx) -> str:
+    """One physical-line, DSL-shaped type annotation for inspection output."""
+    if isinstance(ty, (TensorType, TupleType)):
+        with printer.type_surface():
+            rendered = printer.visit(ty, ctx)
         return " ".join(rendered.split())
-    if isinstance(ty, TupleType):
-        fields = ", ".join(_compact_type(field, mesh_name_map) for field in ty.fields)
-        return f"Tuple[{fields}]"
     return repr(ty)
 
 
-def _comments(expr: Expr, options: PythonPrintOptions, mesh_name_map: dict[int, str]) -> str:
+def _comments(expr: Expr, options: PythonPrintOptions, printer: PythonPrinter, ctx) -> str:
     """Return same-line annotations for one printed statement.
 
     Omit the binding because the left-hand side already carries its emitted name
@@ -163,7 +297,7 @@ def _comments(expr: Expr, options: PythonPrintOptions, mesh_name_map: dict[int, 
     """
     comments: list[str] = []
     if options.show_types:
-        comments.append(_compact_type(expr.type, mesh_name_map))
+        comments.append(_compact_type(expr.type, printer, ctx))
     for metadata_type in options.comment_metadata_types:
         metadata = get_metadata(expr, metadata_type)
         if metadata is None:
@@ -174,219 +308,6 @@ def _comments(expr: Expr, options: PythonPrintOptions, mesh_name_map: dict[int, 
     return f"  # {PARTS.join(comments)}" if comments else ""
 
 
-def shape_entry_str(entry: object) -> str:
-    """Render one tensor shape entry in canonical human-readable form.
-
-    Static integers remain literals, dimension variables use their names, and
-    arithmetic expression trees use infix or function syntax. The printer and
-    viewer share this rendering instead of exposing dataclass representations.
-    See [types §4](docs/spec/types.md#4-dim--symbolic-shape-dimensions) and
-    [inspection §2.3](docs/spec/inspection.md#23-dsl-text-forms).
-    """
-    return _shape_entry_str(entry, nested=False)
-
-
-class _ShapeEntryVisitor(ExprFunctor[str]):
-    def __init__(self, nested: bool) -> None:
-        super().__init__()
-        self.nested = nested
-
-    def visit_DimVar(self, entry: DimVar, ctx=None) -> str:
-        return entry.name
-
-    def visit_Var(self, entry: Var, ctx=None) -> str:
-        return entry.name
-
-    def visit_Constant(self, entry: Constant, ctx=None) -> str:
-        return str(entry.value)
-
-    def visit_Call(self, entry: Call, ctx=None) -> str:
-        ceildiv_args = _ceildiv_args(entry)
-        if ceildiv_args is not None:
-            a, b = ceildiv_args
-            return f"ceildiv({self._render(a, False)}, {self._render(b, False)})"
-        target = entry.target
-        if isinstance(target, DimConst):
-            return str(target.value)
-        for op_cls, sym in _DIM_INFIX_OPS.items():
-            if isinstance(target, op_cls):
-                a, b = entry.args
-                rendered = f"{self._render(a, True)} {sym} {self._render(b, True)}"
-                return f"({rendered})" if self.nested else rendered
-        for op_cls, fname in _DIM_FUNC_OPS.items():
-            if isinstance(target, op_cls):
-                rendered = ", ".join(self._render(arg, False) for arg in entry.args)
-                return f"{fname}({rendered})"
-        return repr(entry)
-
-    def default_visit(self, entry, ctx=None) -> str:
-        if isinstance(entry, bool):
-            return repr(entry)
-        if isinstance(entry, int):
-            return str(entry)
-        return repr(entry)
-
-    def _render(self, entry, nested: bool) -> str:
-        previous = self.nested
-        self.nested = nested
-        try:
-            return self.visit(entry, None)
-        finally:
-            self.nested = previous
-
-
-def _shape_entry_str(entry: object, *, nested: bool) -> str:
-    return _ShapeEntryVisitor(nested).visit(entry)
-
-
-def _ceildiv_args(entry: Call) -> tuple[object, object] | None:
-    """Recover the public constructor from ceildiv's canonical arithmetic tree."""
-    if not isinstance(entry.target, DimFloorDiv) or len(entry.args) != 2:
-        return None
-    numerator, divisor = entry.args
-    if not (
-        isinstance(numerator, Call)
-        and isinstance(numerator.target, DimSub)
-        and len(numerator.args) == 2
-        and isinstance(numerator.args[1], Constant)
-        and numerator.args[1].value == 1
-    ):
-        return None
-    added = numerator.args[0]
-    if not (
-        isinstance(added, Call)
-        and isinstance(added.target, DimAdd)
-        and len(added.args) == 2
-        and added.args[1] == divisor
-    ):
-        return None
-    return added.args[0], divisor
-
-
-def _classify_shard_attrs(
-    sl: ShardLayout, mesh_name: str
-) -> tuple[dict[int, list[str]], list[str], list[str]] | None:
-    """Classify shard attributes into layout-axis splits, partials, broadcasts.
-
-    Preserve mesh-axis order and allow nested axes to split one layout axis.
-    Return ``None`` for rank mismatch, invalid axes, or unknown attributes so
-    callers use verbose fallback. Surface and compact renderers share the
-    result, with the latter remapping splits onto tensor axes.
-    """
-    layout = sl.layout
-    if not isinstance(layout, Layout) or len(sl.attrs) != len(sl.mesh.layout.shape):
-        return None
-    layout_rank = len(layout.shape)
-    names = sl.mesh.names if hasattr(sl.mesh, "names") and sl.mesh.names else ()
-    splits: dict[int, list[str]] = {}
-    partials: list[str] = []
-    broadcasts: list[str] = []
-    for mesh_axis_idx, attr in enumerate(sl.attrs):
-        axis_name = names[mesh_axis_idx] if mesh_axis_idx < len(names) else f"ax{mesh_axis_idx}"
-        axis_ref = f"{mesh_name}.{axis_name}"
-        if isinstance(attr, Split):
-            if attr.axis >= layout_rank:
-                return None
-            splits.setdefault(attr.axis, []).append(axis_ref)
-        elif isinstance(attr, Partial):
-            partials.append(f'{axis_ref} @ P("{attr.reduction or "sum"}")')
-        elif isinstance(attr, Broadcast):
-            broadcasts.append(f"{axis_ref} @ B()")
-        else:
-            return None
-    return splits, partials, broadcasts
-
-
-def _shard_layout_surface_str(sl: ShardLayout, mesh_name: str = "gpu", ctx=None) -> str | None:
-    """Render canonical parser sugar for a shard layout.
-
-    Splits inline on the layout dimension they divide; the remaining value
-    states form a set, in which a broadcast appears only when nothing else
-    would name the mesh, because the parser reads an unstated axis that way.
-    The stride tuple is written whenever the layout has one: an unstated one
-    is not C-order shorthand but the sugar default a ``Reshard`` materializes
-    from the storage it moves between. Return ``None`` when sugar cannot
-    express the layout, so callers use the verbose fallback.
-    """
-    layout = sl.layout
-    if not isinstance(layout, Layout):
-        return None
-    classified = _classify_shard_attrs(sl, mesh_name)
-    if classified is None:
-        return None
-    splits, partials, broadcasts = classified
-    states, state_import = (partials, "P") if (splits or partials) else (broadcasts, "B")
-    if not splits and not states:
-        return None
-
-    explicit = layout.strides is not None
-    if explicit and any(
-        i in splits and _shape_entry_str(dim, nested=True) != shape_entry_str(dim)
-        for i, dim in enumerate(layout.shape)
-    ):
-        return None
-
-    dims = [
-        f"{_shape_entry_str(d, nested=True)} {' '.join(f'@ {r}' for r in splits[i])}"
-        if i in splits
-        else shape_entry_str(d)
-        for i, d in enumerate(layout.shape)
-    ]
-    dim_str = ", ".join(dims)
-    if len(dims) == 1:
-        dim_str += ","
-    axis_tuple = f"({dim_str})"
-
-    stride_str = _shape_tuple(layout.strides) if explicit else None
-    value_set = None
-    if states:
-        value_set = "{" + ", ".join(states) + "}"
-        if ctx is not None:
-            ctx.use(
-                PythonExpr(
-                    (f"from tilefoundry.ir.types.shard import {state_import}",), state_import
-                )
-            )
-
-    if stride_str is None and value_set is None:
-        return axis_tuple
-    parts = [axis_tuple]
-    if stride_str is not None:
-        parts.append(stride_str)
-    if value_set is not None:
-        parts.append(value_set)
-    return "(" + ", ".join(parts) + ")"
-
-
-def shard_compact_inline(
-    sl: ShardLayout, mesh_name: str, tensor_shape: tuple
-) -> tuple[dict[int, str], list[str]] | None:
-    """Decompose a shard layout for compact tensor-axis display.
-
-    Map splits to tensor axes, collect ordered partial states, and omit
-    broadcasts. Return ``None`` for ambiguous split positions, invalid axes,
-    unknown attributes, or rank mismatch so callers fall back to canonical
-    rendering. Attribute classification is shared with surface rendering.
-    """
-    layout = sl.layout
-    if not isinstance(layout, Layout):
-        return None
-    classified = _classify_shard_attrs(sl, mesh_name)
-    if classified is None:
-        return None
-    splits, partials, _broadcasts = classified
-    la2ta = layout_axis_to_tensor_axis(layout.shape, tensor_shape)
-    split_ref: dict[int, str] = {}
-    for layout_axis, refs in splits.items():
-        if len(refs) != 1:
-            return None
-        t_axis = la2ta[layout_axis]
-        if t_axis in split_ref:
-            return None
-        split_ref[t_axis] = refs[0]
-    return split_ref, partials
-
-
 def _moved_window_ref(name: str, offset: int) -> str:
     """A tile-window indexer, carrying the compile-time offset that moves it."""
     if offset == 0:
@@ -394,7 +315,7 @@ def _moved_window_ref(name: str, offset: int) -> str:
     return f"{name} + {offset}" if offset > 0 else f"{name} - {-offset}"
 
 
-def _attr_tuple_str(value: tuple) -> str:
+def _attr_tuple_str(value: tuple, printer: PythonPrinter, ctx) -> str:
     """Render an attribute's tuple value as a Python tuple literal.
 
     A shape-valued attribute -- `new_shape`, a tile's extents -- can hold a
@@ -404,7 +325,7 @@ def _attr_tuple_str(value: tuple) -> str:
     the header emits binds the name, not the repr.
     """
     rendered = tuple(
-        shape_entry_str(entry) if _is_dim_entry(entry) else repr(entry)
+        printer.visit(entry, ctx) if _is_dim_entry(entry) else repr(entry)
         for entry in value
     )
     if len(rendered) == 1:
@@ -414,10 +335,7 @@ def _attr_tuple_str(value: tuple) -> str:
 
 def _is_dim_entry(entry: object) -> bool:
     """Whether *entry* is a dimension rather than a plain attribute value."""
-    return isinstance(entry, (DimVar, Var, Constant)) or (
-        isinstance(entry, Call)
-        and isinstance(entry.target, (DimConst, *_DIM_INFIX_OPS, *_DIM_FUNC_OPS))
-    )
+    return isinstance(entry, (DimVar, Var, Constant, Call))
 
 
 def _tensor_import_names(fn: HirFunction) -> str:
@@ -577,7 +495,7 @@ def _where_str(metadata: ScheduleConstraintMetadata) -> str:
         fields.append(f"layout={_layout_constraint_str(layout)}")
     for item in metadata.constraints:
         if isinstance(item, MeshConstraint):
-            fields.append(f"mesh={_mesh_str(item.mesh)}")
+            fields.append(f"mesh={PythonPrinter().visit(item.mesh, HirPrintContext())}")
         elif isinstance(item, StorageConstraint):
             fields.append(f'storage="{item.storage.name.lower()}"')
     return "where(" + ", ".join(fields) + ")"
@@ -610,52 +528,6 @@ def iter_exprs(root: Expr | None, seen: set[int] | None = None) -> Iterator[Expr
     for child in expr_children(root):
         yield from iter_exprs(child, seen)
     yield root
-
-
-def _collect_meshes(
-    fn: HirFunction,
-    *,
-    include_node_types: bool = False,
-) -> tuple[dict[int, Mesh], dict[int, Mesh]]:
-    """Collect meshes needed before emitting a function header.
-
-    The function header declares every mesh and builds the name map used by
-    parameter annotations and region bodies, so collection must precede body
-    emission. It walks params, return type, and body references once; the
-    optional node-type scan is used by the viewer for intermediate annotations.
-
-    With ``include_node_types=True`` (the viewer's wider scan, via
-    ``viewer.builder._collect_view_meshes``) every node's own result type is
-    also walked, since the viewer renders shard sugar on intermediate types too.
-    """
-    type_meshes: dict[int, Mesh] = {}
-    scope_meshes: dict[int, Mesh] = {}
-
-    def _add_layout(layout) -> None:
-        if isinstance(layout, ShardLayout):
-            type_meshes.setdefault(id(layout.mesh), layout.mesh)
-
-    def _add_type(ty) -> None:
-        if isinstance(ty, TensorType):
-            _add_layout(ty.layout)
-        elif isinstance(ty, TupleType):
-            for f in ty.fields:
-                _add_type(f)
-
-    for p in fn.params:
-        _add_type(p.type)
-    _add_type(fn.return_type)
-
-    expressions = tuple(iter_exprs(fn.body))
-    for expr in expressions:
-        if include_node_types:
-            _add_type(getattr(expr, "type", None))
-        if isinstance(expr, Call) and isinstance(expr.target, Reshard):
-            _add_layout(expr.target.layout)
-        if isinstance(expr, MeshRegion):
-            scope_meshes.setdefault(id(expr.mesh), expr.mesh)
-
-    return type_meshes, scope_meshes
 
 
 def _region_projection(expr: Expr) -> LoopRegion | MeshRegion | None:
@@ -693,7 +565,7 @@ def _module_callee_binding(target: HirFunction, child_entries: dict[int, str]) -
 
 
 def _emit_def(
-    fn: HirFunction, def_name: str, mesh_map: dict[int, str], indent: str,
+    fn: HirFunction, def_name: str, ctx: HirPrintContext, indent: str,
     options: PythonPrintOptions, child_entries: dict[int, str] | None = None,
     *,
     line_offset: int = 0,
@@ -708,7 +580,14 @@ def _emit_def(
     """
     child_entries = {} if child_entries is None else child_entries
     lines: list[str] = []
-
+    printer = HirPrinter()
+    root_mesh = (
+        fn.body.mesh
+        if isinstance(fn.body, MeshRegion) and not fn.specializations
+        else None
+    )
+    if root_mesh is not None:
+        ctx.push_mesh(root_mesh, "mesh")
 
     _counter = [0]
     _names: dict[int, str] = {}
@@ -867,81 +746,28 @@ def _emit_def(
         if isinstance(expr, LoopRegion):
             for carry in expr.carried_args:
                 _assign_name(carry)
+    printer.bind_def(_names, _param_alias, child_entries, _moved_window)
 
-    def _tuple_literal(elements) -> str:
-        inner = ", ".join(
-            repr(el.value) if isinstance(el, Constant) else _expr_ref(el)
-            for el in elements
-        )
-        if len(elements) == 1:
-            inner += ","
-        return f"({inner})"
-
-    def _expr_ref(expr: Expr) -> str:
-        if id(expr) in _param_alias:
-            return _expr_ref(_param_alias[id(expr)])
-        projection = _region_projection(expr)
-        if isinstance(projection, LoopRegion):
-            return _names[id(projection.carried_args[expr.target.index])]
-        if isinstance(expr, LoopRegion):
-
-
-
-            carried = tuple(_names[id(carry)] for carry in expr.carried_args)
-            if len(carried) == 1:
-                return carried[0]
-            return "(" + ", ".join(carried) + ")"
-        if isinstance(projection, MeshRegion):
-            return _expr_ref(projection.body.elements[expr.target.index])
-        if isinstance(expr, MeshRegion):
-            return _arg_ref(expr.body)
-        return _names[id(expr)]
-
-    def _arg_ref(a) -> str:
-
-
-
-        return _tuple_literal(a.elements) if isinstance(a, Tuple) else _expr_ref(a)
-
-    def _start_ref(start, size, stride) -> str:
-        """One Slice start as source.
-
-        A moved tile window prints as the move itself -- the offset is a
-        compile-time constant, so it belongs in the indexer rather than in a
-        statement of its own.
-        """
-        moved = _moved_window(start, size, stride)
-        if moved is None:
-            return repr(start.value) if isinstance(start, Constant) else _expr_ref(start)
-        window, offset = moved
-        return _moved_window_ref(_expr_ref(window), offset)
-
-
-
-    return_ty = fn.return_type
+    return_type = fn.return_type
     arrow = ""
-    if isinstance(return_ty, TensorType):
-        arrow = " -> " + _tensor_annotation(
-            return_ty, mesh_name_map=mesh_map, indent=indent
-        )
-    elif not isinstance(return_ty, TupleType):
+    if isinstance(return_type, TensorType):
+        with printer.type_surface(indent=indent):
+            arrow = " -> " + printer.visit(return_type, ctx)
+    elif not isinstance(return_type, TupleType):
         arrow = " -> None"
 
     lines.append(f"def {def_name}(")
-    param_strs = []
-    for p in fn.params:
-        name = _names[id(p)]
-        if isinstance(p.type, TensorType):
-            ann = _tensor_annotation(
-                p.type, mesh_name_map=mesh_map, indent=indent, is_const=p.is_const,
-            )
-            param_strs.append(f"{indent}{name}: {ann}")
+    params: list[str] = []
+    for param in fn.params:
+        name = _names[id(param)]
+        if isinstance(param.type, TensorType):
+            with printer.type_surface(indent=indent, const=param.is_const):
+                annotation = printer.visit(param.type, ctx)
+            params.append(f"{indent}{name}: {annotation}")
         else:
-            param_strs.append(f"{indent}{name}")
-
-
-    for index, text in enumerate(param_strs):
-        suffix = "," if index < len(param_strs) - 1 else ""
+            params.append(f"{indent}{name}")
+    for index, text in enumerate(params):
+        suffix = "," if index < len(params) - 1 else ""
         lines.extend((text + suffix).split("\n"))
     lines.append(f"){arrow}:")
 
@@ -949,134 +775,13 @@ def _emit_def(
         line = _constraint_line(param, indent, _names[id(param)])
         if line is not None:
             lines.append(line)
-
-
     if fn.body is None:
         lines.append(f"{indent}pass")
+        if root_mesh is not None:
+            ctx.pop_mesh()
         return lines
 
     printed: set[int] = {id(param) for param in fn.params}
-
-    def _format_call(expr: Call, indent_here: str) -> str:
-        """Render a Call's RHS expression text.
-
-        Render a Call's RHS expression text: the ``reshard(...)`` /
-        ``<HirFunction>(...)`` special forms, else ``op_name(args, attr=val,
-        ...)``. Shared by the inline (tile-loop body) emitter and the
-        top-level emit loop so an attribute-rendering rule (``ShardLayout``,
-        ``DType``, ...) only needs one edit. A reshard that gathers back to the
-        whole names no mesh, so its target is a plain ``Layout`` and there is no
-        mesh reference to abbreviate.
-        """
-        target = expr.target
-        args_str = ", ".join(_arg_ref(arg) for arg in expr.args)
-        if isinstance(target, Reshard):
-            layout_kw = ""
-            if isinstance(target.layout, ShardLayout):
-                layout_text = _shard_layout_str(
-                    target.layout, indent=indent_here + "    ", mesh_map=mesh_map
-                )
-                layout_kw = ", layout=" + layout_text
-            elif target.layout is not None:
-                layout_kw = ", layout=" + _layout_str(target.layout, indent_here + "    ")
-            storage = (
-                f", storage={target.storage.name.lower()}"
-                if target.storage is not None
-                else ""
-            )
-            return f"reshard({args_str}{layout_kw}{storage})"
-        if isinstance(target, HirFunction):
-            binding = _module_callee_binding(target, child_entries)
-            return f"{binding or target.name}({args_str})"
-        if isinstance(target, Slice):
-            indexers = []
-            starts = expr.args[1]
-            if not isinstance(starts, Tuple):
-                raise ValueError("canonical_source: Slice starts must be a Tuple")
-            runtime_starts = False
-            for axis, (start, size, stride) in enumerate(
-                zip(starts.elements, target.sizes, target.strides)
-            ):
-                if _moved_window(start, size, stride) is not None:
-                    indexers.append(_start_ref(start, size, stride))
-                    continue
-                dim = expr.args[0].type.shape[axis]
-                if (
-                    isinstance(start, Constant)
-                    and start.value == 0
-                    and size == dim
-                    and stride == 1
-                ):
-                    indexers.append(":")
-                    continue
-                if not (
-                    isinstance(start, Constant)
-                    and isinstance(start.value, int)
-                    and isinstance(size, int)
-                    and isinstance(stride, int)
-                ):
-                    runtime_starts = True
-                    break
-                begin = int(start.value)
-                stop = begin + size * stride
-                indexers.append(
-                    f"{begin}:{stop}" if stride == 1 else f"{begin}:{stop}:{stride}"
-                )
-            if runtime_starts:
-                start_refs = ", ".join(
-                    _start_ref(start, size, stride)
-                    for start, size, stride in zip(
-                        starts.elements, target.sizes, target.strides
-                    )
-                )
-                if len(starts.elements) == 1:
-                    start_refs += ","
-                return (
-                    f"slice({_arg_ref(expr.args[0])}, ({start_refs}), "
-                    f"sizes={_attr_tuple_str(target.sizes)}, "
-                    f"strides={_attr_tuple_str(target.strides)})"
-                )
-            return f"{_arg_ref(expr.args[0])}[{', '.join(indexers)}]"
-
-        alias_name = _kinded_alias_name(target)
-        suppress_attrs = {"kind"} if alias_name is not None else set()
-        attr_strs = []
-        for param in type(target).params():
-            if param.kind != "attribute":
-                continue
-            value = getattr(target, param.name, None)
-            if value is None or param.name in suppress_attrs or param.name == "layout":
-                continue
-            if isinstance(value, str):
-                attr_strs.append(f'{param.name}="{value}"')
-            elif isinstance(value, DType):
-                attr_strs.append(f'{param.name}="{value.name}"')
-            elif isinstance(value, enum.Enum) and isinstance(value.value, str):
-                attr_strs.append(f'{param.name}="{value.value}"')
-            elif isinstance(value, float):
-                if math.isinf(value):
-                    literal = "-1e999" if value < 0 else "1e999"
-                elif math.isnan(value):
-                    literal = "(1e999 - 1e999)"
-                else:
-                    literal = repr(value)
-                attr_strs.append(f"{param.name}={literal}")
-            elif isinstance(value, ShardLayout):
-                sl_str = _shard_layout_str(
-                    value, indent=indent_here + "        ", mesh_map=mesh_map
-                )
-                attr_strs.append(f"{param.name}={sl_str}")
-            elif isinstance(value, TensorType):
-                attr_strs.append(f"{param.name}={_compact_type(value, {})}")
-            elif isinstance(value, tuple):
-                attr_strs.append(f"{param.name}={_attr_tuple_str(value)}")
-            else:
-                attr_strs.append(f"{param.name}={value}")
-
-
-
-        arguments = [_arg_ref(arg) for arg in expr.args] + attr_strs
-        return f"{_op_name(target)}({', '.join(arguments)})"
 
     def _emit_inline_call(expr: Call, level: str) -> None:
         name = _names[id(expr)]
@@ -1085,77 +790,58 @@ def _emit_def(
                 value=name,
                 line=line_offset + _physical_line_count(lines) + 1,
             )
+        with printer.type_surface(indent=level):
+            rendered = printer.visit(expr, ctx)
         lines.append(
-            f"{level}{name} = {_format_call(expr, level)}"
-            f"{_comments(expr, options, mesh_map)}"
+            f"{level}{name} = {rendered}"
+            f"{_comments(expr, options, printer, ctx)}"
         )
         printed.add(id(expr))
 
-    class _ExprEmitter(ExprFunctor[None]):
-        def __init__(self, level: str) -> None:
-            super().__init__()
-            self.level = level
-
-        def emit(self, expr: Expr) -> None:
-            self.visit(expr)
-
-        def visit(self, expr, ctx=None):
-            key = id(expr)
-            if key in printed:
-                return None
-            if key in _inlined_start_ids:
-                printed.add(key)
-                return None
-            return super().visit(expr, ctx)
-
-        def visit_Var(self, expr: Var, ctx=None) -> None:
-            printed.add(id(expr))
-
-        def visit_Constant(self, expr: Constant, ctx=None) -> None:
+    def _emit_expr(expr: Expr, level: str) -> None:
+        key = id(expr)
+        if key in printed:
+            return
+        if key in _inlined_start_ids:
+            printed.add(key)
+            return
+        if isinstance(expr, Var):
+            printed.add(key)
+            return
+        if isinstance(expr, Constant):
             lines.append(
-                f"{self.level}{_names[id(expr)]} = {repr(expr.value)}"
-                f"{_comments(expr, options, mesh_map)}"
+                f"{level}{_names[id(expr)]} = {repr(expr.value)}"
+                f"{_comments(expr, options, printer, ctx)}"
             )
-            printed.add(id(expr))
-
-        def visit_Tuple(self, expr: Tuple, ctx=None) -> None:
+            printed.add(key)
+            return
+        if isinstance(expr, Tuple):
             for element in expr.elements:
                 if not isinstance(element, Constant):
-                    self.visit(element, ctx)
-            printed.add(id(expr))
-
-        def visit_LoopRegion(self, expr: LoopRegion, ctx=None) -> None:
-            _emit_loop_region(expr, self.level)
-
-        def visit_MeshRegion(self, expr: MeshRegion, ctx=None) -> None:
-            _emit_mesh_region(expr, self.level)
-
-        def visit_Call(self, expr: Call, ctx=None) -> None:
+                    _emit_expr(element, level)
+            printed.add(key)
+            return
+        if isinstance(expr, LoopRegion):
+            _emit_loop_region(expr, level)
+            return
+        if isinstance(expr, MeshRegion):
+            _emit_mesh_region(expr, level)
+            return
+        if isinstance(expr, Call):
             projection = _region_projection(expr)
             if isinstance(projection, LoopRegion):
-                _emit_loop_region(projection, self.level)
-                printed.add(id(expr))
+                _emit_loop_region(projection, level)
+                printed.add(key)
                 return
             if isinstance(projection, MeshRegion):
-                _emit_mesh_region(projection, self.level)
-                printed.add(id(expr))
+                _emit_mesh_region(projection, level)
+                printed.add(key)
                 return
             for arg in expr.args:
-                self.visit(arg, ctx)
-            _emit_inline_call(expr, self.level)
-
-        def default_visit(self, expr, ctx=None) -> None:
-            return None
-
-    _expr_emitter = _ExprEmitter("")
-
-    def _emit_expr(expr: Expr, level: str) -> None:
-        previous = _expr_emitter.level
-        _expr_emitter.level = level
-        try:
-            _expr_emitter.emit(expr)
-        finally:
-            _expr_emitter.level = previous
+                _emit_expr(arg, level)
+            _emit_inline_call(expr, level)
+            return
+        printed.add(key)
 
     def _emit_loop_region(region: LoopRegion, level: str) -> None:
         key = id(region)
@@ -1165,23 +851,24 @@ def _emit_def(
             _emit_expr(init, level)
         for carry in region.carried_args:
             printed.add(id(carry))
-        extent = shape_entry_str(region.extent)
-        step = shape_entry_str(region.step)
-        start = shape_entry_str(region.start)
+        extent = printer.visit(region.extent, ctx)
+        step = printer.visit(region.step, ctx)
+        start = printer.visit(region.start, ctx)
         if id(region.induction_var) in _tile_window_steps:
+            ctx.imports.add("from tilefoundry.dsl.tf import *")
             loop = f"tile({extent}, {step})"
         elif region.start == 0 and region.step == 1:
             loop = f"range({extent})"
         else:
             loop = f"range({start}, {extent}, {step})"
-        lines.append(f"{level}for {region.induction_var.name} in {loop}:{_comments(region, options, mesh_map)}")
+        lines.append(f"{level}for {region.induction_var.name} in {loop}:{_comments(region, options, printer, ctx)}")
         printed.add(key)
         inner = level + "    "
         _emit_expr(region.body, inner)
         for value in region.yield_values:
             _emit_expr(value, inner)
         for carry, value in zip(region.carried_args, region.yield_values):
-            lines.append(f"{inner}{_names[id(carry)]} = {_expr_ref(value)}")
+            lines.append(f"{inner}{_names[id(carry)]} = {printer.reference(value)}")
 
     def _emit_mesh_region(region: MeshRegion, level: str, *, terminal: bool = False) -> None:
         key = id(region)
@@ -1189,19 +876,30 @@ def _emit_def(
             return
         for arg in region.args:
             _emit_expr(arg, level)
-        mesh_name = mesh_map[id(region.mesh)]
+        if root_mesh is not None and region is fn.body:
+            printed.add(key)
+            _emit_expr(region.body, level)
+            if terminal:
+                lines.append(f"{level}return {printer.reference(region.body)}")
+            return
+        mesh_text = printer.visit(region.mesh, ctx)
+        mesh_name = ctx.scope_name(region.mesh)
         lines.append(
-            f"{level}with {mesh_name} as _{mesh_name}:"
-            f"{_comments(region, options, mesh_map)}"
+            f"{level}with {mesh_text} as {mesh_name}:"
+            f"{_comments(region, options, printer, ctx)}"
         )
         printed.add(key)
         inner = level + "    "
-        if terminal and isinstance(region.body, MeshRegion):
-            _emit_mesh_region(region.body, inner, terminal=True)
-            return
-        _emit_expr(region.body, inner)
-        if terminal:
-            lines.append(f"{inner}return {_arg_ref(region.body)}")
+        ctx.push_mesh(region.mesh, mesh_name)
+        try:
+            if terminal and isinstance(region.body, MeshRegion):
+                _emit_mesh_region(region.body, inner, terminal=True)
+                return
+            _emit_expr(region.body, inner)
+            if terminal:
+                lines.append(f"{inner}return {printer.reference(region.body)}")
+        finally:
+            ctx.pop_mesh()
 
     for expr in _order:
         if (
@@ -1224,7 +922,7 @@ def _emit_def(
             continue
         if isinstance(expr, Constant):
             name = _names[id(expr)]
-            lines.append(f"{indent}{name} = {repr(expr.value)}{_comments(expr, options, mesh_map)}")
+            lines.append(f"{indent}{name} = {repr(expr.value)}{_comments(expr, options, printer, ctx)}")
             line = _constraint_line(expr, indent, name)
             if line is not None:
                 lines.append(line)
@@ -1243,9 +941,11 @@ def _emit_def(
                     value=name,
                     line=line_offset + _physical_line_count(lines) + 1,
                 )
+            with printer.type_surface(indent=indent):
+                rendered = printer.visit(expr, ctx)
             lines.append(
-                f"{indent}{name} = {_format_call(expr, indent)}"
-                f"{_comments(expr, options, mesh_map)}"
+                f"{indent}{name} = {rendered}"
+                f"{_comments(expr, options, printer, ctx)}"
             )
             line = _constraint_line(expr, indent, name)
             if line is not None:
@@ -1256,227 +956,30 @@ def _emit_def(
 
     if not isinstance(fn.body, MeshRegion):
         if isinstance(fn.body, Tuple):
-            lines.append(f"{indent}return {_tuple_literal(fn.body.elements)}")
+            lines.append(f"{indent}return {printer.tuple_reference(fn.body.elements)}")
         elif isinstance(fn.body, LoopRegion):
             values = tuple(_names[id(carry)] for carry in fn.body.carried_args)
             result = values[0] if len(values) == 1 else "(" + ", ".join(values) + ")"
             lines.append(f"{indent}return {result}")
         else:
-            body_name = _expr_ref(fn.body)
+            body_name = printer.reference(fn.body)
             lines.append(f"{indent}return {body_name}")
+    if root_mesh is not None:
+        ctx.pop_mesh()
     return lines
 
 
-_HIR_RENDERER = HirPrinter()
-_dtype_str = _HIR_RENDERER.dtype_str
-_pattern_ctor = _HIR_RENDERER.render_pattern
 
-
-def _topologies_str(mesh: Mesh) -> str:
-    values = ", ".join(
-        f'Topology("{topology.name}", {shape_entry_str(topology.size)})'
-        for topology in mesh.topologies
-    )
-    return f"({values}{',' if len(mesh.topologies) == 1 else ''})"
-
-
-def _shape_tuple(shape: tuple) -> str:
-    return _HIR_RENDERER.shape_tuple(shape)
-
-
-def _type_str(value, ctx=None, indent: str = "", *, is_const: bool = False) -> str:
-    """Enter the shared type visitor with the caller's block indentation."""
-    with _HIR_RENDERER.type_surface(indent=indent, const=is_const):
-        return _HIR_RENDERER.visit(value, ctx if ctx is not None else HirPrintContext())
-
-
-def _layout_str(layout: LayoutBase | None, indent: str = "") -> str:
-    return "None" if layout is None else _type_str(layout, indent=indent)
-
-
-def _mesh_str(mesh: Mesh, indent: str = "") -> str:
-    return _type_str(mesh, indent=indent)
-
-
-def _shard_layout_str(sl: ShardLayout, indent: str = "", *, mesh_map=None) -> str:
-    """A shard layout in an attribute slot, named from the printed mesh prelude."""
-    return _type_str(sl, HirPrintContext(mesh_map), indent)
-
-
-def _tensor_annotation(ty: TensorType, *, mesh_name_map=None, indent="", is_const=False) -> str:
-    return _type_str(ty, HirPrintContext(mesh_name_map), indent, is_const=is_const)
-
-
-def _collect_all_meshes(
-    fn: HirFunction,
-) -> tuple[dict[int, Mesh], dict[int, Mesh]]:
-    """Meshes referenced by *fn* and every specialization variant.
-
-    Meshes referenced by *fn* and every specialization variant — the
-    printer's mesh-name map must stay stable across the base prototype and
-    each ``.specialize`` block.
-    """
-    type_meshes: dict[int, Mesh] = {}
-    scope_meshes: dict[int, Mesh] = {}
-    for f in (fn, *fn.variants):
-        types, scopes = _collect_meshes(f)
-        type_meshes.update(types)
-        scope_meshes.update(scopes)
-    return type_meshes, scope_meshes
-
-
-def _mesh_name_map(meshes: dict[int, Mesh]) -> dict[int, str]:
-    """Name every mesh identity, sharing one name per structural descriptor.
-
-    A composed mesh is rebuilt at each use site, so one descriptor reaches the
-    printer under several identities. Naming those apart would emit a prelude
-    line per copy and make the annotations read as if they named different
-    meshes.
-    """
-    used: set[str] = set()
-    by_signature: dict[str, str] = {}
-    result: dict[int, str] = {}
-    for identity, mesh in meshes.items():
-        signature = _mesh_str(mesh)
-        name = by_signature.get(signature)
-        if name is None:
-            base = mesh.topologies[0].name if mesh.topologies else "mesh"
-            name, suffix = base, 2
-            while name in used:
-                name = f"{base}_{suffix}"
-                suffix += 1
-            used.add(name)
-            by_signature[signature] = name
-        result[identity] = name
-    return result
-
-
-def _bound_mesh_aliases(
-    names: dict[int, str], meshes: dict[int, Mesh], scope_mesh_ids: set[int]
-) -> dict[int, str]:
-    """Keep only the aliases the mesh prelude actually binds.
-
-    A mesh with no named axes that no scope enters gets no prelude line, so
-    naming it inside a printed type would emit an undefined reference. Names
-    are assigned over every mesh first, so dropping the unbound ones here does
-    not renumber the meshes that remain.
-    """
-    bound = {
-        names[identity]
-        for identity, mesh in meshes.items()
-        if mesh.names or identity in scope_mesh_ids
-    }
-    return {identity: name for identity, name in names.items() if name in bound}
-
-
-def _emit_header(
-    fn: HirFunction,
-    meshes: dict[int, Mesh],
-    mesh_map: dict[int, str],
-    indent: str,
-    *,
-    for_module: bool = False,
-    target: object | None = None,
-    dim_vars: "dict[str, object] | None" = None,
-    scope_mesh_ids: set[int] | None = None,
-) -> list[str]:
-    """Import header + mesh-prelude shared by ``hir_function_to_python`` and ``_module_to_python``.
-
-    Import header + mesh-prelude shared by ``hir_function_to_python`` and
-    ``_module_to_python`` — the only source for the imports/mesh-defs a
-    dispatch prototype needs (the conditional ``DimVarRangePat`` import for
-    ``fn.variants``, the ``ConstTensor``/``Tensor`` selection), so standalone
-    and module-wrapped output cannot drift out of sync.
-    """
-    lines: list[str] = ["from __future__ import annotations", ""]
+def _new_hir_context(*, for_module: bool = False, target=None) -> HirPrintContext:
+    """Create a HIR context with imports owned by the surrounding file."""
+    ctx = HirPrintContext()
     if for_module:
-        lines.append("from tilefoundry.module import module")
-    lines.append("from tilefoundry import func")
+        ctx.imports.add("from tilefoundry.module import module")
+    ctx.imports.add("from tilefoundry import func")
     if target is not None:
-        rendered: PythonExpr = target.to_python()
-        lines.extend(rendered.imports)
-    lines.append("from tilefoundry.dsl.tf import *  # noqa: F401, F403")
-    lines.append(f"from tilefoundry.dsl import {_tensor_import_names(fn)}")
-    lines.append("from tilefoundry.dsl.storage import gmem, host, rmem, smem, tmem  # noqa: F401")
-    shard_names = {"Layout", "Mesh", "Topology"} if meshes else set()
-    if for_module:
-        shard_names.add("Topology")
-    layouts = []
-    functions = (fn, *fn.variants)
-    for current in functions:
-        for param in current.params:
-            if isinstance(param.type, TensorType):
-                layouts.append(param.type.layout)
-        if isinstance(current.return_type, TensorType):
-            layouts.append(current.return_type.layout)
-    for current in functions:
-        for expr in iter_exprs(current.body):
-            if isinstance(expr.type, TensorType):
-                layouts.append(expr.type.layout)
-            if isinstance(expr, Call):
-                for candidate in vars(expr.target).values() if hasattr(expr.target, "__dict__") else ():
-                    if isinstance(candidate, LayoutBase):
-                        layouts.append(candidate)
-                    elif isinstance(candidate, TensorType):
-                        layouts.append(candidate.layout)
-    def nested_layouts(layout):
-        if isinstance(layout, ComposedLayout):
-            yield layout
-            if layout.inner is not None:
-                yield from nested_layouts(layout.inner)
-            if layout.outer is not None:
-                yield from nested_layouts(layout.outer)
-        elif isinstance(layout, ShardLayout):
-            yield layout
-            yield from nested_layouts(layout.layout)
-
-    all_layouts = [nested for layout in layouts for nested in nested_layouts(layout)]
-    if any(isinstance(layout, ShardLayout) for layout in all_layouts):
-        shard_names.add("ShardLayout")
-    if any(isinstance(layout, ComposedLayout) for layout in all_layouts):
-        shard_names.add("ComposedLayout")
-    for layout in all_layouts:
-        if isinstance(layout, ShardLayout):
-            for attr in layout.attrs:
-                shard_names.add({Broadcast: "B", Split: "S", Partial: "P"}.get(type(attr), ""))
-    shard_names.discard("")
-    shard_import = ", ".join(sorted(shard_names))
-    if shard_import:
-        lines.append(f"from tilefoundry.ir.types.shard import {shard_import}")
-    if fn.variants:
-        lines.append("from tilefoundry.ir.core.pattern import DimVarRangePat")
-    if dim_vars:
-        lines.append("from tilefoundry.ir.types.dim import DimVar, ceildiv")
-    lines.append("")
-
-
-
-
-
-    if dim_vars:
-        for name, var in dim_vars.items():
-            lines.append(f'{name} = DimVar("{var.name}", {var.lo}, {var.hi})')
-        lines.append("")
-
-
-    prelude: dict[str, Mesh] = {}
-    for identity, mesh in meshes.items():
-        name = mesh_map.get(identity)
-        if name is not None:
-            prelude.setdefault(name, mesh)
-    for name, mesh in prelude.items():
-        names_repr = repr(tuple(mesh.names)) if mesh.names else "()"
-        lines.append(
-            f"{name} = Mesh("
-            f"{_topologies_str(mesh)}, "
-            f"{_layout_str(mesh.layout)}, "
-            f"names={names_repr}"
-            f")"
-        )
-    if prelude:
-        lines.append("")
-    return lines
-
+        rendered = target.to_python()
+        ctx.imports.update(rendered.imports)
+    return ctx
 
 def _variant_binding_name(variant: HirFunction) -> str:
     """Return a valid source binding for a variant without display metadata."""
@@ -1488,7 +991,7 @@ def _variant_binding_name(variant: HirFunction) -> str:
 
 
 def _emit_decorated_defs(
-    fn: HirFunction, mesh_map: dict[int, str], indent: str, options: PythonPrintOptions,
+    fn: HirFunction, ctx: HirPrintContext, indent: str, options: PythonPrintOptions,
     child_entries: dict[int, str] | None = None,
     *,
     line_offset: int = 0,
@@ -1501,12 +1004,20 @@ def _emit_decorated_defs(
     render identically.
     See [inspection §2.6](docs/spec/inspection.md#26-specialization-printing).
     """
-    lines: list[str] = ["@func"]
+    printer = HirPrinter()
+    decorator = "@func"
+    if isinstance(fn.body, MeshRegion) and not fn.specializations:
+        root_ctx = HirPrintContext()
+        with printer.type_surface(indent=indent):
+            mesh_text = printer.visit(fn.body.mesh, root_ctx)
+        ctx.imports.update(root_ctx.imports)
+        decorator = f"@func(mesh={mesh_text})"
+    lines: list[str] = [decorator]
     lines.extend(
         _emit_def(
             fn,
             fn.name,
-            mesh_map,
+            ctx,
             indent,
             options,
             child_entries,
@@ -1519,11 +1030,11 @@ def _emit_decorated_defs(
     for variant in fn.variants:
         lines.append("")
         lines.append(
-            f"@{fn.name}.specialize({_pattern_ctor(variant.specializations[0])})"
+            f"@{fn.name}.specialize({HirPrinter().render_pattern(variant.specializations[0], ctx)})"
         )
         lines.extend(
             _emit_def(
-                variant, _variant_binding_name(variant), mesh_map, indent, options,
+                variant, _variant_binding_name(variant), ctx, indent, options,
                 child_entries,
                 line_offset=line_offset + _physical_line_count(lines),
                 statements=statements,
@@ -1539,34 +1050,27 @@ def _render_hir_function(
 
     A normal function prints as a single ``@func``. A dispatch prototype
     (``variants != ()``) prints as a ``pass``-bodied ``@func`` base followed by
-    one ``@<name>.specialize(pattern)`` block per variant. When the function
-    uses meshes with named axes, compact sugar form is emitted; otherwise the
-    verbose ``ShardLayout(...)`` form is used.
+    one ``@<name>.specialize(pattern)`` block per variant. Placement sugar is
+    emitted only where an explicit mesh-scope binding dominates its use.
     """
     indent = "    "
-    type_meshes, scope_meshes = _collect_all_meshes(fn)
-    meshes = {**type_meshes, **scope_meshes}
-    mesh_map = _bound_mesh_aliases(_mesh_name_map(meshes), meshes, set(scope_meshes))
-    lines = _emit_header(
-        fn,
-        meshes,
-        mesh_map,
-        indent,
-        dim_vars=dim_vars_reached(fn),
-        scope_mesh_ids=set(scope_meshes),
-    )
+    ctx = _new_hir_context()
     statements: dict[int, _PrintedStatement] = {}
-    lines.extend(
-        _emit_decorated_defs(
-            fn,
-            mesh_map,
-            indent,
-            options or PythonPrintOptions(),
-            line_offset=_physical_line_count(lines),
-            statements=statements,
-        )
+    lines = _emit_decorated_defs(
+        fn,
+        ctx,
+        indent,
+        options or PythonPrintOptions(),
+        line_offset=0,
+        statements=statements,
     )
-    return _PythonRendering("\n".join(lines) + "\n", statements)
+    header = ctx.header()
+    header_lines = _physical_line_count(header)
+    statements = {
+        identity: _PrintedStatement(value=item.value, line=item.line + header_lines)
+        for identity, item in statements.items()
+    }
+    return _PythonRendering("\n".join(header + lines) + "\n", statements)
 
 
 def hir_function_to_python(
@@ -1614,8 +1118,8 @@ def _emission_order(mod: Module) -> tuple:
 
     The entry goes last: a body calling a sibling names the attribute the class
     body already bound, so every callee must be written before it. Mesh
-    collection reads the same order, so the printed mesh prelude does not
-    depend on the order the authored source happened to use.
+    traversal reads the same order, so output does not depend on the order the
+    authored source happened to use.
     """
     functions = mod.functions
     entry = mod.entry_function() if functions and mod.entry is not None else None
@@ -1631,19 +1135,22 @@ def _module_tree_functions(mod: Module) -> tuple[HirFunction, ...]:
     return tuple(functions)
 
 
-def _module_decorator_line(mod: Module, entry_name: str | None) -> str:
+def _module_decorator_line(mod: Module, entry_name: str | None, ctx: HirPrintContext) -> str:
     """Render the context this Module declares as an ``@module(...)`` line.
 
     Always the called form. A bare decorator has not run while the class body
     is evaluated, so a body naming a child call could not resolve it.
     """
     kwargs: list[str] = [] if entry_name is None else [f'entry="{entry_name}"']
+    printer = HirPrinter()
     if mod.target is not None:
         rendered: PythonExpr = mod.target.to_python()
+        ctx.imports.update(rendered.imports)
         kwargs.append(f"target={rendered.text}")
     if mod.topologies is not None:
+        ctx.imports.add("from tilefoundry.ir.types.shard import Topology")
         topo_strs = [
-            f'Topology("{t.name}", {shape_entry_str(t.size)})'
+            f'Topology("{t.name}", {printer.visit(t.size, ctx)})'
             for t in mod.topologies
         ]
         rendered_topologies = f'({", ".join(topo_strs)},)' if topo_strs else "()"
@@ -1652,7 +1159,7 @@ def _module_decorator_line(mod: Module, entry_name: str | None) -> str:
 
 
 def _emit_module_class(
-    mod: Module, module_name: str, mesh_map: dict[int, str], indent: str,
+    mod: Module, module_name: str, ctx: HirPrintContext, indent: str,
     options: PythonPrintOptions,
 ) -> list[str]:
     """One ``@module`` class block: its nested Modules, then its functions.
@@ -1660,7 +1167,7 @@ def _emit_module_class(
     Children first, because a body calling one names the attribute it is bound
     to and a class body binds in the order it is written.
     """
-    lines = [_module_decorator_line(mod, mod.entry), f"class {module_name}:"]
+    lines = [_module_decorator_line(mod, mod.entry, ctx), f"class {module_name}:"]
     ordered = _emission_order(mod)
     child_entries = {
         id(child.entry_function()): child.name
@@ -1668,14 +1175,16 @@ def _emit_module_class(
         if child.entry is not None and isinstance(child.entry_function(), HirFunction)
     }
     blocks: list[list[str]] = [
-        _emit_module_class(child, child.name, mesh_map, indent, options)
+        _emit_module_class(child, child.name, ctx, indent, options)
         for child in mod.modules
     ]
     for fn in ordered:
         if isinstance(fn, HirFunction):
-            blocks.append(_emit_decorated_defs(fn, mesh_map, indent, options, child_entries))
+            blocks.append(_emit_decorated_defs(fn, ctx, indent, options, child_entries))
         elif isinstance(fn, PrimFunction):
-            blocks.append(_tir_function_block(fn))
+            tir_block = _tir_function_block(fn)
+            ctx.imports.update(tir_block.imports)
+            blocks.append(tir_block)
         else:
             raise TypeError(f"Python printer cannot serialize {type(fn).__name__}")
     for index, block in enumerate(blocks):
@@ -1708,48 +1217,13 @@ def _module_to_python(
         raise TypeError("Module printer requires a function entry")
 
 
-    header_of = entry if entry is not None else functions[0]
     indent4 = "    "
-    type_meshes: dict[int, Mesh] = {}
-    scope_meshes: dict[int, Mesh] = {}
-    for fn in functions:
-        types, scopes = _collect_all_meshes(fn)
-        type_meshes.update(types)
-        scope_meshes.update(scopes)
-    meshes = {**type_meshes, **scope_meshes}
-    mesh_map = _bound_mesh_aliases(_mesh_name_map(meshes), meshes, set(scope_meshes))
-
-    dim_vars: dict[str, object] = {}
-    for fn in functions:
-        dim_vars.update(dim_vars_reached(fn))
-    for node in _module_tree(root):
-        dim_vars.update(dim_vars_by_name(node.topologies or ()))
-    lines = _emit_header(
-        header_of, meshes, mesh_map, indent4, for_module=True, target=root.target,
-        dim_vars=dim_vars, scope_mesh_ids=set(scope_meshes),
+    ctx = _new_hir_context(for_module=True, target=root.target)
+    lines = _emit_module_class(
+        root, module_name, ctx, indent4, options or PythonPrintOptions(),
     )
-    if any(isinstance(fn, PrimFunction) for node in _module_tree(root) for fn in node.functions):
-        lines = [
-            line.replace("from tilefoundry import func", "from tilefoundry import func, prim_func")
-            for line in lines
-        ]
-        tensor_line = next(i for i, line in enumerate(lines) if line.startswith("from tilefoundry.dsl import "))
-        lines[tensor_line] = lines[tensor_line].replace("import ", "import T, ")
-        target_imports = sorted({fn.target.to_python().imports[0] for node in _module_tree(root) for fn in node.functions if isinstance(fn, PrimFunction)})
-        lines[2:2] = target_imports
-    tensor_names = "ConstTensor, Tensor" if any(
-        param.is_const for fn in functions for param in fn.params
-    ) else "Tensor"
-    lines = [
-        f"from tilefoundry.dsl import {tensor_names}" if line.startswith("from tilefoundry.dsl import Tensor") else line
-        for line in lines
-    ]
-    lines.extend(
-        _emit_module_class(
-            root, module_name, mesh_map, indent4, options or PythonPrintOptions(),
-        )
-    )
-    return "\n".join(lines) + "\n"
+    header = ctx.header()
+    return "\n".join(header + lines) + "\n"
 
 
 def _module_tree(root: Module) -> Iterator[Module]:

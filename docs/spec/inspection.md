@@ -130,8 +130,8 @@ explicit wrapper request. Module output computes imports from names actually
 used by the rendered program and MUST remain lint-clean.
 
 - constraints:
-  - Module input MUST emit every HIR Function and preserve shared `Mesh` and
-    `Topology` definitions before the class. Mixed HIR/TIR Modules MUST be
+  - Module input MUST emit every HIR Function. Meshes used by a function are
+    written at their scope boundary, and mixed HIR/TIR Modules MUST be
     rejected.
 
 The printer MUST emit a Module's whole tree: each nested Module prints as a
@@ -143,9 +143,9 @@ Target prints as the `@module(target=...)` argument and a declared hierarchy
 as the `@module(topologies=...)` argument
 ([parser §3](./parser.md#3-implementation-overview)).
 Every dimension referenced only by a declared topology expression MUST still
-be emitted in the dimension prelude. A topology `ShapeDim` MUST use the same
-DSL expression text as tensor and Mesh geometry, including public constructors
-such as `ceildiv`, so importing restores the same expression tree.
+be emitted in the file header. A topology `ShapeDim` MUST use the same DSL
+expression text as tensor and Mesh geometry, including public constructors such
+as `ceildiv`, so importing restores the same expression tree.
 
 - constraints:
   - The decorator MUST print in its called form, `@module()` included. A bare
@@ -180,51 +180,39 @@ DSL text forms for tensor / layout / shard annotations are owned by
 round-trip without losing mesh / layout / storage information;
 otherwise it falls back to the verbose `ShardLayout(...)`.
 
-A `ShardLayout` over a plain `Layout` whose `Mesh` has named axes and a
-prelude name ([§2.5](#25-mesh-name-map)) MUST use the placement sugar of
-[parser §2.1](./parser.md#21-syntax), in both type slots and op-attribute
-slots. That sugar states the layout's own dimensions with each `Split` written
-on the dimension it divides, adds the stride tuple when the strides are not
-C-order over those dimensions, and states the remaining mesh axes in a
-`{axis @ ...}` set. Because the parser reads an unstated mesh axis as
-`Broadcast`, the set carries every `Partial` and carries `Broadcast` only when
-no `Split` or `Partial` would otherwise name the mesh.
+A `ShardLayout` over a plain `Layout` whose `Mesh` has named axes MUST use the
+placement sugar of [parser §2.1](./parser.md#21-syntax), in both type slots and
+op-attribute slots, when every mesh identifier in that sugar has an explicit
+scope binding. A binding is either a `with <mesh> as <name>` region or the
+function's own execution domain. A mesh merely restated in another expression
+is not a binding. Without such a binding, the printer MUST use the verbose
+`ShardLayout(...)` form rather than inventing a name.
 
-Printer output supports two modes derived from the same pretty-print core:
+Placement sugar states the layout's own dimensions with each `Split` written on
+the dimension it divides, adds the stride tuple whenever the layout has one,
+and states the remaining mesh axes in a `{axis @ ...}` set. Because the parser
+reads an unstated mesh axis as `Broadcast`, the set carries every `Partial` and
+carries `Broadcast` only when no `Split` or `Partial` would otherwise name the
+mesh.
 
-- `canonical` — round-trippable text used by `as_script()`, pass
-  dumps, and viewer detail `code` blocks: the `Tensor[...]` form of
-  [parser §2.1](./parser.md#21-syntax) (storage as the string
-  slot, `gmem` omitted).
-- `compact` — abbreviated, **display-only / non-round-trip** text for
-  summaries / labels: `dtype[shape] {value-state?} @storage`. It inlines
-  what it can (a split into the shape, a `Partial` into the `{...}`
-  suffix) and falls back to the canonical form when a layout cannot be
-  rendered compactly.
+The printer has one type-text surface: the canonical `Tensor[...]` form of
+[parser §2.1](./parser.md#21-syntax), used by `as_script()`, comments, DOT,
+the viewer graph, and viewer detail panels. Comments may flatten this text onto
+one physical line, but MUST NOT change its syntax or semantics. The same
+printer visitor supplies type, dimension, layout, and shard-attribute text;
+there is no separate compact, display-only type language.
 
-Both modes MUST agree on semantics; only the level of detail differs.
 The meaning of `Split` / `Partial` / `Broadcast` is owned by
-[shard](./shard.md); these forms define only render syntax.
-
-The same-line type annotation `show_types` appends is the `canonical` form on
-one physical line, rendered through the same mesh name map
-([§2.5](#25-mesh-name-map)) as the signature and the prelude: an annotated
-layout MUST name the hoisted mesh rather than restate it, and a `Tuple[...]`
-annotation MUST name it in every field. The verbose `ShardLayout(...)` fallback
-is unchanged — a mesh with no named axes, or a layout the sugar cannot express,
-still renders verbose, so no annotation loses information. The annotation is
-**display-only** ([§2.7](#27-round-trip-contract)); what round-trips is the
-emitted code, not its comments.
-
-Canonical DType text is the descriptor's `name`. Tensor annotations and DType
-op attributes MUST emit that name as a quoted DSL string. Compact labels MAY
-omit the quotes, but MUST NOT use the descriptor's raw `repr()`.
+[shard](./shard.md); these forms define only render syntax. Canonical DType text
+is the descriptor's `name`. Tensor annotations and DType op attributes MUST
+emit that name as a quoted DSL string.
 
 ### 2.4 Pretty-print / debug display contract
 
-Pretty print is the core presentation layer.  Sugar, debug dumps, and
-viewer type/value text reuse the same DSL text forms in [§2.3](#23-dsl-text-forms).  That keeps
-round-trippable source, labels, and detail panes semantically aligned.
+Pretty print is the core presentation layer. Sugar, debug dumps, DOT, and
+viewer type/value text reuse the same canonical DSL text forms in
+[§2.3](#23-dsl-text-forms). That keeps round-trippable source, labels, and
+detail panes semantically aligned.
 
 - op attributes that are `DType`, `TensorType`, `Layout`, or `ShardLayout` are
   rendered through the [§2.3](#23-dsl-text-forms) printer; `DType` uses its canonical name and these
@@ -236,18 +224,20 @@ printing (for example, choosing stable mesh names across a whole function)
 must use an explicit pretty-printer API rather than relying on no-argument
 `repr()`.
 
-### 2.5 Mesh name map
+### 2.5 Mesh bindings and file header
 
-The printer collects unique `Mesh` objects from all `ShardLayout`
-references in the function (params, return type, body `Reshard` ops)
-and assigns variable names from the first declared topology's name. Mesh
-definitions are emitted in the module prelude / standalone header.
+The print context records imports and declarations while the printer visits the
+program. After the body has been visited, the context emits the file header;
+it MUST contain only imports and `DimVar` declarations reached by the output.
+There is no module-level mesh hoist or global mesh name map.
 
-Two `Mesh` values with the same printed descriptor MUST share one name and one
-prelude definition: a composed mesh is rebuilt at each use site, so naming its
-copies apart would claim the value's parts are placed on different meshes. A
-mesh the prelude does not define MUST NOT be named by a printed type; it is
-restated in full there instead.
+A mesh identifier in placement sugar MUST be a lexical binding visible at the
+point represented by the text: a `with <mesh> as <name>` region, or the
+function's own execution domain. The function execution domain is represented
+as `@func(mesh=...)`, so its name is available to signature annotations. A
+nested region writes its mesh expression at the `with` boundary and uses that
+binding in its body. A named constant or an out-of-scope mesh does not create a
+binding; types that refer to one use the verbose form.
 
 ### 2.6 Specialization printing
 
@@ -477,14 +467,10 @@ graph; an id that was collapsed away returns 404.
   elements); `Tuple` bundles its elements. Op attributes that are
   constants / types render through the [§2.4](#24-pretty-print--debug-display-contract) pretty-print, never raw
   `repr`.
-- **Type text.** Graph labels use the [§2.3](#23-dsl-text-forms) **compact** pretty mode
-  (`bf16[4 @ trd.l, 64] {trd.t @ P("sum")} @smem`) with inline split /
-  DimVar / storage colour; the detail panel uses the [§2.3](#23-dsl-text-forms) **canonical**
-  mode (`Tensor[(4, 64), "f32", ((4 @ trd.l, 64), {trd.t @ P("sum")}),
-  "smem"]`). `Reshard` / layout attrs render through the same core (never
-  raw `repr`). DimVar is a single token-class colour;
-  storage classes draw from an ordered pool, and an unknown memory level
-  hashes stably into the pool's spare slots rather than going colourless.
+- **Type text.** Graph labels and detail panels use the canonical type text from
+  [§2.3](#23-dsl-text-forms), including `Tensor[...]` and placement sugar when
+  a scope binding is available. `Reshard` / layout attrs render through the
+  same visitor (never raw `repr`).
 
 ### 3.4 Interaction contract
 

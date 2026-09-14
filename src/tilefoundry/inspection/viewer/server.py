@@ -102,7 +102,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         if ref is None:
             self._send_json(404, {"error": "unknown visual_id", "id": visual_id})
             return
-        self._send_json(200, format_detail(visual_id, ref, index.mesh_name_map))
+        self._send_json(200, format_detail(visual_id, ref, index.context))
 
     @staticmethod
     def _parse_collapsed(query: dict[str, list[str]]) -> set[str]:

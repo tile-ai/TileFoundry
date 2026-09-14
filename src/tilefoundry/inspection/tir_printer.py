@@ -6,7 +6,6 @@ import re
 
 from tilefoundry.inspection.print_context import TirPrintContext
 from tilefoundry.inspection.printer_base import PythonPrinter
-from tilefoundry.inspection.python_type_printer import PythonTypePrinter
 from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
@@ -14,7 +13,6 @@ from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
-from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import (
     Evaluate,
 )
@@ -42,89 +40,90 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         self.context = context or TirPrintContext()
         self.indent = indent
 
-    def dim_entry(self, value, ctx=None) -> str:
-        return f"_{value.name}" if hasattr(value, "name") else str(value)
+    def visit_DimVar(self, value, ctx=None) -> str:
+        return f"_{value.name}"
+
+    def dim_entry(self, value, ctx=None, *, nested: bool = False) -> str:
+        return super().dim_entry(value, ctx, nested=nested)
 
     def visit(self, node, ctx=None):  # type: ignore[override]
-        """One dispatch root for the two functor families this printer implements.
+        """Dispatch statements, expressions, and types by their concrete name."""
+        return PythonPrinter.visit(self, node, ctx)
 
-        Statements reach the statement visitor; every other value is a type and
-        reaches the inherited type visitor, so ``self.visit(expr.type, ctx)``
-        stays the only way a type is printed.
-        """
-        if isinstance(node, Stmt):
-            return StmtVisitor.visit(self, node)
-        return PythonTypePrinter.visit(self, node, ctx)
+    def visit_Var(self, expr: Var, ctx=None) -> str:
+        return expr.name
 
-    def visit_Sequential(self, stmt):
+    def visit_Constant(self, expr: Constant, ctx=None) -> str:
+        return repr(expr.value)
+
+    def visit_SymbolRef(self, expr: SymbolRef, ctx=None) -> str:
+        return _binding_name(expr.name)
+
+    def visit_ShapeOf(self, expr: ShapeOf, ctx=None) -> str:
+        return f"shape_of({expr.param.name}, axis={expr.axis})"
+
+    def visit_Op(self, expr: Op, ctx=None) -> str:
+        name = getattr(getattr(expr, "_op_schema", None), "name", type(expr).__name__.lower())
+        self.context.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
+        return f"T.{name}"
+
+    def visit_program_call(self, expr: Call, ctx=None) -> str:
+        target = expr.target
+        scalar_binary = {
+            BinaryKind.EQ: "==", BinaryKind.NE: "!=", BinaryKind.LT: "<",
+            BinaryKind.LE: "<=", BinaryKind.GT: ">", BinaryKind.GE: ">=", BinaryKind.AND: "and",
+        }
+        kind = getattr(target, "kind", None)
+        if kind in scalar_binary and len(expr.args) == 2 and expr.type.dtype is DType.bool:
+            return f"{self.visit(expr.args[0])} {scalar_binary[kind]} {self.visit(expr.args[1])}"
+        name = getattr(getattr(target, "_op_schema", None), "name", None) or re.sub(
+            r"(?<!^)(?=[A-Z])", "_", type(target).__name__
+        ).lower()
+        args = [self.visit(item) for item in expr.args]
+        for param in type(target).params():
+            if param.kind == "attribute":
+                value = getattr(target, param.name, None)
+                if value is not None:
+                    args.append(f"{param.name}={self.render_value(value, self.context, self.indent + '    ')}")
+        self.context.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
+        return f"T.{name}({', '.join(args)})"
+
+    def visit_Sequential(self, stmt, ctx=None):
         return [line for child in stmt.body for line in self.visit(child)]
 
-    def visit_LetStmt(self, stmt):
-        return [f"{self.indent}{stmt.var.name} = {self._expr(stmt.value)}"] + self.visit(stmt.body)
+    def visit_LetStmt(self, stmt, ctx=None):
+        return [f"{self.indent}{stmt.var.name} = {self.visit(stmt.value)}"] + self.visit(stmt.body)
 
-    def visit_Evaluate(self, stmt):
+    def visit_Evaluate(self, stmt, ctx=None):
         return self._emit_evaluate(stmt)
 
-    def visit_MeshScope(self, stmt):
+    def visit_MeshScope(self, stmt, ctx=None):
         lines = [f"{self.indent}with {self.visit(stmt.mesh, self.context)} as {stmt.binding.name}:"]
         self.context.push_mesh(stmt.mesh, stmt.binding.name)
         lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body))
         self.context.pop_mesh()
         return lines
 
-    def visit_For(self, stmt):
-        lines = [f"{self.indent}for {stmt.induction_var.name} in range({self._expr(stmt.start)}, {self._expr(stmt.stop)}, {self._expr(stmt.step)}):"]
+    def visit_For(self, stmt, ctx=None):
+        lines = [f"{self.indent}for {stmt.induction_var.name} in range({self.visit(stmt.start)}, {self.visit(stmt.stop)}, {self.visit(stmt.step)}):"]
         lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body))
         return lines
 
-    def visit_If(self, stmt):
-        lines = [f"{self.indent}if {self._expr(stmt.cond)}:"]
+    def visit_If(self, stmt, ctx=None):
+        lines = [f"{self.indent}if {self.visit(stmt.cond)}:"]
         lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.then_body))
         if stmt.else_body.body:
             lines.append(f"{self.indent}else:")
             lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.else_body))
         return lines
 
-    def visit_While(self, stmt):
-        return [f"{self.indent}while {self._expr(stmt.cond)}:"] + TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body)
+    def visit_While(self, stmt, ctx=None):
+        return [f"{self.indent}while {self.visit(stmt.cond)}:"] + TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body)
 
-    def visit_Return(self, stmt):
+    def visit_Return(self, stmt, ctx=None):
         return [f"{self.indent}return"]
 
-    def _expr(self, expr):
-        if isinstance(expr, Var):
-            return expr.name
-        if isinstance(expr, Constant):
-            return repr(expr.value)
-        if isinstance(expr, SymbolRef):
-            return _binding_name(expr.name)
-        if isinstance(expr, ShapeOf):
-            return f"shape_of({expr.param.name}, axis={expr.axis})"
-        if isinstance(expr, Op):
-            name = getattr(getattr(expr, "_op_schema", None), "name", type(expr).__name__.lower())
-            self.context.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
-            return f"T.{name}"
-        if isinstance(expr, Tuple):
-            vals = ", ".join(self._expr(x) for x in expr.elements)
-            return f"({vals}{',' if len(expr.elements)==1 else ''})"
-        if isinstance(expr, Call):
-            target = expr.target
-            scalar_binary = {BinaryKind.EQ:"==", BinaryKind.NE:"!=", BinaryKind.LT:"<", BinaryKind.LE:"<=", BinaryKind.GT:">", BinaryKind.GE:">=", BinaryKind.AND:"and"}
-            kind = getattr(target, "kind", None)
-            if kind in scalar_binary and len(expr.args)==2 and expr.type.dtype is DType.bool:
-                return f"{self._expr(expr.args[0])} {scalar_binary[kind]} {self._expr(expr.args[1])}"
-            name = getattr(getattr(target, "_op_schema", None), "name", None) or re.sub(r"(?<!^)(?=[A-Z])", "_", type(target).__name__).lower()
-            args = [self._expr(x) for x in expr.args]
-            for p in type(target).params():
-                if p.kind == "attribute":
-                    value = getattr(target, p.name, None)
-                    if value is not None:
-                        args.append(f"{p.name}={self.render_value(value, self.context, self.indent + '    ')}")
-            self.context.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
-            return f"T.{name}({', '.join(args)})"
-        return self.render_value(expr, self.context)
-
-    def _join_args(self, args): return ", ".join(self._expr(arg) for arg in args)
+    def _join_args(self, args): return ", ".join(self.visit(arg) for arg in args)
 
     def _emit_evaluate(self, stmt):
         handler = _STMT_PRINTERS.get(type(stmt.callable)) or (_STMT_PRINTERS.get(Op) if isinstance(stmt.callable, Op) else None)
@@ -154,7 +153,7 @@ def _print_launch(stmt: Evaluate, printer: TirPrinter) -> list[str]:
     callee, grid = stmt.args[0], stmt.args[1:4]
     block = stmt.args[4:7]
     forwarded = stmt.args[7:]
-    return [f"{indent}launch({printer._expr(callee)}, {printer._join_args(forwarded)}, grid={printer._expr(Tuple(type=grid[0].type, elements=tuple(grid)))}, block={printer._expr(Tuple(type=block[0].type, elements=tuple(block)))})  # noqa: F821"]
+    return [f"{indent}launch({printer.visit(callee)}, {printer._join_args(forwarded)}, grid={printer.visit(Tuple(type=grid[0].type, elements=tuple(grid)))}, block={printer.visit(Tuple(type=block[0].type, elements=tuple(block)))})  # noqa: F821"]
 
 
 @register_tir_printer(Op)
@@ -172,8 +171,8 @@ def _print_op_evaluate(stmt: Evaluate, printer: TirPrinter) -> list[str]:
             continue
         rendered = printer.render_value(value, printer.context, printer.indent + "    ")
         attrs.append(rendered if op_name == "sync" and p.name == "mesh" else f"{p.name}={rendered}")
-    rendered_args = [printer._expr(arg) for arg in args]
-    return [f"{indent}{printer._expr(target)}({', '.join(rendered_args + attrs)})"]
+    rendered_args = [printer.visit(arg) for arg in args]
+    return [f"{indent}{printer.visit_Op(target)}({', '.join(rendered_args + attrs)})"]
 
 
 def _function_block(fn: PrimFunction) -> list[str]:

@@ -20,7 +20,7 @@ from tilefoundry.analysis.report import (
 from tilefoundry.analysis.report import (
     selected_types as _selected_types,
 )
-from tilefoundry.inspection.python_printer import PythonPrintOptions, _render_hir_function
+from tilefoundry.inspection.python_printer import HirPrinter, PythonPrintOptions
 from tilefoundry.inspection.values import (
     AdvisorySummary,
     MemorySummary,
@@ -54,7 +54,7 @@ def render_analysis(
 ) -> AnalysisRendering:
     """Render one result once for both annotated source and report data."""
     selected_types_ = selected_types(result)
-    rendered = _render_hir_function(
+    rendered = HirPrinter().render(
         result.function,
         options=PythonPrintOptions(
             show_types=True,

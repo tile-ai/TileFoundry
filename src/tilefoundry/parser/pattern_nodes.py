@@ -440,7 +440,7 @@ class PlacedLayout:
 
 def _layout_dims() -> AstPattern[Any]:
     """``(extent, extent @ axis, ...)`` — the layout's own divided dimensions."""
-    return AstNodePattern(
+    pattern = AstNodePattern(
         ast.Tuple,
         FieldPattern(
             "elts",
@@ -468,16 +468,20 @@ def _layout_dims() -> AstPattern[Any]:
             ),
         ),
     )
+    pattern.grammar_name = "layout_dims"
+    return pattern
 
 
 def _layout_strides() -> AstPattern[Any]:
     """``(stride, ...)`` — how the divided positions are addressed."""
-    return AstNodePattern(ast.Tuple, FieldPattern("elts", RepeatPattern(DimExprPattern())))
+    pattern = AstNodePattern(ast.Tuple, FieldPattern("elts", RepeatPattern(DimExprPattern())))
+    pattern.grammar_name = "layout_strides"
+    return pattern
 
 
 def _value_states() -> AstPattern[Any]:
     """``{axis @ B(), axis @ P("sum")}`` — what unsplit mesh axes hold."""
-    return AstNodePattern(
+    pattern = AstNodePattern(
         ast.Set,
         FieldPattern(
             "elts",
@@ -524,6 +528,8 @@ def _value_states() -> AstPattern[Any]:
             ),
         ),
     )
+    pattern.grammar_name = "value_states"
+    return pattern
 
 
 def _layout_sugar_parts(node: object):
@@ -569,6 +575,125 @@ def _value_state_parts(node: ast.AST):
 
 
 @dataclass(frozen=True)
+class _PlacementCandidate:
+    shape: tuple
+    strides: tuple | None
+    splits: tuple[tuple[object, int, int], ...]
+    states: tuple[tuple[object, int, str, str | None], ...]
+
+
+def _placement_meshes(value: _PlacementCandidate, context: MatchContext, match):
+    referenced_ids = {id(entry[0]) for entry in (*value.splits, *value.states)}
+    if not referenced_ids:
+        return ()
+    if context.function is None:
+        raise ParseError.from_node(
+            match.node, context, "placed layout requires function context"
+        )
+    meshes = tuple(
+        mesh for mesh in context.function.state.mesh_stack if id(mesh) in referenced_ids
+    )
+    if len(meshes) != len(referenced_ids):
+        meshes = tuple(dict.fromkeys(entry[0] for entry in (*value.splits, *value.states)))
+    if len(meshes) != len(referenced_ids):
+        raise ParseError.from_node(match.node, context, "placement references an inactive Mesh")
+    return meshes
+
+
+@dataclass(frozen=True)
+class LayoutStrideRankRule:
+    STATEMENT: ClassVar[str] = (
+        "A stated stride tuple must have the rank of the layout it addresses."
+    )
+
+    def apply(self, value, *, match, context):
+        if value.strides is not None and len(value.shape) != len(value.strides):
+            raise ParseError.from_node(match.node, context, "layout shape/stride rank mismatch")
+        return value
+
+
+@dataclass(frozen=True)
+class PlacementMeshResolutionRule:
+    STATEMENT: ClassVar[str] = (
+        "A placement's mesh must be an active scope or resolvable from its bindings."
+    )
+
+    def apply(self, value, *, match, context):
+        _placement_meshes(value, context, match)
+        return value
+
+
+@dataclass(frozen=True)
+class PlacementLevelRule:
+    STATEMENT: ClassVar[str] = "A placement's meshes cannot name the same topology level."
+
+    def apply(self, value, *, match, context):
+        meshes = _placement_meshes(value, context, match)
+        levels = [topology.name for mesh in meshes for topology in mesh.topologies]
+        if len(levels) != len(set(levels)):
+            duplicates = sorted(name for name in set(levels) if levels.count(name) > 1)
+            raise ParseError.from_node(
+                match.node, context,
+                f"a layout can split one level once; two of these meshes name {duplicates}",
+            )
+        return value
+
+
+@dataclass(frozen=True)
+class MeshAxisBoundOnceRule:
+    STATEMENT: ClassVar[str] = "A placement binds each mesh axis at most once."
+
+    def apply(self, value, *, match, context):
+        seen: set[tuple[int, int]] = set()
+        for mesh, axis, *_ in (*value.splits, *value.states):
+            key = (id(mesh), axis)
+            if key in seen:
+                raise ParseError.from_node(match.node, context, "mesh axis is bound more than once")
+            seen.add(key)
+        return value
+
+
+@dataclass(frozen=True)
+class PlacementConstructionRule:
+    """Materialize the candidate only after placement invariants have run."""
+
+    STATEMENT: ClassVar[str] = "A placement must construct a valid shard layout."
+
+    def apply(self, value, *, match, context):
+        if not value.splits and not value.states:
+            return PlacedLayout(
+                shape=value.shape, layout=runtime.Layout(shape=value.shape, strides=value.strides)
+            )
+        meshes = _placement_meshes(value, context, match)
+        mesh = meshes[0] if len(meshes) == 1 else runtime.composed(meshes)
+        source_offsets: dict[int, int] = {}
+        offset = 0
+        for source in meshes:
+            source_offsets[id(source)] = offset
+            offset += len(source.layout.shape)
+        attrs: list[object] = [runtime.Broadcast() for _ in mesh.layout.shape]
+        for source, source_axis, tensor_axis in value.splits:
+            attrs[source_offsets[id(source)] + source_axis] = runtime.Split(tensor_axis)
+        for source, source_axis, kind, reduction in value.states:
+            target_axis = source_offsets[id(source)] + source_axis
+            attrs[target_axis] = runtime.Broadcast() if kind == "B" else runtime.Partial(reduction)
+        try:
+            canonical = runtime.canonical_shard_layout(value.shape, mesh, tuple(attrs))
+        except (TypeError, ValueError) as error:
+            raise ParseError.from_node(match.node, context, str(error)) from error
+        if value.strides is not None and len(canonical.layout.shape) != len(value.strides):
+            raise ParseError.from_node(match.node, context, "layout shape/stride rank mismatch")
+        return PlacedLayout(
+            shape=value.shape,
+            layout=runtime.ShardLayout(
+                layout=runtime.Layout(shape=canonical.layout.shape, strides=value.strides),
+                attrs=canonical.attrs,
+                mesh=canonical.mesh,
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class PlacementAnswerRule:
     """A placement answers both halves: the shape written, and where it goes."""
 
@@ -587,15 +712,7 @@ class PlacementAnswerRule:
 
 
 class PlacedLayoutPattern(ElementPattern):
-    """The layout a placement states: split dims, strides, and value states.
-
-    One production covers the whole sugar surface because the parts are not
-    independent answers: the dims say how the layout is divided, the strides
-    say how the divided positions are addressed, and the value-state set says
-    what every mesh axis the dims did not split holds. Splitting them across
-    patterns is what let the printer emit a stride tuple beside a placement
-    that nothing could read back.
-    """
+    """The one placement production, including dimensions, strides, and states."""
 
     element_name = "placed_layout"
     syntax = LazyPattern(
@@ -624,7 +741,6 @@ class PlacedLayoutPattern(ElementPattern):
 
     @staticmethod
     def _placement_parts(node: ast.AST) -> tuple[ast.AST, tuple[ast.AST, ...]] | None:
-        """Flatten ``extent @ axis @ axis`` into one extent and its axes."""
         if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.MatMult):
             return None
         left = PlacedLayoutPattern._placement_parts(node.left)
@@ -656,44 +772,20 @@ class PlacedLayoutPattern(ElementPattern):
             extent_context = context.child(situation="layout_extent", role="layout_extent")
             if DimExprPattern().match(extent_node, extent_context) is None:
                 return None
-            children.append(
-                AstChild(
-                    f"extent_{tensor_axis}",
-                    DimExprPattern(),
-                    extent_node,
-                    "layout_extent",
-                    "layout_extent",
-                )
-            )
+            children.append(AstChild(f"extent_{tensor_axis}", DimExprPattern(), extent_node, "layout_extent", "layout_extent"))
             for mesh_axis, axis_node in enumerate(axis_nodes):
                 axis_context = context.child(situation="mesh_axis", role="mesh_axis")
                 if MeshAxisPattern().match(axis_node, axis_context) is None:
                     return None
                 child_name = f"binding_{tensor_axis}_{mesh_axis}"
                 bindings.append((child_name, tensor_axis))
-                children.append(
-                    AstChild(
-                        child_name,
-                        MeshAxisPattern(),
-                        axis_node,
-                        "mesh_axis",
-                        "mesh_axis",
-                    )
-                )
+                children.append(AstChild(child_name, MeshAxisPattern(), axis_node, "mesh_axis", "mesh_axis"))
         if strides_node is not None:
             for index, item in enumerate(strides_node.elts):
                 stride_context = context.child(situation="layout_strides", role="layout_strides")
                 if DimExprPattern().match(item, stride_context) is None:
                     return None
-                children.append(
-                    AstChild(
-                        f"stride_{index}",
-                        DimExprPattern(),
-                        item,
-                        "layout_strides",
-                        "layout_strides",
-                    )
-                )
+                children.append(AstChild(f"stride_{index}", DimExprPattern(), item, "layout_strides", "layout_strides"))
         if states_node is not None:
             for index, item in enumerate(states_node.elts):
                 state = _value_state_parts(item)
@@ -705,29 +797,16 @@ class PlacedLayoutPattern(ElementPattern):
                     return None
                 child_name = f"state_{index}"
                 states.append((child_name, kind, reduction))
-                children.append(
-                    AstChild(
-                        child_name,
-                        MeshAxisPattern(),
-                        axis_node,
-                        "mesh_axis",
-                        "mesh_axis",
-                    )
-                )
+                children.append(AstChild(child_name, MeshAxisPattern(), axis_node, "mesh_axis", "mesh_axis"))
         if not found_placement and not states and strides_node is None:
             return None
         return dataclasses.replace(
-            matched,
-            pattern_id="tensor.layout.placed",
-            branch_id="placed_layout",
+            matched, pattern_id="tensor.layout.placed", branch_id="placed_layout",
             captures={
-                **matched.captures,
-                "rank": len(dims_node.elts),
+                **matched.captures, "rank": len(dims_node.elts),
                 "stride_rank": None if strides_node is None else len(strides_node.elts),
-                "bindings": tuple(bindings),
-                "states": tuple(states),
-            },
-            children=tuple(children),
+                "bindings": tuple(bindings), "states": tuple(states),
+            }, children=tuple(children),
         )
 
     @staticmethod
@@ -735,86 +814,15 @@ class PlacedLayoutPattern(ElementPattern):
         rank = match.captures["rank"]
         shape = tuple(children[f"extent_{axis}"] for axis in range(rank))
         stride_rank = match.captures.get("stride_rank")
-        strides = (
-            None
-            if stride_rank is None
-            else tuple(children[f"stride_{index}"] for index in range(stride_rank))
-        )
-        splits = tuple(
-            (*children[child_name], tensor_axis)
-            for child_name, tensor_axis in match.captures["bindings"]
-        )
-        states = tuple(
-            (*children[child_name], kind, reduction)
-            for child_name, kind, reduction in match.captures.get("states", ())
-        )
-        if not splits and not states:
-            if strides is not None and len(shape) != len(strides):
-                raise ParseError.from_node(
-                    match.node, context, "layout shape/stride rank mismatch"
-                )
-            return PlacedLayout(
-                shape=shape, layout=runtime.Layout(shape=shape, strides=strides)
-            )
-        referenced_ids = {id(entry[0]) for entry in (*splits, *states)}
-        if context.function is None:
-            raise ParseError.from_node(
-                match.node, context, "placed layout requires function context"
-            )
-        meshes = tuple(
-            mesh for mesh in context.function.state.mesh_stack if id(mesh) in referenced_ids
-        )
-        if len(meshes) != len(referenced_ids):
-            meshes = tuple(dict.fromkeys(entry[0] for entry in (*splits, *states)))
-            if len(meshes) != len(referenced_ids):
-                raise ParseError.from_node(
-                    match.node, context, "placement references an inactive Mesh"
-                )
-        levels = [topology.name for mesh in meshes for topology in mesh.topologies]
-        if len(levels) != len(set(levels)):
-            duplicates = sorted(name for name in set(levels) if levels.count(name) > 1)
-            raise ParseError.from_node(
-                match.node,
-                context,
-                f"a layout can split one level once; two of these meshes name {duplicates}",
-            )
-        mesh = meshes[0] if len(meshes) == 1 else runtime.composed(meshes)
-        source_offsets: dict[int, int] = {}
-        offset = 0
-        for source in meshes:
-            source_offsets[id(source)] = offset
-            offset += len(source.layout.shape)
-        attrs: list[object] = [runtime.Broadcast() for _ in mesh.layout.shape]
-        bound: set[int] = set()
+        strides = None if stride_rank is None else tuple(children[f"stride_{index}"] for index in range(stride_rank))
+        splits = tuple((*children[child_name], tensor_axis) for child_name, tensor_axis in match.captures["bindings"])
+        states = tuple((*children[child_name], kind, reduction) for child_name, kind, reduction in match.captures.get("states", ()))
+        return _PlacementCandidate(shape, strides, splits, states)
 
-        def claim(source, source_axis: int) -> int:
-            target_axis = source_offsets[id(source)] + source_axis
-            if target_axis in bound:
-                raise ParseError.from_node(match.node, context, "mesh axis is bound more than once")
-            bound.add(target_axis)
-            return target_axis
-
-        for source, source_axis, tensor_axis in splits:
-            attrs[claim(source, source_axis)] = runtime.Split(tensor_axis)
-        for source, source_axis, kind, reduction in states:
-            target_axis = claim(source, source_axis)
-            attrs[target_axis] = Broadcast() if kind == "B" else Partial(reduction)
-        try:
-            canonical = runtime.canonical_shard_layout(shape, mesh, tuple(attrs))
-        except (TypeError, ValueError) as error:
-            raise ParseError.from_node(match.node, context, str(error)) from error
-        if strides is not None and len(canonical.layout.shape) != len(strides):
-            raise ParseError.from_node(match.node, context, "layout shape/stride rank mismatch")
-        return PlacedLayout(
-            shape=shape,
-            layout=runtime.ShardLayout(
-                layout=runtime.Layout(shape=canonical.layout.shape, strides=strides),
-                attrs=canonical.attrs,
-                mesh=canonical.mesh,
-            ),
-        )
-
-    RULES: ClassVar[tuple[AstRule[Any], ...]] = (PlacementAnswerRule(),)
+    RULES: ClassVar[tuple[AstRule[Any], ...]] = (
+        LayoutStrideRankRule(), MeshAxisBoundOnceRule(), PlacementMeshResolutionRule(),
+        PlacementLevelRule(), PlacementConstructionRule(), PlacementAnswerRule(),
+    )
 
 
 class LayoutPattern(ElementPattern):

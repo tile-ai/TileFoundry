@@ -96,7 +96,18 @@ class RenderVisitor:
     def __init__(self, *, line_width: int = 100):
         self.line_width = line_width
         self._seen: set[str] = set()
+        self._seen_named: set[str] = set()
         self._productions: list[tuple[str, _Expr]] = []
+
+    def _named_pattern(self, pattern: Any) -> _Expr | None:
+        name = getattr(pattern, "grammar_name", None)
+        if not isinstance(name, str):
+            return None
+        grammar_name = _grammar_name(name)
+        if grammar_name not in self._seen_named:
+            self._seen_named.add(grammar_name)
+            self._productions.append((grammar_name, self._ast_node(pattern, allow_named=False)))
+        return _text(grammar_name)
 
     def _element(self, pattern: ElementPattern[Any]) -> _Expr:
         name = pattern.element_name
@@ -136,7 +147,11 @@ class RenderVisitor:
             pattern = pattern.pattern
         return _text(fallback) if pattern is None else self.visit(pattern)
 
-    def _ast_node(self, pattern: AstNodePattern) -> _Expr:
+    def _ast_node(self, pattern: AstNodePattern, *, allow_named: bool = True) -> _Expr:
+        if allow_named:
+            named = self._named_pattern(pattern)
+            if named is not None:
+                return named
         node_type = pattern.node_type
         for part in pattern.parts:
             self.visit(part)
