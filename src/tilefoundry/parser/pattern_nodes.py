@@ -385,15 +385,11 @@ class MeshAxisPattern(ElementPattern):
         else:
             binding = node.value.id
             axis_name = node.attr
-        mesh = context.lexical_scope.lookup(binding)
-        if mesh is None:
-            try:
-                reference = node if isinstance(node, ast.Name) else node.value
-                mesh = _resolve_reference(reference, context)
-            except ParseError:
-                mesh = None
+        mesh = context.lexical_scope.lookup_mesh(binding)
         if not isinstance(mesh, runtime.Mesh):
-            raise ParseError.from_node(node, context, f"{binding!r} is not an active Mesh")
+            raise ParseError.from_node(
+                node, context, f"{binding!r} is not a lexical Mesh binding"
+            )
         if axis_name is None:
             if len(mesh.layout.shape) != 1:
                 raise ParseError.from_node(
@@ -590,13 +586,11 @@ def _placement_meshes(value: _PlacementCandidate, context: MatchContext, match):
         raise ParseError.from_node(
             match.node, context, "placed layout requires function context"
         )
-    meshes = tuple(
-        mesh for mesh in context.function.state.mesh_stack if id(mesh) in referenced_ids
-    )
+    meshes = tuple(dict.fromkeys(entry[0] for entry in (*value.splits, *value.states)))
     if len(meshes) != len(referenced_ids):
-        meshes = tuple(dict.fromkeys(entry[0] for entry in (*value.splits, *value.states)))
-    if len(meshes) != len(referenced_ids):
-        raise ParseError.from_node(match.node, context, "placement references an inactive Mesh")
+        raise ParseError.from_node(
+            match.node, context, "placement references a non-lexical Mesh binding"
+        )
     return meshes
 
 
@@ -614,9 +608,7 @@ class LayoutStrideRankRule:
 
 @dataclass(frozen=True)
 class PlacementMeshResolutionRule:
-    STATEMENT: ClassVar[str] = (
-        "A placement's mesh must be an active scope or resolvable from its bindings."
-    )
+    STATEMENT: ClassVar[str] = "A placement's mesh must be a lexical mesh binding."
 
     def apply(self, value, *, match, context):
         _placement_meshes(value, context, match)
@@ -3362,7 +3354,7 @@ class MeshContextPattern(ElementPattern):
         binding = context.values.get("mesh_binding")
         _enter_mesh_scope(context, mesh, match)
         if isinstance(binding, str):
-            context.lexical_scope.define(binding, mesh)
+            context.lexical_scope.define_mesh(binding, mesh)
         context.function.state.mesh_stack.append(mesh)
         return mesh
 

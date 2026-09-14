@@ -239,6 +239,10 @@ nested region writes its mesh expression at the `with` boundary and uses that
 binding in its body. A named constant or an out-of-scope mesh does not create a
 binding; types that refer to one use the verbose form.
 
+Analysis annotations use the same type text for value-producing statements, but
+a structural `MeshRegion` line MUST NOT restate the aggregate type of its body.
+The region may still carry selected analysis metadata.
+
 ### 2.6 Specialization printing
 
 A dispatch prototype ([hir.md §1.1](./hir.md#11-function))

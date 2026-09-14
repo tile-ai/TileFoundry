@@ -25,6 +25,8 @@ from tilefoundry.ir.types.shard import Topology
 from tilefoundry.parser import ParseError
 from tilefoundry.target import CpuTarget, CudaTarget
 
+_EXTERNAL_PLACEMENT_MESH = Mesh(("cta",), (2,), names=("tile",))
+
 
 def test_matmul_layout_literals_are_parser_checked() -> None:
     assert get_args(MatMul.a_layout.annotation) == ("MK", "KM")
@@ -346,7 +348,7 @@ def test_valueful_mesh_region_also_wraps_escaping_bindings() -> None:
 
 def test_mesh_binding_does_not_escape_its_with_scope() -> None:
     """A mesh alias is removed with its lexical frame after the with body."""
-    with pytest.raises(ParseError, match="'mesh' is not an active Mesh"):
+    with pytest.raises(ParseError, match="'mesh' is not a lexical Mesh binding"):
 
         @module(
             entry="escaped_mesh",
@@ -499,7 +501,7 @@ def test_a_layout_undefined_boundary_still_constrains_storage() -> None:
 
 
 def test_a_boundary_rejects_a_bare_undeclared_mesh_name() -> None:
-    with pytest.raises(ParseError, match="'nope' is not an active Mesh"):
+    with pytest.raises(ParseError, match="'nope' is not a lexical Mesh binding"):
 
         @module(
             entry="root",
@@ -520,3 +522,17 @@ def test_function_mesh_requires_a_module_topology_declaration() -> None:
             @func(mesh=Mesh(("cta",), (8,), names=("b",)))
             def run(x: Tensor[(8 @ mesh.b, 8), "f32"]):  # noqa: F821
                 return tf.add(x, x)
+
+
+def test_placement_rejects_an_external_mesh_axis_binding() -> None:
+    with pytest.raises(ParseError, match="'_EXTERNAL_PLACEMENT_MESH' is not a lexical Mesh binding"):
+
+        @module(
+            entry="run",
+            target=CudaTarget("nvidia.h200_sxm"),
+            topologies=(Topology("cta", 2),),
+        )
+        class ExternalMeshPlacement:
+            @func
+            def run(x: Tensor[(2 @ _EXTERNAL_PLACEMENT_MESH.tile,), "f32"]):  # noqa: F821
+                return x

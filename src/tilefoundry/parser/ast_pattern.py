@@ -747,12 +747,26 @@ class BindPattern(CombinatorPattern):
 class LexicalScope:
     """Parser-local lexical frames shared by sequential child construction."""
 
-    def __init__(self, frames: tuple[Mapping[str, object], ...] | None = None):
+    def __init__(
+        self,
+        frames: tuple[Mapping[str, object], ...] | None = None,
+        mesh_bindings: tuple[set[str], ...] | None = None,
+    ):
         source = frames or ({},)
         self._frames = [dict(frame) for frame in source]
+        self._mesh_bindings = [
+            set(names) for names in (mesh_bindings or tuple(set() for _ in source))
+        ]
+        if len(self._frames) != len(self._mesh_bindings):
+            raise ValueError("lexical frames and mesh bindings must have the same length")
 
     def define(self, name: str, value: object) -> None:
         self._frames[-1][name] = value
+        self._mesh_bindings[-1].discard(name)
+
+    def define_mesh(self, name: str, value: object) -> None:
+        self._frames[-1][name] = value
+        self._mesh_bindings[-1].add(name)
 
     def lookup(self, name: str) -> object | None:
         for frame in reversed(self._frames):
@@ -760,15 +774,26 @@ class LexicalScope:
                 return frame[name]
         return None
 
+    def lookup_mesh(self, name: str) -> object | None:
+        for frame, mesh_names in reversed(tuple(zip(self._frames, self._mesh_bindings))):
+            if name in frame:
+                return frame[name] if name in mesh_names else None
+        return None
+
     def fork(self) -> LexicalScope:
-        return LexicalScope(tuple(self._frames) + ({},))
+        return LexicalScope(
+            tuple(self._frames) + ({},),
+            tuple(self._mesh_bindings) + (set(),),
+        )
 
     def push_frame(self) -> None:
         self._frames.append({})
+        self._mesh_bindings.append(set())
 
     def pop_frame(self) -> dict[str, object]:
         if len(self._frames) == 1:
             raise RuntimeError("cannot pop the root lexical frame")
+        self._mesh_bindings.pop()
         return self._frames.pop()
 
     def items(self):
@@ -1264,7 +1289,7 @@ class MatchContext:
                 context,
             )
             resolved_mesh = dataclasses.replace(function.mesh, topologies=topologies)
-            scope.define("mesh", resolved_mesh)
+            scope.define_mesh("mesh", resolved_mesh)
         scope.define(
             _TYPE_INFER_CONTEXT,
             ParserTypeInferContext(child_resolver=provider, current_mesh=resolved_mesh),

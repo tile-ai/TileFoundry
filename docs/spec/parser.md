@@ -264,12 +264,19 @@ function              ::= 'def' name '(' signature ')' ('->' return-type)? ':' b
 | placed_layout | tensor_optional_slot, tensor_shape | PlacementAnswerRule | Placement sugar states both the shape as written and the layout it implies. | src/tilefoundry/parser/pattern_nodes.py |
 | placed_layout | tensor_optional_slot, tensor_shape | PlacementConstructionRule | A placement must construct a valid shard layout. | src/tilefoundry/parser/pattern_nodes.py |
 | placed_layout | tensor_optional_slot, tensor_shape | PlacementLevelRule | A placement's meshes cannot name the same topology level. | src/tilefoundry/parser/pattern_nodes.py |
-| placed_layout | tensor_optional_slot, tensor_shape | PlacementMeshResolutionRule | A placement's mesh must be an active scope or resolvable from its bindings. | src/tilefoundry/parser/pattern_nodes.py |
+| placed_layout | tensor_optional_slot, tensor_shape | PlacementMeshResolutionRule | A placement's mesh must be a lexical mesh binding. | src/tilefoundry/parser/pattern_nodes.py |
 | shape | tensor_shape | ShapeTupleRule | A shape must construct a tuple of dimensions. | src/tilefoundry/parser/ast_pattern.py |
 | storage | tensor_optional_slot | StorageValueRule | Storage must resolve to a StorageKind. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | annotation, expression, slice_endpoint, subscript_index, type_annotation | TensorLayoutStorageRule | A tensor type must contain compatible layout and storage values. | src/tilefoundry/parser/ast_pattern.py |
 | tensor | annotation, expression, slice_endpoint, subscript_index, type_annotation | TensorPositionRule | A tensor type's storage must be legal for its dialect and position. | src/tilefoundry/parser/ast_pattern.py |
 <!-- parser-constraints:end -->
+
+A `mesh-axis` used by placement sugar MUST resolve to a mesh binding in the
+current lexical scope. A module or closure name that resolves to a `Mesh` does
+not become a placement binding. Such an external value remains valid as the
+context expression of `with ... as ...` or as the value supplied to
+`@func(mesh=...)`; the resulting lexical binding is the name placement sugar
+may use.
 
 ## 3. Implementation Overview
 

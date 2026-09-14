@@ -27,55 +27,67 @@ _FRAGMENT = ShardLayout(
     attrs=(S(0), S(1)),
     mesh=_WARP_LANE,
 )
+_WEIGHT = ShardLayout(
+    layout=Layout((8, 16), None),
+    attrs=(B(), P("max")),
+    mesh=_WARP_LANE,
+)
+_MIXED = ShardLayout(
+    layout=Layout((4, 2, 16), None),
+    attrs=(S(0), B(), P("sum")),
+    mesh=Mesh(
+        (Topology("cta", 4), Topology("thread", 8)),
+        Layout((4, 2, 4), (8, 4, 1)),
+        names=("tile", "warp", "lane"),
+    ),
+)
+_ESCAPED = ShardLayout(
+    layout=Layout((2, 4, 16), None),
+    attrs=(S(0), B()),
+    mesh=_WARP_LANE,
+)
 
 
 @module(entry="composed_mesh_pipeline", target=_H200, topologies=_TOPOLOGIES)
 class TypePrinterSugar:
-    @func
+    @func(mesh=_WARP_LANE)
     def composed_mesh_pipeline(
         x: Tensor[(8, 4, 16), "f32"],
         seed: Tensor[(16,), "f32"],
         acc: Tensor[
             (8, 16), "f32",
-            ((2 @ _WARP_LANE.warp, 4, 16), {_WARP_LANE.lane @ P("sum")}),
+            ((2 @ mesh.warp, 4, 16), {mesh.lane @ P("sum")}),
             "rmem",
         ],
-        mixed: Tensor[
-            (8, 16), "f32",
-            ((8 @ _TILE.tile, 16), {_WARP_LANE.warp @ B(), _WARP_LANE.lane @ P("sum")}),
-            "rmem",
-        ],
+        mixed: Tensor[(8, 16), "f32", _MIXED, "rmem"],
     ):
         with _TILE as cta:
-            with _WARP_LANE as thr:
-                composed = tf.reshard(
-                    x, (8 @ cta.tile, 4 @ thr.warp, 16 @ thr.lane), "rmem"
-                )
-                staged = tf.reshard(tf.square(composed), (8 @ cta.tile, 4, 16), "smem")
-                narrowed = tf.cast(staged, dtype="bf16")
-                swapped = tf.transpose(narrowed, perm=(0, 2, 1))
-                gathered = tf.reshard(swapped, (8, 16, 4), "gmem")
-                seeded = tf.reshard(seed, _FRAGMENT, "rmem")
-                folded = tf.reshard(acc, (8 @ thr.warp, 16 @ thr.lane), "rmem")
-                summed = tf.reshard(
-                    mixed, ((8, 16), {cta.tile @ B(), thr.warp @ B(), thr.lane @ B()}), "rmem"
-                )
-                for _ in range(3):
-                    folded = tf.square(folded)
-                    summed = tf.add(summed, summed)
-                return (
-                    gathered,
-                    tf.reshard(folded, (8, 16), "gmem"),
-                    tf.reshard(summed, (8, 16), "gmem"),
-                    tf.reshard(seeded, (16,), "gmem"),
-                )
+            composed = tf.reshard(
+                x, (8 @ cta.tile, 4 @ mesh.warp, 16 @ mesh.lane), "rmem"
+            )
+            staged = tf.reshard(tf.square(composed), (8 @ cta.tile, 4, 16), "smem")
+            narrowed = tf.cast(staged, dtype="bf16")
+            swapped = tf.transpose(narrowed, perm=(0, 2, 1))
+            gathered = tf.reshard(swapped, (8, 16, 4), "gmem")
+            seeded = tf.reshard(seed, _FRAGMENT, "rmem")
+        folded = tf.reshard(acc, (8 @ mesh.warp, 16 @ mesh.lane), "rmem")
+        summed = tf.reshard(
+            mixed, ((8, 16), {mesh.warp @ B(), mesh.lane @ B()}), "rmem"
+        )
+        for _ in range(3):
+            folded = tf.square(folded)
+            summed = tf.add(summed, summed)
+        return (
+            gathered,
+            tf.reshard(folded, (8, 16), "gmem"),
+            tf.reshard(summed, (8, 16), "gmem"),
+            tf.reshard(seeded, (16,), "gmem"),
+        )
 
     @func
     def nested_loop_tuple(
         x: Tensor[(8, 16), "f32"],
-        weight: Tensor[
-            (8, 16), "f32", ((8, 16), {_WARP_LANE.warp @ B(), _WARP_LANE.lane @ P("max")})
-        ],
+        weight: Tensor[(8, 16), "f32", _WEIGHT],
     ):
         with _LANES as lanes:
             split = tf.reshard(x, (8 @ lanes.lane, 16), "rmem")
@@ -109,5 +121,5 @@ class TypePrinterSugar:
         that boundary, so its target names a mesh that is not its own scope.
         """
         mine = tf.reshard(x, (8 @ mesh.tile, 16), "rmem")  # noqa: F821
-        escaped = tf.reshard(x, ((8 @ _WARP_LANE.warp, 16), {_WARP_LANE.lane @ B()}), "rmem")
+        escaped = tf.reshard(x, _ESCAPED, "rmem")
         return tf.reshard(mine, (8, 16), "gmem"), held, frag, escaped
