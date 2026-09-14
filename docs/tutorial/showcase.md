@@ -870,11 +870,11 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 # peak-footprint=gmem:10945036,smem:16960
 # roofline ideal-ns=11213 bound-by=memory
 
-    v1 = reshard(w_q, layout=(1, 256, 8 @ mesh.head, 32), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ mesh.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; traffic traffic=gmem:r131072/w0@cta:r16384/w0,smem:r0/w131072@cta:r0/w16384 operands=0:r131072/w0,result:r0/w131072; roofline ideal-ns=28 bound-by=memory
-    v2 = matmul(v0, v1, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16", ((1, 1, 8 @ mesh.head, 32), (256, 256, 32, 1)), "smem"]; compute-cost flops=bf16:131072@cta:16384; traffic traffic=smem:r131584/w512@cta:r16896/w64 operands=0:r512/w0,1:r131072/w0,result:r0/w512; roofline ideal-ns=1 bound-by=compute
+        v1 = reshard(w_q, layout=(1, 256, 8 @ cta.head, 32), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ cta.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; traffic traffic=gmem:r131072/w0@cta:r16384/w0,smem:r0/w131072@cta:r0/w16384 operands=0:r131072/w0,result:r0/w131072; roofline ideal-ns=28 bound-by=memory
+        v2 = matmul(v0, v1, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16", ((1, 1, 8 @ cta.head, 32), (256, 256, 32, 1)), "smem"]; compute-cost flops=bf16:131072@cta:16384; traffic traffic=smem:r131584/w512@cta:r16896/w64 operands=0:r512/w0,1:r131072/w0,result:r0/w512; roofline ideal-ns=1 bound-by=compute
 
-    v42 = reshard(w_o, layout=(1, 256, 8 @ mesh.head, 32), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ mesh.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; traffic traffic=gmem:r131072/w0@cta:r16384/w0,smem:r0/w131072@cta:r0/w16384 operands=0:r131072/w0,result:r0/w131072; roofline ideal-ns=28 bound-by=memory
-    v43 = matmul(v41, v42, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16", ((1, 1, 8 @ mesh.head, 32), (256, 256, 32, 1)), "smem"]; compute-cost flops=bf16:131072@cta:16384; traffic traffic=smem:r131584/w512@cta:r16896/w64 operands=0:r512/w0,1:r131072/w0,result:r0/w512; roofline ideal-ns=1 bound-by=compute
+        v42 = reshard(w_o, layout=(1, 256, 8 @ cta.head, 32), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ cta.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; traffic traffic=gmem:r131072/w0@cta:r16384/w0,smem:r0/w131072@cta:r0/w16384 operands=0:r131072/w0,result:r0/w131072; roofline ideal-ns=28 bound-by=memory
+        v43 = matmul(v41, v42, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16", ((1, 1, 8 @ cta.head, 32), (256, 256, 32, 1)), "smem"]; compute-cost flops=bf16:131072@cta:16384; traffic traffic=smem:r131584/w512@cta:r16896/w64 operands=0:r512/w0,1:r131072/w0,result:r0/w512; roofline ideal-ns=1 bound-by=compute
 ```
 
 ## 6. Stream the KV cache
@@ -1022,7 +1022,7 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 # peak-footprint=gmem:2950412,rmem:0,smem:33536
 # roofline ideal-ns=2474 bound-by=memory
 
-        v21 = slice(k_cache, (0, v20, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost; traffic traffic=rmem:r32/w0@cta:r32/w0 operands=0:r0/w0,1:r32/w0,result:r0/w0; roofline
+            v21 = slice(k_cache, (0, v20, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost; traffic traffic=rmem:r32/w0@cta:r32/w0 operands=0:r0/w0,1:r32/w0,result:r0/w0; roofline
     v6 = cache_update(k_cache, cur_pos, write_len, v5)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; traffic traffic=gmem:r136/w128@cta:r136/w128 operands=0:r0/w0,1:r4/w0,2:r4/w0,3:r128/w0,result:r0/w128; roofline ideal-ns=1 bound-by=memory
 ```
 
