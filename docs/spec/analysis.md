@@ -171,12 +171,16 @@ class ComputeCostMetadata(IRMetadata):
     Attributes:
         topologies: attribute; The declared levels, in the order per_unit states them.
         flops: attribute; Flop counts per compute DType name.
+        flops_logical: attribute; Flop counts before execution-position replication.
         service: attribute; Result counts per service kind.
+        service_logical: attribute; Service counts before execution-position replication.
     """
 
     topologies: tuple[str, ...] = ()
     flops: Breakdown[int] = Breakdown()
+    flops_logical: tuple[tuple[str, int], ...] = ()
     service: Breakdown[int] = Breakdown()
+    service_logical: tuple[tuple[str, int], ...] = ()
 ```
 
 | Field | How it is computed | Reads the target |

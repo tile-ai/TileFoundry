@@ -156,6 +156,7 @@ def _call_cost_record(
     expr: Call,
     locals_by_unit: "dict[str, CostContext]",
     positions_by_unit: "dict[str, int]",
+    whole: CostContext,
     asked: "str | None" = None,
 ) -> ComputeCostMetadata:
     """Measure the work one Call asks for, without attaching the record.
@@ -169,6 +170,10 @@ def _call_cost_record(
     service_by_unit: list[dict[str, int]] = []
     whole_flops: dict[str, int] = {}
     whole_service: dict[str, int] = {}
+    try:
+        whole_cost = CostEvaluator().visit(expr, whole)
+    except (ValueError, VerifyError) as error:
+        raise AnalysisError(str(error)) from None
     for unit, local in locals_by_unit.items():
         try:
             cost = CostEvaluator().visit(expr, local)
@@ -183,7 +188,9 @@ def _call_cost_record(
     return ComputeCostMetadata(
         topologies=tuple(locals_by_unit),
         flops=breakdown(whole_flops, flops_by_unit, 0),
+        flops_logical=tuple(sorted(_named(whole_cost.flops).items())),
         service=breakdown(whole_service, service_by_unit, 0),
+        service_logical=tuple(sorted(whole_cost.service.items())),
     )
 
 
@@ -221,15 +228,21 @@ def _bytes(
 
 def _accumulate(
     flops: dict[str, int],
+    flops_logical: dict[str, int],
     service: dict[str, int],
+    service_logical: dict[str, int],
     by_unit: "dict[str, dict[str, dict[str, int]]]",
     record: ComputeCostMetadata,
     trips: int,
 ) -> None:
     for kind, spread in record.flops.kinds:
         flops[kind] = flops.get(kind, 0) + spread.total * trips
+    for kind, value in record.flops_logical:
+        flops_logical[kind] = flops_logical.get(kind, 0) + value * trips
     for kind, spread in record.service.kinds:
         service[kind] = service.get(kind, 0) + spread.total * trips
+    for kind, value in record.service_logical:
+        service_logical[kind] = service_logical.get(kind, 0) + value * trips
     for index, unit in enumerate(record.topologies):
         held = by_unit.setdefault(unit, {"flops": {}, "service": {}})
         for kind, spread in record.flops.kinds:
@@ -248,10 +261,13 @@ class ComputeCostContext(AnalyzeContext):
     """
 
     locals_by_unit: dict[str, CostContext] = field(default_factory=dict)
+    whole: CostContext | None = None
     current_mesh: Mesh | None = None
     executing_positions: dict[str, int] = field(default_factory=dict)
     flops: dict[str, int] = field(default_factory=dict)
+    flops_logical: dict[str, int] = field(default_factory=dict)
     service: dict[str, int] = field(default_factory=dict)
+    service_logical: dict[str, int] = field(default_factory=dict)
     by_unit: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
     call_count: list[int] = field(default_factory=lambda: [0])
 
@@ -291,7 +307,11 @@ class ComputeCostVisitor(ExprVisitor[None]):
         if not ctx.locals_by_unit:
             raise AnalysisError("compute-cost: visitor context is missing its cost context")
         record = _call_cost_record(
-            expr, ctx.locals_by_unit, ctx.executing_positions, ctx.topology_level
+            expr,
+            ctx.locals_by_unit,
+            ctx.executing_positions,
+            ctx.whole,
+            ctx.topology_level,
         )
         attach(expr, record)
         owner = ctx.current if id(expr) in ctx.current.accesses["narrow"] else ctx.root
@@ -301,7 +321,15 @@ class ComputeCostVisitor(ExprVisitor[None]):
             if cursor.is_variant(expr):
                 repeats *= max(1, cursor.trips())
             cursor = cursor.parent
-        _accumulate(ctx.flops, ctx.service, ctx.by_unit, record, repeats)
+        _accumulate(
+            ctx.flops,
+            ctx.flops_logical,
+            ctx.service,
+            ctx.service_logical,
+            ctx.by_unit,
+            record,
+            repeats,
+        )
 
 
 def analyze_compute_cost(
@@ -312,6 +340,7 @@ def analyze_compute_cost(
     module, topology_level = context.module, context.topology_level
     topologies = module.effective_topologies()
     scope = FunctionScope(module, function)
+    whole = CostContext(scope=scope)
     units = tuple(topology.name for topology in topologies) or (topology_level,)
     locals_by_unit = {
         unit: CostContext(scope=scope, topology_level=unit, topologies=topologies)
@@ -326,6 +355,7 @@ def analyze_compute_cost(
         root=context.root,
         current=context.current,
         locals_by_unit=locals_by_unit,
+        whole=whole,
         executing_positions=dict.fromkeys(locals_by_unit, 1),
     )
     ComputeCostVisitor().visit(function.body, cost_context)
@@ -339,11 +369,13 @@ def analyze_compute_cost(
                     [dict(held["flops"]) for held in cost_context.by_unit.values()],
                     0,
                 ),
+                flops_logical=tuple(sorted(cost_context.flops_logical.items())),
                 service=breakdown(
                     dict(cost_context.service),
                     [dict(held["service"]) for held in cost_context.by_unit.values()],
                     0,
                 ),
+                service_logical=tuple(sorted(cost_context.service_logical.items())),
             ),
         )
 

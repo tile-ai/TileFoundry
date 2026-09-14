@@ -108,7 +108,9 @@ class ComputeCostMetadata(IRMetadata):
 
     topologies: tuple[str, ...] = ()
     flops: Breakdown[int] = Breakdown()
+    flops_logical: tuple[tuple[str, int], ...] = ()
     service: Breakdown[int] = Breakdown()
+    service_logical: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
