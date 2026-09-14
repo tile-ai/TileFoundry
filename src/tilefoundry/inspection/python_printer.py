@@ -296,7 +296,7 @@ def _comments(expr: Expr, options: PythonPrintOptions, printer: PythonPrinter, c
     the boundary between those two languages.
     """
     comments: list[str] = []
-    if options.show_types and not isinstance(expr, MeshRegion):
+    if options.show_types and not isinstance(expr, (LoopRegion, MeshRegion)):
         comments.append(_compact_type(expr.type, printer, ctx))
     for metadata_type in options.comment_metadata_types:
         metadata = get_metadata(expr, metadata_type)

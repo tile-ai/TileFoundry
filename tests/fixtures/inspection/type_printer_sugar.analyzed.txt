@@ -28,7 +28,7 @@ def composed_mesh_pipeline(
         v6 = reshard(seed, layout=((2 @ mesh.warp, 4 @ mesh.lane, 2), (8, 2, 1)), storage=rmem)  # Tensor[(16,), "f32", ((2 @ mesh.warp, 4 @ mesh.lane, 2), (8, 2, 1)), "rmem"]; compute-cost; traffic traffic=gmem:r64/w0@cta:r64/w0,thread:r8/w0,rmem:r0/w64@cta:r0/w64,thread:r0/w8
     folded = reshard(acc, layout=(2 @ mesh.warp, 4, 4 @ mesh.lane, 4), storage=rmem)  # Tensor[(8, 16), "f32", ((2 @ mesh.warp, 4, 4 @ mesh.lane, 4), (64, 16, 4, 1)), "rmem"]; compute-cost; traffic
     summed = reshard(mixed, layout=((8, 16), {mesh.warp @ B()}), storage=rmem)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {mesh.warp @ B()}), "rmem"]; compute-cost; traffic
-    for _ in range(3):  # Tuple[Tensor[(8, 16), "f32", ((2 @ mesh.warp, 4, 4 @ mesh.lane, 4), (64, 16, 4, 1)), "rmem"], Tensor[(8, 16), "f32", ((8, 16), (16, 1), {mesh.warp @ B()}), "rmem"]]; loop-footprint footprints=folded@rmem:8192/196608/24576,summed@rmem:131072/393216/393216 status=complete
+    for _ in range(3):  # loop-footprint footprints=folded@rmem:8192/196608/24576,summed@rmem:131072/393216/393216 status=complete
         v10 = add(summed, summed)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {mesh.warp @ B()}), "rmem"]; compute-cost flops=f32:128@cta:128,thread:128; traffic traffic=rmem:r1024/w512@cta:r1024/w512,thread:r1024/w512
         v11 = unary(folded, kind="square")  # Tensor[(8, 16), "f32", ((2 @ mesh.warp, 4, 4 @ mesh.lane, 4), (64, 16, 4, 1)), "rmem"]; compute-cost flops=f32:128@cta:128,thread:16; traffic traffic=rmem:r512/w512@cta:r512/w512,thread:r64/w64
         folded = v11

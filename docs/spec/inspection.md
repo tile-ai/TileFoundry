@@ -240,8 +240,8 @@ binding in its body. A named constant or an out-of-scope mesh does not create a
 binding; types that refer to one use the verbose form.
 
 Analysis annotations use the same type text for value-producing statements, but
-a structural `MeshRegion` line MUST NOT restate the aggregate type of its body.
-The region may still carry selected analysis metadata.
+a structural `LoopRegion` or `MeshRegion` line MUST NOT restate the aggregate
+type of its body. The region may still carry selected analysis metadata.
 
 ### 2.6 Specialization printing
 
