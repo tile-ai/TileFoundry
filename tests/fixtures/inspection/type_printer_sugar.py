@@ -31,7 +31,7 @@ _FRAGMENT = ShardLayout(
 
 @module(entry="composed_mesh_pipeline", target=_H200, topologies=_TOPOLOGIES)
 class TypePrinterSugar:
-    @func
+    @func(mesh=_WARP_LANE)
     def composed_mesh_pipeline(
         x: Tensor[(8, 4, 16), "f32"],
         seed: Tensor[(16,), "f32"],
@@ -47,28 +47,27 @@ class TypePrinterSugar:
         ],
     ):
         with _TILE as cta:
-            with _WARP_LANE as thr:
-                composed = tf.reshard(
-                    x, (8 @ cta.tile, 4 @ thr.warp, 16 @ thr.lane), "rmem"
-                )
-                staged = tf.reshard(tf.square(composed), (8 @ cta.tile, 4, 16), "smem")
-                narrowed = tf.cast(staged, dtype="bf16")
-                swapped = tf.transpose(narrowed, perm=(0, 2, 1))
-                gathered = tf.reshard(swapped, (8, 16, 4), "gmem")
-                seeded = tf.reshard(seed, _FRAGMENT, "rmem")
-                folded = tf.reshard(acc, (8 @ thr.warp, 16 @ thr.lane), "rmem")
-                summed = tf.reshard(
-                    mixed, ((8, 16), {cta.tile @ B(), thr.warp @ B(), thr.lane @ B()}), "rmem"
-                )
-                for _ in range(3):
-                    folded = tf.square(folded)
-                    summed = tf.add(summed, summed)
-                return (
-                    gathered,
-                    tf.reshard(folded, (8, 16), "gmem"),
-                    tf.reshard(summed, (8, 16), "gmem"),
-                    tf.reshard(seeded, (16,), "gmem"),
-                )
+            composed = tf.reshard(
+                x, (8 @ cta.tile, 4 @ mesh.warp, 16 @ mesh.lane), "rmem"
+            )
+            staged = tf.reshard(tf.square(composed), (8 @ cta.tile, 4, 16), "smem")
+            narrowed = tf.cast(staged, dtype="bf16")
+            swapped = tf.transpose(narrowed, perm=(0, 2, 1))
+            gathered = tf.reshard(swapped, (8, 16, 4), "gmem")
+            seeded = tf.reshard(seed, _FRAGMENT, "rmem")
+        folded = tf.reshard(acc, (8 @ mesh.warp, 16 @ mesh.lane), "rmem")
+        summed = tf.reshard(
+            mixed, ((8, 16), {mesh.warp @ B(), mesh.lane @ B()}), "rmem"
+        )
+        for _ in range(3):
+            folded = tf.square(folded)
+            summed = tf.add(summed, summed)
+        return (
+            gathered,
+            tf.reshard(folded, (8, 16), "gmem"),
+            tf.reshard(summed, (8, 16), "gmem"),
+            tf.reshard(seeded, (16,), "gmem"),
+        )
 
     @func
     def nested_loop_tuple(
