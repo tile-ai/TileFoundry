@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from math import prod
 
 from tilefoundry.ir.types.shard.int_tuple import flatten
@@ -18,6 +19,7 @@ class PrintContext:
         self._dim_declarations: dict[str, tuple[object, str]] = {}
         self._mesh_bindings: list[tuple[Mesh, str]] = []
         self._used_scope_names: set[str] = set()
+        self._type_annotation_surface = False
 
     def use(self, rendered: PythonExpr | str) -> str:
         if isinstance(rendered, PythonExpr):
@@ -69,6 +71,16 @@ class PrintContext:
     def pop_mesh(self) -> None:
         self._mesh_bindings.pop()
 
+    @contextmanager
+    def type_annotation_surface(self):
+        """Prefer a parent binding when a type refers to a sliced mesh."""
+        previous = self._type_annotation_surface
+        self._type_annotation_surface = True
+        try:
+            yield
+        finally:
+            self._type_annotation_surface = previous
+
     def mesh_alias(self, mesh: Mesh) -> str | None:
         for bound, name in reversed(self._mesh_bindings):
             if bound is mesh:
@@ -94,7 +106,15 @@ class PrintContext:
         target_topology = next(
             (topology for topology in mesh.topologies if topology.name == target_level), None
         )
-        for bound, alias in reversed(self._mesh_bindings):
+        for binding_index in range(len(self._mesh_bindings) - 1, -1, -1):
+            bound, alias = self._mesh_bindings[binding_index]
+            if (
+                self._type_annotation_surface
+                and bound is mesh
+                and isinstance(mesh.layout, ComposedLayout)
+                and mesh.layout.offset != 0
+            ):
+                continue
             if not bound.names or target_name not in bound.names:
                 continue
             bound_levels = self._axis_levels(bound)
@@ -124,7 +144,12 @@ class PrintContext:
 
     @staticmethod
     def _slice_from_parent(parent: Mesh, child: Mesh, alias: str) -> str | None:
-        if not isinstance(parent.layout, Layout):
+        if not (
+            isinstance(parent.layout, Layout)
+            and isinstance(child.layout, ComposedLayout)
+            and child.layout.inner is None
+            and isinstance(child.layout.outer, Layout)
+        ):
             return None
         if parent.topologies != child.topologies or parent.names != child.names:
             return None

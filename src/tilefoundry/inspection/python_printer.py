@@ -277,7 +277,7 @@ def _physical_line_count(lines: list[str]) -> int:
 def _compact_type(ty: object, printer: PythonPrinter, ctx) -> str:
     """One physical-line, DSL-shaped type annotation for inspection output."""
     if isinstance(ty, (TensorType, TupleType)):
-        with printer.type_surface():
+        with ctx.type_annotation_surface(), printer.type_surface():
             rendered = printer.visit(ty, ctx)
         return " ".join(rendered.split())
     return repr(ty)
