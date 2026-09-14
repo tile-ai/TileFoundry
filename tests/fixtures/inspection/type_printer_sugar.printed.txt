@@ -54,11 +54,16 @@ class TypePrinterSugar:
         ), storage=rmem)
         return (v0, held, frag, escaped)
 
-    @func(mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane')))
+    @func(mesh=Mesh((Topology("cta", 4),), Layout((4,), (1,)), names=('tile',)))
     def composed_mesh_pipeline(
         x: Tensor[(8, 4, 16), "f32"],
         seed: Tensor[(16,), "f32"],
-        acc: Tensor[(8, 16), "f32", ((2 @ mesh.warp, 4, 16), {mesh.lane @ P("sum")}), "rmem"],
+        acc: Tensor[(8, 16), "f32",
+            ShardLayout(
+                layout=Layout((2, 4, 16), None),
+                attrs=(S(0), P("sum")),
+                mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane')),
+            ), "rmem"],
         mixed: Tensor[(8, 16), "f32",
             ShardLayout(
                 layout=Layout((4, 2, 16), None),
@@ -66,22 +71,22 @@ class TypePrinterSugar:
                 mesh=Mesh((Topology("cta", 4), Topology("thread", 8)), Layout((4, 2, 4), (8, 4, 1)), names=('tile', 'warp', 'lane')),
             ), "rmem"]
     ):
-        with Mesh((Topology("cta", 4),), Layout((4,), (1,)), names=('tile',)) as cta:
-            composed = reshard(x, layout=(4 @ cta.tile, 2, 2 @ mesh.warp, 2, 4 @ mesh.lane, 4), storage=rmem)
+        with Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane')) as thread_2:
+            composed = reshard(x, layout=(4 @ mesh.tile, 2, 2 @ thread_2.warp, 2, 4 @ thread_2.lane, 4), storage=rmem)
             v0 = unary(composed, kind="square")
-            staged = reshard(v0, layout=(4 @ cta.tile, 2, 4, 16), storage=smem)
+            staged = reshard(v0, layout=(4 @ mesh.tile, 2, 4, 16), storage=smem)
             narrowed = cast(staged, dtype="bf16")
             swapped = transpose(narrowed, perm=(0, 2, 1))
-            gathered = reshard(swapped, layout=((8, 16, 4), (64, 4, 1), {cta.tile @ B()}), storage=gmem)
-            seeded = reshard(seed, layout=((2 @ mesh.warp, 4 @ mesh.lane, 2), (8, 2, 1)), storage=rmem)
-        folded = reshard(acc, layout=(2 @ mesh.warp, 4, 4 @ mesh.lane, 4), storage=rmem)
-        summed = reshard(mixed, layout=((8, 16), {mesh.warp @ B()}), storage=rmem)
-        for _ in range(3):
-            summed_2 = add(summed, summed)
-            folded_2 = unary(folded, kind="square")
-            folded = folded_2
-            summed = summed_2
-        v4 = reshard(folded, layout=Layout((8, 16), (16, 1)), storage=gmem)
-        v5 = reshard(summed, layout=Layout((8, 16), (16, 1)), storage=gmem)
-        v6 = reshard(seeded, layout=Layout((16,), (1,)), storage=gmem)
-        return (gathered, v4, v5, v6)
+            gathered = reshard(swapped, layout=((8, 16, 4), (64, 4, 1), {thread_2.warp @ B()}), storage=gmem)
+            folded = reshard(acc, layout=(2 @ thread_2.warp, 4, 4 @ thread_2.lane, 4), storage=rmem)
+            summed = reshard(mixed, layout=((8, 16), {mesh.tile @ B(), thread_2.warp @ B()}), storage=rmem)
+            for _ in range(3):
+                summed_2 = add(summed, summed)
+                folded_2 = unary(folded, kind="square")
+                folded = folded_2
+                summed = summed_2
+            v2 = reshard(folded, layout=((8, 16), (16, 1), {thread_2.warp @ B()}), storage=gmem)
+            v3 = reshard(summed, layout=((8, 16), (16, 1), {thread_2.warp @ B()}), storage=gmem)
+            seeded = reshard(seed, layout=((2 @ thread_2.warp, 4 @ thread_2.lane, 2), (8, 2, 1)), storage=rmem)
+            v4 = reshard(seeded, layout=((16,), (1,), {thread_2.warp @ B()}), storage=gmem)
+        return (gathered, v2, v3, v4)
