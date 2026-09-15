@@ -100,9 +100,7 @@ def build(
             f"conflicts with the Module Target {_target_summary(module_target)}"
         )
 
-    workdir = os.path.join(
-        tempfile.gettempdir(), f"tilefoundry_build_{mod.entry}_{os.getpid()}_split"
-    )
+    workdir = tempfile.mkdtemp(prefix=f"tilefoundry_build_{mod.entry}_split_")
     return _build_split_runtime_module(mod, workdir=workdir)
 
 

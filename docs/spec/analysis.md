@@ -169,8 +169,8 @@ class ComputeCostMetadata(IRMetadata):
     """Typed work in logical, expanded, and topology-unit domains."""
 
     topologies: tuple[str, ...] = ()
-    flops: Spread[tuple[tuple[str, int], ...]] = Spread((), (), ())
-    other_ops: Spread[tuple[tuple[str, int], ...]] = Spread((), (), ())
+    flops: Breakdown[int] = Breakdown()
+    other_ops: Breakdown[int] = Breakdown()
 ```
 
 
@@ -185,7 +185,7 @@ record, stated exactly as a Call's is. The whole program's work is not a second
 record.
 
 ```text
-compute-cost flops=<dtype>:<logical>/<total>@<level>:<per-unit>[,...] other-ops=<kind>:<logical>/<total>@<level>:<per-unit>[,...]
+compute-cost flops=<dtype>:<int>@logical,<int>@total,<int>@<level>[,...][;<dtype>:...] other-ops=<kind>:<int>@logical,<int>@total,<int>@<level>[,...][;<kind>:...]
 ```
 
 Every measured Call receives this annotation. Each key pairs the whole quantity
@@ -195,10 +195,10 @@ Each reported Call's JSON projection is under its `compute-cost` key:
 
 ```text
 {"topologies": [<level>, ...],
- "flops": {"logical": {<dtype>: <int>}, "total": {<dtype>: <int>},
-           "per_unit": [{<dtype>: <int>}, ...]},
- "other_ops": {"logical": {<kind>: <int>}, "total": {<kind>: <int>},
-               "per_unit": [{<kind>: <int>}, ...]}}
+ "flops": {<dtype>: {"logical": <int>, "total": <int>,
+                      "per_unit": [<int>, ...]}},
+ "other_ops": {<kind>: {"logical": <int>, "total": <int>,
+                         "per_unit": [<int>, ...]}}}
 ```
 
 - constraints:
@@ -540,7 +540,7 @@ Requesting memory adds the Function's own movement, one footprint line, and one
 line per advisory:
 
 ```text
-traffic traffic=<level>:r<int>/w<int>@r<int>/w<int>[,...]
+traffic traffic=<memory-level>:r<int>/w<int>@total,r<int>/w<int>@<topology>[,...][;<memory-level>:...]
 peak-footprint=<level>:<int>[,<level>:<int>...]
 advisory="<text>"
 ```
@@ -559,7 +559,7 @@ is emitted only when asked for ([cli Analyze](./cli.md#analyze)) and is absent
 from a Function, which has no split:
 
 ```text
-traffic traffic=<level>:r<int>/w<int>@r<int>/w<int>[,...][ operands=<position>:r<int>/w<int>[,...]]
+traffic traffic=<memory-level>:r<int>/w<int>@total,r<int>/w<int>@<topology>[,...][;<memory-level>:...] [operands=<position>:r<int>/w<int>[;<position>:...]]
 ```
 
 Its JSON projection is under the reported value's `traffic` key, with `whole`,

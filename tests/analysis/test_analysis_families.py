@@ -233,9 +233,11 @@ def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
         bound = get_metadata(result.function, RooflineMetadata)
         summary = get_metadata(result.function, PerformanceSummaryMetadata)
         assert cost is not None and bound is not None and summary is not None
+        integer_ops = cost.other_ops.of("integer")
+        assert integer_ops is not None
         observed[name] = (
-            dict(cost.other_ops.total)["integer"],
-            dict(cost.other_ops.per_unit[0])["integer"],
+            integer_ops.total,
+            integer_ops.per_unit[0],
             bound.ideal_ns,
             summary.timeline.end_ns - summary.timeline.start_ns,
         )
@@ -321,9 +323,11 @@ def test_a_matmul_counts_its_rows_once_whichever_axis_the_mesh_split() -> None:
         )
         cost = get_metadata(product, ComputeCostMetadata)
         summary = get_metadata(report.function, PerformanceSummaryMetadata)
+        bf16 = cost.flops.of("bf16")
+        assert bf16 is not None
         per_layout[name] = (
-            dict(cost.flops.total)["bf16"],
-            dict(cost.flops.per_unit[0])["bf16"],
+            bf16.total,
+            bf16.per_unit[0],
             summary.timeline.end_ns,
         )
 
@@ -403,7 +407,8 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
     work = next(
         record
         for record in records
-        if record is not None and any(v for _n, v in record.flops.per_unit[0])
+        if record is not None
+        and any(spread.per_unit[0] for _name, spread in record.flops.kinds)
     )
 
     with pytest.raises(
@@ -415,7 +420,10 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
 
     with pytest.raises(AnalysisError, match=r"unknown compute dtype 'f9e9m9'"):
         _local_duration_ns(
-            replace(work, flops=replace(work.flops, per_unit=((("f9e9m9", 8),),))),
+            replace(
+                work,
+                flops=Breakdown((*work.flops.kinds, ("f9e9m9", Spread(8, 8, (8,))))),
+            ),
             throughput,
             services,
             level="cta",

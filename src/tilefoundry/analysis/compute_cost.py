@@ -18,7 +18,7 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts, ThroughputFacts
-from .metadata import Breakdown, ComputeCostMetadata, Spread, shares
+from .metadata import Breakdown, ComputeCostMetadata, breakdown, shares
 from .visitor import AnalyzeContext
 
 SELECTOR = "compute-cost"
@@ -28,9 +28,8 @@ def _counts(values: dict) -> tuple[tuple[str, int], ...]:
     return tuple(sorted((getattr(kind, "name", kind), value) for kind, value in values.items()))
 
 
-def _at(spread: Spread, topologies: tuple[str, ...], level: str | None):
-    index = topologies.index(level) if level in topologies else None
-    return spread.total if index is None else spread.at(index)
+def _at(held: Breakdown[int], topologies: tuple[str, ...], level: str | None):
+    return tuple(shares(held, topologies, level).items())
 
 
 def _is_structural_occurrence(
@@ -161,8 +160,18 @@ def _call_cost_record(
             total_other_ops = tuple((kind, value * repeats) for kind, value in unit_other_ops)
     return ComputeCostMetadata(
         topologies=tuple(locals_by_unit),
-        flops=Spread(_counts(logical.flops), total_flops, tuple(flops_by_unit)),
-        other_ops=Spread(_counts(logical.service), total_other_ops, tuple(other_ops_by_unit)),
+        flops=breakdown(
+            dict(total_flops),
+            tuple(dict(values) for values in flops_by_unit),
+            0,
+            logical=dict(_counts(logical.flops)),
+        ),
+        other_ops=breakdown(
+            dict(total_other_ops),
+            tuple(dict(values) for values in other_ops_by_unit),
+            0,
+            logical=dict(_counts(logical.service)),
+        ),
     )
 
 
@@ -201,15 +210,23 @@ def _add(target: dict[str, int], values, trips: int) -> None:
         target[name] = target.get(name, 0) + value * trips
 
 
+def _domain_values(held: Breakdown[int], domain: str) -> tuple[tuple[str, int], ...]:
+    return tuple((name, getattr(spread, domain)) for name, spread in held.kinds)
+
+
 def _accumulate(ctx: "ComputeCostContext", record: ComputeCostMetadata, trips: int) -> None:
-    _add(ctx.flops_logical, record.flops.logical, trips)
-    _add(ctx.flops, record.flops.total, trips)
-    _add(ctx.other_ops_logical, record.other_ops.logical, trips)
-    _add(ctx.other_ops, record.other_ops.total, trips)
+    _add(ctx.flops_logical, _domain_values(record.flops, "logical"), trips)
+    _add(ctx.flops, _domain_values(record.flops, "total"), trips)
+    _add(ctx.other_ops_logical, _domain_values(record.other_ops, "logical"), trips)
+    _add(ctx.other_ops, _domain_values(record.other_ops, "total"), trips)
     for index, unit in enumerate(record.topologies):
         held = ctx.by_unit.setdefault(unit, {"flops": {}, "other_ops": {}})
-        _add(held["flops"], record.flops.at(index), trips)
-        _add(held["other_ops"], record.other_ops.at(index), trips)
+        _add(held["flops"], ((name, spread.at(index)) for name, spread in record.flops.kinds), trips)
+        _add(
+            held["other_ops"],
+            ((name, spread.at(index)) for name, spread in record.other_ops.kinds),
+            trips,
+        )
 
 
 @dataclass
@@ -299,15 +316,17 @@ def analyze_compute_cost(function: Function, context: AnalyzeContext) -> None:
             function,
             ComputeCostMetadata(
                 topologies=units,
-                flops=Spread(
-                    _counts(cost_context.flops_logical),
-                    _counts(cost_context.flops),
-                    tuple(_counts(cost_context.by_unit[u]["flops"]) for u in units),
+                flops=breakdown(
+                    cost_context.flops,
+                    tuple(cost_context.by_unit[u]["flops"] for u in units),
+                    0,
+                    logical=cost_context.flops_logical,
                 ),
-                other_ops=Spread(
-                    _counts(cost_context.other_ops_logical),
-                    _counts(cost_context.other_ops),
-                    tuple(_counts(cost_context.by_unit[u]["other_ops"]) for u in units),
+                other_ops=breakdown(
+                    cost_context.other_ops,
+                    tuple(cost_context.by_unit[u]["other_ops"] for u in units),
+                    0,
+                    logical=cost_context.other_ops_logical,
                 ),
             ),
         )

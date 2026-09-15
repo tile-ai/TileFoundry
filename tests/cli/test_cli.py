@@ -701,7 +701,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
     assert cli.main(["analyze", selector, str(operands_path), *flags, "--operands"]) == 0
     asked = operands_path.read_text(encoding="utf-8")
     assert "operands=" not in first
-    assert "operands=0:r30720/w0,result:r0/w30720" in asked
+    assert "operands=0:r30720/w0;result:r0/w30720" in asked
     assert (
         cli.main(["analyze", selector, str(operands_json_path), *flags, "--operands", "--json"])
         == 0
@@ -746,21 +746,23 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         f"# selection requested={','.join(payload['requested'])} "
         f"executed={','.join(payload['executed'])}",
         "# compute-cost "
-        f"flops=f32:{cost['flops']['logical']['f32']}"
-        f"/{cost['flops']['total']['f32']}"
-        f"@{payload['topology']}:{cost['flops']['per_unit'][0]['f32']}",
+        f"flops=f32:{cost['flops']['f32']['logical']}@logical,"
+        f"{cost['flops']['f32']['total']}@total,"
+        f"{cost['flops']['f32']['per_unit'][0]}@{payload['topology']}",
         "# traffic "
         f"traffic=gmem:r{moved['storage']['gmem']['total']['read']}"
-        f"/w{moved['storage']['gmem']['total']['write']}"
-        f"@{payload['topology']}:r{moved['storage']['gmem']['per_unit'][0]['read']}"
-        f"/w{moved['storage']['gmem']['per_unit'][0]['write']}",
+        f"/w{moved['storage']['gmem']['total']['write']}@total,"
+        f"r{moved['storage']['gmem']['per_unit'][0]['read']}"
+        f"/w{moved['storage']['gmem']['per_unit'][0]['write']}@{payload['topology']}",
         f"# peak-footprint=gmem:{peak[0]['peak_bytes']}",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# performance root=MoEMegaKernel::experts "
         f"predicted-ns={summary['timeline']['end_ns']} "
         f"waves={summary['waves']}",
     ]
-    assert payload["totals"]["flops"] == cost["flops"]["total"]
+    assert payload["totals"]["flops"] == {
+        name: spread["total"] for name, spread in cost["flops"].items()
+    }
     assert payload["totals"]["traffic"] == {
         name: value["total"] for name, value in moved["storage"].items()
     }

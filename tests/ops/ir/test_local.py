@@ -53,6 +53,6 @@ def test_local_analyzes_as_a_zero_traffic_topology_view() -> None:
         moved = get_metadata(analysed_local, TrafficMetadata)
         assert result.topology_level == topology_level
         assert record is not None
-        assert record.flops.total == ()
+        assert record.flops.kinds == ()
         assert moved.storage.kinds == ()
         assert moved.operands == (TrafficBytes(), TrafficBytes())

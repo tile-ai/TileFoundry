@@ -88,7 +88,7 @@ grep -E '^# (traffic|roofline) ' Naive.txt
 ```
 
 ```text
-# traffic traffic=gmem:r71680/w43456@cta:r71680/w43456,thread:r336/w224,rmem:r603496/w488344@cta:r603496/w488344,thread:r2604/w2084
+# traffic traffic=gmem:r71680/w43456@total,r71680/w43456@cta,r336/w224@thread;rmem:r603496/w488344@total,r603496/w488344@cta,r2604/w2084@thread
 # roofline ideal-ns=24 bound-by=memory
 ```
 
@@ -132,7 +132,7 @@ grep -E '^# (traffic|roofline) ' Fused.txt
 ```
 
 ```text
-# traffic traffic=gmem:r43008/w14784@cta:r43008/w14784,thread:r224/w112,rmem:r574824/w459672@cta:r574824/w459672,thread:r2492/w1972
+# traffic traffic=gmem:r43008/w14784@total,r43008/w14784@cta,r224/w112@thread;rmem:r574824/w459672@total,r574824/w459672@cta,r2492/w1972@thread
 # roofline ideal-ns=13 bound-by=memory
 ```
 

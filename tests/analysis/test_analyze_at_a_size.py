@@ -203,10 +203,12 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
                     assert value >= 0, f"{describe_expr(expr)}: {field}[{name}] = {value}"
             if record is ComputeCostMetadata:
                 for field in ("flops", "other_ops"):
-                    spread = getattr(held, field)
-                    for domain in (spread.logical, spread.total, *spread.per_unit):
-                        for name, value in domain:
-                            assert value >= 0, f"{describe_expr(expr)}: {field}[{name}] = {value}"
+                    breakdown = getattr(held, field)
+                    for name, spread in breakdown.kinds:
+                        for value in (spread.logical, spread.total, *spread.per_unit):
+                            assert value >= 0, (
+                                f"{describe_expr(expr)}: {field}[{name}] = {value}"
+                            )
             if record is TrafficMetadata:
                 for field in ("whole", "per_unit"):
                     for level, moved in getattr(held, field):

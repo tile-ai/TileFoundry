@@ -46,16 +46,21 @@ class Breakdown[V]:
 
 
 def breakdown[V](
-    total: "Mapping[str, V]", per_unit: "Sequence[Mapping[str, V]]", zero: V
+    total: "Mapping[str, V]",
+    per_unit: "Sequence[Mapping[str, V]]",
+    zero: V,
+    *,
+    logical: "Mapping[str, V] | None" = None,
 ) -> Breakdown[V]:
-    """Gather traffic kinds, filling missing values at each topology level."""
-    kinds = sorted({*total, *(kind for share in per_unit for kind in share)})
+    """Gather keyed spreads, filling missing values in every counting domain."""
+    logical = total if logical is None else logical
+    kinds = sorted({*logical, *total, *(kind for share in per_unit for kind in share)})
     return Breakdown(
         tuple(
             (
                 kind,
                 Spread(
-                    logical=total.get(kind, zero),
+                    logical=logical.get(kind, zero),
                     total=total.get(kind, zero),
                     per_unit=tuple(share.get(kind, zero) for share in per_unit),
                 ),
@@ -66,30 +71,24 @@ def breakdown[V](
 
 
 def shares[V](
-    held: Breakdown[V] | Spread[tuple[tuple[str, V], ...]],
+    held: Breakdown[V],
     topologies: tuple[str, ...],
     topology_level: "str | None" = None,
 ) -> dict[str, V]:
-    """Each traffic kind's value at one topology level, or its total."""
+    """Each kind's value at one topology level, or its total."""
     index = topologies.index(topology_level) if topology_level in topologies else None
-    if isinstance(held, Spread):
-        value = held.total if index is None else held.at(index)
-        return dict(value)
     return {
         kind: spread.total if index is None else spread.at(index) for kind, spread in held.kinds
     }
 
 
-TypedCounts = tuple[tuple[str, int], ...]
-
-
 @dataclass(frozen=True)
 class ComputeCostMetadata(IRMetadata):
-    """Typed floating-point and other operation work in each counting domain."""
+    """Floating-point and other operation kinds, each with one counting spread."""
 
     topologies: tuple[str, ...] = ()
-    flops: Spread[TypedCounts] = Spread((), (), ())
-    other_ops: Spread[TypedCounts] = Spread((), (), ())
+    flops: Breakdown[int] = Breakdown()
+    other_ops: Breakdown[int] = Breakdown()
 
 
 @dataclass(frozen=True)

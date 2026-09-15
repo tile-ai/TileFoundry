@@ -71,7 +71,7 @@ class CommentPrinter:
                 for item in fields(value)
             )
         if isinstance(value, Mapping):
-            return ENTRIES.join(f"{k}{ENTRY}{self.print(v)}" for k, v in value.items())
+            return ";".join(f"{k}{ENTRY}{self.print(v)}" for k, v in value.items())
         if isinstance(value, (tuple, list)):
             return ENTRIES.join(self.print(v) for v in value)
         return str(value)
@@ -114,47 +114,34 @@ class CommentPrinter:
             return family
         return f"{family}{FIELD}{self.print(value)}"
 
-    def print_ComputeCostMetadata(self, record, **_):
-        def spread_values(spread):
-            logical = dict(spread.logical)
-            total = dict(spread.total)
-            per_unit = [dict(value) for value in spread.per_unit]
-            names = sorted({*logical, *total, *(name for value in per_unit for name in value)})
-            return {
-                name: (
-                    f"{logical.get(name, 0)}{PAIR}{total.get(name, 0)}"
-                    + "".join(
-                        f"{PER_UNIT}{level}{ENTRY}{value.get(name, 0)}"
-                        for level, value in zip(record.topologies, per_unit, strict=False)
-                    )
-                )
-                for name in names
-            }
+    def _spread(self, spread, topologies, *, logical=True):
+        values = []
+        if logical:
+            values.append(f"{self.print(spread.logical)}@logical")
+        values.append(f"{self.print(spread.total)}@total")
+        values.extend(
+            f"{self.print(value)}@{topology}"
+            for topology, value in zip(topologies, spread.per_unit, strict=False)
+        )
+        return self.print(values)
 
+    def _breakdown(self, held, topologies, *, logical=True):
+        return {
+            kind: self._spread(spread, topologies, logical=logical)
+            for kind, spread in held.kinds
+        }
+
+    def print_ComputeCostMetadata(self, record, **_):
         return self._record(
             "compute-cost",
             (
-                ("flops", spread_values(record.flops)),
-                ("other_ops", spread_values(record.other_ops)),
+                ("flops", self._breakdown(record.flops, record.topologies)),
+                ("other_ops", self._breakdown(record.other_ops, record.topologies)),
             ),
         )
 
     def print_TrafficMetadata(self, record, *, opt_in=frozenset()):
-        traffic = {
-            level: (
-                f"{self.print(spread.total)}"
-                + (
-                    f"{PER_UNIT}"
-                    + ENTRIES.join(
-                        f"{topology}{ENTRY}{self.print(value)}"
-                        for topology, value in zip(record.topologies, spread.per_unit, strict=False)
-                    )
-                    if spread.per_unit
-                    else ""
-                )
-            )
-            for level, spread in record.storage.kinds
-        }
+        traffic = self._breakdown(record.storage, record.topologies, logical=False)
         values = [("traffic", traffic)]
         if "operands" in opt_in:
             last = len(record.operands) - 1
