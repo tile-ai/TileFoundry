@@ -100,7 +100,7 @@ def _cost_bound(
 
     Whole-device work against whole-device rates: the flops the target publishes
     a peak for, and the bytes at the level it publishes a bandwidth for. Typed
-    service has no whole-device rate to divide by and so does not enter a bound,
+    typed ops have no whole-device rate to divide by and so do not enter a bound,
     and neither do bytes at a level with no published bandwidth: what asks for a
     nanosecond is what this could have priced, so a dtype whose rate is missing
     still owes one and a level nobody rated does not.

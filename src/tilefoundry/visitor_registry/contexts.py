@@ -123,14 +123,14 @@ class VerifyContext(TypeInferContext):
 class CostContext(TypeInferContext):
     """Cost Evaluator context for one topology window.
 
-    ``topology_level=None`` exposes the types as written. A named level projects
-    them to what one unit of that level holds, letting the same registered
-    evaluator answer both global and per-unit questions.
+    ``level=None`` exposes the types as written. A named level projects them to
+    what one unit of that level holds, letting the same registered evaluator
+    answer both global and per-unit questions.
     """
 
     selected_types: Mapping[int, Type] = field(default_factory=dict)
     selected_output_type: Type | None = None
-    topology_level: str | None = None
+    level: str | None = None
     topologies: tuple[Topology, ...] = ()
 
     def type_of(self, expr: Expr) -> Type:
@@ -141,18 +141,18 @@ class CostContext(TypeInferContext):
         """Return ``expr``'s Type in this context's topology window."""
         selected = self.selected_types.get(id(expr))
         type_ = selected if selected is not None else expr.type
-        if self.topology_level is None:
+        if self.level is None:
             return type_
-        return local_type_of(type_, topology_level=self.topology_level, topologies=self.topologies)
+        return local_type_of(type_, level=self.level, topologies=self.topologies)
 
     def local_output_type(self, call: Call) -> Type:
         """Return the selected candidate output in recursive-local form."""
         output = self.selected_output_type
         if output is None:
             output = call.type
-        if self.topology_level is None:
+        if self.level is None:
             return output
-        return local_type_of(output, topology_level=self.topology_level, topologies=self.topologies)
+        return local_type_of(output, level=self.level, topologies=self.topologies)
 
 
 @dataclass(frozen=True)
@@ -174,24 +174,16 @@ class Cost:
 
     ``flops`` groups leaf-local logical work by compute ``DType`` so one Op can
     report mixed work without selecting an ALU/TensorCore implementation.
-    ``service`` counts what is not floating point at all -- a comparison, a
-    select, an integer add -- by the service it asks for, because a dtype is not
-    a kind of work. ``traffic`` carries one entry per operand in call order with
+    ``ops`` counts what is not floating point at all -- a comparison, a
+    select, an integer add -- by the machine operation kind it asks for, because
+    a dtype is not a kind of work. ``traffic`` carries one entry per operand in call order with
     the result last, so an Op that reads part of an input says so where it knows
     it. No field names a hardware implementation or a memory level.
     """
 
     flops: Mapping[DType, int]
     traffic: tuple[TrafficBytes, ...]
-    service: Mapping[str, int] = field(default_factory=dict)
-    sent: tuple[tuple[str, TrafficBytes], ...] = ()
-    """Bytes that left the unit they were on, by the boundary they crossed.
-
-    ``traffic`` says which storage level each operand touched. Data handed
-    between two units of one topology level touches the same storage at both
-    ends and has still gone somewhere, so it is stated against that level's
-    name instead, from the sending unit's own view.
-    """
+    ops: Mapping[str, int] = field(default_factory=dict)
 
     @property
     def bytes(self) -> int:
@@ -209,9 +201,9 @@ class Cost:
             raise ValueError("Cost traffic must be non-negative integers")
         if any(
             isinstance(value, bool) or not isinstance(value, int) or value < 0
-            for value in self.service.values()
+            for value in self.ops.values()
         ):
-            raise ValueError("Cost service work must be non-negative integers")
+            raise ValueError("Cost ops work must be non-negative integers")
 
 
 __all__ = [

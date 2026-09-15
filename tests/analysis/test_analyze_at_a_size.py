@@ -92,7 +92,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
 
     module_target = result.module.resolve_target()
     throughput = module_target.get_facts(ThroughputFacts)
-    services = module_target.get_facts(PerformanceServiceFacts, result.topology_level)
+    services = module_target.get_facts(PerformanceServiceFacts)
     scopes = tuple(walk_scopes(build_scopes(result.module, fn)))
     timed = 0
     for expr in collect_exprs(fn.body):
@@ -105,7 +105,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
             throughput,
             services,
             moved=get_metadata(expr, TrafficMetadata),
-            topology_level=result.topology_level,
+            level=result.level,
         )
         record = get_metadata(expr, PerformanceMetadata)
         if not duration:
@@ -184,36 +184,39 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
     """
     fn = result.function
     for expr in (fn, *collect_exprs(fn.body)):
-        for record in (
-            ComputeCostMetadata,
-            TrafficMetadata,
-            MemoryMetadata,
-            RooflineMetadata,
-            PerformanceMetadata,
+        for record, rows in (
+            (
+                ComputeCostMetadata,
+                (
+                    "flops",
+                    "flops_logical",
+                    "flops_per_unit",
+                    "ops",
+                    "ops_logical",
+                    "ops_per_unit",
+                ),
+            ),
+            (TrafficMetadata, ()),
+            (MemoryMetadata, ()),
+            (RooflineMetadata, ()),
+            (PerformanceMetadata, ()),
         ):
             held = get_metadata(expr, record)
             if held is None:
                 continue
-            if record is ComputeCostMetadata:
-                for field in ("flops", "service"):
-                    for kind, spread in getattr(held, field).kinds:
-                        for where, value in (
-                            ("total", spread.total),
-                            *zip(held.topologies, spread.per_unit, strict=False),
-                        ):
-                            assert value >= 0, (
-                                f"{describe_expr(expr)}: {field}[{kind}].{where} = {value}"
-                            )
+            for field in rows:
+                value = getattr(held, field)
+                if field == "flops_logical":
+                    assert value >= 0, f"{describe_expr(expr)}: {field} = {value}"
+                    continue
+                for name, value in value:
+                    assert value >= 0, f"{describe_expr(expr)}: {field}[{name}] = {value}"
             if record is TrafficMetadata:
-                for field in ("storage", "communication"):
-                    for level, spread in getattr(held, field).kinds:
-                        for where, moved in (
-                            ("total", spread.total),
-                            *zip(held.topologies, spread.per_unit, strict=False),
-                        ):
-                            assert moved.read >= 0 and moved.write >= 0, (
-                                f"{describe_expr(expr)}: {field}[{level}].{where} = {moved}"
-                            )
+                for field in ("whole", "per_unit"):
+                    for level, moved in getattr(held, field):
+                        assert moved.read >= 0 and moved.write >= 0, (
+                            f"{describe_expr(expr)}: {field}[{level}] = {moved}"
+                        )
                 for position, moved in enumerate(held.operands):
                     assert moved.read >= 0 and moved.write >= 0, (
                         f"{describe_expr(expr)}: operand {position} = {moved}"
@@ -232,7 +235,7 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
         record = get_metadata(expr, LoopFootprintMetadata)
         if record is None:
             continue
-        rows = [(item.buffer, item.memory_level) for item in record.footprints]
+        rows = [(item.buffer, item.level) for item in record.footprints]
         assert rows == sorted(rows), describe_expr(expr)
         assert len(rows) == len(set(rows)), describe_expr(expr)
         for item in record.footprints:
@@ -270,9 +273,7 @@ def test_every_analysis_runs_at_a_stated_size(family: str) -> None:
 
 def _predicted_ns(module, dims=None) -> int:
     """What the four families together say one program takes."""
-    result = analyze(
-        module, module.entry_function(), analysis=FAMILIES, topology_level="cta", dims=dims
-    )
+    result = analyze(module, module.entry_function(), analysis=FAMILIES, level="cta", dims=dims)
     summary = get_metadata(result.function, PerformanceSummaryMetadata)
     assert summary is not None
     return summary.timeline.end_ns - summary.timeline.start_ns

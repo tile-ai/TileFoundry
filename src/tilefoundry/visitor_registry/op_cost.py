@@ -107,11 +107,11 @@ def _elementwise(call: Call, ctx: CostContext, *, dtype: DType | None = None) ->
     return Cost({result_dtype: numel(output)}, _traffic(inputs, output))
 
 
-def _serviced(call: Call, ctx: CostContext, kind: str) -> Cost:
-    """One result of *kind* per element, and no floating-point work at all."""
+def _ops(call: Call, ctx: CostContext, kind: str) -> Cost:
+    """One machine operation of *kind* per element, and no FLOP work."""
     inputs = _input_types(call, ctx)
     output = _output_type(call, ctx)
-    return Cost({}, _traffic(inputs, output), {kind: numel(output)})
+    return Cost({}, _traffic(inputs, output), ops={kind: numel(output)})
 
 
 @register_cost_evaluator(MatMul)
@@ -206,15 +206,15 @@ def _binary(call: Call, ctx: CostContext) -> Cost:
 
     A comparison over floats produces booleans, and calling that a bool FLOP
     asks the target for a rate no machine publishes. What it really asks for is
-    a predicate, which is a service a machine does state a throughput for.
+    a predicate, which is a machine operation with a separately stated throughput.
     ``_PREDICATES`` holds the kinds whose result is one, whatever the operands
     were.
     """
     kind = call.target.kind
     if kind in _PREDICATES:
-        return _serviced(call, ctx, "predicate")
+        return _ops(call, ctx, "predicate")
     if _integral(call, ctx):
-        return _serviced(call, ctx, "integer")
+        return _ops(call, ctx, "integer")
     return _elementwise(call, ctx)
 
 
@@ -236,17 +236,17 @@ def _unary(call: Call, ctx: CostContext) -> Cost:
     ``_SPECIAL`` holds the kinds the machine answers on its
     special-function unit, at a rate of its own -- a quarter of the scalar one
     here. Counting one of those as a single FLOP would put it on the float pipe
-    at four times the throughput the unit has, so it is a service rather than
-    arithmetic. What is left for ``flops`` is the arithmetic that really is a
+    at four times the throughput the unit has, so it is a separately priced
+    operation rather than arithmetic. What is left for ``flops`` is the arithmetic that really is a
     multiply or an add.
     """
     kind = call.target.kind
     if kind in _SPECIAL:
-        return _serviced(call, ctx, "special")
+        return _ops(call, ctx, "special")
     if kind is UnaryKind.NOT:
-        return _serviced(call, ctx, "predicate")
+        return _ops(call, ctx, "predicate")
     if _integral(call, ctx):
-        return _serviced(call, ctx, "integer")
+        return _ops(call, ctx, "integer")
     return _elementwise(call, ctx)
 
 
@@ -350,8 +350,7 @@ def _softmax(call: Call, ctx: CostContext) -> Cost:
 @register_cost_evaluator(Where)
 def _where(call: Call, ctx: CostContext) -> Cost:
     """Choosing between two values it already has is a select, not arithmetic."""
-    return _serviced(call, ctx, "select")
-
+    return _ops(call, ctx, "select")
 
 @register_cost_evaluator(LayerNorm)
 def _layer_norm(call: Call, ctx: CostContext) -> Cost:

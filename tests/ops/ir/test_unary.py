@@ -101,7 +101,7 @@ COST_CASES = [
         "exp_is_special_function_work",
         Unary(kind=UnaryKind.EXP),
         (_REAL,),
-        service={"special": 8},
+        ops={"special": 8},
         traffic=(TrafficBytes(read=32), TrafficBytes(write=32)),
     ),
     CostCase(

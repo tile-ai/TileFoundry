@@ -1,7 +1,7 @@
 """How much work the authored program asks for.
 
-This family reads the program and nothing else. Flops and typed service come
-from each op's registered cost evaluator, so the record it leaves is the same on
+This family reads the program and nothing else. Flops and typed machine ops
+come from each op's registered cost evaluator, so the record it leaves is the same on
 every backend. What that work moves is the memory family's half of the same
 declaration, and what it costs in time is a separate question again, asked
 against a target's rates.
@@ -17,19 +17,18 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard import Mesh, composed, topology_axes
+from tilefoundry.ir.types.shard import Mesh, composed, level_axes
 from tilefoundry.ir.types.shard.mesh import _positions_layout
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry.contexts import (
     CostContext,
     FunctionScope,
-    TrafficBytes,
 )
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts, ThroughputFacts
-from .metadata import Breakdown, ComputeCostMetadata, breakdown, shares
+from .metadata import ComputeCostMetadata
 from .visitor import AnalyzeContext
 
 SELECTOR = "compute-cost"
@@ -39,12 +38,11 @@ def _is_structural_occurrence(
     cost: ComputeCostMetadata,
     moved: "TrafficMetadata | None" = None,
     *,
-    unit: str,
     bandwidth_level: str | None = None,
 ) -> bool:
     """Whether an occurrence asks for nothing this model puts on a clock.
 
-    Only what could take time is counted: the flops, the typed service, and the
+    Only what could take time is counted: the flops, the typed machine ops, and the
     bytes at the one level a bandwidth is published for. Movement at any other
     level is still movement and still recorded -- what it is not is work this
     model can lay on a timeline, so it neither earns a duration nor asks for a
@@ -52,10 +50,10 @@ def _is_structural_occurrence(
     different questions, and this is the second one.
     """
     return (
-        all(not value for _name, value in shares(cost.flops, cost.topologies, unit).items())
-        and all(not value for _kind, value in shares(cost.service, cost.topologies, unit).items())
+        all(not value for _name, value in cost.flops_per_unit)
+        and all(not value for _kind, value in cost.ops_per_unit)
         and not (
-            _bytes(moved.storage, moved.topologies, bandwidth_level, unit)
+            moved.per_unit_at(bandwidth_level).total_bytes
             if moved is not None and bandwidth_level is not None
             else 0
         )
@@ -68,32 +66,29 @@ def _local_duration_ns(
     services: PerformanceServiceFacts,
     *,
     moved: "TrafficMetadata | None" = None,
-    topology_level: str,
+    level: str,
     scale: int = 1,
 ) -> int:
     """Price one occurrence's projected work against one unit's throughputs.
 
-    Compute, movement and what leaves the unit overlap, so the duration is
-    whichever takes longest; the same bytes can spend two resources and still
-    take one span of time. Work with no stated throughput is refused rather
-    than priced at nothing. Movement at a level the target publishes no
-    bandwidth for is a different case -- stated and left untimed, because a
-    rate nobody published is not one this may invent.
+    Compute and movement overlap within one occurrence, so its duration is
+    whichever side takes longer. Work with no stated throughput is refused
+    rather than priced at nothing: a number with a hole in it reads as a program
+    that does less than it does. Movement at a level the target publishes no
+    bandwidth for is a different case -- it is stated and left untimed, because
+    a rate nobody published is not one this may invent.
     """
-    if services.unit != topology_level:
+    if services.unit != level:
         raise AnalysisError(
-            f"performance: selected topology level {topology_level!r}, but the "
-            f"target's one-unit throughputs are stated for {services.unit!r}"
+            f"performance: selected topology level {level!r}, but the target's "
+            f"one-unit throughputs are stated for {services.unit!r}"
         )
 
-    if _is_structural_occurrence(
-        cost, moved, unit=topology_level, bandwidth_level=facts.bandwidth_level
-    ):
+    if _is_structural_occurrence(cost, moved, bandwidth_level=facts.bandwidth_level):
         return 0
 
     compute_ns = 0
-    for name, share in shares(cost.flops, cost.topologies, topology_level).items():
-        value = share
+    for name, value in cost.flops_per_unit:
         if not value:
             continue
         dtype = getattr(DType, name, None)
@@ -102,27 +97,22 @@ def _local_duration_ns(
         throughput = services.flops(dtype)
         if throughput is None or throughput <= 0:
             raise AnalysisError(
-                f"performance: target states no one-unit throughput for dtype "
-                f"{name!r} at {topology_level!r}"
+                f"performance: target states no one-unit throughput for dtype {name!r} at {level!r}"
             )
         compute_ns += -(-(value * scale * 1_000_000_000) // throughput)
 
-    for kind, share in shares(cost.service, cost.topologies, topology_level).items():
-        value = share
+    for kind, value in cost.ops_per_unit:
         if not value:
             continue
         throughput = services.ops(kind)
         if throughput is None or throughput <= 0:
             raise AnalysisError(
-                f"performance: target states no one-unit throughput for {kind!r} "
-                f"work at {topology_level!r}"
+                f"performance: target states no one-unit throughput for {kind!r} work at {level!r}"
             )
         compute_ns += -(-(value * scale * 1_000_000_000) // throughput)
 
     crossed = (
-        _bytes(moved.storage, moved.topologies, facts.bandwidth_level, topology_level) * scale
-        if moved is not None
-        else 0
+        moved.per_unit_at(facts.bandwidth_level).total_bytes * scale if moved is not None else 0
     )
     memory_ns = 0
     if crossed:
@@ -130,79 +120,56 @@ def _local_duration_ns(
         if throughput is None or throughput <= 0:
             raise AnalysisError(
                 f"performance: target states no one-unit throughput for level "
-                f"{facts.bandwidth_level!r} at {topology_level!r}"
+                f"{facts.bandwidth_level!r} at {level!r}"
             )
         memory_ns = -(-(crossed * 1_000_000_000) // throughput)
-
-    sent = (
-        _bytes(moved.communication, moved.topologies, topology_level, topology_level) * scale
-        if moved is not None
-        else 0
-    )
-    link_ns = 0
-    if sent:
-        rate = services.bandwidth(topology_level)
-        if rate:
-            link_ns = -(-(sent * 1_000_000_000) // rate)
-    return max(compute_ns, memory_ns, link_ns)
+    return max(compute_ns, memory_ns)
 
 
-def _named(flops: dict) -> dict[str, int]:
-    """The flop counts keyed by dtype name, as a record states them."""
-    return {dtype.name: value for dtype, value in flops.items()}
+def _flops(flops: dict) -> tuple[tuple[str, int], ...]:
+    return tuple(sorted((dtype.name, value) for dtype, value in flops.items()))
 
 
 def _call_cost_record(
-    expr: Call,
-    locals_by_unit: "dict[str, CostContext]",
-    positions_by_unit: "dict[str, int]",
-    whole: CostContext,
-    asked: "str | None" = None,
+    expr: Call, whole: CostContext, local: CostContext, executing_positions: int
 ) -> ComputeCostMetadata:
     """Measure the work one Call asks for, without attaching the record.
 
-    Work only: what an occurrence moves is the memory family's answer. One
-    unit's work is measured at every declared level rather than at one chosen
-    for the reader, and global work is any of them repeated over the positions
-    executing this scope -- the product is the same whichever level states it.
+    Work only: what an occurrence moves is the memory family's answer. Global
+    work is one selected unit's work repeated over the positions executing this
+    scope, so it is derived from the same registered evaluator rather than
+    independently recomputed from the authored type.
     """
-    flops_by_unit: list[dict[str, int]] = []
-    service_by_unit: list[dict[str, int]] = []
-    whole_flops: dict[str, int] = {}
-    whole_service: dict[str, int] = {}
     try:
         whole_cost = CostEvaluator().visit(expr, whole)
+        local_cost = CostEvaluator().visit(expr, local)
     except (ValueError, VerifyError) as error:
         raise AnalysisError(str(error)) from None
-    for unit, local in locals_by_unit.items():
-        try:
-            cost = CostEvaluator().visit(expr, local)
-        except (ValueError, VerifyError) as error:
-            raise AnalysisError(str(error)) from None
-        flops_by_unit.append(_named(cost.flops))
-        service_by_unit.append(dict(cost.service))
-        if unit == (asked or next(iter(locals_by_unit))):
-            repeats = positions_by_unit[unit]
-            whole_flops = {name: value * repeats for name, value in _named(cost.flops).items()}
-            whole_service = {kind: value * repeats for kind, value in cost.service.items()}
     return ComputeCostMetadata(
-        topologies=tuple(locals_by_unit),
-        flops=breakdown(whole_flops, flops_by_unit, 0),
-        flops_logical=tuple(sorted(_named(whole_cost.flops).items())),
-        service=breakdown(whole_service, service_by_unit, 0),
-        service_logical=tuple(sorted(whole_cost.service.items())),
+        flops=_flops(
+            {dtype: value * executing_positions for dtype, value in local_cost.flops.items()}
+        ),
+        flops_logical=sum(whole_cost.flops.values()),
+        flops_per_unit=_flops(local_cost.flops),
+        ops=tuple(
+            sorted(
+                (kind, value * executing_positions) for kind, value in local_cost.ops.items()
+            )
+        ),
+        ops_logical=tuple(sorted(whole_cost.ops.items())),
+        ops_per_unit=tuple(sorted(local_cost.ops.items())),
     )
 
 
-def _scope_position_count(mesh: Mesh, topology_level: str | None, topologies: tuple) -> int:
+def _scope_position_count(mesh: Mesh, level: str | None, topologies: tuple) -> int:
     """Count positions at or above the selected level within *mesh*."""
-    if topology_level is None:
+    if level is None:
         return 1
     declared = {topology.name: index for index, topology in enumerate(topologies)}
-    selected = declared[topology_level]
+    selected = declared[level]
     shape, _strides, _offset = _positions_layout(mesh)
     positions = 1
-    for topology, axes in zip(mesh.topologies, topology_axes(mesh)):
+    for topology, axes in zip(mesh.topologies, level_axes(mesh)):
         if declared[topology.name] > selected:
             continue
         for axis in axes:
@@ -215,60 +182,48 @@ def _scope_position_count(mesh: Mesh, topology_level: str | None, topologies: tu
     return positions
 
 
-def _bytes(
-    held: "Breakdown[TrafficBytes]",
-    topologies: tuple[str, ...],
-    kind: str,
-    topology_level: "str | None",
-) -> int:
-    """One kind's bytes for one unit of *topology_level*, read and written together."""
-    moved = shares(held, topologies, topology_level).get(kind)
-    return moved.total_bytes if moved is not None else 0
-
-
 def _accumulate(
     flops: dict[str, int],
-    flops_logical: dict[str, int],
-    service: dict[str, int],
-    service_logical: dict[str, int],
-    by_unit: "dict[str, dict[str, dict[str, int]]]",
+    flops_logical: list[int],
+    flops_per_unit: dict[str, int],
+    ops: dict[str, int],
+    ops_logical: dict[str, int],
+    ops_per_unit: dict[str, int],
     record: ComputeCostMetadata,
     trips: int,
 ) -> None:
-    for kind, spread in record.flops.kinds:
-        flops[kind] = flops.get(kind, 0) + spread.total * trips
-    for kind, value in record.flops_logical:
-        flops_logical[kind] = flops_logical.get(kind, 0) + value * trips
-    for kind, spread in record.service.kinds:
-        service[kind] = service.get(kind, 0) + spread.total * trips
-    for kind, value in record.service_logical:
-        service_logical[kind] = service_logical.get(kind, 0) + value * trips
-    for index, unit in enumerate(record.topologies):
-        held = by_unit.setdefault(unit, {"flops": {}, "service": {}})
-        for kind, spread in record.flops.kinds:
-            held["flops"][kind] = held["flops"].get(kind, 0) + spread.at(index) * trips
-        for kind, spread in record.service.kinds:
-            held["service"][kind] = held["service"].get(kind, 0) + spread.at(index) * trips
+    for name, value in record.flops:
+        flops[name] = flops.get(name, 0) + value * trips
+    flops_logical[0] += record.flops_logical * trips
+    for name, value in record.flops_per_unit:
+        flops_per_unit[name] = flops_per_unit.get(name, 0) + value * trips
+    for name, value in record.ops:
+        ops[name] = ops.get(name, 0) + value * trips
+    for name, value in record.ops_logical:
+        ops_logical[name] = ops_logical.get(name, 0) + value * trips
+    for name, value in record.ops_per_unit:
+        ops_per_unit[name] = ops_per_unit.get(name, 0) + value * trips
 
 
 @dataclass
 class ComputeCostContext(AnalyzeContext):
     """State carried through the compute-cost expression walk.
 
-    ``executing_positions`` is how many positions of each declared level the
-    enclosing scope holds; it is the multiplier that turns one unit's work at
-    that level into total replicated work.
+    ``executing_positions`` is the number of positions in the enclosing scope
+    through the selected topology level; it is the D68 multiplier that turns
+    per-unit work into total replicated work.
     """
 
-    locals_by_unit: dict[str, CostContext] = field(default_factory=dict)
+    local: CostContext | None = None
     whole: CostContext | None = None
     current_mesh: Mesh | None = None
-    executing_positions: dict[str, int] = field(default_factory=dict)
+    executing_positions: int = 1
     flops: dict[str, int] = field(default_factory=dict)
-    flops_logical: dict[str, int] = field(default_factory=dict)
-    service: dict[str, int] = field(default_factory=dict)
-    service_logical: dict[str, int] = field(default_factory=dict)
-    by_unit: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
+    flops_logical: list[int] = field(default_factory=lambda: [0])
+    flops_per_unit: dict[str, int] = field(default_factory=dict)
+    ops: dict[str, int] = field(default_factory=dict)
+    ops_logical: dict[str, int] = field(default_factory=dict)
+    ops_per_unit: dict[str, int] = field(default_factory=dict)
     call_count: list[int] = field(default_factory=lambda: [0])
 
 
@@ -280,10 +235,7 @@ class ComputeCostVisitor(ExprVisitor[None]):
         for arg in expr.args:
             self.visit(arg, ctx)
         mesh = composed((ctx.current_mesh, expr.mesh)) if ctx.current_mesh else expr.mesh
-        topologies = ctx.module.effective_topologies()
-        positions = {
-            unit: _scope_position_count(mesh, unit, topologies) for unit in ctx.locals_by_unit
-        }
+        positions = _scope_position_count(mesh, ctx.level, ctx.module.effective_topologies())
         self.visit(
             expr.body,
             replace(ctx, executing_positions=positions, current_mesh=mesh),
@@ -304,15 +256,11 @@ class ComputeCostVisitor(ExprVisitor[None]):
         if not isinstance(expr, Call):
             return
         ctx.call_count[0] += 1
-        if not ctx.locals_by_unit:
+        if ctx.local is None:
             raise AnalysisError("compute-cost: visitor context is missing its cost context")
-        record = _call_cost_record(
-            expr,
-            ctx.locals_by_unit,
-            ctx.executing_positions,
-            ctx.whole,
-            ctx.topology_level,
-        )
+        if ctx.whole is None:
+            raise AnalysisError("compute-cost: visitor context is missing its whole context")
+        record = _call_cost_record(expr, ctx.whole, ctx.local, ctx.executing_positions)
         attach(expr, record)
         owner = ctx.current if id(expr) in ctx.current.accesses["narrow"] else ctx.root
         repeats = 1
@@ -324,9 +272,10 @@ class ComputeCostVisitor(ExprVisitor[None]):
         _accumulate(
             ctx.flops,
             ctx.flops_logical,
-            ctx.service,
-            ctx.service_logical,
-            ctx.by_unit,
+            ctx.flops_per_unit,
+            ctx.ops,
+            ctx.ops_logical,
+            ctx.ops_per_unit,
             record,
             repeats,
         )
@@ -337,45 +286,32 @@ def analyze_compute_cost(
     context: AnalyzeContext,
 ) -> None:
     """Attach one-trip work per Call and multiplicity-aware totals per Function."""
-    module, topology_level = context.module, context.topology_level
+    module, level = context.module, context.level
     topologies = module.effective_topologies()
     scope = FunctionScope(module, function)
     whole = CostContext(scope=scope)
-    units = tuple(topology.name for topology in topologies) or (topology_level,)
-    locals_by_unit = {
-        unit: CostContext(scope=scope, topology_level=unit, topologies=topologies)
-        for unit in units
-        if unit is not None
-    }
+    local = CostContext(scope=scope, level=level, topologies=topologies)
     cost_context = ComputeCostContext(
         module=module,
         target=context.target,
-        topology_level=topology_level,
+        level=level,
         options=context.options,
         root=context.root,
         current=context.current,
-        locals_by_unit=locals_by_unit,
+        local=local,
         whole=whole,
-        executing_positions=dict.fromkeys(locals_by_unit, 1),
     )
     ComputeCostVisitor().visit(function.body, cost_context)
     if cost_context.call_count[0] > 0:
         attach(
             function,
             ComputeCostMetadata(
-                topologies=tuple(cost_context.by_unit),
-                flops=breakdown(
-                    dict(cost_context.flops),
-                    [dict(held["flops"]) for held in cost_context.by_unit.values()],
-                    0,
-                ),
-                flops_logical=tuple(sorted(cost_context.flops_logical.items())),
-                service=breakdown(
-                    dict(cost_context.service),
-                    [dict(held["service"]) for held in cost_context.by_unit.values()],
-                    0,
-                ),
-                service_logical=tuple(sorted(cost_context.service_logical.items())),
+                flops=tuple(sorted(cost_context.flops.items())),
+                flops_logical=cost_context.flops_logical[0],
+                flops_per_unit=tuple(sorted(cost_context.flops_per_unit.items())),
+                ops=tuple(sorted(cost_context.ops.items())),
+                ops_logical=tuple(sorted(cost_context.ops_logical.items())),
+                ops_per_unit=tuple(sorted(cost_context.ops_per_unit.items())),
             ),
         )
 

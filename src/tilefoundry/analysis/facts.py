@@ -147,7 +147,7 @@ class PerformanceServiceFacts:
     """Everything one unit gets through, by the kind of work it is asked for.
 
     Floating-point work by dtype, movement by the level it crosses, and the work
-    that is not floating point at all by the service it asks for. A comparison,
+    that is not floating point at all by the operation kind it asks for. A comparison,
     a select, an integer add and a local move all take a machine time, and none
     of them is a FLOP; a dtype is not a kind of work.
     """

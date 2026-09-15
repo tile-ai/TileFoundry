@@ -119,7 +119,7 @@ def test_where_cost_counts_selection_and_materialization():
                 make_tensor_type((2, 3, 4), DType.f32),
                 make_tensor_type((2, 3, 4), DType.f32),
             ),
-            service={"select": 24},
+            ops={"select": 24},
             traffic=(
                 TrafficBytes(read=3),
                 TrafficBytes(read=96),

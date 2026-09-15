@@ -43,7 +43,8 @@ def _watch(limit: float) -> None:
     def stop() -> None:
         time.sleep(limit)
         sys.stderr.write(
-            f"tilefoundry: error: analysis too complex, timed out after {limit:.0f}s\n"
+            "tilefoundry: error: analysis too complex, "
+            f"timed out after {limit:.0f}s\n"
         )
         sys.stderr.flush()
         os._exit(1)
@@ -82,10 +83,10 @@ def guidance() -> str:
 
         family         what --topology changes                 pass it when
         ------------   --------------------------------------  ---------------------
-        compute-cost   nothing. Every kind states its total     never
-                       and every level's per-unit share
-        memory         nothing for traffic, which states every   the program shards
-                       level. Footprint follows its owner
+        compute-cost   flops_per_unit and ops_per_unit.        the program shards
+                       flops and ops stay global
+        memory         per-unit traffic. Footprint follows     the program shards
+                       its owner for each storage level
         roofline       nothing. The bound is the machine's     never
                        and is unchanged by program splits
         performance    which level's parallel capacity the     the program shards
@@ -155,7 +156,7 @@ def run_authored_analysis(
         Path(out_path).write_text(annotated, encoding="utf-8")
         return 0
 
-    result = analyze(module, function, analysis=analyses, topology_level=topology, dims=dims)
+    result = analyze(module, function, analysis=analyses, level=topology, dims=dims)
     rendered = render_analysis(result, operands=operands and not as_json)
     if as_json:
         Path(out_path).write_text(
@@ -164,7 +165,9 @@ def run_authored_analysis(
         )
         return 0
 
-    Path(out_path).write_text(f"{render_text(rendered)}\n\n{rendered.annotated}", encoding="utf-8")
+    Path(out_path).write_text(
+        f"{render_text(rendered)}\n\n{rendered.annotated}", encoding="utf-8"
+    )
     return 0
 
 

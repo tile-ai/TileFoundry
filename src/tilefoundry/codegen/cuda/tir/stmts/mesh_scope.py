@@ -1,21 +1,15 @@
-"""Emit CUDA mesh scopes.
+"""Helpers for CUDA ``MeshScope`` lowering.
 
-Emitter for `tir.MeshScope` — emits a C++ block + comment marker +
-constexpr Mesh type alias ([runtime §2.3.2](docs/spec/runtime.md#232-layoutmeshcuh)).
+The ``CudaEmitter`` owns Stmt traversal and invokes these stateless mesh
+layout helpers while visiting a ``MeshScope``.
 """
-
 from __future__ import annotations
 
-from tilefoundry.codegen.cuda.context import (
-    CudaCodegenContext,
-    topology_scope_str,
-)
-from tilefoundry.ir.tir.stmts import MeshScope
+from tilefoundry.codegen.cuda.context import topology_scope_str
 from tilefoundry.ir.tir.sync import participation
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
 from tilefoundry.ir.types.shard.mesh import Mesh, Topology, positions_at
-from tilefoundry.target import CudaTarget, validate_cuda_topology_levels
-from tilefoundry.visitor_registry.registries import Role, register_codegen
+from tilefoundry.target import validate_cuda_topology_levels
 
 
 def _resolved(topology: Topology | str) -> Topology:
@@ -43,14 +37,14 @@ def _validate_topology(mesh: Mesh, target) -> None:
     validate_cuda_topology_levels(target, (_resolved(t).name for t in mesh.topologies))
 
 
-def _group_mesh_layout(mesh: Mesh, topos) -> str:
+def _levelwise_layout(mesh: Mesh, topos) -> str:
     """One nest per topology level, each in that level's own numbering.
 
     A flat shape says nothing about which axes are whose, so the runtime's
-    ``get<level>`` needs the boundary stated. ``topology_axes`` hands the
-    axes to the levels left to right and ``positions_at`` divides each level's
-    strides by what the levels under it contribute, so a nest reads as the
-    layout that level would have alone. The composite is a grouping, not a map: only the
+    ``get<level>`` needs the boundary stated. ``level_axes`` hands the axes to
+    the levels left to right and ``positions_at`` divides each level's strides
+    by what the levels under it contribute, so a nest reads as the layout that
+    level would have alone. The composite is a grouping, not a map: only the
     nests are evaluated. A level every instance shares keeps a mode of one, so
     that ``get<level>`` still has something to pick.
     """
@@ -59,9 +53,20 @@ def _group_mesh_layout(mesh: Mesh, topos) -> str:
         level_shape, level_strides = positions_at(mesh, topology.name)
         if not level_shape:
             level_shape, level_strides = (1,), (0,)
-        shapes.append("cute::Shape<" + ", ".join(f"cute::Int<{s}>" for s in level_shape) + ">")
-        strides.append("cute::Stride<" + ", ".join(f"cute::Int<{s}>" for s in level_strides) + ">")
-    return f"cute::Layout<cute::Shape<{', '.join(shapes)}>, cute::Stride<{', '.join(strides)}>>"
+        shapes.append(
+            "cute::Shape<"
+            + ", ".join(f"cute::Int<{s}>" for s in level_shape)
+            + ">"
+        )
+        strides.append(
+            "cute::Stride<"
+            + ", ".join(f"cute::Int<{s}>" for s in level_strides)
+            + ">"
+        )
+    return (
+        f"cute::Layout<cute::Shape<{', '.join(shapes)}>, "
+        f"cute::Stride<{', '.join(strides)}>>"
+    )
 
 
 def mesh_type(mesh: Mesh) -> str:
@@ -83,7 +88,10 @@ def mesh_type(mesh: Mesh) -> str:
     if len(topos) == 1:
         shape_types = ", ".join(f"cute::Int<{s}>" for s in shape)
         stride_types = ", ".join(f"cute::Int<{s}>" for s in strides)
-        layout = f"cute::Layout<cute::Shape<{shape_types}>, cute::Stride<{stride_types}>>"
+        layout = (
+            f"cute::Layout<cute::Shape<{shape_types}>, "
+            f"cute::Stride<{stride_types}>>"
+        )
     else:
         if base:
             raise NotImplementedError(
@@ -91,7 +99,7 @@ def mesh_type(mesh: Mesh) -> str:
                 "be sliced; the slice and the level boundary would both be "
                 "deciding which positions these are"
             )
-        layout = _group_mesh_layout(mesh, topos)
+        layout = _levelwise_layout(mesh, topos)
     if base:
         layout = f"cute::ComposedLayout<cute::identity, cute::Int<{base}>, {layout}>"
     return f"tilefoundry::Mesh<{layout}, {', '.join(topology_scope_str(t.name) for t in topos)}>"
@@ -108,35 +116,4 @@ def _is_dynamic_mesh(mesh: Mesh) -> bool:
     return any(s is None for s in mesh.layout.shape)
 
 
-@register_codegen(CudaTarget, Role.EMIT, MeshScope)
-def _emit(node: MeshScope, ctx: CudaCodegenContext) -> None:
-    """Emit the block a mesh scope is, and the mesh object it states."""
-    if ctx.target is None:
-        raise RuntimeError("CUDA MeshScope emission requires its Target")
-    _validate_topology(node.mesh, ctx.target)
-    name = ctx.name_for(node.binding)
-    ctx.emit(f"// mesh scope: {program_topologies(node.mesh)[0].name}")
-
-    is_slice = isinstance(node.mesh.layout, ComposedLayout)
-    ctx.emit("{")
-    ctx.indent()
-    outer_aliases = ctx._mesh_aliases
-    ctx._mesh_aliases = dict(outer_aliases)
-    try:
-        if not _is_dynamic_mesh(node.mesh):
-            alias = f"{name}_mesh_t"
-            mesh_type_str = mesh_type(node.mesh)
-            ctx._mesh_aliases[id(node.mesh)] = (alias, mesh_type_str)
-            ctx.emit(f"using {alias} = {mesh_type_str};")
-            ctx.emit(f"constexpr {alias} {name}_mesh{{}};")
-        if is_slice:
-            ctx.emit(f"if (tilefoundry::contains({name}_mesh, tilefoundry::program_ids())) {{")
-            ctx.indent()
-        ctx.emit_node(node.body)
-        if is_slice:
-            ctx.dedent()
-            ctx.emit("}")
-    finally:
-        ctx._mesh_aliases = outer_aliases
-    ctx.dedent()
-    ctx.emit("}")
+__all__ = ["mesh_type", "program_topologies"]

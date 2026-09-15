@@ -173,7 +173,7 @@ COST_CASES = [
         "lt_over_reals_is_a_predicate",
         Binary(kind=BinaryKind.LT),
         (_REAL, _REAL),
-        service={"predicate": 8},
+        ops={"predicate": 8},
         traffic=(TrafficBytes(read=32), TrafficBytes(read=32), TrafficBytes(write=1)),
     ),
     CostCase(
