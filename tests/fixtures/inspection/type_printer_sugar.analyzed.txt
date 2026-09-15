@@ -20,17 +20,17 @@ def composed_mesh_pipeline(
 ):
     with Mesh((Topology("cta", 4),), Layout((4,), (1,)), names=('tile',)) as cta:
         v0 = reshard(x, layout=(4 @ cta.tile, 2, 2 @ mesh.warp, 2, 4 @ mesh.lane, 4), storage=rmem)  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 2 @ mesh.warp, 2, 4 @ mesh.lane, 4), (0, 8, 0, 4, 0, 1)), "rmem"]; compute-cost; traffic traffic=gmem:r2048/w0@cta:r512/w0,thread:r64/w0,rmem:r0/w2048@cta:r0/w512,thread:r0/w64
-        v1 = unary(v0, kind="square")  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 2 @ mesh.warp, 2, 4 @ mesh.lane, 4), (0, 8, 0, 4, 0, 1)), "rmem"]; compute-cost flops=f32:512@cta:128,thread:16; traffic traffic=rmem:r2048/w2048@cta:r512/w512,thread:r64/w64
+        v1 = unary(v0, kind="square")  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 2 @ mesh.warp, 2, 4 @ mesh.lane, 4), (0, 8, 0, 4, 0, 1)), "rmem"]; compute-cost flops=f32:512/512@cta:128@thread:16; traffic traffic=rmem:r2048/w2048@cta:r512/w512,thread:r64/w64
         v2 = reshard(v1, layout=(4 @ cta.tile, 2, 4, 16), storage=smem)  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 4, 16), (128, 64, 16, 1)), "smem"]; compute-cost; traffic traffic=rmem:r2048/w0@cta:r512/w0,thread:r64/w0,smem:r0/w2048@cta:r0/w512,thread:r0/w64
-        v3 = cast(v2, dtype="bf16")  # Tensor[(8, 4, 16), "bf16", ((4 @ cta.tile, 2, 4, 16), (128, 64, 16, 1)), "smem"]; compute-cost flops=bf16:512@cta:128,thread:128; traffic traffic=smem:r2048/w1024@cta:r512/w256,thread:r512/w256
+        v3 = cast(v2, dtype="bf16")  # Tensor[(8, 4, 16), "bf16", ((4 @ cta.tile, 2, 4, 16), (128, 64, 16, 1)), "smem"]; compute-cost flops=bf16:512/512@cta:128@thread:128; traffic traffic=smem:r2048/w1024@cta:r512/w256,thread:r512/w256
         v4 = transpose(v3, perm=(0, 2, 1))  # Tensor[(8, 16, 4), "bf16", ((4 @ cta.tile, 2, 16, 4), (128, 64, 1, 16)), "smem"]; compute-cost; traffic traffic=smem:r1024/w1024@cta:r256/w256,thread:r256/w256
         v5 = reshard(v4, layout=((8, 16, 4), (64, 4, 1), {cta.tile @ B()}), storage=gmem)  # Tensor[(8, 16, 4), "bf16", ((8, 16, 4), (64, 4, 1), {cta.tile @ B()})]; compute-cost; traffic traffic=gmem:r0/w1024@cta:r0/w256,thread:r0/w256,smem:r1024/w0@cta:r256/w0,thread:r256/w0
         v6 = reshard(seed, layout=((2 @ mesh.warp, 4 @ mesh.lane, 2), (8, 2, 1)), storage=rmem)  # Tensor[(16,), "f32", ((2 @ mesh.warp, 4 @ mesh.lane, 2), (8, 2, 1)), "rmem"]; compute-cost; traffic traffic=gmem:r64/w0@cta:r64/w0,thread:r8/w0,rmem:r0/w64@cta:r0/w64,thread:r0/w8
     folded = reshard(acc, layout=(2 @ mesh.warp, 4, 4 @ mesh.lane, 4), storage=rmem)  # Tensor[(8, 16), "f32", ((2 @ mesh.warp, 4, 4 @ mesh.lane, 4), (64, 16, 4, 1)), "rmem"]; compute-cost; traffic
     summed = reshard(mixed, layout=((8, 16), {mesh.warp @ B()}), storage=rmem)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {mesh.warp @ B()}), "rmem"]; compute-cost; traffic
     for _ in range(3):  # loop-footprint footprints=folded@rmem:8192/196608/24576,summed@rmem:131072/393216/393216 status=complete
-        v10 = add(summed, summed)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {mesh.warp @ B()}), "rmem"]; compute-cost flops=f32:128@cta:128,thread:128; traffic traffic=rmem:r1024/w512@cta:r1024/w512,thread:r1024/w512
-        v11 = unary(folded, kind="square")  # Tensor[(8, 16), "f32", ((2 @ mesh.warp, 4, 4 @ mesh.lane, 4), (64, 16, 4, 1)), "rmem"]; compute-cost flops=f32:128@cta:128,thread:16; traffic traffic=rmem:r512/w512@cta:r512/w512,thread:r64/w64
+        v10 = add(summed, summed)  # Tensor[(8, 16), "f32", ((8, 16), (16, 1), {mesh.warp @ B()}), "rmem"]; compute-cost flops=f32:128/128@cta:128@thread:128; traffic traffic=rmem:r1024/w512@cta:r1024/w512,thread:r1024/w512
+        v11 = unary(folded, kind="square")  # Tensor[(8, 16), "f32", ((2 @ mesh.warp, 4, 4 @ mesh.lane, 4), (64, 16, 4, 1)), "rmem"]; compute-cost flops=f32:128/128@cta:128@thread:16; traffic traffic=rmem:r512/w512@cta:r512/w512,thread:r64/w64
         folded = v11
         summed = v10
     v13 = reshard(folded, layout=Layout((8, 16), (16, 1)), storage=gmem)  # Tensor[(8, 16), "f32", Layout((8, 16), (16, 1))]; compute-cost; traffic traffic=gmem:r0/w512@cta:r0/w512,thread:r0/w64,rmem:r512/w0@cta:r512/w0,thread:r64/w0
