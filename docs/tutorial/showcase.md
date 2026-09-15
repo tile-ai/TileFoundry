@@ -197,14 +197,14 @@ for needle in ("matmul(hidden, w_q", "cache_update(k_cache", "matmul(v33, w_o"):
 ```text
 # analysis target=nvidia.h200_sxm module=Stage0_Naive function=gqa_decode topology=cta
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
-# compute-cost flops=bf16:328896@cta:328896,f32:200448@cta:200448 service=special:1024@cta:1024
+# compute-cost flops=bf16:328896/328896@cta:328896,f32:200448/200448@cta:200448 other-ops=special:1024/1024@cta:1024
 # traffic traffic=gmem:r2225620/w806592@cta:r2225620/w806592
 # peak-footprint=gmem:1675788
 # roofline ideal-ns=632 bound-by=memory
 
-    v0 = matmul(hidden, w_q, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072@cta:131072; traffic traffic=gmem:r131584/w512@cta:r131584/w512 operands=0:r512/w0,1:r131072/w0,result:r0/w512; roofline ideal-ns=28 bound-by=memory
+    v0 = matmul(hidden, w_q, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072/131072@cta:131072; traffic traffic=gmem:r131584/w512@cta:r131584/w512 operands=0:r512/w0,1:r131072/w0,result:r0/w512; roofline ideal-ns=28 bound-by=memory
     v11 = cache_update(k_cache, cur_pos, write_len, v10)  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost; traffic traffic=gmem:r136/w128@cta:r136/w128 operands=0:r0/w0,1:r4/w0,2:r4/w0,3:r128/w0,result:r0/w128; roofline ideal-ns=1 bound-by=memory
-    v34 = matmul(v33, w_o, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072@cta:131072; traffic traffic=gmem:r131584/w512@cta:r131584/w512 operands=0:r512/w0,1:r131072/w0,result:r0/w512; roofline ideal-ns=28 bound-by=memory
+    v34 = matmul(v33, w_o, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072/131072@cta:131072; traffic traffic=gmem:r131584/w512@cta:r131584/w512 operands=0:r512/w0,1:r131072/w0,result:r0/w512; roofline ideal-ns=28 bound-by=memory
 ```
 
 The number before `@` is global work or traffic. After it comes one share per
@@ -259,12 +259,12 @@ for ctx_len in (128, 512, 1024, 2048, 4096, 8192):
 
 | `ctx_len` | f32 flops `global@CTA` | traffic `global@CTA` | peak gmem bytes | ideal ns | bound |
 |---:|---:|---|---:|---:|---|
-| 128 | `200448@cta:200448` | `gmem:r2225620/w806592@cta:r2225620/w806592` | 1675788 | 632 | memory |
-| 512 | `799488@cta:799488` | `gmem:r4744660/w3202752@cta:r4744660/w3202752` | 2572812 | 1656 | memory |
-| 1024 | `1598208@cta:1598208` | `gmem:r8103380/w6397632@cta:r8103380/w6397632` | 3768844 | 3022 | memory |
-| 2048 | `3195648@cta:3195648` | `gmem:r14820820/w12787392@cta:r14820820/w12787392` | 6160908 | 5752 | memory |
-| 4096 | `6390528@cta:6390528` | `gmem:r28255700/w25566912@cta:r28255700/w25566912` | 10945036 | 11214 | memory |
-| 8192 | `12780288@cta:12780288` | `gmem:r55125460/w51125952@cta:r55125460/w51125952` | 20513292 | 22136 | memory |
+| 128 | `200448/200448@cta:200448` | `gmem:r2225620/w806592@cta:r2225620/w806592` | 1675788 | 632 | memory |
+| 512 | `799488/799488@cta:799488` | `gmem:r4744660/w3202752@cta:r4744660/w3202752` | 2572812 | 1656 | memory |
+| 1024 | `1598208/1598208@cta:1598208` | `gmem:r8103380/w6397632@cta:r8103380/w6397632` | 3768844 | 3022 | memory |
+| 2048 | `3195648/3195648@cta:3195648` | `gmem:r14820820/w12787392@cta:r14820820/w12787392` | 6160908 | 5752 | memory |
+| 4096 | `6390528/6390528@cta:6390528` | `gmem:r28255700/w25566912@cta:r28255700/w25566912` | 10945036 | 11214 | memory |
+| 8192 | `12780288/12780288@cta:12780288` | `gmem:r55125460/w51125952@cta:r55125460/w51125952` | 20513292 | 22136 | memory |
 
 The table says:
 
@@ -426,7 +426,7 @@ print(report.partition("\n\n")[0].rstrip())
 ```text
 # analysis target=nvidia.h200_sxm module=Stage2_Sharded function=gqa_decode topology=cta
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
-# compute-cost flops=bf16:2629376@cta:328672,f32:2833728@cta:354216 service=special:14528@cta:1816
+# compute-cost flops=bf16:328896/2629376@cta:328672,f32:2833728/2833728@cta:354216 other-ops=special:14528/14528@cta:1816
 # traffic traffic=gmem:r5563796/w3721856@cta:r3936212/w3721408,smem:r9597248/w9480000@cta:r1199656/w1185000
 # peak-footprint=gmem:3701260,smem:472160
 # roofline ideal-ns=1935 bound-by=memory
@@ -554,7 +554,7 @@ for line in report.splitlines():
 ```
 
 ```text
-# compute-cost flops=bf16:328896@cta:328896,f32:200448@cta:200448 service=special:1024@cta:1024
+# compute-cost flops=bf16:328896/328896@cta:328896,f32:200448/200448@cta:200448 other-ops=special:1024/1024@cta:1024
 # traffic traffic=gmem:r2225620/w806592@cta:r2225620/w806592
 # peak-footprint=gmem:1675788
 # roofline ideal-ns=632 bound-by=memory
@@ -581,7 +581,7 @@ for line in report.splitlines():
 ```
 
 ```text
-# compute-cost flops=bf16:2629376@cta:328672,f32:200448@cta:25056 service=special:1024@cta:128
+# compute-cost flops=bf16:328896/2629376@cta:328672,f32:200448/200448@cta:25056 other-ops=special:1024/1024@cta:128
 # traffic traffic=gmem:r1674644/w264832@cta:r1559508/w264384,smem:r684608/w675392@cta:r85576/w84424
 # peak-footprint=gmem:1540620,smem:33280
 # roofline ideal-ns=405 bound-by=memory
@@ -728,7 +728,7 @@ print(next(line.rstrip() for line in annotated.splitlines() if "cache_update(k_c
 ```text
 # analysis target=nvidia.h200_sxm module=Stage3_Fused function=gqa_decode topology=cta
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
-# compute-cost flops=bf16:4392896@cta:328672,f32:6418944@cta:200592 service=integer:288@cta:9,special:33152@cta:1036
+# compute-cost flops=bf16:328896/4392896@cta:328672,f32:3239808/6418944@cta:200592 other-ops=integer:9/288@cta:9,special:33056/33152@cta:1036
 # traffic traffic=gmem:r3476884/w4196992@cta:r2558932/w4196544,rmem:r656/w72@cta:r656/w72,smem:r5839296/w5662784@cta:r682464/w672676
 # peak-footprint=gmem:5047436,rmem:16,smem:33408
 # roofline ideal-ns=1599 bound-by=memory
@@ -865,7 +865,7 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 ```text
 # analysis target=nvidia.h200_sxm module=Stage4_WeightPrepared function=gqa_decode topology=cta
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
-# compute-cost flops=bf16:337408@cta:42176,f32:51124224@cta:6390528 service=special:262144@cta:32768
+# compute-cost flops=bf16:328896/337408@cta:42176,f32:6390528/51124224@cta:6390528 other-ops=special:32768/262144@cta:32768
 # traffic traffic=gmem:r28254676/w25566912@cta:r27967956/w25565792,smem:r331008/w329984@cta:r43168/w42144
 # peak-footprint=gmem:10945036,smem:16960
 # roofline ideal-ns=11213 bound-by=memory
@@ -1017,7 +1017,7 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 ```text
 # analysis target=nvidia.h200_sxm module=Stage5_CachePrepared function=gqa_decode topology=cta
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
-# compute-cost flops=bf16:1246400@cta:328672,f32:6410280@cta:801285 service=integer:256@cta:32,special:33040@cta:4130
+# compute-cost flops=bf16:328896/1246400@cta:328672,f32:6410280/6410280@cta:801285 other-ops=integer:32/256@cta:32,special:33040/33040@cta:4130
 # traffic traffic=gmem:r7672476/w4198272@cta:r4001116/w4197824,rmem:r2560/w0@cta:r2560/w0,smem:r21788704/w21486432@cta:r2723588/w2685804
 # peak-footprint=gmem:2950412,rmem:0,smem:33536
 # roofline ideal-ns=2474 bound-by=memory

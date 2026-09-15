@@ -10,6 +10,7 @@ from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import (
 )
 from tilefoundry.codegen.cuda.tir.stmts.scalar_expr import render_scalar_expr
 from tilefoundry.ir.core import Call
+from tilefoundry.ir.tir.abort import Abort
 from tilefoundry.ir.tir.stmts import (
     Evaluate,
     For,
@@ -84,11 +85,13 @@ class CppEmitter(StmtVisitor[None]):
     def visit_Return(self, node: Return) -> None:
         self.statement("return")
 
+    def visit_Abort(self, node: Abort) -> None:
+        self.statement("__trap()")
+
     def visit_LetStmt(self, node: LetStmt) -> None:
         if not isinstance(node.value, Call):
             raise RuntimeError(
-                f"LetStmt.value must be a Call (TIR-owned Expr Op), "
-                f"got {type(node.value).__name__}"
+                f"LetStmt.value must be a Call (TIR-owned Expr Op), got {type(node.value).__name__}"
             )
         self.emit_let_op(node.value, node)
         self.visit(node.body)
@@ -101,13 +104,13 @@ class CppEmitter(StmtVisitor[None]):
         raise NotImplementedError
 
     def emit_evaluate_op(self, call: Call) -> None:
-        handler = self.context.lookup(type(call.target))
+        handler = self.context.handler_for(type(call.target))
         if handler is None:
             raise RuntimeError(f"no codegen handler for Op {type(call.target).__name__}")
         handler(call, self.context)
 
     def emit_let_op(self, call: Call, stmt: LetStmt) -> None:
-        handler = self.context.lookup(type(call.target))
+        handler = self.context.handler_for(type(call.target))
         if handler is None:
             raise RuntimeError(f"no codegen handler for Op {type(call.target).__name__}")
         handler(stmt, self.context)
@@ -140,10 +143,7 @@ class CudaEmitter(CppEmitter):
                 ctx.emit(f"using {alias} = {mesh_type_str};")
                 ctx.emit(f"constexpr {alias} {name}_mesh{{}};")
             if is_slice:
-                ctx.emit(
-                    f"if (tilefoundry::contains({name}_mesh, "
-                    "tilefoundry::program_ids())) {"
-                )
+                ctx.emit(f"if (tilefoundry::contains({name}_mesh, tilefoundry::program_ids())) {{")
                 ctx.indent()
             self.visit(node.body)
             if is_slice:

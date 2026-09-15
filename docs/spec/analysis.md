@@ -166,35 +166,26 @@ target hardware facts. What an occurrence moves is the memory family's answer
 
 ```python
 class ComputeCostMetadata(IRMetadata):
-    """One Call's logical work, as the authored program states it.
-
-    Attributes:
-        topologies: attribute; The declared levels, in the order per_unit states them.
-        flops: attribute; Flop counts per compute DType name.
-        flops_logical: attribute; Flop counts before execution-position replication.
-        service: attribute; Result counts per service kind.
-        service_logical: attribute; Service counts before execution-position replication.
-    """
+    """Typed work in logical, expanded, and topology-unit domains."""
 
     topologies: tuple[str, ...] = ()
-    flops: Breakdown[int] = Breakdown()
-    flops_logical: tuple[tuple[str, int], ...] = ()
-    service: Breakdown[int] = Breakdown()
-    service_logical: tuple[tuple[str, int], ...] = ()
+    flops: Spread[tuple[tuple[str, int], ...]] = Spread((), (), ())
+    other_ops: Spread[tuple[tuple[str, int], ...]] = Spread((), (), ())
 ```
+
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `topologies` | The effective Module topology levels, coarsest first. | No |
 | `flops` | For a primitive Call, run its registered cost evaluator over operand and result Types as written; the total then multiplies by the enclosing recomputation factor and the number of positions in its execution scope, and each level's share is the same evaluator over Types projected through authored `Split`s at or coarser than that level. For a Function Call, take the callee's summed record and multiply by the call site's factor. | No; projection reads resolved Mesh and effective Module topology extents. |
-| `service` | The same evaluator's service counts -- the results it asks a machine for that are not floating point -- totalled and shared the same way. | No; projection reads resolved Mesh and effective Module topology extents. |
+| `other_ops` | The evaluator's non-floating-point operation counts (`integer`, `predicate`, `select`, `special`), totalled and shared the same way. These keys map directly to target one-unit operation-throughput keys; target-side service naming is unchanged. | No; projection reads resolved Mesh and effective Module topology extents. |
 
 Requesting this family adds one summary line, prefixed by `# `: the Function's own
 record, stated exactly as a Call's is. The whole program's work is not a second
 record.
 
 ```text
-compute-cost flops=<dtype>:<int>@<int>[,...] service=<kind>:<int>@<int>[,...]
+compute-cost flops=<dtype>:<logical>/<total>@<level>:<per-unit>[,...] other-ops=<kind>:<logical>/<total>@<level>:<per-unit>[,...]
 ```
 
 Every measured Call receives this annotation. Each key pairs the whole quantity
@@ -204,8 +195,10 @@ Each reported Call's JSON projection is under its `compute-cost` key:
 
 ```text
 {"topologies": [<level>, ...],
- "flops":   {<dtype>: {"total": <int>, "per_unit": [<int>, ...]}},
- "service": {<kind>:  {"total": <int>, "per_unit": [<int>, ...]}}}
+ "flops": {"logical": {<dtype>: <int>}, "total": {<dtype>: <int>},
+           "per_unit": [{<dtype>: <int>}, ...]},
+ "other_ops": {"logical": {<kind>: <int>}, "total": {<kind>: <int>},
+               "per_unit": [{<kind>: <int>}, ...]}}
 ```
 
 - constraints:
@@ -238,10 +231,12 @@ class Spread[V]:
     and a reader who knew to ask.
 
     Attributes:
-        total: attribute; What the whole program asks for.
-        per_unit: attribute; What one unit of each level holds, in the record's topologies order.
+        logical: attribute; What the authored operation asks for before replication.
+        total: attribute; What the whole execution asks for.
+        per_unit: attribute; What one unit of each level holds, in topology order.
     """
 
+    logical: V
     total: V
     per_unit: tuple[V, ...] = ()
 

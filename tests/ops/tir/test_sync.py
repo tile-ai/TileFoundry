@@ -18,7 +18,7 @@ from tilefoundry.target import CpuTarget, CudaTarget
 _CUDA = CudaTarget("nvidia.h200_sxm")
 
 
-@module(entry="slice_host", target=_CUDA)
+@module(entry="slice_host", target=_CUDA, topologies=(Topology("thread", 128),))
 class SyncSlices:
     @prim_func(target=_CUDA)
     def one_warp(a: Tensor[(1, 32), "f32"], o: Tensor[(1, 32), "f32"]):
@@ -55,7 +55,11 @@ class SyncSlices:
         launch(two_warps, a1, o1, grid=(1, 1, 1), block=(128, 1, 1))  # noqa: F821
 
 
-@module(entry="grid_sync_host", target=_CUDA)
+@module(
+    entry="grid_sync_host",
+    target=_CUDA,
+    topologies=(Topology("cta", 4), Topology("thread", 128)),
+)
 class GridSync:
     @prim_func(target=CudaTarget("nvidia.h200_sxm"))
     def grid_sync_device(a: Tensor[(128,), "f32"]):

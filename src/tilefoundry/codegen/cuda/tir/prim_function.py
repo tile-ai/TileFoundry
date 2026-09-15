@@ -1,233 +1,105 @@
-"""Emit a TIR primitive function's CUDA kernel and host wrapper.
+"""Emit the body of one CUDA kernel: its buffers, then its statements.
 
-The wrapper accepts TVM tensors, extracts pointers and hidden integer shape
-scalars, and derives launch dimensions from mesh scopes. A specialization entry
-containing only dispatch emits no global kernel; its host wrapper selects and
-calls variant wrappers because CUDA kernels cannot call host code.
-See [codegen §1](docs/spec/codegen.md#1-pipeline).
+A kernel is handed pointers and the extents its parameter types leave open, so
+the body starts by wrapping each pointer in the cute tensor the ops index. A
+specialization prototype has no body of its own: its variants are branches of
+the one kernel, chosen on the extent the pattern ranges over, because every
+kernel in a translation unit runs at the geometry that unit states once.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from tilefoundry.codegen.cuda.context import CodegenContext
+from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.cuda.tir.memory.tensor_view import render_shard_layout_value
 from tilefoundry.codegen.emitter import CudaEmitter
-from tilefoundry.codegen.signature import LaunchSignature
+from tilefoundry.codegen.signature import TensorSignature, tensor_signature_of
+from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.shape import (
-    is_hidden_shape_scalar as _is_hidden_shape_scalar,
-)
-from tilefoundry.ir.tir.shape import (
-    parse_shape_var_name as _parse_shape_param_name,
-)
-from tilefoundry.ir.tir.shape import (
-    shape_var_name,
-)
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.shape_helpers import shape_numel_upper_bound
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry.registries import Role, register_codegen
 
 
-def _internal_wrapper_symbol(kernel_name: str) -> str:
-    """Map a user-facing kernel name to its internal C++ wrapper symbol.
+def _wrap_buffer(signature: TensorSignature, ctx: CudaCodegenContext) -> None:
+    """Wrap one parameter's pointer in the tensor the body indexes it through.
 
-    The user-facing name may be ``main`` (collides with ``::main``) or
-    a mangled variant like ``main$S$1_4`` (``$`` is a GCC extension,
-    not portable). The internal symbol is always a plain C++ identifier
-    so the generated source compiles under strict toolchains.
+    The layout is the envelope the whole dispatch range fits in, so one kernel
+    covers every shape its type admits; a sharded parameter carries which part
+    of that envelope this instance holds.
     """
-    return "__tilefoundry_" + kernel_name.replace("$", "__") + "_host"
-
-
-def _param_wrapper(name: str, total: int, cpp_type: str) -> str:
+    name = signature.name
+    total = shape_numel_upper_bound(signature.type.shape)
     layout = f"cute::make_layout(cute::Shape<cute::Int<{total}>>{{}})"
-    return (
-        f"auto {name}_tensor = cute::make_tensor("
-        f"cute::make_gmem_ptr({name}), {layout});"
+    pointer = f"cute::make_tensor(cute::make_gmem_ptr({name}), {layout})"
+    shard = signature.type.layout
+    if not isinstance(shard, ShardLayout):
+        ctx.emit(f"auto {name}_tensor = {pointer};")
+        return
+    preamble, value = render_shard_layout_value(
+        f"{name}_tensor", shard, ctx.dynamic_extents, signature.type.storage, ctx
     )
+    for line in preamble:
+        ctx.emit(line)
+    ctx.emit(f"auto {name}_tensor = tilefoundry::make_shard_tensor({pointer}, {layout}, {value});")
 
 
-def _param_cpp_types(params: tuple, ctx: CodegenContext) -> dict[str, str]:
-    """Map each param name → CUDA C++ type from its TensorType dtype."""
-    result: dict[str, str] = {}
-    for p in params:
-        ty = p.type
-        if isinstance(ty, TensorType):
-            result[p.name] = ctx.dtype_to_cpp(ty.dtype.name)
-        else:
-            result[p.name] = "float"
-    return result
+def _dispatch(fn: PrimFunction, ctx: CudaCodegenContext) -> None:
+    """Write the variants of *fn* as branches on the extent they range over.
 
-
-def _param_wrapper_shard(
-    name: str, total: int, shard_layout: ShardLayout, dim_var_runtime=None
-) -> str:
-    """Emit make_shard_tensor wrapping a kernel param with ShardLayout value."""
-    global_layout = f"cute::make_layout(cute::Shape<cute::Int<{total}>>{{}})"
-    tensor_ref = f"{name}_tensor"
-    preamble, shard_value = render_shard_layout_value(
-        tensor_ref, shard_layout, dim_var_runtime, None, ctx
-    )
-    wrapper = (
-        f"auto {tensor_ref} = tilefoundry::make_shard_tensor("
-        f"cute::make_tensor(cute::make_gmem_ptr({name}), {global_layout}), "
-        f"{global_layout}, {shard_value});"
-    )
-    return "\n".join([*preamble, wrapper])
-
-
-@dataclass(frozen=True)
-class _KernelFields:
-    """Represent KernelFields.
-
-    Per-PrimFunction codegen pieces shared by the single-source kernel
-    emitter and the split device / host fragment emitters.
+    The extent is already a parameter of this kernel, so the choice costs one
+    comparison inside the launch the host would otherwise have had to make
+    before it -- and the host has nothing to gain by making it, since all the
+    variants run at one geometry anyway.
     """
+    ctx.bind_extents(tensor_signature_of(param) for param in fn.params)
+    for index, variant in enumerate(fn.variants):
+        pattern = _range_over_one_dimension(fn, variant)
+        subject = _subject(fn, pattern, ctx)
+        opening = "if" if index == 0 else "} else if"
+        ctx.emit(f"{opening} (({pattern.lo} <= {subject}) && ({subject} <= {pattern.hi})) {{")
+        ctx.indent()
+        ctx.emit_node(variant)
+        ctx.dedent()
+    ctx.emit("} else {")
+    ctx.indent()
+    ctx.emit("__trap();")
+    ctx.dedent()
+    ctx.emit("}")
 
-    kernel_name: str
-    internal_wrapper_name: str
-    params: tuple
-    param_cpp_types: dict
-    param_kinds: dict
-    kernel_params_sig: str
-    wrapper_params_sig: str
-    user_params: tuple
-    launch_args: str
-    param_wrappers: list
-    wrapper_locals: list
-    kernel_body: str
-    launch: LaunchSignature
-    entry_host_only: bool
+
+def _range_over_one_dimension(fn: PrimFunction, variant: PrimFunction) -> DimVarRangePat:
+    """The pattern selecting *variant*, which a branch can only be a range."""
+    pattern = variant.specializations[0]
+    if not isinstance(pattern, DimVarRangePat):
+        raise NotImplementedError(
+            f"CUDA dispatch: {fn.name!r} selects {variant.name!r} by "
+            f"{type(pattern).__name__}; only a range over one dimension is written"
+        )
+    return pattern
 
 
-def _compute_kernel_fields(node: PrimFunction, ctx: CodegenContext) -> _KernelFields:
-    if node.variants:
+def _subject(fn: PrimFunction, pattern: DimVarRangePat, ctx: CudaCodegenContext) -> str:
+    """Where this kernel reads the dimension *pattern* ranges over."""
+    subject = ctx.dynamic_extents.get(pattern.dim_var)
+    if subject is None:
         raise ValueError(
-            f"PrimFunction {node.name!r} is a specialization prototype; "
-            "codegen must dispatch variants instead of emitting an empty kernel"
+            f"CUDA dispatch: {fn.name!r} selects on {pattern.dim_var!r}, which "
+            f"no parameter's type leaves open, so the kernel is never told it"
         )
-    for p in node.params:
-        ctx.register_kernel_param(p)
+    return subject
 
 
-
-
-
-
-    ctx._dim_var_runtime = {}
-    for p in node.params:
-        ty = p.type
-        if not isinstance(ty, TensorType):
-            continue
-        for axis, dim in enumerate(ty.shape):
-            if isinstance(dim, DimVar) and dim.name not in ctx._dim_var_runtime:
-                ctx._dim_var_runtime[dim.name] = shape_var_name(p.name, axis)
-
-    ctx.reset_barrier_ids()
-
-    entry_host_only = bool(node.variants)
-
-
-
-    body = ctx.capture(lambda inner: CudaEmitter(context=inner).visit(node.body))
-
-    param_cpp_types = _param_cpp_types(node.params, ctx)
-    hidden_shape = tuple(
-        p for p in node.params if _is_hidden_shape_scalar(p, node.params)
-    )
-    hidden_names = {p.name for p in hidden_shape}
-    user_params = tuple(p for p in node.params if p.name not in hidden_names)
-
-
-
-
-    def _is_user_scalar(p) -> bool:
-        return (
-            p.name not in hidden_names
-            and isinstance(p.type, TensorType)
-            and not p.type.shape
-        )
-
-    def _kind(p) -> str:
-        if p.name in hidden_names:
-            return "hidden_scalar"
-        if _is_user_scalar(p):
-            return "user_scalar"
-        return "tensor"
-
-    param_kinds = {p.name: _kind(p) for p in node.params}
-
-    def _kernel_sig_token(p) -> str:
-        if param_kinds[p.name] != "tensor":
-            return f"int {p.name}"
-        return f"{param_cpp_types[p.name]}* {p.name}"
-
-    kernel_params_sig = ", ".join(_kernel_sig_token(p) for p in node.params)
-
-
-
-
-    def _wrapper_param_token(p) -> str:
-        if param_kinds[p.name] == "user_scalar":
-            return f"int {p.name}"
-        return f"tvm::ffi::Tensor {p.name}"
-
-    wrapper_params_sig = ", ".join(_wrapper_param_token(p) for p in user_params)
-    wrapper_locals = []
-    for p in hidden_shape:
-        parsed = _parse_shape_param_name(p.name)
-
-        assert parsed is not None
-        base, axis = parsed
-        wrapper_locals.append(
-            f"int {p.name} = static_cast<int>({base}.shape()[{axis}]);"
-        )
-
-
-
-    def _launch_arg(p) -> str:
-        if param_kinds[p.name] != "tensor":
-            return p.name
-        return f"static_cast<{param_cpp_types[p.name]}*>({p.name}.data_ptr())"
-
-    launch_args = ", ".join(_launch_arg(p) for p in node.params)
-
-
-
-    buffer_params = tuple(
-        p for p in user_params if param_kinds[p.name] == "tensor"
-    )
-    param_wrappers = []
-    for p in buffer_params:
-        total = shape_numel_upper_bound(p.type.shape)
-        sl = getattr(p.type, "layout", None)
-        if isinstance(sl, ShardLayout):
-            param_wrappers.append(
-                _param_wrapper_shard(p.name, total, sl, ctx._dim_var_runtime)
-            )
-        else:
-            param_wrappers.append(
-                _param_wrapper(p.name, total, param_cpp_types[p.name])
-            )
-
-    launch = LaunchSignature.from_topologies(ctx.topologies)
-
-    codegen_name = node.name
-    return _KernelFields(
-        kernel_name=codegen_name,
-        internal_wrapper_name=_internal_wrapper_symbol(codegen_name),
-        params=node.params,
-        param_cpp_types=param_cpp_types,
-        param_kinds=param_kinds,
-        kernel_params_sig=kernel_params_sig,
-        wrapper_params_sig=wrapper_params_sig,
-        user_params=user_params,
-        launch_args=launch_args,
-        param_wrappers=param_wrappers,
-        wrapper_locals=wrapper_locals,
-        kernel_body=body,
-        launch=launch,
-        entry_host_only=entry_host_only,
-    )
+@register_codegen(CudaTarget, Role.EMIT, PrimFunction)
+def _emit(fn: PrimFunction, ctx: CudaCodegenContext) -> None:
+    """Write what runs inside one ``__global__``: its buffers, then its statements."""
+    if fn.variants:
+        _dispatch(fn, ctx)
+        return
+    params = tuple(tensor_signature_of(param) for param in fn.params)
+    for param in fn.params:
+        ctx.register_kernel_param(param)
+    ctx.bind_extents(params)
+    for signature in params:
+        _wrap_buffer(signature, ctx)
+    CudaEmitter(context=ctx).visit(fn.body)

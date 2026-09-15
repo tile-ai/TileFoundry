@@ -35,7 +35,7 @@ def test_handwritten_mma_matches_torch() -> None:
     torch.testing.assert_close(out, torch.matmul(a.float(), b.float()), rtol=2e-2, atol=2e-2)
 
 
-@module(entry="tile_host", target=_CUDA)
+@module(entry="tile_host", target=_CUDA, topologies=(Topology("thread", 32),))
 class MmaTile:
     """A 16x16 by 16x8 product done as one atom, looped by the tile's shape."""
 
@@ -68,22 +68,30 @@ class MmaTile:
                 ),
             )
             a_tile = T.alloc_tensor(
-                Tensor[(16, 16), 'bf16', ShardLayout(
+                Tensor[
+                    (16, 16),
+                    "bf16",
+                    ShardLayout(
                         layout=Layout(shape=(16, 16), strides=(16, 1)),
                         attrs=(Broadcast(), Broadcast()),
                         mesh=m,
-                    ), 'smem']
+                    ),
+                    "smem",
+                ]
             )
             b_tile = T.alloc_tensor(
-                Tensor[(8, 16), 'bf16', ShardLayout(
+                Tensor[
+                    (8, 16),
+                    "bf16",
+                    ShardLayout(
                         layout=Layout(shape=(8, 16), strides=(1, 8)),
                         attrs=(Broadcast(), Broadcast()),
                         mesh=m,
-                    ), 'smem']
+                    ),
+                    "smem",
+                ]
             )
-            acc = T.alloc_tensor(
-                Tensor[(16, 8), 'f32', atom.C, 'rmem']
-            )
+            acc = T.alloc_tensor(Tensor[(16, 8), "f32", atom.C, "rmem"])
             T.copy(a_view, a_tile)
             T.copy(b_view, b_tile)
             T.fill(acc, 0.0)

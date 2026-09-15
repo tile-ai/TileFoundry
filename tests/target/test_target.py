@@ -20,7 +20,6 @@ from tests.fixtures.placed.rmsnorm import RmsnormModule
 from tests.installed.smoke_target.vendor_npu import VendorNpuTarget
 from tilefoundry import CompilerOptions, DType, build, jit, module
 from tilefoundry.analysis import AnalysisError, analyze
-from tilefoundry.codegen.registry import group_functions_by_target
 from tilefoundry.dsl import DimVar
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -126,9 +125,7 @@ def test_document_free_target_projects_facts_and_inherits_standard_analysis() ->
     target = VendorNpuTarget()
 
     assert target.get_analyzer("roofline").selector == "roofline"
-    assert target.get_facts(TopologyLimitFacts, "core") == TopologyLimitFacts(
-        "core", 256
-    )
+    assert target.get_facts(TopologyLimitFacts, "core") == TopologyLimitFacts("core", 256)
     memory = target.get_facts(MemoryHierarchyFacts)
     assert memory.explicit("gmem").capacity_bytes == 64_000_000_000
     assert target.get_facts(ThroughputFacts).peak_for(DType.f32) == 2_000_000_000_000_000
@@ -152,8 +149,7 @@ def test_cuda_projects_one_ctas_share_from_device_rates() -> None:
 
     assert services.unit == "cta"
     assert dict(services.unit_flops) == {
-        dtype: rate // target.device.sm_count
-        for dtype, rate in device.peak_flops_per_second
+        dtype: rate // target.device.sm_count for dtype, rate in device.peak_flops_per_second
     }
     assert dict(services.unit_bandwidth) == {
         device.bandwidth_level: (
@@ -289,36 +285,6 @@ def test_program_topologies_use_target_resource_facts() -> None:
     assert len(str(error.value)) < 120
 
 
-def test_group_functions_by_target_fact_matching() -> None:
-    """CUDA functions must agree on Target facts before grouping.
-
-    CUDA functions must agree on Target facts before grouping; CPU
-    functions are exempt from the CUDA fact-matching.
-    """
-    body = Sequential(body=())
-    first = PrimFunction(name="first", params=(), body=body, target=CudaTarget("nvidia.h200_sxm"))
-    second = PrimFunction(
-        name="second",
-        params=(),
-        body=body,
-        target=CudaTarget(
-            "nvidia.h200_sxm",
-            architecture=replace(CudaTarget.hardware.resolve(SM90_ID).value, name="sm_90_alt"),
-        ),
-    )
-    with pytest.raises(ValueError, match="mixes unequal device Targets") as error:
-        group_functions_by_target(Module(name="mixed", functions=(first, second), entry="first"))
-    assert "CudaTarget (cuda)" in str(error.value)
-    assert "architecture=" not in str(error.value)
-    assert "device=" not in str(error.value)
-    assert len(str(error.value)) < 300
-
-    host = PrimFunction(name="host", params=(), body=body, target=CpuTarget())
-    groups = group_functions_by_target(Module(name="mixed", functions=(first, host), entry="host"))
-    assert tuple(fn.name for fn in groups[first.target]) == ("first",)
-    assert tuple(fn.name for fn in groups[host.target]) == ("host",)
-
-
 def test_build_rejects_unequal_device_targets_before_emitting() -> None:
     emitted: list[object] = []
 
@@ -349,12 +315,7 @@ def test_build_rejects_unequal_device_targets_before_emitting() -> None:
     with pytest.raises(ValueError) as error:
         build(mixed)
 
-    assert str(error.value) == (
-        "tilefoundry: module 'mixed' mixes unequal device Targets: "
-        "FirstDeviceTarget (tests.target.first_device) (function 'first') vs "
-        "SecondDeviceTarget (tests.target.second_device) (function 'second'); "
-        "multiple device translation units are not supported"
-    )
+    assert str(error.value) == "codegen: expected one device Target, found 2"
     assert emitted == []
 
 

@@ -6,9 +6,8 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
 
-from tilefoundry.analysis.metadata import TripInterval
 from tilefoundry.ir.core.metadata import IRMetadata
-from tilefoundry.visitor_registry.contexts import TrafficBytes
+from tilefoundry.ir.core.values import TripInterval
 
 PAIR, PER_UNIT, ENTRY, ENTRIES, FIELD, FIELDS, PARTS, TRIPS = (
     "/",
@@ -116,34 +115,45 @@ class CommentPrinter:
         return f"{family}{FIELD}{self.print(value)}"
 
     def print_ComputeCostMetadata(self, record, **_):
-        flops_per_unit = dict(record.flops_per_unit)
-        ops_per_unit = dict(record.ops_per_unit)
-        flops = {
-            dtype: f"{total}{PER_UNIT}{flops_per_unit.get(dtype, 0)}"
-            for dtype, total in record.flops
-        }
-        ops = {
-            kind: f"{total}{PER_UNIT}{ops_per_unit.get(kind, 0)}"
-            for kind, total in record.ops
-        }
+        def spread_values(spread):
+            logical = dict(spread.logical)
+            total = dict(spread.total)
+            per_unit = [dict(value) for value in spread.per_unit]
+            names = sorted({*logical, *total, *(name for value in per_unit for name in value)})
+            return {
+                name: (
+                    f"{logical.get(name, 0)}{PAIR}{total.get(name, 0)}"
+                    + "".join(
+                        f"{PER_UNIT}{level}{ENTRY}{value.get(name, 0)}"
+                        for level, value in zip(record.topologies, per_unit, strict=False)
+                    )
+                )
+                for name in names
+            }
+
         return self._record(
             "compute-cost",
             (
-                ("flops", flops),
-                ("flops_logical", record.flops_logical),
-                ("ops", ops),
-                ("ops_logical", dict(record.ops_logical)),
+                ("flops", spread_values(record.flops)),
+                ("other_ops", spread_values(record.other_ops)),
             ),
         )
 
     def print_TrafficMetadata(self, record, *, opt_in=frozenset()):
-        per_unit = dict(record.per_unit)
         traffic = {
             level: (
-                f"{self.print(moved)}{PER_UNIT}"
-                f"{self.print(per_unit.get(level, TrafficBytes()))}"
+                f"{self.print(spread.total)}"
+                + (
+                    f"{PER_UNIT}"
+                    + ENTRIES.join(
+                        f"{topology}{ENTRY}{self.print(value)}"
+                        for topology, value in zip(record.topologies, spread.per_unit, strict=False)
+                    )
+                    if spread.per_unit
+                    else ""
+                )
             )
-            for level, moved in record.whole
+            for level, spread in record.storage.kinds
         }
         values = [("traffic", traffic)]
         if "operands" in opt_in:
@@ -159,7 +169,7 @@ class CommentPrinter:
         return self._record(
             "memory",
             (
-                ("peak", {item.level: item.peak_bytes for item in record.footprint}),
+                ("peak", {item.memory_level: item.peak_bytes for item in record.footprint}),
                 ("persistent", sum(item.persistent_bytes for item in record.footprint), 0),
                 ("advisories", len(record.advisories), 0),
             ),
@@ -167,7 +177,7 @@ class CommentPrinter:
 
     def print_LoopFootprintMetadata(self, record, **_):
         footprints = {
-            f"{item.buffer}@{item.level}": PAIR.join(
+            f"{item.buffer}@{item.memory_level}": PAIR.join(
                 str(value) for value in (item.bytes, item.device_bytes, item.repeated_bytes)
             )
             for item in record.footprints
@@ -240,7 +250,7 @@ def render_comment(record, *, opt_in=frozenset()):
 
 
 def peak_footprint(record):
-    return {item.level: item.peak_bytes for item in record.footprint}
+    return {item.memory_level: item.peak_bytes for item in record.footprint}
 
 
 __all__ = [

@@ -9,10 +9,9 @@ name and guess what it stands for.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 
-from tilefoundry.ir.core.module import Module, module_functions
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
@@ -128,15 +127,14 @@ class CallableSignature(Signature):
 
 LAUNCH_ABI = (
     LaunchSignature("grid_x", "int"),
-    LaunchSignature("grid_y", "int"),
-    LaunchSignature("grid_z", "int"),
     LaunchSignature("block_x", "int"),
-    LaunchSignature("block_y", "int"),
-    LaunchSignature("block_z", "int"),
     LaunchSignature("dynamic_smem", "int"),
-    LaunchSignature("stream", "void*"),
 )
-"""What a launch shim is told beyond the kernel's own arguments."""
+"""Actual cross-translation-unit scalars on a CPU-to-device Launch edge.
+
+The topology is one-dimensional, so only grid_x and block_x are stated.
+Dynamic shared memory remains because its per-Launch value crosses the shim ABI.
+"""
 
 
 def tensor_signature_of(var) -> TensorSignature:
@@ -187,18 +185,6 @@ def called_as(fn, program_ids: tuple[ProgramIdSignature, ...] = ()) -> CallableS
     return convention(fn, program_ids)
 
 
-def symbol_table(module: Module, target: Target) -> Mapping[int, CallableSignature]:
-    """What every function in the tree is called by, before anything is emitted.
-
-    Keyed by ``id(fn)``: a call site holds the callee itself and never asks
-    which module it lives in. A specialization variant gets no row, because
-    nothing calls one: its prototype compiles to the one symbol, and which
-    variant runs is decided inside it.
-    """
-    program_ids = program_id_params(module, target)
-    return {id(fn): called_as(fn, program_ids) for fn in module_functions(module)}
-
-
 __all__ = [
     "LAUNCH_ABI",
     "CallableSignature",
@@ -211,6 +197,5 @@ __all__ = [
     "UnitSignature",
     "called_as",
     "program_id_params",
-    "symbol_table",
     "tensor_signature_of",
 ]

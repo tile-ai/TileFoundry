@@ -9,30 +9,40 @@ one branch on the extent the call already carries.
 from __future__ import annotations
 
 from tests.fixtures.tir.square import TirSquare
+from tilefoundry.codegen.context_builder import build_codegen_context
 from tilefoundry.codegen.cpu.context import CpuCodegenContext
 from tilefoundry.codegen.cpu.module import emit_host_module
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.cuda.module import emit_cuda_module
-from tilefoundry.codegen.signature import symbol_table
-from tilefoundry.codegen.topology import launch_geometry
 from tilefoundry.target import CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
 
 
+def _view(target):
+    root = build_codegen_context(TirSquare)
+    group = next(group for group in root.groups if group.target == target)
+    return root, group, root.for_group(group)
+
+
 def _device_source() -> str:
+    _root, group, view = _view(_CUDA)
     ctx = CudaCodegenContext(
-        symbols=symbol_table(TirSquare, _CUDA),
+        symbols=view.symbols,
         target=_CUDA,
-        launches=launch_geometry(TirSquare),
+        launches=view.launches,
     )
-    kernels = tuple(fn for fn in TirSquare.functions if fn.target == _CUDA)
-    return emit_cuda_module(TirSquare, kernels, _CUDA, ctx).source
+    return emit_cuda_module(TirSquare, group.functions, _CUDA, ctx).source
 
 
 def _host_source() -> str:
     entry = TirSquare.entry_function()
-    ctx = CpuCodegenContext(symbols=symbol_table(TirSquare, _CUDA), target=entry.target)
+    _root, group, view = _view(entry.target)
+    ctx = CpuCodegenContext(
+        symbols=view.symbols,
+        target=entry.target,
+        resolved_launches=view.resolved_launches,
+    )
     return emit_host_module(TirSquare, (entry,), entry.target, ctx).source
 
 

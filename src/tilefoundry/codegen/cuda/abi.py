@@ -8,10 +8,10 @@ it without naming this module.
 
 from __future__ import annotations
 
-from tilefoundry.codegen.context import CodegenContext
+from tilefoundry.codegen.context import EmitContext
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
+from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import mesh_type
 from tilefoundry.codegen.signature import (
-    LAUNCH_ABI,
     CallableSignature,
     LaunchSignature,
     ProgramIdSignature,
@@ -21,6 +21,7 @@ from tilefoundry.codegen.signature import (
     tensor_signature_of,
 )
 from tilefoundry.ir.tir.prim_function import PrimFunction
+from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.registries import Role, register_codegen
 
@@ -85,9 +86,10 @@ def kernel_arguments(kernel: CallableSignature, ctx: CudaCodegenContext) -> str:
             continue
         element = ctx.dtype_to_cpp(param.type.dtype.name)
         written.append(f"static_cast<{element}*>({param.name})")
-        written += [
-            f"static_cast<int>({param.extent_name(axis)})" for axis in param.dynamic_axes
-        ]
+        written += [f"static_cast<int>({param.extent_name(axis)})" for axis in param.dynamic_axes]
+        layout = param.type.layout
+        if isinstance(layout, ShardLayout):
+            written.append(f"{mesh_type(layout.mesh)}{{}}")
     return ", ".join(written)
 
 
@@ -106,12 +108,11 @@ def _called_as_shim(
         params=tuple(tensor_signature_of(var) for var in fn.params),
         output_count=fn.output_count,
         leading=program_ids,
-        trailing=LAUNCH_ABI,
     )
 
 
 @register_codegen(CudaTarget, Role.CALLEE, TensorSignature)
-def _declare_tensor(sig: TensorSignature, ctx: CodegenContext) -> tuple[str, ...]:
+def _declare_tensor(sig: TensorSignature, ctx: EmitContext) -> tuple[str, ...]:
     """A tensor arrives as a pointer, then one extent per open axis.
 
     A static extent is a constant on both sides of the call and costs the
@@ -123,10 +124,14 @@ def _declare_tensor(sig: TensorSignature, ctx: CodegenContext) -> tuple[str, ...
         pointer, extent = _C_ABI
     else:
         pointer, extent = f"{ctx.dtype_to_cpp(sig.type.dtype.name)}*", "int"
-    return (
+    declared = [
         f"{pointer} {sig.name}",
         *(f"{extent} {sig.extent_name(axis)}" for axis in sig.dynamic_axes),
-    )
+    ]
+    layout = sig.type.layout
+    if not ctx.exported and isinstance(layout, ShardLayout):
+        declared.append(f"{mesh_type(layout.mesh)} {sig.name}_mesh")
+    return tuple(declared)
 
 
 @register_codegen(CudaTarget, Role.CALLEE, LaunchSignature)
@@ -148,7 +153,7 @@ def _declare_program_meta(sig: ProgramMetaSignature, ctx: CudaCodegenContext) ->
 
 
 @register_codegen(CudaTarget, Role.CALLER, TensorSignature)
-def _pass_tensor(sig: TensorSignature, ctx: CodegenContext) -> tuple[str, ...]:
+def _pass_tensor(sig: TensorSignature, ctx: EmitContext) -> tuple[str, ...]:
     """The pointer, then the extents, as the calling scope spells them.
 
     How many arguments there are and in what order is CUDA's, since CUDA
@@ -163,7 +168,7 @@ def _pass_tensor(sig: TensorSignature, ctx: CodegenContext) -> tuple[str, ...]:
 @register_codegen(CudaTarget, Role.CALLER, LaunchSignature)
 @register_codegen(CudaTarget, Role.CALLER, ProgramIdSignature)
 @register_codegen(CudaTarget, Role.CALLER, ProgramMetaSignature)
-def _pass_value(sig: Signature, ctx: CodegenContext) -> tuple[str, ...]:
+def _pass_value(sig: Signature, ctx: EmitContext) -> tuple[str, ...]:
     """One argument the caller already holds, spelled in its own scope."""
     return (ctx.local_value(sig),)
 

@@ -11,13 +11,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
-from tilefoundry.codegen.context import CodegenContext
+from tilefoundry.codegen.context import EmitContext
 from tilefoundry.codegen.signature import CallableSignature, TensorSignature
-from tilefoundry.codegen.topology import Geometry
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.target import CudaTarget
 from tilefoundry.target.base import Target
 from tilefoundry.visitor_registry.registries import codegen_registry
+
+Geometry = tuple[tuple[object, object, object], tuple[object, object, object]]
 
 _CUDA_CPP: dict[str, str] = {
     "f32": "float",
@@ -47,7 +48,7 @@ def topology_scope_str(name: str) -> str:
         ) from None
 
 
-class CudaCodegenContext(CodegenContext):
+class CudaCodegenContext(EmitContext):
     """A compile writing CUDA: the shared context plus what only CUDA states."""
 
     target_kind = CudaTarget
@@ -58,8 +59,14 @@ class CudaCodegenContext(CodegenContext):
         symbols: Mapping[int, CallableSignature] | None = None,
         target: Target | None = None,
         launches: Mapping[int, Geometry] | None = None,
+        codegen_context: object | None = None,
     ) -> None:
-        super().__init__(codegen_registry, symbols=symbols, target=target)
+        super().__init__(
+            codegen_registry,
+            symbols=symbols,
+            target=target,
+            codegen_context=codegen_context,
+        )
         self._mesh_aliases: dict[int, tuple[str, str]] = {}
         self.launches: Mapping[int, Geometry] = {} if launches is None else launches
         """The geometry each device function is launched at, keyed by ``id(fn)``."""

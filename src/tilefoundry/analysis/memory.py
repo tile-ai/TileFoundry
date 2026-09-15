@@ -277,8 +277,9 @@ def _shares(
             (
                 name,
                 Spread(
-                    shares.get(_WHOLE, TrafficBytes()),
-                    tuple(shares.get(unit, TrafficBytes()) for unit in topologies),
+                    logical=shares.get(_WHOLE, TrafficBytes()),
+                    total=shares.get(_WHOLE, TrafficBytes()),
+                    per_unit=tuple(shares.get(unit, TrafficBytes()) for unit in topologies),
                 ),
             )
             for name, shares in sorted(held.items())

@@ -166,8 +166,8 @@ def test_analyze_help_explains_topology_effects_and_assumptions(capsys) -> None:
     help_text = capsys.readouterr().out
     for family in ("compute-cost", "memory", "roofline", "performance"):
         assert family in help_text
-    assert "flops_per_unit" in help_text
-    assert "per-unit traffic" in help_text
+    assert "logical" in help_text and "per-unit share" in help_text
+    assert "traffic" in help_text
     assert "global traffic is the device's and counted once" in help_text
     assert "is an observation, not a bound" in help_text
 
@@ -746,21 +746,24 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         f"# selection requested={','.join(payload['requested'])} "
         f"executed={','.join(payload['executed'])}",
         "# compute-cost "
-        f"flops=f32:{cost['flops']['f32']}@{cost['flops_per_unit']['f32']}"
-        f" flops-logical={cost['flops_logical']}",
+        f"flops=f32:{cost['flops']['logical']['f32']}"
+        f"/{cost['flops']['total']['f32']}"
+        f"@{payload['topology']}:{cost['flops']['per_unit'][0]['f32']}",
         "# traffic "
-        f"traffic=gmem:r{moved['whole']['gmem']['read']}"
-        f"/w{moved['whole']['gmem']['write']}"
-        f"@r{moved['per_unit']['gmem']['read']}"
-        f"/w{moved['per_unit']['gmem']['write']}",
+        f"traffic=gmem:r{moved['storage']['gmem']['total']['read']}"
+        f"/w{moved['storage']['gmem']['total']['write']}"
+        f"@{payload['topology']}:r{moved['storage']['gmem']['per_unit'][0]['read']}"
+        f"/w{moved['storage']['gmem']['per_unit'][0]['write']}",
         f"# peak-footprint=gmem:{peak[0]['peak_bytes']}",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# performance root=MoEMegaKernel::experts "
         f"predicted-ns={summary['timeline']['end_ns']} "
         f"waves={summary['waves']}",
     ]
-    assert payload["totals"]["flops"] == cost["flops"]
-    assert payload["totals"]["traffic"] == moved["whole"]
+    assert payload["totals"]["flops"] == cost["flops"]["total"]
+    assert payload["totals"]["traffic"] == {
+        name: value["total"] for name, value in moved["storage"].items()
+    }
 
     hoisted = {line.split(" = ", 1)[0] for line in lines if " = Mesh((Topology(" in line}
     scoped = {

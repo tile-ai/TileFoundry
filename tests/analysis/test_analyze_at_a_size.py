@@ -92,7 +92,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
 
     module_target = result.module.resolve_target()
     throughput = module_target.get_facts(ThroughputFacts)
-    services = module_target.get_facts(PerformanceServiceFacts)
+    services = module_target.get_facts(PerformanceServiceFacts, result.level)
     scopes = tuple(walk_scopes(build_scopes(result.module, fn)))
     timed = 0
     for expr in collect_exprs(fn.body):
@@ -185,17 +185,7 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
     fn = result.function
     for expr in (fn, *collect_exprs(fn.body)):
         for record, rows in (
-            (
-                ComputeCostMetadata,
-                (
-                    "flops",
-                    "flops_logical",
-                    "flops_per_unit",
-                    "ops",
-                    "ops_logical",
-                    "ops_per_unit",
-                ),
-            ),
+            (ComputeCostMetadata, ()),
             (TrafficMetadata, ()),
             (MemoryMetadata, ()),
             (RooflineMetadata, ()),
@@ -211,6 +201,12 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
                     continue
                 for name, value in value:
                     assert value >= 0, f"{describe_expr(expr)}: {field}[{name}] = {value}"
+            if record is ComputeCostMetadata:
+                for field in ("flops", "other_ops"):
+                    spread = getattr(held, field)
+                    for domain in (spread.logical, spread.total, *spread.per_unit):
+                        for name, value in domain:
+                            assert value >= 0, f"{describe_expr(expr)}: {field}[{name}] = {value}"
             if record is TrafficMetadata:
                 for field in ("whole", "per_unit"):
                     for level, moved in getattr(held, field):

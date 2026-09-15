@@ -31,8 +31,8 @@ _NO_BOUND = 0
 
 
 def _totals(held) -> tuple[tuple[str, int], ...]:
-    """One category's kinds with their whole-program counts."""
-    return tuple((kind, spread.total) for kind, spread in held.kinds)
+    """One typed work category's whole-program counts."""
+    return held.total
 
 
 def _compute_ns(flops: tuple[tuple[str, int], ...], facts: ThroughputFacts) -> int:
@@ -100,7 +100,7 @@ def _cost_bound(
 
     Whole-device work against whole-device rates: the flops the target publishes
     a peak for, and the bytes at the level it publishes a bandwidth for. Typed
-    typed ops have no whole-device rate to divide by and so do not enter a bound,
+    service has no whole-device rate to divide by and so does not enter a bound,
     and neither do bytes at a level with no published bandwidth: what asks for a
     nanosecond is what this could have priced, so a dtype whose rate is missing
     still owes one and a level nobody rated does not.

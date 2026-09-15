@@ -73,7 +73,10 @@ def test_refuses_a_shape_change() -> None:
         verify_prim_function(_pf(_ty(8), _ty(4, storage="smem")))
 
 
-@pytest.mark.parametrize(("n", "dtype"), [(5, DType.from_name("f32")), (1, DType.from_name("f32")), (7, DType.from_name("bf16"))])
+@pytest.mark.parametrize(
+    ("n", "dtype"),
+    [(5, DType.from_name("f32")), (1, DType.from_name("f32")), (7, DType.from_name("bf16"))],
+)
 def test_admits_a_transfer_off_the_sixteen_byte_grain(n, dtype) -> None:
     """The grain belongs to one instruction, and the op does not name one.
 
@@ -82,7 +85,11 @@ def test_admits_a_transfer_off_the_sixteen_byte_grain(n, dtype) -> None:
     verify_prim_function(_pf(_ty(n, dtype), _ty(n, dtype, storage="smem")))
 
 
-@module(entry="tma_tiers_host", target=CudaTarget("nvidia.h200_sxm"))
+@module(
+    entry="tma_tiers_host",
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("thread", 128),),
+)
 class TmaTiers:
     """Both staging tiers in one device function, one operand pair each."""
 
@@ -101,15 +108,18 @@ class TmaTiers:
                 ),
             )
             bulk_stage = T.alloc_tensor(
-                Tensor[(256,), 'f32', ShardLayout(
+                Tensor[
+                    (256,),
+                    "f32",
+                    ShardLayout(
                         layout=Layout(shape=(256,), strides=(1,)),
                         attrs=(Broadcast(),),
                         mesh=m,
-                    ), 'smem']
+                    ),
+                    "smem",
+                ]
             )
-            bulk_bar = T.alloc_tensor(
-                Tensor[(1,), 'i64', None, 'smem']
-            )
+            bulk_bar = T.alloc_tensor(Tensor[(1,), "i64", None, "smem"])
             T.mbarrier_init(bulk_bar, arrive_count=1)
             T.sync(m)
             T.tma_copy(bulk_view, bulk_stage, bulk_bar)
@@ -123,15 +133,18 @@ class TmaTiers:
                 ),
             )
             odd_stage = T.alloc_tensor(
-                Tensor[(5,), 'f32', ShardLayout(
+                Tensor[
+                    (5,),
+                    "f32",
+                    ShardLayout(
                         layout=Layout(shape=(5,), strides=(1,)),
                         attrs=(Broadcast(),),
                         mesh=mo,
-                    ), 'smem']
+                    ),
+                    "smem",
+                ]
             )
-            odd_bar = T.alloc_tensor(
-                Tensor[(1,), 'i64', None, 'smem']
-            )
+            odd_bar = T.alloc_tensor(Tensor[(1,), "i64", None, "smem"])
             T.mbarrier_init(odd_bar, arrive_count=1)
             T.sync(mo)
             T.tma_copy(odd_view, odd_stage, odd_bar)

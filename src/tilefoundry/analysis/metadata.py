@@ -8,6 +8,7 @@ across calls.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from tilefoundry.ir.core.metadata import IRMetadata
@@ -15,65 +16,129 @@ from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 
 @dataclass(frozen=True)
-class ComputeCostMetadata(IRMetadata):
-    """Record one occurrence's work, or one Function's total work.
+class Spread[V]:
+    """One typed value in logical, expanded, and topology-unit domains.
 
-    ``flops`` and ``ops`` state global work; their ``*_per_unit`` partners
-    apply shard projection at the requested topology level. ``ops`` counts
-    non-floating-point machine operations by kind -- comparing, selecting,
-    whole-number arithmetic and special functions. What an occurrence moves is a separate
-    record, kept by the family that knows where values live. On a Call these
-    state one occurrence; on a Function, loops contribute their trip count.
+    ``per_unit`` follows ``ComputeCostMetadata.topologies``. The value retains
+    its semantic structure while ``Spread`` states only its counting domain.
     """
 
-    flops: tuple[tuple[str, int], ...] = ()
-    flops_logical: int = 0
-    flops_per_unit: tuple[tuple[str, int], ...] = ()
-    ops: tuple[tuple[str, int], ...] = ()
-    ops_logical: tuple[tuple[str, int], ...] = ()
-    ops_per_unit: tuple[tuple[str, int], ...] = ()
+    logical: V
+    total: V
+    per_unit: tuple[V, ...] = ()
 
-    def ops_per_unit_of(self, kind: str) -> int:
-        """One unit's count of *kind*, zero when the call asks for none."""
-        return next((value for name, value in self.ops_per_unit if name == kind), 0)
+    def at(self, index: int) -> V:
+        """One topology level's value by position, or ``total`` when absent."""
+        return self.per_unit[index] if index < len(self.per_unit) else self.total
+
+
+@dataclass(frozen=True)
+class Breakdown[V]:
+    """Typed quantities grouped by resource kind for traffic records."""
+
+    kinds: tuple[tuple[str, Spread[V]], ...] = ()
+
+    def of(self, kind: str) -> Spread[V] | None:
+        return next((value for name, value in self.kinds if name == kind), None)
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(name for name, _ in self.kinds)
+
+
+def breakdown[V](
+    total: "Mapping[str, V]", per_unit: "Sequence[Mapping[str, V]]", zero: V
+) -> Breakdown[V]:
+    """Gather traffic kinds, filling missing values at each topology level."""
+    kinds = sorted({*total, *(kind for share in per_unit for kind in share)})
+    return Breakdown(
+        tuple(
+            (
+                kind,
+                Spread(
+                    logical=total.get(kind, zero),
+                    total=total.get(kind, zero),
+                    per_unit=tuple(share.get(kind, zero) for share in per_unit),
+                ),
+            )
+            for kind in kinds
+        )
+    )
+
+
+def shares[V](
+    held: Breakdown[V] | Spread[tuple[tuple[str, V], ...]],
+    topologies: tuple[str, ...],
+    topology_level: "str | None" = None,
+) -> dict[str, V]:
+    """Each traffic kind's value at one topology level, or its total."""
+    index = topologies.index(topology_level) if topology_level in topologies else None
+    if isinstance(held, Spread):
+        value = held.total if index is None else held.at(index)
+        return dict(value)
+    return {
+        kind: spread.total if index is None else spread.at(index) for kind, spread in held.kinds
+    }
+
+
+TypedCounts = tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True)
+class ComputeCostMetadata(IRMetadata):
+    """Typed floating-point and other operation work in each counting domain."""
+
+    topologies: tuple[str, ...] = ()
+    flops: Spread[TypedCounts] = Spread((), (), ())
+    other_ops: Spread[TypedCounts] = Spread((), (), ())
 
 
 @dataclass(frozen=True)
 class TrafficMetadata(IRMetadata):
-    """The bytes one occurrence moves, whole and for one participant.
+    """The bytes one occurrence moves, in the two coordinates a move has.
 
-    Which way a boundary moves is its Op's evaluator's answer and how much is
-    its relation's; the family that decides where values live attaches the
-    record, and where they landed never corrects a crossing. ``operands`` is
-    positional against ``(*call.args, call)`` on a Call and empty on a Function,
-    whose totals count each occurrence as often as its loops repeat it.
+    ``storage`` says where the bytes are; ``communication`` says whose boundary
+    they crossed, which a storage level cannot answer: data handed from one
+    card to another is global memory at both ends and has still gone
+    somewhere. One movement is counted in both, because it spends both.
+    ``operands`` is positional against ``(*call.args, call)`` on a Call and
+    empty on a Function, whose totals count each occurrence as often as its
+    loops repeat it.
     """
 
-    whole: tuple[tuple[str, TrafficBytes], ...] = ()
-    per_unit: tuple[tuple[str, TrafficBytes], ...] = ()
+    topologies: tuple[str, ...] = ()
+    storage: Breakdown[TrafficBytes] = Breakdown()
+    communication: Breakdown[TrafficBytes] = Breakdown()
     operands: tuple[TrafficBytes, ...] = ()
 
-    def at(self, level: str) -> TrafficBytes:
-        """Bytes moved at *level*, zero when the occurrence does not touch it."""
-        return next((value for name, value in self.whole if name == level), TrafficBytes())
+    @property
+    def whole(self) -> tuple[tuple[str, TrafficBytes], ...]:
+        return tuple((name, spread.total) for name, spread in self.storage.kinds)
 
-    def per_unit_at(self, level: str) -> TrafficBytes:
-        """One unit's bytes at *level*, zero when it does not touch it."""
-        return next((value for name, value in self.per_unit if name == level), TrafficBytes())
+    @property
+    def per_unit(self) -> tuple[tuple[str, TrafficBytes], ...]:
+        return tuple(
+            (name, spread.per_unit[-1] if spread.per_unit else spread.total)
+            for name, spread in self.storage.kinds
+        )
 
 
 @dataclass(frozen=True)
-class LevelFootprint:
+class MemoryLevelFootprint:
     """How much of one memory level a function needs at its peak.
 
     ``persistent_bytes`` is the part that cannot be reclaimed within the
     function, so it is the floor the peak can never fall below.
     """
 
-    level: str
+    memory_level: str
     peak_bytes: int
     persistent_bytes: int
     capacity_bytes: int | None = None
+
+    @property
+    def level(self) -> str:
+        """Compatibility spelling for consumers rendering a memory level."""
+        return self.memory_level
 
     @property
     def exceeds_capacity(self) -> bool:
@@ -86,10 +151,14 @@ class BufferFootprint:
     """Per-position, device-wide, and repeated bytes touched in one buffer."""
 
     buffer: str
-    level: str
+    memory_level: str
     bytes: int
     device_bytes: int
     repeated_bytes: int
+
+    @property
+    def level(self) -> str:
+        return self.memory_level
 
 
 @dataclass(frozen=True)
@@ -117,11 +186,16 @@ class ValueLifetime:
     """
 
     binding: str
-    level: str
+    memory_level: str
     bytes: int
     defined_at: int
     last_used_at: int
     persistent: bool = False
+
+    @property
+    def level(self) -> str:
+        """Compatibility spelling for consumers rendering a memory level."""
+        return self.memory_level
 
 
 @dataclass(frozen=True)
@@ -149,14 +223,14 @@ class MemoryMetadata(IRMetadata):
     placed one: nothing was decided, so nothing is claimed.
     """
 
-    footprint: tuple[LevelFootprint, ...] = ()
+    footprint: tuple[MemoryLevelFootprint, ...] = ()
     lifetimes: tuple[ValueLifetime, ...] = ()
     advisories: tuple[str, ...] = ()
     allocation: "AllocationMetadata | None" = None
 
-    def level(self, name: str) -> LevelFootprint | None:
+    def memory_level(self, name: str) -> MemoryLevelFootprint | None:
         """The footprint recorded for *name*, if the function touches it."""
-        return next((item for item in self.footprint if item.level == name), None)
+        return next((item for item in self.footprint if item.memory_level == name), None)
 
 
 @dataclass(frozen=True)
@@ -196,21 +270,6 @@ class TimelineMetadata:
 
 
 @dataclass(frozen=True)
-class TripInterval:
-    """A half-open interval, parameterized by the trip index of its loop.
-
-    A single trip occurs once, so ``stride`` says nothing about it and the trip
-    index does not appear. Repeated trips state the first interval and the
-    stride every later one is offset by.
-    """
-
-    start: int
-    end: int
-    stride: int = 0
-    trips: int = 1
-
-
-@dataclass(frozen=True)
 class PerformanceMetadata(IRMetadata):
     """One occurrence's interval within one local wave of its Function.
 
@@ -238,16 +297,19 @@ class PerformanceSummaryMetadata(IRMetadata):
 
 __all__ = [
     "AllocationMetadata",
+    "Breakdown",
     "BufferFootprint",
     "ComputeCostMetadata",
-    "LevelFootprint",
     "LoopFootprintMetadata",
+    "MemoryLevelFootprint",
     "MemoryMetadata",
     "PerformanceMetadata",
     "PerformanceSummaryMetadata",
     "RooflineMetadata",
+    "Spread",
     "TimelineMetadata",
-    "TripInterval",
     "TrafficBytes",
     "ValueLifetime",
+    "breakdown",
+    "shares",
 ]

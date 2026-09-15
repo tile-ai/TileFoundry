@@ -19,7 +19,7 @@ from tilefoundry.target import CpuTarget, CudaTarget
 _CUDA = CudaTarget("nvidia.h200_sxm")
 
 
-@module(entry="copy_storage_host", target=_CUDA)
+@module(entry="copy_storage_host", target=_CUDA, topologies=(Topology("thread", 128),))
 class CopyStorage:
     """Five operand pairs in one device function, one per thing that can differ."""
 
@@ -39,44 +39,32 @@ class CopyStorage:
         with Mesh((Topology("thread", 128),), Layout(shape=(128,), strides=(1,)), ("t",)) as m:
             smem_src = T.tensor_view(a_smem, layout=split_rows(m))
             smem_dst = T.tensor_view(b_smem, layout=split_rows(m))
-            smem_tile = T.alloc_tensor(
-                Tensor[(128, 4), 'f32', split_rows(m), 'smem']
-            )
+            smem_tile = T.alloc_tensor(Tensor[(128, 4), "f32", split_rows(m), "smem"])
             T.copy(smem_src, smem_tile)
             T.sync(m)
             T.copy(smem_tile, smem_dst)
             rmem_src = T.tensor_view(a_rmem, layout=split_rows(m))
             rmem_dst = T.tensor_view(b_rmem, layout=split_rows(m))
-            rmem_tile = T.alloc_tensor(
-                Tensor[(128, 4), 'f32', split_rows(m), 'smem']
-            )
-            rmem_frag = T.alloc_tensor(
-                Tensor[(128, 4), 'f32', split_rows(m), 'rmem']
-            )
+            rmem_tile = T.alloc_tensor(Tensor[(128, 4), "f32", split_rows(m), "smem"])
+            rmem_frag = T.alloc_tensor(Tensor[(128, 4), "f32", split_rows(m), "rmem"])
             T.copy(rmem_src, rmem_tile)
             T.sync(m)
             T.copy(rmem_tile, rmem_frag)
             T.copy(rmem_frag, rmem_dst)
             wide_src = T.tensor_view(a_wide, layout=split_rows(m))
             wide_dst = T.tensor_view(b_wide, layout=split_rows(m))
-            wide_frag = T.alloc_tensor(
-                Tensor[(128, 4), 'f32', split_rows(m), 'rmem']
-            )
+            wide_frag = T.alloc_tensor(Tensor[(128, 4), "f32", split_rows(m), "rmem"])
             T.copy(wide_src, wide_frag)
             T.copy(wide_frag, wide_dst)
             narrow_src = T.tensor_view(a_narrow, layout=split_pairs(m))
             narrow_dst = T.tensor_view(b_narrow, layout=split_pairs(m))
-            narrow_frag = T.alloc_tensor(
-                Tensor[(128, 2), 'f32', split_pairs(m), 'rmem']
-            )
+            narrow_frag = T.alloc_tensor(Tensor[(128, 2), "f32", split_pairs(m), "rmem"])
             T.copy(narrow_src, narrow_frag)
             T.copy(narrow_frag, narrow_dst)
         with Mesh((Topology("thread", 32),), Layout(shape=(32,), strides=(1,)), ("t",)) as mb:
             bcast_src = T.tensor_view(a_bcast, layout=split_short_rows(mb))
             bcast_dst = T.tensor_view(b_bcast, layout=split_short_rows(mb))
-            bcast_frag = T.alloc_tensor(
-                Tensor[(4,), 'f32', broadcast_run(mb), 'rmem']
-            )
+            bcast_frag = T.alloc_tensor(Tensor[(4,), "f32", broadcast_run(mb), "rmem"])
             T.copy(bcast_src, bcast_frag)
             T.copy(bcast_frag, bcast_dst)
 

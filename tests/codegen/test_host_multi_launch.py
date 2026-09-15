@@ -7,9 +7,9 @@ import torch
 
 import tilefoundry
 from tilefoundry import module, prim_func
+from tilefoundry.codegen.context_builder import build_codegen_context
 from tilefoundry.codegen.cpu.context import CpuCodegenContext
 from tilefoundry.codegen.cpu.module import emit_host_module
-from tilefoundry.codegen.signature import symbol_table
 from tilefoundry.dsl import T, Tensor
 from tilefoundry.ir.core import Constant, Var
 from tilefoundry.ir.core.module import Module
@@ -129,8 +129,13 @@ def _module(devices, launches, params) -> tuple[Module, PrimFunction]:
 
 def _source(devices, launches, params) -> str:
     mod, host = _module(devices, launches, params)
+    root = build_codegen_context(mod)
+    group = next(group for group in root.groups if host in group.functions)
+    view = root.for_group(group)
     ctx = CpuCodegenContext(
-        symbols=symbol_table(mod, CudaTarget("nvidia.h200_sxm")), target=host.target
+        symbols=view.symbols,
+        target=host.target,
+        resolved_launches=view.resolved_launches,
     )
     return emit_host_module(mod, (host,), host.target, ctx).source
 
@@ -144,8 +149,8 @@ def test_two_launches_keep_order_and_each_block_size() -> None:
         (a, b),
     )
     assert source.index("tilefoundry_first_launch") < source.index("tilefoundry_second_launch")
-    assert "1, 32, 1, 1" in source
-    assert "1, 64, 1, 1" in source
+    assert "1, 32, 0" in source
+    assert "1, 64, 0" in source
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")

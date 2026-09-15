@@ -50,8 +50,8 @@ def _flops(records) -> dict[str, int]:
     total: dict[str, int] = {}
     for item in records:
         record = item[0] if isinstance(item, tuple) else item
-        for name, spread in record.flops.kinds:
-            total[name] = total.get(name, 0) + spread.total
+        for name, value in record.flops.total:
+            total[name] = total.get(name, 0) + value
     return total
 
 

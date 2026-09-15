@@ -46,6 +46,11 @@ class AnalysisResult:
     executed: tuple[str, ...]
     metadata_types: tuple[type[IRMetadata], ...]
 
+    @property
+    def level(self) -> str | None:
+        """The selected topology level."""
+        return self.topology_level
+
 
 def _algorithm(target: Target, selector: str, *, root: str) -> Analyzer:
     """The service selected by the resolved Target for *selector*."""
@@ -107,6 +112,7 @@ def analyze(
     *,
     analysis: str | Sequence[str],
     topology_level: str | None = None,
+    level: str | None = None,
     options: object | None = None,
     dims: "Mapping[str, int] | None" = None,
 ) -> AnalysisResult:
@@ -118,6 +124,9 @@ def analyze(
     variant owned by the module, and the result identifies the concrete inlined
     view that received records.
     """
+    if topology_level is not None and level is not None and topology_level != level:
+        raise ValueError("analyze: topology_level and level disagree")
+    topology_level = topology_level if topology_level is not None else level
     if not isinstance(module, Module):
         raise TypeError(
             f"analyze: expected a Module, got {type(module).__name__}. A Function "

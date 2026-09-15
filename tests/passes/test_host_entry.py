@@ -67,29 +67,6 @@ class _Prototype:
             T.sync(thread)
 
 
-@module(entry="square", topologies=(Topology("thread", 128),))
-class _DisagreeingVariants:
-    """The same shape, except the two variants mesh over different thread counts."""
-
-    @prim_func(target=_CUDA)
-    def square(x: Tensor[(_S,), "f32"]):
-        pass
-
-    @square.specialize(DimVarRangePat("S", 1, 127))
-    def small(x: Tensor[(_S,), "f32"]):
-        with Mesh((Topology("thread", 64),), Layout((64,), (1,))) as thread:
-            view = T.tensor_view(x, layout=_rows(64))
-            T.copy(view, view)
-            T.sync(thread)
-
-    @square.specialize(DimVarRangePat("S", 128, 255))
-    def large(x: Tensor[(_S,), "f32"]):
-        with Mesh((Topology("thread", 128),), Layout((128,), (1,))) as thread:
-            view = T.tensor_view(x, layout=_rows(128))
-            T.copy(view, view)
-            T.sync(thread)
-
-
 def _launch_of(mod):
     """The one ``Launch`` the synthesized entry's body is made of."""
     (statement,) = mod.entry_function().body.body
@@ -126,11 +103,6 @@ def test_a_prototype_reads_its_geometry_off_the_variants_that_have_a_body() -> N
 
 def test_a_lone_kernel_reads_its_geometry_off_its_own_body() -> None:
     assert _geometry(_launch_of(insert_default_host_entry(_OneKernel))) == ((1, 1, 1), (128, 1, 1))
-
-
-def test_variants_that_want_different_geometries_are_refused() -> None:
-    with pytest.raises(ValueError, match="different geometries"):
-        insert_default_host_entry(_DisagreeingVariants)
 
 
 def test_a_module_that_already_has_a_host_entry_is_left_alone() -> None:

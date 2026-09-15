@@ -104,6 +104,7 @@ def _reported_value(value: object, declared: object) -> object:
     if origin is Spread:
         (item,) = get_args(declared)
         return {
+            "logical": _reported_value(value.logical, item),
             "total": _reported_value(value.total, item),
             "per_unit": [_reported_value(share, item) for share in value.per_unit],
         }
@@ -135,6 +136,7 @@ def _pair_types(declared: object) -> tuple[object, object] | None:
 
 for _record_type in (
     ComputeCostMetadata,
+    TrafficMetadata,
     LoopFootprintMetadata,
     MemoryMetadata,
     RooflineMetadata,
@@ -305,14 +307,12 @@ def _loop_records(
     return rows
 
 
-def _totals_of(held: "Breakdown | None") -> dict[str, object]:
-    """Each kind's whole-program amount, without any level's share.
-
-    A total is what the whole program asks for, so this section states one
-    number per kind; the per-level shares are on the family's own record.
-    """
+def _totals_of(held: "Breakdown | Spread | None") -> dict[str, object]:
+    """Each kind's whole-program amount, without any level's share."""
     if held is None:
         return {}
+    if isinstance(held, Spread):
+        return dict(held.total)
     return {
         kind: _reported_value(spread.total, type(spread.total))
         if is_dataclass(type(spread.total))

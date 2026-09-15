@@ -89,15 +89,11 @@ class MemoryHierarchyFacts:
 
     def explicit(self, name: str) -> ExplicitMemoryLevelFacts | None:
         """The explicit level called *name*, if the target has one."""
-        return next(
-            (level for level in self.explicit_levels if level.name == name), None
-        )
+        return next((level for level in self.explicit_levels if level.name == name), None)
 
     def implicit(self, name: str) -> ImplicitMemoryLevelFacts | None:
         """The implicit level called *name*, if the target has one."""
-        return next(
-            (level for level in self.implicit_levels if level.name == name), None
-        )
+        return next((level for level in self.implicit_levels if level.name == name), None)
 
     def cached_level(self, name: str) -> str | None:
         """The level *name* caches, if it caches one."""
@@ -105,8 +101,7 @@ class MemoryHierarchyFacts:
             (
                 relation.far
                 for relation in self.relations
-                if relation.kind is MemoryRelationKind.CACHES
-                and relation.near == name
+                if relation.kind is MemoryRelationKind.CACHES and relation.near == name
             ),
             None,
         )
@@ -122,9 +117,7 @@ class MemoryHierarchyFacts:
         current = name
         while (nearer := self.cached_level(current)) is not None:
             if nearer in seen:
-                raise ValueError(
-                    f"memory hierarchy: caching cycle through {current!r}"
-                )
+                raise ValueError(f"memory hierarchy: caching cycle through {current!r}")
             seen.add(nearer)
             current = nearer
         return current
@@ -147,7 +140,7 @@ class PerformanceServiceFacts:
     """Everything one unit gets through, by the kind of work it is asked for.
 
     Floating-point work by dtype, movement by the level it crosses, and the work
-    that is not floating point at all by the operation kind it asks for. A comparison,
+    that is not floating point at all by the service it asks for. A comparison,
     a select, an integer add and a local move all take a machine time, and none
     of them is a FLOP; a dtype is not a kind of work.
     """

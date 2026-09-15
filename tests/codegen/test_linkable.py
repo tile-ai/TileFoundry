@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from tests.fixtures.tir.square import TirSquare
+from tilefoundry.codegen.context_builder import build_codegen_context
 from tilefoundry.codegen.cpu.context import CpuCodegenContext
 from tilefoundry.codegen.cpu.module import emit_host_module
 from tilefoundry.codegen.linkable import LinkableFunction, LinkableModule
-from tilefoundry.codegen.signature import symbol_table
-from tilefoundry.target import CudaTarget
 
 
 def _linkable_function(name: str) -> LinkableFunction:
@@ -27,8 +26,13 @@ def _param_types(parameter_list: str) -> list[str]:
 def _host_unit() -> LinkableModule:
     """The host translation unit of a module whose entry launches a shape-dispatched kernel."""
     entry = TirSquare.entry_function()
+    root = build_codegen_context(TirSquare)
+    group = next(group for group in root.groups if entry in group.functions)
+    view = root.for_group(group)
     ctx = CpuCodegenContext(
-        symbols=symbol_table(TirSquare, CudaTarget("nvidia.h200_sxm")), target=entry.target
+        symbols=view.symbols,
+        target=entry.target,
+        resolved_launches=view.resolved_launches,
     )
     return emit_host_module(TirSquare, (entry,), entry.target, ctx)
 

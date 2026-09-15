@@ -230,7 +230,7 @@ def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
     moved = get_metadata(analysed_update, TrafficMetadata)
     assert result.topology_level == "cta"
     assert record is not None
-    assert record.flops.kinds == ()
+    assert record.flops.total == ()
     row_bytes = _WINDOW_BYTES // 4
     assert moved.operands == (
         TrafficBytes(),

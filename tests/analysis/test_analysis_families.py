@@ -21,6 +21,7 @@ from tests.fixtures.placed.symbolic_offset import (
 )
 from tilefoundry import func, module
 from tilefoundry.analysis import (
+    Breakdown,
     ComputeCostMetadata,
     MemoryHierarchyFacts,
     MemoryMetadata,
@@ -28,6 +29,7 @@ from tilefoundry.analysis import (
     PerformanceServiceFacts,
     PerformanceSummaryMetadata,
     RooflineMetadata,
+    Spread,
     ThroughputFacts,
     TrafficMetadata,
 )
@@ -174,8 +176,7 @@ def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> Non
 
     cross_scope = results["cross_scope"]
     timed = tuple(
-        (call, get_metadata(call, PerformanceMetadata))
-        for call in _calls(cross_scope.function)
+        (call, get_metadata(call, PerformanceMetadata)) for call in _calls(cross_scope.function)
     )
     scalar_indices = tuple(
         (call, record)
@@ -233,18 +234,14 @@ def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
         summary = get_metadata(result.function, PerformanceSummaryMetadata)
         assert cost is not None and bound is not None and summary is not None
         observed[name] = (
-            dict(cost.ops)["integer"],
-            dict(cost.ops_per_unit)["integer"],
+            dict(cost.other_ops.total)["integer"],
+            dict(cost.other_ops.per_unit[0])["integer"],
             bound.ideal_ns,
             summary.timeline.end_ns - summary.timeline.start_ns,
         )
 
-    literal_service, literal_local, literal_roofline, literal_performance = observed[
-        "literal"
-    ]
-    symbolic_service, symbolic_local, symbolic_roofline, symbolic_performance = observed[
-        "symbolic"
-    ]
+    literal_service, literal_local, literal_roofline, literal_performance = observed["literal"]
+    symbolic_service, symbolic_local, symbolic_roofline, symbolic_performance = observed["symbolic"]
     assert literal_roofline == symbolic_roofline == 139_407
     assert symbolic_local - literal_local == 6
     assert symbolic_service - literal_service == 6 * 128
@@ -281,12 +278,8 @@ class _SplitLastAxis:
         w: ConstTensor[(_SPLIT_HIDDEN, _SPLIT_OUT), "bf16"],
     ):
         with Mesh(("cta",), layout=(_SPLIT_GRID,), names=("unit",)) as mesh:
-            rows = tf.reshard(
-                x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem"
-            )
-            strip = tf.reshard(
-                w[0:_SPLIT_BLOCK, :], (_SPLIT_BLOCK, _SPLIT_OUT @ mesh.unit), "smem"
-            )
+            rows = tf.reshard(x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem")
+            strip = tf.reshard(w[0:_SPLIT_BLOCK, :], (_SPLIT_BLOCK, _SPLIT_OUT @ mesh.unit), "smem")
             return tf.matmul(rows, strip)
 
 
@@ -300,9 +293,7 @@ class _SplitStripMajor:
         w: ConstTensor[(_SPLIT_GRID, _SPLIT_HIDDEN, _SPLIT_PER), "bf16"],
     ):
         with Mesh(("cta",), layout=(_SPLIT_GRID,), names=("unit",)) as mesh:
-            rows = tf.reshard(
-                x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem"
-            )
+            rows = tf.reshard(x[:, :, 0:_SPLIT_BLOCK], (1, _SPLIT_BLOCK, _SPLIT_BLOCK), "smem")
             strip = tf.reshard(
                 w[:, 0:_SPLIT_BLOCK, :],
                 (_SPLIT_GRID @ mesh.unit, _SPLIT_BLOCK, _SPLIT_PER),
@@ -331,8 +322,8 @@ def test_a_matmul_counts_its_rows_once_whichever_axis_the_mesh_split() -> None:
         cost = get_metadata(product, ComputeCostMetadata)
         summary = get_metadata(report.function, PerformanceSummaryMetadata)
         per_layout[name] = (
-            dict(cost.flops)["bf16"],
-            dict(cost.flops_per_unit)["bf16"],
+            dict(cost.flops.total)["bf16"],
+            dict(cost.flops.per_unit[0])["bf16"],
             summary.timeline.end_ns,
         )
 
@@ -412,7 +403,7 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
     work = next(
         record
         for record in records
-        if record is not None and any(v for _n, v in record.flops_per_unit)
+        if record is not None and any(v for _n, v in record.flops.per_unit[0])
     )
 
     with pytest.raises(
@@ -424,14 +415,26 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
 
     with pytest.raises(AnalysisError, match=r"unknown compute dtype 'f9e9m9'"):
         _local_duration_ns(
-            replace(work, flops_per_unit=(("f9e9m9", 8),)),
+            replace(work, flops=replace(work.flops, per_unit=((("f9e9m9", 8),),))),
             throughput,
             services,
             level="cta",
         )
 
     crossed = TrafficMetadata(
-        per_unit=((throughput.bandwidth_level, TrafficBytes(read=4096)),)
+        topologies=("cta",),
+        storage=Breakdown(
+            (
+                (
+                    throughput.bandwidth_level,
+                    Spread(
+                        TrafficBytes(read=4096),
+                        TrafficBytes(read=4096),
+                        (TrafficBytes(read=4096),),
+                    ),
+                ),
+            )
+        ),
     )
     with pytest.raises(
         AnalysisError,

@@ -10,12 +10,10 @@ import os
 import tempfile
 from dataclasses import dataclass, replace
 
+from tilefoundry.codegen.context_builder import build_codegen_context
 from tilefoundry.codegen.cpu.context import CpuCodegenContext
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.linker import link_modules
-from tilefoundry.codegen.registry import group_functions_by_target
-from tilefoundry.codegen.signature import symbol_table
-from tilefoundry.codegen.topology import launch_geometry, topology_domains
 from tilefoundry.inspection import as_script as _as_script
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
@@ -102,7 +100,6 @@ def build(
             f"conflicts with the Module Target {_target_summary(module_target)}"
         )
 
-    mod = _build_default_pipeline().run(mod)
     workdir = os.path.join(
         tempfile.gettempdir(), f"tilefoundry_build_{mod.entry}_{os.getpid()}_split"
     )
@@ -120,67 +117,62 @@ def _build_split_runtime_module(mod: Module, *, workdir: str) -> "RuntimeModule"
     load each other's. Unsupported module shapes raise during codegen -- there
     is no fallback to a single-source path.
     """
-    device_target = _device_target(mod)
+    codegen = build_codegen_context(mod)
     cpu_entry = mod.entry_function()
     if not isinstance(cpu_entry.target, CpuTarget):
         raise ValueError(
-            f"tilefoundry.build: entry {cpu_entry.name!r} is not a CPU host entry "
-            f"after normalization"
+            f"tilefoundry.build: entry {cpu_entry.name!r} is not a CPU host entry; "
+            "build() accepts pass-prepared TIR"
         )
 
-    symbols = symbol_table(mod, device_target)
-    launches = launch_geometry(mod)
-    device_modules = tuple(
-        device_target.get_code_generator().emit(
-            domain,
-            device_fns,
-            device_target,
-            CudaCodegenContext(symbols=symbols, target=device_target, launches=launches),
-        )
-        for domain, device_fns in _device_domains(topology_domains(mod), device_target)
-    )
-    host_module = cpu_entry.target.get_code_generator().emit(
-        mod,
-        (cpu_entry,),
-        cpu_entry.target,
-        CpuCodegenContext(symbols=symbols, target=cpu_entry.target),
-    )
+    device_modules = []
+    host_module = None
+    for group in codegen.groups:
+        view = codegen.for_group(group)
+        if isinstance(group.target, CudaTarget):
+            context = CudaCodegenContext(
+                symbols=view.symbols,
+                target=view.target,
+                launches=view.launches,
+                codegen_context=view.codegen,
+            )
+            device_modules.append(
+                group.target.get_code_generator().emit(
+                    group.owner, group.functions, group.target, context
+                )
+            )
+        elif isinstance(group.target, CpuTarget):
+            if cpu_entry not in group.functions:
+                continue
+            context = CpuCodegenContext(
+                symbols=view.symbols,
+                target=view.target,
+                resolved_launches=view.resolved_launches,
+                codegen_context=view.codegen,
+            )
+            host_module = group.target.get_code_generator().emit(
+                group.owner, (cpu_entry,), group.target, context
+            )
+    if host_module is None:
+        raise ValueError("tilefoundry.build: root context produced no host entry group")
 
     units = (*device_modules, host_module)
     digest = hashlib.sha256("".join(m.source for m in units).encode("utf-8")).hexdigest()[:16]
-    loaded_as = replace(symbols[id(cpu_entry)], name=cpu_entry.name)
+    entry_signature = codegen.symbols.by_function[id(cpu_entry)].callable
+    loaded_as = replace(entry_signature, name=cpu_entry.name)
+    device_targets = tuple(
+        group.target for group in codegen.groups if isinstance(group.target, CudaTarget)
+    )
+    if not device_targets:
+        raise ValueError(f"tilefoundry.build: module {mod.name!r} has no CUDA device functions")
     linked_module = link_modules(
         units,
         workdir=os.path.join(workdir, digest),
         lib_name=cpu_entry.name,
         entry=loaded_as,
-        cuda_arch=device_target.arch.removeprefix("sm_"),
+        cuda_arch=device_targets[0].arch.removeprefix("sm_"),
     )
     return load_linked_module(linked_module)
-
-
-def _device_target(mod: Module) -> Target:
-    """The one device Target this module's functions run on.
-
-    A second unequal one is refused by the grouping that sees them both,
-    because one linked artifact holds one device architecture.
-    """
-    targets = [t for t in group_functions_by_target(mod) if isinstance(t, CudaTarget)]
-    if not targets:
-        raise ValueError(f"tilefoundry.build: module {mod.name!r} has no CUDA device functions")
-    return targets[0]
-
-
-def _device_domains(domains, device_target: Target):
-    """Each *domains* entry that has device functions, and which of them they are.
-
-    A module states its instance counts once, so one that states its own is one
-    translation unit; a domain holding only host functions is not one at all.
-    """
-    for domain, functions in domains:
-        device_fns = tuple(fn for fn in functions if fn.target == device_target)
-        if device_fns:
-            yield domain, device_fns
 
 
 def compile(
@@ -193,7 +185,8 @@ def compile(
 
     *mod* must be a ``Module``.  Meshes are derived from the IR body.
     """
-    return build(mod, target=target)
+    prepared = _build_default_pipeline().run(mod)
+    return build(prepared, target=target)
 
 
 def _canonical_module_text(mod: Module) -> str:

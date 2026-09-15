@@ -7,7 +7,7 @@ than pointers -- a tensor carries its own extents, so no extra parameter does.
 
 from __future__ import annotations
 
-from tilefoundry.codegen.context import CodegenContext
+from tilefoundry.codegen.context import EmitContext
 from tilefoundry.codegen.signature import (
     CallableSignature,
     ProgramIdSignature,
@@ -49,13 +49,13 @@ def _called_as_entry(
 
 
 @register_codegen(CpuTarget, Role.CALLEE, TensorSignature)
-def _declare_tensor(sig: TensorSignature, ctx: CodegenContext) -> tuple[str, ...]:
+def _declare_tensor(sig: TensorSignature, ctx: EmitContext) -> tuple[str, ...]:
     """A runtime tensor, which carries its own extents, so nothing else declares them."""
     return (f"{TENSOR_CTYPE} {sig.name}",)
 
 
 @register_codegen(CpuTarget, Role.CALLEE, ProgramIdSignature)
-def _declare_program_id(sig: ProgramIdSignature, ctx: CodegenContext) -> tuple[str, ...]:
+def _declare_program_id(sig: ProgramIdSignature, ctx: EmitContext) -> tuple[str, ...]:
     """The id of a level no device register answers for, passed in by value."""
     return (f"{PROGRAM_ID_CTYPE} {sig.name}",)
 

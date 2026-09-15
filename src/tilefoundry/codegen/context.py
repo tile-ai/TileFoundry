@@ -12,14 +12,12 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 
 from tilefoundry.codegen.signature import CallableSignature, Signature, TensorSignature
-from tilefoundry.ir.core.expr import Call
 from tilefoundry.ir.tir.stmts import Evaluate
-from tilefoundry.ir.types import UnitType
 from tilefoundry.target.base import Target
 from tilefoundry.visitor_registry.registries import DispatchRegistry, Role, spelled
 
 
-class CodegenContext:
+class EmitContext:
     """One compile, from the first function read to the last line written."""
 
     target_kind: type[Target]
@@ -38,16 +36,27 @@ class CodegenContext:
         *,
         symbols: Mapping[int, CallableSignature] | None = None,
         target: Target | None = None,
+        resolved_launches: Mapping[int, object] | None = None,
+        codegen_context: object | None = None,
     ) -> None:
         self.registry = registry
+        self.codegen_context = codegen_context
         self.symbols: Mapping[int, CallableSignature] = {} if symbols is None else symbols
         self.target = target
+        self.resolved_launches = {} if resolved_launches is None else resolved_launches
         self.exported = False
         self._lines: list[str] = []
         self._indent = 0
         self._var_names: dict[int, str] = {}
         self._counter = 0
         self._kernel_param_ids: set[int] = set()
+
+    def callee_of(self, launch):
+        """The callee root context resolved for one Launch statement."""
+        callee = self.resolved_launches.get(id(launch))
+        if callee is None:
+            raise KeyError("codegen: Launch was not resolved by the root context")
+        return callee
 
     def signature_of(self, fn) -> CallableSignature:
         """How a caller writes a call to *fn*, as the symbol table settled it."""
@@ -109,14 +118,24 @@ class CodegenContext:
             self._lines = saved_lines
 
     def emit_node(self, node) -> None:
-        """Write *node*, dispatching an ``Evaluate`` by the Op it wraps.
+        """Write *node* through the target Visitor or function orchestrator."""
+        from tilefoundry.ir.tir.abort import Abort  # noqa: PLC0415
+        from tilefoundry.ir.tir.stmts import (  # noqa: PLC0415
+            For,
+            If,
+            LetStmt,
+            MeshScope,
+            Return,
+            Sequential,
+            While,
+        )
 
-        An effect Op reaches codegen inside an ``Evaluate``, so the handler
-        that answers for it is registered against the Op's own class.
-        """
-        if isinstance(node, Evaluate):
-            op = node.callable
-            self.handler_for(type(op))(Call(type=UnitType(), target=op, args=node.args), self)
+        if isinstance(
+            node, (Abort, Evaluate, For, If, LetStmt, MeshScope, Return, Sequential, While)
+        ):
+            from tilefoundry.codegen.emitter import CudaEmitter  # noqa: PLC0415
+
+            CudaEmitter(context=self).visit(node)
             return
         self.handler_for(type(node))(node, self)
 
@@ -174,9 +193,7 @@ class CodegenContext:
     def arguments(self, signature: CallableSignature, callee_target: Target) -> str:
         """The whole argument list of one call, in the order the callee declared."""
         return ", ".join(
-            token
-            for param in signature.all_params
-            for token in self.argument(param, callee_target)
+            token for param in signature.all_params for token in self.argument(param, callee_target)
         )
 
     def local_value(self, signature: Signature) -> str:
@@ -204,4 +221,4 @@ class CodegenContext:
         return handler
 
 
-__all__ = ["CodegenContext"]
+__all__ = ["EmitContext"]
