@@ -174,7 +174,7 @@ class LoopFootprintMetadata(IRMetadata):
 
 @dataclass(frozen=True)
 class ValueLifetime:
-    """One value's residency, as positions in the function's definition order.
+    """One value's residency on the function's structured SSA event timeline.
 
     ``persistent`` marks a value that is resident for the whole function rather
     than until its last use. Every parameter is persistent because a function

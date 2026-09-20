@@ -8,17 +8,17 @@ from tilefoundry.ir.core import (
     Call,
     Constant,
     Expr,
-    Var,
     VerifyError,
     describe_expr,
     value_labels,
 )
 from tilefoundry.ir.core import attach_metadata as attach
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.types import TensorType, TupleType, Type, bytes_by_storage
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.visitor import ExprVisitor, expr_children
+from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     access_relation_registry,
@@ -34,6 +34,7 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
 from .facts import MemoryHierarchyFacts
+from .liveness import Liveness, analyze_liveness
 from .metadata import (
     AllocationMetadata,
     Breakdown,
@@ -307,40 +308,71 @@ def add_traffic(
                 )
 
 
-def _lifetimes(
-    values: list[Expr], facts: MemoryHierarchyFacts, local: CostContext
-) -> tuple[ValueLifetime, ...]:
-    """Each value's residency, its bytes taken in the analysed level's window.
+def _resident_value_ids(function: Function, liveness: Liveness) -> frozenset[int]:
+    """Values whose SSA interval represents independently resident bytes."""
+    result = {id(parameter) for parameter in function.params}
+    for interval in liveness.intervals:
+        value = interval.value
+        if isinstance(value, (Call, Constant, LoopRegion)):
+            result.add(id(value))
+        if isinstance(value, LoopRegion):
+            result.update(id(phi) for phi in value.carried_args)
+    return frozenset(result)
 
-    The projection is the one the traffic family reads, so both halves of a report
-    answer for the same unit. Dividing the whole tensor by a per-level constant
-    outside was a second account of it, and the two disagreed.
-    """
-    index_by_id = {id(expr): index for index, expr in enumerate(values)}
-    last_by_id = dict(index_by_id)
-    for index, consumer in enumerate(values):
-        for operand in expr_children(consumer):
-            if id(operand) in last_by_id and index > last_by_id[id(operand)]:
-                last_by_id[id(operand)] = index
+
+def _project_value_lifetimes(
+    liveness: Liveness,
+    resident_ids: frozenset[int],
+    parameter_ids: frozenset[int],
+    facts: MemoryHierarchyFacts,
+    local: CostContext,
+) -> tuple[ValueLifetime, ...]:
+    """Project structural intervals into the analysed topology window."""
+    intervals = tuple(
+        interval for interval in liveness.intervals if id(interval.value) in resident_ids
+    )
     result: list[ValueLifetime] = []
-    labels = value_labels(values)
-    for index, expr in enumerate(values):
+    labels = value_labels(interval.value for interval in intervals)
+    for label, interval in zip(labels, intervals, strict=True):
+        expr = interval.value
+        persistent = id(expr) in parameter_ids
         for memory_level, amount in bytes_by_storage(local.local_type_of(expr)).items():
             if facts.explicit(memory_level) is None:
                 continue
             result.append(
                 ValueLifetime(
-                    binding=labels[index],
+                    binding=label,
                     memory_level=memory_level,
                     bytes=amount,
-                    defined_at=index,
-                    last_used_at=(
-                        len(values) - 1 if isinstance(expr, Var) else last_by_id[id(expr)]
-                    ),
-                    persistent=isinstance(expr, Var),
+                    defined_at=interval.defined_at,
+                    last_used_at=(liveness.timeline_end if persistent else interval.last_used_at),
+                    persistent=persistent,
                 )
             )
     return tuple(result)
+
+
+def analyze_value_lifetimes(
+    module: Module,
+    function: Function,
+    *,
+    topology_level: str | None = None,
+) -> tuple[ValueLifetime, ...]:
+    """Project checked structural SSA liveness into memory residency."""
+    liveness = analyze_liveness(function)
+    facts = module.resolve_target().get_facts(MemoryHierarchyFacts)
+    local = CostContext(
+        scope=FunctionScope(module, function),
+        topology_level=topology_level,
+        topologies=module.effective_topologies(),
+    )
+    return _project_value_lifetimes(
+        liveness,
+        _resident_value_ids(function, liveness),
+        frozenset(id(parameter) for parameter in function.params),
+        facts,
+        local,
+    )
 
 
 @dataclass
@@ -348,15 +380,13 @@ class MemoryContext(AnalyzeContext):
     """State carried through the memory-family expression walk."""
 
     whole: CostContext | None = None
-    local: CostContext | None = None
     locals_by_unit: dict[str, CostContext] = field(default_factory=dict)
     totals: dict[str, dict[str, TrafficBytes]] = field(default_factory=dict)
     shares: dict[str, dict[str, TrafficBytes]] = field(default_factory=dict)
-    values: list[Expr] = field(default_factory=list)
 
 
 class MemoryVisitor(ExprVisitor[None]):
-    """Attach per-Call traffic while collecting lifetime order and loop footprints."""
+    """Attach per-Call traffic and loop footprints."""
 
     def visit_LoopRegion(self, expr: LoopRegion, ctx: MemoryContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is expr)
@@ -371,8 +401,6 @@ class MemoryVisitor(ExprVisitor[None]):
     def default_visit_leaf(
         self, expr: Expr, _operands: tuple[None, ...], ctx: MemoryContext
     ) -> None:
-        if isinstance(expr, (Call, Constant)):
-            ctx.values.append(expr)
         if not isinstance(expr, Call):
             return
         recorded = id(expr) in ctx.current.accesses["narrow"]
@@ -408,11 +436,6 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     facts = context.target.get_facts(MemoryHierarchyFacts)
     topologies = module.effective_topologies()
     whole = CostContext(scope=FunctionScope(module, function))
-    local = CostContext(
-        scope=FunctionScope(module, function),
-        topology_level=topology_level,
-        topologies=topologies,
-    )
     units = tuple(topology.name for topology in topologies) or (
         (topology_level,) if topology_level else ()
     )
@@ -432,9 +455,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         root=context.root,
         current=context.current,
         whole=whole,
-        local=local,
         locals_by_unit=locals_by_unit,
-        values=list(function.params),
     )
     MemoryVisitor().visit(function.body, memory_context)
     attach(
@@ -445,13 +466,18 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             communication=_shares(memory_context.shares, tuple(locals_by_unit)),
         ),
     )
-    lifetimes = _lifetimes(memory_context.values, facts, local)
+    lifetimes = analyze_value_lifetimes(
+        module,
+        function,
+        topology_level=topology_level,
+    )
     levels_list: list[MemoryLevelFootprint] = []
     for name in sorted({item.memory_level for item in lifetimes} | set(memory_context.totals)):
         declared = facts.explicit(name)
         rows = [item for item in lifetimes if item.memory_level == name]
         peak = 0
-        for point in range(len(lifetimes) + 1):
+        end = max((item.last_used_at for item in rows), default=-1)
+        for point in range(end + 1):
             peak = max(
                 peak,
                 sum(item.bytes for item in rows if item.defined_at <= point <= item.last_used_at),
@@ -527,4 +553,10 @@ def cache_pressure(
     return tuple(rows)
 
 
-__all__ = ["MemoryOptions", "SELECTOR", "analyze_memory", "cache_pressure"]
+__all__ = [
+    "MemoryOptions",
+    "SELECTOR",
+    "analyze_memory",
+    "analyze_value_lifetimes",
+    "cache_pressure",
+]

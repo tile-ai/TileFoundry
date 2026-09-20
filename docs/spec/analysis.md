@@ -438,11 +438,11 @@ of this analysis.
 | `ValueLifetime.binding` | Use the parameter or binding name, suffixed with `:` and the line of the value's source span when it has one. Repeated names already differ by the printer's numeric suffix in definition order; the line locates the row in authored source, which a suffix cannot. A value with neither name nor span is `<value N>` in definition order. | No |
 | `ValueLifetime.memory_level` | Emit one lifetime per storage level occupied by the value's Type. | No |
 | `ValueLifetime.bytes` | Project the Type through every authored split at or coarser than the explicit level's `owner`, then take its logical bytes; a target-owned or undeclared level remains global. | `MemoryHierarchyFacts.explicit_levels[].owner` |
-| `ValueLifetime.defined_at` | Position in the order of parameters followed by body Calls and Constants in SSA postorder. | No |
-| `ValueLifetime.last_used_at` | Greatest recorded consumer position; the last position for a parameter, and also for the Function body when that body is itself a recorded value. | No |
+| `ValueLifetime.defined_at` | Definition event on the function-wide structured SSA timeline. | No |
+| `ValueLifetime.last_used_at` | Greatest ordinary-consumer, region-entry, loop-backedge, or region-exit use event; the final timeline event for a parameter. | No |
 | `ValueLifetime.persistent` | True for parameters and false for body allocations. | No |
 | `MemoryLevelFootprint.memory_level` | Each storage level with at least one lifetime, sorted by name. | No |
-| `MemoryLevelFootprint.peak_bytes` | Largest sum of simultaneously live bytes at that level over the value order. | No |
+| `MemoryLevelFootprint.peak_bytes` | Largest sum of simultaneously live bytes at that level over the structured SSA event timeline. | No |
 | `MemoryLevelFootprint.persistent_bytes` | Sum of persistent lifetimes at that level. | No |
 | `MemoryLevelFootprint.capacity_bytes` | Capacity of the matching explicit level, or `None` when it is unknown or undeclared. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
 | `MemoryMetadata.footprint` | One `MemoryLevelFootprint` per occupied storage level. | As above |
@@ -451,6 +451,15 @@ of this analysis.
 | `TrafficMetadata.storage` | One occurrence's per-boundary movement asked of the Op's access relations, charged to the storage levels its operand Types name. The total is asked in the whole program's window and each level's share in that level's, over Types projected through the authored `Split`s at or coarser than it. On a Function, summed over every reachable occurrence, each counted as often as its authored loops repeat it. A Type with leaves at several levels keeps those leaf bytes separate. A `UMAT` leaf has no residency of its own: when it appears in `Call.args`, charge its own bytes at the target's established `rmem` materialization level; when it appears only in an Op attribute, charge nothing. A Function Call takes the callee's grouped total. | No; projection reads resolved Mesh and effective Module topology extents. |
 | `TrafficMetadata.communication` | What a Reshard sends off the unit it was on, when the shards on its two sides differ across a mesh axis that level owns. Zero where they agree. | No; the share each unit keeps follows from the mesh extents the shards name. |
 | `TrafficMetadata.operands` | One occurrence's per-boundary movement in order `(*call.args, call)`, the same relation-derived amounts `storage` groups. Empty on a Function and on a Function Call, neither of which has a split. | No |
+
+One ordinary expression event uses its operands and defines its result. A region
+adds separate binding and exit events: a mesh argument is used before its
+parameter is defined, and a loop initial value is used before its induction and
+carried parameters are defined. One representative loop-body iteration is
+recorded without expanding the trip count; a carried parameter spans entry to
+exit, and a yielded value remains live through the backedge event. Event
+positions are monotonic across the whole Function, including nested and sibling
+regions.
 
 The target-aware loop projection is report data rather than another metadata
 record. `LoopFootprintMetadata` remains target-independent:

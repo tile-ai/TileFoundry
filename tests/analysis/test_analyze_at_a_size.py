@@ -52,6 +52,11 @@ CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT}
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 INVENTORY = [pytest.param(case, id=case.id) for case in placed_cases()]
+EXPECTED_MEMORY_PEAKS = {
+    "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]": {
+        "rmem": 395_264,
+    },
+}
 
 
 def _aimed():
@@ -206,9 +211,7 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
                     breakdown = getattr(held, field)
                     for name, spread in breakdown.kinds:
                         for value in (spread.logical, spread.total, *spread.per_unit):
-                            assert value >= 0, (
-                                f"{describe_expr(expr)}: {field}[{name}] = {value}"
-                            )
+                            assert value >= 0, f"{describe_expr(expr)}: {field}[{name}] = {value}"
             if record is TrafficMetadata:
                 for field in ("whole", "per_unit"):
                     for level, moved in getattr(held, field):
@@ -222,6 +225,20 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
             if record is MemoryMetadata:
                 for level in held.footprint:
                     assert level.peak_bytes >= 0 and level.persistent_bytes >= 0
+                    rows = [item for item in held.lifetimes if item.level == level.level]
+                    end = max((item.last_used_at for item in rows), default=-1)
+                    expected_peak = max(
+                        (
+                            sum(
+                                item.bytes
+                                for item in rows
+                                if item.defined_at <= point <= item.last_used_at
+                            )
+                            for point in range(end + 1)
+                        ),
+                        default=0,
+                    )
+                    assert level.peak_bytes == expected_peak
                 for item in held.lifetimes:
                     assert item.bytes >= 0 and 0 <= item.defined_at <= item.last_used_at
                     assert "<buffer " not in item.binding, describe_expr(expr)
@@ -257,6 +274,11 @@ def test_every_concrete_program_predicts_coherently(case: ConcreteCase) -> None:
     assert result.module is owner
     assert set(result.executed) == set(FAMILIES)
     assert_performance_contract(result)
+    expected = EXPECTED_MEMORY_PEAKS.get(case.id, {})
+    placement = get_metadata(result.function, MemoryMetadata)
+    assert placement is not None
+    observed = {item.level: item.peak_bytes for item in placement.footprint}
+    assert {level: observed[level] for level in expected} == expected
 
 
 @pytest.mark.parametrize("family", FAMILIES)
