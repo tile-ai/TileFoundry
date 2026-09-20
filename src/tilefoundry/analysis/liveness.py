@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from tilefoundry.ir.core import Expr, Var
 from tilefoundry.ir.hir.function import Function
@@ -28,13 +28,6 @@ class Liveness:
     timeline_end: int
 
 
-@dataclass
-class _IntervalState:
-    value: Expr
-    defined_at: int
-    last_used_at: int
-
-
 def _free_vars(function: Function) -> tuple[Var, ...]:
     """Boundary Vars reached as uses but not owned by a structural binding site."""
     if function.body is None:
@@ -56,7 +49,7 @@ class LivenessVisitor(ExprVisitor[None]):
     def __init__(self, function: Function) -> None:
         super().__init__(root_function=function)
         self._point = -1
-        self._states: dict[int, _IntervalState] = {}
+        self._states: dict[int, LiveInterval] = {}
         self._definition_order: list[int] = []
         for parameter in function.params:
             self.define(parameter, self.next_event())
@@ -73,7 +66,7 @@ class LivenessVisitor(ExprVisitor[None]):
         key = id(value)
         if key in self._states:
             raise ValueError(f"liveness: {type(value).__name__} is defined more than once")
-        self._states[key] = _IntervalState(value, point, point)
+        self._states[key] = LiveInterval(value, point, point)
         self._definition_order.append(key)
 
     def use(self, value: Expr, point: int) -> None:
@@ -81,15 +74,13 @@ class LivenessVisitor(ExprVisitor[None]):
         state = self._states.get(id(value))
         if state is None:
             raise ValueError(f"liveness: {type(value).__name__} is used before its definition")
-        state.last_used_at = max(state.last_used_at, point)
+        self._states[id(value)] = replace(state, last_used_at=max(state.last_used_at, point))
 
     def finish(self) -> Liveness:
         """Freeze the definition-ordered result."""
         states = (self._states[key] for key in self._definition_order)
         return Liveness(
-            intervals=tuple(
-                LiveInterval(state.value, state.defined_at, state.last_used_at) for state in states
-            ),
+            intervals=tuple(states),
             timeline_end=self._point,
         )
 

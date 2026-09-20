@@ -54,7 +54,9 @@ FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 INVENTORY = [pytest.param(case, id=case.id) for case in placed_cases()]
 EXPECTED_MEMORY_PEAKS = {
     "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]": {
+        "gmem": 175_514_632,
         "rmem": 395_264,
+        "smem": 98_304,
     },
 }
 
