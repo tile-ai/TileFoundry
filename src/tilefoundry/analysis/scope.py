@@ -55,6 +55,7 @@ class Scope:
     depth: int
     domain: isl.set
     accesses: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(default_factory=dict)
+    outputs: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(default_factory=dict)
     relations: dict[int, tuple[Call, AccessRelations]] = field(default_factory=dict)
     refused: dict[str, frozenset[Call]] = field(default_factory=dict)
     _variance: dict[int, frozenset[int]] = field(default_factory=dict, repr=False)
@@ -381,6 +382,12 @@ def build_scopes(
                 if access is not None:
                     built.append(access)
             scope.accesses.setdefault(view, {})[id(expr)] = (expr, tuple(built))
+            written: list[Access] = []
+            for boundary in local_relations.outputs:
+                access = _bind_access(expr, expr, boundary, scope, type_ctx, narrow=narrow)
+                if access is not None:
+                    written.append(access)
+            scope.outputs.setdefault(view, {})[id(expr)] = (expr, tuple(written))
 
     def record_variance(expr: Expr, operands: tuple[Expr, ...]) -> None:
         changing: set[int] = set()

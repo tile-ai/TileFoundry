@@ -32,6 +32,7 @@ from tilefoundry.visitor_registry.access_relation import (
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
+from .allocation import AllocationValue
 from .errors import AnalysisError
 from .facts import MemoryHierarchyFacts
 from .liveness import Liveness, analyze_liveness
@@ -320,18 +321,18 @@ def _resident_value_ids(function: Function, liveness: Liveness) -> frozenset[int
     return frozenset(result)
 
 
-def _project_value_lifetimes(
+def _project_allocation_values(
     liveness: Liveness,
     resident_ids: frozenset[int],
     parameter_ids: frozenset[int],
     facts: MemoryHierarchyFacts,
     local: CostContext,
-) -> tuple[ValueLifetime, ...]:
+) -> tuple[AllocationValue, ...]:
     """Project structural intervals into the analysed topology window."""
     intervals = tuple(
         interval for interval in liveness.intervals if id(interval.value) in resident_ids
     )
-    result: list[ValueLifetime] = []
+    result: list[AllocationValue] = []
     labels = value_labels(interval.value for interval in intervals)
     for label, interval in zip(labels, intervals, strict=True):
         expr = interval.value
@@ -340,13 +341,18 @@ def _project_value_lifetimes(
             if facts.explicit(memory_level) is None:
                 continue
             result.append(
-                ValueLifetime(
-                    binding=label,
-                    memory_level=memory_level,
-                    bytes=amount,
-                    defined_at=interval.defined_at,
-                    last_used_at=(liveness.timeline_end if persistent else interval.last_used_at),
-                    persistent=persistent,
+                AllocationValue(
+                    expr,
+                    ValueLifetime(
+                        binding=label,
+                        memory_level=memory_level,
+                        bytes=amount,
+                        defined_at=interval.defined_at,
+                        last_used_at=(
+                            liveness.timeline_end if persistent else interval.last_used_at
+                        ),
+                        persistent=persistent,
+                    ),
                 )
             )
     return tuple(result)
@@ -366,13 +372,14 @@ def analyze_value_lifetimes(
         topology_level=topology_level,
         topologies=module.effective_topologies(),
     )
-    return _project_value_lifetimes(
+    projected = _project_allocation_values(
         liveness,
         _resident_value_ids(function, liveness),
         frozenset(id(parameter) for parameter in function.params),
         facts,
         local,
     )
+    return tuple(item.lifetime for item in projected)
 
 
 @dataclass
@@ -466,11 +473,20 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             communication=_shares(memory_context.shares, tuple(locals_by_unit)),
         ),
     )
-    lifetimes = analyze_value_lifetimes(
-        module,
-        function,
+    liveness = analyze_liveness(function)
+    placement = CostContext(
+        scope=FunctionScope(module, function),
         topology_level=topology_level,
+        topologies=topologies,
     )
+    allocation_values = _project_allocation_values(
+        liveness,
+        _resident_value_ids(function, liveness),
+        frozenset(id(parameter) for parameter in function.params),
+        facts,
+        placement,
+    )
+    lifetimes = tuple(item.lifetime for item in allocation_values)
     levels_list: list[MemoryLevelFootprint] = []
     for name in sorted({item.memory_level for item in lifetimes} | set(memory_context.totals)):
         declared = facts.explicit(name)
