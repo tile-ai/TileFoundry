@@ -32,7 +32,7 @@ from tilefoundry.visitor_registry.access_relation import (
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
-from .allocation import AllocationValue
+from .allocation import AllocationValue, solve_allocation
 from .errors import AnalysisError
 from .facts import MemoryHierarchyFacts
 from .liveness import Liveness, analyze_liveness
@@ -487,41 +487,63 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         placement,
     )
     lifetimes = tuple(item.lifetime for item in allocation_values)
+    solver_options = (
+        context.options if isinstance(context.options, MemoryOptions) else MemoryOptions()
+    )
+    solver_statuses: list[str] = []
     levels_list: list[MemoryLevelFootprint] = []
     for name in sorted({item.memory_level for item in lifetimes} | set(memory_context.totals)):
         declared = facts.explicit(name)
-        rows = [item for item in lifetimes if item.memory_level == name]
-        peak = 0
-        end = max((item.last_used_at for item in rows), default=-1)
-        for point in range(end + 1):
-            peak = max(
-                peak,
-                sum(item.bytes for item in rows if item.defined_at <= point <= item.last_used_at),
+        values = tuple(item for item in allocation_values if item.lifetime.memory_level == name)
+        rows = [item.lifetime for item in values]
+        capacity = declared.capacity_bytes if declared is not None else None
+        for item in rows:
+            if capacity is not None and item.bytes > capacity:
+                raise AnalysisError(
+                    f"function {function.name!r}: value {item.binding!r} needs "
+                    f"{item.bytes} B in {item.memory_level}, which exceeds the "
+                    f"{capacity} B the target states for that level"
+                )
+        if name in (str(StorageKind.GMEM), str(StorageKind.SMEM)) and values:
+            solved = solve_allocation(
+                name,
+                values,
+                context.root,
+                capacity_bytes=capacity,
+                options=solver_options,
             )
+            peak = solved.peak_bytes
+            solver_statuses.append(solved.solver_status)
+        elif name == str(StorageKind.RMEM):
+            peak = max((item.bytes for item in rows), default=0)
+        else:
+            peak = 0
+            end = max((item.last_used_at for item in rows), default=-1)
+            for point in range(end + 1):
+                peak = max(
+                    peak,
+                    sum(
+                        item.bytes for item in rows if item.defined_at <= point <= item.last_used_at
+                    ),
+                )
         levels_list.append(
             MemoryLevelFootprint(
                 memory_level=name,
                 peak_bytes=peak,
                 persistent_bytes=sum(item.bytes for item in rows if item.persistent),
-                capacity_bytes=declared.capacity_bytes if declared is not None else None,
+                capacity_bytes=capacity,
             )
         )
     levels = tuple(levels_list)
-    for item in lifetimes:
-        declared = facts.explicit(item.memory_level)
-        capacity = None if declared is None else declared.capacity_bytes
-        if capacity is not None and item.bytes > capacity:
-            raise AnalysisError(
-                f"function {function.name!r}: value {item.binding!r} needs "
-                f"{item.bytes} B in {item.memory_level}, which exceeds the "
-                f"{capacity} B the target states for that level"
-            )
+    allocation = None
+    if solver_statuses:
+        allocation = AllocationMetadata(solver_status="feasible")
     attach(
         function,
         MemoryMetadata(
             footprint=levels,
             lifetimes=lifetimes,
-            allocation=AllocationMetadata(solver_status="optimal"),
+            allocation=allocation,
         ),
     )
 

@@ -43,6 +43,7 @@ class Access:
 
     relation: isl.map
     buffer: Expr
+    exact: bool = True
 
 
 @dataclass(eq=False)
@@ -278,6 +279,7 @@ def _bind_access(
     narrow: bool,
 ) -> Access | None:
     relation = relation_of(boundary.pattern)
+    exact = True
     loops = []
     cursor = scope
     while cursor is not None:
@@ -302,6 +304,7 @@ def _bind_access(
                 term = None
             if term is None:
                 term = _widest_allowed(relation, name, operand.type)
+                exact = False
             if term is None:
                 relation = relation.project_out(isl.dim_type.PARAM, 0, 1)
                 continue
@@ -337,7 +340,9 @@ def _bind_access(
         folded = renaming_relation(operand, ctx, stated=scope.stated_relations(operand, ctx))
         relation = relation.apply_range(relation_of(folded))
         operand = operand.args[0]
-    return Access(relation, operand)
+    if relation.dim(isl.dim_type.PARAM):
+        exact = False
+    return Access(relation, operand, exact)
 
 
 def build_scopes(

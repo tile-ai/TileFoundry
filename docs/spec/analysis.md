@@ -272,7 +272,8 @@ class MemoryLevelFootprint:
 
     Attributes:
         memory_level: attribute; The memory level name.
-        peak_bytes: attribute; The largest simultaneous claim on the level.
+        peak_bytes: attribute; The solved address high-water mark for gmem/smem,
+            or the largest single logical value for rmem.
         persistent_bytes: attribute; The part that cannot be reclaimed.
         capacity_bytes: attribute; The stated capacity, or None when unknown.
     """
@@ -333,7 +334,7 @@ class AllocationMetadata:
     """What showing this function's buffers fit came to.
 
     Attributes:
-        solver_status: attribute; `"optimal"` or `"feasible"`.
+        solver_status: attribute; `"feasible"` for the first validated placement.
     """
 
     solver_status: str
@@ -376,10 +377,13 @@ anything; it does not say how much, and an Op with no relation fails closed.
     it empty.
 
 Capacity is settled against the authored definition order, which fixes every
-buffer's lifetime before any of them is measured, so the only open question is
-whether the ones live at once fit together. An arrangement answers that question
-without being reported: no address or per-value buffer identity is a conclusion
-of this analysis.
+buffer's lifetime before any of them is measured. For `gmem` and `smem`, exact
+polyhedral access relations may let the solver overlap a dead pointwise operand
+with its result or embed an `insert_slice` update in its result. Every logical
+SSA box remains in the model, including outside the container's lifetime. The
+concrete arrangement is not reported: no address or per-value buffer identity
+is a conclusion of this analysis. `rmem` is not address-solved and reports only
+the largest single projected logical value.
 
 - constraints:
   - Capacity MUST be settled for the addressable levels `gmem` and `smem` only,
@@ -392,12 +396,12 @@ of this analysis.
   - `allocation` MUST be absent only when no level could be projected against. A
     function with nothing addressable MUST record a settled `allocation`: the
     question was asked and there was nothing to decide. An attached
-    `solver_status` MUST be `"optimal"` or `"feasible"`; a domain that cannot
+    `solver_status` MUST be `"feasible"`; a domain that cannot
     fit, cannot be expressed, or does not settle in time MUST raise
-    `AnalysisError` saying which of the three happened and leave no record. A
-    domain that fits at once MUST be settled without searching, and one whose
-    simultaneously live bytes exceed the capacity MUST be refused without
-    searching.
+    `AnalysisError` saying which of the three happened and leave no record. The
+    solver MUST stop at its first feasible assignment rather than spend the
+    remaining timeout proving a minimum. Its reported peak is that assignment's
+    actual address high-water mark, not a mathematical optimum.
   - Every `Spread` MUST state a share for each declared topology level, not
     only for the level the call selected, and the record MUST name those
     levels once in `topologies` rather than beside each share.
@@ -442,7 +446,7 @@ of this analysis.
 | `ValueLifetime.last_used_at` | Greatest ordinary-consumer, region-entry, loop-backedge, or region-exit use event; the final timeline event for a parameter. | No |
 | `ValueLifetime.persistent` | True for parameters and false for body allocations. | No |
 | `MemoryLevelFootprint.memory_level` | Each storage level with at least one lifetime, sorted by name. | No |
-| `MemoryLevelFootprint.peak_bytes` | Largest sum of simultaneously live bytes at that level over the structured SSA event timeline. | No |
+| `MemoryLevelFootprint.peak_bytes` | For `gmem` and `smem`, the address high-water mark of the first feasible whole-Function placement. Exact pointwise relations and exact `insert_slice` partitions may permit overlap; widened or unknown relations do not. For `rmem`, the largest single projected logical value, without address placement or cross-value summation. | No |
 | `MemoryLevelFootprint.persistent_bytes` | Sum of persistent lifetimes at that level. | No |
 | `MemoryLevelFootprint.capacity_bytes` | Capacity of the matching explicit level, or `None` when it is unknown or undeclared. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
 | `MemoryMetadata.footprint` | One `MemoryLevelFootprint` per occupied storage level. | As above |

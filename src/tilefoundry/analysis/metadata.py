@@ -123,7 +123,7 @@ class TrafficMetadata(IRMetadata):
 
 @dataclass(frozen=True)
 class MemoryLevelFootprint:
-    """How much of one memory level a function needs at its peak.
+    """One level's solved high-water mark or largest logical value.
 
     ``persistent_bytes`` is the part that cannot be reclaimed within the
     function, so it is the floor the peak can never fall below.
@@ -199,10 +199,11 @@ class ValueLifetime:
 
 @dataclass(frozen=True)
 class AllocationMetadata:
-    """What showing this function's buffers fit took.
+    """What showing this function's addressable buffers fit took.
 
     Where any of them would sit is the solver's business and appears nowhere
-    here. What a reader can act on is whether the question was settled.
+    here. ``feasible`` means the first validated placement was returned without
+    claiming that its high-water mark is minimal.
     """
 
     solver_status: str
