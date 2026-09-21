@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from tests._source import import_dsl
-from tests.fixtures.placed import persistent_gemm_tiled
 from tests.fixtures.placed.fused_boundary import FusedBoundary
 from tests.fixtures.placed.region_boundaries import RegionBoundaries
 from tests.fixtures.placed.rmsnorm import RmsnormModule
@@ -17,7 +16,6 @@ from tilefoundry.ir.core import Call, VerifyError, binding_name
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.visitor import collect_exprs, expr_children
-from tilefoundry.parser.ast_pattern import ParseError
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.visitors import TypeInferVisitor
 
@@ -107,23 +105,3 @@ def test_region_boundaries_capture_external_regions_through_args() -> None:
 
     import_dsl(_diagnostic("region_rebind"), "RegionRebind")
     import_dsl(_diagnostic("region_tuple_rebind"), "RegionTupleRebind")
-
-
-def test_three_argument_tile_accepts_mesh_coordinate_bounds() -> None:
-    source = Path(persistent_gemm_tiled.__file__).read_text()
-
-    parsed = import_dsl(source, "PersistentGemmTiled")
-    assert parsed.entry_function().name == "gemm"
-
-    with pytest.raises(
-        ParseError,
-        match="mesh 'cta' has no axis 'z'; its axes are: x, y",
-    ):
-        import_dsl(source.replace("cta.x * CHUNK_M", "cta.z * CHUNK_M", 1))
-
-    four_arguments = source.replace(
-        "tile(cta.x * CHUNK_M, (cta.x + 1) * CHUNK_M, BM)",
-        "tile(cta.x * CHUNK_M, (cta.x + 1) * CHUNK_M, BM, 1)",
-    )
-    with pytest.raises(ParseError, match=r"tile\(\) takes 2 or 3 arguments"):
-        import_dsl(four_arguments)

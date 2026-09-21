@@ -1615,20 +1615,6 @@ class StaticReferencePattern(ElementPattern):
         elif match.branch_id == "static_attribute":
             owner = children["owner"]
             attribute = match.captures["attribute"]
-            if isinstance(owner, runtime.Mesh) and not hasattr(owner, attribute):
-                axes = owner.names or ("x", "y", "z")[: len(owner.layout.shape)]
-                named = ", ".join(axes)
-                node = match.node
-                owner_name = (
-                    node.value.id
-                    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
-                    else "<mesh>"
-                )
-                raise ParseError.from_node(
-                    node,
-                    context,
-                    f"mesh {owner_name!r} has no axis {attribute!r}; its axes are: {named}",
-                )
             try:
                 return getattr(owner, attribute)
             except AttributeError as error:

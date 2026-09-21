@@ -286,7 +286,6 @@ runtime = SimpleNamespace(
     TupleType=TupleType,
     TypeInferContext=TypeInferContext,
     FunctionScope=FunctionScope,
-    inference_type=inference_type,
     TypeInferVisitor=TypeInferVisitor,
     TupleGetItem=TupleGetItem,
     Unary=Unary,
@@ -1193,7 +1192,7 @@ class ModuleBuildContext:
         for function in functions:
             if isinstance(function, runtime.Function):
                 verify_function(function, module=result)
-                runtime.inference_type(
+                inference_type(
                     function,
                     runtime.TypeInferContext(
                         scope=runtime.FunctionScope(result, function)
@@ -1555,15 +1554,6 @@ def _resolve_reference(node: ast.AST, context: MatchContext) -> object:
         raise ParseError.from_node(node, context, f"undefined static name {node.id!r}")
     if isinstance(node, ast.Attribute):
         owner = _resolve_reference(node.value, context)
-        if isinstance(owner, Mesh) and not hasattr(owner, node.attr):
-            axes = owner.names or ("x", "y", "z")[: len(owner.layout.shape)]
-            named = ", ".join(axes)
-            owner_name = node.value.id if isinstance(node.value, ast.Name) else "<mesh>"
-            raise ParseError.from_node(
-                node,
-                context,
-                f"mesh {owner_name!r} has no axis {node.attr!r}; its axes are: {named}",
-            )
         try:
             return getattr(owner, node.attr)
         except AttributeError as error:

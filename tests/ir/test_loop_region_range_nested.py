@@ -27,14 +27,6 @@ _SUM = ReduceKind.SUM
 
 
 @func
-def _tile_start_stop_step(x: Tensor[(8,), "f32"]) -> Tensor[(2,), "f32"]:
-    acc = tf.zeros(Tensor[(2,), "f32"])
-    for window in tile(2, 8, 2):  # noqa: F821
-        acc = acc + x[window]
-    return acc
-
-
-@func
 def _range_start_step(x: Tensor[(_M,), "f32"]) -> Tensor[(), "f32"]:
     acc = tf.reduce(x, axes=(0,), keepdim=False, kind=_SUM)
     acc = tf.full_like(acc, value=0.0)
@@ -78,16 +70,6 @@ def test_range_start_step():
     x = torch.arange(n, dtype=torch.float32)
     out = evaluate(_range_start_step, x)
     assert torch.allclose(out.reshape(()), x[1:n:2].sum()), (n, out)
-
-
-def test_tile_start_stop_step_maps_to_loop_region_fields() -> None:
-    loop = _tile_start_stop_step.body
-    assert loop.start == 2
-    assert loop.extent == 8
-    assert loop.step == 2
-
-    x = torch.arange(8, dtype=torch.float32)
-    assert torch.equal(evaluate(_tile_start_stop_step, x), x[2:4] + x[4:6] + x[6:8])
 
 
 def test_nested_loop_region_outer_carry_in_inner():

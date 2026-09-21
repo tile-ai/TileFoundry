@@ -140,8 +140,7 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
                 return f"{name}({args})"
         return self.visit_program_call(value, ctx)
 
-    @staticmethod
-    def _mesh_coordinate_text(value: Call, target: MeshCoord, ctx) -> str:
+    def _mesh_coordinate_text(self, value: Call, target: MeshCoord, ctx) -> str:
         """Render one coordinate through the active binding of its mesh."""
         axis = static_dim_value(value.args[0]) if value.args else None
         if axis is None or axis < 0 or axis >= len(target.mesh.layout.shape):
