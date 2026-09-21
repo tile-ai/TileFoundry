@@ -387,12 +387,10 @@ concrete arrangement is not reported: no address or per-value buffer identity
 is a conclusion of this analysis. `rmem` is not address-solved and reports only
 the largest single projected logical value.
 
-An access relation that retains a parameter with a stated finite range remains
-exact: it is neither widened nor unknown, and overlap MAY be proved from it.
-Widened relations and relations with an unbounded parameter MUST NOT prove
-overlap.
-
 - constraints:
+  - An access relation that keeps a parameter with a stated finite range is
+    exact and MAY prove overlap. A widened relation, and one with an unbounded
+    parameter, MUST NOT.
   - Placement MUST be settled for the addressable levels `gmem` and `smem` only,
     once per capacity domain that holds a buffer -- the whole target for a level
     owned target-wide, one per owning position otherwise -- with two buffers in
@@ -1223,19 +1221,18 @@ call site, source expressions shared by identity remain one shared expression
 in the clone; sharing never aliases the independently cloned body of another
 call site.
 
-A loop `start` or `extent` MAY depend on the unit running it when every runtime
-leaf carries a half-open value range. `Scope.domain` MUST retain the complete
-affine expression and represent each such leaf as one identity-deduplicated isl
-parameter constrained by that range. A leaf without a range MUST be rejected as
-runtime-computed. `step` MUST remain a literal: a parametric stride requires a
-product or modulus by two unknowns and has no isl Presburger representation.
-
-`cardinality` with bounded free parameters MUST enumerate every feasible integer
-point and return the true maximum when the parameter box contains at most 4096
-points; for a larger box it MUST return unknown. `Scope.trips()` MUST likewise
-fix child and parent domains to the same parameter point, divide their counts
-there, and then take the maximum ratio; dividing two independently maximized
-counts is not a valid trip bound.
+- constraints:
+  - A loop `start` or `extent` MAY be unit-dependent. Every runtime leaf in one
+    MUST carry a half-open value range, and `Scope.domain` MUST keep the whole
+    affine expression with each such leaf as one identity-deduplicated isl
+    parameter constrained by that range. A leaf without a range MUST be refused.
+  - A loop `step` MUST be a literal; a parametric stride has no isl
+    representation.
+  - `cardinality` MUST enumerate every feasible integer point of a parameter box
+    of at most `PARAM_POINT_LIMIT` points and return the maximum, and MUST
+    report unknown for a larger box.
+  - `Scope.trips()` MUST fix child and parent domains to the same parameter
+    point before dividing, and take the maximum of those ratios.
 
 ### 2.2 Target-selected Analyzers
 
