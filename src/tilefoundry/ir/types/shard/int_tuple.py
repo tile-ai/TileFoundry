@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Union, overload
 
-from tilefoundry.ir.types.shape_dim import ShapeDim
+from tilefoundry.ir.types.tensor_type import ShapeDim
 
 IntTuple = Union[int, tuple["IntTuple", ...]]
 

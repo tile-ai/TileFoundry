@@ -6,7 +6,13 @@ from typing import Union
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 
 from .dtype import DType
-from .shape_dim import ShapeDim
+
+type ShapeDim = "int | DimVar | Expr"
+"""A shape entry: static, symbolic, or expression-valued.
+
+The string forward reference keeps this module free of any import of core
+expressions; annotations never require evaluating it at runtime.
+"""
 
 
 def _canonicalize_static_dims(shape: tuple) -> tuple:

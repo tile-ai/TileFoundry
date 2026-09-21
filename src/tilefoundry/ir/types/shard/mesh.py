@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 
-from tilefoundry.ir.types.shape_dim import ShapeDim
 from tilefoundry.ir.types.shard.int_tuple import flatten
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
 from tilefoundry.ir.types.shard.layout_algebra import c_order_strides, unflatten
+from tilefoundry.ir.types.tensor_type import ShapeDim
 
 
 @dataclass(frozen=True)

@@ -12,7 +12,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import is_dim_expr
-from tilefoundry.ir.types.shape_dim import ShapeDim
+from tilefoundry.ir.types.tensor_type import ShapeDim
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,

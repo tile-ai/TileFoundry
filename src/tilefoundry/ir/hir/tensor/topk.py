@@ -30,7 +30,6 @@ from tilefoundry.ir.types.dim import (
     DimVar,
     is_dim_expr,
 )
-from tilefoundry.ir.types.shape_dim import ShapeDim
 from tilefoundry.ir.types.shard import Layout, try_c_order_strides
 from tilefoundry.ir.types.shard.shard_layout import (
     ShardLayout,
@@ -38,6 +37,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     layout_axis_to_tensor_axis,
     shard_layout_of,
 )
+from tilefoundry.ir.types.tensor_type import ShapeDim
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (

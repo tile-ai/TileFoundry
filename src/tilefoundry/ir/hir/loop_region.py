@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tilefoundry.ir.core import Expr, Var
-from tilefoundry.ir.types.shape_dim import ShapeDim
+from tilefoundry.ir.types.tensor_type import ShapeDim
 
 
 @dataclass(unsafe_hash=True)
