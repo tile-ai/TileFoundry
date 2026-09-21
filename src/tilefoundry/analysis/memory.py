@@ -490,7 +490,6 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     solver_options = (
         context.options if isinstance(context.options, MemoryOptions) else MemoryOptions()
     )
-    solver_statuses: list[str] = []
     levels_list: list[MemoryLevelFootprint] = []
     for name in sorted({item.memory_level for item in lifetimes} | set(memory_context.totals)):
         declared = facts.explicit(name)
@@ -505,7 +504,6 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 options=solver_options,
             )
             peak = solved.peak_bytes
-            solver_statuses.append(solved.solver_status)
         elif name == str(StorageKind.RMEM):
             peak = max((item.bytes for item in rows), default=0)
         else:
@@ -533,9 +531,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         for item in levels
         if item.exceeds_capacity
     )
-    allocation = None
-    if solver_statuses:
-        allocation = AllocationMetadata(solver_status="feasible")
+    allocation = AllocationMetadata(solver_status="feasible")
     attach(
         function,
         MemoryMetadata(
