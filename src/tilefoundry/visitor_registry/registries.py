@@ -83,11 +83,10 @@ register_cost_evaluator = cost_evaluator_registry.decorator()
 
 def register_typeinfer(cls: type) -> Callable[[Callable], Callable]:
     """Register one type rule, normalizing its result without affecting peers."""
+    from .contexts import TypeInferResults  # noqa: PLC0415
 
     def decorator(fn: Callable) -> Callable:
         def wrapped(*args, **kwargs):
-            from .contexts import TypeInferResults  # noqa: PLC0415
-
             result = fn(*args, **kwargs)
             return result if isinstance(result, TypeInferResults) else TypeInferResults(result)
 

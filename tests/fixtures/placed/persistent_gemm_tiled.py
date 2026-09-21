@@ -1,0 +1,69 @@
+"""Persistent GEMM with a two-dimensional rectangular CTA schedule."""
+
+from __future__ import annotations
+
+from tilefoundry import func, module
+from tilefoundry.dsl import Mesh, Tensor, tf
+from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
+from tilefoundry.ir.types.shard import Topology
+from tilefoundry.target import CudaTarget
+
+M = 32
+N = 32
+K = 16
+BM = 8
+BN = 8
+BK = 8
+BX = 2
+BY = 2
+CHUNK_M = M // BX
+CHUNK_N = N // BY
+
+
+@module(
+    entry="gemm",
+    target=CudaTarget("nvidia.h200_sxm"),
+    topologies=(Topology("cta", BX * BY),),
+)
+class PersistentGemmTiled:
+    """Each CTA owns one rectangle of output tiles."""
+
+    @func
+    def gemm(
+        a: Tensor[(M, K), "bf16"],
+        b: Tensor[(K, N), "bf16"],
+    ) -> Tensor[(M, N), "f32"]:
+        out = tf.zeros(Tensor[(M, N), "f32"])
+        with Mesh(("cta",), layout=(BX, BY), names=("x", "y")) as cta:
+            for mi in tile(cta.x * CHUNK_M, (cta.x + 1) * CHUNK_M, BM):
+                for ni in tile(cta.y * CHUNK_N, (cta.y + 1) * CHUNK_N, BN):
+                    acc = tf.zeros(Tensor[(BM, BN), "f32", (BM, BN), "rmem"])
+                    for ki in tile(K, BK):
+                        lhs = tf.reshard(a[mi, ki], (BM, BK), "smem")
+                        rhs = tf.reshard(b[ki, ni], (BK, BN), "smem")
+                        product = tf.cast(tf.matmul(lhs, rhs), dtype="f32")
+                        acc = acc + tf.reshard(product, (BM, BN), "rmem")
+                    out = tf.insert_slice(
+                        out,
+                        tf.reshard(acc, (BM, BN), "gmem"),
+                        (mi, ni),
+                    )
+            return out
+
+
+persistent_gemm_tiled = PersistentGemmTiled.entry_function()
+
+__all__ = [
+    "BK",
+    "BM",
+    "BN",
+    "BX",
+    "BY",
+    "CHUNK_M",
+    "CHUNK_N",
+    "K",
+    "M",
+    "N",
+    "PersistentGemmTiled",
+    "persistent_gemm_tiled",
+]

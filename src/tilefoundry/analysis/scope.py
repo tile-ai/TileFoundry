@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
@@ -19,7 +19,14 @@ from tilefoundry.ir.types.dim_isl import range_expr
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.ir.visitor import expr_children
-from tilefoundry.utils.isl_utils import count, has_unbounded_param, param_points
+from tilefoundry.utils.isl_utils import (
+    PARAM_POINT_LIMIT,
+    ParameterBoxTooLarge,
+    UnboundedParameterBox,
+    count,
+    has_unbounded_param,
+    param_points,
+)
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     access_relation_registry,
@@ -100,16 +107,28 @@ class Scope:
             return cached
         if self.parent is None:
             return 1
+        if isinstance(self.owner, LoopRegion):
+            start, extent, step = self.owner.start, self.owner.extent, self.owner.step
+            if all(isinstance(value, int) for value in (start, extent, step)):
+                result = 1 if step <= 0 or extent <= start else -(-(extent - start) // step)
+                self._trips_cache = result
+                return result
         domain = self.domain
         parent = self.parent.domain.align_params(domain.get_space())
         domain = domain.align_params(parent.get_space())
-        points = param_points(domain.params().intersect(parent.params()))
-        if points is None:
+        try:
+            points = param_points(domain.params().intersect(parent.params()))
+        except UnboundedParameterBox as error:
+            raise AnalysisError(
+                f"loop {_induction_of(self.owner)!r} has unbounded parameter "
+                f"{error.parameter!r}, so its trip count cannot be determined"
+            ) from error
+        except ParameterBoxTooLarge as error:
             raise AnalysisError(
                 f"loop {_induction_of(self.owner)!r} has a parameter box exceeding "
-                "the 4096-point analysis limit, so its trip count cannot be "
+                f"the {PARAM_POINT_LIMIT}-point analysis limit, so its trip count cannot be "
                 "determined"
-            )
+            ) from error
         ratios = []
         for point in points:
             amount = count(domain.intersect_params(point))
@@ -133,13 +152,19 @@ class Scope:
             access.relation.dim(isl.dim_type.IN) - self.depth,
         )
         relation = access.relation.intersect_domain(standing)
-        if has_unbounded_param(relation):
-            raise AnalysisError("scope access still has an unbound parameter")
-        points = param_points(relation.params())
-        if points is None:
+        try:
+            points = param_points(relation.params())
+        except UnboundedParameterBox as error:
+            label = value_label(access.buffer) or type(access.buffer).__name__
             raise AnalysisError(
-                "scope access parameter box exceeds the 4096-point analysis limit"
-            )
+                f"scope access to {label!r} still has unbound parameter "
+                f"{error.parameter!r}"
+            ) from error
+        except ParameterBoxTooLarge as error:
+            raise AnalysisError(
+                "scope access parameter box exceeds the "
+                f"{PARAM_POINT_LIMIT}-point analysis limit"
+            ) from error
         amounts = []
         for point in points:
             fixed = relation.intersect_params(point)
@@ -251,7 +276,7 @@ def _induction_of(loop: LoopRegion) -> str:
     return getattr(loop.induction_var, "name", None) or "<unnamed>"
 
 
-def _unbounded_loop_bound(loop: LoopRegion, which: str) -> None:
+def _reject_unbounded_bound(loop: LoopRegion, which: str) -> None:
     value = getattr(loop, which)
     if which == "extent":
         raise AnalysisError(
@@ -267,7 +292,7 @@ def _unbounded_loop_bound(loop: LoopRegion, which: str) -> None:
     )
 
 
-def _bound_or_param(
+def _render_bound(
     loop: LoopRegion,
     which: str,
     params: dict[str, tuple[int, int] | None],
@@ -287,9 +312,9 @@ def _bound_or_param(
             identities=identities,
         )
     except (TypeError, ValueError, NotImplementedError, isl.Error):
-        _unbounded_loop_bound(loop, which)
+        _reject_unbounded_bound(loop, which)
     if any(bound is None for bound in params.values()):
-        _unbounded_loop_bound(loop, which)
+        _reject_unbounded_bound(loop, which)
     return rendered
 
 
@@ -308,8 +333,8 @@ def _domain_for(owner: Function | LoopRegion, parent: Scope | None) -> isl.set:
     identities: dict[int, str] = {}
     bounds: list[str] = []
     for index, loop in enumerate(loops + [owner]):
-        start = _bound_or_param(loop, "start", params, param_map, identities)
-        stop = _bound_or_param(loop, "extent", params, param_map, identities)
+        start = _render_bound(loop, "start", params, param_map, identities)
+        stop = _render_bound(loop, "extent", params, param_map, identities)
         step = static_dim_value(loop.step)
         if step is None:
             raise AnalysisError(
@@ -331,46 +356,31 @@ def _domain_for(owner: Function | LoopRegion, parent: Scope | None) -> isl.set:
     return isl.set(f"{prefix}{{ [{names}] : {' and '.join(bounds)} }}")
 
 
-def _bind_access(
-    call: Call,
-    operand: Expr,
-    boundary,
-    scope: Scope,
-    ctx: TypeInferContext,
+def _bind_parameters(
+    relation: isl.map,
+    parameters: Mapping[str, object] | Sequence[tuple[str, object]],
+    loops: tuple[LoopRegion, ...],
+    held: object,
     *,
     narrow: bool,
-) -> Access | None:
-    relation = relation_of(boundary.pattern)
+) -> tuple[isl.map, AccessPrecision]:
+    """Bind one relation's stated parameters to literals or loop terms."""
     precision = AccessPrecision.EXACT
-    loops = []
-    cursor = scope
-    while cursor is not None:
-        if isinstance(cursor.owner, LoopRegion):
-            loops.append(cursor.owner)
-        cursor = cursor.parent
-    loops.reverse()
-    relation = relation.insert_dims(isl.dim_type.IN, 0, len(loops))
-    scope_domain = scope.domain.insert_dims(
-        isl.dim_type.SET, scope.depth, relation.dim(isl.dim_type.IN) - scope.depth
-    )
-    relation = relation.intersect_domain(scope_domain)
-    params = dict(getattr(boundary.pattern, "parameters", ()) or ())
-    for name in list(params):
+    for name, value in dict(parameters).items():
         param_index = relation.find_dim_by_name(isl.dim_type.PARAM, name)
         if param_index < 0:
             raise AnalysisError(
                 f"access pattern parameter {name!r} is missing from its relation"
             )
-        value = params[name]
         number = static_dim_value(value)
         if number is None:
             term = None
             try:
-                term = loop_affine_term(value, tuple(loops), narrow=narrow)
+                term = loop_affine_term(value, loops, narrow=narrow)
             except (TypeError, ValueError, NotImplementedError):
                 term = None
             if term is None:
-                term = _widest_allowed(relation, name, operand.type)
+                term = _widest_allowed(relation, name, held)
                 precision = AccessPrecision.WIDENED
             if term is None:
                 relation = relation.project_out(isl.dim_type.PARAM, param_index, 1)
@@ -398,6 +408,39 @@ def _bind_access(
             relation = relation.add_constraint(placed("inequality", 1, -term.low))
             relation = relation.add_constraint(placed("inequality", -1, term.high))
         relation = relation.project_out(isl.dim_type.PARAM, param_index, 1)
+    return relation, precision
+
+
+def _bind_access(
+    call: Call,
+    operand: Expr,
+    boundary,
+    scope: Scope,
+    ctx: TypeInferContext,
+    *,
+    narrow: bool,
+) -> Access | None:
+    relation = relation_of(boundary.pattern)
+    precision = AccessPrecision.EXACT
+    loops = []
+    cursor = scope
+    while cursor is not None:
+        if isinstance(cursor.owner, LoopRegion):
+            loops.append(cursor.owner)
+        cursor = cursor.parent
+    loops.reverse()
+    relation = relation.insert_dims(isl.dim_type.IN, 0, len(loops))
+    scope_domain = scope.domain.insert_dims(
+        isl.dim_type.SET, scope.depth, relation.dim(isl.dim_type.IN) - scope.depth
+    )
+    relation = relation.intersect_domain(scope_domain)
+    relation, precision = _bind_parameters(
+        relation,
+        getattr(boundary.pattern, "parameters", ()) or (),
+        tuple(loops),
+        operand.type,
+        narrow=narrow,
+    )
     try:
         held = local_type_of(operand.type) if narrow else operand.type
     except (TypeError, ValueError, NotImplementedError):
@@ -409,6 +452,15 @@ def _bind_access(
         folded = renaming_relation(operand, ctx, stated=scope.stated_relations(operand, ctx))
         relation = relation.apply_range(relation_of(folded))
         operand = operand.args[0]
+        relation, folded_precision = _bind_parameters(
+            relation,
+            folded.parameters,
+            tuple(loops),
+            operand.type,
+            narrow=narrow,
+        )
+        if folded_precision is AccessPrecision.WIDENED:
+            precision = AccessPrecision.WIDENED
     if precision is AccessPrecision.EXACT and has_unbounded_param(relation):
         precision = AccessPrecision.UNKNOWN
     return Access(relation, operand, precision)

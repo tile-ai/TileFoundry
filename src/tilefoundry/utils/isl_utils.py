@@ -13,10 +13,33 @@ __all__ = [
     "equates",
     "has_unbounded_param",
     "involved_dims",
+    "PARAM_POINT_LIMIT",
+    "ParameterBoxError",
+    "ParameterBoxTooLarge",
+    "UnboundedParameterBox",
     "param_points",
 ]
 
-_PARAM_POINT_LIMIT = 4096
+PARAM_POINT_LIMIT = 4096
+
+
+class ParameterBoxError(ValueError):
+    """A parameter box cannot be enumerated exactly."""
+
+
+class UnboundedParameterBox(ParameterBoxError):
+    """A named parameter has no finite integer bounds."""
+
+    def __init__(self, parameter: str | None) -> None:
+        self.parameter = parameter
+        super().__init__(f"parameter {parameter!r} is unbounded")
+
+
+class ParameterBoxTooLarge(ParameterBoxError):
+    """A parameter box exceeds the exact-enumeration limit."""
+
+    def __init__(self) -> None:
+        super().__init__(f"parameter box exceeds {PARAM_POINT_LIMIT} points")
 
 
 def count(image: "isl.set") -> int | None:
@@ -37,8 +60,13 @@ def count(image: "isl.set") -> int | None:
     return amount.get_num_si() if amount.is_int() else None
 
 
-def param_points(image: "isl.set") -> tuple["isl.set", ...] | None:
-    """Fix parameters to every feasible point of a small bounded integer box."""
+def param_points(image: "isl.set") -> tuple["isl.set", ...]:
+    """Return sets fixing parameters to each feasible point of a small box.
+
+    Raises :class:`UnboundedParameterBox` when an axis has no finite integer
+    bounds and :class:`ParameterBoxTooLarge` when exact enumeration would
+    exceed :data:`PARAM_POINT_LIMIT`.
+    """
     context = image.params()
     param_count = context.dim(isl.dim_type.PARAM)
     if not param_count:
@@ -54,16 +82,16 @@ def param_points(image: "isl.set") -> tuple["isl.set", ...] | None:
     box_points = 1
     for axis in range(param_count):
         if not axes.dim_is_bounded(isl.dim_type.SET, axis):
-            return None
+            raise UnboundedParameterBox(axes.get_dim_name(isl.dim_type.SET, axis))
         low = axes.dim_min_val(axis)
         high = axes.dim_max_val(axis)
         if not (low.is_int() and high.is_int()):
-            return None
+            raise UnboundedParameterBox(axes.get_dim_name(isl.dim_type.SET, axis))
         lo, hi = low.get_num_si(), high.get_num_si()
         choices = range(lo, hi + 1)
         box_points *= len(choices)
-        if box_points > _PARAM_POINT_LIMIT:
-            return None
+        if box_points > PARAM_POINT_LIMIT:
+            raise ParameterBoxTooLarge
         values.append(choices)
     points = []
     for point in product(*values):
@@ -86,8 +114,9 @@ def cardinality(image: "isl.set") -> int | None:
     """
     if not image.dim(isl.dim_type.PARAM):
         return count(image)
-    points = param_points(image)
-    if points is None:
+    try:
+        points = param_points(image)
+    except ParameterBoxError:
         return None
     counts = tuple(count(image.intersect_params(point)) for point in points)
     if any(amount is None for amount in counts):

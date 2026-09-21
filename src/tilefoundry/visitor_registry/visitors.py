@@ -92,13 +92,18 @@ class TypeInferVisitor(ExprVisitor[Type]):
             if self._owns_body:
                 expr.type = result
             if self._ranges and not cached:
-                if results.value_range is None:
-                    detach_metadata(expr, RangeMetadata)
-                else:
-                    attach_metadata(expr, RangeMetadata(*results.value_range))
+                self._record_range(expr, results)
             return result
         finally:
             self._visit_depth -= 1
+
+    @staticmethod
+    def _record_range(expr: Expr, results: TypeInferResults) -> None:
+        """Replace one expression's derived range with this inference result."""
+        if results.value_range is None:
+            detach_metadata(expr, RangeMetadata)
+        else:
+            attach_metadata(expr, RangeMetadata(*results.value_range))
 
     def visit_leaf_Var(self, var: Var, _operands, ctx: TypeInferContext) -> Type:
         return var.annotation

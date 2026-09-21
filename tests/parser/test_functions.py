@@ -214,7 +214,11 @@ def test_every_parsed_call_knows_where_it_came_from(source: Path) -> None:
     ("iterator", "expected"),
     (
         ("tile(10)", "tile(extent) is not supported; use range(extent)"),
-        ("tile(1, 2, 3)", "tile() takes 2 arguments (extent, step), got 3"),
+        (
+            "tile(1, 2, 3, 4)",
+            "tile() takes 2 or 3 arguments, (stop, step) or "
+            "(start, stop, step), got 4",
+        ),
         ("range(1, 2, 3, 4)", "range() takes 1 to 3 arguments, got 4"),
         ("steps(1, 2)", "loop iterator must be tile(...) or range(...)"),
     ),
@@ -235,12 +239,12 @@ def test_a_loop_iterator_states_why_its_arity_is_invalid(iterator: str, expected
                     out = tf.add(x[row, :], seed)
                 return out
 
-        elif iterator == "tile(1, 2, 3)":
+        elif iterator == "tile(1, 2, 3, 4)":
 
             @func
             def looping(x: Tensor[(10, 4), "f32"], seed: Tensor[(4, 4), "f32"]):
                 out = tf.add(seed, seed)
-                for row in tile(1, 2, 3):  # noqa: F821
+                for row in tile(1, 2, 3, 4):  # noqa: F821
                     out = tf.add(x[row, :], seed)
                 return out
 

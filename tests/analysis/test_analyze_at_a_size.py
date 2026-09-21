@@ -137,10 +137,20 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 16_384,
     },
     "performance_findings.LocalTier.kernel[static]": {"gmem": 68_096, "rmem": 512},
+    "persistent_gemm_flat.PersistentGemmFlat.gemm[static]": {
+        "gmem": 10_496,
+        "rmem": 256,
+        "smem": 384,
+    },
+    "persistent_gemm_tiled.PersistentGemmTiled.gemm[static]": {
+        "gmem": 10_496,
+        "rmem": 256,
+        "smem": 384,
+    },
     "prefill_decode_attention.PrefillDecodeAttention.attend[ctx=128,seq=128]": {
         "gmem": 1_310_720,
         "rmem": 0,
-        "smem": 245_760,
+        "smem": 229_376,
     },
     "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]": {
         "gmem": 145_933_316,

@@ -123,24 +123,7 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             return f"ceildiv({self.dim_entry(left, ctx)}, {self.dim_entry(right, ctx)})"
         target = value.target
         if isinstance(target, MeshCoord):
-            axis = static_dim_value(value.args[0]) if value.args else None
-            if axis is None or axis < 0 or axis >= len(target.mesh.layout.shape):
-                raise ValueError("MeshCoord requires a literal in-range axis to print")
-            if ctx is None:
-                raise ValueError("MeshCoord requires an active mesh binding to print")
-            ref = ctx.mesh_axis_alias(target.mesh, axis)
-            if ref is not None:
-                return ref
-            alias = ctx.mesh_alias(target.mesh)
-            if alias is None:
-                raise ValueError("MeshCoord mesh has no active binding to print")
-            if axis < len(target.mesh.names):
-                axis_name = target.mesh.names[axis]
-            elif axis < 3:
-                axis_name = ("x", "y", "z")[axis]
-            else:
-                raise ValueError("unnamed MeshCoord axes above z cannot be printed")
-            return f"{alias}.{axis_name}"
+            return self._mesh_coordinate_text(value, target, ctx)
         if isinstance(target, DimConst):
             return str(target.value)
         for op_type, symbol in _DIM_INFIX_OPS.items():
@@ -156,6 +139,28 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
                 args = ", ".join(self.dim_entry(arg, ctx) for arg in value.args)
                 return f"{name}({args})"
         return self.visit_program_call(value, ctx)
+
+    @staticmethod
+    def _mesh_coordinate_text(value: Call, target: MeshCoord, ctx) -> str:
+        """Render one coordinate through the active binding of its mesh."""
+        axis = static_dim_value(value.args[0]) if value.args else None
+        if axis is None or axis < 0 or axis >= len(target.mesh.layout.shape):
+            raise ValueError("MeshCoord requires a literal in-range axis to print")
+        if ctx is None:
+            raise ValueError("MeshCoord requires an active mesh binding to print")
+        ref = ctx.mesh_axis_alias(target.mesh, axis)
+        if ref is not None:
+            return ref
+        alias = ctx.mesh_alias(target.mesh)
+        if alias is None:
+            raise ValueError("MeshCoord mesh has no active binding to print")
+        if axis < len(target.mesh.names):
+            axis_name = target.mesh.names[axis]
+        elif axis < 3:
+            axis_name = ("x", "y", "z")[axis]
+        else:
+            raise ValueError("unnamed MeshCoord axes above z cannot be printed")
+        return f"{alias}.{axis_name}"
 
     def visit_program_call(self, value: Call, ctx=None) -> str:
         raise NotImplementedError(f"{type(self).__name__} cannot render program calls")

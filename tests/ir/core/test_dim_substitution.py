@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 
+from tests.fixtures.placed.persistent_gemm_tiled import PersistentGemmTiled
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
 from tilefoundry.ir.types.substitute import (
     DimSubstitutionError,
     dim_vars_in,
@@ -41,6 +43,14 @@ def test_an_unbound_dimension_stays_a_range() -> None:
     assert bound.shape == (1, 1, CTX, 128)
     assert dim_vars_in(bound) == ("ctx_len",)
     assert has_symbolic_dims(bound)
+
+
+def test_only_dim_vars_make_dimension_arithmetic_symbolic() -> None:
+    outer = PersistentGemmTiled.entry_function().body.body
+    assert isinstance(outer, LoopRegion)
+
+    assert not has_symbolic_dims(outer.start)
+    assert has_symbolic_dims(simplify_dim(DimMul, (64, CTX)))
 
 
 def test_arithmetic_over_a_bound_dimension_folds_to_its_value() -> None:

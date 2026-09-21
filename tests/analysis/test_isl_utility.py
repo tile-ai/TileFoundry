@@ -5,7 +5,11 @@ from __future__ import annotations
 import isl
 import pytest
 
+from tests.fixtures.placed.persistent_gemm_tiled import BX, PersistentGemmTiled
+from tilefoundry.ir.core import RangeMetadata, attach_metadata
 from tilefoundry.ir.core.expr import Call, Var
+from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import (
     DimAdd,
@@ -19,6 +23,7 @@ from tilefoundry.ir.types.dim import (
     simplify_dim,
 )
 from tilefoundry.ir.types.dim_isl import dim_range, normalize_dim, to_dim, to_domain
+from tilefoundry.utils.isl_utils import cardinality
 
 P = DimVar("P", 2048, 1_048_577)
 Q = DimVar("Q", 2, 33)
@@ -118,6 +123,35 @@ def test_dim_range_symbolic_divisor_unsupported():
         dim_range(simplify_dim(DimFloorDiv, (P, n)))
     with pytest.raises(NotImplementedError, match="symbolic divisor"):
         dim_range(simplify_dim(DimMod, (P, n)))
+
+
+def test_dim_range_prefers_metadata_and_unknown_leaves_return_none():
+    unknown = Var(type=TensorType.umat_scalar(), name="runtime")
+    assert dim_range(unknown) is None
+
+    attach_metadata(unknown, RangeMetadata(3, 11))
+    assert dim_range(unknown) == (3, 11)
+
+    outer = PersistentGemmTiled.entry_function().body.body
+    assert isinstance(outer, LoopRegion)
+
+    def calls(value):
+        if not isinstance(value, Call):
+            return ()
+        return (value, *(nested for arg in value.args for nested in calls(arg)))
+
+    coordinate = next(call for call in calls(outer.start) if isinstance(call.target, MeshCoord))
+    assert dim_range(coordinate) == (0, BX)
+
+
+def test_cardinality_maximizes_small_parameter_boxes_exactly():
+    interior_maximum = isl.set(
+        "[c] -> { [p] : 0 <= c <= 8 and 0 <= p and p < c and p < 8 - c }"
+    )
+    too_large = isl.set("[x, y] -> { [p] : 0 <= x < 132 and 0 <= y < 132 and p = x + y }")
+
+    assert cardinality(interior_maximum) == 4
+    assert cardinality(too_large) is None
 
 
 def test_to_domain_encoding():
