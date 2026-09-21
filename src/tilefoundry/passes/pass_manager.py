@@ -53,7 +53,7 @@ class PassManager:
             if prev_by_name.get(fn.name) is fn:
                 continue
             if isinstance(fn, HirFunction):
-                verify_hir_function(fn, module=curr)
+                verify_hir_function(fn)
                 inference_type(
                     fn,
                     TypeInferContext(scope=FunctionScope(curr, fn)),

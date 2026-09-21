@@ -75,6 +75,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
 
     def visit(self, expr: Expr, ctx: TypeInferContext) -> Type:
         """Derive one type while preserving the active execution domain."""
+        cached = id(expr) in self._memo
         outermost = self._visit_depth == 0
         if outermost:
             if self._memo_supplied:
@@ -90,7 +91,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
             self._memo[id(expr)] = (expr, result)
             if self._owns_body:
                 expr.type = result
-            if self._ranges:
+            if self._ranges and not cached:
                 if results.value_range is None:
                     detach_metadata(expr, RangeMetadata)
                 else:

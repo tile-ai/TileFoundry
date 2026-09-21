@@ -55,19 +55,18 @@ def _bind_param(
             )
     else:
         stored = get_metadata(value, RangeMetadata) if isinstance(value, Expr) else None
-        if stored is None and identities is None:
+        if identities is None:
             raise TypeError(f"unsupported ShapeDim {type(value).__name__}")
         key = id(value)
-        known = identities.get(key) if identities is not None else None
+        known = identities.get(key)
         if known is not None:
             return known
-        index = len(identities) if identities is not None else len(params)
+        index = len(identities)
         name = f"__tf_runtime_{index}"
         while name in params:
             index += 1
             name = f"__tf_runtime_{index}"
-        if identities is not None:
-            identities[key] = name
+        identities[key] = name
         bound = (stored.lo, stored.hi) if stored is not None else None
 
     params[name] = bound
@@ -327,7 +326,11 @@ def dim_range(dim) -> tuple[int, int] | None:
 
 
 def to_domain(extents: tuple) -> tuple:
-    """Build a bounded iteration domain and its isl-parameter ShapeDim map."""
+    """Build an iteration domain and its isl-parameter ShapeDim map.
+
+    A ``Call`` without a value range becomes an unconstrained parameter. Consumers
+    that require a bounded domain must reject that parameter explicitly.
+    """
     param_map: dict[str, object] = {}
     bounds: dict[str, tuple[int, int] | None] = {}
     seen: dict = {}
