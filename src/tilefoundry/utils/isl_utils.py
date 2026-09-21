@@ -39,19 +39,19 @@ def count(image: "isl.set") -> int | None:
 def param_points(image: "isl.set") -> tuple["isl.set", ...] | None:
     """Fix parameters to every feasible point of a small bounded integer box."""
     context = image.params()
-    count = context.dim(isl.dim_type.PARAM)
-    if not count:
+    param_count = context.dim(isl.dim_type.PARAM)
+    if not param_count:
         return (context,)
     axes = context.move_dims(
         isl.dim_type.SET,
         0,
         isl.dim_type.PARAM,
         0,
-        count,
+        param_count,
     )
     values: list[range] = []
     box_points = 1
-    for axis in range(count):
+    for axis in range(param_count):
         if not axes.dim_is_bounded(isl.dim_type.SET, axis):
             return None
         low = axes.dim_min_val(axis)

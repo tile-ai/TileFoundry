@@ -95,8 +95,14 @@ class Scope:
         parent = self.parent.domain.align_params(domain.get_space())
         domain = domain.align_params(parent.get_space())
         points = param_points(domain.params().intersect(parent.params()))
+        if points is None:
+            raise AnalysisError(
+                f"loop {_induction_of(self.owner)!r} has a parameter box exceeding "
+                "the 4096-point analysis limit, so its trip count cannot be "
+                "determined"
+            )
         ratios = []
-        for point in points or ():
+        for point in points:
             amount = count(domain.intersect_params(point))
             parent_count = count(parent.intersect_params(point))
             if amount is None or not parent_count:
