@@ -1218,6 +1218,19 @@ call site, source expressions shared by identity remain one shared expression
 in the clone; sharing never aliases the independently cloned body of another
 call site.
 
+A loop `start` or `extent` MAY depend on the unit running it when every runtime
+leaf carries a half-open value range. `Scope.domain` MUST retain the complete
+affine expression and represent each such leaf as one identity-deduplicated isl
+parameter constrained by that range. A leaf without a range MUST be rejected as
+runtime-computed. `step` MUST remain a literal: a parametric stride requires a
+product or modulus by two unknowns and has no isl Presburger representation.
+
+`cardinality` with bounded free parameters is a conservative upper bound: it
+counts every feasible corner of the parameter box and returns the maximum.
+`Scope.trips()` MUST instead fix child and parent domains to the same corner,
+divide their counts there, and then take the maximum ratio; dividing two
+independently maximized counts is not a valid trip bound.
+
 ### 2.2 Target-selected Analyzers
 
 ```python

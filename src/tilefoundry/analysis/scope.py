@@ -14,11 +14,11 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.dim_isl import _range_expr
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.ir.visitor import expr_children
-from tilefoundry.utils.isl_utils import cardinality
+from tilefoundry.utils.isl_utils import _count, _param_corners, cardinality
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     access_relation_registry,
@@ -91,17 +91,18 @@ class Scope:
             return cached
         if self.parent is None:
             return 1
-        if isinstance(self.owner, LoopRegion):
-            start, extent, step = self.owner.start, self.owner.extent, self.owner.step
-            if all(isinstance(value, int) for value in (start, extent, step)):
-                result = 1 if step <= 0 or extent <= start else -(-(extent - start) // step)
-                self._trips_cache = result
-                return result
-        count = cardinality(self.domain)
-        parent_count = cardinality(self.parent.domain)
-        if count is None or not parent_count:
-            return 1
-        result = max(1, count // parent_count)
+        domain = self.domain
+        parent = self.parent.domain.align_params(domain.get_space())
+        domain = domain.align_params(parent.get_space())
+        corners = _param_corners(domain.params().intersect(parent.params()))
+        ratios = []
+        for corner in corners or ():
+            count = _count(domain.intersect_params(corner))
+            parent_count = _count(parent.intersect_params(corner))
+            if count is None or not parent_count:
+                continue
+            ratios.append(max(1, count // parent_count))
+        result = max(ratios, default=1)
         self._trips_cache = result
         return result
 
@@ -222,6 +223,48 @@ def _induction_of(loop: LoopRegion) -> str:
     return getattr(loop.induction_var, "name", None) or "<unnamed>"
 
 
+def _unbounded_loop_bound(loop: LoopRegion, which: str) -> None:
+    value = getattr(loop, which)
+    if which == "extent":
+        raise AnalysisError(
+            f"loop {_induction_of(loop)!r} has a trip count the program computes "
+            f"at run time from {value_label(value) or 'a value'!r}, so no "
+            f"per-occurrence total can be scaled by it; bind the extent to a "
+            f"literal, or state it as an open dimension"
+        )
+    raise AnalysisError(
+        f"loop {_induction_of(loop)!r} takes its {which} from "
+        f"{value_label(value) or 'a value'!r}, which the program computes at run time; "
+        f"analysis needs a literal {which} or a stated value range"
+    )
+
+
+def _bound_or_param(
+    loop: LoopRegion,
+    which: str,
+    params: dict[str, tuple[int, int] | None],
+    param_map: dict[str, object],
+    identities: dict[int, str],
+) -> str:
+    """Render one start/extent from bounded leaves, or reject an unknown value."""
+    value = getattr(loop, which)
+    number = static_dim_value(value)
+    if number is not None:
+        return str(number)
+    try:
+        rendered = _range_expr(
+            value,
+            params,
+            param_map=param_map,
+            identities=identities,
+        )
+    except (TypeError, ValueError, NotImplementedError, isl.Error):
+        _unbounded_loop_bound(loop, which)
+    if any(bound is None for bound in params.values()):
+        _unbounded_loop_bound(loop, which)
+    return rendered
+
+
 def _domain_for(owner: Function | LoopRegion, parent: Scope | None) -> isl.set:
     if isinstance(owner, Function):
         return isl.set("{ [] }")
@@ -232,38 +275,26 @@ def _domain_for(owner: Function | LoopRegion, parent: Scope | None) -> isl.set:
             loops.append(cursor.owner)
         cursor = cursor.parent
     loops.reverse()
-    params: dict[str, DimVar] = {}
+    params: dict[str, tuple[int, int] | None] = {}
+    param_map: dict[str, object] = {}
+    identities: dict[int, str] = {}
     bounds: list[str] = []
     for index, loop in enumerate(loops + [owner]):
-        start = static_dim_value(loop.start)
+        start = _bound_or_param(loop, "start", params, param_map, identities)
+        stop = _bound_or_param(loop, "extent", params, param_map, identities)
         step = static_dim_value(loop.step)
-        if start is None or step is None:
-            which = "start" if start is None else "step"
-            culprit = value_label(loop.start if start is None else loop.step)
+        if step is None:
             raise AnalysisError(
-                f"loop {_induction_of(loop)!r} takes its {which} from "
-                f"{culprit or 'a value'!r}, which the program computes at run time; "
-                f"analysis needs a literal {which}"
+                f"loop {_induction_of(loop)!r} takes its step from "
+                f"{value_label(loop.step) or 'a value'!r}; analysis needs a literal "
+                "step, because a parametric stride has no isl representation"
             )
-        extent = loop.extent
-        if isinstance(extent, DimVar):
-            params[extent.name] = extent
-            stop = extent.name
-        else:
-            value = static_dim_value(extent)
-            if value is None:
-                raise AnalysisError(
-                    f"loop {_induction_of(loop)!r} has a trip count the program computes "
-                    f"at run time from {value_label(extent) or 'a value'!r}, so no "
-                    f"per-occurrence total can be scaled by it; bind the extent to a "
-                    f"literal, or state it as an open dimension"
-                )
-            stop = str(value)
         bounds.append(f"{start} <= p{index} < {stop}")
         if step != 1:
             bounds.append(f"(p{index} - {start}) mod {step} = 0")
-    for name, dim in params.items():
-        bounds.append(f"{dim.lo} <= {name} < {dim.hi}")
+    for name, bound in params.items():
+        assert bound is not None
+        bounds.append(f"{bound[0]} <= {name} < {bound[1]}")
     names = ", ".join(f"p{index}" for index in range(len(loops) + 1))
     prefix = f"[{', '.join(params)}] -> " if params else ""
     return isl.set(f"{prefix}{{ [{names}] : {' and '.join(bounds)} }}")

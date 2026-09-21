@@ -75,13 +75,13 @@ class TypeInferVisitor(ExprVisitor[Type]):
 
     def visit(self, expr: Expr, ctx: TypeInferContext) -> Type:
         """Derive one type while preserving the active execution domain."""
-        cached = id(expr) in self._memo
         outermost = self._visit_depth == 0
         if outermost:
             if self._memo_supplied:
                 ctx = replace(ctx, memo=self._memo)
             else:
                 self._memo = ctx.memo
+        cached = id(expr) in self._memo
         self._visit_depth += 1
         try:
             results = super().visit(expr, ctx)

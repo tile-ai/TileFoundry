@@ -2,34 +2,80 @@
 
 from __future__ import annotations
 
+from itertools import product
+
 import isl
 
 __all__ = ["as_multi_aff", "cardinality", "equates", "involved_dims"]
 
 
-def cardinality(image: "isl.set") -> int | None:
-    """How many points *image* holds, or None when that is not a finite number.
-
-    A box is counted from its bounds: every axis is an independent bounded
-    interval, so their lengths multiply, at a cost set by rank alone. ISL's own
-    count has a closed form for simple sets and loses it as rank grows: on one
-    462M-point image, 4.0 ms at two dimensions and 2.3 s at four. The cost
-    tracks rank, not points. Anything that is not a box falls back to it.
-    """
+def _count(image: "isl.set") -> int | None:
+    """Count *image* after every parameter has been fixed by its caller."""
     image = image.coalesce()
     if image.is_box():
-        product = 1
+        amount = 1
         for axis in range(image.tuple_dim()):
             if not image.dim_is_bounded(isl.dim_type.SET, axis):
                 break
             low, high = image.dim_min_val(axis), image.dim_max_val(axis)
             if not (low.is_int() and high.is_int()):
                 break
-            product *= high.get_num_si() - low.get_num_si() + 1
+            amount *= high.get_num_si() - low.get_num_si() + 1
         else:
-            return product
+            return amount
     amount = image.count_val()
     return amount.get_num_si() if amount.is_int() else None
+
+
+def _param_corners(image: "isl.set") -> tuple["isl.set", ...] | None:
+    """Fix every parameter to each feasible corner of its bounded box."""
+    context = image.params()
+    count = context.dim(isl.dim_type.PARAM)
+    if not count:
+        return (context,)
+    axes = context.move_dims(
+        isl.dim_type.SET,
+        0,
+        isl.dim_type.PARAM,
+        0,
+        count,
+    )
+    values: list[tuple[int, ...]] = []
+    for axis in range(count):
+        if not axes.dim_is_bounded(isl.dim_type.SET, axis):
+            return None
+        low = axes.dim_min_val(axis)
+        high = axes.dim_max_val(axis)
+        if not (low.is_int() and high.is_int()):
+            return None
+        lo, hi = low.get_num_si(), high.get_num_si()
+        values.append((lo,) if lo == hi else (lo, hi))
+    corners = []
+    for point in product(*values):
+        corner = context
+        for axis, value in enumerate(point):
+            corner = corner.fix_si(isl.dim_type.PARAM, axis, value)
+        if not corner.is_empty():
+            corners.append(corner)
+    return tuple(corners)
+
+
+def cardinality(image: "isl.set") -> int | None:
+    """Return a finite point count, or a corner-wise upper bound with params.
+
+    A box is counted from its bounds: every axis is an independent bounded
+    interval, so their lengths multiply, at a cost set by rank alone. ISL's own
+    count has a closed form for simple sets and loses it as rank grows: on one
+    462M-point image, 4.0 ms at two dimensions and 2.3 s at four. The cost
+    tracks rank, not points. Anything that is not a box falls back to it. When
+    bounded parameters remain free, each feasible box corner is counted and the
+    maximum is returned; an unbounded parameter has no finite answer.
+    """
+    corners = _param_corners(image)
+    if corners is None:
+        return None
+    counts = tuple(_count(image.intersect_params(corner)) for corner in corners)
+    return None if not counts or any(count is None for count in counts) else max(counts)
 
 
 def equates(relation: "isl.map", out_axis: int, in_dim: int) -> bool:
