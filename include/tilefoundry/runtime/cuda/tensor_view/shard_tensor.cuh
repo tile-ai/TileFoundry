@@ -41,6 +41,19 @@ template <class T>
 concept ShardTensorLike =
     detail::is_shard_tensor<cute::remove_cvref_t<T>>::value;
 
+/// Whether a shard layout states a non-affine mapping in front of its layout.
+///
+/// A swizzle is one: ``cute::ComposedLayout<Swizzle<B,M,S>, Offset, Layout>``
+/// permutes the index the layout produces. ``local_tensor`` keeps that
+/// function and folds the instance's origin into the composition's offset,
+/// because the function runs on the whole tensor's index: advancing the
+/// engine pointer would run it on a slice-relative one and hand two
+/// instances one address. The whole-tensor shortcut is wrong for the same
+/// reason -- it returns the backing engine, whose layout states no function.
+template <class SL>
+inline constexpr bool shard_layout_is_composed_v =
+    cute::is_composed_layout<typename SL::layout>::value;
+
 /// ``t`` as the tensor this instance holds, in CuTe's ``local_tile`` /
 /// ``local_partition`` sense: a ShardTensor projected to its own slice, and
 /// anything the mesh never spread already whole. An op takes both -- an
@@ -55,7 +68,9 @@ template <class T> CUTE_HOST_DEVICE decltype(auto) local_tensor(T &&t) {
     if constexpr (!detail::is_shard_tensor<t_t>::value) {
         return std::forward<T>(t);
     } else if constexpr (detail::shard_layout_is_full_broadcast<
-                             typename t_t::shard_layout_type>()) {
+                             typename t_t::shard_layout_type>() &&
+                         !shard_layout_is_composed_v<
+                             typename t_t::shard_layout_type>) {
         return t.engine;
     } else {
         auto const [loc_layout, off] = detail::local_layout_and_offset(
@@ -65,7 +80,16 @@ template <class T> CUTE_HOST_DEVICE decltype(auto) local_tensor(T &&t) {
         auto &engine_mut = const_cast<typename std::remove_const<
             typename std::remove_reference<decltype(t.engine)>::type>::type &>(
             t.engine);
-        return cute::make_tensor(engine_mut.data() + off, loc_layout);
+        if constexpr (shard_layout_is_composed_v<
+                          typename t_t::shard_layout_type>) {
+            auto const &whole = t.shard_layout.layout_value;
+            return cute::make_tensor(
+                engine_mut.data(),
+                cute::make_composed_layout(whole.layout_a(),
+                                           whole.offset() + off, loc_layout));
+        } else {
+            return cute::make_tensor(engine_mut.data() + off, loc_layout);
+        }
     }
 }
 

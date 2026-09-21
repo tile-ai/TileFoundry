@@ -23,24 +23,87 @@ class Layout(LayoutBase):
 
 
 @dataclass(frozen=True)
+class Swizzle:
+    """CuTe ``Swizzle<B,M,S>``: the XOR offset functor, not a layout.
+
+    It states a permutation of an *index*, so it has no domain shape of its
+    own and is not a ``LayoutBase``. The domain comes from the
+    ``ComposedLayout`` that carries it in ``inner``.
+
+    ``bits`` is CuTe's ``BBits`` (how many bits are XORed), ``base`` its
+    ``MBase`` (how many low bits are left alone) and ``shift`` its ``SShift``
+    (the signed distance from the source mask to the target mask).
+
+    See [shard §4.1](docs/spec/shard.md#41-swizzle).
+    """
+
+    bits: int
+    base: int
+    shift: int
+
+    def __post_init__(self) -> None:
+        for name in ("bits", "base", "shift"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError(f"Swizzle {name} must be an int, got {value!r}")
+        if self.bits < 0:
+            raise ValueError(f"Swizzle bits must be non-negative, got {self.bits}")
+        if self.base < 0:
+            raise ValueError(f"Swizzle base must be non-negative, got {self.base}")
+        if abs(self.shift) < self.bits:
+            raise ValueError(
+                f"abs(Swizzle shift) must be >= bits, got shift={self.shift}, "
+                f"bits={self.bits}"
+            )
+
+    @property
+    def bit_mask(self) -> int:
+        """CuTe ``bit_msk``: the ``bits`` low bits."""
+        return (1 << self.bits) - 1
+
+    @property
+    def yyy_mask(self) -> int:
+        """CuTe ``yyy_msk``: the bits read out of the index."""
+        return self.bit_mask << (self.base + max(0, self.shift))
+
+    @property
+    def zzz_mask(self) -> int:
+        """CuTe ``zzz_msk``: the bits XORed in the index."""
+        return self.bit_mask << (self.base - min(0, self.shift))
+
+    @property
+    def swizzle_code(self) -> int:
+        """CuTe ``swizzle_code``: every bit this swizzle touches."""
+        return self.yyy_mask | self.zzz_mask
+
+    def __call__(self, offset: int) -> int:
+        """``offset ^ shiftr(offset & yyy_msk, msk_sft)`` (CuTe ``apply``)."""
+        selected = offset & self.yyy_mask
+        moved = selected >> self.shift if self.shift >= 0 else selected << -self.shift
+        return offset ^ moved
+
+
+@dataclass(frozen=True)
 class ComposedLayout(LayoutBase):
     """Represent ``image(c) = inner(offset + outer(c))``.
 
     ``outer`` defines the domain shape and axis numbering; ``None`` means an
-    identity component. Either component may retain a nested ``ShardLayout``.
-    Inversion applies the component inverses in reverse order.
+    identity component. ``outer`` and a ``LayoutBase`` ``inner`` may retain a
+    nested ``ShardLayout``. Inversion applies the component inverses in reverse
+    order. ``inner`` may also be a :class:`Swizzle`, which states a
+    non-affine permutation of the index and carries no domain of its own.
 
     See [shard §4](docs/spec/shard.md#4-composedlayout).
     """
 
-    inner: LayoutBase | None
+    inner: "LayoutBase | Swizzle | None"
     offset: int
     outer: LayoutBase | None
 
     @property
     def shape(self) -> tuple:
         domain = self.outer if self.outer is not None else self.inner
-        if domain is None:
+        if domain is None or isinstance(domain, Swizzle):
             return ()
         return domain.shape
 
@@ -48,4 +111,4 @@ class ComposedLayout(LayoutBase):
 EMPTY_LAYOUT = Layout(shape=(), strides=())
 
 
-__all__ = ["LayoutBase", "Layout", "ComposedLayout", "EMPTY_LAYOUT"]
+__all__ = ["LayoutBase", "Layout", "Swizzle", "ComposedLayout", "EMPTY_LAYOUT"]

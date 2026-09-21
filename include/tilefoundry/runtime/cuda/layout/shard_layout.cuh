@@ -151,6 +151,23 @@ CUTE_HOST_DEVICE constexpr int shard_inner() {
             cute::tuple_size<shard_mesh_flat_t<SL>>::value>{});
 }
 
+/// The part of a layout that carries strides.
+///
+/// A swizzled layout is a ``cute::ComposedLayout`` whose first component is a
+/// function rather than a stride rule, so CuTe deletes ``stride()`` on it
+/// (layout_composed.hpp). Every reader of a step reads it off the layout
+/// underneath; the function is put back when the tensor is projected.
+template <class L>
+CUTE_HOST_DEVICE constexpr L const &affine_portion(L const &layout) {
+    return layout;
+}
+
+template <class A, class O, class B>
+CUTE_HOST_DEVICE constexpr auto
+affine_portion(cute::ComposedLayout<A, O, B> const &layout) {
+    return layout.layout_b();
+}
+
 /// Local extent of tensor axis I.
 template <size_t I, class L, class A, class M>
 CUTE_HOST_DEVICE constexpr auto local_extent(ShardLayout<L, A, M> const &sl) {
@@ -175,7 +192,7 @@ CUTE_HOST_DEVICE constexpr auto stride(ShardLayout<L, A, M> const &sl) {
         constexpr int inner =
             detail::shard_inner<ShardLayout<L, A, M>, Ax, k>();
         return detail::local_extent<size_t(k)>(sl) * cute::Int<inner>{} *
-               cute::stride<k>(sl.layout_value);
+               cute::stride<k>(detail::affine_portion(sl.layout_value));
     } else {
         static_assert(detail::attr_leaves_tensor_whole<attr_t>(),
                       "shard layout: this attr must leave the tensor whole");
@@ -220,9 +237,9 @@ CUTE_HOST_DEVICE constexpr auto local_layout(ShardLayout<L, A, M> const &sl) {
         cute::tuple_size<cute::remove_cvref_t<decltype(cute::shape(
             typename ShardLayout<L, A, M>::layout{}))>>::value;
     return [&]<size_t... Is>(std::index_sequence<Is...>) {
-        return cute::make_layout(
-            cute::make_shape(local_extent<Is>(sl)...),
-            cute::make_stride(cute::stride<int(Is)>(sl.layout_value)...));
+        return cute::make_layout(cute::make_shape(local_extent<Is>(sl)...),
+                                 cute::make_stride(cute::stride<int(Is)>(
+                                     affine_portion(sl.layout_value))...));
     }(std::make_index_sequence<t_rank>{});
 }
 

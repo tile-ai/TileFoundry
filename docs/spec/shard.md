@@ -178,7 +178,7 @@ class ComposedLayout(LayoutBase):
         outer: attribute; Domain-side layout applied first, or identity.
     """
 
-    inner: LayoutBase | None
+    inner: LayoutBase | Swizzle | None
     offset: int
     outer: LayoutBase | None
 ```
@@ -188,8 +188,13 @@ class ComposedLayout(LayoutBase):
     `apply(None, value) == value`.
   - `shape` and `domain_rank` come from `outer` when it is present, otherwise
     from `inner`; a composition with no explicit domain has `shape == ()`.
-  - either non-`None` component MAY be any `LayoutBase`, including a
-    `ShardLayout` that preserves an earlier distribution.
+    A `Swizzle` states no domain, so `inner=Swizzle` with `outer=None` has
+    `shape == ()` and is not a complete tensor layout.
+  - `outer`, and an `inner` that is a `LayoutBase`, MAY be any `LayoutBase`,
+    including a `ShardLayout` that preserves an earlier distribution.
+  - `inner` MAY instead be a [`Swizzle`](#41-swizzle), which is the only
+    non-affine mapping this IR states. `outer` MUST NOT be one: a `Swizzle`
+    has no domain to be the domain-side component of.
 
 Field meanings:
 
@@ -205,6 +210,59 @@ from `outer`. When `outer=None`, the identity mapping contributes no explicit
 domain, so the composition inherits them from `inner`. Therefore, when an
 outer `ShardLayout` binds a `ComposedLayout`, a `Split(k)` attr still
 references the composition's stable `shape` / `domain_rank` contract.
+
+### 4.1 `Swizzle`
+
+Mirrors CuTe `Swizzle<B,M,S>`: the XOR offset functor a swizzled
+shared-memory layout applies to its index.
+
+```python
+class Swizzle:
+    """Describe the XOR permutation CuTe `Swizzle<B,M,S>` applies to an index.
+
+    Attributes:
+        bits: attribute; CuTe `BBits`, how many bits are XORed.
+        base: attribute; CuTe `MBase`, how many low bits are left alone.
+        shift: attribute; CuTe `SShift`, the signed source-to-target distance.
+    """
+
+    bits: int
+    base: int
+    shift: int
+
+    def __call__(self, offset: int) -> int: ...
+```
+
+**Terms.** The *Y bits* are the ones read out of the index
+(`yyy_msk = ((1 << bits) - 1) << (base + max(0, shift))`); the *Z bits* are
+the ones they are XORed onto
+(`zzz_msk = ((1 << bits) - 1) << (base - min(0, shift))`).
+
+- constraints:
+  - `bits >= 0`, `base >= 0`, and `abs(shift) >= bits`, which is what keeps
+    the Y and Z ranges from overlapping.
+  - `swizzle(offset) == offset ^ shiftr(offset & yyy_msk, shift)`, the CuTe
+    formula unchanged.
+  - Because the two ranges do not overlap, a `Swizzle` is an involution:
+    `swizzle(swizzle(offset)) == offset`, so it is its own left and right
+    inverse. `bits == 0` is the identity.
+  - A `Swizzle` is a mapping on an index, not a layout. It is not a
+    `LayoutBase`, it states no `shape`, and it MUST NOT be a
+    `TensorType.layout` or a `ShardLayout.layout` on its own. It reaches a
+    tensor only as `ComposedLayout.inner`.
+  - A `Swizzle` permutes bits inside the codomain `outer` already spans, so
+    `cosize(ComposedLayout(Swizzle, offset, outer)) == cosize(outer)` and the
+    backing allocation is unchanged by it.
+  - A `Swizzle` states where an element lives, never which element a logical
+    coordinate names. `shape`, `domain_rank`, the axis numbering a `Split`
+    references, and the access relation an op states over a value are all read
+    off `outer` and MUST be the same as the unswizzled layout's. This is why an
+    op that only relabels the domain -- `Transpose`, `Reshape`, `Slice` --
+    carries the same `Swizzle` through: a window's start is a constant shift of
+    the index, which `offset` already states.
+  - A swizzled `ComposedLayout` MUST NOT serve as a `Mesh` execution scope:
+    [§9](#9-layout-construction-and-mesh-scope-projection) admits an identity
+    `inner` only.
 
 ---
 

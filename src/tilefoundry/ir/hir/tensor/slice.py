@@ -24,6 +24,7 @@ from tilefoundry.ir.types.shard import (
     ComposedLayout,
     Layout,
     ShardLayout,
+    Swizzle,
 )
 from tilefoundry.ir.types.shard.shard_layout import (
     layout_axis_to_tensor_axis,
@@ -378,6 +379,16 @@ def _slice_shard_layout(call, ctx, x_ty, source, starts, inherited_offset):
 
 @register_typeinfer(Slice)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+    """The window's type, its source layout carried where the window keeps it.
+
+    A ``Swizzle`` survives a window. It says where an element lives, not which
+    element a coordinate names, so it leaves the domain -- and the access
+    relation stated over it -- alone; the window narrows that domain and
+    shifts the index by a constant the composition's ``offset`` already holds.
+    Any other composed ``inner`` is refused by name: a window cannot be proven
+    against a mapping this does not know, and reporting the outer strides as
+    the whole layout would be wrong rather than partial.
+    """
     x_ty = ctx.type_of(call.args[0])
     starts = call.args[1]
     op = call.target
@@ -400,13 +411,29 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     layout_shape = shape
     source = x_ty.layout
     inherited_offset = 0
-    if (
-        isinstance(source, ComposedLayout)
-        and source.inner is None
-        and isinstance(source.outer, (Layout, ShardLayout))
+    inherited_inner = None
+    if isinstance(source, ComposedLayout) and isinstance(
+        source.outer, (Layout, ShardLayout)
     ):
+        if isinstance(source.inner, Swizzle) and isinstance(source.outer, Layout):
+            inherited_inner = source.inner
+        elif source.inner is not None:
+            ctx.error(
+                call,
+                f"Slice cannot narrow a composed layout whose inner is "
+                f"{type(source.inner).__name__} over "
+                f"{type(source.outer).__name__}: the window would have to be "
+                f"proven against that mapping, not against the outer strides",
+            )
         inherited_offset = source.offset
         source = source.outer
+    elif isinstance(source, ComposedLayout) and source.inner is not None:
+        ctx.error(
+            call,
+            f"Slice cannot narrow a composed layout whose inner is "
+            f"{type(source.inner).__name__}: the window would have to be proven "
+            f"against that mapping, not against the outer strides",
+        )
 
     new_layout = None
     if isinstance(source, ShardLayout):
@@ -428,7 +455,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             steps.append(stride)
         else:
             new_layout = ComposedLayout(
-                inner=None,
+                inner=inherited_inner,
                 offset=inherited_offset
                 + sum(
                     start * stride

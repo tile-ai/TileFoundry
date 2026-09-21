@@ -3,8 +3,14 @@ from __future__ import annotations
 # ruff: noqa: I001 -- curated re-export order; alphabetical sort breaks staged imports.
 
 from .int_tuple import IntTuple, flatten, product
-from .layout import ComposedLayout, Layout, LayoutBase
-from .layout_algebra import c_order_strides, prefix_product, try_c_order_strides
+from .layout import ComposedLayout, Layout, LayoutBase, Swizzle
+from .layout_algebra import (
+    c_order_strides,
+    composition,
+    prefix_product,
+    swizzle_of,
+    try_c_order_strides,
+)
 from .mesh import (
     Mesh,
     Topology,
@@ -40,7 +46,10 @@ __all__ = [
     "prefix_product",
     "LayoutBase",
     "Layout",
+    "Swizzle",
     "ComposedLayout",
+    "composition",
+    "swizzle_of",
     "Topology",
     "check_topology",
     "composed",

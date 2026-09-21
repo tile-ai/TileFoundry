@@ -1044,6 +1044,9 @@ template <class T>
 concept ShardTensorLike =
     detail::is_shard_tensor<cute::remove_cvref_t<T>>::value;
 
+template <class SL>
+inline constexpr bool shard_layout_is_composed_v;
+
 template <class T> CUTE_HOST_DEVICE decltype(auto) local_tensor(T &&t);
 
 template <class T>
@@ -1058,6 +1061,8 @@ template <class T> CUTE_HOST_DEVICE constexpr int shard_mesh_instances();
 
 - constraints:
   - `engine` is a CuTe tensor or view, never a raw pointer: residency lives on the engine type, and `data()` drops it.
+  - A shard layout whose layout is a `cute::ComposedLayout` -- which is how a [`Swizzle`](./shard.md#41-swizzle) reaches the device -- is projected with its function kept: `shard_layout_is_composed_v` picks that path, and `local_tensor` returns a tensor over the engine's own pointer whose layout is the same composition, this instance's origin folded into its offset. Advancing the pointer instead would run the function on a slice-relative index and hand two instances one address, so the offset MUST NOT move to the engine.
+  - A composed layout takes that path even when no mesh axis splits it. The whole-tensor shortcut returns the backing engine, whose layout states no function at all, so taking it would drop the swizzle.
   - `local_tensor`, `local_view_t` and `ShardTensorLike` are public: a step every op must take, and the word an op writes its own constraints in, are not implementation details. `is_shard_tensor` -- how `ShardTensorLike` is decided, which nothing outside needs -- stays in `detail`.
   - A tensor whose layout is a `ShardLayout` has distributed semantics -- it is the whole tensor, and each instance owns the slice its shard layout gives it.
   - One attr per mesh axis, against the mesh's axes flattened: a mesh naming several levels states them grouped one nest per level, and its rank is then how many levels it names rather than how many axes the attrs answer for.

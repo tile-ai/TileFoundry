@@ -41,6 +41,7 @@ from tilefoundry.ir.types.shard import (
     B,
     Broadcast,
     ComposedLayout,
+    Swizzle,
     Dynamic,
     IntTuple,
     Layout,
@@ -107,7 +108,7 @@ __all__ = [
     "DType", "TensorType", "TupleType", "Type",
     "Pattern", "DimVarRangePat", "DimVar",
 
-    "IntTuple", "LayoutBase", "Layout", "ComposedLayout",
+    "IntTuple", "LayoutBase", "Layout", "Swizzle", "ComposedLayout",
     "Topology", "Mesh",
     "ShardAttr", "Split", "Partial", "Broadcast", "Dynamic", "ShardLayout",
     "S", "P", "B",

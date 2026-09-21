@@ -25,8 +25,8 @@ from tilefoundry.ir.tir.stmts import LetStmt
 from tilefoundry.ir.tir.sync import participation
 from tilefoundry.ir.types.dim import DimAdd, DimMul, DimSub, DimVar
 from tilefoundry.ir.types.shape_helpers import shape_numel_upper_bound, upper_bound
-from tilefoundry.ir.types.shard import c_order_strides
-from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
+from tilefoundry.ir.types.shard import c_order_strides, swizzle_of
+from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
     Dynamic,
@@ -41,11 +41,58 @@ from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.registries import Role, register_codegen
 
 
-def _render_layout(shape, strides) -> str:
-    """Render a CuTe layout type."""
-    shape_args = ", ".join(f"cute::Int<{s}>" for s in shape)
-    stride_args = ", ".join(f"cute::Int<{s}>" for s in strides)
-    return f"cute::Layout<cute::Shape<{shape_args}>, cute::Stride<{stride_args}>>"
+def _swizzle_args(swizzle) -> str:
+    """``B, M, S`` as the ``cute::Swizzle`` template arguments."""
+    return f"{swizzle.bits}, {swizzle.base}, {swizzle.shift}"
+
+
+def _render_layout_type(layout: LayoutBase) -> str:
+    """Render a CuTe layout type.
+
+    A swizzled composed layout keeps its shape: CuTe states it as a
+    ``ComposedLayout`` of the swizzle, a static offset and the layout
+    underneath. The XOR mapping is not expressible as strides, so there is no
+    affine form to fall back to.
+    """
+    swizzle = swizzle_of(layout)
+    if swizzle is not None:
+        return (
+            f"cute::ComposedLayout<cute::Swizzle<{_swizzle_args(swizzle)}>, "
+            f"cute::Int<{int(layout.offset)}>, {_render_layout_type(layout.outer)}>"
+        )
+    if isinstance(layout, Layout):
+        shape_args = ", ".join(f"cute::Int<{s}>" for s in layout.shape)
+        stride_args = ", ".join(f"cute::Int<{s}>" for s in layout.strides)
+        return f"cute::Layout<cute::Shape<{shape_args}>, cute::Stride<{stride_args}>>"
+    raise NotImplementedError(
+        f"tensor_view: no CuTe layout type for {type(layout).__name__}"
+    )
+
+
+def _render_layout_value(layout: LayoutBase, dim, stride) -> str:
+    """Render a CuTe layout value, the mirror of :func:`_render_layout_type`.
+
+    *dim* and *stride* render one shape entry and one stride entry, which is
+    where a runtime-provided extent reaches the emitted layout.
+    """
+    swizzle = swizzle_of(layout)
+    if swizzle is not None:
+        return (
+            f"cute::make_composed_layout("
+            f"cute::Swizzle<{_swizzle_args(swizzle)}>{{}}, "
+            f"cute::Int<{int(layout.offset)}>{{}}, "
+            f"{_render_layout_value(layout.outer, dim, stride)})"
+        )
+    if isinstance(layout, Layout):
+        shape_args = ", ".join(dim(d) for d in layout.shape)
+        stride_args = ", ".join(stride(s) for s in layout.strides)
+        return (
+            f"cute::make_layout(cute::make_shape({shape_args}), "
+            f"cute::make_stride({stride_args}))"
+        )
+    raise NotImplementedError(
+        f"tensor_view: no CuTe layout value for {type(layout).__name__}"
+    )
 
 
 def _scope_mesh_value(mesh, ctx) -> "str | None":
@@ -108,7 +155,7 @@ def _render_attr(a) -> str:
 
 def _render_shard_layout_type(sl: SL, ctx=None) -> str:
     """Render a full ShardLayout C++ type string."""
-    layout_str = _render_layout(sl.layout.shape, sl.layout.strides)
+    layout_str = _render_layout_type(sl.layout)
     attrs_str = ", ".join(_render_attr(a) for a in sl.attrs)
     mesh_str = _render_mesh_type(sl.mesh, ctx)
     return f"tilefoundry::ShardLayout<{layout_str}, cute::tuple<{attrs_str}>, {mesh_str}>"
@@ -163,6 +210,12 @@ def render_shard_layout_value(
     """
     sll = sl.layout
     if storage is StorageKind.RMEM:
+        if swizzle_of(sll) is not None:
+            raise NotImplementedError(
+                "render_shard_layout_value: a Swizzle states how a shared-memory "
+                "bank pattern is arranged; a register engine has no such addresses, "
+                "and rebuilding this layout from register strides would drop it"
+            )
         sll = Layout(shape=sll.shape, strides=register_strides(sl))
     mesh_layout = sl.mesh.layout
     if isinstance(mesh_layout, ComposedLayout):
@@ -234,8 +287,6 @@ def render_shard_layout_value(
     ml_var = f"{var_name}__mesh_layout"
     mesh_var = f"{var_name}__mesh"
 
-    sl_shape_args = ", ".join(_global_dim(d) for d in sll.shape)
-    sl_stride_args = ", ".join(_static_dim(s, "shard layout stride") for s in sll.strides)
     ml_shape_args = ", ".join(_mesh_dim(d) for d in ml_shape)
     ml_stride_args = ", ".join(_static_dim(s, "mesh layout stride") for s in ml_strides)
 
@@ -246,10 +297,10 @@ def render_shard_layout_value(
     mesh_layout = _composed_mesh_layout(positions, ml_base)
 
     attrs = ", ".join(_render_attr(a) for a in sl.attrs)
-    preamble = [
-        f"auto {sl_var} = cute::make_layout("
-        f"cute::make_shape({sl_shape_args}), cute::make_stride({sl_stride_args}));",
-    ]
+    sl_layout = _render_layout_value(
+        sll, _global_dim, lambda s: _static_dim(s, "shard layout stride")
+    )
+    preamble = [f"auto {sl_var} = {sl_layout};"]
     scope_mesh = _scope_mesh_value(sl.mesh, ctx)
     if scope_mesh is not None:
         mesh_var = scope_mesh

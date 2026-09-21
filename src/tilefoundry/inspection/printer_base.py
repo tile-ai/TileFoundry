@@ -20,7 +20,7 @@ from tilefoundry.ir.types.dim import (
     DimSub,
     DimVar,
 )
-from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase
+from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase, Swizzle
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, ShardLayout, Split
 from tilefoundry.ir.types.storage import StorageKind
@@ -289,6 +289,11 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Layout",), "Layout"))
         strides = self.shape_tuple(value.strides, ctx) if value.strides is not None else "None"
         return f"Layout({self.shape_tuple(value.shape, ctx)}, {strides})"
+
+    def visit_Swizzle(self, value: Swizzle, ctx=None) -> str:
+        if ctx is not None:
+            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Swizzle",), ""))
+        return f"Swizzle({value.bits}, {value.base}, {value.shift})"
 
     def visit_ComposedLayout(self, value: ComposedLayout, ctx=None) -> str:
         if ctx is not None:
