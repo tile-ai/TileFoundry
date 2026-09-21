@@ -9,7 +9,6 @@ import isl
 __all__ = [
     "as_multi_aff",
     "cardinality",
-    "count",
     "equates",
     "has_unbounded_param",
     "involved_dims",
@@ -42,8 +41,8 @@ class ParameterBoxTooLarge(ParameterBoxError):
         super().__init__(f"parameter box exceeds {PARAM_POINT_LIMIT} points")
 
 
-def count(image: "isl.set") -> int | None:
-    """Count *image* after every parameter has been fixed by its caller."""
+def _count(image: "isl.set") -> int | None:
+    """Count *image* without enumerating its parameter space."""
     image = image.coalesce()
     if image.is_box():
         amount = 1
@@ -58,6 +57,14 @@ def count(image: "isl.set") -> int | None:
             return amount
     amount = image.count_val()
     return amount.get_num_si() if amount.is_int() else None
+
+
+def _parameters_are_fixed(context: "isl.set") -> bool:
+    """Whether every retained parameter has one explicit integer value."""
+    return all(
+        context.plain_get_val_if_fixed(isl.dim_type.PARAM, axis).is_int()
+        for axis in range(context.dim(isl.dim_type.PARAM))
+    )
 
 
 def param_points(image: "isl.set") -> tuple["isl.set", ...]:
@@ -107,18 +114,22 @@ def cardinality(image: "isl.set") -> int | None:
     """Return a finite point count, maximizing over a small parameter box.
 
     A box is counted by multiplying its bounded axis lengths, at a cost set by
-    rank alone; anything else falls back to ISL's count. With bounded free
-    parameters, every feasible integer point in a box of at most 4096 points is
-    counted and the true maximum is returned. A larger or unbounded parameter
-    box has no answer.
+    rank alone; anything else falls back to ISL's count. Retained parameters
+    already fixed to one integer point are counted directly. With bounded free
+    parameters, every feasible integer point in a box of at most 4096 points
+    is counted and the true maximum is returned. A larger or unbounded
+    parameter box has no answer.
     """
     if not image.dim(isl.dim_type.PARAM):
-        return count(image)
+        return _count(image)
+    context = image.params()
+    if context.is_empty() or _parameters_are_fixed(context):
+        return _count(image)
     try:
         points = param_points(image)
     except ParameterBoxError:
         return None
-    counts = tuple(count(image.intersect_params(point)) for point in points)
+    counts = tuple(_count(image.intersect_params(point)) for point in points)
     if any(amount is None for amount in counts):
         return None
     return max(counts, default=0)

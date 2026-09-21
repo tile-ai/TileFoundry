@@ -1232,7 +1232,8 @@ call site.
     representation.
   - `cardinality` MUST enumerate every feasible integer point of a parameter box
     of at most `PARAM_POINT_LIMIT` points and return the maximum, and MUST
-    report unknown for a larger box.
+    report unknown for a larger box. It MUST count directly when every retained
+    parameter is already fixed to one integer point.
   - `IterationScope.trips()` MUST fix child and parent domains to the same parameter
     point before dividing, and take the maximum of those ratios.
 

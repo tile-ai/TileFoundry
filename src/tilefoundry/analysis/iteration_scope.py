@@ -16,7 +16,7 @@ from tilefoundry.utils.isl_utils import (
     PARAM_POINT_LIMIT,
     ParameterBoxTooLarge,
     UnboundedParameterBox,
-    count,
+    cardinality,
     param_points,
 )
 from tilefoundry.visitor_registry.access_relation import (
@@ -110,8 +110,8 @@ class IterationScope:
             ) from error
         ratios = []
         for point in points:
-            amount = count(domain.intersect_params(point))
-            parent_count = count(parent.intersect_params(point))
+            amount = cardinality(domain.intersect_params(point))
+            parent_count = cardinality(parent.intersect_params(point))
             if amount is None or not parent_count:
                 continue
             ratios.append(max(1, amount // parent_count))
@@ -155,7 +155,7 @@ class IterationScope:
                     axis,
                     low.get_num_si(),
                 )
-            amount = count(fixed.intersect_domain(fixed_standing).range())
+            amount = cardinality(fixed.intersect_domain(fixed_standing).range())
             if amount is None:
                 raise AnalysisError("scope access has no finite one-pass extent")
             amounts.append(amount)
