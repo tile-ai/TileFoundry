@@ -154,6 +154,14 @@ def test_cardinality_maximizes_small_parameter_boxes_exactly():
     assert cardinality(too_large) is None
 
 
+def test_cardinality_distinguishes_empty_and_unbounded_parameter_contexts():
+    empty = isl.set("[c] -> { [i] : 0 <= i < 4 and c >= 3 and c <= 1 }")
+    unbounded = isl.set("[c] -> { [i] : i = 0 }")
+
+    assert cardinality(empty) == 0
+    assert cardinality(unbounded) is None
+
+
 def test_to_domain_encoding():
     """Static extents inline.
 
