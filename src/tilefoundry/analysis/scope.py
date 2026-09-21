@@ -14,11 +14,11 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.dim_isl import _range_expr
+from tilefoundry.ir.types.dim_isl import range_expr
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.ir.visitor import expr_children
-from tilefoundry.utils.isl_utils import _count, _param_corners, cardinality
+from tilefoundry.utils.isl_utils import cardinality, count, param_points
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     access_relation_registry,
@@ -94,14 +94,14 @@ class Scope:
         domain = self.domain
         parent = self.parent.domain.align_params(domain.get_space())
         domain = domain.align_params(parent.get_space())
-        corners = _param_corners(domain.params().intersect(parent.params()))
+        points = param_points(domain.params().intersect(parent.params()))
         ratios = []
-        for corner in corners or ():
-            count = _count(domain.intersect_params(corner))
-            parent_count = _count(parent.intersect_params(corner))
-            if count is None or not parent_count:
+        for point in points or ():
+            amount = count(domain.intersect_params(point))
+            parent_count = count(parent.intersect_params(point))
+            if amount is None or not parent_count:
                 continue
-            ratios.append(max(1, count // parent_count))
+            ratios.append(max(1, amount // parent_count))
         result = max(ratios, default=1)
         self._trips_cache = result
         return result
@@ -252,7 +252,7 @@ def _bound_or_param(
     if number is not None:
         return str(number)
     try:
-        rendered = _range_expr(
+        rendered = range_expr(
             value,
             params,
             param_map=param_map,
@@ -293,7 +293,10 @@ def _domain_for(owner: Function | LoopRegion, parent: Scope | None) -> isl.set:
         if step != 1:
             bounds.append(f"(p{index} - {start}) mod {step} = 0")
     for name, bound in params.items():
-        assert bound is not None
+        if bound is None:
+            raise AnalysisError(
+                f"loop domain parameter {name!r} has no stated value range"
+            )
         bounds.append(f"{bound[0]} <= {name} < {bound[1]}")
     names = ", ".join(f"p{index}" for index in range(len(loops) + 1))
     prefix = f"[{', '.join(params)}] -> " if params else ""

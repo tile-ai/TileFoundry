@@ -1225,11 +1225,12 @@ parameter constrained by that range. A leaf without a range MUST be rejected as
 runtime-computed. `step` MUST remain a literal: a parametric stride requires a
 product or modulus by two unknowns and has no isl Presburger representation.
 
-`cardinality` with bounded free parameters is a conservative upper bound: it
-counts every feasible corner of the parameter box and returns the maximum.
-`Scope.trips()` MUST instead fix child and parent domains to the same corner,
-divide their counts there, and then take the maximum ratio; dividing two
-independently maximized counts is not a valid trip bound.
+`cardinality` with bounded free parameters MUST enumerate every feasible integer
+point and return the true maximum when the parameter box contains at most 4096
+points; for a larger box it MUST return unknown. `Scope.trips()` MUST likewise
+fix child and parent domains to the same parameter point, divide their counts
+there, and then take the maximum ratio; dividing two independently maximized
+counts is not a valid trip bound.
 
 ### 2.2 Target-selected Analyzers
 

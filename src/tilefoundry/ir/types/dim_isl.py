@@ -188,7 +188,7 @@ def _dim_range_visitor_type():
                         )
                         return min(corners), max(corners) + 1
                 params: dict[str, tuple[int, int] | None] = {}
-                expr = _range_expr(value, params, identities={})
+                expr = range_expr(value, params, identities={})
                 if any(bound is None for bound in params.values()):
                     return None
                 prefix = f"[{', '.join(params)}] -> " if params else ""
@@ -213,13 +213,14 @@ def _dim_range_visitor_type():
     return _DIM_RANGE_VISITOR_TYPE
 
 
-def _range_expr(
+def range_expr(
     dim,
     params: dict[str, tuple[int, int] | None],
     *,
     param_map: dict[str, object] | None = None,
     identities: dict[int, str] | None = None,
 ) -> str:
+    """Render *dim* as an isl expression and register its leaf parameters."""
     return _range_expr_visitor_type()(params, param_map, identities).visit(dim)
 
 
@@ -286,7 +287,7 @@ def normalize_dim(value):
     try:
         params: dict[str, tuple[int, int] | None] = {}
         param_map: dict[str, object] = {}
-        expr = _range_expr(
+        expr = range_expr(
             value,
             params,
             param_map=param_map,
@@ -385,6 +386,7 @@ __all__ = [
     "dim_range",
     "normalize_dim",
     "normalize_dim_entries",
+    "range_expr",
     "to_dim",
     "to_domain",
 ]
