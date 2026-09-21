@@ -39,7 +39,8 @@ from tilefoundry.ir.types.shard.shard_layout import Partial
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes, TypeInferContext
-from tilefoundry.visitor_registry.visitors import CostEvaluator, TypeInferVisitor
+from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
+from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 
 def _ref(cache, cur_pos, s, new):

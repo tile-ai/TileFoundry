@@ -29,7 +29,7 @@ from tilefoundry.ir.types.substitute import (
 from tilefoundry.ir.types.tensor_type import TensorType, Type
 from tilefoundry.ir.visitor import ExprCloner, ExprVisitor, ExprWalker
 from tilefoundry.visitor_registry.contexts import TypeInferContext
-from tilefoundry.visitor_registry.visitors import TypeInferVisitor
+from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 from .function import Function
 

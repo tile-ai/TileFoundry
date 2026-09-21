@@ -18,7 +18,7 @@ from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.shard.layout import Layout
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split, shard_layout_local_shape
 from tilefoundry.visitor_registry.contexts import TypeInferContext
-from tilefoundry.visitor_registry.visitors import TypeInferVisitor
+from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 
 def raw_shard_tensor_type(

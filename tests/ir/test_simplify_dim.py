@@ -29,7 +29,7 @@ from tilefoundry.ir.types.dim import (
 )
 from tilefoundry.ir.types.shard import ComposedLayout, Layout, Mesh, ShardLayout, Topology
 from tilefoundry.ir.types.shard.shard_layout import Broadcast
-from tilefoundry.visitor_registry.visitors import TypeInferVisitor
+from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 
 def _i64(v: int) -> Constant:

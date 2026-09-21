@@ -37,6 +37,7 @@ _INTEGER_BINARY_DIM_OP = {
     BinaryKind.MAX: DimMax,
 }
 
+
 def _is_const(node) -> bool:
     if isinstance(node, bool):
         return False

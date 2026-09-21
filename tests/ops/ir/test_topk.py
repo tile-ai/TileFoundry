@@ -40,7 +40,7 @@ from tilefoundry.ir.types.dim import DimVar, dim_min
 from tilefoundry.ir.types.shard import Layout, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, ShardLayout, Split
 from tilefoundry.visitor_registry.contexts import TypeInferContext
-from tilefoundry.visitor_registry.visitors import TypeInferVisitor
+from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 _F32 = DType.f32
 _I64 = DType.i64

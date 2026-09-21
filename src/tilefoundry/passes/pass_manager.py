@@ -17,7 +17,7 @@ from tilefoundry.ir.hir.verify import verify_function as verify_hir_function
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
-from tilefoundry.visitor_registry.visitors import inference_type
+from tilefoundry.visitor_registry.typeinfer import inference_type
 
 from .pass_base import Pass
 

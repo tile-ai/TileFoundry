@@ -91,7 +91,7 @@ from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 from tilefoundry.ir.visitor import BindingSubstitutionCloner
 from tilefoundry.target import MemoryHierarchyFacts, Target, UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
-from tilefoundry.visitor_registry.visitors import TypeInferVisitor, inference_type
+from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor, inference_type
 
 T = TypeVar("T")
 _TYPE_INFER_CONTEXT = "<type_infer_context>"

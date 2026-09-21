@@ -2,9 +2,11 @@
 
 To keep this package importable early (ir.core imports from here during
 its own __init__), the package __init__ re-exports **only** the
-lightweight registry bits. Contexts and Visitors live in submodules
-``contexts`` and ``visitors`` and should be imported from there.
+lightweight registry bits. Contexts live in ``contexts``, type inference in
+``typeinfer``, and the remaining derived visitors in ``visitors``; import each
+from its owning submodule.
 """
+
 from __future__ import annotations
 
 from .registries import (

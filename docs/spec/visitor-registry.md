@@ -251,6 +251,10 @@ def _(call: Call, ctx: TypeInferContext) -> TensorType: ...
 
 Visitor:
 
+`TypeInferVisitor` and `inference_type` live in
+`tilefoundry.visitor_registry.typeinfer`. Verification, code-generation, and
+cost-evaluation visitors remain in `tilefoundry.visitor_registry.visitors`.
+
 ```python
 class TypeInferVisitor(ExprVisitor[Type]):
     def __init__(self, *, memo=None, owns_body=True, ranges=False): ...

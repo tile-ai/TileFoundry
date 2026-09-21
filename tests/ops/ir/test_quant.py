@@ -35,7 +35,7 @@ from tilefoundry.ir.types.shard.shard_layout import (
     split_target_axes,
 )
 from tilefoundry.visitor_registry.contexts import TypeInferContext
-from tilefoundry.visitor_registry.visitors import TypeInferVisitor
+from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 _BF = DType.bf16
 _FP8 = DType.fp8e4m3

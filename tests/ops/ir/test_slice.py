@@ -22,7 +22,8 @@ from tilefoundry.ir.types.dim_isl import normalize_dim
 from tilefoundry.ir.types.shard import ComposedLayout, Layout, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split, shard_layout_of
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes
-from tilefoundry.visitor_registry.visitors import CostEvaluator, TypeInferVisitor
+from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
+from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 _F = DType.f32
 _M = make_mesh((4,))

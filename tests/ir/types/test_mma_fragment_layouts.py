@@ -15,7 +15,7 @@ from tilefoundry.ir.tir.cuda.nn.mma import SM80_16x8x16_F32BF16BF16F32_TN, make_
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import ShardLayout, Split, product
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.visitor_registry.visitors import inference_type
+from tilefoundry.visitor_registry.typeinfer import inference_type
 
 _ATOM = make_atom(SM80_16x8x16_F32BF16BF16F32_TN)
 A_FRAG_SHARD = _ATOM.A

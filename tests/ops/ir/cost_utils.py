@@ -9,7 +9,8 @@ from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes, TypeInferContext
-from tilefoundry.visitor_registry.visitors import CostEvaluator, TypeInferVisitor
+from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
+from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 
 @dataclass(frozen=True)

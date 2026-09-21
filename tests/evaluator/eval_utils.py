@@ -17,7 +17,7 @@ from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.types import DType, TensorType, make_tensor_type
 from tilefoundry.visitor_registry.contexts import TypeInferContext
-from tilefoundry.visitor_registry.visitors import TypeInferVisitor
+from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 _DTYPE_OF = {
     torch.float32: DType.f32,

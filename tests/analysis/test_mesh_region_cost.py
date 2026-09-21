@@ -18,7 +18,7 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TypeInferContext
-from tilefoundry.visitor_registry.visitors import TypeInferVisitor
+from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 _TARGET = CudaTarget("nvidia.h200_sxm")
 _TOPOLOGIES = (Topology("cta", 1), Topology("thread", 4))
