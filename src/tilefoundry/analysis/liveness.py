@@ -21,10 +21,20 @@ class LiveInterval:
 
 
 @dataclass(frozen=True)
+class UseEvent:
+    """One SSA use and whether it exists only to extend structured liveness."""
+
+    value: Expr
+    at: int
+    synthetic: bool = False
+
+
+@dataclass(frozen=True)
 class Liveness:
     """Definition-ordered intervals on one function-wide event timeline."""
 
     intervals: tuple[LiveInterval, ...]
+    uses: tuple[UseEvent, ...]
     timeline_end: int
 
 
@@ -51,6 +61,7 @@ class LivenessVisitor(ExprVisitor[None]):
         self._point = -1
         self._states: dict[int, LiveInterval] = {}
         self._definition_order: list[int] = []
+        self._uses: list[UseEvent] = []
         for parameter in function.params:
             self.define(parameter, self.next_event())
         for free in _free_vars(function):
@@ -69,18 +80,20 @@ class LivenessVisitor(ExprVisitor[None]):
         self._states[key] = LiveInterval(value, point, point)
         self._definition_order.append(key)
 
-    def use(self, value: Expr, point: int) -> None:
+    def use(self, value: Expr, point: int, *, synthetic: bool = False) -> None:
         """Extend *value* through one consumer event."""
         state = self._states.get(id(value))
         if state is None:
             raise ValueError(f"liveness: {type(value).__name__} is used before its definition")
         self._states[id(value)] = replace(state, last_used_at=max(state.last_used_at, point))
+        self._uses.append(UseEvent(value, point, synthetic))
 
     def finish(self) -> Liveness:
         """Freeze the definition-ordered result."""
         states = (self._states[key] for key in self._definition_order)
         return Liveness(
             intervals=tuple(states),
+            uses=tuple(self._uses),
             timeline_end=self._point,
         )
 
@@ -131,7 +144,7 @@ class LivenessVisitor(ExprVisitor[None]):
 
         exit_use = self.next_event()
         for source in region.carried_args or (region.body,):
-            self.use(source, exit_use)
+            self.use(source, exit_use, synthetic=bool(region.carried_args))
         self.define(region, self.next_event())
 
 
@@ -144,4 +157,4 @@ def analyze_liveness(function: Function) -> Liveness:
     return visitor.finish()
 
 
-__all__ = ["LiveInterval", "Liveness", "analyze_liveness"]
+__all__ = ["LiveInterval", "Liveness", "UseEvent", "analyze_liveness"]

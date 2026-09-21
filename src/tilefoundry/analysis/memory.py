@@ -500,6 +500,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             solved = solve_allocation(
                 name,
                 values,
+                liveness,
                 context.root,
                 options=solver_options,
             )
