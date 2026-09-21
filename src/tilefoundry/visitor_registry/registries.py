@@ -77,9 +77,24 @@ codegen_registry: DispatchRegistry = DispatchRegistry("codegen")
 """Keyed by ``(target, role, class)``; see :func:`register_codegen`."""
 
 
-register_typeinfer = typeinfer_registry.decorator()
 register_verify_stmt = verify_stmt_registry.decorator()
 register_cost_evaluator = cost_evaluator_registry.decorator()
+
+
+def register_typeinfer(cls: type) -> Callable[[Callable], Callable]:
+    """Register one type rule, normalizing its result without affecting peers."""
+
+    def decorator(fn: Callable) -> Callable:
+        def wrapped(*args, **kwargs):
+            from .contexts import TypeInferResults  # noqa: PLC0415
+
+            result = fn(*args, **kwargs)
+            return result if isinstance(result, TypeInferResults) else TypeInferResults(result)
+
+        typeinfer_registry.register(cls, wrapped)
+        return fn
+
+    return decorator
 
 
 def register_codegen(

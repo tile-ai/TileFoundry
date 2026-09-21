@@ -14,6 +14,11 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from tilefoundry.ir.core.expr import Call, Constant, Expr, Tuple, Var
+from tilefoundry.ir.core.metadata import (
+    RangeMetadata,
+    attach_metadata,
+    detach_metadata,
+)
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
@@ -21,6 +26,7 @@ from tilefoundry.ir.hir.sharding.reshard import Reshard as HirReshard
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Evaluate, MeshScope
+from tilefoundry.ir.types.callable_type import callable_type_for
 from tilefoundry.ir.types.shard.mesh import composed
 from tilefoundry.ir.types.shard.scope_match import covered_by_scope, storage_reaches
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
@@ -32,7 +38,9 @@ from tilefoundry.ir.visitor import ExprVisitor, ExprWalker, StmtVisitor
 from .contexts import (
     Cost,
     CostContext,
+    FunctionScope,
     TypeInferContext,
+    TypeInferResults,
     VerifyContext,
 )
 from .registries import (
@@ -56,11 +64,14 @@ class TypeInferVisitor(ExprVisitor[Type]):
     stale ``expr.type``.
     """
 
-    def __init__(self, *, memo=None, owns_body: bool = True) -> None:
+    def __init__(
+        self, *, memo=None, owns_body: bool = True, ranges: bool = False
+    ) -> None:
         super().__init__(memo=memo)
         self._memo_supplied = memo is not None
         self._visit_depth = 0
         self._owns_body = owns_body
+        self._ranges = ranges
 
     def visit(self, expr: Expr, ctx: TypeInferContext) -> Type:
         """Derive one type while preserving the active execution domain."""
@@ -72,9 +83,18 @@ class TypeInferVisitor(ExprVisitor[Type]):
                 self._memo = ctx.memo
         self._visit_depth += 1
         try:
-            result = canonicalize_dims(super().visit(expr, ctx))
+            results = super().visit(expr, ctx)
+            if not isinstance(results, TypeInferResults):
+                results = TypeInferResults(results)
+            result = canonicalize_dims(results.type)
+            self._memo[id(expr)] = (expr, result)
             if self._owns_body:
                 expr.type = result
+            if self._ranges:
+                if results.value_range is None:
+                    detach_metadata(expr, RangeMetadata)
+                else:
+                    attach_metadata(expr, RangeMetadata(*results.value_range))
             return result
         finally:
             self._visit_depth -= 1
@@ -155,7 +175,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
         cached = ctx.instantiated_memo.get(key)
         if cached is not None:
             return cached
-        result = TypeInferVisitor(memo=memo, owns_body=False).visit(
+        result = TypeInferVisitor(memo=memo, owns_body=False, ranges=False).visit(
             callee.body, ctx.for_callee(callee)
         )
         ctx.instantiated_memo[key] = result
@@ -177,7 +197,11 @@ class TypeInferVisitor(ExprVisitor[Type]):
             id(region.induction_var): (region.induction_var, region.induction_var.annotation),
             **{id(phi): (phi, type_) for phi, type_ in zip(region.carried_args, inits)},
         }
-        inner = TypeInferVisitor(memo=memo, owns_body=self._owns_body)
+        inner = TypeInferVisitor(
+            memo=memo,
+            owns_body=self._owns_body,
+            ranges=self._ranges,
+        )
         body_type = inner.visit(region.body, ctx)
         for y in region.yield_values:
             inner.visit(y, ctx)
@@ -223,6 +247,24 @@ class TypeInferVisitor(ExprVisitor[Type]):
         mesh = composed((ctx.current_mesh, expr.mesh)) if ctx.current_mesh else expr.mesh
         return self.visit(expr.body, replace(ctx, current_mesh=mesh, memo=memo))
 
+    def visit_Function(self, fn: Function, ctx: TypeInferContext) -> Type:
+        """Refresh one complete function after binding its parameter types."""
+        if ctx.scope is not None and ctx.scope.function is not fn:
+            ctx = replace(ctx, scope=FunctionScope(ctx.scope.module, fn))
+        memo = {id(param): (param, param.annotation) for param in fn.params}
+        if fn.body is not None:
+            TypeInferVisitor(
+                memo=memo,
+                owns_body=self._owns_body,
+                ranges=self._ranges,
+            ).visit(fn.body, replace(ctx, memo=memo))
+        for nested in (*fn.variants, *(converter for _, converter in fn.converters)):
+            TypeInferVisitor(
+                owns_body=self._owns_body,
+                ranges=self._ranges,
+            ).visit(nested, ctx)
+        return callable_type_for(fn.params, fn.return_type)
+
     def visit_leaf_ShapeOf(
         self, shape_of: ShapeOf, _operands, ctx: TypeInferContext
     ) -> Type:
@@ -237,9 +279,14 @@ class TypeInferVisitor(ExprVisitor[Type]):
         ctx.error(expr, f"no typeinfer rule for Expr subclass {type(expr).__name__}")
 
 
-def inference_type(expr: Expr, ctx: TypeInferContext | None = None) -> Type:
-    """Infer and return *expr*'s type without writing it back to the IR."""
-    return TypeInferVisitor(owns_body=False).visit(
+def inference_type(
+    expr: Expr,
+    ctx: TypeInferContext | None = None,
+    *,
+    ranges: bool = False,
+) -> Type:
+    """Infer *expr*; ``ranges=True`` refreshes value ranges but not stored types."""
+    return TypeInferVisitor(owns_body=False, ranges=ranges).visit(
         expr, ctx if ctx is not None else TypeInferContext()
     )
 

@@ -28,6 +28,14 @@ class SourceSpanMetadata(IRMetadata):
     end_column: int | None = None
 
 
+@dataclass(frozen=True)
+class RangeMetadata(IRMetadata):
+    """Conservative half-open value bounds ``[lo, hi)`` for one expression."""
+
+    lo: int
+    hi: int
+
+
 def get_metadata[T: IRMetadata](expr: "Expr", cls: type[T]) -> T | None:
     """Return the metadata whose concrete class is ``cls``, if present."""
     return next((value for value in expr.metadata if type(value) is cls), None)
@@ -123,6 +131,7 @@ def remove_metadata(expr: "Expr", cls: type[IRMetadata]) -> "Expr":
 __all__ = [
     "IRMetadata",
     "BindingMetadata",
+    "RangeMetadata",
     "SourceSpanMetadata",
     "binding_name",
     "describe_expr",

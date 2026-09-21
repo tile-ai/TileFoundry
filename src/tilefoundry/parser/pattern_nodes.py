@@ -25,6 +25,7 @@ from tilefoundry.ir.constraints import (
 from tilefoundry.ir.constraints.layout import _LAYOUT_WILDCARD
 from tilefoundry.ir.core import (
     BindingMetadata,
+    RangeMetadata,
     attach_metadata,
     get_metadata,
 )
@@ -3162,6 +3163,7 @@ class MeshCoordinatePattern(ElementPattern):
             return cached
         index = _constant(axis)
         coordinate = _infer_call(runtime.MeshCoord(mesh=mesh), (index,), context)
+        attach_metadata(coordinate, RangeMetadata(0, extent))
         context.function.state.mesh_coordinates[cache_key] = coordinate
         return coordinate
 

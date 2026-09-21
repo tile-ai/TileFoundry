@@ -238,7 +238,9 @@ def register_typeinfer(op_cls: type[Op]): ...     # decorator: register a typein
 ```
 
 - constraints:
-  - handler signature is `(call: Call, ctx: TypeInferContext) -> Type`.
+  - handler signature is `(call: Call, ctx: TypeInferContext) -> Type | TypeInferResults`.
+    A bare `Type` states no value range; the decorator normalizes it to
+    `TypeInferResults(type)` without changing the other registries.
 
 ```python
 # example
@@ -251,7 +253,7 @@ Visitor:
 
 ```python
 class TypeInferVisitor(ExprVisitor[Type]):
-    def __init__(self, *, memo=None, owns_body=True): ...
+    def __init__(self, *, memo=None, owns_body=True, ranges=False): ...
     def visit(self, expr: Expr, ctx: TypeInferContext) -> Type: ...
     def visit_leaf_Var(self, var: Var, operands, ctx): ...
     def visit_leaf_Constant(self, c: Constant, operands, ctx): ...
@@ -261,7 +263,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
     def visit_MeshRegion(self, region, ctx): ...
     def visit_leaf_ShapeOf(self, shape_of: ShapeOf, operands, ctx) -> Type: ...
 
-def inference_type(expr: Expr, ctx: TypeInferContext | None = None) -> Type: ...
+def inference_type(expr: Expr, ctx: TypeInferContext | None = None, *, ranges=False) -> Type: ...
 ```
 
 - constraints:
@@ -286,13 +288,16 @@ def inference_type(expr: Expr, ctx: TypeInferContext | None = None) -> Type: ...
     replaced child context. The region result type is the body's type.
   - `visit_leaf_ShapeOf` returns the node's declared rank-0 i32 type.
   - `inference_type` creates a fresh non-owning visitor and returns the inferred
-    type without writing it to `expr.type`; traversal-wide inference continues
-    to use its own shared visitor and memo.
+    type without writing it to `expr.type` by default. With `ranges=True`, it
+    replaces or removes each `RangeMetadata` over the complete tree without
+    rewriting stored types. Partial parser inference never writes ranges.
 
 Lifecycle: parser builds a `TypeInferContext` and infers each newly built call
-at parse time (see [parser](./parser.md)). The analysis preflight then walks
-each authored body and writes every `Expr.type` in place before
-consumers run. The visitor and its context share the current scope's memo;
+at parse time (see [parser](./parser.md)). Once a complete HIR Function is
+formed, and after a pass replaces one, whole-function inference refreshes its
+available ranges. Analysis does the same after cloning its complete view. This
+range-only refresh deliberately leaves the existing type lifecycle unchanged.
+The visitor and its context share the current scope's memo;
 `type_of` is a constant-time lookup used to expose bindings to handlers.
 
 ### 4.1 Access relation service — `access_relation`

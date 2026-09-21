@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import isl
 
-from tilefoundry.ir.core.expr import Call, Constant, Var
+from tilefoundry.ir.core.expr import Call, Constant, Expr, Var
 from tilefoundry.ir.core.kinds import BinaryKind
+from tilefoundry.ir.core.metadata import RangeMetadata, get_metadata
 
 from .dim import (
     _DIM_OP_TYPES,
@@ -52,20 +53,22 @@ def _bind_param(
             raise ValueError(
                 f"DimVar {name!r} used with conflicting bounds {previous} vs {bound}"
             )
-    elif identities is not None:
+    else:
+        stored = get_metadata(value, RangeMetadata) if isinstance(value, Expr) else None
+        if stored is None and identities is None:
+            raise TypeError(f"unsupported ShapeDim {type(value).__name__}")
         key = id(value)
-        known = identities.get(key)
+        known = identities.get(key) if identities is not None else None
         if known is not None:
             return known
-        index = len(identities)
+        index = len(identities) if identities is not None else len(params)
         name = f"__tf_runtime_{index}"
         while name in params:
             index += 1
             name = f"__tf_runtime_{index}"
-        identities[key] = name
-        bound = None
-    else:
-        raise TypeError(f"unsupported ShapeDim {type(value).__name__}")
+        if identities is not None:
+            identities[key] = name
+        bound = (stored.lo, stored.hi) if stored is not None else None
 
     params[name] = bound
     if param_map is not None:
@@ -160,7 +163,7 @@ def _dim_range_visitor_type():
     if _DIM_RANGE_VISITOR_TYPE is None:
         from tilefoundry.ir.visitor import ExprVisitor  # noqa: PLC0415
 
-        class _DimRangeVisitor(ExprVisitor[tuple[int, int]]):
+        class _DimRangeVisitor(ExprVisitor[tuple[int, int] | None]):
             def visit_Constant(self, value: Constant, ctx=None) -> tuple[int, int]:
                 number = int(value.value)
                 return number, number + 1
@@ -168,12 +171,16 @@ def _dim_range_visitor_type():
             def visit_DimVar(self, value: DimVar, ctx=None) -> tuple[int, int]:
                 return value.lo, value.hi
 
-            def visit_Call(self, value: Call, ctx=None) -> tuple[int, int]:
+            def visit_Call(self, value: Call, ctx=None) -> tuple[int, int] | None:
                 if type(value.target) is DimMul:
                     a, b = value.args
                     if not (_is_const(a) or _is_const(b)):
-                        alo, ahi = self.visit(a, ctx)
-                        blo, bhi = self.visit(b, ctx)
+                        a_bounds = self.visit(a, ctx)
+                        b_bounds = self.visit(b, ctx)
+                        if a_bounds is None or b_bounds is None:
+                            return None
+                        alo, ahi = a_bounds
+                        blo, bhi = b_bounds
                         corners = (
                             alo * blo,
                             alo * (bhi - 1),
@@ -182,7 +189,9 @@ def _dim_range_visitor_type():
                         )
                         return min(corners), max(corners) + 1
                 params: dict[str, tuple[int, int] | None] = {}
-                expr = _range_expr(value, params)
+                expr = _range_expr(value, params, identities={})
+                if any(bound is None for bound in params.values()):
+                    return None
                 prefix = f"[{', '.join(params)}] -> " if params else ""
                 pw_aff = isl.pw_aff(prefix + f"{{ [{expr}] }}")
                 if params:
@@ -194,12 +203,12 @@ def _dim_range_visitor_type():
                     pw_aff = pw_aff.intersect_params(isl.set(prefix + f"{{ : {bounds} }}"))
                 return int(pw_aff.min_val().num_si()), int(pw_aff.max_val().num_si()) + 1
 
-            def default_visit(self, value, ctx=None) -> tuple[int, int]:
+            def default_visit(self, value, ctx=None) -> tuple[int, int] | None:
                 if isinstance(value, bool):
                     raise TypeError("ShapeDim must not be bool")
                 if isinstance(value, int):
                     return value, value + 1
-                raise TypeError(f"unsupported ShapeDim {type(value).__name__}")
+                return None
 
         _DIM_RANGE_VISITOR_TYPE = _DimRangeVisitor
     return _DIM_RANGE_VISITOR_TYPE
@@ -309,20 +318,22 @@ def normalize_dim_entries(value):
     return value
 
 
-def dim_range(dim) -> tuple[int, int]:
+def dim_range(dim) -> tuple[int, int] | None:
     """Return conservative half-open value bounds ``[lo, hi)`` for *dim*."""
+    stored = get_metadata(dim, RangeMetadata) if isinstance(dim, Expr) else None
+    if stored is not None:
+        return stored.lo, stored.hi
     return _dim_range_visitor_type()().visit(dim)
 
 
 def to_domain(extents: tuple) -> tuple:
     """Build a bounded iteration domain and its isl-parameter ShapeDim map."""
     param_map: dict[str, object] = {}
-    bounds: dict[str, tuple[int, int]] = {}
+    bounds: dict[str, tuple[int, int] | None] = {}
     seen: dict = {}
     names: list[str] = []
 
-    def bind(name: str, dim, lo: int, hi: int) -> None:
-        bound = (lo, hi)
+    def bind(name: str, dim, bound: tuple[int, int] | None) -> None:
         previous = bounds.get(name)
         if previous is not None and previous != bound:
             raise ValueError(
@@ -343,20 +354,23 @@ def to_domain(extents: tuple) -> tuple:
         elif isinstance(extent, Constant):
             constraints.append(f"0 <= d{i} < {int(extent.value)}")
         elif isinstance(extent, DimVar):
-            bind(extent.name, extent, extent.lo, extent.hi)
+            bind(extent.name, extent, (extent.lo, extent.hi))
             constraints.append(f"0 <= d{i} < {extent.name}")
         elif isinstance(extent, Call):
             name = seen.get(extent)
             if name is None:
                 name = f"D{i}"
                 seen[extent] = name
-            lo, hi = dim_range(extent)
-            bind(name, extent, lo, hi)
+            bind(name, extent, dim_range(extent))
             constraints.append(f"0 <= d{i} < {name}")
         else:
             raise TypeError(f"unsupported ShapeDim {type(extent).__name__}")
 
-    constraints += [f"{bounds[name][0]} <= {name} < {bounds[name][1]}" for name in names]
+    constraints += [
+        f"{bound[0]} <= {name} < {bound[1]}"
+        for name in names
+        if (bound := bounds[name]) is not None
+    ]
     prefix = f"[{', '.join(names)}] -> " if names else ""
     if not dims:
         return isl.set(prefix + "{ [] }"), param_map

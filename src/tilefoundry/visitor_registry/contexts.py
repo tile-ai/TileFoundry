@@ -20,6 +20,14 @@ from tilefoundry.ir.types.utils import local_type_of
 
 
 @dataclass(frozen=True)
+class TypeInferResults:
+    """The type and optional value range produced by one inference rule."""
+
+    type: Type
+    value_range: tuple[int, int] | None = None
+
+
+@dataclass(frozen=True)
 class FunctionScope:
     """Where a walk is reading: one Module tree, and whose body it is in.
 

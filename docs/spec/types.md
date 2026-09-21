@@ -527,6 +527,13 @@ def ceildiv(a, b) -> Expr:
     operations, and MUST reject other values.
   - `ceildiv(a, b)` MUST compose the existing add, subtract, and floor-divide
     operations; it does not introduce a distinct Op.
+  - `dim_range(value)` MUST return conservative half-open bounds from
+    `RangeMetadata` before attempting structural dimension arithmetic. A value
+    with neither stored nor structurally derivable bounds returns `None`.
+    Unsupported symbolic divisors remain an error rather than an unknown range.
+  - A bounded non-dimension `Expr` leaf in dimension arithmetic MUST become one
+    identity-deduplicated isl parameter carrying its stored bounds. An unbounded
+    leaf remains an unconstrained parameter for consumers that permit one.
 
 ---
 

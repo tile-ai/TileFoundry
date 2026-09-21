@@ -63,6 +63,10 @@ class Function(Expr):
     rules are stated below.
   - mutable during the compiler's authorised typing, metadata, and specialization updates;
     fields that are not updated retain structural equality and hashing semantics.
+  - value-range metadata is refreshed by a non-type-writing whole-function
+    inference walk. Parser construction MAY attach an already-proved range to a leaf
+    whose value is fixed by lexical geometry; `MeshCoord` uses its concrete mesh
+    axis extent for this purpose.
   - a `Function` MUST NOT declare or override execution context. The `Module`
     that owns it declares the `Target` and the ordered `Topology` hierarchy its
     body runs against ([core-ir §1](./core-ir.md#1-module)).

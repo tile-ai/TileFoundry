@@ -9,6 +9,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Scalar
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.scope_match import covered_by_scope
 from tilefoundry.ir.types.storage import StorageKind
@@ -17,6 +18,7 @@ from tilefoundry.visitor_registry.access_relation import (
     measures_without_reading,
     register_access_relation,
 )
+from tilefoundry.visitor_registry.contexts import TypeInferResults
 
 
 @register_op
@@ -37,7 +39,7 @@ class MeshCoord(Op):
 
 
 @register_typeinfer(MeshCoord)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+def _(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
     """A coordinate is one number about this unit, so it carries no placement."""
     if not isinstance(call.target.mesh, Mesh):
         ctx.error(call, "MeshCoord.mesh must be a Mesh")
@@ -45,7 +47,21 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         ctx.error(call, "MeshCoord.mesh must be bound by the current mesh scope")
     if not call.args:
         ctx.error(call, "missing required input 'axis'")
-    return TensorType(shape=(), dtype=DType.i64, layout=None, storage=StorageKind.RMEM)
+    shape = call.target.mesh.layout.shape
+    axis = static_dim_value(call.args[0])
+    if axis is not None and not 0 <= axis < len(shape):
+        ctx.error(call, f"axis {axis} is out of range for rank-{len(shape)} mesh")
+    extents = (shape[axis],) if axis is not None else shape
+    bounds = (
+        (0, max(extents))
+        if extents
+        and all(isinstance(extent, int) and not isinstance(extent, bool) for extent in extents)
+        else None
+    )
+    return TypeInferResults(
+        TensorType(shape=(), dtype=DType.i64, layout=None, storage=StorageKind.RMEM),
+        value_range=bounds,
+    )
 
 
 @register_eval(MeshCoord)

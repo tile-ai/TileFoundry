@@ -208,7 +208,8 @@ parser already runs eager typeinfer ([parser](./parser.md)), so a
 pass runs, `PassManager` re-runs the relevant analysis on that
 pass's **dirty scope**:
 
-- HIR-side: changed `Function`s rerun `typeinfer`.
+- HIR-side: changed `Function`s rerun the existing checks and refresh available
+  `RangeMetadata` over the complete function without rewriting `.type`.
 - TIR-side: changed `PrimFunction`s rerun `verify`, which
   recursively retriggers `typeinfer` on the embedded Expr fields
   and refreshes their `.type`.

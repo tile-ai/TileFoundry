@@ -91,7 +91,7 @@ from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 from tilefoundry.ir.visitor import BindingSubstitutionCloner
 from tilefoundry.target import MemoryHierarchyFacts, Target, UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
-from tilefoundry.visitor_registry.visitors import TypeInferVisitor
+from tilefoundry.visitor_registry.visitors import TypeInferVisitor, inference_type
 
 T = TypeVar("T")
 _TYPE_INFER_CONTEXT = "<type_infer_context>"
@@ -286,6 +286,7 @@ runtime = SimpleNamespace(
     TupleType=TupleType,
     TypeInferContext=TypeInferContext,
     FunctionScope=FunctionScope,
+    inference_type=inference_type,
     TypeInferVisitor=TypeInferVisitor,
     TupleGetItem=TupleGetItem,
     Unary=Unary,
@@ -1192,6 +1193,13 @@ class ModuleBuildContext:
         for function in functions:
             if isinstance(function, runtime.Function):
                 verify_function(function, module=result)
+                runtime.inference_type(
+                    function,
+                    runtime.TypeInferContext(
+                        scope=runtime.FunctionScope(result, function)
+                    ),
+                    ranges=True,
+                )
             elif isinstance(function, runtime.PrimFunction):
                 verify_prim_function(function, module_fns=result)
         return result

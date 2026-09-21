@@ -14,6 +14,7 @@ from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
     Expr,
+    RangeMetadata,
     Var,
 )
 from tilefoundry.ir.core.module import (
@@ -67,6 +68,7 @@ _DERIVED_METADATA = {
     MemoryMetadata,
     PerformanceMetadata,
     PerformanceSummaryMetadata,
+    RangeMetadata,
     RooflineMetadata,
     TrafficMetadata,
 }
@@ -595,7 +597,11 @@ def check_program(
             f"got {budget!r}"
         )
     derived = InlineCloner(module, function, budget).clone()
-    inference_type(derived.body, TypeInferContext(scope=FunctionScope(module, derived)))
+    inference_type(
+        derived,
+        TypeInferContext(scope=FunctionScope(module, derived)),
+        ranges=True,
+    )
     _require_concrete_geometry(module, derived, error_type=AnalysisError)
     target = module.resolve_target()
     for topology in module.effective_topologies():
