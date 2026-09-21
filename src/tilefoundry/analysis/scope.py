@@ -334,6 +334,11 @@ def _bind_access(
     relation = relation.intersect_domain(scope_domain)
     params = dict(getattr(boundary.pattern, "parameters", ()) or ())
     for name in list(params):
+        param_index = relation.find_dim_by_name(isl.dim_type.PARAM, name)
+        if param_index < 0:
+            raise AnalysisError(
+                f"access pattern parameter {name!r} is missing from its relation"
+            )
         value = params[name]
         number = static_dim_value(value)
         if number is None:
@@ -346,7 +351,7 @@ def _bind_access(
                 term = _widest_allowed(relation, name, operand.type)
                 exact = False
             if term is None:
-                relation = relation.project_out(isl.dim_type.PARAM, 0, 1)
+                relation = relation.project_out(isl.dim_type.PARAM, param_index, 1)
                 continue
         else:
             term = type(
@@ -356,7 +361,9 @@ def _bind_access(
 
         def placed(kind: str, sign: int, constant: int) -> isl.constraint:
             constraint = getattr(isl.constraint, f"alloc_{kind}")(local)
-            constraint = constraint.set_coefficient_si(isl.dim_type.PARAM, 0, sign)
+            constraint = constraint.set_coefficient_si(
+                isl.dim_type.PARAM, param_index, sign
+            )
             if term.loop_axis is not None:
                 constraint = constraint.set_coefficient_si(
                     isl.dim_type.IN, term.loop_axis, -sign * term.stride
@@ -368,7 +375,7 @@ def _bind_access(
         else:
             relation = relation.add_constraint(placed("inequality", 1, -term.low))
             relation = relation.add_constraint(placed("inequality", -1, term.high))
-        relation = relation.project_out(isl.dim_type.PARAM, 0, 1)
+        relation = relation.project_out(isl.dim_type.PARAM, param_index, 1)
     try:
         held = local_type_of(operand.type) if narrow else operand.type
     except (TypeError, ValueError, NotImplementedError):
