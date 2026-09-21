@@ -7,6 +7,7 @@ from contextlib import contextmanager
 
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom
 from tilefoundry.ir.types import DType, TensorType, TupleType, UnitType
 from tilefoundry.ir.types.dim import (
@@ -20,6 +21,7 @@ from tilefoundry.ir.types.dim import (
     DimSub,
     DimVar,
 )
+from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase, Swizzle
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, ShardLayout, Split
@@ -120,6 +122,25 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             left, right = ceildiv_args
             return f"ceildiv({self.dim_entry(left, ctx)}, {self.dim_entry(right, ctx)})"
         target = value.target
+        if isinstance(target, MeshCoord):
+            axis = static_dim_value(value.args[0]) if value.args else None
+            if axis is None or axis < 0 or axis >= len(target.mesh.layout.shape):
+                raise ValueError("MeshCoord requires a literal in-range axis to print")
+            if ctx is None:
+                raise ValueError("MeshCoord requires an active mesh binding to print")
+            ref = ctx.mesh_axis_alias(target.mesh, axis)
+            if ref is not None:
+                return ref
+            alias = ctx.mesh_alias(target.mesh)
+            if alias is None:
+                raise ValueError("MeshCoord mesh has no active binding to print")
+            if axis < len(target.mesh.names):
+                axis_name = target.mesh.names[axis]
+            elif axis < 3:
+                axis_name = ("x", "y", "z")[axis]
+            else:
+                raise ValueError("unnamed MeshCoord axes above z cannot be printed")
+            return f"{alias}.{axis_name}"
         if isinstance(target, DimConst):
             return str(target.value)
         for op_type, symbol in _DIM_INFIX_OPS.items():

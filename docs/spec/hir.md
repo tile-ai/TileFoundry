@@ -364,14 +364,15 @@ binds a parser-side Python `slice`, while `range` binds a scalar; see
 [parser §2.1](./parser.md#21-syntax)). `range` is not unrolled. `induction_var` ranges
 over `range(start, extent, step)`: `start` and `extent` are the **half-open**
 `[start, extent)` Python-range endpoints (so `extent` is the **stop** value,
-not a count). `start` defaults to `0` (`tile(...)` and `range(stop)`); the
-`range(start, stop[, step])` surface sets it. Each of `start` / `extent` /
-`step` is a `ShapeDim` ([types §4](./types.md#4-dim--symbolic-shape-dimensions)).
+not a count). `start` defaults to `0` for `tile(stop, step)` and `range(stop)`;
+the `tile(start, stop, step)` and `range(start, stop[, step])` surfaces set it.
+Each of `start` / `extent` / `step` is a `ShapeDim`
+([types §4](./types.md#4-dim--symbolic-shape-dimensions)).
 
-For a two-argument `tile(extent, step)`, the parser-side window at one
-iteration is `[induction_var, induction_var + step)`. The induction value is
-already a coordinate in `range(0, extent, step)`, not an ordinal to multiply by
-`step`.
+For `tile(stop, step)` or `tile(start, stop, step)`, the parser-side window at
+one iteration is `[induction_var, induction_var + step)`. The induction value
+is already a coordinate in `range(start, stop, step)`, not an ordinal to
+multiply by `step`.
 
 - When `start` / `extent` / `step` are static `int`, the trip count is
   recoverable from the node alone, without the parser-side window binding

@@ -635,8 +635,7 @@ def _emit_def(
         if not isinstance(expr, LoopRegion):
             continue
         if (
-            expr.start == 0
-            and any(
+            any(
                 isinstance(candidate, Call)
                 and isinstance(candidate.target, Slice)
                 and id(candidate) not in collapsed_slice_ids
@@ -856,7 +855,11 @@ def _emit_def(
         start = printer.visit(region.start, ctx)
         if id(region.induction_var) in _tile_window_steps:
             ctx.imports.add("from tilefoundry.dsl.tf import *")
-            loop = f"tile({extent}, {step})"
+            loop = (
+                f"tile({extent}, {step})"
+                if region.start == 0
+                else f"tile({start}, {extent}, {step})"
+            )
         elif region.start == 0 and region.step == 1:
             loop = f"range({extent})"
         else:

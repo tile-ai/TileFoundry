@@ -1615,6 +1615,20 @@ class StaticReferencePattern(ElementPattern):
         elif match.branch_id == "static_attribute":
             owner = children["owner"]
             attribute = match.captures["attribute"]
+            if isinstance(owner, runtime.Mesh) and not hasattr(owner, attribute):
+                axes = owner.names or ("x", "y", "z")[: len(owner.layout.shape)]
+                named = ", ".join(axes)
+                node = match.node
+                owner_name = (
+                    node.value.id
+                    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                    else "<mesh>"
+                )
+                raise ParseError.from_node(
+                    node,
+                    context,
+                    f"mesh {owner_name!r} has no axis {attribute!r}; its axes are: {named}",
+                )
             try:
                 return getattr(owner, attribute)
             except AttributeError as error:
@@ -3858,7 +3872,14 @@ class LoopIteratorPattern(ElementPattern):
                     FieldPattern("keywords", SequencePattern()),
                     FieldPattern(
                         "args",
-                        SequencePattern(AstNodePattern(ast.expr), AstNodePattern(ast.expr)),
+                        ChoicePattern(
+                            SequencePattern(AstNodePattern(ast.expr), AstNodePattern(ast.expr)),
+                            SequencePattern(
+                                AstNodePattern(ast.expr),
+                                AstNodePattern(ast.expr),
+                                AstNodePattern(ast.expr),
+                            ),
+                        ),
                     ),
                 ),
                 pattern_id="loop.iterator.tile",
@@ -3945,11 +3966,14 @@ class LoopHeaderPattern(ElementPattern):
                     node.iter,
                     "tile()/range() does not accept keyword args (positional-only at the IR level)",
                 )
-            if (kind == "tile" and count != 2) or (kind == "range" and count not in {1, 2, 3}):
+            if count not in ({2, 3} if kind == "tile" else {1, 2, 3}):
                 if kind == "tile" and count == 1:
                     detail = "tile(extent) is not supported; use range(extent)"
                 elif kind == "tile":
-                    detail = f"tile() takes 2 arguments (extent, step), got {count}"
+                    detail = (
+                        "tile() takes 2 or 3 arguments, (stop, step) or "
+                        f"(start, stop, step), got {count}"
+                    )
                 else:
                     detail = f"range() takes 1 to 3 arguments, got {count}"
                 return PatternFailure("loop_header", node.iter, detail)
@@ -3971,11 +3995,14 @@ class LoopHeaderPattern(ElementPattern):
                 node.iter,
                 "tile()/range() does not accept keyword args (positional-only at the IR level)",
             )
-        if (kind == "tile" and count != 2) or (kind == "range" and count not in {1, 2, 3}):
+        if count not in ({2, 3} if kind == "tile" else {1, 2, 3}):
             if kind == "tile" and count == 1:
                 detail = "tile(extent) is not supported; use range(extent)"
             elif kind == "tile":
-                detail = f"tile() takes 2 arguments (extent, step), got {count}"
+                detail = (
+                    "tile() takes 2 or 3 arguments, (stop, step) or "
+                    f"(start, stop, step), got {count}"
+                )
             else:
                 detail = f"range() takes 1 to 3 arguments, got {count}"
             return PatternFailure(
@@ -3983,9 +4010,12 @@ class LoopHeaderPattern(ElementPattern):
                 node.iter,
                 detail,
             )
-        if kind == "tile":
+        if kind == "tile" and count == 2:
             fields = ("extent", "step")
             defaults = {"start": 0}
+        elif kind == "tile":
+            fields = ("start", "extent", "step")
+            defaults = {}
         elif count == 1:
             fields = ("extent",)
             defaults = {"start": 0, "step": 1}
@@ -4006,9 +4036,7 @@ class LoopHeaderPattern(ElementPattern):
         children.extend(
             AstChild(
                 field_name,
-                ChoicePattern(ExpressionPattern(), StaticValuePattern())
-                if context.function is not None and context.function.dialect == "tir"
-                else StaticValuePattern(),
+                ChoicePattern(ExpressionPattern(), StaticValuePattern()),
                 argument,
                 "loop_bound",
                 field_name,

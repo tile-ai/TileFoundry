@@ -164,7 +164,7 @@ signature             ::= (name ':' type-annotation (',' name ':' type-annotatio
 return-type           ::= type-annotation
 if                    ::= if cond-node block (block)?
 while                 ::= while cond-node block
-loop-iterator         ::= 'tile' '(' expression ',' expression ')'
+loop-iterator         ::= 'tile' '(' expression ',' expression (',' expression)? ')'
                           | 'range' '(' (expression | expression ',' expression | expression ','
                             expression ',' expression) ')'
 loop-carry-statement  ::= expression '=' expression
