@@ -16,8 +16,8 @@ class AnalyzeContext:
     target: Target
     topology_level: str | None
     options: object | None
-    root: "Scope"
-    current: "Scope"
+    root: "IterationScope"
+    current: "IterationScope"
 
 
 __all__ = ["AnalyzeContext"]

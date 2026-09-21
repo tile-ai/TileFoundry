@@ -33,7 +33,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.compute_cost import _local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.scope import build_scopes, walk_scopes
+from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
 from tilefoundry.ir.core import Call, describe_expr, get_metadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion

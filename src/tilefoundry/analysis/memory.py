@@ -1,4 +1,4 @@
-"""Memory-family projection from shared Scope and Access records."""
+"""Memory-family projection from shared IterationScope and Access records."""
 
 from __future__ import annotations
 
@@ -437,7 +437,7 @@ class MemoryVisitor(ExprVisitor[None]):
 
 
 def analyze_memory(function: Function, context: AnalyzeContext) -> None:
-    """Attach traffic and per-loop footprints from the shared Scope tree."""
+    """Attach traffic and per-loop footprints from the shared IterationScope tree."""
     module = context.module
     topology_level = context.topology_level
     facts = context.target.get_facts(MemoryHierarchyFacts)

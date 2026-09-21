@@ -1,4 +1,4 @@
-"""Place modeled work by querying the shared lexical Scope tree."""
+"""Place modeled work by querying the shared IterationScope tree."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from tilefoundry.ir.visitor import ExprVisitor
 from .compute_cost import _local_duration_ns
 from .errors import AnalysisError
 from .facts import ParallelCapacityFacts, PerformanceServiceFacts, ThroughputFacts
+from .iteration_scope import IterationScope
 from .metadata import (
     ComputeCostMetadata,
     PerformanceMetadata,
@@ -24,7 +25,6 @@ from .metadata import (
     TimelineMetadata,
     TrafficMetadata,
 )
-from .scope import Scope
 from .visitor import AnalyzeContext
 
 SELECTOR = "performance"
@@ -36,7 +36,7 @@ class PerformanceContext(AnalyzeContext):
 
     facts: ThroughputFacts | None = None
     services: PerformanceServiceFacts | None = None
-    occurrences: list[tuple[Scope, Call, int]] = field(default_factory=list)
+    occurrences: list[tuple[IterationScope, Call, int]] = field(default_factory=list)
 
 
 class PerformanceVisitor(ExprVisitor[None]):

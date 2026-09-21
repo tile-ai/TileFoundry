@@ -15,9 +15,9 @@ from dataclasses import dataclass
 
 from tilefoundry.analysis.check import _resolve_program_geometry, check_program
 from tilefoundry.analysis.errors import AnalysisError
+from tilefoundry.analysis.iteration_scope import ScopeBuilder
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.analysis.report import render_json, report_data
-from tilefoundry.analysis.scope import ScopeBuilder
 from tilefoundry.analysis.visitor import AnalyzeContext
 from tilefoundry.dump import DumpFlags, dump
 from tilefoundry.ir.core import IRMetadata

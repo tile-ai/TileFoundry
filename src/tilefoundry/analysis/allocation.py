@@ -21,10 +21,11 @@ from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.isl_utils import equates
 from tilefoundry.visitor_registry.access_relation import index_set
 
+from .access import Access, AccessPrecision
 from .errors import AnalysisError
+from .iteration_scope import IterationScope
 from .liveness import Liveness
 from .metadata import ValueLifetime
-from .scope import Access, AccessPrecision, Scope
 
 
 class _MemoryOptions(Protocol):
@@ -61,7 +62,7 @@ class _OperandConstraint:
 class _ConstraintContext:
     """One memory-level model while the HIR visitor applies logical relations."""
 
-    current: Scope
+    current: IterationScope
     liveness: Liveness
     values: tuple[AllocationValue, ...]
     boxes_by_expr: dict[int, int]
@@ -114,7 +115,7 @@ def _access_relation(accesses: tuple[Access, ...]) -> isl.map | None:
     return result.coalesce()
 
 
-def _value_domain(value: Expr, scope: Scope) -> isl.set | None:
+def _value_domain(value: Expr, scope: IterationScope) -> isl.set | None:
     """The complete loop-aware coordinate domain of one material value."""
     try:
         held = local_type_of(value.type)
@@ -163,7 +164,7 @@ def _complete_operand_relation(
     operand: Expr,
     inputs: isl.map | None,
     outputs: isl.map | None,
-    scope: Scope,
+    scope: IterationScope,
 ) -> isl.map | None:
     """Return a composed relation only when it covers the whole operand."""
     if inputs is None or outputs is None:
@@ -178,7 +179,7 @@ def _complete_operand_relation(
         return None
 
 
-def _identity_result_relation(node: Call, scope: Scope) -> isl.map | None:
+def _identity_result_relation(node: Call, scope: IterationScope) -> isl.map | None:
     """Map a same-shaped operand to the result while retaining loop axes."""
     domain = _value_domain(node, scope)
     if domain is None:
@@ -201,9 +202,11 @@ def _intervals_by_expr(liveness: Liveness) -> dict[int, tuple[int, int]]:
     }
 
 
-def _corresponding_carry(source: Expr, operand: Expr, scope: Scope) -> LoopRegion | None:
+def _corresponding_carry(
+    source: Expr, operand: Expr, scope: IterationScope
+) -> LoopRegion | None:
     """Find the carry whose own yield is ``source``, without walking its body."""
-    cursor: Scope | None = scope
+    cursor: IterationScope | None = scope
     while cursor is not None:
         loop = cursor.owner
         if isinstance(loop, LoopRegion):
@@ -214,7 +217,9 @@ def _corresponding_carry(source: Expr, operand: Expr, scope: Scope) -> LoopRegio
     return None
 
 
-def _tie_is_live(source: Expr, operand: Expr, scope: Scope, liveness: Liveness) -> bool:
+def _tie_is_live(
+    source: Expr, operand: Expr, scope: IterationScope, liveness: Liveness
+) -> bool:
     """Prove that reusing ``operand`` cannot clobber a later ordinary use."""
     intervals = _intervals_by_expr(liveness)
     source_interval = intervals.get(id(source))
@@ -236,7 +241,7 @@ def _tie_is_live(source: Expr, operand: Expr, scope: Scope, liveness: Liveness) 
 
 
 def _analyze_operand_constraints(
-    node: Call, scope: Scope, liveness: Liveness
+    node: Call, scope: IterationScope, liveness: Liveness
 ) -> tuple[_OperandConstraint, ...]:
     """Prove exact logical relations between one result and its operands."""
     recorded_inputs = scope.accesses.get("narrow", {}).get(id(node))
@@ -516,7 +521,7 @@ def solve_allocation(
     memory_level: str,
     values: tuple[AllocationValue, ...],
     liveness: Liveness,
-    root: Scope,
+    root: IterationScope,
     *,
     options: _MemoryOptions,
 ) -> AllocationResult:
