@@ -68,6 +68,17 @@ class IterationScope:
             root = root.parent
         return id(self) in root._variance.get(id(value), frozenset())
 
+    def enclosing_loops(self) -> tuple[LoopRegion, ...]:
+        """Return this scope's loop owners in outer-to-inner order."""
+        loops = []
+        cursor: IterationScope | None = self
+        while cursor is not None:
+            if isinstance(cursor.owner, LoopRegion):
+                loops.append(cursor.owner)
+            cursor = cursor.parent
+        loops.reverse()
+        return tuple(loops)
+
     def trips(self) -> int:
         """Return this scope's iteration count relative to its parent."""
         cached = getattr(self, "_trips_cache", None)

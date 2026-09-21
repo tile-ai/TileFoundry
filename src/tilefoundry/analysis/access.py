@@ -114,17 +114,6 @@ def eliminate_parameters(
     return relation, precision
 
 
-def _enclosing_loops(scope: "IterationScope") -> tuple[LoopRegion, ...]:
-    loops = []
-    cursor = scope
-    while cursor is not None:
-        if isinstance(cursor.owner, LoopRegion):
-            loops.append(cursor.owner)
-        cursor = cursor.parent
-    loops.reverse()
-    return tuple(loops)
-
-
 def resolve_access(
     operand: Expr,
     boundary: BoundaryRelation,
@@ -135,8 +124,7 @@ def resolve_access(
 ) -> Access | None:
     """Resolve one declared boundary into an access from its iteration scope."""
     relation = relation_of(boundary.pattern)
-    precision = AccessPrecision.EXACT
-    loops = _enclosing_loops(scope)
+    loops = scope.enclosing_loops()
     relation = relation.insert_dims(isl.dim_type.IN, 0, len(loops))
     scope_domain = scope.domain.insert_dims(
         isl.dim_type.SET, scope.depth, relation.dim(isl.dim_type.IN) - scope.depth

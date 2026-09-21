@@ -65,18 +65,12 @@ def iteration_domain(owner: Function | LoopRegion, parent: "IterationScope | Non
     """Build the accumulated authored iteration domain for one scope owner."""
     if isinstance(owner, Function):
         return isl.set("{ [] }")
-    loops: list[LoopRegion] = []
-    cursor = parent
-    while cursor is not None:
-        if isinstance(cursor.owner, LoopRegion):
-            loops.append(cursor.owner)
-        cursor = cursor.parent
-    loops.reverse()
+    loops = () if parent is None else parent.enclosing_loops()
     params: dict[str, tuple[int, int] | None] = {}
     param_map: dict[str, object] = {}
     identities: dict[int, str] = {}
     bounds: list[str] = []
-    for index, loop in enumerate(loops + [owner]):
+    for index, loop in enumerate((*loops, owner)):
         start = bound_to_isl_expr(loop, "start", params, param_map, identities)
         stop = bound_to_isl_expr(loop, "extent", params, param_map, identities)
         step = static_dim_value(loop.step)
