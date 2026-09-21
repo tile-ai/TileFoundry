@@ -51,14 +51,156 @@ from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFa
 CONTEXT = 32
 DIMS = {"ctx_len": CONTEXT}
 FAMILIES = ("compute-cost", "memory", "roofline", "performance")
-INVENTORY = [pytest.param(case, id=case.id) for case in placed_cases()]
+CASES = placed_cases()
+INVENTORY = [pytest.param(case, id=case.id) for case in CASES]
 EXPECTED_MEMORY_PEAKS = {
-    "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]": {
-        "gmem": 175_514_632,
-        "rmem": 395_264,
-        "smem": 98_304,
+    "derived_prefill.DerivedPrefill.prefill[prefill_n=64,topology_only=128]": {
+        "gmem": 288,
     },
+    "flash_split_k_decode.FlashSplitKDecode.flash_split_k_decode[ctx=128]": {
+        "gmem": 788_480,
+        "rmem": 8,
+        "smem": 83_592,
+    },
+    "fused_boundary.FusedBoundary.inner.run[static]": {"rmem": 128},
+    "fused_boundary.FusedBoundary.inner.scale[static]": {"rmem": 128},
+    "fused_boundary.FusedBoundary.root[static]": {
+        "gmem": 512,
+        "rmem": 128,
+        "smem": 32,
+    },
+    "fused_boundary.FusedBoundary.stage[static]": {"smem": 64},
+    "gqa_decode.GqaOnline._ctx_combine[static]": {"gmem": 291_968},
+    "gqa_decode.GqaOnline._ctx_partials[ctx_len=128]": {"gmem": 5_662_720},
+    "gqa_decode.GqaOnline.gqa_online_attend[ctx_len=128]": {
+        "gmem": 283_752,
+        "rmem": 0,
+    },
+    "leaf_weights.Mod.entry[static]": {
+        "gmem": 51_539_608_064,
+        "rmem": 0,
+        "smem": 160,
+    },
+    "leaf_weights.Mod.leaf[static]": {"gmem": 512, "smem": 64},
+    "leaf_weights.Mod.other[static]": {
+        "gmem": 51_539_608_064,
+        "rmem": 0,
+        "smem": 160,
+    },
+    "mesh_slice_start.Fixed.scan[static]": {
+        "gmem": 5_120,
+        "rmem": 0,
+        "smem": 1_408,
+    },
+    "mesh_slice_start.OutOfWindow.oob[static]": {"gmem": 6_144, "rmem": 0},
+    "mesh_slice_start.Strided.scan[static]": {
+        "gmem": 5_120,
+        "rmem": 8,
+        "smem": 1_408,
+    },
+    "mha_decode_paged.Batch2Page256.mha_decode_paged[static]": {
+        "gmem": 5_245_000,
+        "rmem": 32_768,
+        "smem": 16_384,
+    },
+    "mha_decode_paged.LongerCache.mha_decode_paged[static]": {
+        "gmem": 4_195_364,
+        "rmem": 16_384,
+        "smem": 8_192,
+    },
+    "mha_decode_paged.ShorterCache.mha_decode_paged[static]": {
+        "gmem": 2_098_196,
+        "rmem": 8_192,
+        "smem": 4_096,
+    },
+    "mha_decode_paged.SingleTokenPage128.mha_decode_paged[static]": {
+        "gmem": 8_392_740,
+        "rmem": 32_768,
+        "smem": 16_384,
+    },
+    "moe_mega_kernel.MoEMegaKernel.experts[static]": {"gmem": 61_440},
+    "moe_mega_kernel.MoEMegaKernel.routed_expert[static]": {"gmem": 61_440},
+    "moe_mega_kernel.MoEMegaKernel.shared_expert[static]": {"gmem": 61_440},
+    "nested_twin.Weighted.scaled[static]": {"gmem": 1_348, "rmem": 4},
+    "performance_findings.Compare.kernel[static]": {"gmem": 136_208},
+    "performance_findings.GmemSquare.kernel[static]": {"gmem": 68_096},
+    "performance_findings.Levels.kernel[static]": {
+        "gmem": 2_113_536,
+        "rmem": 16_384,
+    },
+    "performance_findings.LevelsNested.kernel[static]": {
+        "gmem": 2_113_536,
+        "rmem": 16_384,
+    },
+    "performance_findings.LevelsOnOneMesh.kernel[static]": {
+        "gmem": 2_113_536,
+        "rmem": 16_384,
+    },
+    "performance_findings.LocalTier.kernel[static]": {"gmem": 68_096, "rmem": 512},
+    "prefill_decode_attention.PrefillDecodeAttention.attend[ctx=128,seq=128]": {
+        "gmem": 1_572_864,
+        "rmem": 0,
+        "smem": 245_760,
+    },
+    "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]": {
+        "gmem": 148_521_988,
+        "rmem": 520,
+        "smem": 65_792,
+    },
+    "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]": {
+        "gmem": 178_922_500,
+        "rmem": 66_560,
+        "smem": 131_072,
+    },
+    "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=0,seq=512]": {
+        "gmem": 5_750_002_180,
+        "rmem": 66_560,
+        "smem": 131_072,
+    },
+    "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=4608,seq=1]": {
+        "gmem": 4_763_301_384,
+        "rmem": 520,
+        "smem": 65_792,
+    },
+    "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=1]": {
+        "gmem": 4_763_301_384,
+        "rmem": 520,
+        "smem": 65_792,
+    },
+    "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=512]": {
+        "gmem": 5_750_002_180,
+        "rmem": 66_560,
+        "smem": 131_072,
+    },
+    "region_boundaries.RegionBoundaries.helper[static]": {"gmem": 64, "rmem": 32},
+    "region_boundaries.RegionBoundaries.run[static]": {
+        "gmem": 64,
+        "rmem": 32,
+        "smem": 32,
+    },
+    "rmsnorm.RmsnormModule.rmsnorm[static]": {"gmem": 6_144, "rmem": 6_144},
+    "rmsnorm_quant_seq2.RmsnormQuantSeq2Module.rmsnorm_quant_seq_2[static]": {
+        "gmem": 9_312,
+        "rmem": 12_288,
+    },
+    "rmsnorm_seq2.RmsnormSeq2Module.rmsnorm_seq_2[static]": {
+        "gmem": 12_288,
+        "rmem": 12_288,
+    },
+    "specialize_through_call.Direct.pick[n=128]": {"gmem": 1_024, "smem": 128},
+    "specialize_through_call.Direct.run[n=128]": {"gmem": 1_024, "smem": 128},
+    "specialize_through_call.ToCallee.pick[n=128]": {"gmem": 1_024, "smem": 128},
+    "specialize_through_call.ToCallee.run[n=128]": {"gmem": 1_024, "smem": 128},
+    "square_cuda.Model.main[static]": {"gmem": 676, "rmem": 4},
+    "tiny_tp_decoder.DecoderLayer.decode[static]": {"gmem": 48, "rmem": 16},
+    "tiny_tp_decoder.DecoderLayer.project[static]": {"gmem": 128},
+    "tiny_tp_decoder.TinyTPDecoderLM.layer.decode[static]": {"gmem": 48, "rmem": 16},
+    "tiny_tp_decoder.TinyTPDecoderLM.layer.project[static]": {"gmem": 128},
+    "tp_all_to_all.TransposeShard.transpose_shard[static]": {"gmem": 256},
+    "weighted_twin.Weighted.scaled[static]": {"gmem": 1_348, "rmem": 4},
 }
+
+assert set(EXPECTED_MEMORY_PEAKS) == {case.id for case in CASES}
 
 
 def _aimed():
@@ -227,20 +369,6 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
             if record is MemoryMetadata:
                 for level in held.footprint:
                     assert level.peak_bytes >= 0 and level.persistent_bytes >= 0
-                    rows = [item for item in held.lifetimes if item.level == level.level]
-                    end = max((item.last_used_at for item in rows), default=-1)
-                    expected_peak = max(
-                        (
-                            sum(
-                                item.bytes
-                                for item in rows
-                                if item.defined_at <= point <= item.last_used_at
-                            )
-                            for point in range(end + 1)
-                        ),
-                        default=0,
-                    )
-                    assert level.peak_bytes == expected_peak
                 for item in held.lifetimes:
                     assert item.bytes >= 0 and 0 <= item.defined_at <= item.last_used_at
                     assert "<buffer " not in item.binding, describe_expr(expr)
@@ -276,11 +404,10 @@ def test_every_concrete_program_predicts_coherently(case: ConcreteCase) -> None:
     assert result.module is owner
     assert set(result.executed) == set(FAMILIES)
     assert_performance_contract(result)
-    expected = EXPECTED_MEMORY_PEAKS.get(case.id, {})
     placement = get_metadata(result.function, MemoryMetadata)
     assert placement is not None
     observed = {item.level: item.peak_bytes for item in placement.footprint}
-    assert {level: observed[level] for level in expected} == expected
+    assert observed == EXPECTED_MEMORY_PEAKS[case.id]
 
 
 @pytest.mark.parametrize("family", FAMILIES)

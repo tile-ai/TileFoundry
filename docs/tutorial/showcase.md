@@ -199,7 +199,7 @@ for needle in ("matmul(hidden, w_q", "cache_update(k_cache", "matmul(v33, w_o"):
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,328896@total,328896@cta;f32:200448@logical,200448@total,200448@cta other-ops=special:1024@logical,1024@total,1024@cta
 # traffic traffic=gmem:r2225620/w806592@total,r2225620/w806592@cta
-# peak-footprint=gmem:1675788
+# peak-footprint=gmem:1690380
 # roofline ideal-ns=632 bound-by=memory
 
     v0 = matmul(hidden, w_q, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072@logical,131072@total,131072@cta; traffic traffic=gmem:r131584/w512@total,r131584/w512@cta operands=0:r512/w0;1:r131072/w0;result:r0/w512; roofline ideal-ns=28 bound-by=memory
@@ -259,12 +259,12 @@ for ctx_len in (128, 512, 1024, 2048, 4096, 8192):
 
 | `ctx_len` | f32 flops `global@CTA` | traffic `global@CTA` | peak gmem bytes | ideal ns | bound |
 |---:|---:|---|---:|---:|---|
-| 128 | `200448@logical,200448@total,200448@cta` | `gmem:r2225620/w806592@total,r2225620/w806592@cta` | 1675788 | 632 | memory |
-| 512 | `799488@logical,799488@total,799488@cta` | `gmem:r4744660/w3202752@total,r4744660/w3202752@cta` | 2572812 | 1656 | memory |
-| 1024 | `1598208@logical,1598208@total,1598208@cta` | `gmem:r8103380/w6397632@total,r8103380/w6397632@cta` | 3768844 | 3022 | memory |
-| 2048 | `3195648@logical,3195648@total,3195648@cta` | `gmem:r14820820/w12787392@total,r14820820/w12787392@cta` | 6160908 | 5752 | memory |
-| 4096 | `6390528@logical,6390528@total,6390528@cta` | `gmem:r28255700/w25566912@total,r28255700/w25566912@cta` | 10945036 | 11214 | memory |
-| 8192 | `12780288@logical,12780288@total,12780288@cta` | `gmem:r55125460/w51125952@total,r55125460/w51125952@cta` | 20513292 | 22136 | memory |
+| 128 | `200448@logical,200448@total,200448@cta` | `gmem:r2225620/w806592@total,r2225620/w806592@cta` | 1690380 | 632 | memory |
+| 512 | `799488@logical,799488@total,799488@cta` | `gmem:r4744660/w3202752@total,r4744660/w3202752@cta` | 2624268 | 1656 | memory |
+| 1024 | `1598208@logical,1598208@total,1598208@cta` | `gmem:r8103380/w6397632@total,r8103380/w6397632@cta` | 3869452 | 3022 | memory |
+| 2048 | `3195648@logical,3195648@total,3195648@cta` | `gmem:r14820820/w12787392@total,r14820820/w12787392@cta` | 6359820 | 5752 | memory |
+| 4096 | `6390528@logical,6390528@total,6390528@cta` | `gmem:r28255700/w25566912@total,r28255700/w25566912@cta` | 11340556 | 11214 | memory |
+| 8192 | `12780288@logical,12780288@total,12780288@cta` | `gmem:r55125460/w51125952@total,r55125460/w51125952@cta` | 21302028 | 22136 | memory |
 
 The table says:
 
@@ -274,9 +274,9 @@ weight bytes = fixed              -> projection weights are a staging target
 cache scan   = grows with ctx_len -> a full-cache residency decision will fail first
 ```
 
-## 2. Specialize at the capacity boundary
+## 2. Specialize at the cache-only capacity estimate
 
-The full-cache sharded program in `Stage2_Sharded` places one local query head's K and V cache in smem. The boundary is derived from the target capacity:
+The full-cache sharded program in `Stage2_Sharded` places one local query head's K and V cache in smem. A cache-only estimate follows from the target capacity:
 
 ```text
 bytes per ctx per CTA = K + V
@@ -288,7 +288,7 @@ T = floor(232448 B / 128 B)
   = 1816
 ```
 
-`Stage1_Specialized` expresses the dispatch as two closed `DimVarRangePat` variants: `[1, 1816]` and `[1817, 8192]`. The Stage1 body is deliberately the unsplit baseline, so the dispatch contract can be read independently from the later implementations.
+This is not the complete placement peak: other simultaneously resident values also occupy smem. `Stage1_Specialized` still uses the estimate to express two closed `DimVarRangePat` variants, `[1, 1816]` and `[1817, 8192]`; the CP placement report below decides whether either variant actually fits. The Stage1 body is deliberately the unsplit baseline, so the dispatch contract can be read independently from the later implementations.
 
 <!-- tilefoundry-source: attn_layer.py -->
 
@@ -405,8 +405,7 @@ class Stage1_Specialized:
 gqa_decode_specialized = Stage1_Specialized.entry_function()
 ```
 
-The Bash cell writes the valid boundary report. The following Python cell loads the file
-and prints its report header:
+The Bash cell writes the complete report at the cache-only estimate. Analysis still returns when the solved placement exceeds capacity; the report header carries a non-fatal `# error=` line:
 
 ```bash
 set -euo pipefail
@@ -428,41 +427,39 @@ print(report.partition("\n\n")[0].rstrip())
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,2629376@total,328672@cta;f32:2833728@logical,2833728@total,354216@cta other-ops=special:14528@logical,14528@total,1816@cta
 # traffic traffic=gmem:r5563796/w3721856@total,r3936212/w3721408@cta;smem:r9597248/w9480000@total,r1199656/w1185000@cta
-# peak-footprint=gmem:3701260;smem:472160
+# peak-footprint=gmem:3933836;smem:581312
+# error="smem placement peak 581312 B exceeds capacity 232448 B"
 # roofline ideal-ns=1935 bound-by=memory
 ```
 
-A larger context crosses the stated capacity. The Bash cell preserves the non-zero
-CLI refusal in a file; the following Python cell loads and prints the actual error output:
+A larger context increases the solved peak. The CLI still succeeds and writes the complete report, including its capacity error:
 
 ```bash
 set -euo pipefail
 mkdir -p tutorial-reports
-set +e
 tilefoundry analyze attn_layer.py:Stage2_Sharded \
   tutorial-reports/stage2-1820.txt \
-  --compute-cost --memory --roofline --dim ctx_len=1820 \
-  2> tutorial-reports/stage2-1820.err
-status=$?
-set -e
-if [ "$status" -eq 0 ]; then
-  echo "expected Stage2_Sharded to refuse ctx_len=1820" >&2
-  exit 1
-fi
+  --compute-cost --memory --roofline --dim ctx_len=1820
 ```
 
 ```python
 from pathlib import Path
 
-error = Path("tutorial-reports/stage2-1820.err").read_text(encoding="utf-8")
-print(error.rstrip())
+report = Path("tutorial-reports/stage2-1820.txt").read_text(encoding="utf-8")
+print(report.partition("\n\n")[0].rstrip())
 ```
 
 ```text
-tilefoundry: error: function 'gqa_decode': value 'v16:240' needs 232960 B in smem, which exceeds the 232448 B the target states for that level
+# analysis target=nvidia.h200_sxm module=Stage2_Sharded function=gqa_decode topology=cta
+# selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
+# compute-cost flops=bf16:328896@logical,2629376@total,328672@cta;f32:2839968@logical,2839968@total,354996@cta other-ops=special:14560@logical,14560@total,1820@cta
+# traffic traffic=gmem:r5573012/w3730048@total,r3941844/w3729600@cta;smem:r9618368/w9500864@total,r1202296/w1187608@cta
+# peak-footprint=gmem:3939468;smem:582592
+# error="smem placement peak 582592 B exceeds capacity 232448 B"
+# roofline ideal-ns=1939 bound-by=memory
 ```
 
-The formula chooses the dispatch boundary. It is not a benchmark-tuned magic number.
+The formula supplies a cache-only dispatch estimate, while the solved placement and its report error expose the complete capacity requirement.
 
 ## 3. Split the query heads
 
@@ -556,7 +553,7 @@ for line in report.splitlines():
 ```text
 # compute-cost flops=bf16:328896@logical,328896@total,328896@cta;f32:200448@logical,200448@total,200448@cta other-ops=special:1024@logical,1024@total,1024@cta
 # traffic traffic=gmem:r2225620/w806592@total,r2225620/w806592@cta
-# peak-footprint=gmem:1675788
+# peak-footprint=gmem:1690380
 # roofline ideal-ns=632 bound-by=memory
 ```
 
@@ -583,7 +580,7 @@ for line in report.splitlines():
 ```text
 # compute-cost flops=bf16:328896@logical,2629376@total,328672@cta;f32:200448@logical,200448@total,25056@cta other-ops=special:1024@logical,1024@total,128@cta
 # traffic traffic=gmem:r1674644/w264832@total,r1559508/w264384@cta;smem:r684608/w675392@total,r85576/w84424@cta
-# peak-footprint=gmem:1540620;smem:33280
+# peak-footprint=gmem:1557132;smem:41152
 # roofline ideal-ns=405 bound-by=memory
 ```
 
@@ -730,7 +727,7 @@ print(next(line.rstrip() for line in annotated.splitlines() if "cache_update(k_c
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,4392896@total,328672@cta;f32:3239808@logical,6418944@total,200592@cta other-ops=integer:9@logical,288@total,9@cta;special:33056@logical,33152@total,1036@cta
 # traffic traffic=gmem:r3476884/w4196992@total,r2558932/w4196544@cta;rmem:r656/w72@total,r656/w72@cta;smem:r5839296/w5662784@total,r682464/w672676@cta
-# peak-footprint=gmem:7144460;rmem:16;smem:33552
+# peak-footprint=gmem:7145228;rmem:8;smem:42312
 # roofline ideal-ns=1599 bound-by=memory
 
     v6 = cache_update(k_cache, cur_pos, write_len, v5)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; traffic traffic=gmem:r136/w128@total,r136/w128@cta operands=0:r0/w0;1:r4/w0;2:r4/w0;3:r128/w0;result:r0/w128; roofline ideal-ns=1 bound-by=memory
@@ -867,7 +864,7 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,337408@total,42176@cta;f32:6390528@logical,51124224@total,6390528@cta other-ops=special:32768@logical,262144@total,32768@cta
 # traffic traffic=gmem:r28254676/w25566912@total,r27967956/w25565792@cta;smem:r331008/w329984@total,r43168/w42144@cta
-# peak-footprint=gmem:10945036;smem:16960
+# peak-footprint=gmem:11340556;smem:16960
 # roofline ideal-ns=11213 bound-by=memory
 
     v1 = reshard(w_q, layout=(1, 256, 8 @ mesh.head, 32), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ mesh.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; traffic traffic=gmem:r131072/w0@total,r16384/w0@cta;smem:r0/w131072@total,r0/w16384@cta operands=0:r131072/w0;result:r0/w131072; roofline ideal-ns=28 bound-by=memory
@@ -1019,7 +1016,7 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,1246400@total,328672@cta;f32:6410280@logical,6410280@total,801285@cta other-ops=integer:32@logical,256@total,32@cta;special:33040@logical,33040@total,4130@cta
 # traffic traffic=gmem:r7672476/w4198272@total,r4001116/w4197824@cta;rmem:r2560/w0@total,r2560/w0@cta;smem:r21788704/w21486432@total,r2723588/w2685804@cta
-# peak-footprint=gmem:3474572;rmem:0;smem:33680
+# peak-footprint=gmem:3475212;rmem:0;smem:41920
 # roofline ideal-ns=2474 bound-by=memory
 
         v21 = slice(k_cache, (0, v20, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost; traffic traffic=rmem:r32/w0@total,r32/w0@cta operands=0:r0/w0;1:r32/w0;result:r0/w0; roofline
