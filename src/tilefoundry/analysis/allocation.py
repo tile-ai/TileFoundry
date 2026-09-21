@@ -24,7 +24,7 @@ from tilefoundry.visitor_registry.access_relation import index_set
 from .errors import AnalysisError
 from .liveness import Liveness
 from .metadata import ValueLifetime
-from .scope import Access, Scope
+from .scope import Access, AccessPrecision, Scope
 
 
 class _MemoryOptions(Protocol):
@@ -92,7 +92,9 @@ def _is_view_of(value: Expr, source: Expr) -> bool:
 
 def _coverage(accesses: tuple[Access, ...]) -> isl.set | None:
     """Union the call coordinates on which exact accesses reach one buffer."""
-    if not accesses or any(not access.exact for access in accesses):
+    if not accesses or any(
+        access.precision is not AccessPrecision.EXACT for access in accesses
+    ):
         return None
     result = accesses[0].relation.domain()
     for access in accesses[1:]:
@@ -102,7 +104,9 @@ def _coverage(accesses: tuple[Access, ...]) -> isl.set | None:
 
 def _access_relation(accesses: tuple[Access, ...]) -> isl.map | None:
     """Union exact accesses to one buffer without discarding their maps."""
-    if not accesses or any(not access.exact for access in accesses):
+    if not accesses or any(
+        access.precision is not AccessPrecision.EXACT for access in accesses
+    ):
         return None
     result = accesses[0].relation
     for access in accesses[1:]:

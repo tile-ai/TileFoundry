@@ -387,6 +387,11 @@ concrete arrangement is not reported: no address or per-value buffer identity
 is a conclusion of this analysis. `rmem` is not address-solved and reports only
 the largest single projected logical value.
 
+An access relation that retains a parameter with a stated finite range remains
+exact: it is neither widened nor unknown, and overlap MAY be proved from it.
+Widened relations and relations with an unbounded parameter MUST NOT prove
+overlap.
+
 - constraints:
   - Placement MUST be settled for the addressable levels `gmem` and `smem` only,
     once per capacity domain that holds a buffer -- the whole target for a level

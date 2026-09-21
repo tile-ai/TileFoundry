@@ -11,6 +11,7 @@ __all__ = [
     "cardinality",
     "count",
     "equates",
+    "has_unbounded_param",
     "involved_dims",
     "param_points",
 ]
@@ -92,6 +93,15 @@ def cardinality(image: "isl.set") -> int | None:
     if any(amount is None for amount in counts):
         return None
     return max(counts, default=0)
+
+
+def has_unbounded_param(relation) -> bool:
+    """Whether a parameter left in *relation* lacks its own finite bounds."""
+    params = relation.params()
+    return any(
+        not params.dim_is_bounded(isl.dim_type.PARAM, index)
+        for index in range(params.dim(isl.dim_type.PARAM))
+    )
 
 
 def equates(relation: "isl.map", out_axis: int, in_dim: int) -> bool:

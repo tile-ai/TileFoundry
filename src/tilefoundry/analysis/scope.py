@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
+from enum import Enum, auto
 
 import isl
 
@@ -18,7 +19,7 @@ from tilefoundry.ir.types.dim_isl import range_expr
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.ir.visitor import expr_children
-from tilefoundry.utils.isl_utils import cardinality, count, param_points
+from tilefoundry.utils.isl_utils import count, has_unbounded_param, param_points
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     access_relation_registry,
@@ -37,13 +38,21 @@ from .footprint import _widest_allowed
 from .metadata import BufferFootprint, LoopFootprintMetadata
 
 
+class AccessPrecision(Enum):
+    """How faithfully an access relation describes the authored access."""
+
+    EXACT = auto()
+    WIDENED = auto()
+    UNKNOWN = auto()
+
+
 @dataclass(frozen=True)
 class Access:
     """One relation from a lexical scope to the allocation it reaches."""
 
     relation: isl.map
     buffer: Expr
-    exact: bool = True
+    precision: AccessPrecision = AccessPrecision.EXACT
 
 
 @dataclass(eq=False)
@@ -123,19 +132,32 @@ class Scope:
             self.depth,
             access.relation.dim(isl.dim_type.IN) - self.depth,
         )
-        for axis in range(self.depth):
-            standing = standing.fix_si(
-                isl.dim_type.SET,
-                axis,
-                standing.dim_min_val(axis).get_num_si(),
-            )
-        reached = access.relation.intersect_domain(standing).range()
-        if reached.dim(isl.dim_type.PARAM):
+        relation = access.relation.intersect_domain(standing)
+        if has_unbounded_param(relation):
             raise AnalysisError("scope access still has an unbound parameter")
-        amount = cardinality(reached)
-        if amount is None:
-            raise AnalysisError("scope access has no finite one-pass extent")
-        result = amount
+        points = param_points(relation.params())
+        if points is None:
+            raise AnalysisError(
+                "scope access parameter box exceeds the 4096-point analysis limit"
+            )
+        amounts = []
+        for point in points:
+            fixed = relation.intersect_params(point)
+            fixed_standing = standing.intersect_params(point)
+            for axis in range(self.depth):
+                low = fixed_standing.dim_min_val(axis)
+                if not low.is_int():
+                    raise AnalysisError("scope access has no finite one-pass extent")
+                fixed_standing = fixed_standing.fix_si(
+                    isl.dim_type.SET,
+                    axis,
+                    low.get_num_si(),
+                )
+            amount = count(fixed.intersect_domain(fixed_standing).range())
+            if amount is None:
+                raise AnalysisError("scope access has no finite one-pass extent")
+            amounts.append(amount)
+        result = max(amounts, default=0)
         cache[id(access)] = result
         self._one_pass_cache = cache
         return result
@@ -319,7 +341,7 @@ def _bind_access(
     narrow: bool,
 ) -> Access | None:
     relation = relation_of(boundary.pattern)
-    exact = True
+    precision = AccessPrecision.EXACT
     loops = []
     cursor = scope
     while cursor is not None:
@@ -349,7 +371,7 @@ def _bind_access(
                 term = None
             if term is None:
                 term = _widest_allowed(relation, name, operand.type)
-                exact = False
+                precision = AccessPrecision.WIDENED
             if term is None:
                 relation = relation.project_out(isl.dim_type.PARAM, param_index, 1)
                 continue
@@ -387,9 +409,9 @@ def _bind_access(
         folded = renaming_relation(operand, ctx, stated=scope.stated_relations(operand, ctx))
         relation = relation.apply_range(relation_of(folded))
         operand = operand.args[0]
-    if relation.dim(isl.dim_type.PARAM):
-        exact = False
-    return Access(relation, operand, exact)
+    if precision is AccessPrecision.EXACT and has_unbounded_param(relation):
+        precision = AccessPrecision.UNKNOWN
+    return Access(relation, operand, precision)
 
 
 def build_scopes(
@@ -502,4 +524,11 @@ def walk_scopes(root: Scope) -> Iterator[Scope]:
         yield from walk_scopes(child)
 
 
-__all__ = ["Access", "Scope", "ScopeBuilder", "build_scopes", "walk_scopes"]
+__all__ = [
+    "Access",
+    "AccessPrecision",
+    "Scope",
+    "ScopeBuilder",
+    "build_scopes",
+    "walk_scopes",
+]
