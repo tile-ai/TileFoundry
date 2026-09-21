@@ -22,12 +22,12 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials, reject_partials
 from tilefoundry.ir.types import TupleType
+from tilefoundry.ir.types.dim_isl import index_set
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     AffineAccess,
     BoundaryRelation,
-    index_set,
     iterating,
     logical_coordinates,
     reached_at,

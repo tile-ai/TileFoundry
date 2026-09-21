@@ -27,7 +27,7 @@ from tilefoundry.visitor_registry.access_relation import (
     relations_of,
     shape_from_relation,
 )
-from tilefoundry.visitor_registry.isl_utility import to_domain
+from tilefoundry.visitor_registry.isl_utility import shape_to_isl_domain
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 
@@ -50,7 +50,7 @@ def _broadcast_all(shapes: tuple[tuple, ...]) -> tuple:
 def _maps(shapes: tuple[tuple, ...]) -> tuple[object, tuple[AffineAccess, ...], dict]:
     out_shape = _broadcast_all(shapes)
     rank = len(out_shape)
-    domain, param_map = to_domain(out_shape)
+    domain, param_map = shape_to_isl_domain(out_shape)
     dims = [f"d{i}" for i in range(rank)]
     source = "[" + ", ".join(dims) + "]"
     maps = []

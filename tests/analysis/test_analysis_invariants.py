@@ -53,6 +53,7 @@ from tilefoundry.ir.types import (
     make_tensor_type,
     tensor_bytes,
 )
+from tilefoundry.ir.types.dim_isl import index_set
 from tilefoundry.ir.types.shard import Topology, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.storage import StorageKind
@@ -61,7 +62,6 @@ from tilefoundry.visitor_registry.access_relation import (
     AffineAccess,
     BoundaryRelation,
     access_relation_registry,
-    index_set,
     local_relations_of,
     relation_of,
     relations_of,

@@ -1,4 +1,4 @@
-"""isl_utility — dim_range, to_domain encode, to_dim decode."""
+"""dim_isl — range queries and conversion between dimensions and isl."""
 
 from __future__ import annotations
 
@@ -22,7 +22,13 @@ from tilefoundry.ir.types.dim import (
     DimVar,
     simplify_dim,
 )
-from tilefoundry.ir.types.dim_isl import dim_range, normalize_dim, to_dim, to_domain
+from tilefoundry.ir.types.dim_isl import (
+    dim_range,
+    index_set,
+    isl_to_dim,
+    normalize_dim,
+    shape_to_isl_domain,
+)
 from tilefoundry.utils.isl_utils import cardinality
 
 P = DimVar("P", 2048, 1_048_577)
@@ -145,9 +151,7 @@ def test_dim_range_prefers_metadata_and_unknown_leaves_return_none():
 
 
 def test_cardinality_maximizes_small_parameter_boxes_exactly():
-    interior_maximum = isl.set(
-        "[c] -> { [p] : 0 <= c <= 8 and 0 <= p and p < c and p < 8 - c }"
-    )
+    interior_maximum = isl.set("[c] -> { [p] : 0 <= c <= 8 and 0 <= p and p < c and p < 8 - c }")
     too_large = isl.set("[x, y] -> { [p] : 0 <= x < 132 and 0 <= y < 132 and p = x + y }")
 
     assert cardinality(interior_maximum) == 4
@@ -162,38 +166,49 @@ def test_cardinality_distinguishes_empty_and_unbounded_parameter_contexts():
     assert cardinality(unbounded) is None
 
 
-def test_to_domain_encoding():
+def test_shape_to_isl_domain_encoding():
     """Static extents inline.
 
     Static extents inline; a bare DimVar keeps its own param name; a
     composite mints one opaque param bounded by ``dim_range`` and dedups
     across axes on the canonical expression.
     """
-    dom, param_map = to_domain((8, 4))
+    dom, param_map = shape_to_isl_domain((8, 4))
     assert dom.dim(isl.dim_type.PARAM) == 0
     assert dom.dim(isl.dim_type.SET) == 2
     assert param_map == {}
 
-    dom, param_map = to_domain((P,))
+    dom, param_map = shape_to_isl_domain((P,))
     assert dom.get_dim_name(isl.dim_type.PARAM, 0) == "P"
     assert param_map == {"P": P}
 
     d = simplify_dim(DimFloorDiv, (P, 4))
-    dom, param_map = to_domain((d, 128, d))
+    dom, param_map = shape_to_isl_domain((d, 128, d))
     assert dom.dim(isl.dim_type.PARAM) == 1
     name = dom.get_dim_name(isl.dim_type.PARAM, 0)
     lo, hi = dim_range(d)
     assert f"{lo} <= {name} <= {hi - 1}" in str(dom)
     assert param_map[name] is d
 
-    dom, param_map = to_domain(())
+    dom, param_map = shape_to_isl_domain(())
     assert dom.dim(isl.dim_type.SET) == 0
     assert param_map == {}
 
 
-def test_to_domain_same_name_conflicting_bounds_raises():
+def test_shape_to_isl_domain_same_name_conflicting_bounds_raises():
     with pytest.raises(ValueError, match="conflicting bounds"):
-        to_domain((DimVar("S", 1, 8), DimVar("S", 1, 16)))
+        shape_to_isl_domain((DimVar("S", 1, 8), DimVar("S", 1, 16)))
+
+
+def test_index_set_is_the_nonnegative_literal_shape_special_case():
+    for shape in ((8, 4), (), (0, 3)):
+        domain, param_map = shape_to_isl_domain(shape)
+        assert param_map == {}
+        assert index_set(shape).is_equal(domain)
+
+    assert index_set((-1, 3)) is None
+    assert index_set((P,)) is None
+    assert index_set((True,)) is None
 
 
 def test_round_trip_lossless_for_every_dim_kind():
@@ -205,11 +220,11 @@ def test_round_trip_lossless_for_every_dim_kind():
     the map is refused instead of being invented as an opaque dim nothing can
     resolve later.
     """
-    assert to_dim(isl.pw_aff("{ [42] }"), {}) == 42
+    assert isl_to_dim(isl.pw_aff("{ [42] }"), {}) == 42
     named = isl.pw_aff("[P] -> { [P] }")
-    assert to_dim(named, {"P": P}) is P
+    assert isl_to_dim(named, {"P": P}) is P
     with pytest.raises(ValueError, match="no known ShapeDim"):
-        to_dim(named, {})
+        isl_to_dim(named, {})
 
     dims = (
         128,
@@ -222,8 +237,8 @@ def test_round_trip_lossless_for_every_dim_kind():
         simplify_dim(DimMod, (P, 128)),
         simplify_dim(DimAdd, (128, simplify_dim(DimFloorDiv, (P, 4)))),
     )
-    domain, param_map = to_domain(dims)
+    domain, param_map = shape_to_isl_domain(dims)
     recovered = tuple(
-        to_dim(domain.dim_max(i).add_constant(1), param_map) for i in range(len(dims))
+        isl_to_dim(domain.dim_max(i).add_constant(1), param_map) for i in range(len(dims))
     )
     assert recovered == dims

@@ -16,7 +16,7 @@ import isl
 
 from tilefoundry.ir.hir._helpers import is_one
 from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
-from tilefoundry.ir.types.dim_isl import to_dim, to_domain
+from tilefoundry.ir.types.dim_isl import index_set, isl_to_dim, shape_to_isl_domain
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis
 from tilefoundry.utils.isl_utils import cardinality
@@ -396,7 +396,7 @@ def shape_from_relation(
         return tuple(extents[axis] for axis in range(rank))
     image = reached.range()
     bindings = parameters_of(relations)
-    return tuple(to_dim(image.dim_max(axis).add_constant(1), bindings) for axis in range(rank))
+    return tuple(isl_to_dim(image.dim_max(axis).add_constant(1), bindings) for axis in range(rank))
 
 
 def boundary_maps(relations: AccessRelations) -> tuple["isl.map", ...]:
@@ -664,7 +664,7 @@ def iterating(extents: "Sequence", relations: "AccessRelations") -> "AccessRelat
     that space, which is one relation empty somewhere, not a second space.
     """
     try:
-        domain, named = to_domain(tuple(extents))
+        domain, named = shape_to_isl_domain(tuple(extents))
     except (TypeError, ValueError, isl.Error) as error:
         raise ValueError(
             f"an Op states it iterates {tuple(extents)}, which is no space to walk: {error}"
@@ -706,19 +706,6 @@ def relation_of(pattern: "AffineAccess") -> "isl.map":
     if not isinstance(pattern, AffineAccess):
         raise ValueError(f"a boundary states an AffineAccess, not {pattern!r}")
     return pattern.relation
-
-
-def index_set(shape) -> "isl.set | None":
-    """The coordinates one value legally has, or nothing when its shape is not numbers."""
-    if any(
-        not isinstance(extent, int) or isinstance(extent, bool) or extent < 0 for extent in shape
-    ):
-        return None
-    if not shape:
-        return isl.set("{ [] }")
-    names = ", ".join(f"d{index}" for index in range(len(shape)))
-    guards = " and ".join(f"0 <= d{index} < {extent}" for index, extent in enumerate(shape))
-    return isl.set(f"{{ [{names}] : {guards} }}")
 
 
 def _as_number(value) -> int | None:
@@ -1226,7 +1213,6 @@ __all__ = [
     "AffineAccess",
     "BoundaryRelation",
     "access_relation_registry",
-    "index_set",
     "iterating",
     "identity_access",
     "identity_relations",

@@ -531,6 +531,17 @@ def ceildiv(a, b) -> Expr:
     symbolic merely by participating in that arithmetic.
   - `ceildiv(a, b)` MUST compose the existing add, subtract, and floor-divide
     operations; it does not introduce a distinct Op.
+  - `ir.types.dim` MUST own dimension IR definitions, construction, and
+    structural predicates without depending on isl. `ir.types.dim_isl` MUST own
+    conversion between dimension IR and isl, affine normalization, shape-domain
+    construction, and conservative value-range queries.
+  - `dim_to_isl_expr` MUST render one dimension expression while registering
+    its leaf parameters; `isl_to_dim` MUST decode an isl affine expression using
+    that parameter map. `shape_to_isl_domain` MUST return one shape's iteration
+    domain and parameter map.
+  - `index_set` MUST be the non-negative, all-literal shape specialization of
+    `shape_to_isl_domain`. It MUST return `None` for a negative, boolean, or
+    non-literal extent rather than constructing a symbolic or empty domain.
   - `dim_range(value)` MUST return conservative half-open bounds from
     `RangeMetadata` before attempting structural dimension arithmetic. A value
     with neither stored nor structurally derivable bounds returns `None`.

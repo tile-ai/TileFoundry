@@ -7,7 +7,7 @@ import isl
 from tilefoundry.ir.core import value_label
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.types.dim_isl import range_expr
+from tilefoundry.ir.types.dim_isl import dim_to_isl_expr
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 
 from .errors import AnalysisError
@@ -48,7 +48,7 @@ def bound_to_isl_expr(
     if number is not None:
         return str(number)
     try:
-        rendered = range_expr(
+        rendered = dim_to_isl_expr(
             value,
             params,
             param_map=param_map,
