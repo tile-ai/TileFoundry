@@ -23,6 +23,7 @@ from tilefoundry.analysis.report import (
 from tilefoundry.inspection.python_printer import HirPrinter, PythonPrintOptions
 from tilefoundry.inspection.values import (
     AdvisorySummary,
+    ErrorSummary,
     MemorySummary,
     PerformanceSummaryView,
     Prose,
@@ -49,9 +50,7 @@ def selected_types(result: AnalysisResult) -> tuple[type[IRMetadata], ...]:
     return _selected_types(result.module, result.analyses, result.metadata_types)
 
 
-def render_analysis(
-    result: AnalysisResult, *, operands: bool = False
-) -> AnalysisRendering:
+def render_analysis(result: AnalysisResult, *, operands: bool = False) -> AnalysisRendering:
     """Render one result once for both annotated source and report data."""
     selected_types_ = selected_types(result)
     rendered = HirPrinter().render(
@@ -98,9 +97,7 @@ def _summary(
             function=data["function"],
             topology=data["topology"] or "none",
         ),
-        ReportSelection(
-            requested=tuple(data["requested"]), executed=tuple(data["executed"])
-        ),
+        ReportSelection(requested=tuple(data["requested"]), executed=tuple(data["executed"])),
     ]
     if "totals" in data and "compute-cost" in data["executed"]:
         views.append(get_metadata(function, ComputeCostMetadata) or ComputeCostMetadata())
@@ -110,6 +107,7 @@ def _summary(
         memory = get_metadata(function, MemoryMetadata)
         views.append(MemorySummary(peak_footprint(memory)))
         if MemoryMetadata in selected:
+            views.extend(ErrorSummary(Prose(note)) for note in memory.errors)
             views.extend(AdvisorySummary(Prose(note)) for note in memory.advisories)
     if "roofline" in function_records:
         views.append(get_metadata(function, RooflineMetadata))

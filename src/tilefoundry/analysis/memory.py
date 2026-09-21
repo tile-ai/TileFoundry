@@ -497,19 +497,11 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         values = tuple(item for item in allocation_values if item.lifetime.memory_level == name)
         rows = [item.lifetime for item in values]
         capacity = declared.capacity_bytes if declared is not None else None
-        for item in rows:
-            if capacity is not None and item.bytes > capacity:
-                raise AnalysisError(
-                    f"function {function.name!r}: value {item.binding!r} needs "
-                    f"{item.bytes} B in {item.memory_level}, which exceeds the "
-                    f"{capacity} B the target states for that level"
-                )
         if name in (str(StorageKind.GMEM), str(StorageKind.SMEM)) and values:
             solved = solve_allocation(
                 name,
                 values,
                 context.root,
-                capacity_bytes=capacity,
                 options=solver_options,
             )
             peak = solved.peak_bytes
@@ -535,6 +527,12 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             )
         )
     levels = tuple(levels_list)
+    errors = tuple(
+        f"{item.memory_level} placement peak {item.peak_bytes} B exceeds "
+        f"capacity {item.capacity_bytes} B"
+        for item in levels
+        if item.exceeds_capacity
+    )
     allocation = None
     if solver_statuses:
         allocation = AllocationMetadata(solver_status="feasible")
@@ -543,6 +541,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         MemoryMetadata(
             footprint=levels,
             lifetimes=lifetimes,
+            errors=errors,
             allocation=allocation,
         ),
     )

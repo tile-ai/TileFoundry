@@ -278,7 +278,6 @@ def solve_allocation(
     values: tuple[AllocationValue, ...],
     root: Scope,
     *,
-    capacity_bytes: int | None,
     options: _MemoryOptions,
 ) -> AllocationResult:
     """Return the first feasible whole-function placement for one level."""
@@ -289,12 +288,7 @@ def solve_allocation(
 
     largest = max(item.lifetime.bytes for item in values)
     total = sum(item.lifetime.bytes for item in values)
-    limit = total if capacity_bytes is None else capacity_bytes
-    if largest > limit:
-        raise AnalysisError(
-            f"allocation: a value needs {largest} B in {memory_level}, "
-            f"which exceeds its {limit} B placement limit"
-        )
+    limit = total
 
     model = cp_model.CpModel()
     peak = model.new_int_var(largest, limit, f"{memory_level}_peak")

@@ -213,10 +213,10 @@ class AllocationMetadata:
 class MemoryMetadata(IRMetadata):
     """Record one function's memory behavior against a target hierarchy.
 
-    Function attachment reflects that peaks span all live ranges. Advisories
-    report cache working-set and order-dependent peak overflow; only a single
-    value exceeding an addressable level is an error because no schedule can
-    place it.
+    Function attachment reflects that peaks span all live ranges. ``errors``
+    reports a solved placement whose high-water exceeds stated capacity without
+    suppressing the rest of the analysis result. Advisories carry lower-severity
+    capacity findings.
 
     ``allocation`` is absent when the function has no addressable buffer to
     place at the level being analysed, which is a different answer from having
@@ -225,6 +225,7 @@ class MemoryMetadata(IRMetadata):
 
     footprint: tuple[MemoryLevelFootprint, ...] = ()
     lifetimes: tuple[ValueLifetime, ...] = ()
+    errors: tuple[str, ...] = ()
     advisories: tuple[str, ...] = ()
     allocation: "AllocationMetadata | None" = None
 

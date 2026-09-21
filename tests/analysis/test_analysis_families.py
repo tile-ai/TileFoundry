@@ -40,6 +40,7 @@ from tilefoundry.analysis.compute_cost import (
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.memory import MemoryOptions
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
+from tilefoundry.inspection.analysis_report import render_analysis, render_text
 from tilefoundry.ir.core import (
     Call,
     get_metadata,
@@ -337,24 +338,30 @@ def test_a_matmul_counts_its_rows_once_whichever_axis_the_mesh_split() -> None:
     assert per_layout["last_axis"] == per_layout["strip_major"]
 
 
-def test_a_program_whose_buffers_have_nowhere_to_sit_is_refused() -> None:
-    """Placing the buffers is what makes the rest of the answer worth having.
+def test_a_program_whose_peak_exceeds_capacity_reports_an_error() -> None:
+    """A placement error is report data rather than an aborted analysis.
 
     One shared tile of this program is twice what the tight machine states for
-    that level, so the value cannot be placed at all. On the real machine the
-    pointwise add result reuses its dead input: two logical lifetimes overlap at
-    the call event, but their exact access maps prove one physical placement.
-    Restating capacity changes only the answer, not those logical lifetimes.
+    that level. The solver still places it and its pointwise add result in one
+    buffer, then reports that solved high-water against capacity. Restating
+    capacity changes only the error, not the logical lifetimes or placement.
     """
     tight = replace(_SharedTile, target=_TightShared("nvidia.h200_sxm"))
     split = next(function for function in tight.functions if function.name == "split")
     roomy = replace(_SharedTile, target=_RoomyShared("nvidia.h200_sxm"))
 
-    refusal = r"value 'v\d+:\d+' needs 211200 B in smem, which exceeds the 105600 B"
-    with pytest.raises(AnalysisError, match=refusal):
-        analyze(tight, split, analysis="memory")
-    with pytest.raises(AnalysisError, match=refusal):
-        analyze(tight, split, analysis="performance")
+    tight_memory = analyze(tight, split, analysis="memory")
+    tight_record = get_metadata(tight_memory.function, MemoryMetadata)
+    assert tight_record.errors == ("smem placement peak 211200 B exceeds capacity 105600 B",)
+    assert '# error="smem placement peak 211200 B exceeds capacity 105600 B"' in render_text(
+        render_analysis(tight_memory)
+    )
+    assert render_analysis(tight_memory).data["function_records"]["memory"]["errors"] == [
+        "smem placement peak 211200 B exceeds capacity 105600 B"
+    ]
+
+    tight_performance = analyze(tight, split, analysis="performance")
+    assert get_metadata(tight_performance.function, MemoryMetadata).errors == tight_record.errors
 
     unrestated = next(item for item in _SharedTile.functions if item.name == "split")
     held = get_metadata(
@@ -375,7 +382,9 @@ def test_a_program_whose_buffers_have_nowhere_to_sit_is_refused() -> None:
     )
     summary = get_metadata(fits.function, PerformanceSummaryMetadata)
     assert summary is not None
-    assert get_metadata(fits.function, MemoryMetadata).allocation.solver_status == "feasible"
+    fits_memory = get_metadata(fits.function, MemoryMetadata)
+    assert fits_memory.allocation.solver_status == "feasible"
+    assert fits_memory.errors == ()
     assert summary.timeline.end_ns > 0
 
     wider = replace(_SharedTile, target=_RoomierShared("nvidia.h200_sxm"))

@@ -52,6 +52,11 @@ class AdvisorySummary(IRMetadata):
 
 
 @dataclass(frozen=True)
+class ErrorSummary(IRMetadata):
+    text: Prose
+
+
+@dataclass(frozen=True)
 class PerformanceSummaryView(IRMetadata):
     root: str = ""
     predicted_ns: int = 0
@@ -127,8 +132,7 @@ class CommentPrinter:
 
     def _breakdown(self, held, topologies, *, logical=True):
         return {
-            kind: self._spread(spread, topologies, logical=logical)
-            for kind, spread in held.kinds
+            kind: self._spread(spread, topologies, logical=logical) for kind, spread in held.kinds
         }
 
     def print_ComputeCostMetadata(self, record, **_):
@@ -158,6 +162,7 @@ class CommentPrinter:
             (
                 ("peak", {item.memory_level: item.peak_bytes for item in record.footprint}),
                 ("persistent", sum(item.persistent_bytes for item in record.footprint), 0),
+                ("errors", len(record.errors), 0),
                 ("advisories", len(record.advisories), 0),
             ),
         )
@@ -217,6 +222,9 @@ class CommentPrinter:
     def print_AdvisorySummary(self, record, **_):
         return self._single("advisory", record.text)
 
+    def print_ErrorSummary(self, record, **_):
+        return self._single("error", record.text)
+
     def print_PerformanceSummaryView(self, record, **_):
         return self._record(
             "performance",
@@ -256,6 +264,7 @@ __all__ = [
     "ReportSelection",
     "MemorySummary",
     "AdvisorySummary",
+    "ErrorSummary",
     "PerformanceSummaryView",
     "peak_footprint",
 ]
