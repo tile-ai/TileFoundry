@@ -52,8 +52,6 @@ class PersistentGemmFlat:
             return out
 
 
-persistent_gemm_flat = PersistentGemmFlat.entry_function()
-
 __all__ = [
     "BK",
     "BM",
@@ -66,5 +64,4 @@ __all__ = [
     "NBLOCKS",
     "NUM_TILES",
     "PersistentGemmFlat",
-    "persistent_gemm_flat",
 ]

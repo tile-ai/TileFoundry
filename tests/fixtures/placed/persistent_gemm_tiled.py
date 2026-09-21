@@ -51,8 +51,6 @@ class PersistentGemmTiled:
             return out
 
 
-persistent_gemm_tiled = PersistentGemmTiled.entry_function()
-
 __all__ = [
     "BK",
     "BM",
@@ -65,5 +63,4 @@ __all__ = [
     "M",
     "N",
     "PersistentGemmTiled",
-    "persistent_gemm_tiled",
 ]

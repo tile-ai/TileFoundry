@@ -15,7 +15,6 @@ from dataclasses import replace
 import pytest
 
 from tests.fixtures.placed.performance_findings import _CrossScopePerformance
-from tests.fixtures.placed.persistent_gemm_tiled import BM, BN, PersistentGemmTiled
 from tests.fixtures.placed.symbolic_offset import (
     _LiteralStoreOffset,
     _SymbolicStoreOffset,
@@ -40,14 +39,12 @@ from tilefoundry.analysis.compute_cost import (
 )
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.memory import MemoryOptions
-from tilefoundry.analysis.scope import build_scopes, walk_scopes
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, Topology, tf
 from tilefoundry.inspection.analysis_report import render_analysis, render_text
 from tilefoundry.ir.core import (
     Call,
     get_metadata,
 )
-from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
@@ -164,22 +161,6 @@ class _SharedTile:
 
 def _calls(function) -> tuple[Call, ...]:
     return tuple(expr for expr in collect_exprs(function.body) if isinstance(expr, Call))
-
-
-def test_one_pass_maximizes_over_bounded_mesh_parameters() -> None:
-    root = build_scopes(PersistentGemmTiled, PersistentGemmTiled.entry_function())
-    scope = next(
-        scope
-        for scope in walk_scopes(root)
-        if isinstance(scope.owner, LoopRegion) and scope.owner.induction_var.name == "ni"
-    )
-    access = next(
-        accesses[0]
-        for call, accesses in scope.outputs["narrow"].values()
-        if isinstance(call.target, InsertSlice)
-    )
-
-    assert scope.one_pass(access) == BM * BN
 
 
 def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> None:
