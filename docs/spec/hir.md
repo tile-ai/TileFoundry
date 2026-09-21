@@ -1690,4 +1690,6 @@ def is_concrete(fn: Function) -> bool:
     re-pointed instead would answer both with whichever was written last.
   - `residual_dims` and `dim_vars_reached` MUST inspect the whole function
     graph, including signatures, bodies, Op attributes, loop bounds, variants,
-    and called functions. `is_concrete` additionally checks the return type.
+    and called functions. `is_concrete` additionally checks the return type and
+    is false exactly when a reachable required extent still contains a `DimVar`;
+    runtime values without a `DimVar` are rejected later by their consumer.

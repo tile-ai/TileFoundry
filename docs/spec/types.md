@@ -525,6 +525,10 @@ def ceildiv(a, b) -> Expr:
   - `is_dim_expr` MUST accept non-boolean integers, `DimVar`, integer-valued
     `Constant`, and recursively valid calls to the seven dimension arithmetic
     operations, and MUST reject other values.
+  - `has_symbolic_dims(value)` MUST report whether a `DimVar` is reachable, not
+    whether dimension arithmetic contains a runtime `Expr`. A dimension call
+    recursively checks its operands; non-dimension expressions do not become
+    symbolic merely by participating in that arithmetic.
   - `ceildiv(a, b)` MUST compose the existing add, subtract, and floor-divide
     operations; it does not introduce a distinct Op.
   - `dim_range(value)` MUST return conservative half-open bounds from

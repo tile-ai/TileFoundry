@@ -388,7 +388,7 @@ def has_symbolic_dims(value: object) -> bool:
     if isinstance(value, DimVar):
         return True
     if isinstance(value, Call) and isinstance(value.target, _DIM_OP_TYPES):
-        return True
+        return any(has_symbolic_dims(arg) for arg in value.args)
     if isinstance(value, TensorType):
         return has_symbolic_dims(value.shape) or has_symbolic_dims(value.layout)
     if isinstance(value, TupleType):
