@@ -134,7 +134,12 @@ def _flat_schedule(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     return result
 
 
-def test_persistent_schedules_match_nonpersistent_gemm() -> None:
+def test_reference_tiling_index_arithmetic_matches_dense_gemm() -> None:
+    """The reference loops cover each output once and equal dense GEMM.
+
+    The analysis assertions above cover the authored DSL bodies. The evaluator
+    cannot execute those bodies because it intentionally rejects MeshCoord.
+    """
     a, b = _reference_inputs()
     expected = a.float() @ b.float()
 

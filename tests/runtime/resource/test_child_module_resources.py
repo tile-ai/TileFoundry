@@ -16,7 +16,6 @@ from tests.fixtures.shapes.scaled_modules import FusedScaledParent, ScaledChild
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, Tensor, tf
 from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.core import VerifyError
 from tilefoundry.target import CudaTarget
 
 
@@ -54,25 +53,27 @@ def test_a_child_weight_elsewhere_is_refused_before_anything_runs() -> None:
     assert str(reading.resource.subtree("scaled").load("w").device) == "meta"
 
 
-def test_a_converter_cannot_take_implicit_constants_from_a_child() -> None:
-    with pytest.raises(
-        VerifyError,
-        match=r"callee declares 2 parameter\(s\), call passed 1",
-    ):
+def test_a_converter_may_call_a_child_staged_before_it(tmp_path) -> None:
+    @module(entry="run", target=CudaTarget("nvidia.h200_sxm"))
+    class _Converted:
+        scaled = ScaledChild
 
-        @module(entry="run", target=CudaTarget("nvidia.h200_sxm"))
-        class _Converted:
-            scaled = ScaledChild
+        @func
+        def run(x: Tensor[(4,), "f32"], w: ConstTensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
+            return tf.add(x, w)
 
-            @func
-            def run(
-                x: Tensor[(4,), "f32"], w: ConstTensor[(4,), "f32"]
-            ) -> Tensor[(4,), "f32"]:
-                return tf.add(x, w)
+        @run.converter("w")
+        def _convert_w(w: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
+            return scaled(w)  # noqa: F821
 
-            @run.converter("w")
-            def _convert_w(w: Tensor[(4,), "f32"]) -> Tensor[(4,), "f32"]:
-                return scaled(w)  # noqa: F821
+    raw = _Weights({"w": torch.full((4,), 3.0), "scaled.w": torch.full((4,), 2.0)})
+    _Converted.prepare(raw, str(tmp_path), device="cpu")
+
+    from safetensors.torch import load_file  # noqa: PLC0415 — optional runtime dep
+
+    prepared = load_file(str(tmp_path / "model-00001-of-00001.safetensors"))
+    assert torch.equal(prepared["w"], torch.full((4,), 6.0))
+    assert torch.equal(prepared["scaled.w"], torch.full((4,), 2.0))
 
 
 def test_preparation_stages_on_the_device_it_was_given() -> None:

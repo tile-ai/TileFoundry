@@ -8,14 +8,14 @@ from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 
-M = 32
-N = 32
-K = 16
-BM = 8
-BN = 8
-BK = 8
-BX = 2
-BY = 2
+M = 512
+N = 512
+K = 128
+BM = 64
+BN = 64
+BK = 32
+BX = 4
+BY = 4
 CHUNK_M = M // BX
 CHUNK_N = N // BY
 

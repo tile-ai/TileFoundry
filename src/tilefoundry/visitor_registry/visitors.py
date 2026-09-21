@@ -264,7 +264,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
                 owns_body=self._owns_body,
                 ranges=self._ranges,
             ).visit(fn.body, replace(ctx, memo=memo))
-        for nested in (*fn.variants, *(converter for _, converter in fn.converters)):
+        for nested in fn.variants:
             TypeInferVisitor(
                 owns_body=self._owns_body,
                 ranges=self._ranges,

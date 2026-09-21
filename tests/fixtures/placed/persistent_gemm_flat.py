@@ -8,16 +8,16 @@ from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 
-M = 32
-N = 32
-K = 16
-BM = 8
-BN = 8
-BK = 8
+M = 512
+N = 512
+K = 128
+BM = 64
+BN = 64
+BK = 32
 GRID_M = M // BM
 GRID_N = N // BN
 NUM_TILES = GRID_M * GRID_N
-NBLOCKS = 4
+NBLOCKS = 16
 
 
 @module(
