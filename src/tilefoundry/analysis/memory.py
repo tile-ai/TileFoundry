@@ -10,6 +10,7 @@ from tilefoundry.ir.core import (
     Expr,
     VerifyError,
     describe_expr,
+    get_metadata,
     value_labels,
 )
 from tilefoundry.ir.core import attach_metadata as attach
@@ -452,8 +453,8 @@ class MemoryContext(AnalyzeContext):
     communication: _TrafficAccounts = field(default_factory=_TrafficAccounts)
     memory_level: str | None = None
     wave: tuple[int, int] | None = None
-    footprint_labels: dict[int, str] = field(default_factory=dict)
     reached: list[ReachedAddresses] = field(default_factory=list)
+    call_reached: list[tuple[Call, tuple[ReachedAddresses, ...]]] = field(default_factory=list)
     footprint_available: bool = False
 
 
@@ -464,30 +465,15 @@ def _footprint_inputs(
     wave: tuple[int, int],
     whole: CostContext,
 ) -> tuple[
-    dict[int, str],
     list[ReachedAddresses],
     bool,
 ]:
-    """Fix shared labels and account for Calls with no recorded boundaries."""
-    distinct: dict[int, Expr] = {}
+    """Account for Calls with no recorded boundaries."""
     refused: list[ReachedAddresses] = []
     available = True
     wave_units, declared_units = wave
     for scope in walk_scopes(root):
-        for call, accesses in scope.accesses.get("narrow", {}).values():
-            for access in accesses:
-                distinct.setdefault(id(access.buffer), access.buffer)
-            for argument in call.args:
-                distinct.setdefault(id(argument), argument)
-            distinct.setdefault(id(call), call)
-        for call, accesses in scope.outputs.get("narrow", {}).values():
-            for access in accesses:
-                distinct.setdefault(id(access.buffer), access.buffer)
-            distinct.setdefault(id(call), call)
         for call in scope.refused.get("narrow", ()):
-            for argument in call.args:
-                distinct.setdefault(id(argument), argument)
-            distinct.setdefault(id(call), call)
             reached = reached_by(
                 scope,
                 call,
@@ -502,8 +488,7 @@ def _footprint_inputs(
             else:
                 refused.extend(reached)
 
-    labels = dict(zip(distinct, value_labels(distinct.values()), strict=True))
-    return labels, refused, available
+    return refused, available
 
 
 class MemoryVisitor(ExprVisitor[None]):
@@ -549,14 +534,7 @@ class MemoryVisitor(ExprVisitor[None]):
             )
             if reached is not None:
                 ctx.reached.extend(reached)
-                moved = replace(
-                    moved,
-                    footprint=footprint_of(
-                        merged(reached),
-                        memory_level=ctx.memory_level,
-                        labels=ctx.footprint_labels,
-                    ),
-                )
+                ctx.call_reached.append((expr, reached))
             else:
                 ctx.footprint_available = False
         attach(expr, moved)
@@ -590,12 +568,10 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     cache = cached_level(facts)
     wave = wave_of(module, context.target, topology_level) if cache is not None else None
     memory_level = cache[1] if cache is not None and wave is not None else None
-    footprint_labels: dict[int, str] = {}
     refused_reached: list[ReachedAddresses] = []
     footprint_available = False
     if memory_level is not None and wave is not None:
         (
-            footprint_labels,
             refused_reached,
             footprint_available,
         ) = _footprint_inputs(
@@ -626,11 +602,32 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         locals_by_unit=locals_by_unit,
         memory_level=memory_level,
         wave=wave,
-        footprint_labels=footprint_labels,
         reached=refused_reached,
         footprint_available=footprint_available,
     )
     MemoryVisitor().visit(function.body, memory_context)
+    merged_reached = merged(memory_context.reached)
+    distinct: dict[int, Expr] = {}
+    for item in merged_reached:
+        if item.reached is not None:
+            distinct.setdefault(id(item.buffer), item.buffer)
+    footprint_labels = dict(zip(distinct, value_labels(distinct.values()), strict=True))
+    if memory_level is not None:
+        for call, reached in memory_context.call_reached:
+            moved = get_metadata(call, MemoryMetadata)
+            if moved is None:
+                raise AnalysisError("memory: Call footprint has no movement record")
+            attach(
+                call,
+                replace(
+                    moved,
+                    footprint=footprint_of(
+                        merged(reached),
+                        memory_level=memory_level,
+                        labels=footprint_labels,
+                    ),
+                ),
+            )
     liveness = analyze_liveness(function)
     placement = CostContext(
         scope=FunctionScope(module, function),
@@ -704,9 +701,9 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         and memory_context.footprint_available
     ):
         footprint = footprint_of(
-            merged(memory_context.reached),
+            merged_reached,
             memory_level=memory_level,
-            labels=memory_context.footprint_labels,
+            labels=footprint_labels,
         )
         cache_level, _backing_level, cache_capacity_bytes = cache
         wave_units, declared_units = wave

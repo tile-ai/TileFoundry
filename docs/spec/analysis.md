@@ -627,6 +627,10 @@ receives a `memory` annotation; `operands` is emitted only when asked for
 memory traffic=<memory-level>:r<int>/w<int>@logical,r<int>/w<int>@total,r<int>/w<int>@<topology>[,...] footprint=<buffer>:<int>[;<buffer>:<int>] [operands=<position>:r<int>/w<int>[;<position>:...]]
 ```
 
+In the printed `footprint` field, a buffer uses the same value label as a
+lifetime binding and that label may itself contain `:` (for example,
+`v0:57:1024`). The byte count is the integer after the last colon.
+
 Missing optional conclusions omit their whole printed field. Call and Function
 JSON projections are both under `memory`. The Function's full projection is
 under `function_records.memory`:

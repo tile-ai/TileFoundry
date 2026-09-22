@@ -183,7 +183,10 @@ def _missing_boundaries(
     recorded_outputs = {
         access.output_index for access in accesses if access.output_index is not None
     }
-    output = ctx.local_type_of(call)
+    try:
+        output = ctx.local_type_of(call)
+    except ValueError:
+        return (ReachedAddresses(call, None, None, None, False),)
     output_count = len(output.fields) if isinstance(output, TupleType) else 1
     missing_inputs = (
         ReachedAddresses(call.args[index], None, None, None, False)
@@ -200,7 +203,10 @@ def _missing_boundaries(
 
 def _uncounted_boundaries(call: Call, ctx: CostContext) -> tuple[ReachedAddresses, ...]:
     """Represent every boundary when no positional movement answer exists."""
-    output = ctx.local_type_of(call)
+    try:
+        output = ctx.local_type_of(call)
+    except ValueError:
+        return (ReachedAddresses(call, None, None, None, False),)
     output_count = len(output.fields) if isinstance(output, TupleType) else 1
     return (
         *(ReachedAddresses(arg, None, None, None, False) for arg in call.args),
