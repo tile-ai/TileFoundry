@@ -51,7 +51,7 @@ def _is_structural_occurrence(
     )
 
 
-def _local_duration_ns(
+def local_duration_ns(
     cost: ComputeCostMetadata,
     facts: ThroughputFacts,
     services: PerformanceServiceFacts,

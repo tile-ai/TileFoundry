@@ -33,7 +33,7 @@ from tilefoundry.analysis import (
     analyze,
 )
 from tilefoundry.analysis.access import Access, AccessPrecision
-from tilefoundry.analysis.compute_cost import _local_duration_ns
+from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import IterationScope, build_scopes, walk_scopes
 from tilefoundry.ir.core import Call, describe_expr, get_metadata
@@ -325,7 +325,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
             continue
         cost = get_metadata(expr, ComputeCostMetadata)
         assert cost is not None
-        duration = _local_duration_ns(
+        duration = local_duration_ns(
             cost,
             throughput,
             services,

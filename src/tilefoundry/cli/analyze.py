@@ -13,7 +13,7 @@ from typing import Mapping
 from tilefoundry.analysis import analyze, check_program
 from tilefoundry.analysis.check import (
     _program_dim_vars,
-    _resolve_program_geometry,
+    resolve_program_geometry,
 )
 from tilefoundry.cli.source import load_authored_ir, suggested_extents
 from tilefoundry.inspection import PythonPrintOptions, as_script
@@ -142,7 +142,7 @@ def run_authored_analysis(
         raise ValueError(f"analyze needs one EXTENT for every open dimension: {guidance}")
     if not analyses:
         try:
-            checked_module, checked = _resolve_program_geometry(
+            checked_module, checked = resolve_program_geometry(
                 module,
                 function,
                 dims,

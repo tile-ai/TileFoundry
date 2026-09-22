@@ -162,7 +162,7 @@ def _program_dim_vars(module: Module, function: Function) -> dict[str, object]:
     return found
 
 
-def _resolve_program_geometry(
+def resolve_program_geometry(
     module: Module,
     function: Function,
     dims: Mapping[str, int] | None,

@@ -13,7 +13,7 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.visitor import ExprVisitor
 
-from .compute_cost import _local_duration_ns
+from .compute_cost import local_duration_ns
 from .errors import AnalysisError
 from .facts import ParallelCapacityFacts, PerformanceServiceFacts, ThroughputFacts
 from .iteration_scope import IterationScope
@@ -63,7 +63,7 @@ class PerformanceVisitor(ExprVisitor[None]):
             raise AnalysisError(f"performance: missing compute/memory record for {expr!r}")
         if ctx.facts is None or ctx.services is None:
             raise AnalysisError("performance: visitor context is missing target facts")
-        duration = _local_duration_ns(
+        duration = local_duration_ns(
             cost,
             ctx.facts,
             ctx.services,

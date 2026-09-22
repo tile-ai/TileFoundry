@@ -35,7 +35,7 @@ from tilefoundry.analysis import (
 )
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.compute_cost import (
-    _local_duration_ns,
+    local_duration_ns,
 )
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.memory import MemoryOptions
@@ -429,10 +429,10 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
         match=r"^performance: selected topology level 'thread', but the target's "
         r"one-unit throughputs are stated for 'cta'$",
     ):
-        _local_duration_ns(work, throughput, services, level="thread")
+        local_duration_ns(work, throughput, services, level="thread")
 
     with pytest.raises(AnalysisError, match=r"unknown compute dtype 'f9e9m9'"):
-        _local_duration_ns(
+        local_duration_ns(
             replace(
                 work,
                 flops=Breakdown((*work.flops.kinds, ("f9e9m9", Spread(8, 8, (8,))))),
@@ -461,7 +461,7 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
         AnalysisError,
         match=rf"no one-unit throughput for level '{throughput.bandwidth_level}' at 'cta'",
     ):
-        _local_duration_ns(
+        local_duration_ns(
             ComputeCostMetadata(),
             throughput,
             replace(services, unit_bandwidth=()),
