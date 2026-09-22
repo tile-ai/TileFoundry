@@ -27,7 +27,7 @@ from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContex
 
 EVIDENCE: dict[str, str] = {
     "compute-cost": "the logical work and traffic of every value: flops by dtype, bytes moved",
-    "memory": "where that traffic lands, and the footprint it holds live against the capacity",
+    "memory": "where traffic lands and what storage remains live against capacity",
     "roofline": "which of compute or memory limits each value, and the limit in time",
     "performance": "when each value runs, where its buffers fit, and the time that takes",
 }
@@ -85,17 +85,17 @@ def guidance() -> str:
         compute-cost   nothing. Every kind states its total     never
                        and every level's per-unit share
         memory         nothing for traffic, which states every   the program shards
-                       level. Footprint follows its owner
+                       level; placement remains Function-wide
         roofline       nothing. The bound is the machine's     never
                        and is unchanged by program splits
         performance    which level's parallel capacity the     the program shards
                        plan is issued against
 
         Two assumptions the reported numbers rest on:
-          global traffic is the device's and counted once, so units reading one operand
-            in common are assumed to read it from memory once. Whether they can is
-            a residency question, reported as an advisory.
-          a reported peak footprint holds under the order this walk took. Which
+          logical traffic omits loop replication that does not change an access;
+            total traffic counts every executed occurrence. Per-unit traffic is
+            the selected topology unit's share of that executed total.
+          a reported placement peak holds under the order this walk took. Which
             order the program really takes is settled by scheduling, so the peak
             is an observation, not a bound.
 

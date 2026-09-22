@@ -17,7 +17,7 @@ from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tilefoundry import func, module
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.metadata import ComputeCostMetadata, TrafficMetadata
+from tilefoundry.analysis.metadata import ComputeCostMetadata, MemoryMetadata
 from tilefoundry.dsl import ConstTensor, DimVar, Tensor, Topology, tf
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.module import reachable_functions
@@ -33,14 +33,14 @@ _H200 = "nvidia.h200_sxm"
 _CTA = (Topology("cta", 132),)
 
 
-def _matmul_records(result) -> tuple[tuple[ComputeCostMetadata, TrafficMetadata], ...]:
+def _matmul_records(result) -> tuple[tuple[ComputeCostMetadata, MemoryMetadata], ...]:
     """Both halves of the record on each inlined MatMul occurrence."""
     records = []
     for expr in collect_exprs(result.function.body):
         if not isinstance(expr, Call) or not isinstance(expr.target, MatMul):
             continue
         record = get_metadata(expr, ComputeCostMetadata)
-        moved = get_metadata(expr, TrafficMetadata)
+        moved = get_metadata(expr, MemoryMetadata)
         assert record is not None
         records.append((record, moved))
     return tuple(records)
@@ -60,7 +60,7 @@ def _traffic(records) -> dict[str, int]:
     total: dict[str, int] = {}
     for _record, moved in records:
         assert moved is not None, "traffic was asked of a run that did not measure it"
-        for name, spread in moved.storage.kinds:
+        for name, spread in moved.traffic.storage.kinds:
             total[name] = total.get(name, 0) + spread.total.total_bytes
     return total
 
@@ -174,7 +174,7 @@ def test_a_child_declaring_the_caller_hierarchy_is_accepted() -> None:
         analysis=("compute-cost", "memory"),
         dims={"child_topology_extent": 132},
     )
-    assert set(result.metadata_types) >= {ComputeCostMetadata, TrafficMetadata}
+    assert set(result.metadata_types) >= {ComputeCostMetadata, MemoryMetadata}
 
 
 @pytest.mark.parametrize("name,root", REFERENCE_PROGRAMS, ids=[n for n, _ in REFERENCE_PROGRAMS])
@@ -182,7 +182,7 @@ def test_each_reference_program_is_one_analysable_kernel(name, root) -> None:
     """The shared programs measure as one root each; what a call means is not restated."""
     result = analyze(root, root.entry_function(), analysis=("compute-cost", "memory"))
 
-    assert set(result.metadata_types) >= {ComputeCostMetadata, TrafficMetadata}
+    assert set(result.metadata_types) >= {ComputeCostMetadata, MemoryMetadata}
 
 
 def _placed_primitives(fn) -> list[tuple[str, object]]:

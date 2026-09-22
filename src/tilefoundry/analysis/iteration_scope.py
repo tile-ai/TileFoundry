@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 import isl
 
-from tilefoundry.ir.core import Call, Expr, value_label, value_labels
+from tilefoundry.ir.core import Call, Expr
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -24,14 +24,12 @@ from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
     projected,
     relations_of,
-    static_bytes,
 )
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
 from .access import Access, resolve_access
 from .errors import AnalysisError
 from .loop_domain import induction_name, iteration_domain
-from .metadata import BufferFootprint, LoopFootprintMetadata
 
 
 @dataclass(eq=False)
@@ -119,113 +117,6 @@ class IterationScope:
         self._trips_cache = result
         return result
 
-    def elements_per_trip(self, access: Access) -> int:
-        """Count elements reached while this scope's loop axes are held still."""
-        cache = getattr(self, "_elements_per_trip_cache", {})
-        cached = cache.get(id(access))
-        if cached is not None:
-            return cached
-        standing = self.domain.insert_dims(
-            isl.dim_type.SET,
-            self.depth,
-            access.relation.dim(isl.dim_type.IN) - self.depth,
-        )
-        relation = access.relation.intersect_domain(standing)
-        try:
-            points = param_points(relation.params())
-        except UnboundedParameterBox as error:
-            label = value_label(access.buffer) or type(access.buffer).__name__
-            raise AnalysisError(
-                f"scope access to {label!r} still has unbound parameter {error.parameter!r}"
-            ) from error
-        except ParameterBoxTooLarge as error:
-            raise AnalysisError(
-                f"scope access parameter box exceeds the {PARAM_POINT_LIMIT}-point analysis limit"
-            ) from error
-        amounts = []
-        for point in points:
-            fixed = relation.intersect_params(point)
-            fixed_standing = standing.intersect_params(point)
-            for axis in range(self.depth):
-                low = fixed_standing.dim_min_val(axis)
-                if not low.is_int():
-                    raise AnalysisError("scope access has no finite one-pass extent")
-                fixed_standing = fixed_standing.fix_si(
-                    isl.dim_type.SET,
-                    axis,
-                    low.get_num_si(),
-                )
-            amount = cardinality(fixed.intersect_domain(fixed_standing).range())
-            if amount is None:
-                raise AnalysisError("scope access has no finite one-pass extent")
-            amounts.append(amount)
-        result = max(amounts, default=0)
-        cache[id(access)] = result
-        self._elements_per_trip_cache = cache
-        return result
-
-    def accesses_in(self, view: str) -> Iterator[Access]:
-        """Yield accesses owned by this scope and all descendant scopes."""
-        for _call, values in self.accesses.get(view, {}).values():
-            yield from values
-        for child in self.children:
-            yield from child.accesses_in(view)
-
-    def is_complete(self, view: str) -> bool:
-        """Whether this scope and every descendant answered every access."""
-        if self.refused.get(view):
-            return False
-        return all(child.is_complete(view) for child in self.children)
-
-    def footprint(self) -> LoopFootprintMetadata:
-        """Summarize device and per-unit access bytes for this scope.
-
-        Two structurally equal buffers are distinct allocations, so identity
-        groups the rows. It does not order or name them: an address is whatever
-        the allocator handed out this run, and a report exists to be compared
-        against another run.
-        """
-        rows: dict[tuple[int, str], tuple[Expr, int, int, int]] = {}
-        for view, scale in (("narrow", "bytes"), ("device", "device_bytes")):
-            for access in self.accesses_in(view):
-                try:
-                    amount = self.elements_per_trip(access)
-                except AnalysisError:
-                    continue
-                size = static_bytes(access.buffer.type)
-                if size is None:
-                    continue
-                device_amount = amount * max(1, self.trips())
-                key = (id(access.buffer), str(getattr(access.buffer.type, "storage", "unknown")))
-                current = rows.get(key, (access.buffer, len(rows), 0, 0))
-                rows[key] = (
-                    current[0],
-                    current[1],
-                    current[2] + (amount * size if scale == "bytes" else 0),
-                    current[3] + (device_amount * size if scale == "device_bytes" else 0),
-                )
-        entries = list(rows.items())
-        labels = value_labels(buffer for _, (buffer, _, _, _) in entries)
-        ordered = sorted(
-            (label, memory_level, local, device)
-            for label, ((_, memory_level), (_, _, local, device)) in zip(labels, entries)
-        )
-        footprints = tuple(
-            BufferFootprint(
-                buffer=label,
-                memory_level=memory_level,
-                bytes=local,
-                device_bytes=device,
-                repeated_bytes=local * self.trips(),
-            )
-            for label, memory_level, local, device in ordered
-        )
-        return LoopFootprintMetadata(
-            footprints=footprints,
-            known=self.is_complete("narrow") and self.is_complete("device"),
-        )
-
-
 class ScopeBuilder:
     """Build one IterationScope tree and its access views for a Function."""
 
@@ -267,14 +158,26 @@ class ScopeBuilder:
                 if index >= len(expr.args):
                     continue
                 access = resolve_access(
-                    expr.args[index], boundary, scope, self.type_ctx, narrow=narrow
+                    expr.args[index],
+                    boundary,
+                    scope,
+                    self.type_ctx,
+                    input_index=index,
+                    narrow=narrow,
                 )
                 if access is not None:
                     built.append(access)
             scope.accesses.setdefault(view, {})[id(expr)] = (expr, tuple(built))
             written: list[Access] = []
             for boundary in local_relations.outputs:
-                access = resolve_access(expr, boundary, scope, self.type_ctx, narrow=narrow)
+                access = resolve_access(
+                    expr,
+                    boundary,
+                    scope,
+                    self.type_ctx,
+                    input_index=None,
+                    narrow=narrow,
+                )
                 if access is not None:
                     written.append(access)
             scope.outputs.setdefault(view, {})[id(expr)] = (expr, tuple(written))

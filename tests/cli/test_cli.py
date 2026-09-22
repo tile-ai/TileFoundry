@@ -168,7 +168,8 @@ def test_analyze_help_explains_topology_effects_and_assumptions(capsys) -> None:
         assert family in help_text
     assert "logical" in help_text and "per-unit share" in help_text
     assert "traffic" in help_text
-    assert "global traffic is the device's and counted once" in help_text
+    assert "logical traffic omits loop replication" in help_text
+    assert "total traffic counts every executed occurrence" in help_text
     assert "is an observation, not a bound" in help_text
 
 
@@ -722,7 +723,6 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
     )
     assert set(payload["function_records"]) == {
         "compute-cost",
-        "traffic",
         "memory",
         "roofline",
         "performance",
@@ -737,8 +737,8 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
 
     summary = payload["function_records"]["performance"]
     cost = payload["function_records"]["compute-cost"]
-    moved = payload["function_records"]["traffic"]
-    peak = payload["function_records"]["memory"]["footprint"]
+    moved = payload["function_records"]["memory"]
+    peak = moved["peaks"]
     bound = payload["function_records"]["roofline"]
     assert header.splitlines() == [
         "# analysis target=nvidia.h200_sxm module=MoEMegaKernel function=experts "
@@ -749,12 +749,15 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         f"flops=f32:{cost['flops']['f32']['logical']}@logical,"
         f"{cost['flops']['f32']['total']}@total,"
         f"{cost['flops']['f32']['per_unit'][0]}@{payload['topology']}",
-        "# traffic "
-        f"traffic=gmem:r{moved['storage']['gmem']['total']['read']}"
-        f"/w{moved['storage']['gmem']['total']['write']}@total,"
-        f"r{moved['storage']['gmem']['per_unit'][0]['read']}"
-        f"/w{moved['storage']['gmem']['per_unit'][0]['write']}@{payload['topology']}",
-        f"# peak-footprint=gmem:{peak[0]['peak_bytes']}",
+        "# memory "
+        f"traffic=gmem:r{moved['traffic']['storage']['gmem']['logical']['read']}"
+        f"/w{moved['traffic']['storage']['gmem']['logical']['write']}@logical,"
+        f"r{moved['traffic']['storage']['gmem']['total']['read']}"
+        f"/w{moved['traffic']['storage']['gmem']['total']['write']}@total,"
+        f"r{moved['traffic']['storage']['gmem']['per_unit'][0]['read']}"
+        f"/w{moved['traffic']['storage']['gmem']['per_unit'][0]['write']}"
+        f"@{payload['topology']} peak=gmem:{peak[0]['peak_bytes']} "
+        f"persistent={sum(item['persistent_bytes'] for item in peak)}",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# performance root=MoEMegaKernel::experts "
         f"predicted-ns={summary['timeline']['end_ns']} "
@@ -764,7 +767,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         name: spread["total"] for name, spread in cost["flops"].items()
     }
     assert payload["totals"]["traffic"] == {
-        name: value["total"] for name, value in moved["storage"].items()
+        name: value["total"] for name, value in moved["traffic"]["storage"].items()
     }
 
     hoisted = {line.split(" = ", 1)[0] for line in lines if " = Mesh((Topology(" in line}
@@ -785,7 +788,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
     rows = payload["calls"]
     assert len(rows) == 7
     assert all(
-        set(row) - {"performance"} == {"value", "compute-cost", "traffic", "roofline"}
+        set(row) - {"performance"} == {"value", "compute-cost", "memory", "roofline"}
         for row in rows
     )
     timed = [index for index, row in enumerate(rows) if "performance" in row]

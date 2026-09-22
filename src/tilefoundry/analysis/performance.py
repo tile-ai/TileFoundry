@@ -19,11 +19,11 @@ from .facts import ParallelCapacityFacts, PerformanceServiceFacts, ThroughputFac
 from .iteration_scope import IterationScope
 from .metadata import (
     ComputeCostMetadata,
+    MemoryMetadata,
     PerformanceMetadata,
     PerformanceSummaryMetadata,
     RooflineMetadata,
     TimelineMetadata,
-    TrafficMetadata,
 )
 from .visitor import AnalyzeContext
 
@@ -58,7 +58,7 @@ class PerformanceVisitor(ExprVisitor[None]):
             return
         scope = ctx.current if id(expr) in ctx.current.accesses["narrow"] else ctx.root
         cost = get_metadata(expr, ComputeCostMetadata)
-        moved = get_metadata(expr, TrafficMetadata)
+        moved = get_metadata(expr, MemoryMetadata)
         if cost is None or moved is None:
             raise AnalysisError(f"performance: missing compute/memory record for {expr!r}")
         if ctx.facts is None or ctx.services is None:

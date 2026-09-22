@@ -21,7 +21,7 @@ from tests.ops.ir.typeinfer_utils import (
     run_typeinfer_case,
 )
 from tilefoundry import func, module
-from tilefoundry.analysis import ComputeCostMetadata, TrafficMetadata
+from tilefoundry.analysis import ComputeCostMetadata, MemoryMetadata
 from tilefoundry.analysis.api import analyze
 from tilefoundry.dsl import Mesh, Tensor, tf
 from tilefoundry.evaluator import evaluate
@@ -228,7 +228,7 @@ def test_cache_update_function_analyzes_program_and_cta_cost() -> None:
         if isinstance(expr, Call) and isinstance(expr.target, CacheUpdate)
     )
     record = get_metadata(analysed_update, ComputeCostMetadata)
-    moved = get_metadata(analysed_update, TrafficMetadata)
+    moved = get_metadata(analysed_update, MemoryMetadata)
     assert result.topology_level == "cta"
     assert record is not None
     assert record.flops.kinds == ()

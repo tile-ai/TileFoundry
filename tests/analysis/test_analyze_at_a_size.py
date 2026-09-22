@@ -24,12 +24,11 @@ from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry.analysis import (
     AnalysisResult,
     ComputeCostMetadata,
-    LoopFootprintMetadata,
     MemoryMetadata,
     PerformanceMetadata,
     PerformanceSummaryMetadata,
+    RegionMemoryMetadata,
     RooflineMetadata,
-    TrafficMetadata,
     analyze,
 )
 from tilefoundry.analysis.access import Access, AccessPrecision
@@ -88,6 +87,11 @@ EXPECTED_MEMORY_PEAKS = {
     "gqa_decode.GqaOnline.gqa_online_attend[ctx_len=128]": {
         "gmem": 283_752,
         "rmem": 0,
+    },
+    "hand_checked.InvariantReuse.reuse[static]": {
+        "gmem": 80,
+        "rmem": 0,
+        "smem": 64,
     },
     "leaf_weights.Mod.entry[static]": {
         "gmem": 51_539_608_064,
@@ -300,16 +304,16 @@ def assert_performance_contract(result: AnalysisResult) -> None:
     at the target's rates, and a solve that proved nothing says so. One a loop
     repeats is written once, so its interval is that many of its own durations
     and its last trip still lands inside the prediction that contains it.
-    A loop is not an occurrence and carries no timeline of its own, and still
-    states the buffers it touches.
+    A loop is not an occurrence and carries neither a timeline nor a placeholder
+    memory record of its own.
     """
     fn = result.function
     summary = get_metadata(fn, PerformanceSummaryMetadata)
     assert summary is not None
     assert 0 <= summary.timeline.start_ns <= summary.timeline.end_ns
-    placement = get_metadata(fn, MemoryMetadata)
-    assert placement is not None and placement.allocation is not None
-    assert placement.allocation.solver_status in ("optimal", "feasible")
+    placement = get_metadata(fn, RegionMemoryMetadata)
+    assert placement is not None
+    assert placement.solver_status in ("optimal", "feasible")
     predicted_ns = summary.timeline.end_ns - summary.timeline.start_ns
     assert summary.waves > 0 and predicted_ns % summary.waves == 0
     bound = get_metadata(fn, RooflineMetadata)
@@ -329,7 +333,7 @@ def assert_performance_contract(result: AnalysisResult) -> None:
             cost,
             throughput,
             services,
-            moved=get_metadata(expr, TrafficMetadata),
+            moved=get_metadata(expr, MemoryMetadata),
             level=result.level,
         )
         record = get_metadata(expr, PerformanceMetadata)
@@ -369,7 +373,6 @@ def assert_performance_contract(result: AnalysisResult) -> None:
             continue
         assert get_metadata(expr, PerformanceMetadata) is None, describe_expr(expr)
         assert get_metadata(expr, PerformanceSummaryMetadata) is None, describe_expr(expr)
-        assert get_metadata(expr, LoopFootprintMetadata) is not None, describe_expr(expr)
 
 
 @pytest.mark.parametrize(
@@ -401,7 +404,7 @@ def test_more_of_the_same_work_is_never_predicted_to_take_less_time(smaller, lar
 def _every_number_counts_something(result: AnalysisResult) -> None:
     """Every quantity these four families report is a count, so none is below zero.
 
-    Work, bytes, a footprint and a bound are all counts of something that
+    Work, moved bytes, placement peaks and a bound are all counts of something that
     happened or has to happen. A negative one is not a small answer but a
     derivation that ran backwards -- a projection dividing what it should have
     multiplied, or a difference taken the wrong way round -- and it would then be
@@ -411,8 +414,8 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
     for expr in (fn, *collect_exprs(fn.body)):
         for record, rows in (
             (ComputeCostMetadata, ()),
-            (TrafficMetadata, ()),
             (MemoryMetadata, ()),
+            (RegionMemoryMetadata, ()),
             (RooflineMetadata, ()),
             (PerformanceMetadata, ()),
         ):
@@ -432,18 +435,21 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
                     for name, spread in breakdown.kinds:
                         for value in (spread.logical, spread.total, *spread.per_unit):
                             assert value >= 0, f"{describe_expr(expr)}: {field}[{name}] = {value}"
-            if record is TrafficMetadata:
-                for field in ("whole", "per_unit"):
-                    for level, moved in getattr(held, field):
-                        assert moved.read >= 0 and moved.write >= 0, (
-                            f"{describe_expr(expr)}: {field}[{level}] = {moved}"
-                        )
+            if record in (MemoryMetadata, RegionMemoryMetadata):
+                for field in ("storage", "communication"):
+                    breakdown = getattr(held.traffic, field)
+                    for level, spread in breakdown.kinds:
+                        for moved in (spread.logical, spread.total, *spread.per_unit):
+                            assert moved.read >= 0 and moved.write >= 0, (
+                                f"{describe_expr(expr)}: {field}[{level}] = {moved}"
+                            )
+            if record is MemoryMetadata:
                 for position, moved in enumerate(held.operands):
                     assert moved.read >= 0 and moved.write >= 0, (
                         f"{describe_expr(expr)}: operand {position} = {moved}"
                     )
-            if record is MemoryMetadata:
-                for level in held.footprint:
+            if record is RegionMemoryMetadata:
+                for level in held.peaks:
                     assert level.peak_bytes >= 0 and level.persistent_bytes >= 0
                 for item in held.lifetimes:
                     assert item.bytes >= 0 and 0 <= item.defined_at <= item.last_used_at
@@ -452,16 +458,6 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
                 assert held.ideal_ns >= 0 and held.compute_ns >= 0 and held.memory_ns >= 0
             if record is PerformanceMetadata:
                 assert 0 <= held.timeline.start_ns <= held.timeline.end_ns
-    for expr in collect_exprs(fn.body):
-        record = get_metadata(expr, LoopFootprintMetadata)
-        if record is None:
-            continue
-        rows = [(item.buffer, item.level) for item in record.footprints]
-        assert rows == sorted(rows), describe_expr(expr)
-        assert len(rows) == len(set(rows)), describe_expr(expr)
-        for item in record.footprints:
-            assert item.bytes >= 0 and item.device_bytes >= 0 and item.repeated_bytes >= 0
-            assert "<buffer " not in item.buffer, describe_expr(expr)
 
 
 @pytest.mark.parametrize("case", INVENTORY)
@@ -480,9 +476,9 @@ def test_every_concrete_program_predicts_coherently(case: ConcreteCase) -> None:
     assert result.module is owner
     assert set(result.executed) == set(FAMILIES)
     assert_performance_contract(result)
-    placement = get_metadata(result.function, MemoryMetadata)
+    placement = get_metadata(result.function, RegionMemoryMetadata)
     assert placement is not None
-    observed = {item.level: item.peak_bytes for item in placement.footprint}
+    observed = {item.memory_level: item.peak_bytes for item in placement.peaks}
     assert observed == EXPECTED_MEMORY_PEAKS[case.id]
     expected_schedule = EXPECTED_PERSISTENT_SCHEDULES.get(case.id)
     if expected_schedule is not None:

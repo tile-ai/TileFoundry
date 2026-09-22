@@ -18,9 +18,10 @@ from .errors import AnalysisError
 from .facts import ThroughputFacts
 from .metadata import (
     ComputeCostMetadata,
+    MemoryMetadata,
+    RegionMemoryMetadata,
     RooflineMetadata,
     TrafficBytes,
-    TrafficMetadata,
 )
 from .visitor import AnalyzeContext
 
@@ -94,7 +95,9 @@ def _bound(compute_ns: int, memory_ns: int, *, has_work: bool) -> RooflineMetada
 
 
 def _cost_bound(
-    cost: ComputeCostMetadata, moved: TrafficMetadata, facts: ThroughputFacts
+    cost: ComputeCostMetadata,
+    moved: MemoryMetadata | RegionMemoryMetadata,
+    facts: ThroughputFacts,
 ) -> RooflineMetadata:
     """Bound one occurrence from the work it does and the bytes it moves.
 
@@ -105,7 +108,7 @@ def _cost_bound(
     nanosecond is what this could have priced, so a dtype whose rate is missing
     still owes one and a level nobody rated does not.
     """
-    reached = moved.storage.of(facts.bandwidth_level)
+    reached = moved.traffic.storage.of(facts.bandwidth_level)
     crossed = reached.total if reached is not None else TrafficBytes()
     return _bound(
         _compute_ns(_totals(cost.flops), facts),
@@ -132,7 +135,7 @@ class RooflineVisitor(ExprVisitor[None]):
                 f"{describe_expr(expr)}: roofline needs the compute-cost record "
                 "this call was never given"
             )
-        moved = get_metadata(expr, TrafficMetadata)
+        moved = get_metadata(expr, MemoryMetadata)
         if moved is None:
             raise AnalysisError(
                 f"{describe_expr(expr)}: roofline needs the traffic record the "
@@ -155,7 +158,7 @@ def analyze_roofline(
             f"function {function.name!r}: roofline needs the compute-cost root "
             "record this function was never given"
         )
-    moved = get_metadata(function, TrafficMetadata)
+    moved = get_metadata(function, RegionMemoryMetadata)
     if moved is None:
         raise AnalysisError(
             f"function {function.name!r}: roofline needs the traffic root record "

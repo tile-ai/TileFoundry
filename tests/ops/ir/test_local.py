@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry import func, module
-from tilefoundry.analysis import ComputeCostMetadata, TrafficMetadata
+from tilefoundry.analysis import ComputeCostMetadata, MemoryMetadata
 from tilefoundry.analysis.api import analyze
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.ir.core import Call, get_metadata
@@ -50,9 +50,9 @@ def test_local_analyzes_as_a_zero_traffic_topology_view() -> None:
             if isinstance(expr, Call) and isinstance(expr.target, Local)
         )
         record = get_metadata(analysed_local, ComputeCostMetadata)
-        moved = get_metadata(analysed_local, TrafficMetadata)
+        moved = get_metadata(analysed_local, MemoryMetadata)
         assert result.topology_level == topology_level
         assert record is not None
         assert record.flops.kinds == ()
-        assert moved.storage.kinds == ()
+        assert moved.traffic.storage.kinds == ()
         assert moved.operands == (TrafficBytes(), TrafficBytes())

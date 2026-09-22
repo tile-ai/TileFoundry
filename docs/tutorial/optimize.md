@@ -84,11 +84,11 @@ class Naive:
 ```bash
 set -euo pipefail
 tilefoundry analyze rms_norm_quant.py:Naive Naive.txt --compute-cost --memory --roofline
-grep -E '^# (traffic|roofline) ' Naive.txt
+grep -E '^# (memory|roofline) ' Naive.txt
 ```
 
 ```text
-# traffic traffic=gmem:r71680/w43456@total,r71680/w43456@cta,r336/w224@thread;rmem:r603496/w488344@total,r603496/w488344@cta,r2604/w2084@thread
+# memory traffic=gmem:r71680/w43456@logical,r71680/w43456@total,r71680/w43456@cta,r336/w224@thread;rmem:r603496/w488344@logical,r603496/w488344@total,r603496/w488344@cta,r2604/w2084@thread peak=gmem:71680;rmem:57344 persistent=43008
 # roofline ideal-ns=24 bound-by=memory
 ```
 
@@ -128,11 +128,11 @@ class Fused:
 ```bash
 set -euo pipefail
 tilefoundry analyze rms_norm_quant.py:Fused Fused.txt --compute-cost --memory --roofline
-grep -E '^# (traffic|roofline) ' Fused.txt
+grep -E '^# (memory|roofline) ' Fused.txt
 ```
 
 ```text
-# traffic traffic=gmem:r43008/w14784@total,r43008/w14784@cta,r224/w112@thread;rmem:r574824/w459672@total,r574824/w459672@cta,r2492/w1972@thread
+# memory traffic=gmem:r43008/w14784@logical,r43008/w14784@total,r43008/w14784@cta,r224/w112@thread;rmem:r574824/w459672@logical,r574824/w459672@total,r574824/w459672@cta,r2492/w1972@thread peak=gmem:57792;rmem:57344 persistent=43008
 # roofline ideal-ns=13 bound-by=memory
 ```
 

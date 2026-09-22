@@ -9,18 +9,15 @@ from dataclasses import fields, is_dataclass
 from types import UnionType
 from typing import Union, get_args, get_origin, get_type_hints
 
-from tilefoundry.analysis.facts import MemoryHierarchyFacts
-from tilefoundry.analysis.memory import cache_pressure
 from tilefoundry.analysis.metadata import (
     Breakdown,
     ComputeCostMetadata,
-    LoopFootprintMetadata,
     MemoryMetadata,
     PerformanceMetadata,
     PerformanceSummaryMetadata,
+    RegionMemoryMetadata,
     RooflineMetadata,
     Spread,
-    TrafficMetadata,
 )
 from tilefoundry.ir.core import Call, IRMetadata, binding_name, get_metadata
 from tilefoundry.ir.core.module import Module
@@ -136,13 +133,12 @@ def _pair_types(declared: object) -> tuple[object, object] | None:
 
 for _record_type in (
     ComputeCostMetadata,
-    TrafficMetadata,
-    LoopFootprintMetadata,
-    MemoryMetadata,
     RooflineMetadata,
 ):
     declare_record(_record_type)
 
+declare_record(MemoryMetadata, family="memory")
+declare_record(RegionMemoryMetadata, family="memory")
 declare_record(PerformanceMetadata, family="performance")
 declare_record(PerformanceSummaryMetadata, family="performance")
 
@@ -169,7 +165,7 @@ def _operand_name(operand: object) -> str:
     return type(operand).__name__.lower()
 
 
-def _operands(record: TrafficMetadata, expr: object) -> list[dict[str, object]] | None:
+def _operands(record: MemoryMetadata, expr: object) -> list[dict[str, object]] | None:
     """Each recorded amount, against the operand it was charged to."""
     if not isinstance(expr, Call) or not record.operands:
         return None
@@ -186,7 +182,7 @@ def _operands(record: TrafficMetadata, expr: object) -> list[dict[str, object]] 
     ]
 
 
-expr_field(TrafficMetadata, "operands", _operands)
+expr_field(MemoryMetadata, "operands", _operands)
 
 
 def _records_of(expr: object, selected: frozenset[type[IRMetadata]]) -> dict[str, object]:
@@ -242,10 +238,10 @@ def report_data(
         "executed": list(executed),
         "function_records": function_records,
         "calls": _call_records(function, selected, call_labels),
-        "loops": _loop_records(function, selected, target),
+        "loops": _loop_records(function, selected),
     }
     available = set(metadata_types)
-    asked = {ComputeCostMetadata, TrafficMetadata}
+    asked = {ComputeCostMetadata, MemoryMetadata, RegionMemoryMetadata}
     if asked & selected or ("roofline" in analyses and asked & available):
         data["totals"] = _work_totals(function)
     return data
@@ -277,20 +273,8 @@ def _call_records(
 def _loop_records(
     function: Function,
     selected: frozenset[type[IRMetadata]],
-    target,
 ) -> list[dict[str, object]]:
     """Every selected record attached to an authored loop."""
-    memory = get_metadata(function, MemoryMetadata)
-    facts = (
-        target.get_facts(MemoryHierarchyFacts)
-        if memory is not None and MemoryMetadata in selected
-        else None
-    )
-    peaks = (
-        {item.memory_level: item.peak_bytes for item in memory.footprint}
-        if memory is not None
-        else {}
-    )
     rows: list[dict[str, object]] = []
     for expr in collect_exprs(function.body):
         if not isinstance(expr, LoopRegion):
@@ -298,11 +282,6 @@ def _loop_records(
         records = _records_of(expr, selected)
         if not records:
             continue
-        record = get_metadata(expr, LoopFootprintMetadata)
-        if record is not None and facts is not None:
-            pressure = cache_pressure(record, facts, peaks)
-            if pressure:
-                records["cache-pressure"] = list(pressure)
         rows.append({"value": expr.induction_var.name, **records})
     return rows
 
@@ -328,11 +307,11 @@ def _work_totals(function: Function) -> dict[str, object]:
     a program asks of the machine beside what it moves through it.
     """
     record = get_metadata(function, ComputeCostMetadata)
-    moved = get_metadata(function, TrafficMetadata)
+    moved = get_metadata(function, RegionMemoryMetadata)
     return {
         "flops": _totals_of(None if record is None else record.flops),
-        "traffic": _totals_of(None if moved is None else moved.storage),
-        "communication": _totals_of(None if moved is None else moved.communication),
+        "traffic": _totals_of(None if moved is None else moved.traffic.storage),
+        "communication": _totals_of(None if moved is None else moved.traffic.communication),
     }
 
 

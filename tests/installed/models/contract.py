@@ -84,9 +84,7 @@ def analysed(
     ]
     if json_output:
         arguments.append("--json")
-    done, report_text = _run_with_report(
-        tf, arguments, suffix=".json" if json_output else ".py"
-    )
+    done, report_text = _run_with_report(tf, arguments, suffix=".json" if json_output else ".py")
     assert done.returncode == 0, done.stderr
     return report_text
 
@@ -131,9 +129,9 @@ def _memory_evidence(report: dict) -> str | None:
     as two.
     """
     record = report["function_records"]["memory"]
-    placement = record.get("allocation")
-    if placement is None or placement["solver_status"] not in ("optimal", "feasible"):
-        return f"allocation is {placement!r}"
+    solver_status = record.get("solver_status")
+    if solver_status not in ("optimal", "feasible"):
+        return f"solver status is {solver_status!r}"
     gmem = report["totals"]["traffic"]["gmem"]
     if not gmem.get("read", 0) > 0:
         return f"reported no gmem read ({gmem!r})"
@@ -312,7 +310,9 @@ def compared(
                 return type(value)(move(item) for item in value)
             return value
 
-        loaded = module.load(DictResource({name: value.to(device) for name, value in weights.items()}))
+        loaded = module.load(
+            DictResource({name: value.to(device) for name, value in weights.items()})
+        )
         got = loaded.forward(*(move(value) for value in activations))
         want = move(expected[0] if len(expected) == 1 else tuple(expected))
         expect = {

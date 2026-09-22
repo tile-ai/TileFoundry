@@ -7,10 +7,9 @@ from dataclasses import dataclass
 from tilefoundry.analysis.api import AnalysisResult
 from tilefoundry.analysis.metadata import (
     ComputeCostMetadata,
-    MemoryMetadata,
     PerformanceSummaryMetadata,
+    RegionMemoryMetadata,
     RooflineMetadata,
-    TrafficMetadata,
 )
 from tilefoundry.analysis.report import _type_text as _type_text
 from tilefoundry.analysis.report import (
@@ -24,12 +23,10 @@ from tilefoundry.inspection.python_printer import HirPrinter, PythonPrintOptions
 from tilefoundry.inspection.values import (
     AdvisorySummary,
     ErrorSummary,
-    MemorySummary,
     PerformanceSummaryView,
     Prose,
     ReportIdentity,
     ReportSelection,
-    peak_footprint,
     render_comment,
 )
 from tilefoundry.ir.core import IRMetadata, get_metadata
@@ -101,12 +98,11 @@ def _summary(
     ]
     if "totals" in data and "compute-cost" in data["executed"]:
         views.append(get_metadata(function, ComputeCostMetadata) or ComputeCostMetadata())
-    if "traffic" in function_records:
-        views.append(get_metadata(function, TrafficMetadata) or TrafficMetadata())
     if "memory" in function_records:
-        memory = get_metadata(function, MemoryMetadata)
-        views.append(MemorySummary(peak_footprint(memory)))
-        if MemoryMetadata in selected:
+        memory = get_metadata(function, RegionMemoryMetadata)
+        assert memory is not None
+        views.append(memory)
+        if RegionMemoryMetadata in selected:
             views.extend(ErrorSummary(Prose(note)) for note in memory.errors)
             views.extend(AdvisorySummary(Prose(note)) for note in memory.advisories)
     if "roofline" in function_records:

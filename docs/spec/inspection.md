@@ -551,5 +551,6 @@ class DumpScope:
     A non-master worker appends `__<worker-id>` to the test-name leaf rather
     than adding a worker directory. `pytest.mark.no_dump` disables it.
   - A completed `analyze(...)` call MUST dump its complete report data as
-    `analysis.json` when `DumpFlags.ANALYSIS` is enabled. This includes
-    target-aware report-only projections such as authored-loop cache pressure.
+    `analysis.json` when `DumpFlags.ANALYSIS` is enabled. Every conclusion in
+    that dump MUST come from the selected typed records; the report layer MUST
+    NOT reconstruct target-aware findings that no record carries.

@@ -25,10 +25,10 @@ def _v100_qwen(tf, tmp_path: Path) -> Path:
         )
         .replace(
             'CudaTarget("nvidia.h200_sxm")',
-            'CudaTarget(\n'
+            "CudaTarget(\n"
             '    Path(__file__).parent / "hw" / "vendor_v100_sxm2_32gb.toml",\n'
             '    Path(__file__).parent / "hw" / "vendor_sm70.toml",\n'
-            ')',
+            ")",
         ),
         encoding="utf-8",
     )
@@ -39,9 +39,7 @@ def _v100_qwen(tf, tmp_path: Path) -> Path:
     return model
 
 
-def test_external_v100_documents_analyse_a_copied_installed_model(
-    tf, tmp_path
-) -> None:
+def test_external_v100_documents_analyse_a_copied_installed_model(tf, tmp_path) -> None:
     model = _v100_qwen(tf, tmp_path)
     done = tf(
         "analyze",
@@ -62,13 +60,14 @@ def test_external_v100_documents_analyse_a_copied_installed_model(
     assert report["totals"]["flops"]["f16"] > 0
     assert report["function_records"]["roofline"]["ideal_ns"] > 0
     gmem = next(
-        item for item in report["function_records"]["memory"]["footprint"]
+        item
+        for item in report["function_records"]["memory"]["peaks"]
         if item["memory_level"] == "gmem"
     )
     assert gmem["peak_bytes"] < 32_000_000_000
     record = report["function_records"]["performance"]
     assert record["waves"] == 2
-    assert report["function_records"]["memory"]["allocation"]["solver_status"] in (
+    assert report["function_records"]["memory"]["solver_status"] in (
         "optimal",
         "feasible",
     )
@@ -76,14 +75,10 @@ def test_external_v100_documents_analyse_a_copied_installed_model(
         call["performance"]["timeline"] for call in report["calls"] if "performance" in call
     ]
     assert call_records
-    assert all(
-        set(call) == {"start_ns", "end_ns", "trips", "stride_ns"}
-        for call in call_records
-    )
+    assert all(set(call) == {"start_ns", "end_ns", "trips", "stride_ns"} for call in call_records)
     assert all(call["end_ns"] > call["start_ns"] for call in call_records)
     per_wave_end = max(
-        call["end_ns"] + (call["trips"] - 1) * call["stride_ns"]
-        for call in call_records
+        call["end_ns"] + (call["trips"] - 1) * call["stride_ns"] for call in call_records
     )
     per_wave_end = max(per_wave_end, report["function_records"]["roofline"]["ideal_ns"])
     assert record["timeline"] == {

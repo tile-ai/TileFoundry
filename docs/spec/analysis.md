@@ -41,7 +41,7 @@ Each owns its record types and declares its dependencies and output additions.
 | Selector | Requires | Owns | Attaches to | Rests on | Text summary adds | Annotates equations |
 |---|---|---|---|---|---|---|
 | `compute-cost` | - | `ComputeCostMetadata` | every measured Call and the Function | the authored program | `compute-cost` | every measured Call |
-| `memory` | - | `MemoryMetadata`, `TrafficMetadata`, `LoopFootprintMetadata` | `MemoryMetadata` on the Function; `TrafficMetadata` on every measured Call and the Function; `LoopFootprintMetadata` on every `LoopRegion` | the authored program, `MemoryHierarchyFacts` | `peak-footprint`, `traffic`, `advisory` | none |
+| `memory` | - | `MemoryMetadata`, `RegionMemoryMetadata` | `MemoryMetadata` on every measured Call; `RegionMemoryMetadata` on the Function | the authored program, `MemoryHierarchyFacts` | `memory`, `advisory` | every measured Call |
 | `roofline` | `compute-cost`, `memory` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | `roofline` | every measured Call |
 | `performance` | `compute-cost`, `memory` | `PerformanceMetadata`, `PerformanceSummaryMetadata` | `PerformanceMetadata` on every Call with a modeled duration; `PerformanceSummaryMetadata` on the Function | `ThroughputFacts`, `ParallelCapacityFacts`, `MemoryHierarchyFacts` | `performance` | every Call with a modeled duration |
 
@@ -63,11 +63,10 @@ The JSON report carries the same identity and selection in `target`, `module`,
 `function`, `topology`, `requested`, and `executed`. Whole-function
 projections are under `function_records`; `calls` is a value-ordered list whose
 entries have a `value` label and one key per selected family. `loops` is the
-corresponding authored-loop list, labelled by induction variable. When memory is
-selected, a loop whose backing storage has a same-scope implicit cache also has
-`cache-pressure`: one target-aware row per cache, computed from the loop's
-device-wide access footprint. `totals` appears when the selected view includes
-compute cost or roofline's bounded work evidence.
+corresponding authored-loop list, labelled by induction variable. Memory does not
+attach an empty record to a loop for a conclusion it has not computed. `totals`
+appears when the selected view includes compute cost or roofline's bounded work
+evidence.
 
 One result is rendered once, and every surface reads that rendering:
 
@@ -216,10 +215,11 @@ Each reported Call's JSON projection is under its `compute-cost` key:
 
 #### 1.2.2 `memory`
 
-`memory` measures whole-Function value lifetimes and footprints, decides where
-each value's bytes live, and states what every occurrence moves and at which
-level. The movement is read off the Op's own registered evaluator and the
-amounts its access relations reach.
+`memory` measures whole-Function value lifetimes and placement peaks, and states
+what every occurrence moves and at which level. The movement is read off the
+Op's own registered evaluator and the amounts its access relations reach. The
+records reserve an optional read-footprint conclusion, but this analysis does
+not currently produce one: both attachment points report `footprint=None`.
 
 ```python
 class Spread[V]:
@@ -251,23 +251,30 @@ class Breakdown[V]:
     kinds: tuple[tuple[str, Spread[V]], ...] = ()
 
 
-class TrafficMetadata(IRMetadata):
-    """What one Call moves, or what one Function moves over all its trips.
+class Traffic:
+    """Movement grouped by storage and communication boundary."""
 
-    Attributes:
-        topologies: attribute; The declared levels, in the order per_unit states them.
-        storage: attribute; TrafficBytes per storage level name.
-        communication: attribute; TrafficBytes per topology level name, for the boundary the bytes crossed.
-        operands: attribute; TrafficBytes per operand, positional against (*call.args, call); present only for a direct primitive call.
-    """
-
-    topologies: tuple[str, ...] = ()
     storage: Breakdown[TrafficBytes] = Breakdown()
     communication: Breakdown[TrafficBytes] = Breakdown()
+
+
+class Footprint:
+    """Unique read bytes, or the available lower bound when incomplete."""
+
+    buffers: tuple[tuple[str, Breakdown[int]], ...] = ()
+    complete: bool = True
+
+
+class MemoryMetadata(IRMetadata):
+    """One primitive Call's memory behavior for one occurrence."""
+
+    topologies: tuple[str, ...] = ()
+    traffic: Traffic = Traffic()
     operands: tuple[TrafficBytes, ...] = ()
+    footprint: Footprint | None = None
 
 
-class MemoryLevelFootprint:
+class MemoryLevelPeak:
     """How much of one memory level a function needs at its peak.
 
     Attributes:
@@ -282,34 +289,6 @@ class MemoryLevelFootprint:
     peak_bytes: int
     persistent_bytes: int
     capacity_bytes: int | None = None
-
-class BufferFootprint:
-    """Bytes one authored loop touches in one buffer at one storage level.
-
-    Attributes:
-        buffer: attribute; The stable value name of the source buffer.
-        memory_level: attribute; The storage level containing that buffer.
-        bytes: attribute; Deduplicated bytes reached by one logical position.
-        device_bytes: attribute; Deduplicated bytes in the union across positions.
-        repeated_bytes: attribute; Per-position bytes without deduplicating repeated access.
-    """
-
-    buffer: str
-    memory_level: str
-    bytes: int
-    device_bytes: int
-    repeated_bytes: int
-
-class LoopFootprintMetadata(IRMetadata):
-    """Known buffer accesses or a lower bound within one authored LoopRegion.
-
-    Attributes:
-        footprints: attribute; One row per source buffer and storage level.
-        known: attribute; Whether every access had a representable relation.
-    """
-
-    footprints: tuple[BufferFootprint, ...]
-    known: bool
 
 class ValueLifetime:
     """One value's residency, as positions in the function's value order.
@@ -330,31 +309,17 @@ class ValueLifetime:
     last_used_at: int
     persistent: bool = False
 
-class AllocationMetadata:
-    """What showing this function's buffers fit came to.
-
-    Attributes:
-        solver_status: attribute; `"feasible"` for the first validated placement.
-    """
+class RegionMemoryMetadata(IRMetadata):
+    """One Function's aggregate movement and placement conclusions."""
 
     solver_status: str
-
-class MemoryMetadata(IRMetadata):
-    """One function's memory behaviour against one target's hierarchy.
-
-    Attributes:
-        footprint: attribute; One row per level the function places values in.
-        lifetimes: attribute; One entry per value residency.
-        errors: attribute; Solved placement peaks that exceed stated capacity.
-        advisories: attribute; Capacity findings that do not invalidate the program.
-        allocation: attribute; What showing the addressable buffers fit came to.
-    """
-
-    footprint: tuple[MemoryLevelFootprint, ...] = ()
+    topologies: tuple[str, ...] = ()
+    traffic: Traffic = Traffic()
+    footprint: Footprint | None = None
     lifetimes: tuple[ValueLifetime, ...] = ()
+    peaks: tuple[MemoryLevelPeak, ...] = ()
     errors: tuple[str, ...] = ()
     advisories: tuple[str, ...] = ()
-    allocation: AllocationMetadata | None = None
 ```
 
 Every traffic amount here is what a boundary's own relation reaches. The Op's
@@ -398,10 +363,9 @@ the largest single projected logical value.
     MUST NOT make a program unplaceable, and a level owned per unit of a topology
     level other than the one being analysed MUST fail rather than be assumed.
     Domains holding the same buffers are one question, decided once.
-  - `allocation` MUST be absent only when no level could be projected against. A
-    function with nothing addressable MUST record a settled `allocation`: the
-    question was asked and there was nothing to decide. An attached
-    `solver_status` MUST be `"feasible"`; a domain that cannot be expressed or
+  - `RegionMemoryMetadata.solver_status` MUST be `"feasible"`, including when
+    the function has no addressable value: the question was asked and there was
+    nothing to place. A domain that cannot be expressed or
     does not settle in time MUST raise `AnalysisError` and leave no record. The
     solver MUST stop at its first feasible assignment rather than spend the
     remaining timeout proving a minimum. Its reported peak is that assignment's
@@ -425,43 +389,36 @@ the largest single projected logical value.
     is longest, and MUST NOT sum them: one movement spends two resources over
     one span of time. A crossing at a level the target publishes no rate for
     MUST be stated and left untimed.
-  - A Call's `storage`, `communication` and `operands` MUST state one occurrence. Only
-    the Function record counts an occurrence as often as its authored loops
-    repeat it, and its `operands` MUST be empty: which operand moved what
-    belongs to the occurrence, not to the total.
+  - A Call's `traffic` and `operands` MUST state one occurrence. Only the Function
+    record counts an occurrence as often as its authored loops repeat it; which
+    operand moved what belongs to the occurrence, not to the region total.
   - A capacity conclusion MUST NOT correct or invent a movement number. What an
-    occurrence moves is counted once from its own boundaries, so a function with
-    no `allocation` still carries traffic -- a different question from whether a
-    time may be reported for it ([§1.2.4](#124-performance)) -- and a window
+    occurrence moves is counted once from its own boundaries, so placement and
+    traffic remain separate fields of one record. A window
     whose start arrives at run time reads that start rather than becoming a full
     read of its source and a write of its result.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `BufferFootprint.buffer` | The label value lifetimes use for that value, from the same derivation. Grouping stays by buffer identity, because two structurally equal buffers are distinct allocations; the label never reads an address. | No |
-| `BufferFootprint.memory_level` | Read the source buffer's declared storage level. | No |
-| `BufferFootprint.bytes` | Build relations from rank-preserving per-position Types, union the loop-prefixed access images, count the union's integer points, multiply by the dtype bit width, then round the whole buffer reading up to bytes. If the count is not an integer or exceeds `repeated_bytes`, that buffer reading is unavailable. | No |
-| `BufferFootprint.device_bytes` | Repeat the same exact union measurement from authored Types without shard narrowing, giving the union across logical positions in bytes. | No |
-| `BufferFootprint.repeated_bytes` | Multiply each operand's per-position element count by its enclosing trip counts, sum accesses to the same buffer, multiply by dtype bit width, then round the whole buffer reading up to bytes. | No |
-| `LoopFootprintMetadata.footprints` | One `BufferFootprint` per known source buffer and storage level, sorted by buffer then level. When `known` is false these rows are the available lower bound rather than an empty replacement. | No |
-| `LoopFootprintMetadata.known` | False when an access in the loop or a descendant loop lacks a representable forward relation, marking `footprints` as a lower bound; true otherwise. | No |
 | `ValueLifetime.binding` | Use the parameter or binding name, suffixed with `:` and the line of the value's source span when it has one. Repeated names already differ by the printer's numeric suffix in definition order; the line locates the row in authored source, which a suffix cannot. A value with neither name nor span is `<value N>` in definition order. | No |
 | `ValueLifetime.memory_level` | Emit one lifetime per storage level occupied by the value's Type. | No |
 | `ValueLifetime.bytes` | Project the Type through every authored split at or coarser than the explicit level's `owner`, then take its logical bytes; a target-owned or undeclared level remains global. | `MemoryHierarchyFacts.explicit_levels[].owner` |
 | `ValueLifetime.defined_at` | Definition event on the function-wide structured SSA timeline. | No |
 | `ValueLifetime.last_used_at` | Greatest ordinary-consumer, region-entry, loop-backedge, or region-exit use event; the final timeline event for a parameter. | No |
 | `ValueLifetime.persistent` | True for parameters and false for body allocations. | No |
-| `MemoryLevelFootprint.memory_level` | Each storage level with at least one lifetime, sorted by name. | No |
-| `MemoryLevelFootprint.peak_bytes` | For `gmem` and `smem`, the address high-water mark of the first feasible whole-Function placement. Exact pointwise relations and exact `insert_slice` partitions may permit overlap; widened or unknown relations do not. For `rmem`, the largest single projected logical value, without address placement or cross-value summation. | No |
-| `MemoryLevelFootprint.persistent_bytes` | Sum of persistent lifetimes at that level. | No |
-| `MemoryLevelFootprint.capacity_bytes` | Capacity of the matching explicit level, or `None` when it is unknown or undeclared. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
-| `MemoryMetadata.footprint` | One `MemoryLevelFootprint` per occupied storage level. | As above |
-| `MemoryMetadata.lifetimes` | Every value residency except a `Reshape` or a `Transpose`, each of which describes bytes its operand already holds. | As above |
-| `MemoryMetadata.errors` | One non-fatal error for each solved `gmem` or `smem` placement whose `peak_bytes` exceeds stated `capacity_bytes`; this includes a single value larger than capacity. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
-| `MemoryMetadata.advisories` | Cache/shared-capacity division and same-scope authored-loop access-footprint findings. | `MemoryHierarchyFacts` |
-| `TrafficMetadata.storage` | One occurrence's per-boundary movement asked of the Op's access relations, charged to the storage levels its operand Types name. The total is asked in the whole program's window and each level's share in that level's, over Types projected through the authored `Split`s at or coarser than it. On a Function, summed over every reachable occurrence, each counted as often as its authored loops repeat it. A Type with leaves at several levels keeps those leaf bytes separate. A `UMAT` leaf has no residency of its own: when it appears in `Call.args`, charge its own bytes at the target's established `rmem` materialization level; when it appears only in an Op attribute, charge nothing. A Function Call takes the callee's grouped total. | No; projection reads resolved Mesh and effective Module topology extents. |
-| `TrafficMetadata.communication` | What a Reshard sends off the unit it was on, when the shards on its two sides differ across a mesh axis that level owns. Zero where they agree. | No; the share each unit keeps follows from the mesh extents the shards name. |
-| `TrafficMetadata.operands` | One occurrence's per-boundary movement in order `(*call.args, call)`, the same relation-derived amounts `storage` groups. Empty on a Function and on a Function Call, neither of which has a split. | No |
+| `MemoryLevelPeak.memory_level` | Each storage level with at least one lifetime or traffic entry, sorted by name. | No |
+| `MemoryLevelPeak.peak_bytes` | For `gmem` and `smem`, the address high-water mark of the first feasible whole-Function placement. Exact pointwise relations and exact `insert_slice` partitions may permit overlap; widened or unknown relations do not. For `rmem`, the largest single projected logical value. | No |
+| `MemoryLevelPeak.persistent_bytes` | Sum of persistent lifetimes at that level. | No |
+| `MemoryLevelPeak.capacity_bytes` | Capacity of the matching explicit level, or `None` when unknown. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
+| `MemoryMetadata.traffic` | One occurrence's per-boundary movement, grouped by storage and communication boundary. | No; projection reads resolved Mesh and topology extents. |
+| `MemoryMetadata.operands` | One occurrence's movement in order `(*call.args, call)`. | No |
+| `RegionMemoryMetadata.traffic` | Every reachable occurrence. `logical` multiplies only loops the value varies in; `total` and `per_unit` multiply every enclosing loop. | No |
+| `RegionMemoryMetadata.footprint` | `None` until a read-footprint analysis has produced a conclusion; it MUST NOT use an empty `Footprint` to mean “not computed”. | No |
+| `RegionMemoryMetadata.lifetimes` | Every value residency except a non-material view. | As above |
+| `RegionMemoryMetadata.peaks` | One `MemoryLevelPeak` per occupied or moved storage level. | As above |
+| `RegionMemoryMetadata.solver_status` | The validated whole-Function placement status. | No |
+| `RegionMemoryMetadata.errors` | One non-fatal error per placement peak exceeding capacity. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
+| `RegionMemoryMetadata.advisories` | Lower-severity target-aware memory findings. | `MemoryHierarchyFacts` |
 
 One ordinary expression event uses its operands and defines its result. A region
 adds separate binding and exit events: a mesh argument is used before its
@@ -472,25 +429,7 @@ exit, and a yielded value remains live through the backedge event. Event
 positions are monotonic across the whole Function, including nested and sibling
 regions.
 
-The target-aware loop projection is report data rather than another metadata
-record. `LoopFootprintMetadata` remains target-independent:
-
-```text
-"cache-pressure": [{"cache_level": <level>, "backing_level": <level>,
-                    "device_bytes": <int>, "capacity_bytes": <int|null>,
-                    "status": "fits"|"exceeds"|"lower-bound"|"unknown"}, ...]
-```
-
-The projection MUST use `device_bytes`, sum rows at the cache's ultimate explicit
-backing level, and compare only levels whose capacity scopes agree. A missing
-backing level or a scope mismatch MUST emit no row and MUST NOT fail analysis.
-`lower-bound` means an incomplete footprint has not yet exceeded capacity;
-`exceeds` remains conclusive when the lower bound alone exceeds it. A cache with
-no usable capacity emits `unknown`. A buffer with `device_bytes < bytes` MUST be
-removed before projection and its `LoopFootprintMetadata` MUST be marked
-incomplete.
-
-The family reads this target projection:
+The family reads this target hierarchy:
 
 ```python
 class MemoryRelationKind(Enum):
@@ -556,52 +495,42 @@ class MemoryHierarchyFacts:
     relations: tuple[MemoryLevelRelation, ...]
 ```
 
-Requesting memory adds the Function's own movement, one footprint line, and one
-line per advisory:
+Requesting memory adds one Function memory line and one line per finding:
 
 ```text
-traffic traffic=<memory-level>:r<int>/w<int>@total,r<int>/w<int>@<topology>[,...][;<memory-level>:...]
-peak-footprint=<level>:<int>[,<level>:<int>...]
+memory traffic=<memory-level>:r<int>/w<int>@logical,r<int>/w<int>@total,r<int>/w<int>@<topology>[,...] peak=<level>:<int>[,...]
 error="<text>"
 advisory="<text>"
 ```
 
-An empty footprint states the family name alone; each error and advisory is its
-own line and is quoted and escaped
-([inspection §2.8](./inspection.md#28-record-comment-forms)). The record's own
-comment form projects the footprint it holds, and `lifetimes` is read from JSON:
+Each error and advisory is its own quoted and escaped line. Every measured Call
+receives a `memory` annotation; its `operands` split is emitted only when asked
+for ([cli Analyze](./cli.md#analyze)):
 
 ```text
-memory peak=<level>:<int>[,...] persistent=<int> errors=<int> advisories=<int>
+memory traffic=<memory-level>:r<int>/w<int>@logical,r<int>/w<int>@total,r<int>/w<int>@<topology>[,...] [operands=<position>:r<int>/w<int>[;<position>:...]]
 ```
 
-Every measured Call also receives a `traffic` annotation, whose `operands` split
-is emitted only when asked for ([cli Analyze](./cli.md#analyze)) and is absent
-from a Function, which has no split:
+Call and Function JSON projections are both under `memory`. The Function's full
+projection is under `function_records.memory`:
 
 ```text
-traffic traffic=<memory-level>:r<int>/w<int>@total,r<int>/w<int>@<topology>[,...][;<memory-level>:...] [operands=<position>:r<int>/w<int>[;<position>:...]]
-```
-
-Its JSON projection is under the reported value's `traffic` key, with `whole`,
-`communication` and one `operands` entry per position carrying `read` and `write`.
-The `analyze` equation printer emits no memory annotation because that record is
-attached only to the Function. Its full JSON projection is under
-`function_records.memory`:
-
-```text
-{"footprint": [{"memory_level": <level>, "peak_bytes": <int>,
-                "persistent_bytes": <int>, "capacity_bytes": <int|null>}, ...],
- "traffic": {<level>: {"read": <int>, "write": <int>}},
+{"topologies": [<level>, ...],
+ "traffic": {"storage": {<memory-level>: <spread>, ...},
+             "communication": {<topology-level>: <spread>, ...}},
+ "footprint": null,
  "lifetimes": [{"binding": <name>, "memory_level": <level>, "bytes": <int>,
                 "defined_at": <int>, "last_used_at": <int>,
                 "persistent": <bool>}, ...],
+ "peaks": [{"memory_level": <level>, "peak_bytes": <int>,
+             "persistent_bytes": <int>, "capacity_bytes": <int|null>}, ...],
+ "solver_status": "feasible",
  "errors": [<text>, ...],
  "advisories": [<text>, ...]}
 ```
 
 - constraints:
-  - `MemoryMetadata` MUST be attached per reachable `Function`; a peak spans its
+  - `RegionMemoryMetadata` MUST be attached per reachable `Function`; a peak spans its
     live ranges and belongs to no single expression.
   - `Reshape` and `Transpose` describe bytes their operand already holds and
     MUST NOT receive independent lifetimes. Every other result, a window and a
@@ -636,8 +565,9 @@ attached only to the Function. Its full JSON projection is under
     capacity scope.
   - A solved explicit-level peak exceeding capacity, whether from one value or
     the aggregate placement, MUST produce a report `error` and MUST NOT fail the
-    call. An authored-loop access footprint exceeding an implicit cache capacity
-    MUST instead produce an advisory.
+    call. This contract produces no authored-loop cache conclusion; an
+    `advisory` MUST come from a recorded Function-level finding rather than a
+    report-layer reconstruction.
 
 #### 1.2.3 `roofline`
 
@@ -744,11 +674,10 @@ Reported Call and Function records use the same projection under their
 ```
 
 When roofline is requested without its dependencies being requested, `totals`
-carries only exact `flops` and `traffic` sums, and `function_records.memory`
-carries only `memory_level` and `peak_bytes` per footprint row. Persistent bytes,
-capacities, advisories, lifetimes, operand splits, and dependency annotations do
-not enter that view. Independently requesting a dependency selects its full form
-as defined in that family's section.
+carries only exact `flops`, `traffic`, and `communication` sums. Dependency
+records remain on the semantic result but do not enter `function_records`, Call
+annotations, or Call report rows. Independently requesting a dependency selects
+its full form as defined in that family's section.
 
 - constraints:
   - `ThroughputFacts.peak_for` MUST return `None` for a dtype with no published
@@ -761,17 +690,17 @@ as defined in that family's section.
     bandwidth rather than summing traffic across levels.
   - Performance local duration MUST divide one unit's share of
     `ComputeCostMetadata.flops` by `unit_flops`, of `service` by `unit_ops`, and
-    the `bandwidth_level` entry of `TrafficMetadata.storage` by
+    the `bandwidth_level` entry of `MemoryMetadata.traffic.storage` by
     `unit_bandwidth`, all at the level it was asked about. Compute and
     movement overlap within one occurrence, so its duration is the greater of
     the two sides rather than their sum.
   - Traffic at a level with no stated one-unit bandwidth MUST remain visible in
-    `TrafficMetadata` and MUST NOT enter a duration: an instruction throughput
+    `MemoryMetadata` and MUST NOT enter a duration: an instruction throughput
     standing in for a bandwidth prices a move as though it were arithmetic.
   - Having moved bytes and having work this can time are different questions.
     What decides the second is the quantities a rate exists for: a nonzero
     share of `flops` or of `service`, or nonzero
-    `TrafficMetadata.storage` at `bandwidth_level`. An occurrence with none of
+    `MemoryMetadata.traffic.storage` at `bandwidth_level`. An occurrence with none of
     them MUST take zero time, MUST NOT be required to carry an execution
     placement, and MUST still record its movement at any other level: it is
     untimed, not absent. Work of a dtype or kind the target states no one-unit
@@ -933,12 +862,12 @@ model.
     An occurrence
     with no nonzero share of
     `flops`, none of `service` and no nonzero
-    `TrafficMetadata.storage` at `bandwidth_level` is structural to this
+    `MemoryMetadata.traffic.storage` at `bandwidth_level` is structural to this
     model: it needs no execution placement and MUST receive no record, because
     an empty
     interval reads as a measurement rather than as the absence of one. Movement
     at another level does not change that and MUST NOT be dropped from
-    `TrafficMetadata` because of it -- structural here means nothing to time,
+    `MemoryMetadata` because of it -- structural here means nothing to time,
     not nothing done. It still carries its producers' precedence to its
     consumers. Inputs MUST NOT supply placement for an unplaced occurrence.
   - The global total for an occurrence is its per-unit quantity multiplied by
@@ -984,9 +913,9 @@ model.
   - `parallel_units` is compiler policy over hardware facts. It MUST NOT enter
     one-unit rates or the CTA-local layout, and is not a program rewrite.
   - The buffers a plan keeps live MUST have been placed by `memory` before a
-    time is reported for it, which a `MemoryMetadata` carrying an `allocation`
-    is the evidence of; one without it MUST fail with `AnalysisError`. A
-    placement that failed never reaches here, because `memory` refuses it.
+    time is reported for it. A successful dependency records
+    `RegionMemoryMetadata.solver_status="feasible"`; a placement that failed
+    never reaches performance because `memory` refuses it.
     Capacity therefore changes whether there is an answer, never which answer:
     two capacities that both admit a placement MUST produce the same intervals.
   - Performance is a modeled plan and MUST NOT be read as a guarantee about
@@ -1209,14 +1138,16 @@ def analyze(
 ### 2.1 Shared IterationScope and Access
 
 The normalized HIR is visited once per `analyze()` call. That visit produces a
-`IterationScope` tree parallel to Function/LoopRegion nesting and `Access`
-relations for the narrow and device views. `IterationScope.domain` is the
-accumulated authored loop domain; `IterationScope.accesses` and
-`IterationScope.refused` are the only family inputs for
-loop footprints, movement, and placement. An `Access` stores only its relation
-and allocation expression; storage level and element width are read from the
-allocation type. A refused descendant makes its owning scope unknown for that
-view. Non-affine runtime indices retain the widest legal access approximation.
+`IterationScope` tree parallel to Function/LoopRegion nesting and `Access` relations
+for the narrow and device views. `IterationScope.domain` is the accumulated
+authored loop domain; `IterationScope.accesses` and `IterationScope.refused` are
+the shared family inputs for movement and any later read-footprint conclusion.
+An input `Access` stores its original Call boundary index as well as its relation
+and allocation expression; an output stores `input_index=None`. Failed boundaries
+remain absent without shifting the index on later successful inputs. Storage level
+and element width are read from the allocation type. A refused descendant makes
+its owning scope unknown for that view. Non-affine runtime indices retain the
+widest legal access approximation.
 Normalization clones each reached Function call site independently. Within one
 call site, source expressions shared by identity remain one shared expression
 in the clone; sharing never aliases the independently cloned body of another

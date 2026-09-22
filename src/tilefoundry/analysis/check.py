@@ -58,8 +58,8 @@ from .metadata import (
     MemoryMetadata,
     PerformanceMetadata,
     PerformanceSummaryMetadata,
+    RegionMemoryMetadata,
     RooflineMetadata,
-    TrafficMetadata,
 )
 
 _INLINE_NODES = 10_000
@@ -69,8 +69,8 @@ _DERIVED_METADATA = {
     PerformanceMetadata,
     PerformanceSummaryMetadata,
     RangeMetadata,
+    RegionMemoryMetadata,
     RooflineMetadata,
-    TrafficMetadata,
 }
 _ResourceKey = tuple[str, str]
 

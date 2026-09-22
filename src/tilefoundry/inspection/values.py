@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 
 from tilefoundry.ir.core.metadata import IRMetadata
 from tilefoundry.ir.core.values import TripInterval
@@ -39,11 +39,6 @@ class ReportIdentity(IRMetadata):
 class ReportSelection(IRMetadata):
     requested: tuple[str, ...] = ()
     executed: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class MemorySummary(IRMetadata):
-    peak_bytes: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -144,8 +139,8 @@ class CommentPrinter:
             ),
         )
 
-    def print_TrafficMetadata(self, record, *, opt_in=frozenset()):
-        traffic = self._breakdown(record.storage, record.topologies, logical=False)
+    def print_MemoryMetadata(self, record, *, opt_in=frozenset()):
+        traffic = self._breakdown(record.traffic.storage, record.topologies)
         values = [("traffic", traffic)]
         if "operands" in opt_in:
             last = len(record.operands) - 1
@@ -154,29 +149,18 @@ class CommentPrinter:
                 for index, moved in enumerate(record.operands)
             }
             values.append(("operands", operands))
-        return self._record("traffic", values)
+        return self._record("memory", values)
 
-    def print_MemoryMetadata(self, record, **_):
+    def print_RegionMemoryMetadata(self, record, **_):
         return self._record(
             "memory",
             (
-                ("peak", {item.memory_level: item.peak_bytes for item in record.footprint}),
-                ("persistent", sum(item.persistent_bytes for item in record.footprint), 0),
+                ("traffic", self._breakdown(record.traffic.storage, record.topologies)),
+                ("peak", {item.memory_level: item.peak_bytes for item in record.peaks}),
+                ("persistent", sum(item.persistent_bytes for item in record.peaks), 0),
                 ("errors", len(record.errors), 0),
                 ("advisories", len(record.advisories), 0),
             ),
-        )
-
-    def print_LoopFootprintMetadata(self, record, **_):
-        footprints = {
-            f"{item.buffer}@{item.memory_level}": PAIR.join(
-                str(value) for value in (item.bytes, item.device_bytes, item.repeated_bytes)
-            )
-            for item in record.footprints
-        }
-        return self._record(
-            "loop-footprint",
-            (("footprints", footprints), ("status", "complete" if record.known else "lower-bound")),
         )
 
     def print_RooflineMetadata(self, record, **_):
@@ -216,9 +200,6 @@ class CommentPrinter:
             "selection", (("requested", record.requested, ()), ("executed", record.executed, ()))
         )
 
-    def print_MemorySummary(self, record, **_):
-        return self._single("peak-footprint", record.peak_bytes, {})
-
     def print_AdvisorySummary(self, record, **_):
         return self._single("advisory", record.text)
 
@@ -244,10 +225,6 @@ def render_comment(record, *, opt_in=frozenset()):
     return method(record, opt_in=opt_in) if method else None
 
 
-def peak_footprint(record):
-    return {item.memory_level: item.peak_bytes for item in record.footprint}
-
-
 __all__ = [
     "CommentPrinter",
     "Prose",
@@ -262,9 +239,7 @@ __all__ = [
     "TRIPS",
     "ReportIdentity",
     "ReportSelection",
-    "MemorySummary",
     "AdvisorySummary",
     "ErrorSummary",
     "PerformanceSummaryView",
-    "peak_footprint",
 ]

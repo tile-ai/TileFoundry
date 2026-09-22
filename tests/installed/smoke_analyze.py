@@ -17,7 +17,7 @@ class Bad:
         return wrong
 """
 
-_OPEN_MODULE = '''
+_OPEN_MODULE = """
 from tilefoundry import module
 from tilefoundry.dsl import DimVar, Tensor, Topology, func, tf
 from tilefoundry.target import CudaTarget
@@ -29,7 +29,7 @@ class Open:
     @func
     def main(x: Tensor[(N,), "f32"]):
         return tf.add(x, x)
-'''
+"""
 
 
 def test_logical_analyses_run(tf, cmine, tmp_path) -> None:
@@ -44,7 +44,7 @@ def test_logical_analyses_run(tf, cmine, tmp_path) -> None:
     assert done.returncode == 0, done.stderr
     assert done.stdout == ""
     report = (tmp_path / "logical.py").read_text(encoding="utf-8")
-    for conclusion in ("# compute-cost flops=", "# peak-footprint=", "# roofline ideal-ns="):
+    for conclusion in ("# compute-cost flops=", "# memory traffic=", "# roofline ideal-ns="):
         assert conclusion in report, conclusion
 
 
@@ -81,7 +81,7 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf, tmp_path)
 
     families = ["compute-cost", "memory", "roofline", "performance"]
     assert payload["requested"] == payload["executed"] == families
-    assert set(payload["function_records"]) == {*families, "traffic"}
+    assert set(payload["function_records"]) == set(families)
     assert len(payload["calls"]) == 7
     for row in payload["calls"]:
         name, line_text = row["value"].rsplit(":", 1)
@@ -89,19 +89,21 @@ def test_mega_kernel_reports_four_families_on_one_expanded_program(tf, tmp_path)
         assert 1 <= line <= len(source_lines)
         assert f"{name} =" in source_lines[line - 1]
     assert all(
-        set(row) - {"performance"} == {"value", "compute-cost", "roofline", "traffic"}
+        set(row) - {"performance"} == {"value", "compute-cost", "memory", "roofline"}
         for row in payload["calls"]
     )
-    assert [
-        index for index, row in enumerate(payload["calls"]) if "performance" in row
-    ] == [1, 4, 6]
+    assert [index for index, row in enumerate(payload["calls"]) if "performance" in row] == [
+        1,
+        4,
+        6,
+    ]
     assert text.startswith(
         "# analysis target=nvidia.h200_sxm module=MoEMegaKernel function=experts"
     )
     for conclusion in (
         "# selection requested=compute-cost,memory,roofline,performance",
         "# compute-cost flops=f32:",
-        "# peak-footprint=",
+        "# memory traffic=",
         "# roofline ideal-ns=",
         "# performance root=MoEMegaKernel::experts predicted-ns=",
     ):
@@ -114,7 +116,10 @@ def test_usage_errors_print_usage_before_error(tf) -> None:
 
     assert done.stdout == ""
     assert done.stderr.startswith("usage: tilefoundry analyze")
-    assert "tilefoundry analyze: error: the following arguments are required: SOURCE, PATH" in done.stderr
+    assert (
+        "tilefoundry analyze: error: the following arguments are required: SOURCE, PATH"
+        in done.stderr
+    )
     assert "SOURCE" in done.stderr
     assert "model.py[:Module[.child_module...][.function]]" not in done.stderr
 
@@ -164,9 +169,7 @@ def test_a_bare_analyze_binds_every_open_dimension(tf, tmp_path) -> None:
 
 def test_performance_resolves_derived_execution_geometry(tf, derived_prefill, tmp_path) -> None:
     source = f"{derived_prefill}:DerivedPrefill.prefill"
-    unbound = tf(
-        "analyze", source, str(tmp_path / "unbound.json"), "--performance", "--json"
-    )
+    unbound = tf("analyze", source, str(tmp_path / "unbound.json"), "--performance", "--json")
     assert unbound.returncode == 1
     assert unbound.stdout == ""
     assert "prefill_n is declared as [1, 65)" in unbound.stderr
@@ -204,23 +207,18 @@ def test_analyze_reports_only_the_analyses_that_were_requested(tf, cwide, tmp_pa
 
     assert done.stdout == ""
     report = (tmp_path / "report.py").read_text(encoding="utf-8")
-    assert (
-        "# selection requested=roofline executed=compute-cost,memory,roofline"
-        in report
-    )
+    assert "# selection requested=roofline executed=compute-cost,memory,roofline" in report
     assert "# compute-cost flops=" in report
     assert "# roofline ideal-ns=" in report
-    assert "# peak-footprint=" not in report
+    assert "# memory " not in report
     assert "# performance " not in report
     assert "; roofline ideal-ns=" in report
-    assert "; memory peak=" not in report
+    assert "; memory" not in report
     assert "; compute-cost" not in report
     assert "; performance=" not in report
 
 
-def test_analyze_failure_reports_line_variable_and_reason(
-    tf, dynamic_trip_count, tmp_path
-) -> None:
+def test_analyze_failure_reports_line_variable_and_reason(tf, dynamic_trip_count, tmp_path) -> None:
     bad = tmp_path / "bad.py"
     bad.write_text(_BAD_MODULE, encoding="utf-8")
 
@@ -233,9 +231,7 @@ def test_analyze_failure_reports_line_variable_and_reason(
     assert "dtype mismatch" in done.stderr
 
     report = tmp_path / "dynamic_report.py"
-    refused = tf(
-        "analyze", f"{dynamic_trip_count}:DynamicTripCount", str(report), "--memory"
-    )
+    refused = tf("analyze", f"{dynamic_trip_count}:DynamicTripCount", str(report), "--memory")
     assert refused.returncode == 1
     assert refused.stdout == ""
     assert "loop '_step'" in refused.stderr

@@ -40,6 +40,7 @@ class AccessPrecision(Enum):
 class Access:
     """One relation from an iteration scope to the allocation it reaches."""
 
+    input_index: int | None
     relation: isl.map
     buffer: Expr
     precision: AccessPrecision = AccessPrecision.EXACT
@@ -155,6 +156,7 @@ def resolve_access(
     scope: "IterationScope",
     ctx: TypeInferContext,
     *,
+    input_index: int | None,
     narrow: bool,
 ) -> Access | None:
     """Resolve one declared boundary into an access from its iteration scope."""
@@ -194,7 +196,7 @@ def resolve_access(
             precision = AccessPrecision.WIDENED
     if precision is AccessPrecision.EXACT and has_unbounded_param(relation):
         precision = AccessPrecision.UNKNOWN
-    return Access(relation, operand, precision)
+    return Access(input_index, relation, operand, precision)
 
 
 __all__ = [

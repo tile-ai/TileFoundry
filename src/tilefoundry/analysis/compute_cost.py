@@ -18,7 +18,7 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts, ThroughputFacts
-from .metadata import Breakdown, ComputeCostMetadata, breakdown, shares
+from .metadata import Breakdown, ComputeCostMetadata, MemoryMetadata, breakdown, shares
 from .visitor import AnalyzeContext
 
 SELECTOR = "compute-cost"
@@ -34,7 +34,7 @@ def _at(held: Breakdown[int], topologies: tuple[str, ...], level: str | None):
 
 def _is_structural_occurrence(
     cost: ComputeCostMetadata,
-    moved: "TrafficMetadata | None" = None,
+    moved: MemoryMetadata | None = None,
     *,
     unit: str,
     bandwidth_level: str | None = None,
@@ -44,7 +44,7 @@ def _is_structural_occurrence(
         all(not value for _name, value in _at(cost.flops, cost.topologies, unit))
         and all(not value for _kind, value in _at(cost.other_ops, cost.topologies, unit))
         and not (
-            _bytes(moved.storage, moved.topologies, bandwidth_level, unit)
+            _bytes(moved.traffic.storage, moved.topologies, bandwidth_level, unit)
             if moved is not None and bandwidth_level is not None
             else 0
         )
@@ -56,7 +56,7 @@ def local_duration_ns(
     facts: ThroughputFacts,
     services: PerformanceServiceFacts,
     *,
-    moved: "TrafficMetadata | None" = None,
+    moved: MemoryMetadata | None = None,
     topology_level: str | None = None,
     level: str | None = None,
     scale: int = 1,
@@ -102,7 +102,8 @@ def local_duration_ns(
         compute_ns += -(-(value * scale * 1_000_000_000) // throughput)
 
     crossed = (
-        _bytes(moved.storage, moved.topologies, facts.bandwidth_level, topology_level) * scale
+        _bytes(moved.traffic.storage, moved.topologies, facts.bandwidth_level, topology_level)
+        * scale
         if moved is not None
         else 0
     )
@@ -117,7 +118,13 @@ def local_duration_ns(
         memory_ns = -(-(crossed * 1_000_000_000) // throughput)
 
     sent = (
-        _bytes(moved.communication, moved.topologies, topology_level, topology_level) * scale
+        _bytes(
+            moved.traffic.communication,
+            moved.topologies,
+            topology_level,
+            topology_level,
+        )
+        * scale
         if moved is not None
         else 0
     )
