@@ -762,9 +762,24 @@ class Target:
         facts_type: type[FactsT],
         query: object | None = None,
     ) -> FactsT: ...
+
+
+class ParallelCapacityFacts:
+    """Carry the parallel capacity assumed by target-aware analyses.
+
+    Attributes:
+        topology: attribute; Topology level being measured over.
+        parallel_units: attribute; Instances admitted concurrently.
+    """
+
+    topology: str
+    parallel_units: int
 ```
 
 - constraints:
+  - `ParallelCapacityFacts` is compiler policy expressed over a hardware fact,
+    not a hardware limit. It is consumed by more than one analysis family, so
+    it is owned here rather than by either one.
   - A subclass MUST inherit its base Target's projections through normal Python
     inheritance. It MAY override `get_facts` for hardware that differs and
     delegate unknown requests to `super()`.
