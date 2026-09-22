@@ -314,15 +314,18 @@ anything; it does not say how much, and an Op with no relation fails closed.
     in `topologies` rather than beside each share.
   - A movement has two coordinates and MUST be stated in both. `storage` names
     the level the bytes entered or left. `communication` names the topology
-    level whose boundary they crossed. The same bytes MUST appear under both,
-    exactly as a move between two storage levels is read at one and written at
-    the other.
+    level whose boundary they crossed, which no storage level can answer: data
+    handed from one unit to another is the same storage at both ends and has
+    still gone somewhere. The same bytes MUST appear under both, exactly as a
+    move between two storage levels is read at one and written at the other.
   - Under `communication`, `read` and `write` are the unit's own view: what it
     received and what it sent. A unit finer than the boundary MUST state no
-    share of it.
+    share of it -- crossing is what the units on either side do, and dividing
+    the move among the units inside one states a move nobody made.
   - A duration MUST take whichever of compute, storage movement and crossing is
-    longest, and MUST NOT sum them. A crossing at a level the target publishes
-    no rate for MUST be stated and left untimed.
+    longest, and MUST NOT sum them: one movement spends two resources over one
+    span of time. A crossing at a level the target publishes no rate for MUST
+    be stated and left untimed.
   - A Call's `traffic` and `operands` MUST state one occurrence. Only the
     Function record counts an occurrence as often as its authored loops repeat
     it.
@@ -331,9 +334,11 @@ anything; it does not say how much, and an Op with no relation fails closed.
     a full read of its source and a write of its result.
   - Which boundaries move is the Op's evaluator's answer and MUST NOT be read
     off value lifetimes. A boundary it reports no direction on moves nothing.
-    The numbers that place a window are reached and charged like any other
-    operand. An operation that writes at an address it is given reads that
-    address the same way.
+    The numbers that place a window MUST be read like any other operand: one
+    element per number, reached through the boundary's own relation onto the
+    flat leaves the operand holds, and charged at each reached leaf's own width.
+    An operation that writes at an address it is given reads that address the
+    same way.
 
 ##### `Footprint`
 
@@ -454,14 +459,18 @@ class MemoryLevelPeak:
 | `RegionMemoryMetadata.advisories` | Lower-severity target-aware memory findings recorded by this family. | `MemoryHierarchyFacts` |
 
 - constraints:
+  - `RegionMemoryMetadata` MUST be attached per reachable `Function`; a peak
+    spans its live ranges and belongs to no single expression.
   - An access relation that keeps a parameter with a stated finite range is
     exact and MAY prove overlap. A widened relation, and one with an unbounded
     parameter, MUST NOT.
   - Placement MUST be settled for the addressable levels `gmem` and `smem` only,
-    once per capacity domain that holds a buffer. Residency at another level
-    MUST NOT make a program unplaceable, and a level owned per unit of a
-    topology other than the one being analysed MUST fail rather than be
-    assumed. Domains holding the same buffers are one question, decided once.
+    once per capacity domain that holds a buffer -- the whole target for a level
+    owned target-wide, one per owning position otherwise -- with two buffers in
+    one domain never live in the same bytes at once. Residency at another level
+    MUST NOT make a program unplaceable, and a level owned per unit of a topology
+    other than the one being analysed MUST fail rather than be assumed. Domains
+    holding the same buffers are one question, decided once.
   - A domain that cannot be expressed or does not settle in time MUST raise
     `AnalysisError` and leave no record. The solver MUST stop at its first
     feasible assignment rather than prove a minimum. Capacity MUST NOT restrict
@@ -521,7 +530,14 @@ class MemoryRelationKind(Enum):
 
 
 class ExplicitMemoryLevelFacts:
-    """A level a program places values in by name."""
+    """A level a program places values in by name.
+
+    Attributes:
+        name: attribute; The storage level name.
+        capacity_bytes: attribute; Stated capacity, or None when unknown.
+        scope: attribute; The topology level the capacity is stated per.
+        owner: attribute; The topology whose units own separate values, or target.
+    """
 
     name: str
     capacity_bytes: int | None
@@ -530,7 +546,13 @@ class ExplicitMemoryLevelFacts:
 
 
 class ImplicitMemoryLevelFacts:
-    """A level traffic passes through without being placed there."""
+    """A level traffic passes through without being placed there.
+
+    Attributes:
+        name: attribute; The cache level name.
+        capacity_bytes: attribute; Stated capacity, or None when unknown.
+        scope: attribute; The topology level the capacity is stated per.
+    """
 
     name: str
     capacity_bytes: int | None
@@ -538,7 +560,14 @@ class ImplicitMemoryLevelFacts:
 
 
 class MemoryLevelRelation:
-    """One edge between two memory levels."""
+    """One edge between two memory levels.
+
+    Attributes:
+        kind: attribute; Which relationship this edge states.
+        near: attribute; The level closer to the compute units.
+        far: attribute; The level on the other side of the edge.
+        shared_capacity_bytes: attribute; Size of the divided block, on a sharing edge.
+    """
 
     kind: MemoryRelationKind
     near: str
@@ -547,7 +576,13 @@ class MemoryLevelRelation:
 
 
 class MemoryHierarchyFacts:
-    """Every memory level of one target, as a flat graph."""
+    """Every memory level of one target, as a flat graph.
+
+    Attributes:
+        explicit_levels: attribute; The levels a program names.
+        implicit_levels: attribute; The levels traffic only passes through.
+        relations: attribute; The edges between them.
+    """
 
     explicit_levels: tuple[ExplicitMemoryLevelFacts, ...]
     implicit_levels: tuple[ImplicitMemoryLevelFacts, ...]

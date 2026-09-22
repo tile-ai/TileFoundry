@@ -765,7 +765,7 @@ class Target:
 
 
 class ParallelCapacityFacts:
-    """Carry the parallel capacity assumed by target-aware analyses.
+    """How many instances of one topology level run at once.
 
     Attributes:
         topology: attribute; Topology level being measured over.
