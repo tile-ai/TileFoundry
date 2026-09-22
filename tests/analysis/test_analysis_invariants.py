@@ -45,6 +45,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor as TensorPattern
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.slice import Slice as SliceOp
+from tilefoundry.ir.isl_interop import index_set
 from tilefoundry.ir.types import (
     DType,
     TensorType,
@@ -53,7 +54,6 @@ from tilefoundry.ir.types import (
     make_tensor_type,
     tensor_bytes,
 )
-from tilefoundry.ir.types.dim_isl import index_set
 from tilefoundry.ir.types.shard import Topology, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.storage import StorageKind

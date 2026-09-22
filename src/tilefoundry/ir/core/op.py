@@ -37,7 +37,7 @@ def _normalize_attr(name: str, value: Any) -> Any:
     """
     if name == "storage":
         return resolve_storage(value)
-    from tilefoundry.ir.types.dim_isl import normalize_dim_entries  # noqa: PLC0415
+    from tilefoundry.ir.isl_interop import normalize_dim_entries  # noqa: PLC0415
 
     return normalize_dim_entries(value)
 

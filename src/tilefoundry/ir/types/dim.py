@@ -1,7 +1,8 @@
 """Dimension IR definitions, construction, and structural predicates.
 
 This module does not depend on isl. Conversion to and from isl, affine
-normalization, and value-range queries belong to :mod:`dim_isl`.
+normalization, and value-range queries belong to
+:mod:`tilefoundry.ir.isl_interop`.
 """
 
 from __future__ import annotations

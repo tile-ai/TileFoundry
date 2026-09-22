@@ -16,9 +16,9 @@ from tilefoundry.ir.core import Call, Constant, Tuple, TypeInferContext, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.tensor.slice import Slice, slice_size
+from tilefoundry.ir.isl_interop import normalize_dim
 from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_tensor_type
 from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
-from tilefoundry.ir.types.dim_isl import normalize_dim
 from tilefoundry.ir.types.shard import ComposedLayout, Layout, make_mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split, shard_layout_of
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes

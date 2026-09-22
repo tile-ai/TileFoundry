@@ -1,8 +1,9 @@
-"""Conversion between dimension IR and isl, plus affine range queries.
+"""Interoperation between dimension and shape IR values and isl.
 
-Dimension definitions and construction stay in :mod:`dim`; this module owns
-the dim-to-isl rendering, isl-to-dim decoding, shape-domain construction,
-affine normalization, and conservative value-range calculation.
+Dimension definitions and construction stay in :mod:`tilefoundry.ir.types.dim`;
+pure isl operations stay in :mod:`tilefoundry.utils.isl_utils`. This module owns
+the boundary between those layers: rendering, decoding, normalization, value
+ranges, and shape domains.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from tilefoundry.ir.core.expr import Call, Constant, Expr, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.metadata import RangeMetadata, get_metadata
 
-from .dim import (
+from .types.dim import (
     _DIM_OP_TYPES,
     DimAdd,
     DimFloorDiv,
@@ -24,8 +25,8 @@ from .dim import (
     DimSub,
     DimVar,
 )
-from .dtype import IntegerDType
-from .tensor_type import TensorType
+from .types.dtype import IntegerDType
+from .types.tensor_type import TensorType
 
 _INTEGER_BINARY_DIM_OP = {
     BinaryKind.ADD: DimAdd,

@@ -532,9 +532,10 @@ def ceildiv(a, b) -> Expr:
   - `ceildiv(a, b)` MUST compose the existing add, subtract, and floor-divide
     operations; it does not introduce a distinct Op.
   - `ir.types.dim` MUST own dimension IR definitions, construction, and
-    structural predicates without depending on isl. `ir.types.dim_isl` MUST own
-    conversion between dimension IR and isl, affine normalization, shape-domain
-    construction, and conservative value-range queries.
+    structural predicates without depending on isl. `ir.isl_interop` MUST own
+    conversion between dimension and shape IR values and isl, affine
+    normalization, shape-domain construction, and conservative value-range
+    queries.
   - `dim_to_isl_expr` MUST render one dimension expression while registering
     its leaf parameters; `isl_to_dim` MUST decode an isl affine expression using
     that parameter map. `shape_to_isl_domain` MUST return one shape's iteration

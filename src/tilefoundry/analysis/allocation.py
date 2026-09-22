@@ -15,8 +15,8 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
+from tilefoundry.ir.isl_interop import index_set
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.dim_isl import index_set
 from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.isl_utils import equates

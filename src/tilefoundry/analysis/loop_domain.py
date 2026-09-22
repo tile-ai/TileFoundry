@@ -7,7 +7,7 @@ import isl
 from tilefoundry.ir.core import value_label
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.types.dim_isl import dim_to_isl_expr
+from tilefoundry.ir.isl_interop import dim_to_isl_expr
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 
 from .errors import AnalysisError

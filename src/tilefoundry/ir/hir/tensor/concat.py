@@ -17,9 +17,9 @@ from tilefoundry.ir.hir._shard_checks import (
     reject_dynamic_shards,
     require_uniform_partial_slices,
 )
+from tilefoundry.ir.isl_interop import normalize_dim_entries
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimAdd, simplify_dim
-from tilefoundry.ir.types.dim_isl import normalize_dim_entries
 from tilefoundry.ir.types.shard import (
     Layout,
     Split,

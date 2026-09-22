@@ -10,6 +10,7 @@ from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.isl_interop import dim_range
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import (
     DimAdd,
@@ -18,7 +19,6 @@ from tilefoundry.ir.types.dim import (
     DimSub,
     simplify_dim,
 )
-from tilefoundry.ir.types.dim_isl import dim_range
 from tilefoundry.ir.types.shape_helpers import i64_const
 from tilefoundry.ir.types.shard import (
     ComposedLayout,

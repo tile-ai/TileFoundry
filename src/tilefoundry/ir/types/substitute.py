@@ -11,9 +11,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from tilefoundry.ir.core.expr import Call, Constant
+from tilefoundry.ir.isl_interop import normalize_dim
 
 from .dim import _DIM_OP_TYPES, DimVar, simplify_dim
-from .dim_isl import normalize_dim
 from .tensor_type import TensorType, TupleType, Type
 
 

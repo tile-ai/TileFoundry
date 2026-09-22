@@ -1,4 +1,4 @@
-"""dim_isl — range queries and conversion between dimensions and isl."""
+"""isl_interop — range queries and conversion between IR dimensions and isl."""
 
 from __future__ import annotations
 
@@ -10,6 +10,13 @@ from tilefoundry.ir.core import RangeMetadata, attach_metadata
 from tilefoundry.ir.core.expr import Call, Var
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
+from tilefoundry.ir.isl_interop import (
+    dim_range,
+    index_set,
+    isl_to_dim,
+    normalize_dim,
+    shape_to_isl_domain,
+)
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import (
     DimAdd,
@@ -21,13 +28,6 @@ from tilefoundry.ir.types.dim import (
     DimSub,
     DimVar,
     simplify_dim,
-)
-from tilefoundry.ir.types.dim_isl import (
-    dim_range,
-    index_set,
-    isl_to_dim,
-    normalize_dim,
-    shape_to_isl_domain,
 )
 from tilefoundry.utils.isl_utils import cardinality
 
