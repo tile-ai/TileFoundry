@@ -33,6 +33,8 @@ class ReportIdentity(IRMetadata):
     module: str = ""
     function: str = ""
     topology: str = "none"
+    wave: str = ""
+    cache: str = ""
 
 
 @dataclass(frozen=True)
@@ -139,24 +141,6 @@ class CommentPrinter:
             for name, breakdown in footprint.buffers
         }
 
-    def _cache(self, record):
-        capacity = record.cache_capacity_bytes
-        if record.footprint is None or not record.cache_level or capacity is None:
-            return {}
-        used = sum(self._footprint(record.footprint).values())
-        percent = 100 * used / capacity
-        return {
-            record.cache_level: (
-                f"{used / 1048576:.2f}MB/{capacity / 1048576:.2f}MB@{percent:.1f}%"
-            )
-        }
-
-    @staticmethod
-    def _wave(record):
-        if not record.wave_units or not record.declared_units:
-            return ""
-        return f"{record.wave_units}/{record.declared_units}"
-
     def print_ComputeCostMetadata(self, record, **_):
         return self._record(
             "compute-cost",
@@ -184,12 +168,23 @@ class CommentPrinter:
             (
                 ("traffic", self._breakdown(record.traffic.storage, record.topologies)),
                 ("footprint", self._footprint(record.footprint)),
-                ("cache", self._cache(record)),
-                ("wave", self._wave(record), ""),
                 ("peak", {item.memory_level: item.peak_bytes for item in record.peaks}),
                 ("persistent", sum(item.persistent_bytes for item in record.peaks), 0),
                 ("errors", len(record.errors), 0),
                 ("advisories", len(record.advisories), 0),
+            ),
+        )
+
+    def print_ReuseWindow(self, record, **_):
+        return self._record(
+            "reuse",
+            (
+                ("buffer", record.buffer),
+                ("holds", f"{record.holds_bytes / 1048576:.2f}MB"),
+                ("time", record.time or "none"),
+                ("space", record.space or "none"),
+                ("saves", f"{record.saves_bytes / 1048576:.2f}MB"),
+                ("fits", "yes" if record.fits else "no"),
             ),
         )
 
@@ -215,15 +210,17 @@ class CommentPrinter:
         return self._single("source", f"{record.file}:{record.line}:{record.column}")
 
     def print_ReportIdentity(self, record, **_):
-        return self._record(
+        identity = self._record(
             "analysis",
             (
                 ("target", record.target, ""),
                 ("module", record.module, ""),
                 ("function", record.function, ""),
                 ("topology", record.topology, "none"),
+                ("wave", record.wave, ""),
             ),
         )
+        return FIELDS.join((identity, record.cache)) if record.cache else identity
 
     def print_ReportSelection(self, record, **_):
         return self._record(

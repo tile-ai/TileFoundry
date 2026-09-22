@@ -49,7 +49,7 @@ Every compact text summary begins with these two lines:
 
 ```text
 # example
-# analysis target=<target> module=<module> function=<function> topology=<level>
+# analysis target=<target> module=<module> function=<function> topology=<level> wave=<counted>/<declared> <cache-level>=<capacity>MB
 # selection requested=<selector>[,<selector>...] executed=<selector>[,<selector>...]
 ```
 
@@ -60,7 +60,9 @@ are records of the report rather than of the IR; every other summary line is a
 record of the selected Function.
 
 The JSON report carries the same identity and selection in `target`, `module`,
-`function`, `topology`, `requested`, and `executed`. Whole-function
+`function`, `topology`, `wave`, `cache`, `requested`, and `executed`. `wave`
+holds `counted` and `declared`; `cache` holds `level` and `capacity_bytes`.
+Whole-function
 projections are under `function_records`; `calls` is a value-ordered list whose
 entries have a `value` label and one key per selected family. `loops` is the
 corresponding authored-loop list, labelled by induction variable. Memory does not
@@ -217,7 +219,7 @@ Each reported Call's JSON projection is under its `compute-cost` key:
 
 `memory` states what every occurrence moves and at which level, the unique
 addresses one wave touches at a representative iteration, whole-Function value
-lifetimes and placement peaks, and the resulting cache occupancy. The movement
+lifetimes and placement peaks, and which repeated reads fit in cache. The movement
 is read off the Op's own registered evaluator and the amounts its access
 relations reach.
 
@@ -235,6 +237,18 @@ class MemoryMetadata(IRMetadata):
     footprint: Footprint | None = None
 
 
+class ReuseWindow:
+    """One buffer's re-reads, and what keeping it costs the cache."""
+
+    buffer: str
+    time: str = ""
+    space: str = ""
+    holds_bytes: int = 0
+    saves_bytes: int = 0
+    fits: bool = True
+    complete: bool = True
+
+
 class RegionMemoryMetadata(IRMetadata):
     """One Function's aggregate memory conclusions."""
 
@@ -242,12 +256,9 @@ class RegionMemoryMetadata(IRMetadata):
     topologies: tuple[str, ...] = ()
     traffic: Traffic = Traffic()
     footprint: Footprint | None = None
+    reuse_windows: tuple[ReuseWindow, ...] = ()
     lifetimes: tuple[ValueLifetime, ...] = ()
     peaks: tuple[MemoryLevelPeak, ...] = ()
-    cache_level: str = ""
-    cache_capacity_bytes: int | None = None
-    wave_units: int = 0
-    declared_units: int = 0
     errors: tuple[str, ...] = ()
     advisories: tuple[str, ...] = ()
 ```
@@ -484,40 +495,52 @@ class MemoryLevelPeak:
 
 ##### Cache occupancy
 
-The reported working set is the footprint of the level a cache backs, at one
-iteration, over one wave of units. A wave is
-`min(declared units, units the target runs at once)`, read from the parallel
-capacity the target publishes and the declared extent of the topology that
-capacity names. Of the implicit levels with stated capacity, the first by name
-is reported.
+A cache holds data because it will be read again, and whether it still holds it
+is decided by what was touched in between. This analysis states one row per
+buffer that is read again, naming the two axes a second read can come from: the
+loop whose next iteration reads it, and the mesh axis whose units read it at
+once. A buffer with neither states no row.
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `RegionMemoryMetadata.cache_level` | The implicit cache whose capacity the working set is compared against, first by name among levels with stated capacity; empty when no such conclusion is available. | `MemoryHierarchyFacts.implicit_levels[]` |
-| `RegionMemoryMetadata.cache_capacity_bytes` | That cache level's stated capacity, or `None` when unknown. | As above |
-| `RegionMemoryMetadata.wave_units` | `min(declared_units, parallel_units)`; the units whose reached addresses were unioned. | [target §11](./target.md#11-target-facts-projection) `ParallelCapacityFacts.parallel_units` |
-| `RegionMemoryMetadata.declared_units` | The static declared extent of the topology named by `ParallelCapacityFacts.topology`. | No; reads the resolved Module topology. |
+| `ReuseWindow.buffer` | The source buffer's lifetime label. | No |
+| `ReuseWindow.time` | The outermost enclosing loop whose different iterations reach the same addresses, named by its induction variable; empty when no loop supplies a second read. | No |
+| `ReuseWindow.space` | The mesh axis whose different coordinates reach the same addresses; empty when no mesh axis supplies a second read. | No |
+| `ReuseWindow.holds_bytes` | Unique bytes of every buffer the whole wave touches while this buffer must remain resident. | `MemoryHierarchyFacts` selects the backed level; [target §11](./target.md#11-target-facts-projection) supplies `ParallelCapacityFacts`. |
+| `ReuseWindow.saves_bytes` | `(time trips * space units - 1)` times this buffer's unique bytes in the window; an absent axis contributes one. | As above |
+| `ReuseWindow.fits` | True exactly when `holds_bytes` is less than the cache capacity. | `MemoryHierarchyFacts.implicit_levels[]` |
+| `ReuseWindow.complete` | False when any boundary contributing to `holds_bytes` is inexact, uncountable, or refused; otherwise true. | No |
+| `RegionMemoryMetadata.reuse_windows` | One row for every buffer with a time or space reuse axis. | As above |
 
 - constraints:
-  - A program declaring more units than the target holds MUST NOT have them all
-    counted as concurrent. The wave is the first `wave_units` positions in the
-    mesh's own linear order, taken through `Mesh.layout`'s strides.
-  - Occupancy MUST be reported on every analysis, not only when capacity is
-    exceeded. It is keyed by memory level as
-    `cache=<level>:<used>MB/<capacity>MB@<percent>%`; one MB is 1048576 bytes.
-  - The wave MUST be reported beside occupancy as
-    `wave=<wave_units>/<declared_units>`.
-  - A working set above capacity MUST add a non-fatal `errors` entry and MUST
-    NOT fail the call. An unknown count MUST add none.
-  - This working set is a lower bound on the peak: exceeding capacity proves
-    the peak exceeds it, and fitting proves nothing about the peak.
-  - The capacity is stated per one instance of the cache's `scope`, and this
-    analysis compares one wave against one instance. A deployment that spreads
-    one wave across several instances is not modelled.
-  - Per-unit control flow is out of scope: HIR states no conditional region, so
-    two units differ only by the iteration domain a coordinate gives them.
-  - Replacement policy, miss counts, miss rates, and a peak taken across
-    iterations state nothing here.
+  - The stated bytes are everything the whole wave touches while that buffer
+    must stay resident, every buffer included, not only the one read again:
+    the others are what evict it.
+  - A read by another unit of the same wave counts. On a target whose units
+    share one cache, data several units read at once is the common case, and a
+    model counting only one unit returning later would state no reuse at all
+    for a schedule giving each unit one output tile.
+  - The window is the loop axis when there is one, and the mesh axis alone
+    otherwise, because units reading at once are already inside one iteration
+    of the loop that carries the later read.
+  - Rows MUST NOT be summed. One row's window lies inside another's whenever
+    its axis is nested inside, so a row that fits implies those nested in it
+    fit.
+  - Data read once states no row; its bytes still enter every row whose window
+    contains it.
+  - A row above capacity MUST add a non-fatal `errors` entry and MUST NOT fail
+    the call.
+  - The stated bytes are a lower bound when any contributing boundary is
+    inexact, exactly as a footprint is.
+  - This is the capacity judgement of an idealised fully associative LRU cache.
+    Miss counts, miss rates and replacement policy state nothing here.
+
+The report identity, not `RegionMemoryMetadata`, states the machine context.
+Its wave is `min(declared units, units the target runs at once)` over the
+topology named by `ParallelCapacityFacts`; its cache is the first implicit
+level by name with stated capacity. One MB is 1048576 bytes. These facts are
+top-level `wave` and `cache` fields in JSON and appear once on the `analysis`
+text line.
 
 ##### Target facts
 
@@ -614,7 +637,8 @@ class MemoryHierarchyFacts:
 Requesting memory adds one Function line and one line per finding:
 
 ```text
-memory traffic=<memory-level>:r<int>/w<int>@logical,r<int>/w<int>@total,r<int>/w<int>@<topology>[,...] footprint=<buffer>:<int>[;<buffer>:<int>] cache=<level>:<float>MB/<float>MB@<float>% wave=<int>/<int> peak=<level>:<int>[,...]
+memory traffic=<memory-level>:r<int>/w<int>@logical,r<int>/w<int>@total,r<int>/w<int>@<topology>[,...] footprint=<buffer>:<int>[;<buffer>:<int>] peak=<level>:<int>[,...]
+reuse buffer=<buffer> holds=<float>MB time=<loop|none> space=<mesh-axis|none> saves=<float>MB fits=<yes|no>
 error="<text>"
 advisory="<text>"
 ```
@@ -641,23 +665,24 @@ under `function_records.memory`:
              "communication": {<topology-level>: <spread>, ...}},
  "footprint": {"buffers": {<buffer>: {<memory-level>: <spread>}, ...},
                "complete": <bool>} | null,
+ "reuse_windows": [{"buffer": <name>, "time": <loop|"">,
+                     "space": <mesh-axis|"">, "holds_bytes": <int>,
+                     "saves_bytes": <int>, "fits": <bool>,
+                     "complete": <bool>}, ...],
  "lifetimes": [{"binding": <name>, "memory_level": <level>, "bytes": <int>,
                 "defined_at": <int>, "last_used_at": <int>,
                 "persistent": <bool>}, ...],
  "peaks": [{"memory_level": <level>, "peak_bytes": <int>,
              "persistent_bytes": <int>, "capacity_bytes": <int|null>}, ...],
- "cache_level": <level|"">,
- "cache_capacity_bytes": <int|null>,
- "wave_units": <int>,
- "declared_units": <int>,
  "solver_status": "feasible",
  "errors": [<text>, ...],
  "advisories": [<text>, ...]}
 ```
 
 - constraints:
-  - Text and JSON MUST project these records rather than reconstruct analysis
-    conclusions in the report layer.
+  - Text and JSON MUST project analysis conclusions from these records. The
+    report identity's `wave` and `cache` are machine facts read from the
+    resolved Module Target and MUST NOT be copied into the memory record.
   - A missing footprint MUST be JSON `null`; it MUST NOT be represented by an
     empty `Footprint`.
 

@@ -740,9 +740,17 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
     moved = payload["function_records"]["memory"]
     peak = moved["peaks"]
     bound = payload["function_records"]["roofline"]
+    assert payload["wave"] == {"counted": 132, "declared": 132}
+    assert payload["cache"] == {"level": "l2", "capacity_bytes": 50_000_000}
+    assert not {
+        "cache_level",
+        "cache_capacity_bytes",
+        "wave_units",
+        "declared_units",
+    } & moved.keys()
     assert header.splitlines() == [
         "# analysis target=nvidia.h200_sxm module=MoEMegaKernel function=experts "
-        f"topology={payload['topology']}",
+        f"topology={payload['topology']} wave=132/132 l2=47.68MB",
         f"# selection requested={','.join(payload['requested'])} "
         f"executed={','.join(payload['executed'])}",
         "# compute-cost "
@@ -759,7 +767,6 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         f"@{payload['topology']} "
         "footprint=<value 4>:30720;<value 5>:30720;v0:29:256;v1:30:256;"
         "v3:37:2560;v4:38:2560;v6:44:30720 "
-        "cache=l2:0.09MB/47.68MB@0.2% wave=132/132 "
         f"peak=gmem:{peak[0]['peak_bytes']} "
         f"persistent={sum(item['persistent_bytes'] for item in peak)}",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",

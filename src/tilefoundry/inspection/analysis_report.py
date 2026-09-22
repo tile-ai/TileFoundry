@@ -87,12 +87,24 @@ def _summary(
     selected: frozenset[type[IRMetadata]],
 ) -> tuple[IRMetadata, ...]:
     """One record per summary line: identity, selection, then findings."""
+    wave = data["wave"]
+    cache = data["cache"]
+    counted = wave["counted"]
+    declared = wave["declared"]
+    cache_level = cache["level"]
+    cache_capacity = cache["capacity_bytes"]
     views: list[IRMetadata] = [
         ReportIdentity(
             target=data["target"],
             module=data["module"],
             function=data["function"],
             topology=data["topology"] or "none",
+            wave=f"{counted}/{declared}" if counted and declared else "",
+            cache=(
+                f"{cache_level}={cache_capacity / 1048576:.2f}MB"
+                if cache_level and cache_capacity is not None
+                else ""
+            ),
         ),
         ReportSelection(requested=tuple(data["requested"]), executed=tuple(data["executed"])),
     ]
@@ -103,6 +115,7 @@ def _summary(
         assert memory is not None
         views.append(memory)
         if RegionMemoryMetadata in selected:
+            views.extend(memory.reuse_windows)
             views.extend(ErrorSummary(Prose(note)) for note in memory.errors)
             views.extend(AdvisorySummary(Prose(note)) for note in memory.advisories)
     if "roofline" in function_records:

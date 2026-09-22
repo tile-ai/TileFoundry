@@ -167,6 +167,26 @@ class ValueLifetime:
 
 
 @dataclass(frozen=True)
+class ReuseWindow:
+    """One buffer's re-reads, and what keeping it costs the cache.
+
+    ``time`` is the loop whose next iteration reads it again and ``space`` the
+    mesh axis whose units read it at once; either may be absent. ``holds`` is
+    everything the wave touches while it must stay resident -- other buffers
+    included, because they are what evicts it -- and ``saves`` the bytes that
+    are not fetched again once it does.
+    """
+
+    buffer: str
+    time: str = ""
+    space: str = ""
+    holds_bytes: int = 0
+    saves_bytes: int = 0
+    fits: bool = True
+    complete: bool = True
+
+
+@dataclass(frozen=True)
 class RegionMemoryMetadata(IRMetadata):
     """Record one region's memory behavior against a target hierarchy.
 
@@ -179,12 +199,9 @@ class RegionMemoryMetadata(IRMetadata):
     topologies: tuple[str, ...] = ()
     traffic: Traffic = Traffic()
     footprint: Footprint | None = None
+    reuse_windows: tuple[ReuseWindow, ...] = ()
     lifetimes: tuple[ValueLifetime, ...] = ()
     peaks: tuple[MemoryLevelPeak, ...] = ()
-    cache_level: str = ""
-    cache_capacity_bytes: int | None = None
-    wave_units: int = 0
-    declared_units: int = 0
     errors: tuple[str, ...] = ()
     advisories: tuple[str, ...] = ()
 
@@ -264,6 +281,7 @@ __all__ = [
     "PerformanceMetadata",
     "PerformanceSummaryMetadata",
     "RegionMemoryMetadata",
+    "ReuseWindow",
     "RooflineMetadata",
     "Spread",
     "TimelineMetadata",

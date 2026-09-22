@@ -159,26 +159,30 @@ def test_packed_dtype_rounds_up_to_whole_bytes() -> None:
 
 
 def test_one_wave_counts_only_the_resident_ctas() -> None:
-    resident = _memory_record(OneWave)
+    resident_data = _report(OneWave)
+    resident = resident_data["function_records"]["memory"]
     wide_target = CudaTarget(
         replace(OneWave.target.device, sm_count=256),
         architecture=OneWave.target.architecture,
     )
-    all_declared = _memory_record(replace(OneWave, target=wide_target))
+    all_declared_data = _report(replace(OneWave, target=wide_target))
+    all_declared = all_declared_data["function_records"]["memory"]
 
-    assert (resident["wave_units"], resident["declared_units"]) == (132, 256)
+    assert resident_data["wave"] == {"counted": 132, "declared": 256}
     assert _footprint_bytes(resident, "x") == 132 * 4 * 2
-    assert (all_declared["wave_units"], all_declared["declared_units"]) == (256, 256)
+    assert all_declared_data["wave"] == {"counted": 256, "declared": 256}
     assert _footprint_bytes(all_declared, "x") == 256 * 4 * 2
 
 
 def test_l2_occupancy_matches_the_written_ratio() -> None:
-    memory = _memory_record(L2Occupancy)
+    data = _report(L2Occupancy)
+    memory = data["function_records"]["memory"]
     used = _working_set_bytes(memory)
-    capacity = memory["cache_capacity_bytes"]
+    capacity = data["cache"]["capacity_bytes"]
     l2_errors = [error for error in memory["errors"] if error.startswith("l2 working set")]
 
     assert (used, capacity, used * 100 / capacity) == (1_572_864, 1_048_576, 150.0)
+    assert data["cache"]["level"] == "l2"
     assert l2_errors == [
         "l2 working set 1572864 B at the first iteration of a 1-unit wave "
         "exceeds capacity 1048576 B"
