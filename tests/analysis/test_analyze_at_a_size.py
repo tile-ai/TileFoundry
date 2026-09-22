@@ -82,6 +82,31 @@ EXPECTED_MEMORY_PEAKS = {
         "smem": 32,
     },
     "fused_boundary.FusedBoundary.stage[static]": {"smem": 64},
+    "gemm_schedules.GemmNaiveWave.gemm[static]": {
+        "gmem": 5_414_912,
+        "rmem": 16_384,
+        "smem": 16_384,
+    },
+    "gemm_schedules.GemmReuseAWave.gemm[static]": {
+        "gmem": 5_414_912,
+        "rmem": 16_384,
+        "smem": 16_384,
+    },
+    "gemm_schedules.GemmReuseBWave.gemm[static]": {
+        "gmem": 5_414_912,
+        "rmem": 16_384,
+        "smem": 16_384,
+    },
+    "gemm_schedules.GemmTile128.gemm[static]": {
+        "gmem": 163_840,
+        "rmem": 32_768,
+        "smem": 98_304,
+    },
+    "gemm_schedules.GemmTile64.gemm[static]": {
+        "gmem": 139_264,
+        "rmem": 8_192,
+        "smem": 24_576,
+    },
     "gqa_decode.GqaOnline._ctx_combine[static]": {"gmem": 291_968},
     "gqa_decode.GqaOnline._ctx_partials[ctx_len=128]": {"gmem": 5_662_720},
     "gqa_decode.GqaOnline.gqa_online_attend[ctx_len=128]": {
@@ -93,6 +118,19 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 0,
         "smem": 64,
     },
+    "hand_checked.L2Occupancy.read[static]": {
+        "gmem": 1_572_864,
+        "rmem": 1_572_864,
+    },
+    "hand_checked.OneWave.read[static]": {"gmem": 2_056, "rmem": 8},
+    "hand_checked.OverlappingReads.read[static]": {"gmem": 48, "rmem": 16},
+    "hand_checked.PackedDtype.read[static]": {"gmem": 5, "rmem": 5},
+    "hand_checked.SlicedView.read[static]": {
+        "gmem": 128,
+        "rmem": 0,
+        "smem": 32,
+    },
+    "hand_checked.StoreOnly.store[static]": {"gmem": 16, "rmem": 16},
     "leaf_weights.Mod.entry[static]": {
         "gmem": 51_539_608_064,
         "rmem": 0,

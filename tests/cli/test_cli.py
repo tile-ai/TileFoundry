@@ -756,7 +756,11 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         f"/w{moved['traffic']['storage']['gmem']['total']['write']}@total,"
         f"r{moved['traffic']['storage']['gmem']['per_unit'][0]['read']}"
         f"/w{moved['traffic']['storage']['gmem']['per_unit'][0]['write']}"
-        f"@{payload['topology']} peak=gmem:{peak[0]['peak_bytes']} "
+        f"@{payload['topology']} "
+        "footprint=<value 4>:30720;<value 5>:30720;v0:29:256;v1:30:256;"
+        "v3:37:2560;v4:38:2560;v6:44:30720 "
+        "cache=l2:0.09MB/47.68MB@0.2% wave=132/132 "
+        f"peak=gmem:{peak[0]['peak_bytes']} "
         f"persistent={sum(item['persistent_bytes'] for item in peak)}",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# performance root=MoEMegaKernel::experts "
