@@ -366,6 +366,10 @@ class Footprint:
   - Both directions contribute: a load and a store to that level each occupy the
     cache. Only boundaries against that level are counted; a boundary against
     another level MUST NOT enter.
+  - A boundary contributes only when its positional entry in
+    `MemoryMetadata.operands` reports a nonzero read or write. This MUST use the
+    same Op-evaluator answer as traffic; a boundary with no direction moves
+    nothing and MUST NOT enter the footprint.
   - One window is defined, and no other: every enclosing loop's induction
     variable is held at its first iteration, over one wave of units. A Call
     states the footprint of its own boundaries; a Function states the union of

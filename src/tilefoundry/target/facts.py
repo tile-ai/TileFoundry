@@ -36,6 +36,19 @@ class TopologyFacts:
     topologies: tuple[TopologyLimitFacts, ...]
 
 
+@dataclasses.dataclass(frozen=True)
+class ParallelCapacityFacts:
+    """How many instances of one topology level run at once.
+
+    This is a compiler policy expressed over a hardware fact, not a hardware
+    limit: the number of parallel units the plan assumes it may occupy. A
+    tighter policy changes the plan, never the program.
+    """
+
+    topology: str
+    parallel_units: int
+
+
 class TargetFactsError(Exception):
     """A Target failed to provide the requested immutable Facts aggregate."""
 
@@ -64,6 +77,7 @@ def facts_result(
 
 __all__ = [
     "FactsT",
+    "ParallelCapacityFacts",
     "TARGET_MEMORY_OWNER",
     "TargetFactsError",
     "TopologyFacts",

@@ -35,6 +35,15 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 from .allocation import AllocationValue, solve_allocation
 from .errors import AnalysisError
 from .facts import MemoryHierarchyFacts
+from .footprint import (
+    ReachedAddresses,
+    cached_level,
+    footprint_of,
+    merged,
+    reached_by,
+    wave_of,
+)
+from .iteration_scope import IterationScope, walk_scopes
 from .liveness import Liveness, analyze_liveness
 from .metadata import (
     Breakdown,
@@ -441,6 +450,60 @@ class MemoryContext(AnalyzeContext):
     locals_by_unit: dict[str, CostContext] = field(default_factory=dict)
     storage: _TrafficAccounts = field(default_factory=_TrafficAccounts)
     communication: _TrafficAccounts = field(default_factory=_TrafficAccounts)
+    memory_level: str | None = None
+    wave: tuple[int, int] | None = None
+    footprint_labels: dict[int, str] = field(default_factory=dict)
+    reached: list[ReachedAddresses] = field(default_factory=list)
+    footprint_available: bool = False
+
+
+def _footprint_inputs(
+    root: IterationScope,
+    *,
+    memory_level: str,
+    wave: tuple[int, int],
+    whole: CostContext,
+) -> tuple[
+    dict[int, str],
+    list[ReachedAddresses],
+    bool,
+]:
+    """Fix shared labels and account for Calls with no recorded boundaries."""
+    distinct: dict[int, Expr] = {}
+    refused: list[ReachedAddresses] = []
+    available = True
+    wave_units, declared_units = wave
+    for scope in walk_scopes(root):
+        for call, accesses in scope.accesses.get("narrow", {}).values():
+            for access in accesses:
+                distinct.setdefault(id(access.buffer), access.buffer)
+            for argument in call.args:
+                distinct.setdefault(id(argument), argument)
+            distinct.setdefault(id(call), call)
+        for call, accesses in scope.outputs.get("narrow", {}).values():
+            for access in accesses:
+                distinct.setdefault(id(access.buffer), access.buffer)
+            distinct.setdefault(id(call), call)
+        for call in scope.refused.get("narrow", ()):
+            for argument in call.args:
+                distinct.setdefault(id(argument), argument)
+            distinct.setdefault(id(call), call)
+            reached = reached_by(
+                scope,
+                call,
+                memory_level=memory_level,
+                wave_units=wave_units,
+                declared_units=declared_units,
+                operands=(),
+                ctx=whole,
+            )
+            if reached is None:
+                available = False
+            else:
+                refused.extend(reached)
+
+    labels = dict(zip(distinct, value_labels(distinct.values()), strict=True))
+    return labels, refused, available
 
 
 class MemoryVisitor(ExprVisitor[None]):
@@ -474,6 +537,28 @@ class MemoryVisitor(ExprVisitor[None]):
             if recorded
             else MemoryMetadata()
         )
+        if recorded and ctx.wave is not None and ctx.memory_level is not None:
+            reached = reached_by(
+                ctx.current,
+                expr,
+                memory_level=ctx.memory_level,
+                wave_units=ctx.wave[0],
+                declared_units=ctx.wave[1],
+                operands=moved.operands,
+                ctx=ctx.whole,
+            )
+            if reached is not None:
+                ctx.reached.extend(reached)
+                moved = replace(
+                    moved,
+                    footprint=footprint_of(
+                        merged(reached),
+                        memory_level=ctx.memory_level,
+                        labels=ctx.footprint_labels,
+                    ),
+                )
+            else:
+                ctx.footprint_available = False
         attach(expr, moved)
         if not recorded:
             return
@@ -502,6 +587,23 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     facts = context.target.get_facts(MemoryHierarchyFacts)
     topologies = module.effective_topologies()
     whole = CostContext(scope=FunctionScope(module, function))
+    cache = cached_level(facts)
+    wave = wave_of(module, context.target, topology_level) if cache is not None else None
+    memory_level = cache[1] if cache is not None and wave is not None else None
+    footprint_labels: dict[int, str] = {}
+    refused_reached: list[ReachedAddresses] = []
+    footprint_available = False
+    if memory_level is not None and wave is not None:
+        (
+            footprint_labels,
+            refused_reached,
+            footprint_available,
+        ) = _footprint_inputs(
+            context.root,
+            memory_level=memory_level,
+            wave=wave,
+            whole=whole,
+        )
     units = tuple(topology.name for topology in topologies) or (
         (topology_level,) if topology_level else ()
     )
@@ -522,6 +624,11 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         current=context.current,
         whole=whole,
         locals_by_unit=locals_by_unit,
+        memory_level=memory_level,
+        wave=wave,
+        footprint_labels=footprint_labels,
+        reached=refused_reached,
+        footprint_available=footprint_available,
     )
     MemoryVisitor().visit(function.body, memory_context)
     liveness = analyze_liveness(function)
@@ -585,6 +692,34 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         for item in levels
         if item.exceeds_capacity
     )
+    footprint = None
+    cache_level = ""
+    cache_capacity_bytes = None
+    wave_units = 0
+    declared_units = 0
+    if (
+        cache is not None
+        and wave is not None
+        and memory_level is not None
+        and memory_context.footprint_available
+    ):
+        footprint = footprint_of(
+            merged(memory_context.reached),
+            memory_level=memory_level,
+            labels=memory_context.footprint_labels,
+        )
+        cache_level, _backing_level, cache_capacity_bytes = cache
+        wave_units, declared_units = wave
+        used = sum(
+            spread.total
+            for _buffer, breakdown in footprint.buffers
+            for _level, spread in breakdown.kinds
+        )
+        if used > cache_capacity_bytes:
+            errors += (
+                f"{cache_level} working set {used} B at the first iteration of a "
+                f"{wave_units}-unit wave exceeds capacity {cache_capacity_bytes} B",
+            )
     attach(
         function,
         RegionMemoryMetadata(
@@ -593,8 +728,13 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 storage=_account_shares(memory_context.storage, tuple(locals_by_unit)),
                 communication=_account_shares(memory_context.communication, tuple(locals_by_unit)),
             ),
+            footprint=footprint,
             lifetimes=lifetimes,
             peaks=levels,
+            cache_level=cache_level,
+            cache_capacity_bytes=cache_capacity_bytes,
+            wave_units=wave_units,
+            declared_units=declared_units,
             solver_status="feasible",
             errors=errors,
         ),

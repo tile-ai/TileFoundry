@@ -9,7 +9,6 @@ import pytest
 
 from tilefoundry.analysis.facts import (
     MemoryHierarchyFacts,
-    ParallelCapacityFacts,
     ThroughputFacts,
 )
 from tilefoundry.ir.types import DType
@@ -22,7 +21,7 @@ from tilefoundry.target import (
     TopologyLimitFacts,
     UnsupportedCapabilityError,
 )
-from tilefoundry.target.facts import TargetFactsError, facts_result
+from tilefoundry.target.facts import ParallelCapacityFacts, TargetFactsError, facts_result
 
 
 def test_builtin_targets_own_their_facts_projections() -> None:

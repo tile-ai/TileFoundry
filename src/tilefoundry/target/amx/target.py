@@ -26,6 +26,7 @@ from tilefoundry.target.base import (
     select,
 )
 from tilefoundry.target.facts import (
+    ParallelCapacityFacts,
     TopologyFacts,
     TopologyLimitFacts,
     facts_result,
@@ -135,7 +136,6 @@ class AmxTarget(Target):
 
         from tilefoundry.analysis.facts import (  # noqa: PLC0415
             MemoryHierarchyFacts,
-            ParallelCapacityFacts,
             ThroughputFacts,
         )
         from tilefoundry.target.amx.facts import (  # noqa: PLC0415

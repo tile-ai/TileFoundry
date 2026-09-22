@@ -107,7 +107,7 @@ class Traffic:
 
 @dataclass(frozen=True)
 class Footprint:
-    """Unique read bytes by source buffer and memory-level counting domain."""
+    """Unique bytes one wave touches, by source buffer and memory level."""
 
     buffers: tuple[tuple[str, Breakdown[int]], ...] = ()
     complete: bool = True
@@ -181,6 +181,10 @@ class RegionMemoryMetadata(IRMetadata):
     footprint: Footprint | None = None
     lifetimes: tuple[ValueLifetime, ...] = ()
     peaks: tuple[MemoryLevelPeak, ...] = ()
+    cache_level: str = ""
+    cache_capacity_bytes: int | None = None
+    wave_units: int = 0
+    declared_units: int = 0
     errors: tuple[str, ...] = ()
     advisories: tuple[str, ...] = ()
 

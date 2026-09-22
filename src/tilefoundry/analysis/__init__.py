@@ -11,7 +11,6 @@ from .facts import (
     MemoryHierarchyFacts,
     MemoryLevelRelation,
     MemoryRelationKind,
-    ParallelCapacityFacts,
     PerformanceServiceFacts,
     ThroughputFacts,
 )
@@ -50,7 +49,6 @@ __all__ = [
     "MemoryLevelRelation",
     "RegionMemoryMetadata",
     "MemoryRelationKind",
-    "ParallelCapacityFacts",
     "PerformanceServiceFacts",
     "PerformanceMetadata",
     "PerformanceSummaryMetadata",

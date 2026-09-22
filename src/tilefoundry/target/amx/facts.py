@@ -13,10 +13,10 @@ from tilefoundry.analysis.facts import (
     MemoryHierarchyFacts,
     MemoryLevelRelation,
     MemoryRelationKind,
-    ParallelCapacityFacts,
     ThroughputFacts,
 )
 from tilefoundry.ir.types import DType
+from tilefoundry.target.facts import ParallelCapacityFacts
 
 from .target import AmxTarget
 

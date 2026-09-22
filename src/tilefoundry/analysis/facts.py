@@ -189,26 +189,12 @@ class ThroughputFacts:
         )
 
 
-@dataclass(frozen=True)
-class ParallelCapacityFacts:
-    """How many instances of one topology level run at once.
-
-    This is a compiler policy expressed over a hardware fact, not a hardware
-    limit: the number of parallel units the plan assumes it may occupy. A
-    tighter policy changes the plan, never the program.
-    """
-
-    topology: str
-    parallel_units: int
-
-
 __all__ = [
     "ExplicitMemoryLevelFacts",
     "ImplicitMemoryLevelFacts",
     "MemoryHierarchyFacts",
     "MemoryLevelRelation",
     "MemoryRelationKind",
-    "ParallelCapacityFacts",
     "PerformanceServiceFacts",
     "TARGET_MEMORY_OWNER",
     "ThroughputFacts",

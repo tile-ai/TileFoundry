@@ -198,12 +198,12 @@ for needle in ("matmul(hidden, w_q", "cache_update(k_cache", "matmul(v33, w_o"):
 # analysis target=nvidia.h200_sxm module=Stage0_Naive function=gqa_decode topology=cta
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,328896@total,328896@cta;f32:200448@logical,200448@total,200448@cta other-ops=special:1024@logical,1024@total,1024@cta
-# memory traffic=gmem:r2225620/w806592@logical,r2225620/w806592@total,r2225620/w806592@cta peak=gmem:1690380 persistent=1409548
+# memory traffic=gmem:r2225620/w806592@logical,r2225620/w806592@total,r2225620/w806592@cta footprint=cos_cache:524288;cur_pos:4;hidden:512;pos_ids:4;sin_cache:524288;v0:57:1024;v10:60:128;v11:61:16512;v12:64:131072;v13:66:131072;v14:69:262144;v16:75:262144;v17:75:8192;v18:76:64;v19:77:8192;v20:77:8192;v21:59:256;v23:62:16512;v24:65:131072;v25:67:131072;v26:70:262144;v28:79:262144;v29:79:2048;v2:58:256;v30:78:64;v31:80:2048;v32:81:1024;v34:82:512;v4:60:640;v5:60:512;v6:68:2048;v7:71:2048;v8:71:2048;w_k:32768;w_o:131072;w_q:131072;w_v:32768;write_len:4 cache=l2:2.88MB/47.68MB@6.0% wave=132/132 peak=gmem:1690380 persistent=1409548
 # roofline ideal-ns=632 bound-by=memory
 
-    v0 = matmul(hidden, w_q, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072@logical,131072@total,131072@cta; memory traffic=gmem:r131584/w512@logical,r131584/w512@total,r131584/w512@cta operands=0:r512/w0;1:r131072/w0;result:r0/w512; roofline ideal-ns=28 bound-by=memory
-    v11 = cache_update(k_cache, cur_pos, write_len, v10)  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost; memory traffic=gmem:r136/w128@logical,r136/w128@total,r136/w128@cta operands=0:r0/w0;1:r4/w0;2:r4/w0;3:r128/w0;result:r0/w128; roofline ideal-ns=1 bound-by=memory
-    v34 = matmul(v33, w_o, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072@logical,131072@total,131072@cta; memory traffic=gmem:r131584/w512@logical,r131584/w512@total,r131584/w512@cta operands=0:r512/w0;1:r131072/w0;result:r0/w512; roofline ideal-ns=28 bound-by=memory
+    v0 = matmul(hidden, w_q, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072@logical,131072@total,131072@cta; memory traffic=gmem:r131584/w512@logical,r131584/w512@total,r131584/w512@cta footprint=hidden:512;v0:57:512;w_q:131072 operands=0:r512/w0;1:r131072/w0;result:r0/w512; roofline ideal-ns=28 bound-by=memory
+    v11 = cache_update(k_cache, cur_pos, write_len, v10)  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost; memory traffic=gmem:r136/w128@logical,r136/w128@total,r136/w128@cta footprint=cur_pos:4;v10:60:128;v11:61:128;write_len:4 operands=0:r0/w0;1:r4/w0;2:r4/w0;3:r128/w0;result:r0/w128; roofline ideal-ns=1 bound-by=memory
+    v34 = matmul(v33, w_o, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16"]; compute-cost flops=bf16:131072@logical,131072@total,131072@cta; memory traffic=gmem:r131584/w512@logical,r131584/w512@total,r131584/w512@cta footprint=v32:81:512;v34:82:512;w_o:131072 operands=0:r512/w0;1:r131072/w0;result:r0/w512; roofline ideal-ns=28 bound-by=memory
 ```
 
 `@logical` is the authored request before loop replication; `@total` is the
@@ -242,7 +242,7 @@ def metrics(ctx_len):
     memory = next(line for line in lines if line.startswith("# memory "))
     roofline = next(line for line in lines if line.startswith("# roofline "))
     f32 = re.search(r"f32:([^ ]+)", compute).group(1)
-    traffic_value = re.search(r"traffic=(.*?) peak=", memory).group(1)
+    traffic_value = re.search(r"traffic=(.*?)(?: footprint=| peak=)", memory).group(1)
     gmem_peak = re.search(r"peak=.*?gmem:([^;, ]+)", memory).group(1)
     ideal, bound = re.search(r"ideal-ns=([^ ]+) bound-by=([^ ]+)", roofline).groups()
     return f32, traffic_value, gmem_peak, ideal, bound
@@ -424,7 +424,7 @@ print(report.partition("\n\n")[0].rstrip())
 # analysis target=nvidia.h200_sxm module=Stage2_Sharded function=gqa_decode topology=cta
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,2629376@total,328672@cta;f32:2833728@logical,2833728@total,354216@cta other-ops=special:14528@logical,14528@total,1816@cta
-# memory traffic=gmem:r5563796/w3721856@logical,r5563796/w3721856@total,r3936212/w3721408@cta;smem:r9597248/w9480000@logical,r9597248/w9480000@total,r1199656/w1185000@cta peak=gmem:3933836;smem:581312 persistent=1841676 errors=1
+# memory traffic=gmem:r5563796/w3721856@logical,r5563796/w3721856@total,r3936212/w3721408@cta;smem:r9597248/w9480000@logical,r9597248/w9480000@total,r1199656/w1185000@cta footprint=cos_cache:524288;cur_pos:4;hidden:512;pos_ids:4;sin_cache:524288;v0:217:1024;v11:221:128;v12:222:232576;v13:228:1859584;v14:227:1859584;v22:220:256;v24:223:232576;v25:231:1859584;v26:230:1859584;v2:219:256;v35:251:1024;v37:252:512;v4:221:640;v5:221:512;w_k:32768;w_o:131072;w_q:131072;w_v:32768;write_len:4 cache=l2:8.85MB/47.68MB@18.6% wave=132/132 peak=gmem:3933836;smem:581312 persistent=1841676 errors=1
 # error="smem placement peak 581312 B exceeds capacity 232448 B"
 # roofline ideal-ns=1935 bound-by=memory
 ```
@@ -450,7 +450,7 @@ print(report.partition("\n\n")[0].rstrip())
 # analysis target=nvidia.h200_sxm module=Stage2_Sharded function=gqa_decode topology=cta
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,2629376@total,328672@cta;f32:2839968@logical,2839968@total,354996@cta other-ops=special:14560@logical,14560@total,1820@cta
-# memory traffic=gmem:r5573012/w3730048@logical,r5573012/w3730048@total,r3941844/w3729600@cta;smem:r9618368/w9500864@logical,r9618368/w9500864@total,r1202296/w1187608@cta peak=gmem:3939468;smem:582592 persistent=1842700 errors=1
+# memory traffic=gmem:r5573012/w3730048@logical,r5573012/w3730048@total,r3941844/w3729600@cta;smem:r9618368/w9500864@logical,r9618368/w9500864@total,r1202296/w1187608@cta footprint=cos_cache:524288;cur_pos:4;hidden:512;pos_ids:4;sin_cache:524288;v0:217:1024;v11:221:128;v12:222:233088;v13:228:1863680;v14:227:1863680;v22:220:256;v24:223:233088;v25:231:1863680;v26:230:1863680;v2:219:256;v35:251:1024;v37:252:512;v4:221:640;v5:221:512;w_k:32768;w_o:131072;w_q:131072;w_v:32768;write_len:4 cache=l2:8.87MB/47.68MB@18.6% wave=132/132 peak=gmem:3939468;smem:582592 persistent=1842700 errors=1
 # error="smem placement peak 582592 B exceeds capacity 232448 B"
 # roofline ideal-ns=1939 bound-by=memory
 ```
@@ -548,7 +548,7 @@ for line in report.splitlines():
 
 ```text
 # compute-cost flops=bf16:328896@logical,328896@total,328896@cta;f32:200448@logical,200448@total,200448@cta other-ops=special:1024@logical,1024@total,1024@cta
-# memory traffic=gmem:r2225620/w806592@logical,r2225620/w806592@total,r2225620/w806592@cta peak=gmem:1690380 persistent=1409548
+# memory traffic=gmem:r2225620/w806592@logical,r2225620/w806592@total,r2225620/w806592@cta footprint=cos_cache:524288;cur_pos:4;hidden:512;pos_ids:4;sin_cache:524288;v0:57:1024;v10:60:128;v11:61:16512;v12:64:131072;v13:66:131072;v14:69:262144;v16:75:262144;v17:75:8192;v18:76:64;v19:77:8192;v20:77:8192;v21:59:256;v23:62:16512;v24:65:131072;v25:67:131072;v26:70:262144;v28:79:262144;v29:79:2048;v2:58:256;v30:78:64;v31:80:2048;v32:81:1024;v34:82:512;v4:60:640;v5:60:512;v6:68:2048;v7:71:2048;v8:71:2048;w_k:32768;w_o:131072;w_q:131072;w_v:32768;write_len:4 cache=l2:2.88MB/47.68MB@6.0% wave=132/132 peak=gmem:1690380 persistent=1409548
 # roofline ideal-ns=632 bound-by=memory
 ```
 
@@ -574,7 +574,7 @@ for line in report.splitlines():
 
 ```text
 # compute-cost flops=bf16:328896@logical,2629376@total,328672@cta;f32:200448@logical,200448@total,25056@cta other-ops=special:1024@logical,1024@total,128@cta
-# memory traffic=gmem:r1674644/w264832@logical,r1674644/w264832@total,r1559508/w264384@cta;smem:r684608/w675392@logical,r684608/w675392@total,r85576/w84424@cta peak=gmem:1557132;smem:41152 persistent=1409548
+# memory traffic=gmem:r1674644/w264832@logical,r1674644/w264832@total,r1559508/w264384@cta;smem:r684608/w675392@logical,r684608/w675392@total,r85576/w84424@cta footprint=cos_cache:524288;cur_pos:4;hidden:512;pos_ids:4;sin_cache:524288;v0:217:1024;v11:221:128;v12:222:16512;v13:228:131072;v14:227:131072;v22:220:256;v24:223:16512;v25:231:131072;v26:230:131072;v2:219:256;v35:251:1024;v37:252:512;v4:221:640;v5:221:512;w_k:32768;w_o:131072;w_q:131072;w_v:32768;write_len:4 cache=l2:1.85MB/47.68MB@3.9% wave=132/132 peak=gmem:1557132;smem:41152 persistent=1409548
 # roofline ideal-ns=405 bound-by=memory
 ```
 
@@ -720,10 +720,10 @@ print(next(line.rstrip() for line in annotated.splitlines() if "cache_update(k_c
 # analysis target=nvidia.h200_sxm module=Stage3_Fused function=gqa_decode topology=cta
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,4392896@total,328672@cta;f32:3239808@logical,6418944@total,200592@cta other-ops=integer:9@logical,288@total,9@cta;special:33056@logical,33152@total,1036@cta
-# memory traffic=gmem:r3476884/w4196992@logical,r3480468/w4196992@total,r2559380/w4196544@cta;rmem:r656/w72@logical,r768/w128@total,r768/w128@cta;smem:r5839296/w5662784@logical,r5871552/w5695040@total,r686496/w676708@cta peak=gmem:7145228;rmem:8;smem:42312 persistent=2425356
+# memory traffic=gmem:r3476884/w4196992@logical,r3480468/w4196992@total,r2559380/w4196544@cta;rmem:r656/w72@logical,r768/w128@total,r768/w128@cta;smem:r5839296/w5662784@logical,r5871552/w5695040@total,r686496/w676708@cta footprint=cos_cache:524288;cur_pos:4;hidden:512;k_heads:65536;pos_ids:4;q_rope:512;sin_cache:524288;v0:276:1024;v11:282:524416;v12:284:2097152;v2:278:256;v4:280:640;v5:280:128;v63:356:1024;v65:359:512;v6:281:524416;v7:283:2097152;v9:279:256;v_heads:65536;w_k:32768;w_o:131072;w_q:131072;w_v:32768;write_len:4 cache=l2:6.44MB/47.68MB@13.5% wave=132/132 peak=gmem:7145228;rmem:8;smem:42312 persistent=2425356
 # roofline ideal-ns=1600 bound-by=memory
 
-    v6 = cache_update(k_cache, cur_pos, write_len, v5)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; memory traffic=gmem:r136/w128@logical,r136/w128@total,r136/w128@cta operands=0:r0/w0;1:r4/w0;2:r4/w0;3:r128/w0;result:r0/w128; roofline ideal-ns=1 bound-by=memory
+    v6 = cache_update(k_cache, cur_pos, write_len, v5)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; memory traffic=gmem:r136/w128@logical,r136/w128@total,r136/w128@cta footprint=cur_pos:4;v5:280:128;v6:281:128;write_len:4 operands=0:r0/w0;1:r4/w0;2:r4/w0;3:r128/w0;result:r0/w128; roofline ideal-ns=1 bound-by=memory
 ```
 
 The embedded `Stage3_Fused` program is the split-K example for this page.
@@ -856,13 +856,14 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 # analysis target=nvidia.h200_sxm module=Stage4_WeightPrepared function=gqa_decode topology=cta
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,337408@total,42176@cta;f32:6390528@logical,51124224@total,6390528@cta other-ops=special:32768@logical,262144@total,32768@cta
-# memory traffic=gmem:r28254676/w25566912@logical,r28254676/w25566912@total,r27967956/w25565792@cta;smem:r331008/w329984@logical,r331008/w329984@total,r43168/w42144@cta peak=gmem:11340556;smem:16960 persistent=2425356
+# memory traffic=gmem:r28254676/w25566912@logical,r28254676/w25566912@total,r27967956/w25565792@cta;smem:r331008/w329984@logical,r331008/w329984@total,r43168/w42144@cta footprint=cos_cache:524288;cur_pos:4;hidden:512;pos_ids:4;sin_cache:524288;v10:404:512;v11:415:2048;v12:418:2048;v13:418:2048;v15:404:128;v16:405:524416;v17:408:4194304;v18:407:4194304;v19:416:8388608;v21:428:8388608;v22:428:262144;v23:429:64;v24:430:262144;v25:430:262144;v28:398:256;v30:406:524416;v31:412:4194304;v32:411:4194304;v33:417:8388608;v35:432:8388608;v36:432:2048;v37:431:64;v38:433:2048;v39:433:1024;v3:396:1024;v44:445:512;v7:397:256;v9:404:640;w_k:32768;w_o:131072;w_q:131072;w_v:32768;write_len:4 cache=l2:51.08MB/47.68MB@107.1% wave=132/132 peak=gmem:11340556;smem:16960 persistent=2425356 errors=1
+# error="l2 working set 53558412 B at the first iteration of a 132-unit wave exceeds capacity 50000000 B"
 # roofline ideal-ns=11213 bound-by=memory
 
-    v1 = reshard(w_q, layout=(1, 256, 8 @ mesh.head, 32), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ mesh.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; memory traffic=gmem:r131072/w0@logical,r131072/w0@total,r16384/w0@cta;smem:r0/w131072@logical,r0/w131072@total,r0/w16384@cta operands=0:r131072/w0;result:r0/w131072; roofline ideal-ns=28 bound-by=memory
+    v1 = reshard(w_q, layout=(1, 256, 8 @ mesh.head, 32), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ mesh.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; memory traffic=gmem:r131072/w0@logical,r131072/w0@total,r16384/w0@cta;smem:r0/w131072@logical,r0/w131072@total,r0/w16384@cta footprint=w_q:131072 operands=0:r131072/w0;result:r0/w131072; roofline ideal-ns=28 bound-by=memory
     v2 = matmul(v0, v1, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16", ((1, 1, 8 @ mesh.head, 32), (256, 256, 32, 1)), "smem"]; compute-cost flops=bf16:131072@logical,131072@total,16384@cta; memory traffic=smem:r131584/w512@logical,r131584/w512@total,r16896/w64@cta operands=0:r512/w0;1:r131072/w0;result:r0/w512; roofline ideal-ns=1 bound-by=compute
 
-    v42 = reshard(w_o, layout=(1, 256, 8 @ mesh.head, 32), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ mesh.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; memory traffic=gmem:r131072/w0@logical,r131072/w0@total,r16384/w0@cta;smem:r0/w131072@logical,r0/w131072@total,r0/w16384@cta operands=0:r131072/w0;result:r0/w131072; roofline ideal-ns=28 bound-by=memory
+    v42 = reshard(w_o, layout=(1, 256, 8 @ mesh.head, 32), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ mesh.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; memory traffic=gmem:r131072/w0@logical,r131072/w0@total,r16384/w0@cta;smem:r0/w131072@logical,r0/w131072@total,r0/w16384@cta footprint=w_o:131072 operands=0:r131072/w0;result:r0/w131072; roofline ideal-ns=28 bound-by=memory
     v43 = matmul(v41, v42, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16", ((1, 1, 8 @ mesh.head, 32), (256, 256, 32, 1)), "smem"]; compute-cost flops=bf16:131072@logical,131072@total,16384@cta; memory traffic=smem:r131584/w512@logical,r131584/w512@total,r16896/w64@cta operands=0:r512/w0;1:r131072/w0;result:r0/w512; roofline ideal-ns=1 bound-by=compute
 ```
 
@@ -1007,11 +1008,11 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 # analysis target=nvidia.h200_sxm module=Stage5_CachePrepared function=gqa_decode topology=cta
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,1246400@total,328672@cta;f32:6410280@logical,6410280@total,801285@cta other-ops=integer:32@logical,256@total,32@cta;special:33040@logical,33040@total,4130@cta
-# memory traffic=gmem:r7672476/w4198272@logical,r7672476/w4198272@total,r4001116/w4197824@cta;rmem:r2560/w0@logical,r2560/w0@total,r2560/w0@cta;smem:r21788704/w21486432@logical,r21883936/w21549920@total,r2735492/w2693740@cta peak=gmem:3475212;rmem:0;smem:41920 persistent=2425356
+# memory traffic=gmem:r7672476/w4198272@logical,r7672476/w4198272@total,r4001116/w4197824@cta;rmem:r2560/w0@logical,r2560/w0@total,r2560/w0@cta;smem:r21788704/w21486432@logical,r21883936/w21549920@total,r2735492/w2693740@cta footprint=cos_cache:524288;cur_pos:4;cur_pos_2:4;hidden:512;k_all:524288;k_cache_2:16384;pos_ids:4;q_rope:512;sin_cache:524288;v0:469:1024;v10:475:128;v22:491:131072;v2:471:256;v38:500:131072;v46:522:256;v47:521:1024;v4:473:640;v58:525:256;v59:524:1024;v5:473:128;v6:474:128;v71:551:1024;v73:554:512;v8:472:256;v_all:524288;v_cache_2:16384;w_k:32768;w_o:131072;w_q:131072;w_v:32768;write_len:4 cache=l2:2.60MB/47.68MB@5.5% wave=132/132 peak=gmem:3475212;rmem:0;smem:41920 persistent=2425356
 # roofline ideal-ns=2474 bound-by=memory
 
         v21 = slice(k_cache, (0, v20, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost; memory traffic=rmem:r32/w0@logical,r32/w0@total,r32/w0@cta operands=0:r0/w0;1:r32/w0;result:r0/w0; roofline
-    v6 = cache_update(k_cache, cur_pos, write_len, v5)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; memory traffic=gmem:r136/w128@logical,r136/w128@total,r136/w128@cta operands=0:r0/w0;1:r4/w0;2:r4/w0;3:r128/w0;result:r0/w128; roofline ideal-ns=1 bound-by=memory
+    v6 = cache_update(k_cache, cur_pos, write_len, v5)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; memory traffic=gmem:r136/w128@logical,r136/w128@total,r136/w128@cta footprint=cur_pos:4;v5:473:128;v6:474:128;write_len:4 operands=0:r0/w0;1:r4/w0;2:r4/w0;3:r128/w0;result:r0/w128; roofline ideal-ns=1 bound-by=memory
 ```
 
 ```text

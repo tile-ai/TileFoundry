@@ -26,6 +26,7 @@ from tilefoundry.target.cuda.spec import (
     build_cuda_device,
 )
 from tilefoundry.target.facts import (
+    ParallelCapacityFacts,
     TopologyFacts,
     TopologyLimitFacts,
     facts_result,
@@ -156,7 +157,6 @@ class CudaTarget(Target):
 
         from tilefoundry.analysis.facts import (  # noqa: PLC0415
             MemoryHierarchyFacts,
-            ParallelCapacityFacts,
             PerformanceServiceFacts,
             ThroughputFacts,
         )

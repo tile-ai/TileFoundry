@@ -14,10 +14,10 @@ from tilefoundry.analysis.facts import (
     MemoryHierarchyFacts,
     MemoryLevelRelation,
     MemoryRelationKind,
-    ParallelCapacityFacts,
     PerformanceServiceFacts,
     ThroughputFacts,
 )
+from tilefoundry.target.facts import ParallelCapacityFacts
 
 from ..base import UnsupportedCapabilityError
 from .target import CudaTarget

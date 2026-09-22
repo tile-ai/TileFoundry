@@ -12,10 +12,11 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.visitor import ExprVisitor
+from tilefoundry.target.facts import ParallelCapacityFacts
 
 from .compute_cost import local_duration_ns
 from .errors import AnalysisError
-from .facts import ParallelCapacityFacts, PerformanceServiceFacts, ThroughputFacts
+from .facts import PerformanceServiceFacts, ThroughputFacts
 from .iteration_scope import IterationScope
 from .metadata import (
     ComputeCostMetadata,

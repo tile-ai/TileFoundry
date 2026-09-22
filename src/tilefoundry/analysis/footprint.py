@@ -6,12 +6,13 @@ of one wave reaches are unioned, and both loads and stores occupy the level.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 import isl
 
-from tilefoundry.ir.core import Call, Expr, value_labels
+from tilefoundry.ir.core import Call, Expr
+from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.types import DType, TensorType, TupleType, Type
 from tilefoundry.ir.types.shape_helpers import static_dim_value
@@ -22,13 +23,16 @@ from tilefoundry.ir.types.shard import (
     flatten,
     try_c_order_strides,
 )
+from tilefoundry.target.base import Target, UnsupportedCapabilityError
+from tilefoundry.target.facts import ParallelCapacityFacts
 from tilefoundry.utils.isl_utils import cardinality
 from tilefoundry.visitor_registry.access_relation import leaves_of
 from tilefoundry.visitor_registry.contexts import CostContext
 
 from .access import Access, AccessPrecision
+from .facts import MemoryHierarchyFacts
 from .iteration_scope import IterationScope
-from .metadata import Breakdown, Footprint, Spread
+from .metadata import Breakdown, Footprint, Spread, TrafficBytes
 
 
 @dataclass(frozen=True)
@@ -161,7 +165,7 @@ def _boundary_type(access: Access, call: Call, ctx: CostContext) -> Type | None:
 def _call_accesses(scope: IterationScope, call: Call) -> tuple[Access, ...]:
     """The narrow input and output boundaries recorded for one Call."""
     found: list[Access] = []
-    for side in (scope.accesses["narrow"], scope.outputs["narrow"]):
+    for side in (scope.accesses.get("narrow", {}), scope.outputs.get("narrow", {})):
         recorded = side.get(id(call))
         if recorded is not None and recorded[0] is call:
             found.extend(recorded[1])
@@ -171,6 +175,7 @@ def _call_accesses(scope: IterationScope, call: Call) -> tuple[Access, ...]:
 def _missing_boundaries(
     call: Call,
     accesses: tuple[Access, ...],
+    operands: tuple[TrafficBytes, ...],
     ctx: CostContext,
 ) -> tuple[ReachedAddresses, ...]:
     """Represent boundary-index gaps as uncounted lower-bound evidence."""
@@ -183,12 +188,24 @@ def _missing_boundaries(
     missing_inputs = (
         ReachedAddresses(call.args[index], None, None, None, False)
         for index in sorted(set(range(len(call.args))) - recorded_inputs)
+        if operands[index].read > 0 or operands[index].write > 0
     )
     missing_outputs = (
         ReachedAddresses(call, index, None, None, False)
         for index in sorted(set(range(output_count)) - recorded_outputs)
+        if operands[-1].read > 0 or operands[-1].write > 0
     )
     return (*missing_inputs, *missing_outputs)
+
+
+def _uncounted_boundaries(call: Call, ctx: CostContext) -> tuple[ReachedAddresses, ...]:
+    """Represent every boundary when no positional movement answer exists."""
+    output = ctx.local_type_of(call)
+    output_count = len(output.fields) if isinstance(output, TupleType) else 1
+    return (
+        *(ReachedAddresses(arg, None, None, None, False) for arg in call.args),
+        *(ReachedAddresses(call, index, None, None, False) for index in range(output_count)),
+    )
 
 
 def reached_by(
@@ -198,6 +215,7 @@ def reached_by(
     memory_level: str,
     wave_units: int,
     declared_units: int,
+    operands: tuple[TrafficBytes, ...],
     ctx: CostContext,
 ) -> tuple[ReachedAddresses, ...] | None:
     """Return one Call's cache-backed addresses, or ``None`` for no stated wave."""
@@ -208,10 +226,16 @@ def reached_by(
         if position is None:
             return None
 
+    if len(operands) != len(call.args) + 1:
+        return _uncounted_boundaries(call, ctx)
+
     refused = call in scope.refused.get("narrow", ())
     accesses = _call_accesses(scope, call)
     result: list[ReachedAddresses] = []
     for access in accesses:
+        moved = operands[access.input_index] if access.input_index is not None else operands[-1]
+        if moved.read <= 0 and moved.write <= 0:
+            continue
         held = _boundary_type(access, call, ctx)
         if held is None:
             continue
@@ -247,8 +271,7 @@ def reached_by(
                 exact=access.precision is AccessPrecision.EXACT and not refused,
             )
         )
-    if not refused:
-        result.extend(_missing_boundaries(call, accesses, ctx))
+    result.extend(_missing_boundaries(call, accesses, operands, ctx))
     return tuple(result)
 
 
@@ -299,14 +322,14 @@ def merged(items: Iterable[ReachedAddresses]) -> tuple[ReachedAddresses, ...]:
     return tuple(grouped.values())
 
 
-def footprint_of(items: Iterable[ReachedAddresses], *, memory_level: str) -> Footprint:
+def footprint_of(
+    items: Iterable[ReachedAddresses],
+    *,
+    memory_level: str,
+    labels: Mapping[int, str],
+) -> Footprint:
     """Count unioned addresses and pack their element widths into bytes."""
     items = tuple(items)
-    distinct: dict[int, Expr] = {}
-    for item in items:
-        distinct.setdefault(id(item.buffer), item.buffer)
-    labels = dict(zip(distinct, value_labels(distinct.values()), strict=True))
-
     totals: dict[tuple[str, str], int] = {}
     complete = True
     for item in items:
@@ -333,4 +356,43 @@ def footprint_of(items: Iterable[ReachedAddresses], *, memory_level: str) -> Foo
     return Footprint(buffers=buffers, complete=complete)
 
 
-__all__ = ["ReachedAddresses", "footprint_of", "merged", "reached_by"]
+def wave_of(
+    module: Module,
+    target: Target,
+    topology_level: str | None,
+) -> tuple[int, int] | None:
+    """Return ``(wave_units, declared_units)``, or ``None`` when unstated."""
+    try:
+        capacity = target.get_facts(ParallelCapacityFacts, topology_level)
+        declared_units = static_dim_value(module.resolve_topology(capacity.topology).size)
+    except (UnsupportedCapabilityError, ValueError):
+        return None
+    if declared_units is None:
+        return None
+    return min(declared_units, capacity.parallel_units), declared_units
+
+
+def cached_level(facts: MemoryHierarchyFacts) -> tuple[str, str, int] | None:
+    """Return the first stated cache and the addressable level it backs."""
+    stated = sorted(
+        (
+            (level.name, level.capacity_bytes)
+            for level in facts.implicit_levels
+            if level.capacity_bytes is not None
+        ),
+        key=lambda item: item[0],
+    )
+    if not stated:
+        return None
+    cache_level, capacity = stated[0]
+    return cache_level, facts.backing_level(cache_level), capacity
+
+
+__all__ = [
+    "ReachedAddresses",
+    "cached_level",
+    "footprint_of",
+    "merged",
+    "reached_by",
+    "wave_of",
+]

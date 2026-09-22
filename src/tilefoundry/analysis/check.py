@@ -48,11 +48,12 @@ from tilefoundry.ir.types.substitute import (
 )
 from tilefoundry.ir.visitor import BindingSubstitutionCloner, collect_exprs
 from tilefoundry.target import UnsupportedCapabilityError
+from tilefoundry.target.facts import ParallelCapacityFacts
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import inference_type
 
 from .errors import AnalysisError
-from .facts import ParallelCapacityFacts, PerformanceServiceFacts
+from .facts import PerformanceServiceFacts
 from .metadata import (
     ComputeCostMetadata,
     MemoryMetadata,

@@ -130,6 +130,33 @@ class CommentPrinter:
             kind: self._spread(spread, topologies, logical=logical) for kind, spread in held.kinds
         }
 
+    @staticmethod
+    def _footprint(footprint):
+        if footprint is None:
+            return {}
+        return {
+            name: sum(spread.total for _level, spread in breakdown.kinds)
+            for name, breakdown in footprint.buffers
+        }
+
+    def _cache(self, record):
+        capacity = record.cache_capacity_bytes
+        if record.footprint is None or not record.cache_level or capacity is None:
+            return {}
+        used = sum(self._footprint(record.footprint).values())
+        percent = 100 * used / capacity
+        return {
+            record.cache_level: (
+                f"{used / 1048576:.2f}MB/{capacity / 1048576:.2f}MB@{percent:.1f}%"
+            )
+        }
+
+    @staticmethod
+    def _wave(record):
+        if not record.wave_units or not record.declared_units:
+            return ""
+        return f"{record.wave_units}/{record.declared_units}"
+
     def print_ComputeCostMetadata(self, record, **_):
         return self._record(
             "compute-cost",
@@ -141,7 +168,7 @@ class CommentPrinter:
 
     def print_MemoryMetadata(self, record, *, opt_in=frozenset()):
         traffic = self._breakdown(record.traffic.storage, record.topologies)
-        values = [("traffic", traffic)]
+        values = [("traffic", traffic), ("footprint", self._footprint(record.footprint))]
         if "operands" in opt_in:
             last = len(record.operands) - 1
             operands = {
@@ -156,6 +183,9 @@ class CommentPrinter:
             "memory",
             (
                 ("traffic", self._breakdown(record.traffic.storage, record.topologies)),
+                ("footprint", self._footprint(record.footprint)),
+                ("cache", self._cache(record)),
+                ("wave", self._wave(record), ""),
                 ("peak", {item.memory_level: item.peak_bytes for item in record.peaks}),
                 ("persistent", sum(item.persistent_bytes for item in record.peaks), 0),
                 ("errors", len(record.errors), 0),
