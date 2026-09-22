@@ -1222,6 +1222,10 @@ call site, source expressions shared by identity remain one shared expression
 in the clone; sharing never aliases the independently cloned body of another
 call site.
 
+`analysis.loop_terms` resolves HIR values to `LoopTerm` without depending on
+isl. `analysis.access` turns those terms into isl constraints and owns access
+widening; the two modules do not define a second affine graph representation.
+
 - constraints:
   - A loop `start` or `extent` MAY be unit-dependent. Every runtime leaf in one
     MUST carry a half-open value range, and `IterationScope.domain` MUST keep the

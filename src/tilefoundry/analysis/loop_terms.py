@@ -16,7 +16,7 @@ from tilefoundry.ir.hir.tensor.slice import window_base
 
 
 @dataclass(frozen=True)
-class LoopAffineTerm:
+class LoopTerm:
     """One authored loop coefficient plus a compile-time offset interval."""
 
     loop_axis: int | None
@@ -69,12 +69,10 @@ def static_range(expr: Expr, *, narrow: bool) -> tuple[int, int] | None:
     return None
 
 
-def _loop_term(
-    value: Expr, loops: tuple[LoopRegion, ...], *, narrow: bool
-) -> LoopAffineTerm | None:
+def _loop_term(value: Expr, loops: tuple[LoopRegion, ...], *, narrow: bool) -> LoopTerm | None:
     for index, loop in enumerate(loops):
         if loop.induction_var is value:
-            return LoopAffineTerm(index, 1, 0, 0)
+            return LoopTerm(index, 1, 0, 0)
     if not isinstance(value, Call) or not isinstance(value.target, Binary):
         return None
     if value.target.kind is BinaryKind.ADD:
@@ -85,7 +83,7 @@ def _loop_term(
             term = _loop_term(candidate, loops, narrow=narrow)
             bounds = static_range(invariant, narrow=narrow)
             if term is not None and bounds is not None:
-                return LoopAffineTerm(
+                return LoopTerm(
                     term.loop_axis,
                     term.stride,
                     term.low + bounds[0],
@@ -101,7 +99,7 @@ def _loop_term(
             if term is not None and bounds is not None and bounds[0] == bounds[1]:
                 factor = bounds[0]
                 offsets = (term.low * factor, term.high * factor)
-                return LoopAffineTerm(
+                return LoopTerm(
                     term.loop_axis,
                     term.stride * factor,
                     min(offsets),
@@ -112,14 +110,14 @@ def _loop_term(
 
 def loop_affine_term(
     value: Expr, loops: tuple[LoopRegion, ...], *, narrow: bool
-) -> LoopAffineTerm | None:
+) -> LoopTerm | None:
     """Resolve a constant, loop variable, affine offset, or constant stride."""
     base, offset = window_base(value)
     if base is None:
-        return LoopAffineTerm(None, 0, offset, offset)
+        return LoopTerm(None, 0, offset, offset)
     term = _loop_term(base, loops, narrow=narrow)
     if term is not None:
-        return LoopAffineTerm(
+        return LoopTerm(
             term.loop_axis,
             term.stride,
             term.low + offset,
@@ -128,7 +126,7 @@ def loop_affine_term(
     bounds = static_range(base, narrow=narrow)
     if bounds is None:
         return None
-    return LoopAffineTerm(None, 0, bounds[0] + offset, bounds[1] + offset)
+    return LoopTerm(None, 0, bounds[0] + offset, bounds[1] + offset)
 
 
-__all__ = ["LoopAffineTerm", "loop_affine_term"]
+__all__ = ["LoopTerm", "loop_affine_term"]
