@@ -41,6 +41,7 @@ class IterationScope:
     children: tuple[IterationScope, ...]
     depth: int
     domain: isl.set
+    domain_params: dict[str, object] = field(default_factory=dict)
     accesses: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(default_factory=dict)
     outputs: dict[str, dict[int, tuple[Call, tuple[Access, ...]]]] = field(default_factory=dict)
     relations: dict[int, tuple[Call, AccessRelations]] = field(default_factory=dict)
@@ -117,6 +118,7 @@ class IterationScope:
         self._trips_cache = result
         return result
 
+
 class ScopeBuilder:
     """Build one IterationScope tree and its access views for a Function."""
 
@@ -169,13 +171,14 @@ class ScopeBuilder:
                     built.append(access)
             scope.accesses.setdefault(view, {})[id(expr)] = (expr, tuple(built))
             written: list[Access] = []
-            for boundary in local_relations.outputs:
+            for output_index, boundary in enumerate(local_relations.outputs):
                 access = resolve_access(
                     expr,
                     boundary,
                     scope,
                     self.type_ctx,
                     input_index=None,
+                    output_index=output_index,
                     narrow=narrow,
                 )
                 if access is not None:
@@ -197,13 +200,15 @@ class ScopeBuilder:
         if isinstance(expr, LoopRegion):
             for operand in expr.init_args:
                 self._visit(operand, scope)
+            domain, domain_params = iteration_domain(expr, scope)
             child = IterationScope(
-                expr,
-                scope,
-                (),
-                scope.depth + 1,
-                iteration_domain(expr, scope),
-                self._empty_accesses(),
+                owner=expr,
+                parent=scope,
+                children=(),
+                depth=scope.depth + 1,
+                domain=domain,
+                domain_params=domain_params,
+                accesses=self._empty_accesses(),
             )
             scope.children = (*scope.children, child)
             self.seeds[id(expr.induction_var)] = child
@@ -225,13 +230,15 @@ class ScopeBuilder:
         self.seeds = {}
         self.variance = {}
         self.seen = set()
+        domain, domain_params = iteration_domain(self.graph, None)
         root = IterationScope(
-            self.graph,
-            None,
-            (),
-            0,
-            iteration_domain(self.graph, None),
-            self._empty_accesses(),
+            owner=self.graph,
+            parent=None,
+            children=(),
+            depth=0,
+            domain=domain,
+            domain_params=domain_params,
+            accesses=self._empty_accesses(),
         )
         for param in self.graph.params:
             self._visit(param, root)

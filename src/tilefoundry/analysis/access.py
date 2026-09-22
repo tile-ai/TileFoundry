@@ -44,6 +44,7 @@ class Access:
     relation: isl.map
     buffer: Expr
     precision: AccessPrecision = AccessPrecision.EXACT
+    output_index: int | None = None
 
 
 def widest_allowed(access: isl.map, name: str, held: object) -> LoopTerm | None:
@@ -157,6 +158,7 @@ def resolve_access(
     ctx: TypeInferContext,
     *,
     input_index: int | None,
+    output_index: int | None = None,
     narrow: bool,
 ) -> Access | None:
     """Resolve one declared boundary into an access from its iteration scope."""
@@ -196,7 +198,13 @@ def resolve_access(
             precision = AccessPrecision.WIDENED
     if precision is AccessPrecision.EXACT and has_unbounded_param(relation):
         precision = AccessPrecision.UNKNOWN
-    return Access(input_index, relation, operand, precision)
+    return Access(
+        input_index=input_index,
+        relation=relation,
+        buffer=operand,
+        precision=precision,
+        output_index=output_index,
+    )
 
 
 __all__ = [

@@ -1214,11 +1214,12 @@ for the narrow and device views. `IterationScope.domain` is the accumulated
 authored loop domain; `IterationScope.accesses` and `IterationScope.refused` are
 the shared family inputs for movement and footprint conclusions.
 An input `Access` stores its original Call boundary index as well as its relation
-and allocation expression; an output stores `input_index=None`. Failed boundaries
-remain absent without shifting the index on later successful inputs. Storage level
-and element width are read from the allocation type. A refused descendant makes
-its owning scope unknown for that view. Non-affine runtime indices retain the
-widest legal access approximation.
+and allocation expression; an output stores `input_index=None` and its own output
+boundary index, which is the tuple field it answers for. Failed boundaries remain
+absent without shifting the index on later successful inputs or outputs. Storage
+level and element width are read from the allocation type. A refused descendant
+makes its owning scope unknown for that view. Non-affine runtime indices retain
+the widest legal access approximation.
 Normalization clones each reached Function call site independently. Within one
 call site, source expressions shared by identity remain one shared expression
 in the clone; sharing never aliases the independently cloned body of another
@@ -1234,6 +1235,10 @@ widening; the two modules do not define a second affine graph representation.
     whole affine expression with each such leaf as one identity-deduplicated
     isl parameter constrained by that range. A leaf without a range MUST be
     refused.
+  - `IterationScope.domain_params` MUST map each of those parameter names back
+    to the value it stands for, because the name itself carries no meaning and
+    a reader that must recognise a unit coordinate cannot re-derive it without
+    restating how the name was made.
   - A loop `step` MUST be a literal; a parametric stride has no isl
     representation.
   - `cardinality` MUST enumerate every feasible integer point of a parameter box

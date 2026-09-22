@@ -61,10 +61,12 @@ def bound_to_isl_expr(
     return rendered
 
 
-def iteration_domain(owner: Function | LoopRegion, parent: "IterationScope | None") -> isl.set:
+def iteration_domain(
+    owner: Function | LoopRegion, parent: "IterationScope | None"
+) -> tuple[isl.set, dict[str, object]]:
     """Build the accumulated authored iteration domain for one scope owner."""
     if isinstance(owner, Function):
-        return isl.set("{ [] }")
+        return isl.set("{ [] }"), {}
     loops = () if parent is None else parent.enclosing_loops()
     params: dict[str, tuple[int, int] | None] = {}
     param_map: dict[str, object] = {}
@@ -89,7 +91,7 @@ def iteration_domain(owner: Function | LoopRegion, parent: "IterationScope | Non
         bounds.append(f"{bound[0]} <= {name} < {bound[1]}")
     names = ", ".join(f"p{index}" for index in range(len(loops) + 1))
     prefix = f"[{', '.join(params)}] -> " if params else ""
-    return isl.set(f"{prefix}{{ [{names}] : {' and '.join(bounds)} }}")
+    return isl.set(f"{prefix}{{ [{names}] : {' and '.join(bounds)} }}"), param_map
 
 
 __all__ = [
