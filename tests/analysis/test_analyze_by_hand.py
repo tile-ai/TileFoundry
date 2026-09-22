@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import isl
+
 from tests.fixtures.placed.gemm_schedules import (
     WAVE_BK,
     WAVE_BM,
@@ -31,7 +33,9 @@ from tests.fixtures.placed.hand_checked import (
 from tests.fixtures.placed.persistent_gemm_flat import PersistentGemmFlat
 from tests.fixtures.placed.persistent_gemm_tiled import PersistentGemmTiled
 from tilefoundry.analysis import analyze
+from tilefoundry.analysis.footprint import ReachedAddresses, footprint_of, merged
 from tilefoundry.analysis.report import report_data
+from tilefoundry.ir.types import DType
 from tilefoundry.target import CudaTarget
 
 
@@ -66,6 +70,54 @@ def _working_set_bytes(memory: dict) -> int:
         for levels in memory["footprint"]["buffers"].values()
         for level in levels.values()
     )
+
+
+def test_uncounted_boundary_marks_the_footprint_incomplete() -> None:
+    buffer = InvariantReuse.entry_function().params[0]
+    uncounted = ReachedAddresses(
+        buffer=buffer,
+        output_index=0,
+        dtype=None,
+        reached=None,
+        exact=False,
+    )
+
+    footprint = footprint_of(
+        merged((uncounted,)),
+        memory_level="gmem",
+        labels={id(buffer): "x"},
+    )
+
+    assert footprint.buffers == ()
+    assert footprint.complete is False
+
+
+def test_tuple_output_boundaries_add_instead_of_union() -> None:
+    buffer = InvariantReuse.entry_function().params[0]
+    addresses = isl.set("{ [i] : 0 <= i < 4 }")
+    reached = tuple(
+        ReachedAddresses(
+            buffer=buffer,
+            output_index=index,
+            dtype=DType.bf16,
+            reached=addresses,
+            exact=True,
+        )
+        for index in range(2)
+    )
+
+    distinct = merged(reached)
+    footprint = footprint_of(
+        distinct,
+        memory_level="gmem",
+        labels={id(buffer): "x"},
+    )
+    by_name = dict(footprint.buffers)
+    gmem = by_name["x"].of("gmem")
+
+    assert len(distinct) == 2
+    assert gmem is not None and gmem.total == 2 * 4 * 2
+    assert footprint.complete is True
 
 
 def test_invariant_reuse_matches_the_written_arithmetic() -> None:
