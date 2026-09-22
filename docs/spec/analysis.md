@@ -49,7 +49,7 @@ Every compact text summary begins with these two lines:
 
 ```text
 # example
-# analysis target=<target> module=<module> function=<function> topology=<level> wave=<counted>/<declared> <cache-level>=<capacity>MB
+# analysis target=<target> module=<module> function=<function> topology=<level> wave=<counted>/<declared> cache=<level>:<capacity>MB
 # selection requested=<selector>[,<selector>...] executed=<selector>[,<selector>...]
 ```
 
@@ -392,6 +392,9 @@ class Footprint:
   - A unit coordinate MUST be eliminated by union over the wave, never by taking
     the largest single unit's count. The two differ whenever units reach
     different addresses.
+  - A program declaring more units than the target holds MUST NOT have them all
+    counted as concurrent. The wave is the first `wave_units` positions in the
+    mesh's own linear order, taken through `Mesh.layout`'s strides.
   - Each buffer's count is one number. It MUST be stated in every counting
     domain a `Spread` carries, because a union over units divides back into no
     per-unit share.
@@ -532,6 +535,11 @@ once. A buffer with neither states no row.
     the call.
   - The stated bytes are a lower bound when any contributing boundary is
     inexact, exactly as a footprint is.
+  - The capacity is stated per one instance of the cache's `scope`, and this
+    analysis compares one wave against one instance. A deployment that spreads
+    one wave across several instances is not modelled.
+  - Per-unit control flow is out of scope: HIR states no conditional region, so
+    two units differ only by the iteration domain a coordinate gives them.
   - This is the capacity judgement of an idealised fully associative LRU cache.
     Miss counts, miss rates and replacement policy state nothing here.
 

@@ -34,7 +34,8 @@ class ReportIdentity(IRMetadata):
     function: str = ""
     topology: str = "none"
     wave: str = ""
-    cache: str = ""
+    cache_level: str = ""
+    cache_capacity_bytes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -210,7 +211,12 @@ class CommentPrinter:
         return self._single("source", f"{record.file}:{record.line}:{record.column}")
 
     def print_ReportIdentity(self, record, **_):
-        identity = self._record(
+        cache = (
+            {record.cache_level: f"{record.cache_capacity_bytes / 1048576:.2f}MB"}
+            if record.cache_level and record.cache_capacity_bytes is not None
+            else {}
+        )
+        return self._record(
             "analysis",
             (
                 ("target", record.target, ""),
@@ -218,9 +224,9 @@ class CommentPrinter:
                 ("function", record.function, ""),
                 ("topology", record.topology, "none"),
                 ("wave", record.wave, ""),
+                ("cache", cache),
             ),
         )
-        return FIELDS.join((identity, record.cache)) if record.cache else identity
 
     def print_ReportSelection(self, record, **_):
         return self._record(

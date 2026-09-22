@@ -750,7 +750,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
     } & moved.keys()
     assert header.splitlines() == [
         "# analysis target=nvidia.h200_sxm module=MoEMegaKernel function=experts "
-        f"topology={payload['topology']} wave=132/132 l2=47.68MB",
+        f"topology={payload['topology']} wave=132/132 cache=l2:47.68MB",
         f"# selection requested={','.join(payload['requested'])} "
         f"executed={','.join(payload['executed'])}",
         "# compute-cost "

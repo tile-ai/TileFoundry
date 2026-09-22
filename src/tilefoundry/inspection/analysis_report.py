@@ -100,11 +100,8 @@ def _summary(
             function=data["function"],
             topology=data["topology"] or "none",
             wave=f"{counted}/{declared}" if counted and declared else "",
-            cache=(
-                f"{cache_level}={cache_capacity / 1048576:.2f}MB"
-                if cache_level and cache_capacity is not None
-                else ""
-            ),
+            cache_level=cache_level,
+            cache_capacity_bytes=cache_capacity,
         ),
         ReportSelection(requested=tuple(data["requested"]), executed=tuple(data["executed"])),
     ]
