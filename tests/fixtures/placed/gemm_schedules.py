@@ -34,6 +34,12 @@ RESIDENT_Y = 11
 RESIDENT_K_FITS = 4096
 RESIDENT_K_OVER = 16384
 
+DEEPGEMM_X = 17
+DEEPGEMM_Y = 8
+DEEPGEMM_M = DEEPGEMM_X * RESIDENT_BM
+DEEPGEMM_N = DEEPGEMM_Y * RESIDENT_BN
+DEEPGEMM_K = 8192
+
 
 @module(entry="gemm", target=_H200, topologies=(Topology("cta", 1),))
 class GemmTile64:
@@ -306,7 +312,68 @@ class GemmResidentOver:
             return result
 
 
+@module(entry="gemm", target=_H200, topologies=(Topology("cta", DEEPGEMM_X * DEEPGEMM_Y),))
+class GemmDeepGemmWave:
+    """Write DeepGEMM's 132-SM block-index decode as a two-axis mesh.
+
+    For 128-square output tiles, candidates 8 and 16 both have usage 3200, so
+    DeepGEMM chooses the first. One 132-CTA wave covers ``ceil(132 / 8) = 17``
+    M blocks and all 8 N blocks: the first 132 positions of this ``(17, 8)``
+    mesh. Its space-only window is one near-lockstep K iteration and holds
+    ``(17 + 8) * 128 * 64 * 2 = 409600 B`` (400.00 KB). This proves the same
+    tile set as DeepGEMM's rasterization; its ``usage`` chooses a group size,
+    not a cache-capacity estimate.
+    """
+
+    @func
+    def gemm(
+        a: Tensor[(DEEPGEMM_M, DEEPGEMM_K), "bf16"],
+        b: Tensor[(DEEPGEMM_N, DEEPGEMM_K), "bf16"],
+    ):
+        with Mesh(
+            ("cta",),
+            layout=(DEEPGEMM_X, DEEPGEMM_Y),
+            names=("x", "y"),
+        ) as cta:
+            result = tf.zeros(
+                Tensor[
+                    (RESIDENT_BM, RESIDENT_BN),
+                    "bf16",
+                    (RESIDENT_BM, RESIDENT_BN),
+                    "rmem",
+                ]
+            )
+            for mi in range(
+                cta.x * RESIDENT_BM,
+                (cta.x + 1) * RESIDENT_BM,
+                RESIDENT_BM,
+            ):
+                for ni in range(
+                    cta.y * RESIDENT_BN,
+                    (cta.y + 1) * RESIDENT_BN,
+                    RESIDENT_BN,
+                ):
+                    for ki in tile(DEEPGEMM_K, RESIDENT_BK):
+                        lhs = tf.reshard(
+                            a[mi : mi + RESIDENT_BM, ki],
+                            (RESIDENT_BM, RESIDENT_BK),
+                            "smem",
+                        )
+                        rhs = tf.reshard(
+                            b[ni : ni + RESIDENT_BN, ki],
+                            (RESIDENT_BN, RESIDENT_BK),
+                            "smem",
+                        )
+                        result = tf.reshard(
+                            tf.matmul(lhs, rhs, b_layout="NK"),
+                            (RESIDENT_BM, RESIDENT_BN),
+                            "rmem",
+                        )
+            return result
+
+
 __all__ = [
+    "GemmDeepGemmWave",
     "GemmNaiveWave",
     "GemmResidentFits",
     "GemmResidentOver",

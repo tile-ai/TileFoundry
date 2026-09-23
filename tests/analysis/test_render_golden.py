@@ -26,6 +26,14 @@ FIXTURES = (
     ),
     (
         GEMM_FIXTURE,
+        "GemmDeepGemmWave",
+        GEMM_FIXTURE.with_name("gemm_deep_gemm_wave.analyzed.txt"),
+        ("memory",),
+        True,
+        True,
+    ),
+    (
+        GEMM_FIXTURE,
         "GemmResidentFits",
         GEMM_FIXTURE.with_name("gemm_resident_fits.analyzed.txt"),
         ("memory",),

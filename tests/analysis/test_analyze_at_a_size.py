@@ -82,6 +82,11 @@ EXPECTED_MEMORY_PEAKS = {
         "smem": 32,
     },
     "fused_boundary.FusedBoundary.stage[static]": {"smem": 64},
+    "gemm_schedules.GemmDeepGemmWave.gemm[static]": {
+        "gmem": 52_445_184,
+        "rmem": 32_768,
+        "smem": 49_152,
+    },
     "gemm_schedules.GemmNaiveWave.gemm[static]": {
         "gmem": 5_414_912,
         "rmem": 16_384,

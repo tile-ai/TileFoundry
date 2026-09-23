@@ -1,0 +1,33 @@
+# analysis target=nvidia.h200_sxm module=GemmDeepGemmWave function=gemm topology=cta wave=132/136
+# selection requested=memory executed=memory
+# memory traffic=gmem:r4.00MB/w0@logical,r4.00MB/w0@total,r4.00MB/w0@cta;rmem:r4.00KB/w4.03MB@logical,r4.00KB/w4.03MB@total,r4.00KB/w2.03MB@cta;smem:r8.00MB/w8.00MB@logical,r8.00MB/w8.00MB@total,r5.00MB/w6.00MB@cta footprint=a:272.00KB;b:128.00KB peak=gmem:50.02MB;rmem:32.00KB;smem:48.00KB persistent=gmem:50.00MB
+#   buffer=b holds=400.00KB time=none space=cta.x reuse=2.00MB fits=yes
+#   buffer=a holds=400.00KB time=none space=cta.y reuse=1.86MB fits=yes
+
+from __future__ import annotations
+
+from tilefoundry import func
+from tilefoundry.dsl import Tensor
+from tilefoundry.dsl.storage import rmem, smem
+from tilefoundry.dsl.tf import *  # noqa: F401, F403
+from tilefoundry.ir.types.shard import B, Layout, Mesh, Topology
+
+@func(mesh=Mesh((Topology("cta", 136),), Layout((17, 8), (8, 1)), names=('x', 'y')))
+def gemm(
+    a: Tensor[(2176, 8192), "bf16"],
+    b: Tensor[(1024, 8192), "bf16"]
+) -> Tensor[(128, 128), "bf16", ((128, 128), (128, 1), {mesh.x @ B()}), "rmem"]:
+    result = zeros(type=Tensor[(128, 128), "bf16", ((128, 128), (128, 1), {mesh.x @ B()}), "rmem"])  # Tensor[(128, 128), "bf16", ((128, 128), (128, 1), {mesh.x @ B()}), "rmem"]; memory traffic=rmem:r0/w32.00KB@logical,r0/w32.00KB@total,r0/w32.00KB@cta operands=result:r0/w32.00KB
+    for mi in tile(128 * mesh.x, (128 * mesh.x) + 128, 128):
+        for ni in tile(128 * mesh.y, (128 * mesh.y) + 128, 128):
+            for ki in tile(8192, 64):
+                v1 = a[mi, ki]  # Tensor[(128, 64), "bf16"]; memory traffic=rmem:r16B/w0@logical,r16B/w0@total,r16B/w0@cta operands=0:r0/w0;1:r16B/w0;result:r0/w0
+                v2 = reshard(v1, layout=((128, 64), (64, 1), {mesh.x @ B()}), storage=smem)  # Tensor[(128, 64), "bf16", ((128, 64), (64, 1), {mesh.x @ B()}), "smem"]; memory traffic=gmem:r16.00KB/w0@logical,r16.00KB/w0@total,r16.00KB/w0@cta;smem:r0/w16.00KB@logical,r0/w16.00KB@total,r0/w16.00KB@cta footprint=a:272.00KB operands=0:r16.00KB/w0;result:r0/w16.00KB
+                v3 = b[ni, ki]  # Tensor[(128, 64), "bf16"]; memory traffic=rmem:r16B/w0@logical,r16B/w0@total,r16B/w0@cta operands=0:r0/w0;1:r16B/w0;result:r0/w0
+                v4 = reshard(v3, layout=((128, 64), (64, 1), {mesh.x @ B()}), storage=smem)  # Tensor[(128, 64), "bf16", ((128, 64), (64, 1), {mesh.x @ B()}), "smem"]; memory traffic=gmem:r16.00KB/w0@logical,r16.00KB/w0@total,r16.00KB/w0@cta;smem:r0/w16.00KB@logical,r0/w16.00KB@total,r0/w16.00KB@cta footprint=b:128.00KB operands=0:r16.00KB/w0;result:r0/w16.00KB
+                v5 = matmul(v2, v4, a_layout="MK", b_layout="NK")  # Tensor[(128, 128), "bf16", ((128, 64), (64, 1), {mesh.x @ B()}), "smem"]; memory traffic=smem:r32.00KB/w32.00KB@logical,r32.00KB/w32.00KB@total,r24.00KB/w16.00KB@cta operands=0:r16.00KB/w0;1:r16.00KB/w0;result:r0/w32.00KB
+                v6 = reshard(v5, layout=((128, 128), (128, 1), {mesh.x @ B()}), storage=rmem)  # Tensor[(128, 128), "bf16", ((128, 128), (128, 1), {mesh.x @ B()}), "rmem"]; memory traffic=rmem:r0/w32.00KB@logical,r0/w32.00KB@total,r0/w16.00KB@cta;smem:r32.00KB/w0@logical,r32.00KB/w0@total,r16.00KB/w0@cta operands=0:r32.00KB/w0;result:r0/w32.00KB
+                result = v6
+            result = result
+        result = result
+    return result
