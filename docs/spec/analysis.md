@@ -532,7 +532,11 @@ once. A buffer with neither states no row.
     behind it nor hardware validation here.
   - A mesh axis supplies reuse exactly when one unit reaches the same addresses
     as the wave union along that axis. The spatial repeat count is how many
-    units in the wave map onto those same addresses.
+    units in the wave map onto those same addresses. The space comparison reads
+    the wave relation from the device view and the one-unit relation from the
+    unit view. The time axis reads the raw narrow relation, retaining mesh
+    parameters and applying no wave limit. `holds_bytes` reads the narrow
+    relation, limits it to the wave, and projects out mesh parameters.
   - Under nested mesh regions, a reuse row states its space axis against the
     innermost enclosing mesh. Outer execution meshes are not composed into
     that axis label.

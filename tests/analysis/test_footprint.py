@@ -33,6 +33,8 @@ def test_time_comparison_keeps_mesh_parameters() -> None:
         scope=cast(IterationScope, object()),
         call=call,
         access=Access(input_index=0, relation=relation, buffer=buffer),
+        space_wave_access=Access(input_index=0, relation=relation, buffer=buffer),
+        unit_access=Access(input_index=0, relation=relation, buffer=buffer),
         dtype=DType.f32,
         label="x",
         mesh=None,

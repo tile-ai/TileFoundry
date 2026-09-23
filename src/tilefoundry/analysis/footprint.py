@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 
 import isl
 
-from tilefoundry.ir.core import Call, Expr, get_metadata, value_labels
+from tilefoundry.ir.core import Call, Expr, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
@@ -29,10 +29,10 @@ from tilefoundry.ir.types.shard import (
 from tilefoundry.target.base import Target, UnsupportedCapabilityError
 from tilefoundry.target.facts import ParallelCapacityFacts
 from tilefoundry.utils.isl_utils import cardinality
-from tilefoundry.visitor_registry.access_relation import leaves_of
+from tilefoundry.visitor_registry.access_relation import leaves_of, projected
 from tilefoundry.visitor_registry.contexts import CostContext
 
-from .access import Access, AccessPrecision
+from .access import Access, AccessPrecision, resolve_access
 from .facts import MemoryHierarchyFacts
 from .iteration_scope import IterationScope, walk_scopes
 from .loop_domain import induction_name
@@ -216,6 +216,8 @@ class MovingBoundary:
     scope: IterationScope
     call: Call
     access: Access
+    space_wave_access: Access
+    unit_access: Access
     dtype: DType
     label: str
     mesh: Mesh | None
@@ -228,6 +230,10 @@ class MovingBoundary:
     _relations: dict[int, isl.map] = field(default_factory=dict, init=False, repr=False)
     _held: dict[int, isl.set] = field(default_factory=dict, init=False, repr=False)
     _reached: dict[int, isl.set] = field(default_factory=dict, init=False, repr=False)
+    _space_wave_reached: dict[int, isl.set] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _unit_relations: dict[int, isl.map] = field(default_factory=dict, init=False, repr=False)
     _unit_reached: dict[tuple[int, str | None], isl.set | None] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -263,12 +269,32 @@ class MovingBoundary:
             self._reached[window] = reached
         return reached
 
+    def _unit_relation(self, window: int) -> isl.map:
+        relation = self._unit_relations.get(window)
+        if relation is None:
+            relation = _at_first_iteration(self.unit_access.relation, window + 1)
+            self._unit_relations[window] = relation
+        return relation
+
+    def space_wave_reached(self, window: int) -> isl.set:
+        """Return the device-view wave addresses used by the space test."""
+        reached = self._space_wave_reached.get(window)
+        if reached is None:
+            relation = _at_first_iteration(
+                self.space_wave_access.relation, window + 1
+            )
+            if self.position is not None:
+                relation = _restrict_to_wave(relation, self.position, self.wave_units)
+            reached = _project_mesh_parameters(relation.range(), self.mesh_parameters)
+            self._space_wave_reached[window] = reached
+        return reached
+
     def unit_reached(self, window: int, parameter_name: str | None) -> isl.set | None:
         """Return one feasible unit's addresses from the cached window relation."""
         key = (window, parameter_name)
         if key in self._unit_reached:
             return self._unit_reached[key]
-        relation = self._relation(window)
+        relation = self._unit_relation(window)
         if self.position is not None:
             relation = _restrict_to_wave(relation, self.position, self.wave_units)
         parameter = (
@@ -311,7 +337,7 @@ def space_axes(
     if boundary.mesh is None or wave[0] <= 1:
         return ()
     window = boundary.scope.depth - 1
-    wave_reached = boundary.reached(window)
+    wave_reached = boundary.space_wave_reached(window)
     shared = []
     for axis, parameter_name in enumerate(boundary.axis_parameters):
         shape = flatten(boundary.mesh.layout.shape)
@@ -475,6 +501,7 @@ def moving_boundaries(
     memory_level: str,
     wave: tuple[int, int],
     ctx: CostContext,
+    labels: Mapping[int, str],
 ) -> tuple[MovingBoundary, ...]:
     """Collect boundaries that move bytes at *memory_level* in one scope walk."""
     whole = replace(ctx, topology_level=None, topologies=())
@@ -496,6 +523,21 @@ def moving_boundaries(
             moved = get_metadata(call, MemoryMetadata)
             if moved is None or len(moved.operands) != len(call.args) + 1:
                 continue
+            device_recorded = scope.accesses.get("device", {}).get(id(call))
+            device_by_boundary = (
+                {
+                    (item.input_index, item.output_index): item
+                    for item in device_recorded[1]
+                }
+                if device_recorded is not None and device_recorded[0] is call
+                else {}
+            )
+            try:
+                unit_relations = projected(
+                    scope.stated_relations(call, ctx), call, ctx
+                )
+            except (NotImplementedError, TypeError, ValueError, isl.Error):
+                unit_relations = None
             for access in _call_accesses(scope, call):
                 movement = (
                     moved.operands[access.input_index]
@@ -512,13 +554,67 @@ def moving_boundaries(
                     continue
                 if len(leaves) != 1 or not isinstance(leaves[0], TensorType):
                     continue
+                label = labels.get(id(access.buffer))
+                if label is None:
+                    continue
+                boundary_key = (access.input_index, access.output_index)
+                space_wave_access = device_by_boundary.get(boundary_key, access)
+                unit_access = access
+                if unit_relations is not None:
+                    try:
+                        if access.input_index is not None:
+                            boundary = unit_relations.inputs[access.input_index]
+                            operand = call.args[access.input_index]
+                            local_rank = boundary.pattern.relation.dim(isl.dim_type.OUT)
+                            logical_rank = (
+                                len(operand.type.shape)
+                                if isinstance(operand.type, TensorType)
+                                else local_rank
+                            )
+                            if local_rank == logical_rank:
+                                unit_access = (
+                                    resolve_access(
+                                        operand,
+                                        boundary,
+                                        scope,
+                                        ctx,
+                                        input_index=access.input_index,
+                                        narrow=False,
+                                    )
+                                    or access
+                                )
+                        elif access.output_index is not None:
+                            boundary = unit_relations.outputs[access.output_index]
+                            local_rank = boundary.pattern.relation.dim(isl.dim_type.OUT)
+                            logical_rank = (
+                                len(held.shape)
+                                if isinstance(held, TensorType)
+                                else local_rank
+                            )
+                            if local_rank == logical_rank:
+                                unit_access = (
+                                    resolve_access(
+                                        call,
+                                        boundary,
+                                        scope,
+                                        ctx,
+                                        input_index=None,
+                                        output_index=access.output_index,
+                                        narrow=False,
+                                    )
+                                    or access
+                                )
+                    except (IndexError, NotImplementedError, TypeError, ValueError, isl.Error):
+                        unit_access = access
                 found.append(
                     MovingBoundary(
                         scope=scope,
                         call=call,
                         access=access,
+                        space_wave_access=space_wave_access,
+                        unit_access=unit_access,
                         dtype=leaves[0].dtype,
-                        label="",
+                        label=label,
                         mesh=mesh,
                         reads=movement.read > 0,
                         wave_units=wave_units,
@@ -528,12 +624,6 @@ def moving_boundaries(
                         position=position,
                     )
                 )
-    distinct: dict[int, Expr] = {}
-    for boundary in found:
-        distinct.setdefault(id(boundary.access.buffer), boundary.access.buffer)
-    labels = dict(zip(distinct, value_labels(distinct.values()), strict=True))
-    for boundary in found:
-        boundary.label = labels[id(boundary.access.buffer)]
     return tuple(found)
 
 
@@ -806,11 +896,12 @@ def reuse_windows(
     wave_units: int,
     declared_units: int,
     ctx: CostContext,
+    labels: Mapping[int, str],
 ) -> tuple[ReuseWindow, ...]:
     """Describe one cache-residency window per buffer that is read again."""
     wave = (wave_units, declared_units)
     boundaries = moving_boundaries(
-        root, memory_level=memory_level, wave=wave, ctx=ctx
+        root, memory_level=memory_level, wave=wave, ctx=ctx, labels=labels
     )
     buffers = _by_buffer(boundaries, wave)
     if not buffers or ctx.scope is None:

@@ -617,6 +617,12 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         footprint_available=footprint_available,
     )
     MemoryVisitor().visit(function.body, memory_context)
+    merged_reached = merged(memory_context.reached)
+    distinct: dict[int, Expr] = {}
+    for item in merged_reached:
+        if item.reached is not None:
+            distinct.setdefault(id(item.buffer), item.buffer)
+    footprint_labels = dict(zip(distinct, value_labels(distinct.values()), strict=True))
     reuse = (
         reuse_windows(
             context.root,
@@ -624,16 +630,11 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             wave_units=wave[0],
             declared_units=wave[1],
             ctx=locals_by_unit.get(topology_level, whole),
+            labels=footprint_labels,
         )
         if memory_level is not None and wave is not None
         else ()
     )
-    merged_reached = merged(memory_context.reached)
-    distinct: dict[int, Expr] = {}
-    for item in merged_reached:
-        if item.reached is not None:
-            distinct.setdefault(id(item.buffer), item.buffer)
-    footprint_labels = dict(zip(distinct, value_labels(distinct.values()), strict=True))
     if memory_level is not None:
         for call, reached in memory_context.call_reached:
             moved = get_metadata(call, MemoryMetadata)
