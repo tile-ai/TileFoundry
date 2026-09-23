@@ -173,7 +173,7 @@ class ReuseWindow:
     ``time`` is the loop whose next iteration reads it again and ``space`` the
     mesh axis whose units read it at once; either may be absent. ``holds`` is
     everything the wave touches while it must stay resident -- other buffers
-    included, because they are what evicts it -- and ``saves`` the bytes that
+    included, because they are what evicts it -- and ``reuse`` the bytes that
     are not fetched again once it does.
     """
 
@@ -181,7 +181,7 @@ class ReuseWindow:
     time: str = ""
     space: str = ""
     holds_bytes: int = 0
-    saves_bytes: int = 0
+    reuse_bytes: int = 0
     fits: bool = True
     complete: bool = True
 

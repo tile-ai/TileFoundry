@@ -88,7 +88,7 @@ grep -E '^# (memory|roofline) ' Naive.txt
 ```
 
 ```text
-# memory traffic=gmem:r71680/w43456@logical,r71680/w43456@total,r71680/w43456@cta,r336/w224@thread;rmem:r603496/w488344@logical,r603496/w488344@total,r603496/w488344@cta,r2604/w2084@thread footprint=a:28672;gamma:14336;normed:28672;v10:33:28672;v21:45:14336;v23:46:448 peak=gmem:71680;rmem:57344 persistent=43008
+# memory traffic=gmem:r70.00KB/w42.44KB@logical,r70.00KB/w42.44KB@total,r70.00KB/w42.44KB@cta,r336B/w224B@thread;rmem:r589.35KB/w476.90KB@logical,r589.35KB/w476.90KB@total,r589.35KB/w476.90KB@cta,r2.54KB/w2.04KB@thread footprint=a:28.00KB;gamma:14.00KB;normed:28.00KB;v10:33:28.00KB;v21:45:14.00KB;v23:46:448B peak=gmem:70.00KB;rmem:56.00KB persistent=gmem:42.00KB
 # roofline ideal-ns=24 bound-by=memory
 ```
 
@@ -132,7 +132,7 @@ grep -E '^# (memory|roofline) ' Fused.txt
 ```
 
 ```text
-# memory traffic=gmem:r43008/w14784@logical,r43008/w14784@total,r43008/w14784@cta,r224/w112@thread;rmem:r574824/w459672@logical,r574824/w459672@total,r574824/w459672@cta,r2492/w1972@thread footprint=a:28672;gamma:14336;v19:65:14336;v21:66:448 peak=gmem:57792;rmem:57344 persistent=43008
+# memory traffic=gmem:r42.00KB/w14.44KB@logical,r42.00KB/w14.44KB@total,r42.00KB/w14.44KB@cta,r224B/w112B@thread;rmem:r561.35KB/w448.90KB@logical,r561.35KB/w448.90KB@total,r561.35KB/w448.90KB@cta,r2.43KB/w1.93KB@thread footprint=a:28.00KB;gamma:14.00KB;v19:65:14.00KB;v21:66:448B peak=gmem:56.44KB;rmem:56.00KB persistent=gmem:42.00KB
 # roofline ideal-ns=13 bound-by=memory
 ```
 

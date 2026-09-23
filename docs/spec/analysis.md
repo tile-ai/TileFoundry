@@ -49,7 +49,7 @@ Every compact text summary begins with these two lines:
 
 ```text
 # example
-# analysis target=<target> module=<module> function=<function> topology=<level> wave=<counted>/<declared> cache=<level>:<capacity>MB
+# analysis target=<target> module=<module> function=<function> topology=<level> wave=<counted>/<declared>
 # selection requested=<selector>[,<selector>...] executed=<selector>[,<selector>...]
 ```
 
@@ -60,8 +60,8 @@ are records of the report rather than of the IR; every other summary line is a
 record of the selected Function.
 
 The JSON report carries the same identity and selection in `target`, `module`,
-`function`, `topology`, `wave`, `cache`, `requested`, and `executed`. `wave`
-holds `counted` and `declared`; `cache` holds `level` and `capacity_bytes`.
+`function`, `topology`, `wave`, `requested`, and `executed`. `wave` holds
+`counted` and `declared`.
 Whole-function
 projections are under `function_records`; `calls` is a value-ordered list whose
 entries have a `value` label and one key per selected family. `loops` is the
@@ -244,7 +244,7 @@ class ReuseWindow:
     time: str = ""
     space: str = ""
     holds_bytes: int = 0
-    saves_bytes: int = 0
+    reuse_bytes: int = 0
     fits: bool = True
     complete: bool = True
 
@@ -510,7 +510,7 @@ once. A buffer with neither states no row.
 | `ReuseWindow.time` | The outermost enclosing loop whose different iterations reach the same addresses, named by its induction variable; empty when no loop supplies a second read. | No |
 | `ReuseWindow.space` | The mesh axis whose different coordinates reach the same addresses; empty when no mesh axis supplies a second read. | No |
 | `ReuseWindow.holds_bytes` | Unique bytes of every buffer the whole wave touches while this buffer must remain resident. | `MemoryHierarchyFacts` selects the backed level; [target §11](./target.md#11-target-facts-projection) supplies `ParallelCapacityFacts`. |
-| `ReuseWindow.saves_bytes` | `(time trips * space units - 1)` times this buffer's unique bytes in the window; an absent axis contributes one. | As above |
+| `ReuseWindow.reuse_bytes` | `(time trips * space units - 1)` times this buffer's unique bytes in the window; an absent axis contributes one. | As above |
 | `ReuseWindow.fits` | True exactly when `holds_bytes` is less than the cache capacity. | `MemoryHierarchyFacts.implicit_levels[]` |
 | `ReuseWindow.complete` | False when any boundary contributing to `holds_bytes` is inexact, uncountable, or refused; otherwise true. | No |
 | `RegionMemoryMetadata.reuse_windows` | One row for every buffer with a time or space reuse axis and nonzero savings. | As above |
@@ -532,12 +532,11 @@ once. A buffer with neither states no row.
   - Rows MUST NOT be summed. One row's window lies inside another's whenever
     its axis is nested inside, so a row that fits implies those nested in it
     fit.
-  - Rows MUST be ordered by `saves_bytes`, largest first. Equal savings retain
+  - Rows MUST be ordered by `reuse_bytes`, largest first. Equal reuse amounts retain
     their derivation order.
   - Data read once states no row; its bytes still enter every row whose window
     contains it.
-  - A row whose computed savings are zero states no row. A nonzero saving too
-    small to survive the printed MB precision MUST be printed in bytes instead.
+  - A row whose computed reuse is zero states no row.
   - A window above capacity MUST add one non-fatal `errors` entry, regardless
     of how many buffer rows share it, and MUST NOT fail the call.
   - The stated bytes are a lower bound when any contributing boundary is
@@ -550,12 +549,12 @@ once. A buffer with neither states no row.
   - This is the capacity judgement of an idealised fully associative LRU cache.
     Miss counts, miss rates and replacement policy state nothing here.
 
-The report identity, not `RegionMemoryMetadata`, states the machine context.
-Its wave is `min(declared units, units the target runs at once)` over the
-topology named by `ParallelCapacityFacts`; its cache is the first implicit
-level by name with stated capacity. One MB is 1048576 bytes. These facts are
-top-level `wave` and `cache` fields in JSON and appear once on the `analysis`
-text line.
+The report identity, not `RegionMemoryMetadata`, states the program-dependent
+machine context. Its wave is `min(declared units, units the target runs at
+once)` over the topology named by `ParallelCapacityFacts`; it is the top-level
+`wave` field in JSON and appears once on the `analysis` text line. Cache level
+and capacity remain Target facts and appear in this report only when they decide
+a cache-capacity finding.
 
 ##### Target facts
 
@@ -652,23 +651,29 @@ class MemoryHierarchyFacts:
 Requesting memory adds one Function line and one line per finding:
 
 ```text
-memory traffic=<memory-level>:r<int>/w<int>@logical,r<int>/w<int>@total,r<int>/w<int>@<topology>[,...] footprint=<buffer>:<int>[;<buffer>:<int>] peak=<level>:<int>[,...]
-reuse buffer=<buffer> holds=<float>MB time=<loop|none> space=<mesh-axis|none> saves=<float>MB|<int>B fits=<yes|no>
-error="<text>"
-advisory="<text>"
+memory traffic=<memory-level>:r<bytes>/w<bytes>@logical,r<bytes>/w<bytes>@total,r<bytes>/w<bytes>@<topology>[,...] footprint=<buffer>:<bytes>[;<buffer>:<bytes>] peak=<level>:<bytes>[,...] persistent=<level>:<bytes>[,...]
+  buffer=<buffer> holds=<bytes> time=<loop|none> space=<mesh-axis|none> reuse=<bytes> fits=<yes|no>
+  error="<text>"
+  advisory="<text>"
 ```
 
-Each error and advisory is its own quoted and escaped line. Every measured Call
+The `<bytes>` form selects the largest of `B`, `KB`, `MB`, and `GB` whose unit
+the value reaches, with 1024 between adjacent units. `B` is an integer; every
+larger unit has two decimal places. Zero is `0`. This one form is used for every
+human-readable byte count, including error text; JSON keeps raw byte integers.
+
+Each buffer, error, and advisory is its own line indented beneath the `memory`
+family line. Errors and advisories are quoted and escaped. Every measured Call
 receives a `memory` annotation; `operands` is emitted only when asked for
 ([cli Analyze](./cli.md#analyze)):
 
 ```text
-memory traffic=<memory-level>:r<int>/w<int>@logical,r<int>/w<int>@total,r<int>/w<int>@<topology>[,...] footprint=<buffer>:<int>[;<buffer>:<int>] [operands=<position>:r<int>/w<int>[;<position>:...]]
+memory traffic=<memory-level>:r<bytes>/w<bytes>@logical,r<bytes>/w<bytes>@total,r<bytes>/w<bytes>@<topology>[,...] footprint=<buffer>:<bytes>[;<buffer>:<bytes>] [operands=<position>:r<bytes>/w<bytes>[;<position>:...]]
 ```
 
 In the printed `footprint` field, a buffer uses the same value label as a
 lifetime binding and that label may itself contain `:` (for example,
-`v0:57:1024`). The byte count is the integer after the last colon.
+`v0:57:1.00KB`). The byte count is the formatted value after the last colon.
 
 Missing optional conclusions omit their whole printed field. Call and Function
 JSON projections are both under `memory`. The Function's full projection is
@@ -682,7 +687,7 @@ under `function_records.memory`:
                "complete": <bool>} | null,
  "reuse_windows": [{"buffer": <name>, "time": <loop|"">,
                      "space": <mesh-axis|"">, "holds_bytes": <int>,
-                     "saves_bytes": <int>, "fits": <bool>,
+                     "reuse_bytes": <int>, "fits": <bool>,
                      "complete": <bool>}, ...],
  "lifetimes": [{"binding": <name>, "memory_level": <level>, "bytes": <int>,
                 "defined_at": <int>, "last_used_at": <int>,
@@ -696,8 +701,8 @@ under `function_records.memory`:
 
 - constraints:
   - Text and JSON MUST project analysis conclusions from these records. The
-    report identity's `wave` and `cache` are machine facts read from the
-    resolved Module Target and MUST NOT be copied into the memory record.
+    report identity's `wave` is read from the resolved Module Target and the
+    program's declared units and MUST NOT be copied into the memory record.
   - A missing footprint MUST be JSON `null`; it MUST NOT be represented by an
     empty `Footprint`.
 

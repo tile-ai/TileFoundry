@@ -9,8 +9,7 @@ from dataclasses import fields, is_dataclass
 from types import UnionType
 from typing import Union, get_args, get_origin, get_type_hints
 
-from tilefoundry.analysis.facts import MemoryHierarchyFacts
-from tilefoundry.analysis.footprint import cached_level, wave_of
+from tilefoundry.analysis.footprint import wave_of
 from tilefoundry.analysis.metadata import (
     Breakdown,
     ComputeCostMetadata,
@@ -27,7 +26,6 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.types import tensor_types
 from tilefoundry.ir.visitor import collect_exprs
-from tilefoundry.target import UnsupportedCapabilityError
 
 _FAMILIES: dict[type[IRMetadata], str] = {}
 _EXPR_FIELDS: dict[type[IRMetadata], dict[str, Callable[..., object]]] = {}
@@ -232,10 +230,6 @@ def report_data(
     selected = frozenset(selected_types_)
     target = module.resolve_target()
     wave = wave_of(module, target, topology_level)
-    try:
-        cache = cached_level(target.get_facts(MemoryHierarchyFacts))
-    except UnsupportedCapabilityError:
-        cache = None
     function_records = _records_of(function, selected)
     data = {
         "target": target.identity,
@@ -245,10 +239,6 @@ def report_data(
         "wave": {
             "counted": 0 if wave is None else wave[0],
             "declared": 0 if wave is None else wave[1],
-        },
-        "cache": {
-            "level": "" if cache is None else cache[0],
-            "capacity_bytes": None if cache is None else cache[2],
         },
         "requested": list(analyses),
         "executed": list(executed),

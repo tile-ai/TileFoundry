@@ -178,14 +178,13 @@ def test_l2_occupancy_matches_the_written_ratio() -> None:
     data = _report(L2Occupancy)
     memory = data["function_records"]["memory"]
     used = _working_set_bytes(memory)
-    capacity = data["cache"]["capacity_bytes"]
+    capacity = 1_048_576
     l2_errors = [error for error in memory["errors"] if error.startswith("l2 working set")]
 
     assert (used, capacity, used * 100 / capacity) == (1_572_864, 1_048_576, 150.0)
-    assert data["cache"]["level"] == "l2"
     assert l2_errors == [
-        "l2 working set 1572864 B at the first iteration of a 1-unit wave "
-        "exceeds capacity 1048576 B"
+        "l2 working set 1.50MB at the first iteration of a 1-unit wave "
+        "exceeds capacity 1.00MB"
     ]
     assert memory["advisories"] == []
 

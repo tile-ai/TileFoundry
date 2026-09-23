@@ -702,7 +702,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
     assert cli.main(["analyze", selector, str(operands_path), *flags, "--operands"]) == 0
     asked = operands_path.read_text(encoding="utf-8")
     assert "operands=" not in first
-    assert "operands=0:r30720/w0;result:r0/w30720" in asked
+    assert "operands=0:r30.00KB/w0;result:r0/w30.00KB" in asked
     assert (
         cli.main(["analyze", selector, str(operands_json_path), *flags, "--operands", "--json"])
         == 0
@@ -738,10 +738,9 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
     summary = payload["function_records"]["performance"]
     cost = payload["function_records"]["compute-cost"]
     moved = payload["function_records"]["memory"]
-    peak = moved["peaks"]
     bound = payload["function_records"]["roofline"]
     assert payload["wave"] == {"counted": 132, "declared": 132}
-    assert payload["cache"] == {"level": "l2", "capacity_bytes": 50_000_000}
+    assert "cache" not in payload
     assert not {
         "cache_level",
         "cache_capacity_bytes",
@@ -750,29 +749,22 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
     } & moved.keys()
     assert header.splitlines() == [
         "# analysis target=nvidia.h200_sxm module=MoEMegaKernel function=experts "
-        f"topology={payload['topology']} wave=132/132 cache=l2:47.68MB",
+        f"topology={payload['topology']} wave=132/132",
         f"# selection requested={','.join(payload['requested'])} "
         f"executed={','.join(payload['executed'])}",
         "# compute-cost "
         f"flops=f32:{cost['flops']['f32']['logical']}@logical,"
         f"{cost['flops']['f32']['total']}@total,"
         f"{cost['flops']['f32']['per_unit'][0]}@{payload['topology']}",
-        "# memory "
-        f"traffic=gmem:r{moved['traffic']['storage']['gmem']['logical']['read']}"
-        f"/w{moved['traffic']['storage']['gmem']['logical']['write']}@logical,"
-        f"r{moved['traffic']['storage']['gmem']['total']['read']}"
-        f"/w{moved['traffic']['storage']['gmem']['total']['write']}@total,"
-        f"r{moved['traffic']['storage']['gmem']['per_unit'][0]['read']}"
-        f"/w{moved['traffic']['storage']['gmem']['per_unit'][0]['write']}"
-        f"@{payload['topology']} "
-        "footprint=<value 4>:30720;<value 5>:30720;v0:29:256;v1:30:256;"
-        "v3:37:2560;v4:38:2560;v6:44:30720 "
-        f"peak=gmem:{peak[0]['peak_bytes']} "
-        f"persistent={sum(item['persistent_bytes'] for item in peak)}",
-        "# reuse buffer=<value 4> holds=0.09MB time=none space=cta.tile "
-        "saves=3.84MB fits=yes",
-        "# reuse buffer=<value 5> holds=0.09MB time=none space=cta.tile "
-        "saves=3.84MB fits=yes",
+        "# memory traffic=gmem:r120.00KB/w90.00KB@logical,"
+        "r120.00KB/w90.00KB@total,r62.75KB/w32.75KB@cta "
+        "footprint=<value 4>:30.00KB;<value 5>:30.00KB;v0:29:256B;"
+        "v1:30:256B;v3:37:2.50KB;v4:38:2.50KB;v6:44:30.00KB "
+        "peak=gmem:60.00KB persistent=gmem:30.00KB",
+        "#   buffer=<value 4> holds=95.50KB time=none space=cta.tile "
+        "reuse=3.84MB fits=yes",
+        "#   buffer=<value 5> holds=95.50KB time=none space=cta.tile "
+        "reuse=3.84MB fits=yes",
         f"# roofline ideal-ns={bound['ideal_ns']} bound-by={bound['bound_by']}",
         "# performance root=MoEMegaKernel::experts "
         f"predicted-ns={summary['timeline']['end_ns']} "

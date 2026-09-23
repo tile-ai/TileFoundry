@@ -9,6 +9,7 @@ from tilefoundry.analysis.metadata import (
     ComputeCostMetadata,
     PerformanceSummaryMetadata,
     RegionMemoryMetadata,
+    ReuseWindow,
     RooflineMetadata,
 )
 from tilefoundry.analysis.report import _type_text as _type_text
@@ -88,11 +89,8 @@ def _summary(
 ) -> tuple[IRMetadata, ...]:
     """One record per summary line: identity, selection, then findings."""
     wave = data["wave"]
-    cache = data["cache"]
     counted = wave["counted"]
     declared = wave["declared"]
-    cache_level = cache["level"]
-    cache_capacity = cache["capacity_bytes"]
     views: list[IRMetadata] = [
         ReportIdentity(
             target=data["target"],
@@ -100,8 +98,6 @@ def _summary(
             function=data["function"],
             topology=data["topology"] or "none",
             wave=f"{counted}/{declared}" if counted and declared else "",
-            cache_level=cache_level,
-            cache_capacity_bytes=cache_capacity,
         ),
         ReportSelection(requested=tuple(data["requested"]), executed=tuple(data["executed"])),
     ]
@@ -136,7 +132,11 @@ def report(result: AnalysisResult) -> dict[str, object]:
 
 def render_text(rendering: AnalysisRendering) -> str:
     """Render one stable comment line per report conclusion."""
-    return "\n".join(f"# {render_comment(view)}" for view in rendering.summary)
+    nested = (ReuseWindow, ErrorSummary, AdvisorySummary)
+    return "\n".join(
+        f"# {'  ' if isinstance(view, nested) else ''}{render_comment(view)}"
+        for view in rendering.summary
+    )
 
 
 __all__ = [

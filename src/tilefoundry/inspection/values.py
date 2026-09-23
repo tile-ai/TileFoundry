@@ -8,6 +8,7 @@ from dataclasses import dataclass, fields, is_dataclass
 
 from tilefoundry.ir.core.metadata import IRMetadata
 from tilefoundry.ir.core.values import TripInterval
+from tilefoundry.utils.units import format_bytes
 
 PAIR, PER_UNIT, ENTRY, ENTRIES, FIELD, FIELDS, PARTS, TRIPS = (
     "/",
@@ -34,8 +35,6 @@ class ReportIdentity(IRMetadata):
     function: str = ""
     topology: str = "none"
     wave: str = ""
-    cache_level: str = ""
-    cache_capacity_bytes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -83,7 +82,7 @@ class CommentPrinter:
         return json.dumps(str(value))
 
     def print_TrafficBytes(self, value):
-        return f"r{value.read}{PAIR}w{value.write}"
+        return f"r{format_bytes(value.read)}{PAIR}w{format_bytes(value.write)}"
 
     def print_TripInterval(self, value):
         if value.trips <= 1:
@@ -108,6 +107,8 @@ class CommentPrinter:
             elif self._empty_without_default(value):
                 continue
             out.append(f"{key.replace('_', '-')}={self.print(value)}")
+        if not family:
+            return FIELDS.join(out)
         return FIELDS.join([family, *out]) if out else family
 
     def _single(self, family, value, default=_UNSET):
@@ -138,7 +139,7 @@ class CommentPrinter:
         if footprint is None:
             return {}
         return {
-            name: sum(spread.total for _level, spread in breakdown.kinds)
+            name: format_bytes(sum(spread.total for _level, spread in breakdown.kinds))
             for name, breakdown in footprint.buffers
         }
 
@@ -169,25 +170,33 @@ class CommentPrinter:
             (
                 ("traffic", self._breakdown(record.traffic.storage, record.topologies)),
                 ("footprint", self._footprint(record.footprint)),
-                ("peak", {item.memory_level: item.peak_bytes for item in record.peaks}),
-                ("persistent", sum(item.persistent_bytes for item in record.peaks), 0),
-                ("errors", len(record.errors), 0),
-                ("advisories", len(record.advisories), 0),
+                (
+                    "peak",
+                    {
+                        item.memory_level: format_bytes(item.peak_bytes)
+                        for item in record.peaks
+                    },
+                ),
+                (
+                    "persistent",
+                    {
+                        item.memory_level: format_bytes(item.persistent_bytes)
+                        for item in record.peaks
+                        if item.persistent_bytes
+                    },
+                ),
             ),
         )
 
     def print_ReuseWindow(self, record, **_):
-        savings = f"{record.saves_bytes / 1048576:.2f}MB"
-        if savings == "0.00MB":
-            savings = f"{record.saves_bytes}B"
         return self._record(
-            "reuse",
+            "",
             (
                 ("buffer", record.buffer),
-                ("holds", f"{record.holds_bytes / 1048576:.2f}MB"),
+                ("holds", format_bytes(record.holds_bytes)),
                 ("time", record.time or "none"),
                 ("space", record.space or "none"),
-                ("saves", savings),
+                ("reuse", format_bytes(record.reuse_bytes)),
                 ("fits", "yes" if record.fits else "no"),
             ),
         )
@@ -214,11 +223,6 @@ class CommentPrinter:
         return self._single("source", f"{record.file}:{record.line}:{record.column}")
 
     def print_ReportIdentity(self, record, **_):
-        cache = (
-            {record.cache_level: f"{record.cache_capacity_bytes / 1048576:.2f}MB"}
-            if record.cache_level and record.cache_capacity_bytes is not None
-            else {}
-        )
         return self._record(
             "analysis",
             (
@@ -227,7 +231,6 @@ class CommentPrinter:
                 ("function", record.function, ""),
                 ("topology", record.topology, "none"),
                 ("wave", record.wave, ""),
-                ("cache", cache),
             ),
         )
 

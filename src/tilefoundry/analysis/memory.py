@@ -20,6 +20,7 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.types import TensorType, TupleType, Type, bytes_by_storage
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import ExprVisitor
+from tilefoundry.utils.units import format_bytes
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     access_relation_registry,
@@ -698,8 +699,8 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         )
     levels = tuple(levels_list)
     errors = tuple(
-        f"{item.memory_level} placement peak {item.peak_bytes} B exceeds "
-        f"capacity {item.capacity_bytes} B"
+        f"{item.memory_level} placement peak {format_bytes(item.peak_bytes)} exceeds "
+        f"capacity {format_bytes(item.capacity_bytes)}"
         for item in levels
         if item.exceeds_capacity
     )
@@ -714,9 +715,9 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 if not row.time:
                     overfull_snapshot_holds.add(row.holds_bytes)
         errors += tuple(
-            f"{cache_level} reuse window {window} holds {holds_bytes} B at a "
+            f"{cache_level} reuse window {window} holds {format_bytes(holds_bytes)} at a "
             f"{wave[0]}-unit wave, exceeding capacity "
-            f"{cache_capacity_bytes} B"
+            f"{format_bytes(cache_capacity_bytes)}"
             for window, holds_bytes in overfull_windows.items()
         )
     footprint = None
@@ -744,8 +745,9 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         )
         if used > cache_capacity_bytes and used not in overfull_snapshot_holds:
             errors += (
-                f"{cache_level} working set {used} B at the first iteration of a "
-                f"{wave_units}-unit wave exceeds capacity {cache_capacity_bytes} B",
+                f"{cache_level} working set {format_bytes(used)} at the first iteration "
+                f"of a {wave_units}-unit wave exceeds capacity "
+                f"{format_bytes(cache_capacity_bytes)}",
             )
     attach(
         function,

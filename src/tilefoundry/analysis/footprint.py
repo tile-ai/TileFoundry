@@ -745,12 +745,12 @@ def reuse_windows(
                 ),
                 space=",".join(axes_by_buffer[key].space),
                 holds_bytes=holds,
-                saves_bytes=saves,
+                reuse_bytes=saves,
                 fits=holds < capacity,
                 complete=counted.complete,
             )
         )
-    return tuple(sorted(rows, key=lambda row: row.saves_bytes, reverse=True))
+    return tuple(sorted(rows, key=lambda row: row.reuse_bytes, reverse=True))
 
 
 def merged(items: Iterable[ReachedAddresses]) -> tuple[ReachedAddresses, ...]:
