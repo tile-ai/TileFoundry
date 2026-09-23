@@ -519,16 +519,29 @@ once. A buffer with neither states no row.
   - The stated bytes are everything the whole wave touches while that buffer
     must stay resident, every buffer included, not only the one read again:
     the others are what evict it.
+  - Cache lines are not modelled. Reached addresses are packed by element
+    width, so two accesses to neighbouring words of one hardware cache line
+    remain two distinct touches here.
   - A read by another unit of the same wave counts. On a target whose units
     share one cache, data several units read at once is the common case, and a
     model counting only one unit returning later would state no reuse at all
     for a schedule giving each unit one output tile.
+  - The parallel reuse axis is a TileFoundry extension. The reuse-distance
+    model it follows (Falcon, PLDI 2024) states a single-threaded program;
+    unioning addresses across concurrent units has neither a published model
+    behind it nor hardware validation here.
   - A mesh axis supplies reuse exactly when one unit reaches the same addresses
     as the wave union along that axis. The spatial repeat count is how many
     units in the wave map onto those same addresses.
   - The window is the loop axis when there is one, and the mesh axis alone
     otherwise, because units reading at once are already inside one iteration
     of the loop that carries the later read.
+  - A time window is a loop-granularity over-approximation. A true reuse
+    distance starts at the previous touch of the same cache line; this window
+    covers a whole iteration of the carrying loop. For a complete row,
+    `holds_bytes` is therefore never below the true byte reuse distance:
+    `fits=yes` is sound, while `fits=no` may be conservative. An incomplete row
+    retains the lower-bound rule below and supports neither conclusion.
   - Rows MUST NOT be summed. One row's window lies inside another's whenever
     its axis is nested inside, so a row that fits implies those nested in it
     fit.
@@ -547,7 +560,7 @@ once. A buffer with neither states no row.
   - Per-unit control flow is out of scope: HIR states no conditional region, so
     two units differ only by the iteration domain a coordinate gives them.
   - This is the capacity judgement of an idealised fully associative LRU cache.
-    Miss counts, miss rates and replacement policy state nothing here.
+    Miss counts, miss rates and hardware replacement policy are not modelled.
 
 The report identity, not `RegionMemoryMetadata`, states the program-dependent
 machine context. Its wave is `min(declared units, units the target runs at
