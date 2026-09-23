@@ -8,14 +8,14 @@ from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 
-M = 512
-N = 512
-K = 128
+M = 3840
+N = 4224
+K = 4096
 BM = 64
 BN = 64
 BK = 32
-BX = 4
-BY = 4
+BX = 12
+BY = 11
 CHUNK_M = M // BX
 CHUNK_N = N // BY
 
@@ -26,7 +26,7 @@ CHUNK_N = N // BY
     topologies=(Topology("cta", BX * BY),),
 )
 class PersistentGemmTiled:
-    """Each CTA owns one rectangle of output tiles."""
+    """Each of 132 CTAs owns one rectangle of output tiles."""
 
     @func
     def gemm(

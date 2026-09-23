@@ -100,7 +100,7 @@ class PackedDtype:
 
 
 @module(entry="read", target=_H200, topologies=(Topology("cta", 256),))
-class OneWave:
+class WaveTruncation:
     """Only the resident CTA wave contributes, and every CTA has distinct data.
 
     CTA ``i`` reads four bf16 values beginning at ``4 * i``. H200 runs 132 CTAs
@@ -124,7 +124,7 @@ _TIGHT_L2 = CudaTarget(
 
 
 @module(entry="read", target=_TIGHT_L2, topologies=(Topology("cta", 1),))
-class L2Occupancy:
+class CapacityExceeded:
     """A known working set produces a hand-checkable occupancy and error.
 
     The input holds 786432 bf16 elements, or 1572864 B = 1.50 MiB. Against a
@@ -139,8 +139,8 @@ class L2Occupancy:
 
 __all__ = [
     "InvariantReuse",
-    "L2Occupancy",
-    "OneWave",
+    "CapacityExceeded",
+    "WaveTruncation",
     "OverlappingReads",
     "PackedDtype",
     "SlicedView",

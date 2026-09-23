@@ -1,4 +1,4 @@
-# analysis target=nvidia.h200_sxm module=GemmDeepGemmWave function=gemm topology=cta wave=132/136
+# analysis target=nvidia.h200_sxm module=Gemm_MNK_NT128x128x64_w17x8 function=gemm topology=cta wave=132/136
 # selection requested=memory executed=memory
 # memory traffic=gmem:r4.00MB/w0@logical,r4.00MB/w0@total,r4.00MB/w0@cta;rmem:r4.00KB/w4.03MB@logical,r4.00KB/w4.03MB@total,r4.00KB/w2.03MB@cta;smem:r8.00MB/w8.00MB@logical,r8.00MB/w8.00MB@total,r5.00MB/w6.00MB@cta footprint=a:272.00KB;b:128.00KB peak=gmem:50.02MB;rmem:32.00KB;smem:48.00KB persistent=gmem:50.00MB
 #   buffer=b holds=400.00KB time=none space=cta.x reuse=2.00MB fits=yes

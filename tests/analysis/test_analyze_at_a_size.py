@@ -82,42 +82,42 @@ EXPECTED_MEMORY_PEAKS = {
         "smem": 32,
     },
     "fused_boundary.FusedBoundary.stage[static]": {"smem": 64},
-    "gemm_schedules.GemmDeepGemmWave.gemm[static]": {
+    "gemm_schedules.Gemm_MNK_NT128x128x64_w17x8.gemm[static]": {
         "gmem": 52_445_184,
         "rmem": 32_768,
         "smem": 49_152,
     },
-    "gemm_schedules.GemmNaiveWave.gemm[static]": {
+    "gemm_schedules.Gemm_MK_NN64x128x32_w1x132.gemm[static]": {
         "gmem": 5_414_912,
         "rmem": 16_384,
         "smem": 16_384,
     },
-    "gemm_schedules.GemmResidentFits.gemm[static]": {
+    "gemm_schedules.Gemm_MNK_NN128x128x64_w12x11_k4096.gemm[static]": {
         "gmem": 67_125_248,
         "rmem": 32_768,
         "smem": 49_152,
     },
-    "gemm_schedules.GemmResidentOver.gemm[static]": {
+    "gemm_schedules.Gemm_MNK_NN128x128x64_w12x11_k16384.gemm[static]": {
         "gmem": 268_451_840,
         "rmem": 32_768,
         "smem": 49_152,
     },
-    "gemm_schedules.GemmReuseAWave.gemm[static]": {
+    "gemm_schedules.Gemm_MNK_NN64x128x32_w11x12.gemm[static]": {
         "gmem": 5_414_912,
         "rmem": 16_384,
         "smem": 16_384,
     },
-    "gemm_schedules.GemmReuseBWave.gemm[static]": {
+    "gemm_schedules.Gemm_MNK_NN64x128x32_w12x11.gemm[static]": {
         "gmem": 5_414_912,
         "rmem": 16_384,
         "smem": 16_384,
     },
-    "gemm_schedules.GemmTile128.gemm[static]": {
+    "gemm_schedules.Gemm_MNK_NN128.gemm[static]": {
         "gmem": 163_840,
         "rmem": 32_768,
         "smem": 98_304,
     },
-    "gemm_schedules.GemmTile64.gemm[static]": {
+    "gemm_schedules.Gemm_MNK_NN64.gemm[static]": {
         "gmem": 139_264,
         "rmem": 8_192,
         "smem": 24_576,
@@ -133,11 +133,11 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 0,
         "smem": 64,
     },
-    "hand_checked.L2Occupancy.read[static]": {
+    "hand_checked.CapacityExceeded.read[static]": {
         "gmem": 1_572_864,
         "rmem": 1_572_864,
     },
-    "hand_checked.OneWave.read[static]": {"gmem": 2_056, "rmem": 8},
+    "hand_checked.WaveTruncation.read[static]": {"gmem": 2_056, "rmem": 8},
     "hand_checked.OverlappingReads.read[static]": {"gmem": 48, "rmem": 16},
     "hand_checked.PackedDtype.read[static]": {"gmem": 5, "rmem": 5},
     "hand_checked.SlicedView.read[static]": {
@@ -208,12 +208,12 @@ EXPECTED_MEMORY_PEAKS = {
     },
     "performance_findings.LocalTier.kernel[static]": {"gmem": 68_096, "rmem": 512},
     "persistent_gemm_flat.PersistentGemmFlat.gemm[static]": {
-        "gmem": 2_375_680,
+        "gmem": 195_837_952,
         "rmem": 16_384,
         "smem": 12_288,
     },
     "persistent_gemm_tiled.PersistentGemmTiled.gemm[static]": {
-        "gmem": 2_375_680,
+        "gmem": 195_837_952,
         "rmem": 16_384,
         "smem": 12_288,
     },
@@ -281,13 +281,13 @@ EXPECTED_MEMORY_PEAKS = {
 }
 EXPECTED_PERSISTENT_SCHEDULES = {
     "persistent_gemm_flat.PersistentGemmFlat.gemm[static]": _PersistentScheduleExpectation(
-        loop_trips=(("t", 4), ("ki", 4)),
+        loop_trips=(("t", 30), ("ki", 128)),
         store_loop="t",
         store_precision=AccessPrecision.WIDENED,
         compared_units=((0,), (1,)),
     ),
     "persistent_gemm_tiled.PersistentGemmTiled.gemm[static]": _PersistentScheduleExpectation(
-        loop_trips=(("mi", 2), ("ni", 2), ("ki", 4)),
+        loop_trips=(("mi", 5), ("ni", 6), ("ki", 128)),
         store_loop="ni",
         store_precision=AccessPrecision.EXACT,
         compared_units=((0, 0), (1, 0)),

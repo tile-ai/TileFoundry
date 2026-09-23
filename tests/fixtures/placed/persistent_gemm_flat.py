@@ -8,16 +8,16 @@ from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import CudaTarget
 
-M = 512
-N = 512
-K = 128
+M = 3840
+N = 4224
+K = 4096
 BM = 64
 BN = 64
 BK = 32
 GRID_M = M // BM
 GRID_N = N // BN
 NUM_TILES = GRID_M * GRID_N
-NBLOCKS = 16
+NBLOCKS = 132
 
 
 @module(
@@ -26,7 +26,7 @@ NBLOCKS = 16
     topologies=(Topology("cta", NBLOCKS),),
 )
 class PersistentGemmFlat:
-    """Each CTA walks the flattened output-tile space by grid stride."""
+    """Each of 132 CTAs walks the flattened output-tile space by grid stride."""
 
     @func
     def gemm(

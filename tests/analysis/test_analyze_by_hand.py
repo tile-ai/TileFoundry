@@ -13,22 +13,22 @@ from tests.fixtures.placed.gemm_schedules import (
     WAVE_C,
     WAVE_G,
     WAVE_OTHER,
-    GemmNaiveWave,
-    GemmReuseAWave,
-    GemmReuseBWave,
-    GemmTile64,
-    GemmTile128,
+    Gemm_MK_NN64x128x32_w1x132,
+    Gemm_MNK_NN64,
+    Gemm_MNK_NN64x128x32_w11x12,
+    Gemm_MNK_NN64x128x32_w12x11,
+    Gemm_MNK_NN128,
 )
 from tests.fixtures.placed.hand_checked import (
     BN,
+    CapacityExceeded,
     InvariantReuse,
-    L2Occupancy,
     N,
-    OneWave,
     OverlappingReads,
     PackedDtype,
     SlicedView,
     StoreOnly,
+    WaveTruncation,
 )
 from tests.fixtures.placed.persistent_gemm_flat import PersistentGemmFlat
 from tests.fixtures.placed.persistent_gemm_tiled import PersistentGemmTiled
@@ -158,14 +158,14 @@ def test_packed_dtype_rounds_up_to_whole_bytes() -> None:
     assert _footprint_bytes(memory, "x") == 5
 
 
-def test_one_wave_counts_only_the_resident_ctas() -> None:
-    resident_data = _report(OneWave)
+def test_wave_truncation_counts_only_the_resident_ctas() -> None:
+    resident_data = _report(WaveTruncation)
     resident = resident_data["function_records"]["memory"]
     wide_target = CudaTarget(
-        replace(OneWave.target.device, sm_count=256),
-        architecture=OneWave.target.architecture,
+        replace(WaveTruncation.target.device, sm_count=256),
+        architecture=WaveTruncation.target.architecture,
     )
-    all_declared_data = _report(replace(OneWave, target=wide_target))
+    all_declared_data = _report(replace(WaveTruncation, target=wide_target))
     all_declared = all_declared_data["function_records"]["memory"]
 
     assert resident_data["wave"] == {"counted": 132, "declared": 256}
@@ -174,8 +174,8 @@ def test_one_wave_counts_only_the_resident_ctas() -> None:
     assert _footprint_bytes(all_declared, "x") == 256 * 4 * 2
 
 
-def test_l2_occupancy_matches_the_written_ratio() -> None:
-    data = _report(L2Occupancy)
+def test_capacity_exceeded_matches_the_written_ratio() -> None:
+    data = _report(CapacityExceeded)
     memory = data["function_records"]["memory"]
     used = _working_set_bytes(memory)
     capacity = 1_048_576
@@ -192,8 +192,8 @@ def test_l2_occupancy_matches_the_written_ratio() -> None:
 def test_persistent_tiled_holds_the_loop_at_its_start_expression() -> None:
     memory = _memory_record(PersistentGemmTiled)
 
-    assert _footprint_bytes(memory, "a") == 4 * 64 * 32 * 2
-    assert _footprint_bytes(memory, "b") == 4 * 32 * 64 * 2
+    assert _footprint_bytes(memory, "a") == 12 * 64 * 32 * 2
+    assert _footprint_bytes(memory, "b") == 11 * 32 * 64 * 2
     assert memory["footprint"]["complete"] is True
 
 
@@ -225,14 +225,14 @@ def test_persistent_flat_states_its_precision() -> None:
     assert memory["footprint"]["complete"] is False
     assert {"a", "b"} <= incomplete_buffers
     assert store["memory"]["footprint"]["complete"] is False
-    assert _footprint_bytes(memory, "a") == 64 * 32 * 2
+    assert _footprint_bytes(memory, "a") == 60 * 64 * 32 * 2
     assert _footprint_bytes(memory, "b") == 32 * 64 * 2
     assert _working_set_bytes(memory) > 64 * 64 * 4
 
 
-def test_gemm_tile_shape_scales_traffic_and_working_set() -> None:
-    tile64 = _memory_record(GemmTile64)
-    tile128 = _memory_record(GemmTile128)
+def test_tile_area_scales_traffic_and_working_set() -> None:
+    tile64 = _memory_record(Gemm_MNK_NN64)
+    tile128 = _memory_record(Gemm_MNK_NN128)
 
     assert tile64["traffic"]["storage"]["gmem"]["total"] != tile128["traffic"][
         "storage"
@@ -243,9 +243,9 @@ def test_gemm_tile_shape_scales_traffic_and_working_set() -> None:
 
 
 def test_two_waves_share_traffic_but_differ_in_working_set() -> None:
-    naive = _memory_record(GemmNaiveWave)
-    reuse_a = _memory_record(GemmReuseAWave)
-    reuse_b = _memory_record(GemmReuseBWave)
+    naive = _memory_record(Gemm_MK_NN64x128x32_w1x132)
+    reuse_a = _memory_record(Gemm_MNK_NN64x128x32_w11x12)
+    reuse_b = _memory_record(Gemm_MNK_NN64x128x32_w12x11)
     total_reads = {
         memory["traffic"]["storage"]["gmem"]["total"]["read"]
         for memory in (naive, reuse_a, reuse_b)
@@ -257,8 +257,8 @@ def test_two_waves_share_traffic_but_differ_in_working_set() -> None:
 
 
 def test_deepgemm_waves_match_both_scheduler_formulas() -> None:
-    reuse_a = _memory_record(GemmReuseAWave)
-    reuse_b = _memory_record(GemmReuseBWave)
+    reuse_a = _memory_record(Gemm_MNK_NN64x128x32_w11x12)
+    reuse_b = _memory_record(Gemm_MNK_NN64x128x32_w12x11)
     expected_a = (WAVE_OTHER * WAVE_BM + WAVE_G * WAVE_BN) * WAVE_BK * 2
     expected_b = (WAVE_G * WAVE_BM + WAVE_OTHER * WAVE_BN) * WAVE_BK * 2
 
@@ -268,8 +268,8 @@ def test_deepgemm_waves_match_both_scheduler_formulas() -> None:
 
 def test_analyzer_agrees_with_deepgemm_min_choice() -> None:
     analyzed = {
-        "reuse_a": _working_set_bytes(_memory_record(GemmReuseAWave)),
-        "reuse_b": _working_set_bytes(_memory_record(GemmReuseBWave)),
+        "reuse_a": _working_set_bytes(_memory_record(Gemm_MNK_NN64x128x32_w11x12)),
+        "reuse_b": _working_set_bytes(_memory_record(Gemm_MNK_NN64x128x32_w12x11)),
     }
     official = {
         "reuse_a": WAVE_G * WAVE_BN + WAVE_OTHER * WAVE_BM,

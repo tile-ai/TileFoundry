@@ -42,7 +42,7 @@ DEEPGEMM_K = 8192
 
 
 @module(entry="gemm", target=_H200, topologies=(Topology("cta", 1),))
-class GemmTile64:
+class Gemm_MNK_NN64:
     """A 64-square tile reaches two 64-square bf16 operand tiles.
 
     One K iteration reaches ``2 * 64 * 64 * 2 = 16384 B``. The full schedule
@@ -64,7 +64,7 @@ class GemmTile64:
 
 
 @module(entry="gemm", target=_H200, topologies=(Topology("cta", 1),))
-class GemmTile128:
+class Gemm_MNK_NN128:
     """A 128-square tile reaches two 128-square bf16 operand tiles.
 
     One K iteration reaches ``2 * 128 * 128 * 2 = 65536 B``, four times the
@@ -85,7 +85,7 @@ class GemmTile128:
 
 
 @module(entry="gemm", target=_H200, topologies=(Topology("cta", WAVE_C),))
-class GemmNaiveWave:
+class Gemm_MK_NN64x128x32_w1x132:
     """A row-major wave reuses A once and takes 132 distinct B tiles.
 
     The first K iteration reaches
@@ -111,7 +111,7 @@ class GemmNaiveWave:
 
 
 @module(entry="gemm", target=_H200, topologies=(Topology("cta", WAVE_C),))
-class GemmReuseAWave:
+class Gemm_MNK_NN64x128x32_w11x12:
     """DeepGEMM's reuse-A candidate has 11 A tiles and 12 B tiles.
 
     The first K iteration reaches
@@ -153,7 +153,7 @@ class GemmReuseAWave:
 
 
 @module(entry="gemm", target=_H200, topologies=(Topology("cta", WAVE_C),))
-class GemmReuseBWave:
+class Gemm_MNK_NN64x128x32_w12x11:
     """DeepGEMM's reuse-B candidate has 12 A tiles and 11 B tiles.
 
     The first K iteration reaches
@@ -195,7 +195,7 @@ class GemmReuseBWave:
 
 
 @module(entry="gemm", target=_H200, topologies=(Topology("cta", RESIDENT_X * RESIDENT_Y),))
-class GemmResidentFits:
+class Gemm_MNK_NN128x128x64_w12x11_k4096:
     """A persistent wave gives A and B distinct nested reuse windows.
 
     One panel is ``128 * 4096 * 2 = 1048576 B``. A's inner ``ni`` window holds
@@ -254,7 +254,7 @@ class GemmResidentFits:
 
 
 @module(entry="gemm", target=_H200, topologies=(Topology("cta", RESIDENT_X * RESIDENT_Y),))
-class GemmResidentOver:
+class Gemm_MNK_NN128x128x64_w12x11_k16384:
     """The same persistent wave exceeds L2 when K grows to 16384.
 
     One panel is ``128 * 16384 * 2 = 4194304 B``. A's inner ``ni`` window
@@ -313,7 +313,7 @@ class GemmResidentOver:
 
 
 @module(entry="gemm", target=_H200, topologies=(Topology("cta", DEEPGEMM_X * DEEPGEMM_Y),))
-class GemmDeepGemmWave:
+class Gemm_MNK_NT128x128x64_w17x8:
     """Write DeepGEMM's 132-SM block-index decode as a two-axis mesh.
 
     For 128-square output tiles, candidates 8 and 16 both have usage 3200, so
@@ -373,14 +373,14 @@ class GemmDeepGemmWave:
 
 
 __all__ = [
-    "GemmDeepGemmWave",
-    "GemmNaiveWave",
-    "GemmResidentFits",
-    "GemmResidentOver",
-    "GemmReuseAWave",
-    "GemmReuseBWave",
-    "GemmTile64",
-    "GemmTile128",
+    "Gemm_MK_NN64x128x32_w1x132",
+    "Gemm_MNK_NN128",
+    "Gemm_MNK_NN128x128x64_w12x11_k4096",
+    "Gemm_MNK_NN128x128x64_w12x11_k16384",
+    "Gemm_MNK_NN64",
+    "Gemm_MNK_NN64x128x32_w11x12",
+    "Gemm_MNK_NN64x128x32_w12x11",
+    "Gemm_MNK_NT128x128x64_w17x8",
     "WAVE_BK",
     "WAVE_BM",
     "WAVE_BN",
