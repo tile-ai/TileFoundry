@@ -12,6 +12,7 @@ from ortools.sat.python import cp_model
 
 from tilefoundry.ir.core import Call, Expr
 from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
@@ -404,6 +405,12 @@ def _apply_constraints(
 
 class AllocationConstraintVisitor(ExprVisitor[None]):
     """Visit the HIR DAG once and apply each node/operand placement relation."""
+
+    def visit_MeshRegion(self, node: MeshRegion, ctx: _ConstraintContext) -> None:
+        child = next(item for item in ctx.current.children if item.owner is node)
+        for arg in node.args:
+            self.visit(arg, ctx)
+        self.visit(node.body, replace(ctx, current=child))
 
     def visit_LoopRegion(self, node: LoopRegion, ctx: _ConstraintContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is node)

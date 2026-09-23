@@ -17,6 +17,7 @@ from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types import TensorType, TupleType, Type, bytes_by_storage
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import ExprVisitor
@@ -496,6 +497,12 @@ def _footprint_inputs(
 
 class MemoryVisitor(ExprVisitor[None]):
     """Attach per-Call traffic and aggregate it over each enclosing loop."""
+
+    def visit_MeshRegion(self, expr: MeshRegion, ctx: MemoryContext) -> None:
+        child = next(item for item in ctx.current.children if item.owner is expr)
+        for arg in expr.args:
+            self.visit(arg, ctx)
+        self.visit(expr.body, replace(ctx, current=child))
 
     def visit_LoopRegion(self, expr: LoopRegion, ctx: MemoryContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is expr)

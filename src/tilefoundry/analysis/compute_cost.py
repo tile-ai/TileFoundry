@@ -254,6 +254,7 @@ class ComputeCostVisitor(ExprVisitor[None]):
     """Attach per-Call work and accumulate multiplicity-aware totals."""
 
     def visit_MeshRegion(self, expr: MeshRegion, ctx: ComputeCostContext) -> None:
+        child = next(item for item in ctx.current.children if item.owner is expr)
         for arg in expr.args:
             self.visit(arg, ctx)
         mesh = composed((ctx.current_mesh, expr.mesh)) if ctx.current_mesh else expr.mesh
@@ -261,7 +262,10 @@ class ComputeCostVisitor(ExprVisitor[None]):
         positions = {
             unit: _scope_position_count(mesh, unit, topologies) for unit in ctx.locals_by_unit
         }
-        self.visit(expr.body, replace(ctx, executing_positions=positions, current_mesh=mesh))
+        self.visit(
+            expr.body,
+            replace(ctx, current=child, executing_positions=positions, current_mesh=mesh),
+        )
 
     def visit_LoopRegion(self, expr: LoopRegion, ctx: ComputeCostContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is expr)

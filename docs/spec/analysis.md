@@ -1274,11 +1274,14 @@ def analyze(
 
 ### 2.1 Shared IterationScope and Access
 
-The normalized HIR is visited once per `analyze()` call. That visit produces a
-`IterationScope` tree parallel to Function/LoopRegion nesting and `Access` relations
-for the narrow and device views. `IterationScope.domain` is the accumulated
-authored loop domain; `IterationScope.accesses` and `IterationScope.refused` are
-the shared family inputs for movement and footprint conclusions.
+The normalized HIR is visited once per `analyze()` call. That visit produces an
+`IterationScope` tree parallel to Function, LoopRegion, and MeshRegion nesting
+and `Access` relations for the narrow and device views. A mesh scope adds no
+iteration dimension: it keeps its parent's depth and domain, so the first
+`depth` input dimensions of an access relation remain the enclosing loops.
+`IterationScope.domain` is the accumulated authored loop domain;
+`IterationScope.accesses` and `IterationScope.refused` are the shared family
+inputs for movement and footprint conclusions.
 An input `Access` stores its original Call boundary index as well as its relation
 and allocation expression; an output stores `input_index=None` and its own output
 boundary index, which is the tuple field it answers for. Failed boundaries remain

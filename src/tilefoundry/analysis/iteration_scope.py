@@ -11,6 +11,8 @@ from tilefoundry.ir.core import Call, Expr
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.types.shard import Mesh
 from tilefoundry.ir.visitor import expr_children
 from tilefoundry.utils.isl_utils import (
     PARAM_POINT_LIMIT,
@@ -34,9 +36,9 @@ from .loop_domain import induction_name, iteration_domain
 
 @dataclass(eq=False)
 class IterationScope:
-    """One Function or authored loop, with all accesses below it."""
+    """One Function, authored loop, or mesh region, with all accesses below it."""
 
-    owner: Function | LoopRegion
+    owner: Function | LoopRegion | MeshRegion
     parent: IterationScope | None
     children: tuple[IterationScope, ...]
     depth: int
@@ -78,8 +80,19 @@ class IterationScope:
         loops.reverse()
         return tuple(loops)
 
+    def enclosing_mesh(self) -> Mesh | None:
+        """Return the nearest enclosing mesh, or None when there is none."""
+        cursor: IterationScope | None = self
+        while cursor is not None:
+            if isinstance(cursor.owner, MeshRegion):
+                return cursor.owner.mesh
+            cursor = cursor.parent
+        return None
+
     def trips(self) -> int:
         """Return this scope's iteration count relative to its parent."""
+        if isinstance(self.owner, MeshRegion):
+            return 1
         cached = getattr(self, "_trips_cache", None)
         if cached is not None:
             return cached
@@ -217,6 +230,22 @@ class ScopeBuilder:
             self._visit(expr.body, child)
             for operand in expr.yield_values:
                 self._visit(operand, child)
+            self._record_variance(expr, expr_children(expr))
+            return
+        if isinstance(expr, MeshRegion):
+            for operand in expr.args:
+                self._visit(operand, scope)
+            child = IterationScope(
+                owner=expr,
+                parent=scope,
+                children=(),
+                depth=scope.depth,
+                domain=scope.domain,
+                domain_params=scope.domain_params,
+                accesses=self._empty_accesses(),
+            )
+            scope.children = (*scope.children, child)
+            self._visit(expr.body, child)
             self._record_variance(expr, expr_children(expr))
             return
         operands = expr_children(expr)

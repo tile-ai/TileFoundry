@@ -10,6 +10,7 @@ from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target.facts import ParallelCapacityFacts
@@ -42,6 +43,12 @@ class PerformanceContext(AnalyzeContext):
 
 class PerformanceVisitor(ExprVisitor[None]):
     """Collect one duration per Call in authored order."""
+
+    def visit_MeshRegion(self, expr: MeshRegion, ctx: PerformanceContext) -> None:
+        child = next(item for item in ctx.current.children if item.owner is expr)
+        for arg in expr.args:
+            self.visit(arg, ctx)
+        self.visit(expr.body, replace(ctx, current=child))
 
     def visit_LoopRegion(self, expr: LoopRegion, ctx: PerformanceContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is expr)
