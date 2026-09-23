@@ -138,6 +138,7 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 1_572_864,
     },
     "hand_checked.WaveTruncation.read[static]": {"gmem": 2_056, "rmem": 8},
+    "hand_checked.SiblingLoopReuse.read[static]": {"gmem": 32, "rmem": 16},
     "hand_checked.TruncatedWaveReuse.read[static]": {"gmem": 128, "rmem": 32},
     "hand_checked.TruncatedWaveReuse.view[static]": {"gmem": 128, "rmem": 0},
     "hand_checked.OverlappingReads.read[static]": {"gmem": 48, "rmem": 16},

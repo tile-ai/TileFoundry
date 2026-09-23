@@ -149,6 +149,28 @@ class TruncatedWaveReuse:
             return result
 
 
+@module(entry="read", target=_H200, topologies=(Topology("cta", 1),))
+class SiblingLoopReuse:
+    """A time window excludes a different buffer in a sibling loop.
+
+    Three ``n`` iterations read the same 8 bf16 values from ``x``, so its
+    window holds ``8 * 2 = 16 B`` and reuses ``(3 - 1) * 16 = 32 B``. The
+    sibling one-trip ``m`` loop reads all 8 values from ``y``; ``y`` belongs to
+    the Function footprint but not to the ``n`` window.
+    """
+
+    @func
+    def read(x: Tensor[(8,), "bf16"], y: Tensor[(8,), "bf16"]):
+        with Mesh(("cta",), layout=(1,), names=("cta",)) as _cta:
+            x_local = tf.zeros(Tensor[(8,), "bf16", (8,), "rmem"])
+            for n in tile(6, 2):  # noqa: F405
+                x_local = tf.reshard(x, (8,), "rmem")
+            y_local = tf.zeros(Tensor[(8,), "bf16", (8,), "rmem"])
+            for m in tile(1, 1):  # noqa: F405
+                y_local = tf.reshard(y, (8,), "rmem")
+            return x_local + y_local
+
+
 _TIGHT_L2 = CudaTarget(
     replace(_H200.device, l2_capacity_bytes=_ONE_MIB),
     architecture=_H200.architecture,
@@ -172,6 +194,7 @@ class CapacityExceeded:
 __all__ = [
     "InvariantReuse",
     "CapacityExceeded",
+    "SiblingLoopReuse",
     "TruncatedWaveReuse",
     "WaveTruncation",
     "OverlappingReads",

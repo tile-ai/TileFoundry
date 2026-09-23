@@ -29,6 +29,7 @@ from tests.fixtures.placed.hand_checked import (
     N,
     OverlappingReads,
     PackedDtype,
+    SiblingLoopReuse,
     SlicedView,
     StoreOnly,
     TruncatedWaveReuse,
@@ -195,6 +196,22 @@ def test_truncated_wave_keeps_reuse_from_participating_boundaries() -> None:
             "space": "cta.i",
             "holds_bytes": 32,
             "reuse_bytes": 4_192,
+            "fits": True,
+        }
+    ]
+
+
+def test_time_window_excludes_a_buffer_in_a_sibling_loop() -> None:
+    memory = _memory_record(SiblingLoopReuse)
+
+    assert set(memory["footprint"]["buffers"]) == {"x", "y"}
+    assert _reuse_conclusions(memory) == [
+        {
+            "buffer": "x",
+            "time": "n",
+            "space": "",
+            "holds_bytes": 16,
+            "reuse_bytes": 32,
             "fits": True,
         }
     ]
