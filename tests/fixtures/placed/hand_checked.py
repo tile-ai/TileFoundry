@@ -117,6 +117,38 @@ class WaveTruncation:
             return result
 
 
+@module(
+    entry="read",
+    target=_H200,
+    topologies=(Topology("cta", 256), Topology("thread", 2)),
+)
+class TruncatedWaveReuse:
+    """A truncated wave keeps reuse from unrelated, unstateable work.
+
+    The first 132 of 256 CTAs all read the same 16 bf16 values, so the window
+    holds ``16 * 2 = 32 B`` and reuses ``(132 - 1) * 32 = 4192 B``. A nested
+    CTA/thread loop retains coordinates from two meshes and therefore states no
+    single linear order, but only slices the input and moves no gmem bytes; it
+    does not participate in the L2 window and cannot suppress its row.
+    """
+
+    @func
+    def view(x: Tensor[(32,), "bf16"]):
+        viewed = x[16:32]
+        with Mesh(("thread",), layout=(2,), names=("lane",)) as thread:
+            for _lane in range(thread.lane, thread.lane + 1):
+                viewed = x[0:16]
+            return viewed
+
+    @func
+    def read(x: Tensor[(32,), "bf16"]):
+        with Mesh(("cta",), layout=(256,), names=("i",)) as cta:
+            result = tf.zeros(Tensor[(16,), "bf16", (16,), "rmem"])
+            for _i in range(cta.i, cta.i + 1):
+                result = tf.reshard(view(x), (16,), "rmem")  # noqa: F821
+            return result
+
+
 _TIGHT_L2 = CudaTarget(
     replace(_H200.device, l2_capacity_bytes=_ONE_MIB),
     architecture=_H200.architecture,
@@ -140,6 +172,7 @@ class CapacityExceeded:
 __all__ = [
     "InvariantReuse",
     "CapacityExceeded",
+    "TruncatedWaveReuse",
     "WaveTruncation",
     "OverlappingReads",
     "PackedDtype",

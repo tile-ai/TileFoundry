@@ -18,6 +18,9 @@ from tests.fixtures.placed.gemm_schedules import (
     Gemm_MNK_NN64x128x32_w11x12,
     Gemm_MNK_NN64x128x32_w12x11,
     Gemm_MNK_NN128,
+    Gemm_MNK_NN128x128x64_w12x11_k4096,
+    Gemm_MNK_NN128x128x64_w12x11_k16384,
+    Gemm_MNK_NT128x128x64_w17x8,
 )
 from tests.fixtures.placed.hand_checked import (
     BN,
@@ -28,6 +31,7 @@ from tests.fixtures.placed.hand_checked import (
     PackedDtype,
     SlicedView,
     StoreOnly,
+    TruncatedWaveReuse,
     WaveTruncation,
 )
 from tests.fixtures.placed.persistent_gemm_flat import PersistentGemmFlat
@@ -70,6 +74,11 @@ def _working_set_bytes(memory: dict) -> int:
         for levels in memory["footprint"]["buffers"].values()
         for level in levels.values()
     )
+
+
+def _reuse_conclusions(memory: dict) -> list[dict]:
+    fields = ("buffer", "time", "space", "holds_bytes", "reuse_bytes", "fits")
+    return [{field: row[field] for field in fields} for row in memory["reuse_windows"]]
 
 
 def test_uncounted_boundary_marks_the_footprint_incomplete() -> None:
@@ -172,6 +181,98 @@ def test_wave_truncation_counts_only_the_resident_ctas() -> None:
     assert _footprint_bytes(resident, "x") == 132 * 4 * 2
     assert all_declared_data["wave"] == {"counted": 256, "declared": 256}
     assert _footprint_bytes(all_declared, "x") == 256 * 4 * 2
+
+
+def test_truncated_wave_keeps_reuse_from_participating_boundaries() -> None:
+    data = _report(TruncatedWaveReuse)
+    memory = data["function_records"]["memory"]
+
+    assert data["wave"] == {"counted": 132, "declared": 256}
+    assert _reuse_conclusions(memory) == [
+        {
+            "buffer": "<value 0>",
+            "time": "",
+            "space": "cta.i",
+            "holds_bytes": 32,
+            "reuse_bytes": 4_192,
+            "fits": True,
+        }
+    ]
+
+
+def test_deepgemm_wave_reuse_conclusions_match_the_reviewed_report() -> None:
+    memory = _memory_record(Gemm_MNK_NT128x128x64_w17x8)
+
+    assert _reuse_conclusions(memory) == [
+        {
+            "buffer": "b",
+            "time": "",
+            "space": "cta.x",
+            "holds_bytes": 409_600,
+            "reuse_bytes": 2_097_152,
+            "fits": True,
+        },
+        {
+            "buffer": "a",
+            "time": "",
+            "space": "cta.y",
+            "holds_bytes": 409_600,
+            "reuse_bytes": 1_949_696,
+            "fits": True,
+        },
+    ]
+
+
+def test_persistent_gemm_fits_reuse_conclusions_match_the_reviewed_report() -> None:
+    memory = _memory_record(Gemm_MNK_NN128x128x64_w12x11_k4096)
+
+    assert _reuse_conclusions(memory) == [
+        {
+            "buffer": "b",
+            "time": "mi",
+            "space": "cta.x",
+            "holds_bytes": 46_137_344,
+            "reuse_bytes": 1_174_405_120,
+            "fits": True,
+        },
+        {
+            "buffer": "a",
+            "time": "ni",
+            "space": "cta.y",
+            "holds_bytes": 24_117_248,
+            "reuse_bytes": 402_653_184,
+            "fits": True,
+        },
+    ]
+
+
+def test_persistent_gemm_over_reuse_conclusions_match_the_reviewed_report() -> None:
+    memory = _memory_record(Gemm_MNK_NN128x128x64_w12x11_k16384)
+
+    assert _reuse_conclusions(memory) == [
+        {
+            "buffer": "b",
+            "time": "mi",
+            "space": "cta.x",
+            "holds_bytes": 184_549_376,
+            "reuse_bytes": 4_697_620_480,
+            "fits": False,
+        },
+        {
+            "buffer": "a",
+            "time": "ni",
+            "space": "cta.y",
+            "holds_bytes": 96_468_992,
+            "reuse_bytes": 1_610_612_736,
+            "fits": False,
+        },
+    ]
+    assert memory["errors"] == [
+        "l2 reuse window mi holds 176.00MB at a 132-unit wave, exceeding "
+        "capacity 47.68MB",
+        "l2 reuse window ni holds 92.00MB at a 132-unit wave, exceeding "
+        "capacity 47.68MB",
+    ]
 
 
 def test_capacity_exceeded_matches_the_written_ratio() -> None:
