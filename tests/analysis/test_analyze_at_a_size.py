@@ -87,6 +87,16 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 16_384,
         "smem": 16_384,
     },
+    "gemm_schedules.GemmResidentFits.gemm[static]": {
+        "gmem": 67_125_248,
+        "rmem": 32_768,
+        "smem": 49_152,
+    },
+    "gemm_schedules.GemmResidentOver.gemm[static]": {
+        "gmem": 268_451_840,
+        "rmem": 32_768,
+        "smem": 49_152,
+    },
     "gemm_schedules.GemmReuseAWave.gemm[static]": {
         "gmem": 5_414_912,
         "rmem": 16_384,

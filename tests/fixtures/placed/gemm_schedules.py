@@ -24,6 +24,16 @@ WAVE_M = 132 * WAVE_BM
 WAVE_N = 132 * WAVE_BN
 WAVE_K = 64
 
+RESIDENT_M = 4096
+RESIDENT_N = 4096
+RESIDENT_BM = 128
+RESIDENT_BN = 128
+RESIDENT_BK = 64
+RESIDENT_X = 12
+RESIDENT_Y = 11
+RESIDENT_K_FITS = 4096
+RESIDENT_K_OVER = 16384
+
 
 @module(entry="gemm", target=_H200, topologies=(Topology("cta", 1),))
 class GemmTile64:
@@ -178,8 +188,128 @@ class GemmReuseBWave:
             return result
 
 
+@module(entry="gemm", target=_H200, topologies=(Topology("cta", RESIDENT_X * RESIDENT_Y),))
+class GemmResidentFits:
+    """A persistent wave gives A and B distinct nested reuse windows.
+
+    One panel is ``128 * 4096 * 2 = 1048576 B``. A's inner ``ni`` window holds
+    12 A panels and 11 B panels: ``(12 + 11) MB = 24117248 B`` (48.2% of the
+    50000000 B L2), and saves ``(3 * 11 - 1) * 12 MB = 402653184 B``. B's
+    outer ``mi`` window contains the full nested ``ni`` sweep, so it holds 12 A
+    panels plus all 32 B panels: ``(12 + 32) MB = 46137344 B`` (92.3%), and
+    saves ``(3 * 12 - 1) * 32 MB = 1174405120 B``.
+    """
+
+    @func
+    def gemm(
+        a: Tensor[(RESIDENT_M, RESIDENT_K_FITS), "bf16"],
+        b: Tensor[(RESIDENT_K_FITS, RESIDENT_N), "bf16"],
+    ):
+        with Mesh(
+            ("cta",),
+            layout=(RESIDENT_X, RESIDENT_Y),
+            names=("x", "y"),
+        ) as cta:
+            result = tf.zeros(
+                Tensor[
+                    (RESIDENT_BM, RESIDENT_BN),
+                    "bf16",
+                    (RESIDENT_BM, RESIDENT_BN),
+                    "rmem",
+                ]
+            )
+            for mi in range(
+                cta.x * RESIDENT_BM,
+                RESIDENT_M,
+                RESIDENT_X * RESIDENT_BM,
+            ):
+                for ni in range(
+                    cta.y * RESIDENT_BN,
+                    RESIDENT_N,
+                    RESIDENT_Y * RESIDENT_BN,
+                ):
+                    for ki in tile(RESIDENT_K_FITS, RESIDENT_BK):
+                        lhs = tf.reshard(
+                            a[mi : mi + RESIDENT_BM, ki],
+                            (RESIDENT_BM, RESIDENT_BK),
+                            "smem",
+                        )
+                        rhs = tf.reshard(
+                            b[ki, ni : ni + RESIDENT_BN],
+                            (RESIDENT_BK, RESIDENT_BN),
+                            "smem",
+                        )
+                        result = tf.reshard(
+                            tf.matmul(lhs, rhs),
+                            (RESIDENT_BM, RESIDENT_BN),
+                            "rmem",
+                        )
+            return result
+
+
+@module(entry="gemm", target=_H200, topologies=(Topology("cta", RESIDENT_X * RESIDENT_Y),))
+class GemmResidentOver:
+    """The same persistent wave exceeds L2 when K grows to 16384.
+
+    One panel is ``128 * 16384 * 2 = 4194304 B``. A's inner ``ni`` window
+    holds ``(12 + 11) * 4 MB = 96468992 B`` (92 MB), and saves
+    ``(3 * 11 - 1) * 48 MB = 1610612736 B``. B's outer ``mi`` window holds
+    ``48 MB + 128 MB = 184549376 B`` (176 MB), and saves
+    ``(3 * 12 - 1) * 128 MB = 4697620480 B``. Both exceed the 50000000 B L2,
+    so the two distinct windows each state one finding.
+    """
+
+    @func
+    def gemm(
+        a: Tensor[(RESIDENT_M, RESIDENT_K_OVER), "bf16"],
+        b: Tensor[(RESIDENT_K_OVER, RESIDENT_N), "bf16"],
+    ):
+        with Mesh(
+            ("cta",),
+            layout=(RESIDENT_X, RESIDENT_Y),
+            names=("x", "y"),
+        ) as cta:
+            result = tf.zeros(
+                Tensor[
+                    (RESIDENT_BM, RESIDENT_BN),
+                    "bf16",
+                    (RESIDENT_BM, RESIDENT_BN),
+                    "rmem",
+                ]
+            )
+            for mi in range(
+                cta.x * RESIDENT_BM,
+                RESIDENT_M,
+                RESIDENT_X * RESIDENT_BM,
+            ):
+                for ni in range(
+                    cta.y * RESIDENT_BN,
+                    RESIDENT_N,
+                    RESIDENT_Y * RESIDENT_BN,
+                ):
+                    for ki in tile(RESIDENT_K_OVER, RESIDENT_BK):
+                        lhs = tf.reshard(
+                            a[mi : mi + RESIDENT_BM, ki],
+                            (RESIDENT_BM, RESIDENT_BK),
+                            "smem",
+                        )
+                        rhs = tf.reshard(
+                            b[ki, ni : ni + RESIDENT_BN],
+                            (RESIDENT_BK, RESIDENT_BN),
+                            "smem",
+                        )
+                        result = tf.reshard(
+                            tf.matmul(lhs, rhs),
+                            (RESIDENT_BM, RESIDENT_BN),
+                            "rmem",
+                        )
+            return result
+
+
 __all__ = [
     "GemmNaiveWave",
+    "GemmResidentFits",
+    "GemmResidentOver",
     "GemmReuseAWave",
     "GemmReuseBWave",
     "GemmTile64",
