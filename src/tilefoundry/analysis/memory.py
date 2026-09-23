@@ -42,6 +42,7 @@ from .footprint import (
     footprint_of,
     merged,
     reached_by,
+    reuse_windows,
     wave_of,
 )
 from .iteration_scope import IterationScope, walk_scopes
@@ -482,6 +483,7 @@ def _footprint_inputs(
                 declared_units=declared_units,
                 operands=(),
                 ctx=whole,
+                window=scope.depth - 1,
             )
             if reached is None:
                 available = False
@@ -531,6 +533,7 @@ class MemoryVisitor(ExprVisitor[None]):
                 declared_units=ctx.wave[1],
                 operands=moved.operands,
                 ctx=ctx.whole,
+                window=ctx.current.depth - 1,
             )
             if reached is not None:
                 ctx.reached.extend(reached)
@@ -606,6 +609,17 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         footprint_available=footprint_available,
     )
     MemoryVisitor().visit(function.body, memory_context)
+    reuse = (
+        reuse_windows(
+            context.root,
+            memory_level=memory_level,
+            wave_units=wave[0],
+            declared_units=wave[1],
+            ctx=whole,
+        )
+        if memory_level is not None and wave is not None
+        else ()
+    )
     merged_reached = merged(memory_context.reached)
     distinct: dict[int, Expr] = {}
     for item in merged_reached:
@@ -689,6 +703,15 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         for item in levels
         if item.exceeds_capacity
     )
+    if cache is not None and wave is not None:
+        cache_level, _backing_level, cache_capacity_bytes = cache
+        errors += tuple(
+            f"{cache_level} reuse of {row.buffer} holds {row.holds_bytes} B across "
+            f"{row.time or row.space} at a {wave[0]}-unit wave, exceeding capacity "
+            f"{cache_capacity_bytes} B"
+            for row in reuse
+            if not row.fits
+        )
     footprint = None
     cache_level = ""
     cache_capacity_bytes = None
@@ -726,6 +749,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 communication=_account_shares(memory_context.communication, tuple(locals_by_unit)),
             ),
             footprint=footprint,
+            reuse_windows=reuse,
             lifetimes=lifetimes,
             peaks=levels,
             solver_status="feasible",
