@@ -219,12 +219,14 @@ class MovingBoundary:
     dtype: DType
     label: str
     mesh: Mesh | None
-    _reads: bool = field(repr=False)
-    _wave_units: int = field(repr=False)
-    _mesh_parameters: tuple[tuple[str, Call], ...] = field(repr=False)
-    _axis_parameters: tuple[str | None, ...] = field(repr=False)
-    _position: tuple[int, tuple[tuple[str, int], ...]] | None = field(repr=False)
-    _relations: dict[int, isl.map] = field(default_factory=dict, init=False, repr=False)
+    reads: bool
+    wave_units: int
+    mesh_parameters: tuple[tuple[str, Call], ...]
+    axis_parameters: tuple[str | None, ...]
+    position: tuple[int, tuple[tuple[str, int], ...]] | None
+    _relations: dict[int, tuple[isl.map, isl.set]] = field(
+        default_factory=dict, init=False, repr=False
+    )
     _reached: dict[int, isl.set] = field(default_factory=dict, init=False, repr=False)
     _unit_reached: dict[tuple[int, str | None], isl.set | None] = field(
         default_factory=dict, init=False, repr=False
@@ -236,21 +238,26 @@ class MovingBoundary:
         return self.access.precision is AccessPrecision.EXACT
 
     def _relation(self, window: int) -> isl.map:
-        relation = self._relations.get(window)
-        if relation is None:
+        cached = self._relations.get(window)
+        if cached is None:
             relation = _at_first_iteration(self.access.relation, window + 1)
-            if self._position is not None:
-                relation = _restrict_to_wave(relation, self._position, self._wave_units)
-            self._relations[window] = relation
-        return relation
+            cached = (relation, relation.range())
+            self._relations[window] = cached
+        return cached[0]
+
+    def held(self, window: int) -> isl.set:
+        """Return raw reached addresses, retaining every mesh parameter."""
+        self._relation(window)
+        return self._relations[window][1]
 
     def reached(self, window: int) -> isl.set:
         """Return wave-unioned addresses at *window*, computing them once."""
         reached = self._reached.get(window)
         if reached is None:
-            reached = _project_mesh_parameters(
-                self._relation(window).range(), self._mesh_parameters
-            )
+            relation = self._relation(window)
+            if self.position is not None:
+                relation = _restrict_to_wave(relation, self.position, self.wave_units)
+            reached = _project_mesh_parameters(relation.range(), self.mesh_parameters)
             self._reached[window] = reached
         return reached
 
@@ -260,6 +267,8 @@ class MovingBoundary:
         if key in self._unit_reached:
             return self._unit_reached[key]
         relation = self._relation(window)
+        if self.position is not None:
+            relation = _restrict_to_wave(relation, self.position, self.wave_units)
         parameter = (
             -1
             if parameter_name is None
@@ -278,7 +287,7 @@ class MovingBoundary:
                 self._unit_reached[key] = None
                 return None
             relation = relation.fix_val(isl.dim_type.PARAM, parameter, first)
-        reached = _project_mesh_parameters(relation.range(), self._mesh_parameters)
+        reached = _project_mesh_parameters(relation.range(), self.mesh_parameters)
         self._unit_reached[key] = reached
         return reached
 
@@ -288,7 +297,7 @@ def time_axis(boundary: MovingBoundary) -> int | None:
     for axis, loop_scope in enumerate(_loop_scopes(boundary.scope)):
         if loop_scope.trips() <= 1:
             continue
-        if boundary.reached(axis).is_equal(boundary.reached(axis - 1)):
+        if boundary.held(axis).is_equal(boundary.held(axis - 1)):
             return axis
     return None
 
@@ -302,7 +311,7 @@ def space_axes(
     window = boundary.scope.depth - 1
     wave_reached = boundary.reached(window)
     shared = []
-    for axis, parameter_name in enumerate(boundary._axis_parameters):
+    for axis, parameter_name in enumerate(boundary.axis_parameters):
         shape = flatten(boundary.mesh.layout.shape)
         extent = static_dim_value(shape[axis]) if axis < len(shape) else None
         unit_reached = boundary.unit_reached(window, parameter_name)
@@ -474,10 +483,10 @@ def moving_boundaries(
         position = None
         if wave_units < declared_units and mesh_parameters:
             position = _linear_position(mesh_parameters)
-            if position is None:
-                return ()
         mesh = scope.enclosing_mesh()
         axis_parameters = _axis_parameters(scope, mesh)
+        if wave_units < declared_units and mesh_parameters and position is None:
+            axis_parameters = ()
         for call, _recorded in scope.accesses.get("narrow", {}).values():
             moved = get_metadata(call, MemoryMetadata)
             if moved is None or len(moved.operands) != len(call.args) + 1:
@@ -506,11 +515,11 @@ def moving_boundaries(
                         dtype=leaves[0].dtype,
                         label="",
                         mesh=mesh,
-                        _reads=movement.read > 0,
-                        _wave_units=wave_units,
-                        _mesh_parameters=mesh_parameters,
-                        _axis_parameters=axis_parameters,
-                        _position=position,
+                        reads=movement.read > 0,
+                        wave_units=wave_units,
+                        mesh_parameters=mesh_parameters,
+                        axis_parameters=axis_parameters,
+                        position=position,
                     )
                 )
     distinct: dict[int, Expr] = {}
@@ -659,7 +668,7 @@ def _by_buffer(
     """Select the outermost time axis and union space axes per buffer."""
     buffers: dict[int, _BufferReuse] = {}
     for boundary in boundaries:
-        if not boundary._reads:
+        if not boundary.reads:
             continue
         axes = reuse_axes(boundary, wave)
         if axes.window is None:
