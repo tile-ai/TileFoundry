@@ -18,6 +18,7 @@ from tilefoundry.analysis.facts import (
     ThroughputFacts,
 )
 
+from ..base import UnsupportedCapabilityError
 from .target import CudaTarget
 
 
@@ -96,11 +97,21 @@ def parallel_units(target: CudaTarget, unit: str) -> int:
     asked once. A target that never said how many cards is one card.
     """
     cards = _cards(target)
-    return {
-        "gpu": cards,
-        "cta": cards * target.device.sm_count,
-        "thread": cards * target.device.sm_count * target.architecture.max_threads_per_cta,
-    }[unit]
+    try:
+        return {
+            "gpu": cards,
+            "cta": cards * target.device.sm_count,
+            "thread": (
+                cards
+                * target.device.sm_count
+                * target.architecture.max_threads_per_cta
+            ),
+        }[unit]
+    except KeyError:
+        raise UnsupportedCapabilityError(
+            f"cuda: no per-unit rate for topology level {unit!r}; the levels this "
+            "target divides its peaks among are ('gpu', 'cta', 'thread')"
+        ) from None
 
 
 def throughput(target: CudaTarget, query: object = None) -> ThroughputFacts:

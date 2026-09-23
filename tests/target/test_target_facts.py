@@ -9,6 +9,7 @@ import pytest
 
 from tilefoundry.analysis.facts import (
     MemoryHierarchyFacts,
+    PerformanceServiceFacts,
     ThroughputFacts,
 )
 from tilefoundry.analysis.iteration_scope import IterationScope
@@ -60,6 +61,14 @@ def test_topology_facts_name_a_real_optional_parallel_level() -> None:
         TopologyFacts(
             (TopologyLevelFacts("unit", 4, 2),), parallel_level="missing"
         )
+
+
+def test_cuda_performance_service_refuses_an_unknown_topology_level() -> None:
+    with pytest.raises(
+        UnsupportedCapabilityError,
+        match="no per-unit rate for topology level 'warp'",
+    ):
+        CudaTarget("nvidia.h200_sxm").get_facts(PerformanceServiceFacts, "warp")
 
 
 def test_performance_refuses_an_empty_parallel_topology() -> None:
