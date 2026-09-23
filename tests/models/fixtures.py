@@ -18,21 +18,14 @@ from __future__ import annotations
 
 from tests.models.corpus import TargetFixture
 from tilefoundry.ir.types.shard import Topology
-from tilefoundry.target import CudaTarget, TopologyLimitFacts
-from tilefoundry.target.facts import ParallelCapacityFacts
+from tilefoundry.target import CudaTarget, TopologyFacts, TopologyLevelFacts
 from tilefoundry.target.amx.target import AmxTarget
 from tilefoundry.target.base import Target
 
 
 def _parallel_units(target: Target, level: str) -> int:
     """How many positions of *level* the hardware documents state."""
-    facts = target.get_facts(ParallelCapacityFacts)
-    if facts.topology != level:
-        raise ValueError(
-            f"{type(target).__name__} states parallel capacity for "
-            f"{facts.topology!r}, not {level!r}"
-        )
-    return facts.parallel_units
+    return target.get_facts(TopologyFacts).level(level).max_physical_units
 
 
 def h200_sxm(*, threads_per_cta: int = 512) -> TargetFixture:
@@ -44,7 +37,7 @@ def h200_sxm(*, threads_per_cta: int = 512) -> TargetFixture:
     by what the architecture admits.
     """
     target = CudaTarget("nvidia.h200_sxm")
-    limit = target.get_facts(TopologyLimitFacts, "thread").max_static_extent
+    limit = target.get_facts(TopologyLevelFacts, "thread").max_logical_units
     if limit is not None and not 1 <= threads_per_cta <= limit:
         raise ValueError(
             f"h200_sxm: {threads_per_cta} threads per CTA is outside the "
@@ -67,7 +60,7 @@ def apple_m2_pro() -> TargetFixture:
     and the single AMX unit a core issues to.
     """
     target = AmxTarget()
-    amx_limit = target.get_facts(TopologyLimitFacts, "amx").max_static_extent
+    amx_limit = target.get_facts(TopologyLevelFacts, "amx").max_logical_units
     return TargetFixture(
         id="apple_m2_pro",
         target=target,

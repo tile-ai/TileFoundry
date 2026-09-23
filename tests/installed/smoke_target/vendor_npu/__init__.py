@@ -9,12 +9,11 @@ from tilefoundry import DType
 from tilefoundry.analysis import ExplicitMemoryLevelFacts
 from tilefoundry.target import (
     MemoryHierarchyFacts,
-    ParallelCapacityFacts,
     PerformanceServiceFacts,
     Target,
     ThroughputFacts,
     TopologyFacts,
-    TopologyLimitFacts,
+    TopologyLevelFacts,
     facts_result,
     register_target,
 )
@@ -29,9 +28,11 @@ class VendorNpuTarget(Target):
 
     def get_facts(self, facts_type: type, query: object | None = None):
         if facts_type is TopologyFacts and query is None:
-            value = TopologyFacts((TopologyLimitFacts("core", 256),))
-        elif facts_type is TopologyLimitFacts and query == "core":
-            value = TopologyLimitFacts("core", 256)
+            value = TopologyFacts(
+                (TopologyLevelFacts("core", 256, 16),), parallel_level="core"
+            )
+        elif facts_type is TopologyLevelFacts and query == "core":
+            value = TopologyLevelFacts("core", 256, 16)
         elif facts_type is MemoryHierarchyFacts:
             value = MemoryHierarchyFacts(
                 explicit_levels=(
@@ -62,8 +63,6 @@ class VendorNpuTarget(Target):
                 unit_bandwidth=(("gmem", 2_000_000_000_000 // 16),),
                 unit="core",
             )
-        elif facts_type is ParallelCapacityFacts:
-            value = ParallelCapacityFacts("core", 16)
         else:
             return super().get_facts(facts_type, query)
         return facts_result(self, facts_type, value)

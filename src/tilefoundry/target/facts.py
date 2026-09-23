@@ -11,17 +11,21 @@ TARGET_MEMORY_OWNER = "target"
 
 
 @dataclasses.dataclass(frozen=True)
-class TopologyLimitFacts:
-    """The static extent ceiling one topology level admits.
+class TopologyLevelFacts:
+    """The program-side and machine-side unit counts for one topology level.
 
-    ``None`` means that the level has no static ceiling and may defer its extent
-    to launch. ``from_target`` marks a level whose extent and program ids both
-    come from the target instance rather than from a hardware document or a
-    register the device can read.
+    ``max_logical_units`` is how many units a program may declare; ``None``
+    means there is no static ceiling and the extent may be deferred to launch.
+    ``max_physical_units`` is how many machine positions the level divides over;
+    for CUDA CTAs it counts one CTA per SM and is not the hardware resident-CTA
+    limit. ``from_target`` marks a level whose extent and program ids both come
+    from the target instance rather than from a hardware document or a register
+    the device can read.
     """
 
     name: str
-    max_static_extent: int | None
+    max_logical_units: int | None
+    max_physical_units: int | None
     from_target: bool = False
 
 
@@ -33,20 +37,23 @@ class TopologyFacts:
     level vocabulary of a backend has one place to be stated.
     """
 
-    topologies: tuple[TopologyLimitFacts, ...]
+    topologies: tuple[TopologyLevelFacts, ...]
+    parallel_level: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.parallel_level is not None and self.level(self.parallel_level) is None:
+            raise ValueError(
+                f"parallel topology level {self.parallel_level!r} is not among "
+                f"{tuple(level.name for level in self.topologies)}"
+            )
 
-@dataclasses.dataclass(frozen=True)
-class ParallelCapacityFacts:
-    """How many instances of one topology level run at once.
+    def level(self, name: str | None) -> TopologyLevelFacts | None:
+        """Return the facts for *name*, or ``None`` when it is not stated."""
+        return next((level for level in self.topologies if level.name == name), None)
 
-    This is a compiler policy expressed over a hardware fact, not a hardware
-    limit: the number of parallel units the plan assumes it may occupy. A
-    tighter policy changes the plan, never the program.
-    """
-
-    topology: str
-    parallel_units: int
+    def parallel(self) -> TopologyLevelFacts | None:
+        """Return the default parallel level, or ``None`` for an empty aggregate."""
+        return self.level(self.parallel_level)
 
 
 class TargetFactsError(Exception):
@@ -77,10 +84,9 @@ def facts_result(
 
 __all__ = [
     "FactsT",
-    "ParallelCapacityFacts",
     "TARGET_MEMORY_OWNER",
     "TargetFactsError",
     "TopologyFacts",
-    "TopologyLimitFacts",
+    "TopologyLevelFacts",
     "facts_result",
 ]

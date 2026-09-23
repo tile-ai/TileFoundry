@@ -15,7 +15,7 @@ from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import (
     AmxTarget,
     TopologyFacts,
-    TopologyLimitFacts,
+    TopologyLevelFacts,
     UnsupportedCapabilityError,
 )
 
@@ -36,8 +36,8 @@ def test_amx_target_reports_and_validates_its_own_topology_levels():
     levels = target.get_facts(TopologyFacts).topologies
     assert tuple(level.name for level in levels) == ("core", "amx")
     assert not any(level.from_target for level in levels)
-    assert target.get_facts(TopologyLimitFacts, "core").max_static_extent == 8
-    assert target.get_facts(TopologyLimitFacts, "amx").max_static_extent == 1
+    assert target.get_facts(TopologyLevelFacts, "core").max_logical_units == 8
+    assert target.get_facts(TopologyLevelFacts, "amx").max_logical_units == 1
     assert AmxTarget().get_facts(TopologyFacts) == target.get_facts(TopologyFacts)
     assert AmxTarget("apple.m2_pro") == target
     assert target.to_python().text == 'AmxTarget("apple.m2_pro")'
@@ -47,7 +47,7 @@ def test_amx_target_reports_and_validates_its_own_topology_levels():
     assert "unsupported topology level 'cta'" in str(topology_error.value)
     assert "('core', 'amx')" in str(topology_error.value)
     with pytest.raises(UnsupportedCapabilityError, match="no Facts projection"):
-        target.get_facts(TopologyLimitFacts, "cta")
+        target.get_facts(TopologyLevelFacts, "cta")
 
     target.validate_program_topology(Topology("core", 8))
     with pytest.raises(ValueError, match="must satisfy 1 <= extent <= 8"):

@@ -29,13 +29,12 @@ from tilefoundry.target import (
     CpuTarget,
     CudaTarget,
     MemoryHierarchyFacts,
-    ParallelCapacityFacts,
     PerformanceServiceFacts,
     Target,
     TargetFactsError,
     ThroughputFacts,
     TopologyFacts,
-    TopologyLimitFacts,
+    TopologyLevelFacts,
     UnsupportedCapabilityError,
     facts_result,
     register_target,
@@ -72,13 +71,19 @@ class _NoBandwidthUnitRateCudaTarget(CudaTarget):
 
 class ExtraTopologyCudaTarget(CudaTarget):
     name = "tests.target.extra_topology_cuda"
-    extra_levels = (TopologyLimitFacts("custom", 1), TopologyLimitFacts("unknown", 1))
+    extra_levels = (
+        TopologyLevelFacts("custom", 1, None),
+        TopologyLevelFacts("unknown", 1, None),
+    )
 
     def get_facts(self, facts_type: type, query: object | None = None):
         if facts_type is TopologyFacts and query is None:
-            inherited = super().get_facts(facts_type, query).topologies
-            return TopologyFacts((*inherited, *self.extra_levels))
-        if facts_type is TopologyLimitFacts:
+            inherited = super().get_facts(facts_type, query)
+            return TopologyFacts(
+                (*inherited.topologies, *self.extra_levels),
+                parallel_level=inherited.parallel_level,
+            )
+        if facts_type is TopologyLevelFacts:
             for level in self.extra_levels:
                 if level.name == query:
                     return level
@@ -125,11 +130,15 @@ def test_document_free_target_projects_facts_and_inherits_standard_analysis() ->
     target = VendorNpuTarget()
 
     assert target.get_analyzer("roofline").selector == "roofline"
-    assert target.get_facts(TopologyLimitFacts, "core") == TopologyLimitFacts("core", 256)
+    assert target.get_facts(TopologyLevelFacts, "core") == TopologyLevelFacts(
+        "core", 256, 16
+    )
     memory = target.get_facts(MemoryHierarchyFacts)
     assert memory.explicit("gmem").capacity_bytes == 64_000_000_000
     assert target.get_facts(ThroughputFacts).peak_for(DType.f32) == 2_000_000_000_000_000
-    assert target.get_facts(ParallelCapacityFacts) == ParallelCapacityFacts("core", 16)
+    assert target.get_facts(TopologyFacts).parallel() == TopologyLevelFacts(
+        "core", 256, 16
+    )
     target.validate_program_topology(Topology("core", 256))
     with pytest.raises(ValueError, match="1 <= extent <= 256"):
         target.validate_program_topology(Topology("core", 257))

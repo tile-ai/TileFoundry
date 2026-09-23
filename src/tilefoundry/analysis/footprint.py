@@ -27,7 +27,7 @@ from tilefoundry.ir.types.shard import (
     try_c_order_strides,
 )
 from tilefoundry.target.base import Target, UnsupportedCapabilityError
-from tilefoundry.target.facts import ParallelCapacityFacts
+from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.isl_utils import cardinality
 from tilefoundry.visitor_registry.access_relation import leaves_of, projected
 from tilefoundry.visitor_registry.contexts import CostContext
@@ -999,13 +999,16 @@ def wave_of(
 ) -> tuple[int, int] | None:
     """Return ``(wave_units, declared_units)``, or ``None`` when unstated."""
     try:
-        capacity = target.get_facts(ParallelCapacityFacts, topology_level)
-        declared_units = static_dim_value(module.resolve_topology(capacity.topology).size)
+        facts = target.get_facts(TopologyFacts)
+        level = facts.parallel() if topology_level is None else facts.level(topology_level)
+        if level is None or level.max_physical_units is None:
+            return None
+        declared_units = static_dim_value(module.resolve_topology(level.name).size)
     except (UnsupportedCapabilityError, ValueError):
         return None
     if declared_units is None:
         return None
-    return min(declared_units, capacity.parallel_units), declared_units
+    return min(declared_units, level.max_physical_units), declared_units
 
 
 def cached_level(facts: MemoryHierarchyFacts) -> tuple[str, str, int] | None:

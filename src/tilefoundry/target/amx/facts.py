@@ -16,7 +16,6 @@ from tilefoundry.analysis.facts import (
     ThroughputFacts,
 )
 from tilefoundry.ir.types import DType
-from tilefoundry.target.facts import ParallelCapacityFacts
 
 from .target import AmxTarget
 
@@ -100,23 +99,7 @@ def throughput(target: AmxTarget, query: object = None) -> ThroughputFacts:
     )
 
 
-def parallel_capacity(
-    target: AmxTarget, query: object = None
-) -> ParallelCapacityFacts:
-    """How many cores the plan assumes issue AMX work at once.
-
-    The parallel extent is the performance cores, because that is what the
-    program's ``core`` topology divides over. The coprocessor count bounds
-    throughput rather than the launch shape, and enters through the measured
-    rate instead.
-    """
-    return ParallelCapacityFacts(
-        topology="core", parallel_units=target.device.performance_core_count
-    )
-
-
 __all__ = [
     "memory_hierarchy",
-    "parallel_capacity",
     "throughput",
 ]

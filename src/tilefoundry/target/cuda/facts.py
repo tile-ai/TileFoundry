@@ -17,9 +17,7 @@ from tilefoundry.analysis.facts import (
     PerformanceServiceFacts,
     ThroughputFacts,
 )
-from tilefoundry.target.facts import ParallelCapacityFacts
 
-from ..base import UnsupportedCapabilityError
 from .target import CudaTarget
 
 
@@ -98,16 +96,11 @@ def parallel_units(target: CudaTarget, unit: str) -> int:
     asked once. A target that never said how many cards is one card.
     """
     cards = _cards(target)
-    if unit == "gpu":
-        return cards
-    if unit == "cta":
-        return cards * target.device.sm_count
-    if unit == "thread":
-        return cards * target.device.sm_count * target.architecture.max_threads_per_cta
-    raise UnsupportedCapabilityError(
-        f"cuda: no per-unit rate for topology level {unit!r}; the levels this "
-        f"target divides its peaks among are ('gpu', 'cta', 'thread')"
-    )
+    return {
+        "gpu": cards,
+        "cta": cards * target.device.sm_count,
+        "thread": cards * target.device.sm_count * target.architecture.max_threads_per_cta,
+    }[unit]
 
 
 def throughput(target: CudaTarget, query: object = None) -> ThroughputFacts:
@@ -161,20 +154,8 @@ def performance_service(target: CudaTarget, query: object = None) -> Performance
     )
 
 
-def parallel_capacity(target: CudaTarget, query: object = None) -> ParallelCapacityFacts:
-    """How many of the level asked about the plan assumes run at once.
-
-    This is a compiler policy, not CUDA's grid limit and not the hardware
-    resident-CTA maximum: one active CTA per SM, over however many cards the
-    deployment runs.
-    """
-    unit = "cta" if query is None else str(query)
-    return ParallelCapacityFacts(topology=unit, parallel_units=parallel_units(target, unit))
-
-
 __all__ = [
     "memory_hierarchy",
-    "parallel_capacity",
     "performance_service",
     "throughput",
 ]

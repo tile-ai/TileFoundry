@@ -26,9 +26,8 @@ from tilefoundry.target.base import (
     select,
 )
 from tilefoundry.target.facts import (
-    ParallelCapacityFacts,
     TopologyFacts,
-    TopologyLimitFacts,
+    TopologyLevelFacts,
     facts_result,
 )
 from tilefoundry.target.hardware.envelope import HardwareDocument
@@ -119,19 +118,28 @@ class AmxTarget(Target):
         """
         return TopologyFacts(
             (
-                TopologyLimitFacts("core", self.device.performance_core_count),
-                TopologyLimitFacts("amx", self.architecture.topology_limit("amx")),
-            )
+                TopologyLevelFacts(
+                    "core",
+                    self.device.performance_core_count,
+                    self.device.performance_core_count,
+                ),
+                TopologyLevelFacts(
+                    "amx", self.architecture.topology_limit("amx"), None
+                ),
+            ),
+            parallel_level="core",
         )
 
     def get_facts(self, facts_type: type, query: object | None = None):
         """Project AMX hardware through the facts this Target owns."""
         if facts_type is TopologyFacts and query is None:
             return facts_result(self, facts_type, self._topology_facts())
-        if facts_type is TopologyLimitFacts:
-            for level in self._topology_facts().topologies:
-                if level.name == query:
-                    return facts_result(self, facts_type, level)
+        if facts_type is TopologyLevelFacts:
+            level = self._topology_facts().level(
+                query if isinstance(query, str) else None
+            )
+            if level is not None:
+                return facts_result(self, facts_type, level)
             return super().get_facts(facts_type, query)
 
         from tilefoundry.analysis.facts import (  # noqa: PLC0415
@@ -140,7 +148,6 @@ class AmxTarget(Target):
         )
         from tilefoundry.target.amx.facts import (  # noqa: PLC0415
             memory_hierarchy,
-            parallel_capacity,
             throughput,
         )
 
@@ -148,8 +155,6 @@ class AmxTarget(Target):
             return facts_result(self, facts_type, memory_hierarchy(self, query))
         if facts_type is ThroughputFacts:
             return facts_result(self, facts_type, throughput(self, query))
-        if facts_type is ParallelCapacityFacts:
-            return facts_result(self, facts_type, parallel_capacity(self, query))
         return super().get_facts(facts_type, query)
 
     def _python_import_module(self) -> str:

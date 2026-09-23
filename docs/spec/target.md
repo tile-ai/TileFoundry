@@ -55,10 +55,9 @@ def registered_targets() -> Mapping[str, type[Target]]: ...
     only requested Facts, so a backend reuses them by answering `get_facts`, not
     by inheriting a backend-specific analysis base class. A missing Facts
     projection MUST fail when the selected analyzer requests it.
-  - `facts_result`, `TargetFactsError`, `TopologyFacts`, `TopologyLimitFacts`,
-    `MemoryHierarchyFacts`, `ThroughputFacts`, `PerformanceServiceFacts`, and
-    `ParallelCapacityFacts` MUST be importable from `tilefoundry.target` for
-    provider implementations.
+  - `facts_result`, `TargetFactsError`, `TopologyFacts`, `TopologyLevelFacts`,
+    `MemoryHierarchyFacts`, `ThroughputFacts`, and `PerformanceServiceFacts`
+    MUST be importable from `tilefoundry.target` for provider implementations.
   - `name` MUST be a non-empty class variable declared directly by every
     concrete registered Target class. It is the stable class registration
     identity, not a backend-family selector and not an instance value field.
@@ -83,11 +82,11 @@ def registered_targets() -> Mapping[str, type[Target]]: ...
     select immutable descriptors and Facts; normal Python inheritance carries
     those selections to a subclass unless it overrides or refuses them.
   - `get_facts(TopologyFacts)` MUST list every topology level the Target
-    admits, coarsest first, as the `TopologyLimitFacts` of each. A Target that
+    admits, coarsest first, as the `TopologyLevelFacts` of each. A Target that
     states none MUST answer the empty tuple: it runs one program per call.
   - `validate_program_topology` MUST reject a level outside
     `get_facts(TopologyFacts)` and any resolved static extent that is not
-    positive or exceeds that level's finite `max_static_extent`. The shared
+    positive or exceeds that level's finite `max_logical_units`. The shared
     program check MUST use this method rather than reproduce a backend's
     topology limits.
   - A provider MAY import `Analyzer` from `tilefoundry.target` to construct
@@ -219,8 +218,8 @@ class CudaTarget(Target):
   - CUDA's `PerformanceServiceFacts` MUST derive `unit_flops` and
     `unit_bandwidth` by dividing each whole-device rate by `device.sm_count`,
     MUST take `unit_ops` from the device document unchanged, and MUST name its
-    unit `cta`; compiler policy such as `ParallelCapacityFacts` MUST NOT enter
-    this derivation. `unit_ops` is not a division of a device peak, because no
+    unit `cta`; `TopologyLevelFacts.max_physical_units` MUST NOT enter this
+    derivation. `unit_ops` is not a division of a device peak, because no
     vendor publishes a device-wide integer, predicate, select, special or
     local-move rate to divide.
   - `topology_limit("cta")` MUST equal `device.sm_count`, and
@@ -255,7 +254,7 @@ thread mesh layouts.
   - A declared program topology name MUST be one of the levels its target
     states. A name outside that set MUST be refused naming the levels the
     target declares.
-  - `get_facts(TopologyLimitFacts, "cta").max_static_extent` MUST be `None`:
+  - `get_facts(TopologyLevelFacts, "cta").max_logical_units` MUST be `None`:
     the CUDA grid is a launch shape rather than an SM allocation, so its static
     extent is unbounded here. The `"thread"` Facts projection MUST equal
     `architecture.max_threads_per_cta`.
@@ -764,22 +763,38 @@ class Target:
     ) -> FactsT: ...
 
 
-class ParallelCapacityFacts:
-    """How many instances of one topology level run at once.
+class TopologyLevelFacts:
+    """The program-side and machine-side unit counts for one topology level.
 
     Attributes:
-        topology: attribute; Topology level being measured over.
-        parallel_units: attribute; Instances admitted concurrently.
+        name: Topology level being stated.
+        max_logical_units: Maximum units a program may declare, or None.
+        max_physical_units: Machine positions the level divides over, or None.
+        from_target: Whether the target instance supplies extent and program ids.
     """
 
-    topology: str
-    parallel_units: int
+    name: str
+    max_logical_units: int | None
+    max_physical_units: int | None
+    from_target: bool = False
+
+
+class TopologyFacts:
+    topologies: tuple[TopologyLevelFacts, ...]
+    parallel_level: str | None = None
+
+    def level(self, name: str | None) -> TopologyLevelFacts | None: ...
+    def parallel(self) -> TopologyLevelFacts | None: ...
 ```
 
 - constraints:
-  - `ParallelCapacityFacts` is compiler policy expressed over a hardware fact,
-    not a hardware limit. It is consumed by more than one analysis family, so
-    it is owned here rather than by either one.
+  - `max_logical_units` is the program-side declaration limit.
+    `max_physical_units` is the machine-side count of positions the level
+    divides over. For CUDA CTAs it counts one CTA per SM for this model; it is
+    not the hardware resident-CTA limit.
+  - `parallel_level`, when present, MUST name an entry in `topologies`.
+    `parallel()` MUST return that entry. An empty aggregate MUST use `None` and
+    return `None` from `parallel()`.
   - A subclass MUST inherit its base Target's projections through normal Python
     inheritance. It MAY override `get_facts` for hardware that differs and
     delegate unknown requests to `super()`.

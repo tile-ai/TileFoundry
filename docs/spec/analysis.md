@@ -41,9 +41,9 @@ Each owns its record types and declares its dependencies and output additions.
 | Selector | Requires | Owns | Attaches to | Rests on | Text summary adds | Annotates equations |
 |---|---|---|---|---|---|---|
 | `compute-cost` | - | `ComputeCostMetadata` | every measured Call and the Function | the authored program | `compute-cost` | every measured Call |
-| `memory` | - | `MemoryMetadata`, `RegionMemoryMetadata` | `MemoryMetadata` on every measured Call; `RegionMemoryMetadata` on the Function | the authored program, `MemoryHierarchyFacts`, `ParallelCapacityFacts` | `memory`, `advisory` | every measured Call |
+| `memory` | - | `MemoryMetadata`, `RegionMemoryMetadata` | `MemoryMetadata` on every measured Call; `RegionMemoryMetadata` on the Function | the authored program, `MemoryHierarchyFacts`, `TopologyFacts` | `memory`, `advisory` | every measured Call |
 | `roofline` | `compute-cost`, `memory` | `RooflineMetadata` | every measured Call and the Function | `ThroughputFacts` | `roofline` | every measured Call |
-| `performance` | `compute-cost`, `memory` | `PerformanceMetadata`, `PerformanceSummaryMetadata` | `PerformanceMetadata` on every Call with a modeled duration; `PerformanceSummaryMetadata` on the Function | `ThroughputFacts`, `ParallelCapacityFacts`, `MemoryHierarchyFacts` | `performance` | every Call with a modeled duration |
+| `performance` | `compute-cost`, `memory` | `PerformanceMetadata`, `PerformanceSummaryMetadata` | `PerformanceMetadata` on every Call with a modeled duration; `PerformanceSummaryMetadata` on the Function | `ThroughputFacts`, `TopologyFacts`, `MemoryHierarchyFacts` | `performance` | every Call with a modeled duration |
 
 Every compact text summary begins with these two lines:
 
@@ -123,7 +123,7 @@ layer settles is which type a field holds and what its keys name:
     establish every requested root's family-specific readiness. Each family
     states its own through the checker its descriptor carries, and one
     metadata-free traversal of the derived program answers all of them.
-    Performance readiness requires a positive `ParallelCapacityFacts` value for
+    Performance readiness requires positive `TopologyLevelFacts.max_physical_units` for
     the selected topology, rates stated for that same level, and one valid
     execution placement for every occurrence that will take time. Where the
     buffers go is not a readiness question: nothing here decides it.
@@ -366,7 +366,7 @@ class Footprint:
 
 | Field | How it is computed | Reads the target |
 |---|---|---|
-| `Footprint.buffers` | Group reached address sets by source-buffer identity, union each group, count its elements, and pack the source dtype's bits into whole bytes. Each buffer has one memory-level kind whose `Spread` states the same count in `logical` and `total` and has no `per_unit` entries. | `MemoryHierarchyFacts` selects the level; [target §11](./target.md#11-target-facts-projection) supplies `ParallelCapacityFacts`. |
+| `Footprint.buffers` | Group reached address sets by source-buffer identity, union each group, count its elements, and pack the source dtype's bits into whole bytes. Each buffer has one memory-level kind whose `Spread` states the same count in `logical` and `total` and has no `per_unit` entries. | `MemoryHierarchyFacts` selects the level; [target §11](./target.md#11-target-facts-projection) supplies `TopologyFacts`. |
 | `Footprint.complete` | False when any contributing boundary is not exact, has no finite count, or belongs to a refused scope; otherwise true. | No |
 | `MemoryMetadata.footprint` | The unique addresses this occurrence's own boundaries reach at every enclosing loop's first iteration over one wave, or `None` when no wave can be stated. | As above |
 | `RegionMemoryMetadata.footprint` | The union of every Call's reached addresses below the Function, deduplicated per buffer before counting, or `None` when no wave can be stated. | As above |
@@ -509,7 +509,7 @@ once. A buffer with neither states no row.
 | `ReuseWindow.buffer` | The source buffer's lifetime label. | No |
 | `ReuseWindow.time` | The outermost enclosing loop whose different iterations reach the same addresses, named by its induction variable; empty when no loop supplies a second read. | No |
 | `ReuseWindow.space` | The mesh axis whose different coordinates reach the same addresses; empty when no mesh axis supplies a second read. | No |
-| `ReuseWindow.holds_bytes` | Unique bytes of every buffer the whole wave touches while this buffer must remain resident. | `MemoryHierarchyFacts` selects the backed level; [target §11](./target.md#11-target-facts-projection) supplies `ParallelCapacityFacts`. |
+| `ReuseWindow.holds_bytes` | Unique bytes of every buffer the whole wave touches while this buffer must remain resident. | `MemoryHierarchyFacts` selects the backed level; [target §11](./target.md#11-target-facts-projection) supplies `TopologyFacts`. |
 | `ReuseWindow.reuse_bytes` | `(time trips * space units - 1)` times this buffer's unique bytes in the window; an absent axis contributes one. | As above |
 | `ReuseWindow.fits` | True exactly when `holds_bytes` is less than the cache capacity. | `MemoryHierarchyFacts.implicit_levels[]` |
 | `ReuseWindow.complete` | False when any boundary contributing to `holds_bytes` is inexact, uncountable, or refused; otherwise true. | No |
@@ -571,16 +571,16 @@ once. A buffer with neither states no row.
 
 The report identity, not `RegionMemoryMetadata`, states the program-dependent
 machine context. Its wave is `min(declared units, units the target runs at
-once)` over the topology named by `ParallelCapacityFacts`; it is the top-level
+once)` over the level selected by `TopologyFacts.parallel_level`; it is the top-level
 `wave` field in JSON and appears once on the `analysis` text line. Cache level
 and capacity remain Target facts and appear in this report only when they decide
 a cache-capacity finding.
 
 ##### Target facts
 
-The family reads the following target hierarchy. Parallel capacity is stated
-once in [target §11](./target.md#11-target-facts-projection), because `memory`
-and `performance` both consume it.
+The family reads the target hierarchy and physical unit counts stated once in
+[target §11](./target.md#11-target-facts-projection), because `memory` and
+`performance` both consume them.
 
 ```python
 class MemoryRelationKind(Enum):
@@ -948,15 +948,15 @@ Function summary fields are:
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `timeline` | `[0, local makespan * waves)`, where the local makespan is the end of the CTA-local timeline, or zero with no work. Its duration is the prediction. | Through `waves` |
-| `waves` | `ceil(N / P)`, where `N` is the static extent of the root topology selected by `ParallelCapacityFacts.topology` and `P` is `parallel_units`. | `ParallelCapacityFacts` |
+| `waves` | `ceil(N / P)`, where `N` is the static extent of the topology selected by `TopologyFacts.parallel_level` and `P` is that level's `max_physical_units`. | `TopologyFacts` |
 
 Occurrence intervals remain CTA-local. They are not copied once per wave, and
-neither the root topology extent nor `parallel_units` changes them. The capacity
-`P` is compiler policy for concurrent instances; it is distinct from the
-per-unit rates in `ThroughputFacts` even when both projections derive from the
-same physical unit count today. The aggregate itself is stated once in
-[target §11](./target.md#11-target-facts-projection), because `memory` reads it
-too.
+neither the root topology extent nor `max_physical_units` changes them. The capacity
+`P` is the machine-side position count; the mapping of one CTA to one SM is
+compiler policy. It is distinct from the per-unit rates in `ThroughputFacts`
+even when both projections derive from the same physical unit count today. The
+aggregate itself is stated once in [target §11](./target.md#11-target-facts-projection),
+because `memory` reads it too.
 
 Requesting performance adds this Function verdict to the summary:
 
@@ -1054,7 +1054,7 @@ model.
     `waves`; there MUST be no second field restating the local makespan or the
     scaled estimate, and none restating how the layout was reached -- it is
     exact for the model it states.
-  - `parallel_units` is compiler policy over hardware facts. It MUST NOT enter
+  - `max_physical_units` MUST NOT enter
     one-unit rates or the CTA-local layout, and is not a program rewrite.
   - The buffers a plan keeps live MUST have been placed by `memory` before a
     time is reported for it. A successful dependency records
@@ -1201,8 +1201,8 @@ def analyze(
     first-occurrence order, resolve their union dependency closure, and execute
     every member once.
   - `topology_level` MUST name one effective Module topology. When omitted, it
-    MUST default to the coarsest effective topology the target states a
-    `ParallelCapacityFacts` for. A program may name a level the host places
+    MUST default to the coarsest effective topology whose `TopologyLevelFacts`
+    states `max_physical_units`. A program may name a level the host places
     rather than the machine runs -- several cards are one deployment's shape,
     not one card's -- and measuring per such a level would ask the machine for
     a unit it publishes no rate for. When the target answers for none of the
@@ -1210,9 +1210,9 @@ def analyze(
     the level rather than the absence of one; when the Module declares none,
     `topology_level` MUST remain `None` and no per-unit projection divides.
     `AnalysisResult.topology_level` MUST record the resolved answer.
-  - A target MUST answer `PerformanceServiceFacts` and `ParallelCapacityFacts`
-    for the level it is asked about, and MUST refuse a level it publishes no
-    rate for rather than answering for a different one. What one unit gets
+  - A target MUST answer `PerformanceServiceFacts` and state
+    `TopologyLevelFacts.max_physical_units` for the level it is asked about,
+    and MUST refuse a level it publishes no rate for rather than answering for a different one. What one unit gets
     through is the device peak over however many of that unit the device holds,
     so the same program measured at two levels states the same work against
     proportionally different rates.

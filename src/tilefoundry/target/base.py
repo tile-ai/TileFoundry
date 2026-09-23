@@ -253,7 +253,7 @@ class Target:
         """Validate one declared topology against this Target's Facts."""
         target_summary = _target_summary(self)
         levels = self.get_facts(TopologyFacts).topologies
-        limits = {level.name: level.max_static_extent for level in levels}
+        limits = {level.name: level.max_logical_units for level in levels}
         if topology.name not in limits:
             raise ValueError(
                 f"{target_summary}: unsupported topology level {topology.name!r}; "

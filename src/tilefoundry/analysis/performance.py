@@ -13,7 +13,8 @@ from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.visitor import ExprVisitor
-from tilefoundry.target.facts import ParallelCapacityFacts
+from tilefoundry.target import UnsupportedCapabilityError
+from tilefoundry.target.facts import TopologyFacts
 
 from .compute_cost import local_duration_ns
 from .errors import AnalysisError
@@ -157,15 +158,19 @@ def analyze_performance(function: Function, context: AnalyzeContext) -> None:
     roofline = get_metadata(function, RooflineMetadata)
     if roofline is not None:
         summary_end = max(summary_end, roofline.ideal_ns)
-    placement = context.target.get_facts(ParallelCapacityFacts)
-    topology = context.module.resolve_topology(placement.topology)
+    level = context.target.get_facts(TopologyFacts).parallel()
+    if level is None or level.max_physical_units is None:
+        raise UnsupportedCapabilityError(
+            f"{type(context.target).__name__}: no default parallel topology level"
+        )
+    topology = context.module.resolve_topology(level.name)
     topology_extent = static_dim_value(topology.size)
     if topology_extent is None:
         raise AnalysisError(
             f"performance: topology {topology.name!r} has unresolved extent "
             f"{topology.size!r}"
         )
-    waves = -(-topology_extent // placement.parallel_units)
+    waves = -(-topology_extent // level.max_physical_units)
     attach(
         function,
         PerformanceSummaryMetadata(
