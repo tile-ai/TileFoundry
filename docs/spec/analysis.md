@@ -533,6 +533,9 @@ once. A buffer with neither states no row.
   - A mesh axis supplies reuse exactly when one unit reaches the same addresses
     as the wave union along that axis. The spatial repeat count is how many
     units in the wave map onto those same addresses.
+  - Under nested mesh regions, a reuse row states its space axis against the
+    innermost enclosing mesh. Outer execution meshes are not composed into
+    that axis label.
   - The window is the loop axis when there is one, and the mesh axis alone
     otherwise, because units reading at once are already inside one iteration
     of the loop that carries the later read.
