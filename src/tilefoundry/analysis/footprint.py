@@ -221,12 +221,12 @@ class MovingBoundary:
     mesh: Mesh | None
     reads: bool
     wave_units: int
+    wave_stated: bool
     mesh_parameters: tuple[tuple[str, Call], ...]
     axis_parameters: tuple[str | None, ...]
     position: tuple[int, tuple[tuple[str, int], ...]] | None
-    _relations: dict[int, tuple[isl.map, isl.set]] = field(
-        default_factory=dict, init=False, repr=False
-    )
+    _relations: dict[int, isl.map] = field(default_factory=dict, init=False, repr=False)
+    _held: dict[int, isl.set] = field(default_factory=dict, init=False, repr=False)
     _reached: dict[int, isl.set] = field(default_factory=dict, init=False, repr=False)
     _unit_reached: dict[tuple[int, str | None], isl.set | None] = field(
         default_factory=dict, init=False, repr=False
@@ -238,17 +238,19 @@ class MovingBoundary:
         return self.access.precision is AccessPrecision.EXACT
 
     def _relation(self, window: int) -> isl.map:
-        cached = self._relations.get(window)
-        if cached is None:
+        relation = self._relations.get(window)
+        if relation is None:
             relation = _at_first_iteration(self.access.relation, window + 1)
-            cached = (relation, relation.range())
-            self._relations[window] = cached
-        return cached[0]
+            self._relations[window] = relation
+        return relation
 
     def held(self, window: int) -> isl.set:
         """Return raw reached addresses, retaining every mesh parameter."""
-        self._relation(window)
-        return self._relations[window][1]
+        held = self._held.get(window)
+        if held is None:
+            held = self._relation(window).range()
+            self._held[window] = held
+        return held
 
     def reached(self, window: int) -> isl.set:
         """Return wave-unioned addresses at *window*, computing them once."""
@@ -485,7 +487,10 @@ def moving_boundaries(
             position = _linear_position(mesh_parameters)
         mesh = scope.enclosing_mesh()
         axis_parameters = _axis_parameters(scope, mesh)
-        if wave_units < declared_units and mesh_parameters and position is None:
+        wave_stated = not (
+            wave_units < declared_units and mesh_parameters and position is None
+        )
+        if not wave_stated:
             axis_parameters = ()
         for call, _recorded in scope.accesses.get("narrow", {}).values():
             moved = get_metadata(call, MemoryMetadata)
@@ -517,6 +522,7 @@ def moving_boundaries(
                         mesh=mesh,
                         reads=movement.read > 0,
                         wave_units=wave_units,
+                        wave_stated=wave_stated,
                         mesh_parameters=mesh_parameters,
                         axis_parameters=axis_parameters,
                         position=position,
@@ -712,7 +718,7 @@ def _window_footprints(
     buffers: Mapping[int, _BufferReuse],
     *,
     memory_level: str,
-) -> dict[int | None, Footprint]:
+) -> dict[int | None, Footprint | None]:
     """Count every moving buffer once in each distinct selected window."""
     labels = {
         id(boundary.access.buffer): boundary.label for boundary in boundaries
@@ -721,13 +727,16 @@ def _window_footprints(
         id(item.time_scope.owner) if item.time_scope is not None else None: item.time_scope
         for item in buffers.values()
     }
-    footprints: dict[int | None, Footprint] = {}
+    footprints: dict[int | None, Footprint | None] = {}
     for key, time_scope in windows.items():
         reached: list[ReachedAddresses] = []
         for boundary in boundaries:
             window = _window_index(boundary.scope, time_scope)
             if window is None:
                 continue
+            if not boundary.wave_stated:
+                footprints[key] = None
+                break
             reached.append(
                 ReachedAddresses(
                     boundary.access.buffer,
@@ -737,6 +746,8 @@ def _window_footprints(
                     boundary.exact,
                 )
             )
+        if key in footprints:
+            continue
         for scope, item in uncounted:
             if _window_index(scope, time_scope) is not None:
                 reached.append(item)
@@ -748,7 +759,7 @@ def _window_footprints(
 
 def _reuse_rows(
     buffers: Mapping[int, _BufferReuse],
-    footprints: Mapping[int | None, Footprint],
+    footprints: Mapping[int | None, Footprint | None],
     capacity: int,
 ) -> tuple[ReuseWindow, ...]:
     """Build sorted report rows from selected axes and counted windows."""

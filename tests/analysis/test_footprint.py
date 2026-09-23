@@ -38,6 +38,7 @@ def test_time_comparison_keeps_mesh_parameters() -> None:
         mesh=None,
         reads=True,
         wave_units=2,
+        wave_stated=True,
         mesh_parameters=(("c", coordinate),),
         axis_parameters=(),
         position=None,
