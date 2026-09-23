@@ -703,14 +703,21 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         for item in levels
         if item.exceeds_capacity
     )
+    overfull_snapshot_holds: set[int] = set()
     if cache is not None and wave is not None:
         cache_level, _backing_level, cache_capacity_bytes = cache
+        overfull_windows: dict[str, int] = {}
+        for row in reuse:
+            if not row.fits:
+                window = row.time or row.space
+                overfull_windows.setdefault(window, row.holds_bytes)
+                if not row.time:
+                    overfull_snapshot_holds.add(row.holds_bytes)
         errors += tuple(
-            f"{cache_level} reuse of {row.buffer} holds {row.holds_bytes} B across "
-            f"{row.time or row.space} at a {wave[0]}-unit wave, exceeding capacity "
+            f"{cache_level} reuse window {window} holds {holds_bytes} B at a "
+            f"{wave[0]}-unit wave, exceeding capacity "
             f"{cache_capacity_bytes} B"
-            for row in reuse
-            if not row.fits
+            for window, holds_bytes in overfull_windows.items()
         )
     footprint = None
     cache_level = ""
@@ -735,7 +742,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             for _buffer, breakdown in footprint.buffers
             for _level, spread in breakdown.kinds
         )
-        if used > cache_capacity_bytes:
+        if used > cache_capacity_bytes and used not in overfull_snapshot_holds:
             errors += (
                 f"{cache_level} working set {used} B at the first iteration of a "
                 f"{wave_units}-unit wave exceeds capacity {cache_capacity_bytes} B",

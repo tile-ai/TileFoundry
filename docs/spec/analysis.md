@@ -532,12 +532,14 @@ once. A buffer with neither states no row.
   - Rows MUST NOT be summed. One row's window lies inside another's whenever
     its axis is nested inside, so a row that fits implies those nested in it
     fit.
+  - Rows MUST be ordered by `saves_bytes`, largest first. Equal savings retain
+    their derivation order.
   - Data read once states no row; its bytes still enter every row whose window
     contains it.
   - A row whose computed savings are zero states no row. A nonzero saving too
     small to survive the printed MB precision MUST be printed in bytes instead.
-  - A row above capacity MUST add a non-fatal `errors` entry and MUST NOT fail
-    the call.
+  - A window above capacity MUST add one non-fatal `errors` entry, regardless
+    of how many buffer rows share it, and MUST NOT fail the call.
   - The stated bytes are a lower bound when any contributing boundary is
     inexact, exactly as a footprint is.
   - The capacity is stated per one instance of the cache's `scope`, and this
