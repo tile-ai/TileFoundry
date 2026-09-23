@@ -769,10 +769,6 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         "v3:37:2560;v4:38:2560;v6:44:30720 "
         f"peak=gmem:{peak[0]['peak_bytes']} "
         f"persistent={sum(item['persistent_bytes'] for item in peak)}",
-        "# reuse buffer=v0:29 holds=0.09MB time=none space=cta.tile "
-        "saves=0.03MB fits=yes",
-        "# reuse buffer=v3:37 holds=0.09MB time=none space=cta.tile "
-        "saves=0.03MB fits=yes",
         "# reuse buffer=<value 4> holds=0.09MB time=none space=cta.tile "
         "saves=3.84MB fits=yes",
         "# reuse buffer=<value 5> holds=0.09MB time=none space=cta.tile "

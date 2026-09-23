@@ -177,6 +177,9 @@ class CommentPrinter:
         )
 
     def print_ReuseWindow(self, record, **_):
+        savings = f"{record.saves_bytes / 1048576:.2f}MB"
+        if savings == "0.00MB":
+            savings = f"{record.saves_bytes}B"
         return self._record(
             "reuse",
             (
@@ -184,7 +187,7 @@ class CommentPrinter:
                 ("holds", f"{record.holds_bytes / 1048576:.2f}MB"),
                 ("time", record.time or "none"),
                 ("space", record.space or "none"),
-                ("saves", f"{record.saves_bytes / 1048576:.2f}MB"),
+                ("saves", savings),
                 ("fits", "yes" if record.fits else "no"),
             ),
         )

@@ -513,7 +513,7 @@ once. A buffer with neither states no row.
 | `ReuseWindow.saves_bytes` | `(time trips * space units - 1)` times this buffer's unique bytes in the window; an absent axis contributes one. | As above |
 | `ReuseWindow.fits` | True exactly when `holds_bytes` is less than the cache capacity. | `MemoryHierarchyFacts.implicit_levels[]` |
 | `ReuseWindow.complete` | False when any boundary contributing to `holds_bytes` is inexact, uncountable, or refused; otherwise true. | No |
-| `RegionMemoryMetadata.reuse_windows` | One row for every buffer with a time or space reuse axis. | As above |
+| `RegionMemoryMetadata.reuse_windows` | One row for every buffer with a time or space reuse axis and nonzero savings. | As above |
 
 - constraints:
   - The stated bytes are everything the whole wave touches while that buffer
@@ -523,6 +523,9 @@ once. A buffer with neither states no row.
     share one cache, data several units read at once is the common case, and a
     model counting only one unit returning later would state no reuse at all
     for a schedule giving each unit one output tile.
+  - A mesh axis supplies reuse exactly when one unit reaches the same addresses
+    as the wave union along that axis. The spatial repeat count is how many
+    units in the wave map onto those same addresses.
   - The window is the loop axis when there is one, and the mesh axis alone
     otherwise, because units reading at once are already inside one iteration
     of the loop that carries the later read.
@@ -531,6 +534,8 @@ once. A buffer with neither states no row.
     fit.
   - Data read once states no row; its bytes still enter every row whose window
     contains it.
+  - A row whose computed savings are zero states no row. A nonzero saving too
+    small to survive the printed MB precision MUST be printed in bytes instead.
   - A row above capacity MUST add a non-fatal `errors` entry and MUST NOT fail
     the call.
   - The stated bytes are a lower bound when any contributing boundary is
@@ -646,7 +651,7 @@ Requesting memory adds one Function line and one line per finding:
 
 ```text
 memory traffic=<memory-level>:r<int>/w<int>@logical,r<int>/w<int>@total,r<int>/w<int>@<topology>[,...] footprint=<buffer>:<int>[;<buffer>:<int>] peak=<level>:<int>[,...]
-reuse buffer=<buffer> holds=<float>MB time=<loop|none> space=<mesh-axis|none> saves=<float>MB fits=<yes|no>
+reuse buffer=<buffer> holds=<float>MB time=<loop|none> space=<mesh-axis|none> saves=<float>MB|<int>B fits=<yes|no>
 error="<text>"
 advisory="<text>"
 ```

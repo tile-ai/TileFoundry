@@ -615,7 +615,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             memory_level=memory_level,
             wave_units=wave[0],
             declared_units=wave[1],
-            ctx=whole,
+            ctx=locals_by_unit.get(topology_level, whole),
         )
         if memory_level is not None and wave is not None
         else ()

@@ -425,26 +425,23 @@ print(report.partition("\n\n")[0].rstrip())
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,2629376@total,328672@cta;f32:2833728@logical,2833728@total,354216@cta other-ops=special:14528@logical,14528@total,1816@cta
 # memory traffic=gmem:r5563796/w3721856@logical,r5563796/w3721856@total,r3936212/w3721408@cta;smem:r9597248/w9480000@logical,r9597248/w9480000@total,r1199656/w1185000@cta footprint=cos_cache:524288;cur_pos:4;hidden:512;pos_ids:4;sin_cache:524288;v0:217:1024;v11:221:128;v12:222:232576;v13:228:1859584;v14:227:1859584;v22:220:256;v24:223:232576;v25:231:1859584;v26:230:1859584;v2:219:256;v35:251:1024;v37:252:512;v4:221:640;v5:221:512;w_k:32768;w_o:131072;w_q:131072;w_v:32768;write_len:4 peak=gmem:3933836;smem:581312 persistent=1841676 errors=1
-# reuse buffer=hidden holds=8.85MB time=none space=cta.head saves=0.00MB fits=yes
+# reuse buffer=hidden holds=8.85MB time=none space=cta.head saves=3584B fits=yes
 # reuse buffer=w_q holds=8.85MB time=none space=cta.head saves=0.88MB fits=yes
 # reuse buffer=w_k holds=8.85MB time=none space=cta.head saves=0.22MB fits=yes
 # reuse buffer=v0:217 holds=8.85MB time=none space=cta.head saves=0.01MB fits=yes
-# reuse buffer=v2:219 holds=8.85MB time=none space=cta.head saves=0.00MB fits=yes
+# reuse buffer=v2:219 holds=8.85MB time=none space=cta.head saves=1792B fits=yes
 # reuse buffer=cos_cache holds=8.85MB time=none space=cta.head saves=3.50MB fits=yes
 # reuse buffer=sin_cache holds=8.85MB time=none space=cta.head saves=3.50MB fits=yes
-# reuse buffer=pos_ids holds=8.85MB time=none space=cta.head saves=0.00MB fits=yes
-# reuse buffer=v5:221 holds=8.85MB time=none space=cta.head saves=0.00MB fits=yes
-# reuse buffer=cur_pos holds=8.85MB time=none space=cta.head saves=0.00MB fits=yes
-# reuse buffer=write_len holds=8.85MB time=none space=cta.head saves=0.00MB fits=yes
-# reuse buffer=v11:221 holds=8.85MB time=none space=cta.head saves=0.00MB fits=yes
+# reuse buffer=pos_ids holds=8.85MB time=none space=cta.head saves=28B fits=yes
+# reuse buffer=cur_pos holds=8.85MB time=none space=cta.head saves=28B fits=yes
+# reuse buffer=write_len holds=8.85MB time=none space=cta.head saves=28B fits=yes
+# reuse buffer=v11:221 holds=8.85MB time=none space=cta.head saves=896B fits=yes
 # reuse buffer=v12:222 holds=8.85MB time=none space=cta.head saves=1.55MB fits=yes
 # reuse buffer=v13:228 holds=8.85MB time=none space=cta.head saves=12.41MB fits=yes
-# reuse buffer=v14:227 holds=8.85MB time=none space=cta.head saves=12.41MB fits=yes
 # reuse buffer=w_v holds=8.85MB time=none space=cta.head saves=0.22MB fits=yes
-# reuse buffer=v22:220 holds=8.85MB time=none space=cta.head saves=0.00MB fits=yes
+# reuse buffer=v22:220 holds=8.85MB time=none space=cta.head saves=1792B fits=yes
 # reuse buffer=v24:223 holds=8.85MB time=none space=cta.head saves=1.55MB fits=yes
 # reuse buffer=v25:231 holds=8.85MB time=none space=cta.head saves=12.41MB fits=yes
-# reuse buffer=v26:230 holds=8.85MB time=none space=cta.head saves=12.41MB fits=yes
 # reuse buffer=v35:251 holds=8.85MB time=none space=cta.head saves=0.01MB fits=yes
 # reuse buffer=w_o holds=8.85MB time=none space=cta.head saves=0.88MB fits=yes
 # error="smem placement peak 581312 B exceeds capacity 232448 B"
@@ -473,26 +470,23 @@ print(report.partition("\n\n")[0].rstrip())
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,2629376@total,328672@cta;f32:2839968@logical,2839968@total,354996@cta other-ops=special:14560@logical,14560@total,1820@cta
 # memory traffic=gmem:r5573012/w3730048@logical,r5573012/w3730048@total,r3941844/w3729600@cta;smem:r9618368/w9500864@logical,r9618368/w9500864@total,r1202296/w1187608@cta footprint=cos_cache:524288;cur_pos:4;hidden:512;pos_ids:4;sin_cache:524288;v0:217:1024;v11:221:128;v12:222:233088;v13:228:1863680;v14:227:1863680;v22:220:256;v24:223:233088;v25:231:1863680;v26:230:1863680;v2:219:256;v35:251:1024;v37:252:512;v4:221:640;v5:221:512;w_k:32768;w_o:131072;w_q:131072;w_v:32768;write_len:4 peak=gmem:3939468;smem:582592 persistent=1842700 errors=1
-# reuse buffer=hidden holds=8.87MB time=none space=cta.head saves=0.00MB fits=yes
+# reuse buffer=hidden holds=8.87MB time=none space=cta.head saves=3584B fits=yes
 # reuse buffer=w_q holds=8.87MB time=none space=cta.head saves=0.88MB fits=yes
 # reuse buffer=w_k holds=8.87MB time=none space=cta.head saves=0.22MB fits=yes
 # reuse buffer=v0:217 holds=8.87MB time=none space=cta.head saves=0.01MB fits=yes
-# reuse buffer=v2:219 holds=8.87MB time=none space=cta.head saves=0.00MB fits=yes
+# reuse buffer=v2:219 holds=8.87MB time=none space=cta.head saves=1792B fits=yes
 # reuse buffer=cos_cache holds=8.87MB time=none space=cta.head saves=3.50MB fits=yes
 # reuse buffer=sin_cache holds=8.87MB time=none space=cta.head saves=3.50MB fits=yes
-# reuse buffer=pos_ids holds=8.87MB time=none space=cta.head saves=0.00MB fits=yes
-# reuse buffer=v5:221 holds=8.87MB time=none space=cta.head saves=0.00MB fits=yes
-# reuse buffer=cur_pos holds=8.87MB time=none space=cta.head saves=0.00MB fits=yes
-# reuse buffer=write_len holds=8.87MB time=none space=cta.head saves=0.00MB fits=yes
-# reuse buffer=v11:221 holds=8.87MB time=none space=cta.head saves=0.00MB fits=yes
+# reuse buffer=pos_ids holds=8.87MB time=none space=cta.head saves=28B fits=yes
+# reuse buffer=cur_pos holds=8.87MB time=none space=cta.head saves=28B fits=yes
+# reuse buffer=write_len holds=8.87MB time=none space=cta.head saves=28B fits=yes
+# reuse buffer=v11:221 holds=8.87MB time=none space=cta.head saves=896B fits=yes
 # reuse buffer=v12:222 holds=8.87MB time=none space=cta.head saves=1.56MB fits=yes
 # reuse buffer=v13:228 holds=8.87MB time=none space=cta.head saves=12.44MB fits=yes
-# reuse buffer=v14:227 holds=8.87MB time=none space=cta.head saves=12.44MB fits=yes
 # reuse buffer=w_v holds=8.87MB time=none space=cta.head saves=0.22MB fits=yes
-# reuse buffer=v22:220 holds=8.87MB time=none space=cta.head saves=0.00MB fits=yes
+# reuse buffer=v22:220 holds=8.87MB time=none space=cta.head saves=1792B fits=yes
 # reuse buffer=v24:223 holds=8.87MB time=none space=cta.head saves=1.56MB fits=yes
 # reuse buffer=v25:231 holds=8.87MB time=none space=cta.head saves=12.44MB fits=yes
-# reuse buffer=v26:230 holds=8.87MB time=none space=cta.head saves=12.44MB fits=yes
 # reuse buffer=v35:251 holds=8.87MB time=none space=cta.head saves=0.01MB fits=yes
 # reuse buffer=w_o holds=8.87MB time=none space=cta.head saves=0.88MB fits=yes
 # error="smem placement peak 582592 B exceeds capacity 232448 B"
@@ -767,9 +761,9 @@ print(next(line.rstrip() for line in annotated.splitlines() if "cache_update(k_c
 # memory traffic=gmem:r3476884/w4196992@logical,r3480468/w4196992@total,r2559380/w4196544@cta;rmem:r656/w72@logical,r768/w128@total,r768/w128@cta;smem:r5839296/w5662784@logical,r5871552/w5695040@total,r686496/w676708@cta footprint=cos_cache:524288;cur_pos:4;hidden:512;k_heads:65536;pos_ids:4;q_rope:512;sin_cache:524288;v0:276:1024;v11:282:524416;v12:284:2097152;v2:278:256;v4:280:640;v5:280:128;v63:356:1024;v65:359:512;v6:281:524416;v7:283:2097152;v9:279:256;v_heads:65536;w_k:32768;w_o:131072;w_q:131072;w_v:32768;write_len:4 peak=gmem:7145228;rmem:8;smem:42312 persistent=2425356
 # reuse buffer=v63:356 holds=6.44MB time=none space=cta.head,cta.worker saves=0.03MB fits=yes
 # reuse buffer=w_o holds=6.44MB time=none space=cta.head,cta.worker saves=3.88MB fits=yes
-# reuse buffer=q_rope holds=0.13MB time=start space=cta.head,cta.worker saves=0.12MB fits=yes
-# reuse buffer=k_heads holds=0.13MB time=start space=cta.head,cta.worker saves=15.94MB fits=yes
-# reuse buffer=v_heads holds=0.13MB time=start space=cta.head,cta.worker saves=15.94MB fits=yes
+# reuse buffer=q_rope holds=0.13MB time=start space=none saves=3584B fits=yes
+# reuse buffer=k_heads holds=0.13MB time=start space=none saves=0.44MB fits=yes
+# reuse buffer=v_heads holds=0.13MB time=start space=none saves=0.44MB fits=yes
 # roofline ideal-ns=1600 bound-by=memory
 
     v6 = cache_update(k_cache, cur_pos, write_len, v5)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; memory traffic=gmem:r136/w128@logical,r136/w128@total,r136/w128@cta footprint=cur_pos:4;v5:280:128;v6:281:128;write_len:4 operands=0:r0/w0;1:r4/w0;2:r4/w0;3:r128/w0;result:r0/w128; roofline ideal-ns=1 bound-by=memory
@@ -905,21 +899,19 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 # analysis target=nvidia.h200_sxm module=Stage4_WeightPrepared function=gqa_decode topology=cta wave=132/132 cache=l2:47.68MB
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,337408@total,42176@cta;f32:6390528@logical,51124224@total,6390528@cta other-ops=special:32768@logical,262144@total,32768@cta
-# memory traffic=gmem:r28254676/w25566912@logical,r28254676/w25566912@total,r27967956/w25565792@cta;smem:r331008/w329984@logical,r331008/w329984@total,r43168/w42144@cta footprint=cos_cache:524288;cur_pos:4;hidden:512;pos_ids:4;sin_cache:524288;v10:404:512;v11:415:2048;v12:418:2048;v13:418:2048;v15:404:128;v16:405:524416;v17:408:4194304;v18:407:4194304;v19:416:8388608;v21:428:8388608;v22:428:262144;v23:429:64;v24:430:262144;v25:430:262144;v28:398:256;v30:406:524416;v31:412:4194304;v32:411:4194304;v33:417:8388608;v35:432:8388608;v36:432:2048;v37:431:64;v38:433:2048;v39:433:1024;v3:396:1024;v44:445:512;v7:397:256;v9:404:640;w_k:32768;w_o:131072;w_q:131072;w_v:32768;write_len:4 peak=gmem:11340556;smem:16960 persistent=2425356 errors=37
-# reuse buffer=hidden holds=51.08MB time=none space=cta.head saves=0.00MB fits=no
-# reuse buffer=w_q holds=51.08MB time=none space=cta.head saves=0.88MB fits=no
-# reuse buffer=w_k holds=51.08MB time=none space=cta.head saves=0.22MB fits=no
+# memory traffic=gmem:r28254676/w25566912@logical,r28254676/w25566912@total,r27967956/w25565792@cta;smem:r331008/w329984@logical,r331008/w329984@total,r43168/w42144@cta footprint=cos_cache:524288;cur_pos:4;hidden:512;pos_ids:4;sin_cache:524288;v10:404:512;v11:415:2048;v12:418:2048;v13:418:2048;v15:404:128;v16:405:524416;v17:408:4194304;v18:407:4194304;v19:416:8388608;v21:428:8388608;v22:428:262144;v23:429:64;v24:430:262144;v25:430:262144;v28:398:256;v30:406:524416;v31:412:4194304;v32:411:4194304;v33:417:8388608;v35:432:8388608;v36:432:2048;v37:431:64;v38:433:2048;v39:433:1024;v3:396:1024;v44:445:512;v7:397:256;v9:404:640;w_k:32768;w_o:131072;w_q:131072;w_v:32768;write_len:4 peak=gmem:11340556;smem:16960 persistent=2425356 errors=33
+# reuse buffer=hidden holds=51.08MB time=none space=cta.head saves=3584B fits=no
 # reuse buffer=v3:396 holds=51.08MB time=none space=cta.head saves=0.01MB fits=no
-# reuse buffer=v7:397 holds=51.08MB time=none space=cta.head saves=0.00MB fits=no
+# reuse buffer=v7:397 holds=51.08MB time=none space=cta.head saves=1792B fits=no
 # reuse buffer=cos_cache holds=51.08MB time=none space=cta.head saves=3.50MB fits=no
 # reuse buffer=sin_cache holds=51.08MB time=none space=cta.head saves=3.50MB fits=no
-# reuse buffer=pos_ids holds=51.08MB time=none space=cta.head saves=0.00MB fits=no
-# reuse buffer=v10:404 holds=51.08MB time=none space=cta.head saves=0.00MB fits=no
+# reuse buffer=pos_ids holds=51.08MB time=none space=cta.head saves=28B fits=no
+# reuse buffer=v10:404 holds=51.08MB time=none space=cta.head saves=3584B fits=no
 # reuse buffer=v11:415 holds=51.08MB time=none space=cta.head saves=0.01MB fits=no
 # reuse buffer=v12:418 holds=51.08MB time=none space=cta.head saves=0.01MB fits=no
-# reuse buffer=cur_pos holds=51.08MB time=none space=cta.head saves=0.00MB fits=no
-# reuse buffer=write_len holds=51.08MB time=none space=cta.head saves=0.00MB fits=no
-# reuse buffer=v15:404 holds=51.08MB time=none space=cta.head saves=0.00MB fits=no
+# reuse buffer=cur_pos holds=51.08MB time=none space=cta.head saves=28B fits=no
+# reuse buffer=write_len holds=51.08MB time=none space=cta.head saves=28B fits=no
+# reuse buffer=v15:404 holds=51.08MB time=none space=cta.head saves=896B fits=no
 # reuse buffer=v16:405 holds=51.08MB time=none space=cta.head saves=3.50MB fits=no
 # reuse buffer=v17:408 holds=51.08MB time=none space=cta.head saves=28.00MB fits=no
 # reuse buffer=v18:407 holds=51.08MB time=none space=cta.head saves=28.00MB fits=no
@@ -927,10 +919,9 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 # reuse buffer=v19:416 holds=51.08MB time=none space=cta.head saves=56.00MB fits=no
 # reuse buffer=v21:428 holds=51.08MB time=none space=cta.head saves=56.00MB fits=no
 # reuse buffer=v22:428 holds=51.08MB time=none space=cta.head saves=1.75MB fits=no
-# reuse buffer=v23:429 holds=51.08MB time=none space=cta.head saves=0.00MB fits=no
+# reuse buffer=v23:429 holds=51.08MB time=none space=cta.head saves=448B fits=no
 # reuse buffer=v24:430 holds=51.08MB time=none space=cta.head saves=1.75MB fits=no
-# reuse buffer=w_v holds=51.08MB time=none space=cta.head saves=0.22MB fits=no
-# reuse buffer=v28:398 holds=51.08MB time=none space=cta.head saves=0.00MB fits=no
+# reuse buffer=v28:398 holds=51.08MB time=none space=cta.head saves=1792B fits=no
 # reuse buffer=v30:406 holds=51.08MB time=none space=cta.head saves=3.50MB fits=no
 # reuse buffer=v31:412 holds=51.08MB time=none space=cta.head saves=28.00MB fits=no
 # reuse buffer=v32:411 holds=51.08MB time=none space=cta.head saves=28.00MB fits=no
@@ -938,13 +929,10 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 # reuse buffer=v33:417 holds=51.08MB time=none space=cta.head saves=56.00MB fits=no
 # reuse buffer=v35:432 holds=51.08MB time=none space=cta.head saves=56.00MB fits=no
 # reuse buffer=v36:432 holds=51.08MB time=none space=cta.head saves=0.01MB fits=no
-# reuse buffer=v37:431 holds=51.08MB time=none space=cta.head saves=0.00MB fits=no
+# reuse buffer=v37:431 holds=51.08MB time=none space=cta.head saves=448B fits=no
 # reuse buffer=v38:433 holds=51.08MB time=none space=cta.head saves=0.01MB fits=no
 # reuse buffer=v39:433 holds=51.08MB time=none space=cta.head saves=0.01MB fits=no
-# reuse buffer=w_o holds=51.08MB time=none space=cta.head saves=0.88MB fits=no
 # error="l2 reuse of hidden holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
-# error="l2 reuse of w_q holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
-# error="l2 reuse of w_k holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
 # error="l2 reuse of v3:396 holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
 # error="l2 reuse of v7:397 holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
 # error="l2 reuse of cos_cache holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
@@ -965,7 +953,6 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 # error="l2 reuse of v22:428 holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
 # error="l2 reuse of v23:429 holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
 # error="l2 reuse of v24:430 holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
-# error="l2 reuse of w_v holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
 # error="l2 reuse of v28:398 holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
 # error="l2 reuse of v30:406 holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
 # error="l2 reuse of v31:412 holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
@@ -977,7 +964,6 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 # error="l2 reuse of v37:431 holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
 # error="l2 reuse of v38:433 holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
 # error="l2 reuse of v39:433 holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
-# error="l2 reuse of w_o holds 53558412 B across cta.head at a 132-unit wave, exceeding capacity 50000000 B"
 # error="l2 working set 53558412 B at the first iteration of a 132-unit wave exceeds capacity 50000000 B"
 # roofline ideal-ns=11213 bound-by=memory
 
@@ -1130,20 +1116,17 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,1246400@total,328672@cta;f32:6410280@logical,6410280@total,801285@cta other-ops=integer:32@logical,256@total,32@cta;special:33040@logical,33040@total,4130@cta
 # memory traffic=gmem:r7672476/w4198272@logical,r7672476/w4198272@total,r4001116/w4197824@cta;rmem:r2560/w0@logical,r2560/w0@total,r2560/w0@cta;smem:r21788704/w21486432@logical,r21883936/w21549920@total,r2735492/w2693740@cta footprint=cos_cache:524288;cur_pos:4;cur_pos_2:4;hidden:512;k_all:524288;k_cache:16384;pos_ids:4;q_rope:512;sin_cache:524288;v0:469:1024;v10:475:128;v22:491:131072;v2:471:256;v38:500:131072;v46:522:256;v47:521:1024;v4:473:640;v58:525:256;v59:524:1024;v5:473:128;v6:474:128;v71:551:1024;v73:554:512;v8:472:256;v_all:524288;v_cache:16384;w_k:32768;w_o:131072;w_q:131072;w_v:32768;write_len:4 peak=gmem:3475212;rmem:0;smem:41920 persistent=2425356
-# reuse buffer=q_rope holds=2.60MB time=none space=cta.head saves=0.00MB fits=yes
 # reuse buffer=k_all holds=2.60MB time=none space=cta.head saves=3.50MB fits=yes
-# reuse buffer=cur_pos_2 holds=2.60MB time=none space=cta.head saves=0.00MB fits=yes
-# reuse buffer=v46:522 holds=2.60MB time=none space=cta.head saves=0.00MB fits=yes
-# reuse buffer=v47:521 holds=2.60MB time=none space=cta.head saves=0.01MB fits=yes
+# reuse buffer=cur_pos_2 holds=2.60MB time=none space=cta.head saves=28B fits=yes
+# reuse buffer=v46:522 holds=2.60MB time=none space=cta.head saves=1792B fits=yes
 # reuse buffer=v_all holds=2.60MB time=none space=cta.head saves=3.50MB fits=yes
-# reuse buffer=v58:525 holds=2.60MB time=none space=cta.head saves=0.00MB fits=yes
-# reuse buffer=v59:524 holds=2.60MB time=none space=cta.head saves=0.01MB fits=yes
+# reuse buffer=v58:525 holds=2.60MB time=none space=cta.head saves=1792B fits=yes
 # reuse buffer=v71:551 holds=2.60MB time=none space=cta.head saves=0.01MB fits=yes
 # reuse buffer=w_o holds=2.60MB time=none space=cta.head saves=0.88MB fits=yes
 # reuse buffer=k_cache holds=2.60MB time=none space=cta.head saves=0.11MB fits=yes
-# reuse buffer=v22:491 holds=0.28MB time=start space=cta.head saves=31.88MB fits=yes
+# reuse buffer=v22:491 holds=0.28MB time=start space=none saves=3.88MB fits=yes
 # reuse buffer=v_cache holds=2.60MB time=none space=cta.head saves=0.11MB fits=yes
-# reuse buffer=v38:500 holds=0.28MB time=start space=cta.head saves=31.88MB fits=yes
+# reuse buffer=v38:500 holds=0.28MB time=start space=none saves=3.88MB fits=yes
 # roofline ideal-ns=2474 bound-by=memory
 
         v21 = slice(k_cache, (0, v20, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost; memory traffic=rmem:r32/w0@logical,r32/w0@total,r32/w0@cta operands=0:r0/w0;1:r32/w0;result:r0/w0; roofline

@@ -8,9 +8,7 @@ level.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
-from itertools import product
-from math import prod
+from dataclasses import dataclass, replace
 
 import isl
 
@@ -34,10 +32,10 @@ from tilefoundry.ir.visitor import expr_children
 from tilefoundry.target.base import Target, UnsupportedCapabilityError
 from tilefoundry.target.facts import ParallelCapacityFacts
 from tilefoundry.utils.isl_utils import cardinality
-from tilefoundry.visitor_registry.access_relation import leaves_of
+from tilefoundry.visitor_registry.access_relation import leaves_of, projected
 from tilefoundry.visitor_registry.contexts import CostContext
 
-from .access import Access, AccessPrecision
+from .access import Access, AccessPrecision, resolve_access
 from .facts import MemoryHierarchyFacts
 from .iteration_scope import IterationScope, walk_scopes
 from .loop_domain import induction_name
@@ -72,11 +70,13 @@ class ReuseAxes:
 
     ``time`` is the outermost loop dimension whose iterations reach the same
     addresses; ``space`` names the mesh coordinates the addresses do not vary
-    with. Both absent means the data is read once.
+    with, and ``space_units`` counts the units mapping onto those addresses.
+    Both axes absent means the data is read once.
     """
 
     time: int | None = None
     space: tuple[str, ...] = ()
+    space_units: int = 1
 
     @property
     def window(self) -> int | None:
@@ -193,10 +193,15 @@ def _at_first_iteration(relation: isl.map, depth: int) -> isl.map:
 
 def reuse_axes(
     access: Access,
+    unit_access: Access | None,
     scope: IterationScope,
     mesh_params: tuple[tuple[str | None, Mesh, int], ...],
+    *,
+    wave_access: Access,
+    wave_units: int,
+    declared_units: int,
 ) -> ReuseAxes:
-    """Find loop and mesh axes whose positions reach the same addresses."""
+    """Name reuse axes and how many units share their reached addresses."""
     lineage: list[IterationScope] = []
     cursor: IterationScope | None = scope
     while cursor is not None:
@@ -215,29 +220,68 @@ def reuse_axes(
             time = axis
             break
 
+    if unit_access is None or not mesh_params:
+        return ReuseAxes(time=time)
+
+    stated_mesh_params = _mesh_parameters(scope)
+    position = None
+    if wave_units < declared_units and stated_mesh_params:
+        position = _linear_position(stated_mesh_params)
+        if position is None:
+            return ReuseAxes(time=time)
+
+    wave_relation = _at_first_iteration(wave_access.relation, scope.depth)
+    unit_relation = _at_first_iteration(unit_access.relation, scope.depth)
+    if position is not None:
+        wave_relation = _restrict_to_wave(wave_relation, position, wave_units)
+        unit_relation = _restrict_to_wave(unit_relation, position, wave_units)
+    wave_reached = wave_relation.range()
+    for parameter_name, _coordinate in stated_mesh_params:
+        parameter = wave_reached.find_dim_by_name(isl.dim_type.PARAM, parameter_name)
+        if parameter >= 0:
+            wave_reached = wave_reached.project_out(isl.dim_type.PARAM, parameter, 1)
+
     space: list[str] = []
+    shared_axes: list[int] = []
     for name, mesh, axis in mesh_params:
         shape = flatten(mesh.layout.shape)
         if not 0 <= axis < len(shape):
             continue
         extent = static_dim_value(shape[axis])
-        if extent is not None and extent <= 1:
+        if extent is None or extent <= 1:
             continue
 
+        one_unit = unit_relation
         parameter = (
             -1
             if name is None
-            else access.relation.find_dim_by_name(isl.dim_type.PARAM, name)
+            else one_unit.find_dim_by_name(isl.dim_type.PARAM, name)
         )
         if parameter >= 0:
-            free = access.relation.range().project_out(isl.dim_type.PARAM, parameter, 1)
-            fixed = (
-                access.relation.fix_val(isl.dim_type.PARAM, parameter, isl.val(0))
-                .range()
-                .project_out(isl.dim_type.PARAM, parameter, 1)
+            parameter_values = one_unit.params().move_dims(
+                isl.dim_type.SET, 0, isl.dim_type.PARAM, parameter, 1
             )
-            if not free.is_equal(fixed):
+            if parameter_values.dim(isl.dim_type.PARAM):
+                parameter_values = parameter_values.project_out(
+                    isl.dim_type.PARAM,
+                    0,
+                    parameter_values.dim(isl.dim_type.PARAM),
+                )
+            first = parameter_values.dim_min_val(0)
+            if not first.is_int():
                 continue
+            one_unit = one_unit.fix_val(isl.dim_type.PARAM, parameter, first)
+        unit_reached = one_unit.range()
+        for parameter_name, _coordinate in stated_mesh_params:
+            coordinate = unit_reached.find_dim_by_name(
+                isl.dim_type.PARAM, parameter_name
+            )
+            if coordinate >= 0:
+                unit_reached = unit_reached.project_out(
+                    isl.dim_type.PARAM, coordinate, 1
+                )
+        if not wave_reached.is_equal(unit_reached):
+            continue
 
         axis_name = (
             mesh.names[axis]
@@ -252,7 +296,44 @@ def reuse_axes(
                 level_name = getattr(level, "name", str(level))
                 break
         space.append(f"{level_name}.{axis_name}" if level_name else axis_name)
-    return ReuseAxes(time=time, space=tuple(space))
+        shared_axes.append(axis)
+
+    if not shared_axes:
+        return ReuseAxes(time=time)
+    mesh = mesh_params[0][1]
+    image = _layout_image(mesh)
+    if image is None:
+        return ReuseAxes(time=time)
+    offset, shape, strides = image
+    dimensions = ", ".join(f"d{axis}" for axis in range(len(shape)))
+    points = isl.set(f"{{ [{dimensions}] }}")
+    local = isl.local_space.from_space(points.get_space())
+    for axis, extent in enumerate(shape):
+        lower = isl.constraint.alloc_inequality(local).set_coefficient_si(
+            isl.dim_type.SET, axis, 1
+        )
+        upper = (
+            isl.constraint.alloc_inequality(local)
+            .set_coefficient_si(isl.dim_type.SET, axis, -1)
+            .set_constant_si(extent - 1)
+        )
+        points = points.add_constraint(lower).add_constraint(upper)
+    if wave_units < declared_units:
+        lower = isl.constraint.alloc_inequality(local).set_constant_si(offset)
+        upper = isl.constraint.alloc_inequality(local).set_constant_si(
+            wave_units - 1 - offset
+        )
+        for axis, stride in enumerate(strides):
+            lower = lower.set_coefficient_si(isl.dim_type.SET, axis, stride)
+            upper = upper.set_coefficient_si(isl.dim_type.SET, axis, -stride)
+        points = points.add_constraint(lower).add_constraint(upper)
+    for axis in reversed(range(len(shape))):
+        if axis not in shared_axes:
+            points = points.project_out(isl.dim_type.SET, axis, 1)
+    units = cardinality(points)
+    if units is None or units <= 1:
+        return ReuseAxes(time=time)
+    return ReuseAxes(time=time, space=tuple(space), space_units=units)
 
 
 def _boundary_type(access: Access, call: Call, ctx: CostContext) -> Type | None:
@@ -395,6 +476,8 @@ def reuse_windows(
     ctx: CostContext,
 ) -> tuple[ReuseWindow, ...]:
     """Describe one cache-residency window per buffer that is read again."""
+    unit_ctx = ctx
+    whole_ctx = replace(ctx, topology_level=None, topologies=())
     scopes = tuple(walk_scopes(root))
     meshes_by_call: dict[int, Mesh] = {}
     if isinstance(root.owner, Function) and root.owner.body is not None:
@@ -432,6 +515,21 @@ def reuse_windows(
             moved = get_metadata(call, MemoryMetadata)
             if moved is None or len(moved.operands) != len(call.args) + 1:
                 continue
+            device_recorded = scope.accesses.get("device", {}).get(id(call))
+            device_by_boundary = (
+                {
+                    (item.input_index, item.output_index): item
+                    for item in device_recorded[1]
+                }
+                if device_recorded is not None and device_recorded[0] is call
+                else {}
+            )
+            try:
+                local_relations = projected(
+                    scope.stated_relations(call, unit_ctx), call, unit_ctx
+                )
+            except (NotImplementedError, TypeError, ValueError, isl.Error):
+                local_relations = None
             current_mesh = meshes_by_call.get(id(call))
             if current_mesh is None and stated_mesh_params:
                 current_mesh = stated_mesh_params[0][1].target.mesh
@@ -457,52 +555,66 @@ def reuse_windows(
                 )
                 if movement.read <= 0:
                     continue
-                held = _boundary_type(access, call, ctx)
+                held = _boundary_type(access, call, whole_ctx)
                 if held is None or memory_level not in {
                     str(leaf.storage) for leaf in leaves_of(held)
                 }:
                     continue
-                axes = reuse_axes(access, scope, mesh_params)
-                units = 1
-                if axes.space and mesh_params:
-                    mesh = mesh_params[0][1]
-                    named_axes: list[int] = []
-                    for _name, _mesh, axis in mesh_params:
-                        axis_name = (
-                            mesh.names[axis]
-                            if axis < len(mesh.names)
-                            else ("x", "y", "z")[axis]
-                            if axis < 3
-                            else str(axis)
-                        )
-                        level_name = ""
-                        for level, owned in zip(
-                            mesh.topologies, topology_axes(mesh), strict=True
-                        ):
-                            if axis in owned:
-                                level_name = getattr(level, "name", str(level))
-                                break
-                        label = f"{level_name}.{axis_name}" if level_name else axis_name
-                        if label in axes.space:
-                            named_axes.append(axis)
-                    image = _layout_image(mesh)
-                    if wave_units < declared_units and image is not None:
-                        offset, shape, strides = image
-                        active = {
-                            tuple(point[axis] for axis in named_axes)
-                            for point in product(*(range(extent) for extent in shape))
-                            if 0 <= offset + sum(x * stride for x, stride in zip(point, strides))
-                            < wave_units
-                        }
-                        units = max(1, len(active))
-                    else:
-                        extents = flatten(mesh.layout.shape)
-                        stated = [static_dim_value(extents[axis]) for axis in named_axes]
-                        if stated and all(extent is not None for extent in stated):
-                            units = prod(extent for extent in stated if extent is not None)
-                axes = ReuseAxes(
-                    time=axes.time,
-                    space=axes.space if units > 1 else (),
+                unit_access = access
+                if local_relations is not None:
+                    try:
+                        if access.input_index is not None:
+                            boundary = local_relations.inputs[access.input_index]
+                            operand = call.args[access.input_index]
+                            local_rank = boundary.pattern.relation.dim(isl.dim_type.OUT)
+                            logical_rank = (
+                                len(operand.type.shape)
+                                if isinstance(operand.type, TensorType)
+                                else local_rank
+                            )
+                            if local_rank == logical_rank:
+                                projected_access = resolve_access(
+                                    operand,
+                                    boundary,
+                                    scope,
+                                    unit_ctx,
+                                    input_index=access.input_index,
+                                    narrow=False,
+                                )
+                                if projected_access is not None:
+                                    unit_access = projected_access
+                        elif access.output_index is not None:
+                            boundary = local_relations.outputs[access.output_index]
+                            local_rank = boundary.pattern.relation.dim(isl.dim_type.OUT)
+                            output_type = _boundary_type(access, call, whole_ctx)
+                            logical_rank = (
+                                len(output_type.shape)
+                                if isinstance(output_type, TensorType)
+                                else local_rank
+                            )
+                            if local_rank == logical_rank:
+                                projected_access = resolve_access(
+                                    call,
+                                    boundary,
+                                    scope,
+                                    unit_ctx,
+                                    input_index=None,
+                                    output_index=access.output_index,
+                                    narrow=False,
+                                )
+                                if projected_access is not None:
+                                    unit_access = projected_access
+                    except (IndexError, NotImplementedError, TypeError, ValueError, isl.Error):
+                        unit_access = access
+                boundary_key = (access.input_index, access.output_index)
+                axes = reuse_axes(
+                    access,
+                    unit_access,
+                    scope,
+                    mesh_params,
+                    wave_access=device_by_boundary.get(boundary_key, access),
+                    wave_units=wave_units,
+                    declared_units=declared_units,
                 )
                 if axes.window is None:
                     continue
@@ -522,7 +634,7 @@ def reuse_windows(
                     space=merged_space,
                 )
                 time_scopes[key] = selected_time
-                space_units[key] = max(space_units.get(key, 1), units)
+                space_units[key] = max(space_units.get(key, 1), axes.space_units)
 
     if not buffers or ctx.scope is None:
         return ()
@@ -561,7 +673,7 @@ def reuse_windows(
                     wave_units=wave_units,
                     declared_units=declared_units,
                     operands=operands,
-                    ctx=ctx,
+                    ctx=whole_ctx,
                     window=window,
                 )
                 if reached is None:
@@ -576,7 +688,7 @@ def reuse_windows(
                     wave_units=wave_units,
                     declared_units=declared_units,
                     operands=(),
-                    ctx=ctx,
+                    ctx=whole_ctx,
                     window=window,
                 )
                 if reached is None:
@@ -620,6 +732,9 @@ def reuse_windows(
         label = labels[key]
         holds = sum(amounts.values())
         repeats = (1 if time_scope is None else time_scope.trips()) * space_units.get(key, 1)
+        saves = max(0, repeats - 1) * amounts.get(label, 0)
+        if saves == 0:
+            continue
         rows.append(
             ReuseWindow(
                 buffer=label,
@@ -630,7 +745,7 @@ def reuse_windows(
                 ),
                 space=",".join(axes_by_buffer[key].space),
                 holds_bytes=holds,
-                saves_bytes=max(0, repeats - 1) * amounts.get(label, 0),
+                saves_bytes=saves,
                 fits=holds < capacity,
                 complete=counted.complete,
             )
