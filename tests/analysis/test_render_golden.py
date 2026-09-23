@@ -9,7 +9,7 @@ import pytest
 
 from tilefoundry.analysis import analyze
 from tilefoundry.inspection import as_script
-from tilefoundry.inspection.analysis_report import render_analysis
+from tilefoundry.inspection.analysis_report import render_analysis, render_text
 from tilefoundry.ir.core.module import Module
 
 FIXTURES_ROOT = Path(__file__).parents[1] / "fixtures"
@@ -22,6 +22,7 @@ FIXTURES = (
         TYPE_FIXTURE.with_suffix(".analyzed.txt"),
         ("compute-cost", "memory"),
         False,
+        False,
     ),
     (
         GEMM_FIXTURE,
@@ -29,12 +30,14 @@ FIXTURES = (
         GEMM_FIXTURE.with_name("gemm_resident_fits.analyzed.txt"),
         ("memory",),
         True,
+        True,
     ),
     (
         GEMM_FIXTURE,
         "GemmResidentOver",
         GEMM_FIXTURE.with_name("gemm_resident_over.analyzed.txt"),
         ("memory",),
+        True,
         True,
     ),
 )
@@ -57,7 +60,8 @@ def _without_comments(source: str) -> str:
 
 
 @pytest.mark.parametrize(
-    ("fixture", "module_name", "golden", "families", "operands"), FIXTURES
+    ("fixture", "module_name", "golden", "families", "operands", "whole_report"),
+    FIXTURES,
 )
 def test_analysis_annotates_the_printed_program_without_changing_it(
     fixture: Path,
@@ -65,16 +69,25 @@ def test_analysis_annotates_the_printed_program_without_changing_it(
     golden: Path,
     families: tuple[str, ...],
     operands: bool,
+    whole_report: bool,
 ) -> None:
     """Annotation adds metadata to canonical source; it does not restate types.
 
-    The golden shares its fixture with the round-trip golden, so a type that
-    reads one way in emitted code and another in an annotation shows up here as
-    a diff rather than as two goldens that drifted apart.
+    The printer fixture's annotated-only golden is shared with its round-trip
+    golden, so a type rendered two ways shows up as one diff. Placed fixture
+    goldens include the complete report so its reviewed conclusions are locked
+    beside the annotated source.
     """
     module = _module_in(fixture, module_name)
     result = analyze(module, module.entry_function(), analysis=families)
-    annotated = render_analysis(result, operands=operands).annotated
+    rendered = render_analysis(result, operands=operands)
+    expected = (
+        f"{render_text(rendered)}\n\n{rendered.annotated}"
+        if whole_report
+        else rendered.annotated
+    )
 
-    assert annotated == golden.read_text()
-    assert _without_comments(annotated) == _without_comments(as_script(result.function))
+    assert expected == golden.read_text()
+    assert _without_comments(rendered.annotated) == _without_comments(
+        as_script(result.function)
+    )

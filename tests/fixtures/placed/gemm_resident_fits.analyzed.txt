@@ -1,3 +1,9 @@
+# analysis target=nvidia.h200_sxm module=GemmResidentFits function=gemm topology=cta wave=132/132 cache=l2:47.68MB
+# selection requested=memory executed=memory
+# memory traffic=gmem:r6291456/w0@logical,r18874368/w0@total,r18874368/w0@cta;rmem:r6144/w18907136@logical,r18432/w18907136@total,r18432/w9469952@cta;smem:r37748736/w25165824@logical,r37748736/w37748736@total,r23592960/w28311552@cta footprint=a:196608;b:180224 peak=gmem:67125248;rmem:32768;smem:49152 persistent=67108864
+# reuse buffer=b holds=44.00MB time=mi space=cta.x saves=1120.00MB fits=yes
+# reuse buffer=a holds=23.00MB time=ni space=cta.y saves=384.00MB fits=yes
+
 from __future__ import annotations
 
 from tilefoundry import func

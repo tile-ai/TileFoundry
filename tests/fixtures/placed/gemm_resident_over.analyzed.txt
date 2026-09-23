@@ -1,3 +1,11 @@
+# analysis target=nvidia.h200_sxm module=GemmResidentOver function=gemm topology=cta wave=132/132 cache=l2:47.68MB
+# selection requested=memory executed=memory
+# memory traffic=gmem:r25165824/w0@logical,r75497472/w0@total,r75497472/w0@cta;rmem:r24576/w75530240@logical,r73728/w75530240@total,r73728/w37781504@cta;smem:r150994944/w100663296@logical,r150994944/w150994944@total,r94371840/w113246208@cta footprint=a:196608;b:180224 peak=gmem:268451840;rmem:32768;smem:49152 persistent=268435456 errors=2
+# reuse buffer=b holds=176.00MB time=mi space=cta.x saves=4480.00MB fits=no
+# reuse buffer=a holds=92.00MB time=ni space=cta.y saves=1536.00MB fits=no
+# error="l2 reuse window mi holds 184549376 B at a 132-unit wave, exceeding capacity 50000000 B"
+# error="l2 reuse window ni holds 96468992 B at a 132-unit wave, exceeding capacity 50000000 B"
+
 from __future__ import annotations
 
 from tilefoundry import func
