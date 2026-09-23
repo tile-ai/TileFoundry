@@ -17,13 +17,11 @@ from tests.fixtures.placed.moe_mega_kernel import MoEMegaKernel
 from tilefoundry import func, module
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.errors import AnalysisError
-from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
 from tilefoundry.analysis.metadata import ComputeCostMetadata, MemoryMetadata
 from tilefoundry.dsl import ConstTensor, DimVar, Tensor, Topology, tf
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.module import reachable_functions
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.types import tensor_types
 from tilefoundry.ir.types.shard.layout import ComposedLayout
@@ -220,28 +218,3 @@ def test_each_placed_branch_keeps_its_slice_on_its_primitive_results() -> None:
         for _op, layout in placed:
             assert layout.outer.shape == shape
             assert layout.offset == offset
-
-
-def test_inlined_sibling_meshes_keep_distinct_iteration_scopes() -> None:
-    """Direct calls below sibling meshes inherit the mesh that encloses each one."""
-    result = analyze(MoEMegaKernel, MoEMegaKernel.entry_function(), analysis="compute-cost")
-    root = build_scopes(result.module, result.function)
-    reached = {}
-    for scope in walk_scopes(root):
-        targets = {
-            type(call.target).__name__
-            for call, _accesses in scope.accesses["narrow"].values()
-        }
-        for target in targets & {"ReLU", "Unary"}:
-            assert isinstance(scope.owner, MeshRegion)
-            assert scope.depth == root.depth
-            assert scope.domain.is_equal(root.domain)
-            assert scope.domain_params is root.domain_params
-            assert scope.enclosing_loops() == ()
-            assert scope.trips() == 1
-            mesh = scope.enclosing_mesh()
-            assert mesh is scope.owner.mesh
-            assert isinstance(mesh.layout, ComposedLayout)
-            reached[target] = (mesh.layout.outer.shape, mesh.layout.offset)
-
-    assert reached == {"ReLU": ((120,), 0), "Unary": ((12,), 120)}

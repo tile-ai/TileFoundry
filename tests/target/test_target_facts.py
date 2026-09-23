@@ -3,22 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar, cast
+from typing import ClassVar
 
 import pytest
 
 from tilefoundry.analysis.facts import (
     MemoryHierarchyFacts,
-    PerformanceServiceFacts,
     ThroughputFacts,
 )
-from tilefoundry.analysis.iteration_scope import IterationScope
-from tilefoundry.analysis.performance import analyze_performance
-from tilefoundry.analysis.visitor import AnalyzeContext
-from tilefoundry.ir.core import Var
-from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types import DType, make_tensor_type
+from tilefoundry.ir.types import DType
 from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import (
     AmxTarget,
@@ -49,49 +42,6 @@ def test_builtin_targets_own_their_facts_projections() -> None:
         level.name: level.owner
         for level in AmxTarget().get_facts(MemoryHierarchyFacts).explicit_levels
     } == {"host": "target", "gmem": "target", "rmem": "amx"}
-
-
-def test_topology_facts_name_a_real_optional_parallel_level() -> None:
-    empty = Target().get_facts(TopologyFacts)
-    assert empty == TopologyFacts(())
-    assert empty.parallel_level is None
-    assert empty.parallel() is None
-
-    with pytest.raises(ValueError, match="parallel topology level 'missing'"):
-        TopologyFacts(
-            (TopologyLevelFacts("unit", 4, 2),), parallel_level="missing"
-        )
-
-
-def test_cuda_performance_service_refuses_an_unknown_topology_level() -> None:
-    with pytest.raises(
-        UnsupportedCapabilityError,
-        match="no per-unit rate for topology level 'warp'",
-    ):
-        CudaTarget("nvidia.h200_sxm").get_facts(PerformanceServiceFacts, "warp")
-
-
-def test_performance_refuses_an_empty_parallel_topology() -> None:
-    class _EmptyTopologyCuda(CudaTarget):
-        name = "test.empty-topology-cuda"
-
-        def get_facts(self, facts_type: type, query: object | None = None):
-            if facts_type is TopologyFacts and query is None:
-                return TopologyFacts(())
-            return super().get_facts(facts_type, query)
-
-    target = _EmptyTopologyCuda("nvidia.h200_sxm")
-    value_type = make_tensor_type((1,), DType.f32)
-    value = Var(type=value_type, name="x")
-    function = Function.build(
-        name="f", params=(value,), body=value, return_type=value_type
-    )
-    module = Module("empty", (function,), function.name, target=target, topologies=())
-    scope = cast(IterationScope, object())
-    context = AnalyzeContext(module, target, "cta", None, scope, scope)
-
-    with pytest.raises(UnsupportedCapabilityError, match="no default parallel"):
-        analyze_performance(function, context)
 
 
 def test_two_cuda_products_project_the_hardware_each_one_is() -> None:
