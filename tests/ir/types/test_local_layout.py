@@ -15,10 +15,16 @@ from itertools import product
 
 import pytest
 
-from tilefoundry.ir.types import DType, make_shard_tensor_type
-from tilefoundry.ir.types.shard import Mesh, Topology, make_mesh, shard_layout_of
-from tilefoundry.ir.types.shard.local import local_layout, local_layout_and_offset
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, Split
+from tilefoundry.ir.types import (
+    DType,
+    Mesh,
+    Topology,
+    make_mesh,
+    make_shard_tensor_type,
+    shard_layout_of,
+)
+from tilefoundry.ir.types.local import local_layout, local_layout_and_offset
+from tilefoundry.ir.types.shard_layout import Broadcast, Split
 from tilefoundry.ir.types.utils import local_type_of
 
 _GPU, _THREAD = Topology("gpu", 2), Topology("thread", 32)

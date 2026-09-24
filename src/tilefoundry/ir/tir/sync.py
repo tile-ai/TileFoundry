@@ -8,12 +8,11 @@ from enum import Enum
 from tilefoundry.ir.core import Op, VerifyError
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.types import UnitType
-from tilefoundry.ir.types.shard import product
-from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
-from tilefoundry.ir.types.shard.layout_algebra import apply as _apply
-from tilefoundry.ir.types.shard.layout_algebra import size as _size
-from tilefoundry.ir.types.shard.mesh import Mesh
+from tilefoundry.ir.types import UnitType, product
+from tilefoundry.ir.types.layout import ComposedLayout, Layout
+from tilefoundry.ir.types.layout_algebra import apply as _apply
+from tilefoundry.ir.types.layout_algebra import size as _size
+from tilefoundry.ir.types.mesh import Mesh
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
 _WARP_SIZE = 32

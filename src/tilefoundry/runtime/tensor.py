@@ -14,12 +14,12 @@ from dataclasses import dataclass
 
 import torch
 
-from tilefoundry.ir.types.shard import (
+from tilefoundry.ir.types import (
     Placement,
     Topology,
     shard_layout_of,
 )
-from tilefoundry.ir.types.shard.local import local_layout_and_offset
+from tilefoundry.ir.types.local import local_layout_and_offset
 from tilefoundry.ir.types.tensor_type import TensorType
 
 

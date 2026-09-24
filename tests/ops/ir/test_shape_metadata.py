@@ -13,7 +13,7 @@ from tilefoundry.ir.core import Call
 from tilefoundry.ir.hir.tensor.rank import Rank
 from tilefoundry.ir.hir.tensor.shape_of import ShapeOf
 from tilefoundry.ir.types import TensorType, make_tensor_type
-from tilefoundry.ir.types.shard.layout import EMPTY_LAYOUT
+from tilefoundry.ir.types.layout import EMPTY_LAYOUT
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.visitor_registry.contexts import TrafficBytes

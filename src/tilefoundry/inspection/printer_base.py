@@ -21,10 +21,10 @@ from tilefoundry.ir.types.dim import (
     DimSub,
     DimVar,
 )
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, Swizzle
+from tilefoundry.ir.types.mesh import Mesh
 from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase, Swizzle
-from tilefoundry.ir.types.shard.mesh import Mesh
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, ShardLayout, Split
+from tilefoundry.ir.types.shard_layout import Broadcast, Partial, ShardLayout, Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import ExprFunctor, TypeFunctor
 from tilefoundry.target import Target
@@ -314,7 +314,7 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             sliced = ctx.mesh_slice(value)
             if sliced is not None:
                 return sliced
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Mesh, Topology",), "Mesh"))
+            ctx.use(PythonExpr(("from tilefoundry.ir.types import Mesh, Topology",), "Mesh"))
         topologies = ", ".join(
             f'Topology("{topology.name}", {self.dim_entry(topology.size, ctx)})'
             for topology in value.topologies
@@ -330,18 +330,18 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
 
     def visit_Layout(self, value: Layout, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Layout",), "Layout"))
+            ctx.use(PythonExpr(("from tilefoundry.ir.types import Layout",), "Layout"))
         strides = self.shape_tuple(value.strides, ctx) if value.strides is not None else "None"
         return f"Layout({self.shape_tuple(value.shape, ctx)}, {strides})"
 
     def visit_Swizzle(self, value: Swizzle, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Swizzle",), ""))
+            ctx.use(PythonExpr(("from tilefoundry.ir.types import Swizzle",), ""))
         return f"Swizzle({value.bits}, {value.base}, {value.shift})"
 
     def visit_ComposedLayout(self, value: ComposedLayout, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import ComposedLayout",), ""))
+            ctx.use(PythonExpr(("from tilefoundry.ir.types import ComposedLayout",), ""))
         outer, child = self._indent, self._indent + "    "
         with self.type_surface(indent=child):
             inner_text = self.visit(value.inner, ctx)
@@ -359,7 +359,7 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
         if surface is not None:
             return surface
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import ShardLayout",), ""))
+            ctx.use(PythonExpr(("from tilefoundry.ir.types import ShardLayout",), ""))
         outer, child = self._indent, self._indent + "    "
         attrs = ", ".join(self.visit(attr, ctx) for attr in value.attrs)
         if len(value.attrs) == 1:
@@ -377,17 +377,17 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
 
     def visit_Broadcast(self, value: Broadcast, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import B",), "B"))
+            ctx.use(PythonExpr(("from tilefoundry.ir.types import B",), "B"))
         return "B()"
 
     def visit_Split(self, value: Split, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import S",), "S"))
+            ctx.use(PythonExpr(("from tilefoundry.ir.types import S",), "S"))
         return f"S({value.axis})"
 
     def visit_Partial(self, value: Partial, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import P",), "P"))
+            ctx.use(PythonExpr(("from tilefoundry.ir.types import P",), "P"))
         return f'P("{value.reduction}")'
 
     def atom_reference(self, value: MmaAtom, ctx=None) -> str:

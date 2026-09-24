@@ -10,7 +10,7 @@ from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reduce import Reduce
 from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.types.shard import Broadcast, Split
+from tilefoundry.ir.types import Broadcast, Split
 
 
 def _walk(expr, seen=None):

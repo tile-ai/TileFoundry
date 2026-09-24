@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from tilefoundry import func, module
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
-from tilefoundry.ir.types.shard import Layout, Split, canonical_shard_layout
-from tilefoundry.ir.types.shard import Mesh as ShardMesh
+from tilefoundry.ir.types import Layout, Split, canonical_shard_layout
+from tilefoundry.ir.types import Mesh as ShardMesh
 from tilefoundry.target import CudaTarget
 
 GPUS, CTAS, R, C = 2, 4, 8, 8

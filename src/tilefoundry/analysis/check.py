@@ -35,11 +35,11 @@ from tilefoundry.ir.hir.specialize import (
     is_concrete,
     specialize_concretely,
 )
-from tilefoundry.ir.types import callable_type_for
-from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.shard import (
+from tilefoundry.ir.types import (
     Topology,
+    callable_type_for,
 )
+from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.substitute import (
     DimSubstitutionError,
     dim_vars_by_name,

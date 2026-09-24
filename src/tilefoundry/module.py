@@ -57,7 +57,7 @@ def enclosing_declaration(frame: FrameType | None) -> _Entry | None:
 
 
 def _validate(topologies) -> tuple:
-    from tilefoundry.ir.types.shard.mesh import Topology  # noqa: PLC0415
+    from tilefoundry.ir.types.mesh import Topology  # noqa: PLC0415
 
     if not isinstance(topologies, tuple) or not all(
         isinstance(topology, Topology) for topology in topologies

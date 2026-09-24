@@ -56,7 +56,7 @@ from transformers import AutoConfig
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, ReduceKind, Tensor, tf
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
 
 _MAIN_ROPE: "tuple | None" = None

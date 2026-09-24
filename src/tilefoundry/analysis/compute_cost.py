@@ -9,8 +9,7 @@ from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard import Mesh, flatten, level_axes, merge_mesh
+from tilefoundry.ir.types import DType, Mesh, flatten, level_axes, merge_mesh
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TrafficBytes
 from tilefoundry.visitor_registry.visitors import CostEvaluator

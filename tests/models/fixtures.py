@@ -17,7 +17,7 @@ documents: asking a corpus model about H200 is what its own source already does.
 from __future__ import annotations
 
 from tests.models.corpus import TargetFixture
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget, TopologyFacts, TopologyLevelFacts
 from tilefoundry.target.amx.target import AmxTarget
 from tilefoundry.target.base import Target

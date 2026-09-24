@@ -31,7 +31,7 @@ import pytest
 
 from tilefoundry.ir.core.module import Module, function_selectors, select
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target.base import Target
 
 MODELS_ROOT = Path(__file__).parent

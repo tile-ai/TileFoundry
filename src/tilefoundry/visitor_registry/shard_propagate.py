@@ -12,13 +12,13 @@ from dataclasses import replace
 
 import isl
 
-from tilefoundry.ir.types.shard import (
+from tilefoundry.ir.types import (
     Layout,
     ShardLayout,
     canonical_shard_layout,
     try_c_order_strides,
 )
-from tilefoundry.ir.types.shard.shard_layout import (
+from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Partial,
     Split,

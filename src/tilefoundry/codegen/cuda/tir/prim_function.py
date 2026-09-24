@@ -16,7 +16,7 @@ from tilefoundry.codegen.signature import TensorSignature, tensor_signature_of
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types.shape_helpers import shape_numel_upper_bound
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.registries import Role, register_codegen
 

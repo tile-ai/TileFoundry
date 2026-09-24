@@ -20,9 +20,8 @@ from tests.ops.ir.typeinfer_utils import (
 )
 from tilefoundry.ir.core.kinds import UnaryKind
 from tilefoundry.ir.hir.math.unary import Unary
-from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.shard import make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Partial
+from tilefoundry.ir.types import DType, make_mesh, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard_layout import Partial
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 _NEG = Unary(kind=UnaryKind.NEG)

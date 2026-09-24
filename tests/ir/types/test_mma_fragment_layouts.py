@@ -12,8 +12,7 @@ from __future__ import annotations
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.tir.cuda.nn.mma import SM80_16x8x16_F32BF16BF16F32_TN, make_atom
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import ShardLayout, Split, product
+from tilefoundry.ir.types import DType, ShardLayout, Split, TensorType, product
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.typeinfer import inference_type
 

@@ -8,10 +8,9 @@ from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard import ComposedLayout, try_c_order_strides
-from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.shard_layout import (
+from tilefoundry.ir.types import ComposedLayout, TensorType, try_c_order_strides
+from tilefoundry.ir.types.layout import Layout
+from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     ShardLayout,
     Split,

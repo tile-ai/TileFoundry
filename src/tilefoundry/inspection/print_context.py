@@ -5,9 +5,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from math import prod
 
-from tilefoundry.ir.types.shard.int_tuple import flatten
-from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
-from tilefoundry.ir.types.shard.mesh import Mesh, level_axes
+from tilefoundry.ir.types.int_tuple import flatten
+from tilefoundry.ir.types.layout import ComposedLayout, Layout
+from tilefoundry.ir.types.mesh import Mesh, level_axes
 from tilefoundry.utils.python_source import PythonExpr, _merge_imports
 
 

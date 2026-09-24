@@ -24,8 +24,8 @@ from tilefoundry.ir.core.module import reachable_functions
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.types import tensor_types
-from tilefoundry.ir.types.shard.layout import ComposedLayout
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.layout import ComposedLayout
+from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 

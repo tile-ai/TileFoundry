@@ -21,7 +21,7 @@ from tilefoundry.ir.types.shape_helpers import (
     shape_upper_bound,
     upper_bound,
 )
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout, shard_layout_local_shape
+from tilefoundry.ir.types.shard_layout import ShardLayout, shard_layout_local_shape
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.registries import Role, register_codegen

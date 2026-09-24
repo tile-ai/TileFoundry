@@ -53,7 +53,7 @@ ALLOWED = [
     'path = Path(__file__).parent / "model" / "decoder_layer.py"',
     'CKPT_DIR = os.environ["TILEFOUNDRY_QWEN35_CKPT"]',
     'shard = "model-00001-of-00001.safetensors"',
-    "from tilefoundry.ir.types.shard import Layout",
+    "from tilefoundry.ir.types import Layout",
     'doc = "/usr/share/doc"',
     f'note = "put it under {_HOME}/<you>/checkouts"',
     f"# see {_HOME}/someone/notes.md  # no-machine-path: allow",

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from tilefoundry import func, module
 from tilefoundry.dsl import DimVar, Tensor, tf
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
 
 WINDOW_SEQ = DimVar("seq", 4, 64)

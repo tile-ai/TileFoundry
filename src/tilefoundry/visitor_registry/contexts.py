@@ -14,7 +14,7 @@ from tilefoundry.ir.core.metadata import (
     get_metadata,
 )
 from tilefoundry.ir.core.stmt import Stmt
-from tilefoundry.ir.types.shard import Mesh, Topology
+from tilefoundry.ir.types import Mesh, Topology
 from tilefoundry.ir.types.tensor_type import DType, Type
 from tilefoundry.ir.types.utils import local_type_of
 

@@ -83,7 +83,7 @@ from tilefoundry.analysis import analyze as run_analysis
 from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, Mesh, Tensor, tf
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 - bare tile() in the fused body
 from tilefoundry.inspection.analysis_report import render_analysis, render_text
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
 
 HIDDEN = 256

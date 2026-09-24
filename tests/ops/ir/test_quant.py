@@ -22,13 +22,15 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.quant import Quant
 from tilefoundry.ir.types import (
     DType,
+    Layout,
+    ShardLayout,
     TupleType,
+    make_mesh,
     make_shard_tensor_type,
     make_tensor_type,
 )
 from tilefoundry.ir.types.dim import DimFloorDiv, DimVar
-from tilefoundry.ir.types.shard import Layout, ShardLayout, make_mesh
-from tilefoundry.ir.types.shard.shard_layout import (
+from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Partial,
     Split,

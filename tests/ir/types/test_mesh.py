@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.types.shard import (
+from tilefoundry.ir.types import (
     Layout,
     Mesh,
     Topology,
@@ -10,8 +10,8 @@ from tilefoundry.ir.types.shard import (
     make_mesh,
     product,
 )
-from tilefoundry.ir.types.shard.layout_algebra import size
-from tilefoundry.ir.types.shard.scope_match import (
+from tilefoundry.ir.types.layout_algebra import size
+from tilefoundry.ir.types.scope_match import (
     mesh_scope_matches_required_scope,
     states_consistent_positions,
 )

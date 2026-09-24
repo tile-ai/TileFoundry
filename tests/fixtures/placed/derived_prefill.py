@@ -2,7 +2,7 @@
 
 from tilefoundry import func, module
 from tilefoundry.dsl import DimVar, Mesh, Tensor, ceildiv, tf
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
 
 PREFILL_N = DimVar("prefill_n", 1, 65)

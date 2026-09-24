@@ -15,9 +15,8 @@ from tests.ops.ir.typeinfer_utils import (
     raw_shard_tensor_type,
 )
 from tilefoundry.ir.hir.tensor.transpose import Transpose
-from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.shard import Layout, make_mesh
-from tilefoundry.ir.types.shard.shard_layout import (
+from tilefoundry.ir.types import DType, Layout, make_mesh, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     ShardLayout,
     Split,

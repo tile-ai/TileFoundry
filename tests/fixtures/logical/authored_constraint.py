@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from tilefoundry import func, module
 from tilefoundry.dsl import Tensor, tf
-from tilefoundry.ir.types.shard import Layout, Mesh, Topology
+from tilefoundry.ir.types import Layout, Mesh, Topology
 from tilefoundry.target import CudaTarget
 
 _CTA_MESH = Mesh((Topology("cta", 8),), Layout((8,), (1,)))

@@ -62,7 +62,22 @@ from tilefoundry.ir.tir.stmts import (
     While,
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
-from tilefoundry.ir.types import DType, TensorType, TupleType, UnitType
+from tilefoundry.ir.types import (
+    Broadcast,
+    DType,
+    Layout,
+    Mesh,
+    Partial,
+    ShardLayout,
+    Split,
+    TensorType,
+    Topology,
+    TupleType,
+    UnitType,
+    c_order_strides,
+    canonical_shard_layout,
+    merge_mesh,
+)
 from tilefoundry.ir.types.callable_type import CallableType
 from tilefoundry.ir.types.dim import (
     DimAdd,
@@ -74,20 +89,8 @@ from tilefoundry.ir.types.dim import (
     dim_expr,
     simplify_dim,
 )
+from tilefoundry.ir.types.layout import LayoutBase
 from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.shard import (
-    Broadcast,
-    Layout,
-    Mesh,
-    Partial,
-    ShardLayout,
-    Split,
-    Topology,
-    c_order_strides,
-    canonical_shard_layout,
-    merge_mesh,
-)
-from tilefoundry.ir.types.shard.layout import LayoutBase
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 from tilefoundry.ir.visitor import BindingSubstitutionCloner
 from tilefoundry.target import MemoryHierarchyFacts, Target, UnsupportedCapabilityError

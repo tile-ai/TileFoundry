@@ -16,7 +16,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from tilefoundry.ir.types.shard.mesh import Topology
+from tilefoundry.ir.types.mesh import Topology
 
 
 @dataclass(frozen=True)

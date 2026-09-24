@@ -6,19 +6,16 @@ from typing import Optional
 from tilefoundry.ir.types.storage import StorageKind
 
 from .dtype import DType
-from .shard import (
-    ComposedLayout,
-    Layout,
-    Mesh,
+from .layout import ComposedLayout, Layout
+from .layout_algebra import size
+from .mesh import Mesh, Topology, level_axes
+from .shard_layout import (
     ShardLayout,
     Split,
-    Topology,
     canonical_shard_layout,
-    level_axes,
     shard_layout_of,
+    split_target_axes,
 )
-from .shard.layout_algebra import size
-from .shard.shard_layout import split_target_axes
 from .tensor_type import TensorType, TupleType, Type
 
 

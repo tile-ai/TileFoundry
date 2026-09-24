@@ -16,9 +16,9 @@ from tilefoundry.ir.hir._shard_checks import (
     reject_dynamic_shards,
     require_uniform_partial_slices,
 )
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard import (
+from tilefoundry.ir.types import (
     Layout,
+    TensorType,
     shard_layout_of,
     try_c_order_strides,
 )

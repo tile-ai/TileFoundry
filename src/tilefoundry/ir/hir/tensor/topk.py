@@ -19,7 +19,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
-from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types import DType, Layout, TensorType, TupleType, try_c_order_strides
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimFloorDiv,
@@ -30,8 +30,7 @@ from tilefoundry.ir.types.dim import (
     DimVar,
     is_dim_expr,
 )
-from tilefoundry.ir.types.shard import Layout, try_c_order_strides
-from tilefoundry.ir.types.shard.shard_layout import (
+from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     Split,
     layout_axis_to_tensor_axis,

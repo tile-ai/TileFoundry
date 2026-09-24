@@ -20,9 +20,14 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import broadcast_shapes, resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import Layout, canonical_shard_layout, try_c_order_strides
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout, shard_layout_of
+from tilefoundry.ir.types import (
+    DType,
+    Layout,
+    TensorType,
+    canonical_shard_layout,
+    try_c_order_strides,
+)
+from tilefoundry.ir.types.shard_layout import Broadcast, ShardLayout, shard_layout_of
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (

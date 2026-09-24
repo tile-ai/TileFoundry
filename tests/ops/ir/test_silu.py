@@ -12,9 +12,8 @@ from tests.ops.ir.typeinfer_utils import (
     run_typeinfer_case,
 )
 from tilefoundry.ir.hir.nn.silu import Silu
-from tilefoundry.ir.types import make_shard_tensor_type
-from tilefoundry.ir.types.shard import make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Partial
+from tilefoundry.ir.types import make_mesh, make_shard_tensor_type
+from tilefoundry.ir.types.shard_layout import Partial
 
 _OP = Silu()
 _M = make_mesh((4,))

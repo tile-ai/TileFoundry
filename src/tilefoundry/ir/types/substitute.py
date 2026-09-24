@@ -112,9 +112,9 @@ def dim_vars_by_name(value: object) -> dict[str, "DimVar"]:
 
 def _shard_types() -> tuple[type, ...]:
     """Shard geometry descriptors, imported at call time to avoid a cycle."""
-    from .shard.layout import ComposedLayout, Layout  # noqa: PLC0415
-    from .shard.mesh import Mesh, Topology  # noqa: PLC0415
-    from .shard.shard_layout import ShardLayout  # noqa: PLC0415
+    from .layout import ComposedLayout, Layout  # noqa: PLC0415
+    from .mesh import Mesh, Topology  # noqa: PLC0415
+    from .shard_layout import ShardLayout  # noqa: PLC0415
 
     return (Layout, ComposedLayout, ShardLayout, Mesh, Topology)
 

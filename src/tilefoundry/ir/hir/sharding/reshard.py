@@ -6,11 +6,10 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types import TensorType, c_order_strides
 from tilefoundry.ir.types.dim import DimMul, simplify_dim
-from tilefoundry.ir.types.shard import c_order_strides
-from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.shard_layout import (
+from tilefoundry.ir.types.layout import Layout
+from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     Split,
     shard_layout_local_shape,

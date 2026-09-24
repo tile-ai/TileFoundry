@@ -5,7 +5,7 @@ from __future__ import annotations
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, DimVar, Mesh, Tensor, tf
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- bare tile in authored bodies
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
 
 _HIDDEN = 2048

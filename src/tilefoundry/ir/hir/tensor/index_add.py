@@ -10,9 +10,8 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.hir.tensor.index_select import _norm_dim
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import shard_layout_of
-from tilefoundry.ir.types.shard.shard_layout import Split
+from tilefoundry.ir.types import DType, TensorType, shard_layout_of
+from tilefoundry.ir.types.shard_layout import Split
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,

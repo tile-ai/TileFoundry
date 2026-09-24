@@ -4,7 +4,7 @@ from tilefoundry import func
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.storage import gmem, rmem, smem
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
-from tilefoundry.ir.types.shard import B, Layout, Mesh, P, S, ShardLayout, Topology
+from tilefoundry.ir.types import B, Layout, Mesh, P, S, ShardLayout, Topology
 
 @func(mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane')))
 def composed_mesh_pipeline(

@@ -55,9 +55,19 @@ from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.where import Where
 from tilefoundry.ir.hir.tensor.zeros import Zeros
-from tilefoundry.ir.types import DType, IntegerDType, TensorType, Type, numel, tensor_bytes
-from tilefoundry.ir.types.shard import ShardLayout, flatten, level_axes, shard_layout_of
-from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis, split_target_axes
+from tilefoundry.ir.types import (
+    DType,
+    IntegerDType,
+    ShardLayout,
+    TensorType,
+    Type,
+    flatten,
+    level_axes,
+    numel,
+    shard_layout_of,
+    tensor_bytes,
+)
+from tilefoundry.ir.types.shard_layout import layout_axis_to_tensor_axis, split_target_axes
 from tilefoundry.visitor_registry.access_relation import logical_axes_of
 
 from .contexts import Cost, CostContext, TrafficBytes

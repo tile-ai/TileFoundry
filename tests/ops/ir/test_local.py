@@ -8,7 +8,7 @@ from tilefoundry.analysis.api import analyze
 from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.hir.sharding.local import Local
-from tilefoundry.ir.types.shard import Layout
+from tilefoundry.ir.types import Layout
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import TrafficBytes

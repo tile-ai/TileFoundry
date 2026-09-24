@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Callable
 
 from tilefoundry.codegen.signature import CallableSignature
-from tilefoundry.ir.types.shard import Placement
+from tilefoundry.ir.types import Placement
 from tilefoundry.runtime.resource import RuntimeResource
 
 __all__ = ["CompiledModule", "RuntimeModule"]

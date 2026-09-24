@@ -31,11 +31,12 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.types import (
     DType,
+    Topology,
+    make_mesh,
     make_shard_tensor_type,
     make_tensor_type,
 )
-from tilefoundry.ir.types.shard import Topology, make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Partial
+from tilefoundry.ir.types.shard_layout import Partial
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes, TypeInferContext

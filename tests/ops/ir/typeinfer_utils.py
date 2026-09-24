@@ -15,8 +15,8 @@ import pytest
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.types import DType, TensorType, TupleType
-from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split, shard_layout_local_shape
+from tilefoundry.ir.types.layout import Layout
+from tilefoundry.ir.types.shard_layout import ShardLayout, Split, shard_layout_local_shape
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 

@@ -32,13 +32,14 @@ from tilefoundry.ir.hir.tensor.topk import TopK
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import (
     DType,
+    Layout,
     TupleType,
+    make_mesh,
     make_shard_tensor_type,
     make_tensor_type,
 )
 from tilefoundry.ir.types.dim import DimVar, dim_min
-from tilefoundry.ir.types.shard import Layout, make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, ShardLayout, Split
+from tilefoundry.ir.types.shard_layout import Broadcast, Partial, ShardLayout, Split
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 

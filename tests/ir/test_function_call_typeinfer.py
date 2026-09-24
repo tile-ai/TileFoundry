@@ -19,10 +19,15 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types import (
+    DType,
+    TupleType,
+    make_mesh,
+    make_shard_tensor_type,
+    make_tensor_type,
+)
 from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
-from tilefoundry.ir.types.shard import make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
+from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 

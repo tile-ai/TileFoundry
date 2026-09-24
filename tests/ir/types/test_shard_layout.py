@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.types.shard import Layout
-from tilefoundry.ir.types.shard import layout_algebra as la
+from tilefoundry.ir.types import Layout
+from tilefoundry.ir.types import layout_algebra as la
 
 
 @pytest.mark.parametrize(

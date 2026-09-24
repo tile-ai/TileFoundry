@@ -17,8 +17,8 @@ from tilefoundry import func, module
 from tilefoundry.dsl import Tensor, tf  # noqa: F401 — tf used by the @func body
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op names for the @func body
 from tilefoundry.ir.core.pattern import DimVarRangePat
+from tilefoundry.ir.types import Broadcast, Layout, Mesh, ShardLayout, Topology
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard import Broadcast, Layout, Mesh, ShardLayout, Topology
 
 HEAD_DIM = 128
 NUM_Q_HEADS = 32

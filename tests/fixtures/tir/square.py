@@ -4,7 +4,7 @@ from tilefoundry import module, prim_func
 from tilefoundry.dsl import DimVar, T, Tensor
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.pattern import DimVarRangePat
-from tilefoundry.ir.types.shard import Layout, Mesh, Topology
+from tilefoundry.ir.types import Layout, Mesh, Topology
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _S = DimVar("S", 1, 256)

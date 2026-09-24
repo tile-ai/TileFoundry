@@ -32,9 +32,8 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.pattern import _mangle_variant_name
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.tir.launch import launch_call
-from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types import Broadcast, Layout, Partial, Split, TensorType
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard import Broadcast, Layout, Partial, Split
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.utils import types_compatible
 

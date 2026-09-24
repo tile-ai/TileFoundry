@@ -17,10 +17,17 @@ from tilefoundry.evaluator.context import EvaluateContext
 from tilefoundry.evaluator.registry import eval_registry
 from tilefoundry.evaluator.value import TensorValue, TupleValue
 from tilefoundry.ir.hir.tensor.split import Split
-from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.shard import Layout, ShardLayout, make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Split as SplitAttr
-from tilefoundry.ir.types.shard.shard_layout import shard_layout_local_shape
+from tilefoundry.ir.types import (
+    DType,
+    Layout,
+    ShardLayout,
+    TupleType,
+    make_mesh,
+    make_shard_tensor_type,
+    make_tensor_type,
+)
+from tilefoundry.ir.types.shard_layout import Split as SplitAttr
+from tilefoundry.ir.types.shard_layout import shard_layout_local_shape
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 CASES = [

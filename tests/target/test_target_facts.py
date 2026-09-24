@@ -11,8 +11,7 @@ from tilefoundry.analysis.facts import (
     MemoryHierarchyFacts,
     ThroughputFacts,
 )
-from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import DType, Topology
 from tilefoundry.target import (
     AmxTarget,
     CudaTarget,

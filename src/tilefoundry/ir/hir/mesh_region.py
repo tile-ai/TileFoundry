@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tilefoundry.ir.core import Expr, Var
-from tilefoundry.ir.types.shard.mesh import Mesh
+from tilefoundry.ir.types.mesh import Mesh
 
 
 @dataclass(unsafe_hash=True)

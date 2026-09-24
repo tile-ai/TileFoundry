@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.types import DType
+from tilefoundry.ir.types import DType, Topology
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard import Topology
 from tilefoundry.target import (
     AmxTarget,
     TopologyFacts,

@@ -7,9 +7,9 @@ from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import topology_scope_str
 from tilefoundry.ir.tir.sync import participation
-from tilefoundry.ir.types.shard.int_tuple import flatten
-from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
-from tilefoundry.ir.types.shard.mesh import Mesh, Topology, level_index, stated_layout
+from tilefoundry.ir.types.int_tuple import flatten
+from tilefoundry.ir.types.layout import ComposedLayout, Layout
+from tilefoundry.ir.types.mesh import Mesh, Topology, level_index, stated_layout
 from tilefoundry.target import validate_cuda_topology_levels
 
 

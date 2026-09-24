@@ -8,11 +8,11 @@ by ``covered_by_scope`` and ``storage_reaches``.
 
 from __future__ import annotations
 
-from ..storage import StorageKind, resolve_storage
 from .int_tuple import flatten, product
 from .layout import Layout
 from .layout_algebra import is_inverse_projectable, size
 from .mesh import Mesh, stated_layout
+from .storage import StorageKind, resolve_storage
 
 
 def _as_layout(mesh: Mesh) -> Layout:

@@ -16,13 +16,16 @@ from tilefoundry.ir.core import Call, Expr, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
-from tilefoundry.ir.types import DType, TensorType, TupleType, Type
-from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.shard import (
+from tilefoundry.ir.types import (
+    DType,
     Mesh,
+    TensorType,
+    TupleType,
+    Type,
     flatten,
     level_axes,
 )
+from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.target.base import Target, UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.isl_utils import cardinality

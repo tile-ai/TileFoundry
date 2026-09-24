@@ -18,9 +18,8 @@ from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.specialize import residual_dims, specialize_concretely
 from tilefoundry.ir.hir.tensor.arange import Arange
 from tilefoundry.ir.isl_interop import normalize_dim
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import DType, Layout, Mesh, TensorType, Topology, merge_mesh
 from tilefoundry.ir.types.dim import ceildiv
-from tilefoundry.ir.types.shard import Layout, Mesh, Topology, merge_mesh
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor

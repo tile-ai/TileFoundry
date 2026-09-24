@@ -18,7 +18,7 @@ _HEADER = (
 )
 
 _SHARD_IMPORT = (
-    "from tilefoundry.ir.types.shard import (\n"
+    "from tilefoundry.ir.types import (\n"
     "    B, S, P, ComposedLayout, Layout, Mesh, ShardLayout, Topology,\n"
     ")\n"
 )

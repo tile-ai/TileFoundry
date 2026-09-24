@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.types.shard import Layout, ShardAttr
+from tilefoundry.ir.types import Layout, ShardAttr
 
 from .base import ScheduleConstraint
 

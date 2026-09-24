@@ -20,8 +20,7 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.stack import Stack
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import DType, Topology
 from tilefoundry.parser import ParseError
 from tilefoundry.target import CpuTarget, CudaTarget
 

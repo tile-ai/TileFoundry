@@ -23,7 +23,7 @@ from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.types.shard import Layout, Mesh, Topology
+from tilefoundry.ir.types import Layout, Mesh, Topology
 from tilefoundry.runtime.resource import DictResource
 from tilefoundry.target import CpuTarget, CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render

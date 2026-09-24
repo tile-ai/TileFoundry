@@ -14,9 +14,15 @@ from __future__ import annotations
 import isl
 import pytest
 
-from tilefoundry.ir.types import make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Topology
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
+from tilefoundry.ir.types import (
+    Layout,
+    Mesh,
+    ShardLayout,
+    Topology,
+    make_shard_tensor_type,
+    make_tensor_type,
+)
+from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     AffineAccess,

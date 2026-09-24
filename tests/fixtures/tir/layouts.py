@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.types.shard import Layout, ShardLayout, Split
-from tilefoundry.ir.types.shard.shard_layout import Broadcast
+from tilefoundry.ir.types import Layout, ShardLayout, Split
+from tilefoundry.ir.types.shard_layout import Broadcast
 
 
 def bcast(shape, strides, mesh) -> ShardLayout:

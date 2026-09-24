@@ -9,9 +9,8 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard import ComposedLayout, Layout, try_c_order_strides
-from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
+from tilefoundry.ir.types import ComposedLayout, Layout, TensorType, try_c_order_strides
+from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AffineAccess,

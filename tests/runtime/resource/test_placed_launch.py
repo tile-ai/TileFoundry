@@ -23,7 +23,7 @@ from tests.fixtures.placed.gpu_placed_rows import (
     ROWS_PER_CARD,
     GpuPlacedRows,
 )
-from tilefoundry.ir.types.shard import Placement
+from tilefoundry.ir.types import Placement
 from tilefoundry.runtime.resource import DictResource
 
 

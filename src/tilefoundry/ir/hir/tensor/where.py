@@ -13,9 +13,8 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import broadcast_shapes, is_one, resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.hir.math.binary import _merge_layout
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import Layout, try_c_order_strides
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, shard_layout_of
+from tilefoundry.ir.types import DType, Layout, TensorType, try_c_order_strides
+from tilefoundry.ir.types.shard_layout import Broadcast, shard_layout_of
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (

@@ -259,7 +259,7 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
         imports.update(target.imports)
         kwargs.append(f"target={target.text}")
     if mod.topologies is not None:
-        imports.add("from tilefoundry.ir.types.shard import Topology")
+        imports.add("from tilefoundry.ir.types import Topology")
         rendered = ", ".join(f'Topology("{t.name}", {t.size!r})' for t in mod.topologies)
         kwargs.append(f"topologies=({rendered},)" if rendered else "topologies=()")
     lines.append(f"@module({', '.join(kwargs)})")

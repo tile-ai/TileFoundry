@@ -12,9 +12,9 @@ from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.tir.verify import verify_module
 from tilefoundry.ir.types import (
+    Layout,
     callable_type_for_prim_function,
 )
-from tilefoundry.ir.types.shard import Layout
 from tilefoundry.target import CpuTarget, CudaTarget
 
 

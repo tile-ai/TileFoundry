@@ -37,7 +37,7 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.types import DType, TensorType, TupleType, Type
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard import (
+from tilefoundry.ir.types import (
     B,
     Broadcast,
     ComposedLayout,

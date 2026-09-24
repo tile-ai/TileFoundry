@@ -17,9 +17,14 @@ from tests.ops.ir.typeinfer_utils import (
     run_typeinfer_case,
 )
 from tilefoundry.ir.hir.nn.rope import RoPE
-from tilefoundry.ir.types import DType, TupleType, make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.shard import make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Partial
+from tilefoundry.ir.types import (
+    DType,
+    TupleType,
+    make_mesh,
+    make_shard_tensor_type,
+    make_tensor_type,
+)
+from tilefoundry.ir.types.shard_layout import Partial
 
 _BF = DType.bf16
 _M = make_mesh((4,))

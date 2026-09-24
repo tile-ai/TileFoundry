@@ -9,20 +9,21 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.types import TensorType, TupleType
-from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.shard import (
+from tilefoundry.ir.types import (
     Broadcast,
     Layout,
     Partial,
     ShardLayout,
+    TensorType,
+    TupleType,
     canonical_shard_layout,
     shard_layout_of,
     try_c_order_strides,
 )
-from tilefoundry.ir.types.shard.shard_layout import Split as ShardSplit
-from tilefoundry.ir.types.shard.shard_layout import Split as SplitAttr
-from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis, split_target_axes
+from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.shard_layout import Split as ShardSplit
+from tilefoundry.ir.types.shard_layout import Split as SplitAttr
+from tilefoundry.ir.types.shard_layout import layout_axis_to_tensor_axis, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,

@@ -19,7 +19,7 @@ truth for the directory's structure and invariants.
 |---|---|---|
 | `ir/core/` | [core-ir](./core-ir.md) | Shared node algebra: `Module` / `Expr` / `Var` / `Constant` / `Tuple` / `Op` / `Call` / `Stmt` (base class) / `OpSchema` / `ParamDef` / call-graph and ownership queries / typed metadata attach-detach and diagnostics / `@register_op` / `@register_alias` / `op_registry` / `errors`. |
 | `ir/types/` | [types](./types.md) | Type-system root: `Type` / `TensorType` / `TupleType` / `UnitType` / `CallableType` / `DType` / `StorageKind` / `resolve_storage` / local projections (`local_type_of`) / tensor-leaf, byte-by-storage, and topology-extent queries / `dim.*` (with their typeinfer). |
-| `ir/types/shard/` | [shard](./shard.md) | Shard / layout sublayer: `Topology` / `Mesh` / `Layout` / `ComposedLayout` / `ShardLayout` / `ShardAttr` (`Split` / `Broadcast` / `Dynamic` / `Partial`). The physical nesting reflects the spec's "sublayer" relationship. |
+| `ir/types/{int_tuple,stride,layout,layout_algebra,shard_layout,mesh}.py` | [shard](./shard.md) | `Topology` / `Mesh` / `Layout` / `ComposedLayout` / `ShardLayout` / `ShardAttr` (`Split` / `Broadcast` / `Dynamic` / `Partial`), filed as CuTe files them: int tuples, strides, layouts and the algebra over them each in their own module. |
 | `ir/constraints/` | [parser](./parser.md) | Authored `where(layout=..., mesh=..., storage=...)` constraint records: the shared base plus layout, mesh, and storage constraints, attached by the parser and read back by the Python printer. |
 | `ir/visitor.py` | [visitor-mutator](./visitor-mutator.md) | `ExprFunctor` / `ExprVisitor` / `ExprWalker` / `ExprCollector` / `ExprCloner` / `BindingSubstitutionCloner` / `StmtVisitor` / `StmtMutator` / `StmtExprMutator`, plus `collect_exprs`, value-operand/function-value queries, and the canonical `PrimFunction` walk and rewrite entries. |
 | `ir/isl_interop.py` | [types](./types.md) | Interoperation between dimension and shape IR values and isl: expression rendering and decoding, normalization, value ranges, and shape-domain construction. Pure isl operations remain in `utils/isl_utils.py`. |
@@ -74,14 +74,11 @@ physical directory layout reflects that boundary directly.
 **Reading notes:**
 
 - `ir/` holds the IR proper and its sublayers only. `ir/types/` is the
-  root of the type system; `ir/types/shard/` is its shard / layout
-  sublayer ([architecture §3](./architecture.md#3-type-system)). The
-  physical nesting reflects the spec's conceptual "sublayer".
-- The placement of `shard/` under `types/` is a filing decision, not a
-  consumer restriction: `Topology` / `Mesh` / `Layout` / `ShardLayout`
-  are consumed directly by `parser`, `tir`, and `codegen`. The
-  hierarchy expresses "role in the type system", not "who may import
-  it".
+  root of the type system, and the shard / layout types sit in it
+  directly ([architecture §3](./architecture.md#3-type-system)): they
+  are types, and a folder naming them a sublayer said nothing a reader
+  could use. Their filing follows CuTe's, one module per thing the
+  algebra is written against.
 - `codegen/` and `parser/` sit outside `ir/`. By the
   [architecture §1](./architecture.md#1-spec-relationship-map)
   pipeline they are the front-end producer and back-end consumer of

@@ -15,7 +15,16 @@ from tilefoundry.ir.hir._helpers import broadcast_shapes
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types import (
+    ComposedLayout,
+    DType,
+    Layout,
+    Mesh,
+    ShardLayout,
+    TensorType,
+    Topology,
+    TupleType,
+)
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimFloorDiv,
@@ -27,8 +36,7 @@ from tilefoundry.ir.types.dim import (
     DimVar,
     simplify_dim,
 )
-from tilefoundry.ir.types.shard import ComposedLayout, Layout, Mesh, ShardLayout, Topology
-from tilefoundry.ir.types.shard.shard_layout import Broadcast
+from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 

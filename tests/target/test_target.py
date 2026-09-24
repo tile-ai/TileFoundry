@@ -24,7 +24,7 @@ from tilefoundry.dsl import DimVar
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Sequential
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import (
     CpuTarget,
     CudaTarget,

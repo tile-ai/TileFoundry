@@ -12,9 +12,9 @@ from __future__ import annotations
 import pytest
 
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.mesh import Mesh, Topology
-from tilefoundry.ir.types.shard.shard_layout import (
+from tilefoundry.ir.types.layout import Layout
+from tilefoundry.ir.types.mesh import Mesh, Topology
+from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Partial,
     ShardLayout,
