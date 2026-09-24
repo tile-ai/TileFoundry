@@ -77,13 +77,9 @@ region boundary at a time, so nested regions pass a value through each door.
 
 A loop body holds `with Mesh(...)` statements, and the loop carries what one
 binds. Because the body repeats, a name the `with` reads on its way to binding
-it escapes as well as one read after it, and the loop's carry list holds both.
-A `with` whose body states no value of its own yields the first name it rebound,
-so the region stays on the graph the loop reads.
-
-A TIR loop bound that is not a literal is read as the dimension arithmetic the
-loop was lowered from, so a bound naming a mesh coordinate reads back as the
-bound it was printed from rather than as value arithmetic.
+it escapes as a name read after it does, and the loop carries both. A TIR loop
+bound that is not a literal is read as the dimension arithmetic the loop was
+lowered from, so a bound naming a mesh coordinate reads back as it was printed.
 
 ## 2. Syntax and Rules
 

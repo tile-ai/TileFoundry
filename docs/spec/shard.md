@@ -308,9 +308,6 @@ Field meanings:
   ([tir §1.5](./tir.md#15-sync))
 - `names` — optional human-readable names (`cta.x`, `cta.y`, …)
 
-`Mesh` describes the parallel device domain; it is not a tensor layout
-object.
-
 Mesh composition uses the following rules:
 
 - `composed(meshes)` MUST replace all levels in force when the inner mesh names
@@ -332,9 +329,6 @@ Mesh composition uses the following rules:
 HIR `MeshRegion` applies this composition only at its body boundary. Its `args`
 are evaluated in the enclosing scope and are not recomposed merely because the
 value is consumed by a region.
-
-`Mesh` MAY carry more than one `Topology` (e.g. `warp(4) x thread(32)`); the
-full sequence is always `topologies`.
 
 - constraints:
   - `Topology` construction rejects a `None` size. `Mesh` construction rejects

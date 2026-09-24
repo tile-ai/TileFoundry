@@ -1324,8 +1324,8 @@ widening; the two modules do not define a second affine graph representation.
     MUST count as zero; a non-empty context with an unbounded parameter MUST
     report unknown.
   - `IterationScope.trips()` MUST count a loop off its bounds, not its domain:
-    `max(1, ceil(max(stop - start) / step))`, with `step` a literal and the span
-    bounded. `trips_precision` is `EXACT` where that span reaches one value and
+    `max(1, ceil(max(stop - start) / step))`, refusing an unbounded span.
+    `trips_precision` is `EXACT` where that span reaches one value and
     `WIDENED` where it reaches several, the count then being an upper bound.
 
 ### 2.2 Target-selected Analyzers

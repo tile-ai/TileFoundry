@@ -686,9 +686,8 @@ view materialized.
 - A source axis written as a group of modes has no single stride: its start
   MUST be read through the group as a mixed-radix coordinate, and the window
   MUST be the group's least-stepping modes, as many as its size takes, in the
-  order the group wrote them. Such an axis MUST be refused, leaving
-  `layout=None`, when its start is not a multiple of its size, its size lands
-  on no mode boundary, or it is stepped.
+  order the group wrote them. A start that is not a multiple of the size, a
+  size landing on no mode boundary, and a step MUST each be refused.
 - A `ShardLayout` slice MUST preserve its mesh attributes when every narrowed
   logical axis is unsplit. The corresponding primitive layout position takes
   the window size and stepped stride. Static starts wrap that shard layout in a
