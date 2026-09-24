@@ -344,13 +344,13 @@ class Gemm_MNK_NT128x128x64_w17x8:
                 ]
             )
             for mi in range(
-                cta.x * RESIDENT_BM,
-                (cta.x + 1) * RESIDENT_BM,
+                cta.x * (DEEPGEMM_M // DEEPGEMM_X),
+                (cta.x + 1) * (DEEPGEMM_M // DEEPGEMM_X),
                 RESIDENT_BM,
             ):
                 for ni in range(
-                    cta.y * RESIDENT_BN,
-                    (cta.y + 1) * RESIDENT_BN,
+                    cta.y * (DEEPGEMM_N // DEEPGEMM_Y),
+                    (cta.y + 1) * (DEEPGEMM_N // DEEPGEMM_Y),
                     RESIDENT_BN,
                 ):
                     for ki in tile(DEEPGEMM_K, RESIDENT_BK):

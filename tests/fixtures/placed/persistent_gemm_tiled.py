@@ -16,8 +16,6 @@ BN = 64
 BK = 32
 BX = 12
 BY = 11
-CHUNK_M = M // BX
-CHUNK_N = N // BY
 
 
 @module(
@@ -35,8 +33,8 @@ class PersistentGemmTiled:
     ) -> Tensor[(M, N), "f32"]:
         out = tf.zeros(Tensor[(M, N), "f32"])
         with Mesh(("cta",), layout=(BX, BY), names=("x", "y")) as cta:
-            for mi in tile(cta.x * CHUNK_M, (cta.x + 1) * CHUNK_M, BM):
-                for ni in tile(cta.y * CHUNK_N, (cta.y + 1) * CHUNK_N, BN):
+            for mi in tile(cta.x * (M // BX), (cta.x + 1) * (M // BX), BM):
+                for ni in tile(cta.y * (N // BY), (cta.y + 1) * (N // BY), BN):
                     acc = tf.zeros(Tensor[(BM, BN), "f32", (BM, BN), "rmem"])
                     for ki in tile(K, BK):
                         lhs = tf.reshard(a[mi, ki], (BM, BK), "smem")
@@ -57,8 +55,6 @@ __all__ = [
     "BN",
     "BX",
     "BY",
-    "CHUNK_M",
-    "CHUNK_N",
     "K",
     "M",
     "N",

@@ -122,6 +122,11 @@ def test_dim_range_interval_arithmetic():
     ilo, ihi = dim_range(inner)
     assert dim_range(outer) == (ilo // 2, (ihi - 1) // 2 + 1)
 
+    product = simplify_dim(DimMul, (P, Q))
+    shared_leaf = simplify_dim(DimAdd, (product, P))
+    plo, phi = dim_range(product)
+    assert dim_range(shared_leaf) == (plo + P.lo, phi + P.hi - 1)
+
 
 def test_dim_range_symbolic_divisor_unsupported():
     n = DimVar("N", 1, 8)
