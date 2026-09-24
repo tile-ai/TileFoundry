@@ -8,6 +8,9 @@ ranges, and shape domains.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+
 import isl
 
 from tilefoundry.ir.core.expr import Call, Constant, Expr, Var
@@ -141,6 +144,21 @@ def _interval_mul(
     return min(corners), max(corners) + 1
 
 
+def _dim_op_type(dim: Call) -> type | None:
+    op = type(dim.target)
+    if op in _DIM_OP_TYPES:
+        return op
+    kind = getattr(dim.target, "kind", None)
+    if not (
+        isinstance(dim.type, TensorType)
+        and dim.type.shape == ()
+        and isinstance(dim.type.dtype, IntegerDType)
+        and isinstance(kind, BinaryKind)
+    ):
+        return None
+    return _INTEGER_BINARY_DIM_OP.get(kind)
+
+
 _DIM_VISITOR_TYPE = None
 
 
@@ -156,23 +174,36 @@ def _dim_visitor_type():
                 self.param_map = param_map
                 self.identities = identities
 
-            def _snapshot(self):
-                return (
-                    self.params.copy(),
-                    None if self.param_map is None else self.param_map.copy(),
-                    None if self.identities is None else self.identities.copy(),
-                )
+            @contextmanager
+            def _speculative_state(self) -> Iterator[Callable[[], None]]:
+                params = self.params.copy()
+                param_map = None if self.param_map is None else self.param_map.copy()
+                identities = None if self.identities is None else self.identities.copy()
+                memo = self._memo.copy()
+                committed = False
 
-            def _restore(self, snapshot) -> None:
-                params, param_map, identities = snapshot
-                self.params.clear()
-                self.params.update(params)
-                if self.param_map is not None:
-                    self.param_map.clear()
-                    self.param_map.update(param_map)
-                if self.identities is not None:
-                    self.identities.clear()
-                    self.identities.update(identities)
+                def commit() -> None:
+                    nonlocal committed
+                    committed = True
+
+                try:
+                    yield commit
+                finally:
+                    if not committed:
+                        self.params.clear()
+                        self.params.update(params)
+                        if self.param_map is not None:
+                            self.param_map.clear()
+                            self.param_map.update(param_map)
+                        if self.identities is not None:
+                            self.identities.clear()
+                            self.identities.update(identities)
+                        self._memo.clear()
+                        self._memo.update(memo)
+
+            def _render_operands(self, dim: Call, ctx) -> tuple[str, str]:
+                a, b = dim.args
+                return self.visit(a, ctx), self.visit(b, ctx)
 
             def visit_Constant(self, dim: Constant, ctx=None) -> str:
                 return str(int(dim.value))
@@ -184,53 +215,61 @@ def _dim_visitor_type():
                 return _bind_param(dim, self.params, self.param_map, self.identities)
 
             def visit_Call(self, dim: Call, ctx=None) -> str:
-                op = type(dim.target)
-                if op not in _DIM_OP_TYPES:
-                    kind = getattr(dim.target, "kind", None)
-                    if not (
-                        isinstance(dim.type, TensorType)
-                        and dim.type.shape == ()
-                        and isinstance(dim.type.dtype, IntegerDType)
-                        and isinstance(kind, BinaryKind)
-                        and kind in _INTEGER_BINARY_DIM_OP
-                    ):
-                        return _bind_param(dim, self.params, self.param_map, self.identities)
-                    op = _INTEGER_BINARY_DIM_OP[kind]
-                a, b = dim.args
-                if op in (DimFloorDiv, DimMod) and not _is_const(b):
-                    raise NotImplementedError(
-                        f"{op.__name__} by a symbolic divisor has no isl representation"
-                    )
-                snapshot = self._snapshot() if op is DimMul else None
-                sa = self.visit(a, ctx)
-                sb = self.visit(b, ctx)
-                if op is DimMul:
+                op = _dim_op_type(dim)
+                if op is None:
+                    return _bind_param(dim, self.params, self.param_map, self.identities)
+                return getattr(self, f"visit_{op.__name__}")(dim, ctx)
+
+            def visit_DimAdd(self, dim: Call, ctx=None) -> str:
+                sa, sb = self._render_operands(dim, ctx)
+                return f"({sa} + {sb})"
+
+            def visit_DimSub(self, dim: Call, ctx=None) -> str:
+                sa, sb = self._render_operands(dim, ctx)
+                return f"({sa} - {sb})"
+
+            def visit_DimMul(self, dim: Call, ctx=None) -> str:
+                with self._speculative_state() as commit:
+                    sa, sb = self._render_operands(dim, ctx)
                     ca = _constant_value_of(sa, self.params)
                     cb = _constant_value_of(sb, self.params)
                     if ca is not None or cb is not None:
+                        commit()
                         return f"({ca if ca is not None else sa} * {cb if cb is not None else sb})"
                     bound = _interval_mul(
                         _bound_of(sa, self.params),
                         _bound_of(sb, self.params),
                     )
-                    self._restore(snapshot)
-                    name = _bind_param(dim, self.params, self.param_map, self.identities)
-                    if self.params[name] is None:
-                        self.params[name] = bound
-                    return name
-                if op is DimAdd:
-                    return f"({sa} + {sb})"
-                if op is DimSub:
-                    return f"({sa} - {sb})"
-                if op is DimFloorDiv:
-                    return f"floor({sa}/{sb})"
-                if op is DimMod:
-                    return f"({sa} mod {sb})"
-                if op is DimMax:
-                    return f"max({sa}, {sb})"
-                if op is DimMin:
-                    return f"min({sa}, {sb})"
-                raise AssertionError(f"unhandled dim op {op.__name__}")
+                name = _bind_param(dim, self.params, self.param_map, self.identities)
+                if self.params[name] is None:
+                    self.params[name] = bound
+                return name
+
+            def visit_DimFloorDiv(self, dim: Call, ctx=None) -> str:
+                _, b = dim.args
+                if not _is_const(b):
+                    raise NotImplementedError(
+                        "DimFloorDiv by a symbolic divisor has no isl representation"
+                    )
+                sa, sb = self._render_operands(dim, ctx)
+                return f"floor({sa}/{sb})"
+
+            def visit_DimMod(self, dim: Call, ctx=None) -> str:
+                _, b = dim.args
+                if not _is_const(b):
+                    raise NotImplementedError(
+                        "DimMod by a symbolic divisor has no isl representation"
+                    )
+                sa, sb = self._render_operands(dim, ctx)
+                return f"({sa} mod {sb})"
+
+            def visit_DimMax(self, dim: Call, ctx=None) -> str:
+                sa, sb = self._render_operands(dim, ctx)
+                return f"max({sa}, {sb})"
+
+            def visit_DimMin(self, dim: Call, ctx=None) -> str:
+                sa, sb = self._render_operands(dim, ctx)
+                return f"min({sa}, {sb})"
 
             def default_visit(self, value, ctx=None) -> str:
                 if isinstance(value, bool):

@@ -112,7 +112,11 @@ class WaveTruncation:
     def read(x: Tensor[(1024,), "bf16"]):
         with Mesh(("cta",), layout=(256,), names=("i",)) as cta:
             result = tf.zeros(Tensor[(4,), "bf16", (4,), "rmem"])
-            for i in tile(cta.i * 4, (cta.i + 1) * 4, 4):  # noqa: F405
+            for i in tile(  # noqa: F405
+                cta.i * (1024 // 256),
+                (cta.i + 1) * (1024 // 256),
+                4,
+            ):
                 result = tf.reshard(x[i], (4,), "rmem")
             return result
 
