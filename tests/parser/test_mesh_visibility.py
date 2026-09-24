@@ -10,11 +10,14 @@ from tests._source import import_dsl
 from tests.fixtures.placed.fused_boundary import FusedBoundary
 from tests.fixtures.placed.region_boundaries import RegionBoundaries
 from tests.fixtures.placed.rmsnorm import RmsnormModule
+from tests.fixtures.placed.scoped_tile_loop import ScopedTileLoop
 from tilefoundry import module
 from tilefoundry.dsl import *
 from tilefoundry.ir.core import Call, VerifyError, binding_name
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.types.shard import composed
 from tilefoundry.ir.visitor import collect_exprs, expr_children
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
@@ -76,6 +79,28 @@ def test_an_inner_level_layout_is_covered_by_the_whole_running_scope() -> None:
     body = RmsnormModule.rmsnorm.body
     assert isinstance(body, MeshRegion)
     TypeInferVisitor().visit(body, TypeInferContext())
+
+
+def test_a_loop_holds_a_scope_that_refines_the_levels_in_force() -> None:
+    """A region inside a loop names a suffix of the levels around it.
+
+    The whole scope names the CTAs and their threads; the region inside the
+    loop names only the threads, which refines that level and keeps the CTAs.
+    What the loop carries is bound inside that region, so the value it yields
+    reaches it.
+    """
+    body = ScopedTileLoop.row_relu.body
+    assert isinstance(body, MeshRegion)
+    assert [topology.name for topology in body.mesh.topologies] == ["cta", "thread"]
+
+    loop = next(expr for expr in collect_exprs(body) if isinstance(expr, LoopRegion))
+    inside = next(expr for expr in collect_exprs(loop.body) if isinstance(expr, MeshRegion))
+    assert [topology.name for topology in inside.mesh.topologies] == ["thread"]
+    assert inside in collect_exprs(loop.yield_values[0])
+
+    refined = composed((body.mesh, inside.mesh))
+    assert [topology.name for topology in refined.topologies] == ["cta", "thread"]
+    assert tuple(refined.layout.shape) == (4, 128)
 
 
 def test_region_boundaries_capture_external_regions_through_args() -> None:
