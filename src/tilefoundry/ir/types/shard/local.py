@@ -17,13 +17,13 @@ from collections.abc import Iterable
 from .int_tuple import flatten
 from .layout import Layout
 from .layout_algebra import c_order_strides, idx2crd
-from .mesh import positions_at, topology_axes
+from .mesh import level_axes, stated_layout
 from .shard_layout import ShardLayout, layout_axis_to_tensor_axis, split_target_axes
 
 
 def _extents(shard: ShardLayout) -> tuple[int, ...]:
     """Each mesh axis's extent, flat and in the order the attrs index them."""
-    values = tuple(flatten(shard.mesh.layout.shape))
+    values = tuple(flatten(shard.mesh.positions.shape))
     for value in values:
         if not isinstance(value, int) or isinstance(value, bool):
             raise ValueError(
@@ -115,13 +115,17 @@ def _positions(shard: ShardLayout, ids: tuple[int | None, ...]) -> dict[int, int
     A level with no id is left unfixed and names no coordinate, so the axes it
     owns divide nothing and the whole of them stays.
     """
-    names = tuple(topology.name for topology in shard.mesh.topologies)
     found: dict[int, int] = {}
-    for index, mesh_axes in enumerate(topology_axes(shard.mesh)):
+    for index, mesh_axes in enumerate(level_axes(shard.mesh)):
         program_id = ids[index] if index < len(ids) else None
         if program_id is None:
             continue
-        coord = idx2crd(program_id, *positions_at(shard.mesh, names[index]))
+        arrangement = stated_layout(shard.mesh.levels[index])
+        coord = idx2crd(
+            program_id,
+            tuple(flatten(arrangement.shape)),
+            tuple(flatten(arrangement.strides)),
+        )
         for mesh_axis, position in zip(mesh_axes, coord, strict=True):
             found[mesh_axis] = position
     return found

@@ -9,18 +9,18 @@ by ``covered_by_scope`` and ``storage_reaches``.
 from __future__ import annotations
 
 from ..storage import StorageKind, resolve_storage
-from .int_tuple import product
+from .int_tuple import flatten, product
 from .layout import Layout
 from .layout_algebra import is_inverse_projectable, size
-from .mesh import Mesh, level_positions, positions_at
+from .mesh import Mesh, stated_layout
 
 
 def _as_layout(mesh: Mesh) -> Layout:
-    return Layout(shape=tuple(mesh.layout.shape), strides=tuple(mesh.layout.strides))
+    return mesh.positions
 
 
 def states_consistent_positions(mesh: Mesh) -> bool:
-    return product(mesh.topologies) == size(mesh.layout)
+    return product(mesh.topologies) == size(mesh.positions)
 
 
 def mesh_scope_matches_required_scope(current: Mesh, required: Mesh) -> bool:
@@ -40,38 +40,50 @@ def mesh_scope_matches_required_scope(current: Mesh, required: Mesh) -> bool:
     return cur_layout.shape == req_layout.shape and cur_layout.strides == req_layout.strides
 
 
-def _stated_positions(mesh: Mesh, topology_level: str) -> tuple[tuple, tuple]:
-    """One level's positions as written, with the axes of one position left out.
+def _selected(arrangement) -> tuple[tuple, tuple, int]:
+    """One level's positions as a set of them reads: its modes, and where it starts.
 
-    An axis of one position names no instance, so two scopes state the same
-    positions whether or not either of them wrote such an axis down.
+    An axis of one position names no instance, and modes written in another
+    order state the same positions, so the modes come back sorted by step with
+    the adjacent ones joined and the ones of a single position left out.
     """
-    shape, strides = positions_at(mesh, topology_level)
-    kept = tuple(axis for axis, extent in enumerate(shape) if extent != 1)
-    return tuple(shape[axis] for axis in kept), tuple(strides[axis] for axis in kept)
+    offset = arrangement.offset if hasattr(arrangement, "offset") else 0
+    stated = stated_layout(arrangement)
+    modes = [
+        (extent, stride)
+        for extent, stride in zip(flatten(stated.shape), flatten(stated.strides))
+        if extent != 1
+    ]
+    joined: list[list] = []
+    for extent, stride in sorted(modes, key=lambda mode: (mode[1], mode[0])):
+        if joined and joined[-1][0] * joined[-1][1] == stride:
+            joined[-1][0] *= extent
+        else:
+            joined.append([extent, stride])
+    return (
+        tuple(extent for extent, _ in joined),
+        tuple(stride for _, stride in joined),
+        offset,
+    )
 
 
 def covered_by_scope(mesh: Mesh, current: Mesh) -> bool:
     """Whether *mesh* selects exactly the positions the enclosing scope does.
 
-    Level by level, and on the positions each level states rather than on the
-    axes standing where it does: a scope that is part of a level -- one warp of
-    a CTA's threads -- says which positions it is by where its run starts and
-    how its modes step. Where neither states those as numbers, a grid sized by
-    a dimension nobody has fixed yet, they are compared as written instead: the
-    axes each level was given, which is the only answer there is then.
+    Level by level, on the positions each level states rather than on the axes
+    standing where it does: a scope that is part of a level -- one warp of a
+    CTA's threads -- says which positions it is by where its run starts and how
+    its modes step, and a value laid out over that same run is inside it
+    however either of them wrote the axes down.
     """
-    mine, scope = level_positions(mesh), level_positions(current)
-    if mine is not None and scope is not None:
-        return all(name in scope and positions == scope[name] for name, positions in mine.items())
-    written = {
-        topology.name: _stated_positions(current, topology.name)
-        for topology in current.topologies
+    scope = {
+        getattr(topology, "name", topology): _selected(arrangement)
+        for topology, arrangement in zip(current.topologies, current.levels)
     }
     return all(
-        topology.name in written
-        and _stated_positions(mesh, topology.name) == written[topology.name]
-        for topology in mesh.topologies
+        getattr(topology, "name", topology) in scope
+        and _selected(arrangement) == scope[getattr(topology, "name", topology)]
+        for topology, arrangement in zip(mesh.topologies, mesh.levels)
     )
 
 

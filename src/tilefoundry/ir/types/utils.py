@@ -14,8 +14,8 @@ from .shard import (
     Split,
     Topology,
     canonical_shard_layout,
+    level_axes,
     shard_layout_of,
-    topology_axes,
 )
 from .shard.layout_algebra import size
 from .shard.shard_layout import split_target_axes
@@ -146,7 +146,7 @@ def topology_extent(type: Type, name: str) -> int | None:
         names = tuple(topology.name for topology in layout.mesh.topologies)
         if len(names) != 1 or names[0] != name:
             continue
-        count = size(layout.mesh.layout)
+        count = size(layout.mesh.positions)
         if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
             raise ValueError(
                 f"topology_extent: {name!r} needs a positive static layout size"
@@ -213,7 +213,7 @@ def local_type_of(
         for mesh_axis, tensor_axis in enumerate(split_target_axes(layout, type.shape)):
             if tensor_axis is None:
                 continue
-            extent = layout.mesh.layout.shape[mesh_axis]
+            extent = layout.mesh.positions.shape[mesh_axis]
             if extent is None:
                 local[tensor_axis] = 1
                 continue
@@ -301,7 +301,7 @@ def _local_layout_shape(
     )
     declared = {topology.name: index for index, topology in enumerate(topologies)}
     axis_topology_level: dict[int, int] = {}
-    for topology, axes in zip(layout.mesh.topologies, topology_axes(layout.mesh)):
+    for topology, axes in zip(layout.mesh.topologies, level_axes(layout.mesh)):
         position = declared.get(topology.name)
         if position is None:
             raise ValueError(
@@ -309,7 +309,7 @@ def _local_layout_shape(
             )
         for mesh_axis in axes:
             axis_topology_level[mesh_axis] = position
-    mesh_shape = layout.mesh.layout.shape
+    mesh_shape = layout.mesh.positions.shape
     for mesh_axis, attr in enumerate(layout.attrs):
         if not isinstance(attr, Split):
             continue

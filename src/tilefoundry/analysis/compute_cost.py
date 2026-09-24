@@ -10,8 +10,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard import Mesh, composed, topology_axes
-from tilefoundry.ir.types.shard.mesh import _positions_layout
+from tilefoundry.ir.types.shard import Mesh, flatten, level_axes, merge_mesh
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TrafficBytes
 from tilefoundry.visitor_registry.visitors import CostEvaluator
@@ -187,9 +186,9 @@ def _scope_position_count(mesh: Mesh, topology_level: str | None, topologies: tu
         return 1
     declared = {topology.name: index for index, topology in enumerate(topologies)}
     selected = declared[topology_level]
-    shape, _strides, _offset = _positions_layout(mesh)
+    shape = tuple(flatten(mesh.positions.shape))
     positions = 1
-    for topology, axes in zip(mesh.topologies, topology_axes(mesh)):
+    for topology, axes in zip(mesh.topologies, level_axes(mesh)):
         if declared[topology.name] > selected:
             continue
         for axis in axes:
@@ -257,7 +256,7 @@ class ComputeCostVisitor(ExprVisitor[None]):
         child = next(item for item in ctx.current.children if item.owner is expr)
         for arg in expr.args:
             self.visit(arg, ctx)
-        mesh = composed((ctx.current_mesh, expr.mesh)) if ctx.current_mesh else expr.mesh
+        mesh = merge_mesh((ctx.current_mesh, expr.mesh)) if ctx.current_mesh else expr.mesh
         topologies = ctx.module.effective_topologies()
         positions = {
             unit: _scope_position_count(mesh, unit, topologies) for unit in ctx.locals_by_unit

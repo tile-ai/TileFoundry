@@ -145,34 +145,6 @@ def idx2crd(idx: int, shape: tuple[int, ...], stride: tuple[int, ...]) -> tuple[
     return tuple((idx // d) % s for s, d in zip(shape, stride))
 
 
-def _unflatten(flat: tuple, profile) -> tuple:
-    """Take *profile*'s worth of *flat*, returning it nested and what is left."""
-    if not isinstance(profile, tuple):
-        if not flat:
-            raise ValueError("unflatten: the profile asks for more modes than the tuple has")
-        return flat[0], flat[1:]
-    nested: list = []
-    for item in profile:
-        value, flat = _unflatten(flat, item)
-        nested.append(value)
-    return tuple(nested), flat
-
-
-def unflatten(flat: tuple, profile) -> tuple:
-    """CuTe ``unflatten``: nest a flat tuple to *profile*'s structure.
-
-    Only *profile*'s nesting is read, never its leaves, so the profile may be
-    the grouping itself. ``flatten(unflatten(t, p)) == t``.
-    """
-    nested, rest = _unflatten(flat, profile)
-    if rest:
-        raise ValueError(
-            f"unflatten: the profile accounts for {len(flat) - len(rest)} of the "
-            f"tuple's {len(flat)} modes"
-        )
-    return nested
-
-
 def coalesce(layout: Union[Layout, ComposedLayout]):
     """Flatten + merge contiguous modes, drop shape-1 modes (CuTe ``coalesce``).
 
@@ -482,7 +454,6 @@ __all__ = [
     "cosize",
     "apply",
     "idx2crd",
-    "unflatten",
     "coalesce",
     "complement",
     "is_inverse_projectable",

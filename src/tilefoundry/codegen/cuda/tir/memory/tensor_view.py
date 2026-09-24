@@ -26,7 +26,7 @@ from tilefoundry.ir.tir.sync import participation
 from tilefoundry.ir.types.dim import DimAdd, DimMul, DimSub, DimVar
 from tilefoundry.ir.types.shape_helpers import shape_numel_upper_bound, upper_bound
 from tilefoundry.ir.types.shard import c_order_strides, swizzle_of
-from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase
+from tilefoundry.ir.types.shard.layout import Layout, LayoutBase
 from tilefoundry.ir.types.shard.shard_layout import (
     Broadcast,
     Dynamic,
@@ -217,24 +217,16 @@ def render_shard_layout_value(
                 "and rebuilding this layout from register strides would drop it"
             )
         sll = Layout(shape=sll.shape, strides=register_strides(sl))
-    mesh_layout = sl.mesh.layout
-    if isinstance(mesh_layout, ComposedLayout):
-        mesh_outer = mesh_layout.outer
-        if not isinstance(mesh_outer, Layout) or mesh_outer.strides is None:
-            raise NotImplementedError(
-                "render_shard_layout_value: a sliced mesh needs its participating "
-                "box as a strided Layout; this states an identity box, with no sub-box"
-            )
+    try:
+        mesh_axes, mesh_base = sl.mesh.positions, sl.mesh.offset
+    except ValueError as error:
+        raise NotImplementedError(
+            "render_shard_layout_value: a sliced mesh needs its participating box "
+            f"as a strided Layout; this states an identity box, with no sub-box ({error})"
+        ) from error
+    if sl.mesh.sliced:
         participation(sl.mesh)
-        ml_shape, ml_strides, ml_base = (
-            mesh_outer.shape,
-            mesh_outer.strides,
-            int(mesh_layout.offset),
-        )
-    else:
-        if mesh_layout.strides is None:
-            raise NotImplementedError("render_shard_layout_value: mesh layout needs strides")
-        ml_shape, ml_strides, ml_base = mesh_layout.shape, mesh_layout.strides, 0
+    ml_shape, ml_strides, ml_base = mesh_axes.shape, mesh_axes.strides, int(mesh_base)
     topo = program_topologies(sl.mesh)[0]
 
     def _static_dim(value, what):

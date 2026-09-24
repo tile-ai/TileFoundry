@@ -47,7 +47,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
         ctx.error(call, "MeshCoord.mesh must be bound by the current mesh scope")
     if not call.args:
         ctx.error(call, "missing required input 'axis'")
-    shape = call.target.mesh.layout.shape
+    shape = call.target.mesh.positions.shape
     axis = static_dim_value(call.args[0])
     if axis is not None and not 0 <= axis < len(shape):
         ctx.error(call, f"axis {axis} is out of range for rank-{len(shape)} mesh")

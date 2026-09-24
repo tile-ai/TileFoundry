@@ -78,7 +78,7 @@ def _legal_slice_of(m: Mesh, e: Mesh) -> bool:
 def _mesh_str(mesh: Mesh) -> str:
     """A mesh as its topologies and the shape they are viewed through."""
     topologies = ", ".join(f"{t.name}({t.size})" for t in mesh.topologies)
-    return f"({topologies})[{', '.join(str(d) for d in mesh.layout.shape)}]"
+    return f"({topologies})[{', '.join(str(d) for d in mesh.positions.shape)}]"
 
 
 def _no_enclosing_mesh_error(m: Mesh, scope: "tuple[Mesh, ...]") -> VerifyError:
@@ -121,7 +121,7 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
             f"T.sync expects a Mesh argument (m or a slice m[...]), got {type(m).__name__}"
         )
     scope = ctx.mesh_scope
-    if not isinstance(m.layout, ComposedLayout):
+    if not m.sliced:
         ok = any(m == e for e in scope)
     else:
         ok = any(_legal_slice_of(m, e) for e in scope)
@@ -155,17 +155,13 @@ class Participation:
 def _participant_layout(mesh: Mesh) -> "tuple[Layout, int]":
     """The (outer layout, offset) describing which threads participate.
 
-    For a sliced mesh ``layout`` is a ``ComposedLayout`` whose ``outer`` is the
-    participating sub-box and ``offset`` the slice origin; for an un-sliced mesh
-    the whole plain-``Layout`` ``layout`` participates at offset 0.
+    Every level states its own run, and which threads participate is those
+    runs read as the device numbers them: the mesh's axes, at its offset.
     """
-    ly = mesh.layout
-    if isinstance(ly, ComposedLayout):
-        outer = ly.outer
-        if not isinstance(outer, Layout):
-            raise VerifyError("T.sync: mesh slice must be a plain-Layout affine scope")
-        return outer, ly.offset
-    return ly, 0
+    try:
+        return mesh.positions, mesh.offset
+    except ValueError as error:
+        raise VerifyError(f"T.sync: {error}") from error
 
 
 def participation(mesh: Mesh) -> Participation:
@@ -227,7 +223,7 @@ def classify(mesh: Mesh) -> SyncBarrier:
     """
     topos = mesh.topologies
     if all(t.name == "cta" for t in topos):
-        if isinstance(mesh.layout, ComposedLayout):
+        if mesh.sliced:
             raise VerifyError("T.sync: a partial grid sync (cta mesh slice) is unsupported")
         return SyncBarrier.GRID
     p = participation(mesh)

@@ -276,10 +276,10 @@ def _check_bound_coordinates(field: str, bound, scope) -> None:
             continue
         mesh = expr.target.mesh
         axis = static_dim_value(expr.args[0]) if expr.args else None
-        if axis is None or not 0 <= axis < len(mesh.layout.shape):
+        if axis is None or not 0 <= axis < len(mesh.positions.shape):
             raise VerifyError(
                 f"For.{field} reads axis {axis!r} of a mesh of rank "
-                f"{len(mesh.layout.shape)}"
+                f"{len(mesh.positions.shape)}"
             )
         if not any(held is mesh or held == mesh for held in scope):
             raise VerifyError(

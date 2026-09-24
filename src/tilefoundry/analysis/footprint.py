@@ -21,8 +21,7 @@ from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import (
     Mesh,
     flatten,
-    mesh_image,
-    topology_axes,
+    level_axes,
 )
 from tilefoundry.target.base import Target, UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
@@ -85,6 +84,20 @@ class ReuseAxes:
         return -1 if self.space else None
 
 
+def _static_axes(mesh: Mesh) -> "tuple[int, tuple[int, ...], tuple[int, ...]] | None":
+    """A mesh's device-numbered positions, when every one of them is a number."""
+    try:
+        axes = mesh.positions
+        offset = mesh.offset
+    except ValueError:
+        return None
+    shape = tuple(static_dim_value(extent) for extent in flatten(axes.shape))
+    strides = tuple(static_dim_value(stride) for stride in flatten(axes.strides))
+    if any(value is None for value in (*shape, *strides, static_dim_value(offset))):
+        return None
+    return offset, shape, strides
+
+
 def _mesh_parameters(scope: IterationScope) -> tuple[tuple[str, Call], ...]:
     """Mesh-coordinate parameters retained by this scope's loop domain."""
     return tuple(
@@ -101,7 +114,7 @@ def _linear_position(
     if not parameters:
         return 0, ()
     mesh = parameters[0][1].target.mesh
-    image = mesh_image(mesh)
+    image = _static_axes(mesh)
     if image is None:
         return None
     offset, shape, strides = image
@@ -297,7 +310,7 @@ def space_axes(
     wave_reached = boundary.space_wave_reached(window)
     shared = []
     for axis, parameter_name in enumerate(boundary.axis_parameters):
-        shape = flatten(boundary.mesh.layout.shape)
+        shape = flatten(boundary.mesh.positions.shape)
         extent = static_dim_value(shape[axis]) if axis < len(shape) else None
         unit_reached = boundary.unit_reached(window, parameter_name)
         if extent is not None and extent > 1 and unit_reached is not None:
@@ -309,7 +322,7 @@ def space_axes(
 def axis_label(mesh: Mesh, axis: int) -> str:
     """Name a mesh axis, falling back to its factual numeric position."""
     level_name = ""
-    for level, axes in zip(mesh.topologies, topology_axes(mesh), strict=True):
+    for level, axes in zip(mesh.topologies, level_axes(mesh), strict=True):
         if axis in axes:
             level_name = getattr(level, "name", str(level))
             break
@@ -321,7 +334,7 @@ def axis_label(mesh: Mesh, axis: int) -> str:
 
 def shared_units(mesh: Mesh, axes: tuple[int, ...], wave: tuple[int, int]) -> int:
     """Count wave positions after projecting out axes that do not share data."""
-    image = mesh_image(mesh)
+    image = _static_axes(mesh)
     if image is None:
         return 1
     offset, shape, strides = image
@@ -448,7 +461,7 @@ def _axis_parameters(
         and (axis := static_dim_value(coordinate.args[0])) is not None
     }
     return tuple(
-        names_by_axis.get(axis) for axis in range(len(flatten(mesh.layout.shape)))
+        names_by_axis.get(axis) for axis in range(len(flatten(mesh.positions.shape)))
     )
 
 

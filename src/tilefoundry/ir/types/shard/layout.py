@@ -111,4 +111,37 @@ class ComposedLayout(LayoutBase):
 EMPTY_LAYOUT = Layout(shape=(), strides=())
 
 
-__all__ = ["LayoutBase", "Layout", "Swizzle", "ComposedLayout", "EMPTY_LAYOUT"]
+def rank(layout: LayoutBase) -> int:
+    """CuTe ``rank``: how many modes a layout states at its top level."""
+    return len(layout.shape)
+
+
+def get(layout: LayoutBase, index: int) -> "Layout":
+    """CuTe ``get<I>``: one mode of a layout, as a layout of its own."""
+    shape = layout.shape[index]
+    strides = layout.strides[index] if getattr(layout, "strides", None) is not None else None
+    return Layout(
+        shape=shape if isinstance(shape, tuple) else (shape,),
+        strides=None if strides is None else (strides if isinstance(strides, tuple) else (strides,)),
+    )
+
+
+def take(layout: LayoutBase, begin: int, end: int) -> "Layout":
+    """CuTe ``take<B, E>``: the modes in ``[begin, end)``, as a layout."""
+    strides = getattr(layout, "strides", None)
+    return Layout(
+        shape=tuple(layout.shape[begin:end]),
+        strides=None if strides is None else tuple(strides[begin:end]),
+    )
+
+
+__all__ = [
+    "LayoutBase",
+    "Layout",
+    "Swizzle",
+    "ComposedLayout",
+    "EMPTY_LAYOUT",
+    "get",
+    "rank",
+    "take",
+]

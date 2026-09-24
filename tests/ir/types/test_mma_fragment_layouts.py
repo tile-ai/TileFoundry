@@ -47,12 +47,12 @@ def _product(shape: tuple[int, ...]) -> int:
 
 def _per_thread_size(sl: ShardLayout) -> int:
     """Layout product divided by mesh size (= per-thread element count)."""
-    mesh_size = _product(sl.mesh.layout.shape)
+    mesh_size = _product(sl.mesh.positions.shape)
     return _product(sl.layout.shape) // mesh_size
 
 
 def _check_split_extents_match_mesh(sl: ShardLayout) -> None:
-    mesh_shape = sl.mesh.layout.shape
+    mesh_shape = sl.mesh.positions.shape
     assert len(sl.attrs) == len(mesh_shape), (
         f"attrs len {len(sl.attrs)} != mesh rank {len(mesh_shape)}"
     )

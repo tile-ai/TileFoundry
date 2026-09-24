@@ -350,7 +350,7 @@ class PlainLayoutPattern(ElementPattern):
             mesh = context.function.state.mesh_stack[-1]
             return runtime.ShardLayout(
                 layout=layout,
-                attrs=tuple(runtime.Broadcast() for _ in mesh.layout.shape),
+                attrs=tuple(runtime.Broadcast() for _ in mesh.positions.shape),
                 mesh=mesh,
             )
         return layout
@@ -392,7 +392,7 @@ class MeshAxisPattern(ElementPattern):
                 node, context, f"{binding!r} is not a lexical Mesh binding"
             )
         if axis_name is None:
-            if len(mesh.layout.shape) != 1:
+            if len(mesh.positions.shape) != 1:
                 raise ParseError.from_node(
                     node, context, "bare Mesh placement requires a one-axis mesh"
                 )
@@ -658,13 +658,13 @@ class PlacementConstructionRule:
                 shape=value.shape, layout=runtime.Layout(shape=value.shape, strides=value.strides)
             )
         meshes = _placement_meshes(value, context, match)
-        mesh = meshes[0] if len(meshes) == 1 else runtime.composed(meshes)
+        mesh = meshes[0] if len(meshes) == 1 else runtime.merge_mesh(meshes)
         source_offsets: dict[int, int] = {}
         offset = 0
         for source in meshes:
             source_offsets[id(source)] = offset
-            offset += len(source.layout.shape)
-        attrs: list[object] = [runtime.Broadcast() for _ in mesh.layout.shape]
+            offset += len(source.positions.shape)
+        attrs: list[object] = [runtime.Broadcast() for _ in mesh.positions.shape]
         for source, source_axis, tensor_axis in value.splits:
             attrs[source_offsets[id(source)] + source_axis] = runtime.Split(tensor_axis)
         for source, source_axis, kind, reduction in value.states:
@@ -3130,7 +3130,7 @@ class MeshCoordinatePattern(ElementPattern):
         )
         if axis is None and node.attr in {"x", "y", "z"}:
             candidate = ("x", "y", "z").index(node.attr)
-            if candidate < len(mesh.layout.shape):
+            if candidate < len(mesh.positions.shape):
                 axis = candidate
         if axis is None:
             named = ", ".join(mesh.names)
@@ -3152,7 +3152,7 @@ class MeshCoordinatePattern(ElementPattern):
             raise ParseError.from_node(match.node, context, "mesh coordinate lacks context")
         mesh = match.captures["mesh"]
         axis = match.captures["axis"]
-        extent = mesh.layout.shape[axis]
+        extent = mesh.positions.shape[axis]
         if isinstance(extent, bool) or not isinstance(extent, int):
             raise ParseError.from_node(
                 match.node, context, "mesh coordinate requires a concrete axis extent"
@@ -3338,6 +3338,10 @@ class MeshContextPattern(ElementPattern):
                     "Mesh topologies must be a tuple",
                 )
             names = children.get("names", ())
+            if any(isinstance(topology, str) for topology in topology_names):
+                topology_names = _resolve_mesh_topologies_at(
+                    topology_names, context.function.topologies, match.node, context
+                )
             try:
                 mesh = runtime.Mesh(
                     topologies=topology_names,
@@ -3346,7 +3350,6 @@ class MeshContextPattern(ElementPattern):
                 )
             except (TypeError, ValueError) as error:
                 raise ParseError.from_node(match.node, context, str(error)) from error
-            mesh = _resolved_mesh(mesh, match, context)
         elif match.branch_id == "mesh_reference":
             mesh = children["value"]
             if not isinstance(mesh, runtime.Mesh):
@@ -3447,7 +3450,7 @@ def _enter_mesh_scope(context, mesh, match):
     infer = _parser_infer_context(context)
     try:
         entered_mesh = (
-            runtime.composed((infer.current_mesh, mesh))
+            runtime.merge_mesh((infer.current_mesh, mesh))
             if infer.current_mesh
             else mesh
         )
@@ -3810,16 +3813,8 @@ class LoopCarryStatementPattern(ElementPattern):
             BranchPattern(
                 "loop_carry_statement",
                 AstNodePattern(
-                    ast.With,
-                    CapturePattern("names", LoopCarryStatementPattern._mesh_names),
-                ),
-                pattern_id="loop.carry_statement",
-            ),
-            BranchPattern(
-                "loop_carry_statement",
-                AstNodePattern(
                     ast.stmt,
-                    CapturePattern("names", lambda node, context: ()),
+                    CapturePattern("names", LoopCarryStatementPattern._statement_names),
                 ),
                 pattern_id="loop.carry_statement",
             ),
@@ -3827,9 +3822,15 @@ class LoopCarryStatementPattern(ElementPattern):
     )
 
     @staticmethod
-    def _mesh_names(node: object, context: MatchContext) -> tuple[str, ...]:
-        """Names a `with` statement assigns, which the loop carries as its own."""
-        assert isinstance(node, ast.With)
+    def _statement_names(node: object, context: MatchContext) -> tuple[str, ...]:
+        """Names a statement binds that the loop carries rather than the loop itself.
+
+        An assignment states its own; a `with` states what its body binds,
+        because a region delimits who runs the work and not who owns the value.
+        Every other statement binds nothing the loop carries.
+        """
+        if not isinstance(node, ast.With):
+            return ()
         found: list[str] = []
         for child in ast.walk(node):
             if not isinstance(child, ast.Assign):

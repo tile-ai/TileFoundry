@@ -87,7 +87,7 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
     axis_strides = axis_layout.strides
     n_axis = len(axis_shape)
 
-    mesh_shape = layout.mesh.layout.shape
+    mesh_shape = layout.mesh.positions.shape
     split_mesh_extent: dict[int, int] = {}
     for mesh_axis_idx, attr in enumerate(layout.attrs):
         if isinstance(attr, Split) and mesh_axis_idx < len(mesh_shape):

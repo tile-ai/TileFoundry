@@ -152,7 +152,7 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
     def _mesh_coordinate_text(self, value: Call, target: MeshCoord, ctx) -> str:
         """Render one coordinate through the active binding of its mesh."""
         axis = static_dim_value(value.args[0]) if value.args else None
-        if axis is None or axis < 0 or axis >= len(target.mesh.layout.shape):
+        if axis is None or axis < 0 or axis >= len(target.mesh.positions.shape):
             raise ValueError("MeshCoord requires a literal in-range axis to print")
         if ctx is None:
             raise ValueError("MeshCoord requires an active mesh binding to print")
@@ -320,7 +320,7 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             for topology in value.topologies
         )
         topologies = f"({topologies}{',' if len(value.topologies) == 1 else ''})"
-        result = f"Mesh({topologies}, {self.visit(value.layout, ctx)}"
+        result = f"Mesh({topologies}, {self.visit(value.written, ctx)}"
         if value.names:
             result += f", names={tuple(value.names)!r}"
         return result + ")"

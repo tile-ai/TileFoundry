@@ -55,7 +55,7 @@ def _reject_redistribution(ctx, call: "Call", x_ty, axis: int, parts: int) -> No
     if layout is None:
         return
     targets = split_target_axes(layout, x_ty.shape)
-    mesh = layout.mesh.layout.shape if layout.mesh is not None else ()
+    mesh = layout.mesh.positions.shape if layout.mesh is not None else ()
     for mesh_axis, attr in enumerate(layout.attrs):
         divides = mesh_axis < len(mesh) and mesh[mesh_axis] > 1
         if isinstance(attr, ShardSplit) and divides and targets[mesh_axis] == axis:

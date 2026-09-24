@@ -53,7 +53,7 @@ _CASES = {
 def _instances(mesh: Mesh) -> int:
     """How many programs the mesh spreads a tensor over."""
     count = 1
-    for extent in mesh.layout.shape:
+    for extent in mesh.positions.shape:
         count *= extent
     return count
 

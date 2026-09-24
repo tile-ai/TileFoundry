@@ -7,7 +7,7 @@ from math import prod
 
 from tilefoundry.ir.types.shard.int_tuple import flatten
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
-from tilefoundry.ir.types.shard.mesh import Mesh, topology_axes
+from tilefoundry.ir.types.shard.mesh import Mesh, level_axes
 from tilefoundry.utils.python_source import PythonExpr, _merge_imports
 
 
@@ -89,8 +89,8 @@ class PrintContext:
 
     @staticmethod
     def _axis_levels(mesh: Mesh) -> tuple[str, ...]:
-        levels = [""] * len(flatten(mesh.layout.shape))
-        for topology, axes in zip(mesh.topologies, topology_axes(mesh), strict=True):
+        levels = [""] * len(flatten(mesh.positions.shape))
+        for topology, axes in zip(mesh.topologies, level_axes(mesh), strict=True):
             for axis in axes:
                 levels[axis] = topology.name
         return tuple(levels)
@@ -111,8 +111,7 @@ class PrintContext:
             if (
                 self._type_annotation_surface
                 and bound is mesh
-                and isinstance(mesh.layout, ComposedLayout)
-                and mesh.layout.offset != 0
+                and mesh.offset != 0
             ):
                 continue
             if not bound.names or target_name not in bound.names:
@@ -130,11 +129,7 @@ class PrintContext:
 
     def mesh_slice(self, mesh: Mesh) -> str | None:
         """Recover ``binding[start:stop]`` for a sliced active mesh."""
-        if not (
-            isinstance(mesh.layout, ComposedLayout)
-            and mesh.layout.inner is None
-            and isinstance(mesh.layout.outer, Layout)
-        ):
+        if not mesh.sliced:
             return None
         for parent, alias in reversed(self._mesh_bindings):
             text = self._slice_from_parent(parent, mesh, alias)

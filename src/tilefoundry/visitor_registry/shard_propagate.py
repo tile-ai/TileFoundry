@@ -242,7 +242,7 @@ def derive_output_shard_layout(
     if not sharded:
         return None
     mesh = sharded[0][1].mesh
-    mesh_rank = len(mesh.layout.shape)
+    mesh_rank = len(mesh.positions.shape)
 
     *input_maps, output_map = boundary_maps(relations)
     out_access = _result_access(output_map, folded=True)

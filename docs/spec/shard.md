@@ -285,13 +285,28 @@ class Mesh:
 
     Attributes:
         topologies: attribute; Ordered topology sequence.
-        layout: attribute; Mesh layout or constant sliced layout.
+        layout: attribute; One arrangement, or one per level it names.
         names: attribute; Human-readable layout-axis names.
     """
 
     topologies: tuple[Topology, ...]
-    layout: Layout | ComposedLayout
+    layout: LayoutBase | tuple[LayoutBase, ...]
     names: tuple[str, ...] = ()
+
+    @property
+    def levels(self) -> tuple[LayoutBase, ...]: ...
+
+    @property
+    def positions(self) -> Layout: ...
+
+    @property
+    def written(self) -> LayoutBase: ...
+
+    @property
+    def offset(self) -> int: ...
+
+    @property
+    def sliced(self) -> bool: ...
 
     def __getitem__(self, key) -> Mesh: ...
 ```
@@ -308,23 +323,35 @@ Field meanings:
   ([tir §1.5](./tir.md#15-sync))
 - `names` — optional human-readable names (`cta.x`, `cta.y`, …)
 
+A mesh naming several levels MUST state one arrangement per level, each in
+that level's own numbering, and `Mesh` normalizes what was written into that
+form at construction: one arrangement over all the levels' axes is cut at the
+level boundaries, each level taking axes left to right until their extents
+multiply to its own size and its steps divided by what the levels under it
+hold. A boundary no prefix of axes lands on MUST be refused. A level stating a
+run rather than all of its positions states it as a `ComposedLayout` whose
+offset is where that run starts within the level.
+
+`Mesh.levels` is that per-level statement; `Mesh.positions` is every level's
+axes end to end as the device numbers them, each axis stepping by what its
+level states times what the levels under it hold; `Mesh.offset` is where the
+whole mesh starts in that numbering; and `Mesh.written` is the two of them as
+the single arrangement the mesh was written as.
+
 Mesh composition uses the following rules:
 
-- `composed(meshes)` MUST replace all levels in force when the inner mesh names
-  every current level, and MUST concatenate meshes whose level-name sets are
-  disjoint. For concatenation, each outer stride and offset is scaled by the
-  product of positions in the levels below it:
-  `offset = outer_offset * below + inner_offset`.
-- A sliced mesh is composable; its slice offset remains a
-  `ComposedLayout` offset after composition. A mesh naming a suffix of the
-  levels in force MUST replace those levels and keep the ones above unchanged,
-  with `offset = (outer_offset // below) * below + inner_offset`. Level names
-  overlapping in any other way MUST be rejected rather than decomposed.
-- `composed(meshes)` invokes `check_topology` on its result. For each named
-  level with a concrete declared extent, its projected position count MUST NOT
-  exceed that extent; symbolic extents are deferred until dimensions are bound.
-  This check does not reject same-level nesting, because replacement determines
-  the final position count.
+- `merge_mesh(meshes)` MUST `append` a mesh whose level names are disjoint from
+  those in force, MUST replace them entirely when the inner mesh names every
+  one, and MUST `replace` the trailing levels when the inner mesh names a
+  suffix of them, keeping the levels above and their names unchanged. Level
+  names overlapping in any other way MUST be rejected rather than decomposed.
+- `append` and `replace` concatenate the per-level arrangements; no stride or
+  offset is rescaled, because each level already states its own numbering.
+- `merge_mesh(meshes)` invokes `check_topology` on its result. For each named
+  level with a concrete declared extent, its position count MUST NOT exceed
+  that extent; symbolic extents are deferred until dimensions are bound. A
+  level stating a run is already bounded by `Mesh.__getitem__` and is not
+  checked again.
 
 HIR `MeshRegion` applies this composition only at its body boundary. Its `args`
 are evaluated in the enclosing scope and are not recomposed merely because the
@@ -381,7 +408,7 @@ value is consumed by a region.
 The placed-layout constructor has one additional guard: a single layout may
 split a named level only once. If two distinct meshes used by one placed layout
 name the same topology level, parsing MUST reject that layout at its source
-node. This is a layout-construction rule, independent of `composed()`'s
+node. This is a layout-construction rule, independent of `merge_mesh()`'s
 scope-composition rules.
 
 ### 5.1 `Placement`

@@ -78,7 +78,7 @@ def canonical_shard_layout(logical_shape: tuple, mesh: Mesh, attrs: tuple) -> "S
 
     See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
-    mesh_shape = mesh.layout.shape
+    mesh_shape = mesh.positions.shape
     bindings: dict[int, list[int]] = {}
     for mesh_axis, attr in enumerate(attrs):
         if isinstance(attr, Split):
@@ -151,7 +151,7 @@ def shard_layout_local_shape(
 
     See [shard §7](docs/spec/shard.md#7-shardlayout).
     """
-    mesh_shape = sl.mesh.layout.shape
+    mesh_shape = sl.mesh.positions.shape
     local = list(sl.layout.shape)
     for mesh_axis_idx, attr in enumerate(sl.attrs):
         if mesh_axis_idx >= len(mesh_shape):

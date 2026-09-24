@@ -182,7 +182,7 @@ def _divided_axes(type_) -> set[int]:
     if layout is None:
         return set()
     targets = split_target_axes(layout, type_.shape)
-    mesh = layout.mesh.layout.shape if layout.mesh is not None else ()
+    mesh = layout.mesh.positions.shape if layout.mesh is not None else ()
     return {
         targets[mesh_axis]
         for mesh_axis, attr in enumerate(layout.attrs)

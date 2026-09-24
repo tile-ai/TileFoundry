@@ -85,7 +85,7 @@ from tilefoundry.ir.types.shard import (
     Topology,
     c_order_strides,
     canonical_shard_layout,
-    composed,
+    merge_mesh,
 )
 from tilefoundry.ir.types.shard.layout import LayoutBase
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
@@ -296,7 +296,7 @@ runtime = SimpleNamespace(
     DISPLAY_NAME=DISPLAY_NAME,
     c_order_strides=c_order_strides,
     canonical_shard_layout=canonical_shard_layout,
-    composed=composed,
+    merge_mesh=merge_mesh,
     dim_expr=dim_expr,
     normalize_dim=normalize_dim,
     static_dim_value=static_dim_value,

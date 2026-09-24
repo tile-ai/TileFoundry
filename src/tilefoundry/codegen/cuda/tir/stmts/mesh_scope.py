@@ -7,8 +7,9 @@ from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import topology_scope_str
 from tilefoundry.ir.tir.sync import participation
+from tilefoundry.ir.types.shard.int_tuple import flatten
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
-from tilefoundry.ir.types.shard.mesh import Mesh, Topology, positions_at
+from tilefoundry.ir.types.shard.mesh import Mesh, Topology, level_index, stated_layout
 from tilefoundry.target import validate_cuda_topology_levels
 
 
@@ -40,17 +41,17 @@ def _validate_topology(mesh: Mesh, target) -> None:
 def _levelwise_layout(mesh: Mesh, topos) -> str:
     """One nest per topology level, each in that level's own numbering.
 
-    A flat shape says nothing about which axes are whose, so the runtime's
-    ``get<level>`` needs the boundary stated. ``level_axes`` hands the axes to
-    the levels left to right and ``positions_at`` divides each level's strides
-    by what the levels under it contribute, so a nest reads as the layout that
-    level would have alone. The composite is a grouping, not a map: only the
+    A mesh states one arrangement per level already, each in that level's own
+    numbering, so a nest is that arrangement written out: nothing here decides
+    where a boundary falls. The composite is a grouping, not a map: only the
     nests are evaluated. A level every instance shares keeps a mode of one, so
     that ``get<level>`` still has something to pick.
     """
     shapes, strides = [], []
     for topology in topos:
-        level_shape, level_strides = positions_at(mesh, topology.name)
+        arrangement = stated_layout(mesh.levels[level_index(mesh, topology.name)])
+        level_shape = tuple(flatten(arrangement.shape))
+        level_strides = tuple(flatten(arrangement.strides))
         if not level_shape:
             level_shape, level_strides = (1,), (0,)
         shapes.append(
@@ -72,7 +73,7 @@ def _levelwise_layout(mesh: Mesh, topos) -> str:
 def mesh_type(mesh: Mesh) -> str:
     """The C++ ``tilefoundry::Mesh`` type for *mesh*, offset included."""
     topos = program_topologies(mesh)
-    layout_value = mesh.layout
+    layout_value = mesh.written
     if isinstance(layout_value, ComposedLayout):
         outer = layout_value.outer
         if not isinstance(outer, Layout) or outer.strides is None:
@@ -113,7 +114,7 @@ def _is_dynamic_mesh(mesh: Mesh) -> bool:
     """
     if any(t.size is None for t in program_topologies(mesh)):
         return True
-    return any(s is None for s in mesh.layout.shape)
+    return any(s is None for s in mesh.positions.shape)
 
 
 __all__ = ["mesh_type", "program_topologies"]

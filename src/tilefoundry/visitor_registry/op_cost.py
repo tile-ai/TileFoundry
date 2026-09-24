@@ -56,7 +56,7 @@ from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.where import Where
 from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.types import DType, IntegerDType, TensorType, Type, numel, tensor_bytes
-from tilefoundry.ir.types.shard import ShardLayout, flatten, shard_layout_of, topology_axes
+from tilefoundry.ir.types.shard import ShardLayout, flatten, level_axes, shard_layout_of
 from tilefoundry.ir.types.shard.shard_layout import layout_axis_to_tensor_axis, split_target_axes
 from tilefoundry.visitor_registry.access_relation import logical_axes_of
 
@@ -550,10 +550,10 @@ def _sent(source, destination) -> tuple[tuple[str, TrafficBytes], ...]:
     if before is None or after is None or before == after:
         return ()
     mesh = shard_layout_of(source.layout).mesh
-    extents = flatten(mesh.layout.shape)
+    extents = flatten(mesh.positions.shape)
     held = tensor_bytes(source)
     moved: dict[str, int] = {}
-    for topology, axes in zip(mesh.topologies, topology_axes(mesh)):
+    for topology, axes in zip(mesh.topologies, level_axes(mesh)):
         units = 1
         for mesh_axis in axes:
             if before.get(mesh_axis) != after.get(mesh_axis):

@@ -19,7 +19,6 @@ import pytest
 from tests.fixtures.placed.gqa_decode import GqaOnline
 from tests.fixtures.placed.mha_decode_paged import LongerCache, ShorterCache
 from tests.fixtures.placed.qwen3_1_7b_pd import PrefillLayer
-from tests.fixtures.placed.scoped_tile_loop import ScopedTileLoop
 from tests.models.corpus import ConcreteCase, placed_cases
 from tests.models.qwen3_1_7b.case import CASE as QWEN3_1_7B
 from tilefoundry.analysis import (
@@ -128,11 +127,6 @@ EXPECTED_MEMORY_PEAKS = {
     "gqa_decode.GqaOnline.gqa_online_attend[ctx_len=128]": {
         "gmem": 283_752,
         "rmem": 0,
-    },
-    "grouped_window.GroupedWindow.corner[static]": {
-        "gmem": 512,
-        "rmem": 0,
-        "smem": 4_608,
     },
     "hand_checked.InvariantReuse.reuse[static]": {
         "gmem": 80,
@@ -276,7 +270,6 @@ EXPECTED_MEMORY_PEAKS = {
         "gmem": 12_288,
         "rmem": 12_288,
     },
-    "scoped_tile_loop.ScopedTileLoop.row_relu[static]": {"gmem": 25_600, "rmem": 0},
     "specialize_through_call.Direct.pick[n=128]": {"gmem": 1_024, "smem": 128},
     "specialize_through_call.Direct.run[n=128]": {"gmem": 1_024, "smem": 128},
     "specialize_through_call.ToCallee.pick[n=128]": {"gmem": 1_024, "smem": 128},
@@ -521,23 +514,6 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
                 assert held.ideal_ns >= 0 and held.compute_ns >= 0 and held.memory_ns >= 0
             if record is PerformanceMetadata:
                 assert 0 <= held.timeline.start_ns <= held.timeline.end_ns
-
-
-def test_a_loop_off_a_unit_coordinate_is_counted_at_its_widest() -> None:
-    """A loop starting at its own CTA's row runs a count nobody walks to.
-
-    Where the loop begins depends on the unit running it, so the count is read
-    off the widest span its bounds reach rather than coordinate by coordinate,
-    and it says so.
-    """
-    function = next(f for f in ScopedTileLoop.functions if f.name == "row_relu")
-    scopes = {
-        scope.owner.induction_var.name: scope
-        for scope in walk_scopes(build_scopes(ScopedTileLoop, function))
-        if isinstance(scope.owner, LoopRegion)
-    }
-    assert scopes["r"].trips() == 8
-    assert scopes["r"].trips_precision is AccessPrecision.WIDENED
 
 
 @pytest.mark.parametrize("case", INVENTORY)

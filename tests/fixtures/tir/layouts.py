@@ -10,7 +10,7 @@ def bcast(shape, strides, mesh) -> ShardLayout:
     """A tile held whole by every instance, so ``local()`` returns that tile."""
     return ShardLayout(
         layout=Layout(shape=shape, strides=strides),
-        attrs=tuple(Broadcast() for _ in mesh.layout.shape),
+        attrs=tuple(Broadcast() for _ in mesh.positions.shape),
         mesh=mesh,
     )
 

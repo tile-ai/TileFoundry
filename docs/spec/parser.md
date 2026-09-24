@@ -175,7 +175,6 @@ loop-iterator         ::= 'tile' '(' expression ',' expression (',' expression)?
                             expression ',' expression) ')'
 loop-carry-statement  ::= expression '=' expression
                           | 'for' name 'in' expression ':' loop-carry
-                          | with
                           | statement
 loop-carry            ::= (loop-carry-statement (newline loop-carry-statement)*)?
 loop-header           ::= 'for' identifier 'in' loop-iterator ':' loop-carry

@@ -257,13 +257,20 @@ def canonicalize_topology_dims(topology: object) -> object:
     return Topology(topology.name, size)
 
 
+def _map_mesh_layout(layout, rebuild):
+    """Rebuild what a mesh stated, whether that is one arrangement or one per level."""
+    if isinstance(layout, tuple):
+        return tuple(rebuild(one) for one in layout)
+    return rebuild(layout)
+
+
 def _canonicalize_mesh_dims(mesh: object) -> object:
     _, _, _, Mesh, _ = _shard_types()
     if not isinstance(mesh, Mesh):
         return mesh
     topologies = tuple(canonicalize_topology_dims(item) for item in mesh.topologies)
-    layout = _canonicalize_layout_dims(mesh.layout)
-    if topologies == mesh.topologies and layout is mesh.layout:
+    layout = _map_mesh_layout(mesh.layout, _canonicalize_layout_dims)
+    if topologies == mesh.topologies and layout == mesh.layout:
         return mesh
     return Mesh(topologies=topologies, layout=layout, names=mesh.names)
 
@@ -328,8 +335,8 @@ def substitute_mesh_dims(mesh: object, bindings: Mapping[str, int]) -> object:
     if not isinstance(mesh, Mesh):
         return mesh
     topologies = tuple(substitute_topology_dims(item, bindings) for item in mesh.topologies)
-    layout = substitute_layout_dims(mesh.layout, bindings)
-    if topologies == mesh.topologies and layout is mesh.layout:
+    layout = _map_mesh_layout(mesh.layout, lambda one: substitute_layout_dims(one, bindings))
+    if topologies == mesh.topologies and layout == mesh.layout:
         return mesh
     return Mesh(topologies=topologies, layout=layout, names=mesh.names)
 
