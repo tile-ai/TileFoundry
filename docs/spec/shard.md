@@ -785,6 +785,10 @@ copy that displacement to a materialized consumer.
 
 ## 9. Layout construction and mesh-scope projection
 
+Making the steps of a compact arrangement and reading an index back into the
+coordinate that reaches it are not operations on layouts, so they are filed
+apart from the algebra, as CuTe files `stride.hpp` apart from `layout.hpp`.
+
 ```python
 class NotProjectable(ValueError):
     """Report that a layout cannot serve as a mesh execution scope."""

@@ -10,13 +10,13 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.layout_algebra import prefix_product
 from tilefoundry.ir.types.shard.shard_layout import (
     Partial,
     ShardLayout,
     Split,
     split_target_axes,
 )
+from tilefoundry.ir.types.shard.stride import prefix_product
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,

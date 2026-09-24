@@ -14,6 +14,7 @@ from typing import Optional, Union
 
 from .int_tuple import flatten, product
 from .layout import ComposedLayout, Layout, Swizzle
+from .stride import idx2crd, prefix_product
 
 
 class NotProjectable(ValueError):
@@ -28,47 +29,6 @@ def _stride(layout: Layout) -> tuple[int, ...]:
     if layout.strides is not None:
         return layout.strides
     return prefix_product(_shape(layout))
-
-
-def prefix_product(shape: tuple[int, ...]) -> tuple[int, ...]:
-    """Exclusive prefix product (column-major natural strides)."""
-    out: list[int] = []
-    acc = 1
-    for s in shape:
-        out.append(acc)
-        acc *= s
-    return tuple(out)
-
-
-def c_order_strides(shape: tuple, *, mul=None) -> tuple:
-    """Row-major (C-order) contiguous strides.
-
-    Row-major (C-order) contiguous strides: ``strides[-1] == 1``,
-    ``strides[i] == strides[i+1] * shape[i+1]``.
-
-    The single home for this computation. *mul* defaults to ``int``
-    multiplication; pass a dim-expression fold (e.g. wrapping
-    ``simplify_dim(DimMul, ...)``) for shapes with symbolic entries.
-    """
-    if not shape:
-        return ()
-    if mul is None:
-        mul = lambda a, b: a * b  # noqa: E731
-    strides = [1] * len(shape)
-    for i in range(len(shape) - 2, -1, -1):
-        strides[i] = mul(strides[i + 1], shape[i + 1])
-    return tuple(strides)
-
-
-def try_c_order_strides(shape: tuple) -> tuple[int, ...] | None:
-    """``c_order_strides`` when every entry is a static non-bool ``int``, else ``None``.
-
-    ``c_order_strides`` when every entry is a static non-bool ``int``,
-    else ``None`` (symbolic / dynamic shapes have no static strides).
-    """
-    if not all(isinstance(s, int) and not isinstance(s, bool) for s in shape):
-        return None
-    return c_order_strides(shape)
 
 
 def size(layout: Layout) -> int:
@@ -138,11 +98,6 @@ def cosize(layout: Union[Layout, ComposedLayout]) -> int:
     if swizzle_of(layout) is not None:
         return cosize(layout.outer)
     return apply(layout, size(layout) - 1) + 1
-
-
-def idx2crd(idx: int, shape: tuple[int, ...], stride: tuple[int, ...]) -> tuple[int, ...]:
-    """Per-mode ``(idx // stride_i) % shape_i`` (CuTe ``idx2crd``)."""
-    return tuple((idx // d) % s for s, d in zip(shape, stride))
 
 
 def coalesce(layout: Union[Layout, ComposedLayout]):
@@ -447,13 +402,11 @@ def contains(scope: ComposedLayout, t: int) -> bool:
 
 __all__ = [
     "NotProjectable",
-    "prefix_product",
     "size",
     "swizzle_of",
     "composition",
     "cosize",
     "apply",
-    "idx2crd",
     "coalesce",
     "complement",
     "is_inverse_projectable",

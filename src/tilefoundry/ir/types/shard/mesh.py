@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from tilefoundry.ir.types.shard.int_tuple import flatten, product
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase
-from tilefoundry.ir.types.shard.layout_algebra import c_order_strides
+from tilefoundry.ir.types.shard.stride import c_order_strides
 from tilefoundry.ir.types.tensor_type import ShapeDim
 
 

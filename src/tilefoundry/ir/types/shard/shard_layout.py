@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .layout import ComposedLayout, Layout, LayoutBase
-from .layout_algebra import try_c_order_strides
 from .mesh import Mesh
+from .stride import try_c_order_strides
 
 
 class ShardAttr:

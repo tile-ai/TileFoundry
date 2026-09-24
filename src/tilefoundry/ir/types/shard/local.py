@@ -16,9 +16,9 @@ from collections.abc import Iterable
 
 from .int_tuple import flatten
 from .layout import Layout
-from .layout_algebra import c_order_strides, idx2crd
 from .mesh import level_axes, stated_layout
 from .shard_layout import ShardLayout, layout_axis_to_tensor_axis, split_target_axes
+from .stride import c_order_strides, idx2crd
 
 
 def _extents(shard: ShardLayout) -> tuple[int, ...]:

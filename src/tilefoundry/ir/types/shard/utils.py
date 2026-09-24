@@ -3,8 +3,8 @@ from __future__ import annotations
 import math
 
 from .layout import Layout
-from .layout_algebra import try_c_order_strides
 from .mesh import Mesh, Topology
+from .stride import try_c_order_strides
 
 
 def make_mesh(
