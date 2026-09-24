@@ -1323,8 +1323,10 @@ widening; the two modules do not define a second affine graph representation.
     parameter is already fixed to one integer point. An empty parameter context
     MUST count as zero; a non-empty context with an unbounded parameter MUST
     report unknown.
-  - `IterationScope.trips()` MUST fix child and parent domains to the same parameter
-    point before dividing, and take the maximum of those ratios.
+  - `IterationScope.trips()` MUST count a loop off its bounds, not its domain:
+    `max(1, ceil(max(stop - start) / step))`, with `step` a literal and the span
+    bounded. `trips_precision` is `EXACT` where that span reaches one value and
+    `WIDENED` where it reaches several, the count then being an upper bound.
 
 ### 2.2 Target-selected Analyzers
 

@@ -12,15 +12,11 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.isl_interop import dim_range
+from tilefoundry.ir.types.dim import DimSub, simplify_dim
+from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import Mesh
 from tilefoundry.ir.visitor import expr_children
-from tilefoundry.utils.isl_utils import (
-    PARAM_POINT_LIMIT,
-    ParameterBoxTooLarge,
-    UnboundedParameterBox,
-    cardinality,
-    param_points,
-)
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     access_relation_registry,
@@ -29,7 +25,7 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
-from .access import Access, resolve_access
+from .access import Access, AccessPrecision, resolve_access
 from .errors import AnalysisError
 from .loop_domain import induction_name, iteration_domain
 
@@ -89,47 +85,64 @@ class IterationScope:
             cursor = cursor.parent
         return None
 
+    def _counted(self) -> tuple[int, AccessPrecision]:
+        """This scope's iteration count relative to its parent, and how exact it is.
+
+        A loop runs its own span, not the grid it is entered from, so the count
+        is read off ``stop - start``: exactly where that span reaches one value
+        -- however it is written, so bounds naming an enclosing coordinate that
+        cancel are exact -- and at its widest where it reaches several. The
+        widest span is an upper bound on every coordinate's count, which is
+        what every consumer of a trip count already reads it as.
+        """
+        if isinstance(self.owner, MeshRegion) or self.parent is None:
+            return 1, AccessPrecision.EXACT
+        owner = self.owner
+        span = simplify_dim(DimSub, (owner.extent, owner.start))
+        step = static_dim_value(owner.step)
+        if step is None:
+            raise AnalysisError(
+                f"loop {induction_name(owner)!r} steps by {owner.step!r}, which is not "
+                "a number; how often it runs is not stated"
+            )
+        widest = static_dim_value(span)
+        precision = AccessPrecision.EXACT
+        if widest is None:
+            try:
+                bounds = dim_range(span)
+            except (ArithmeticError, TypeError, ValueError):
+                bounds = None
+            if bounds is None:
+                raise AnalysisError(
+                    f"loop {induction_name(owner)!r} runs from {owner.start!r} to "
+                    f"{owner.extent!r}, which state no bounded span; its trip count "
+                    "cannot be determined"
+                )
+            widest = bounds[1] - 1
+            if bounds[1] - bounds[0] > 1:
+                precision = AccessPrecision.WIDENED
+        if step <= 0 or widest <= 0:
+            return 1, precision
+        return max(1, -(-widest // step)), precision
+
     def trips(self) -> int:
         """Return this scope's iteration count relative to its parent."""
-        if isinstance(self.owner, MeshRegion):
-            return 1
         cached = getattr(self, "_trips_cache", None)
-        if cached is not None:
-            return cached
-        if self.parent is None:
-            return 1
-        if isinstance(self.owner, LoopRegion):
-            start, extent, step = self.owner.start, self.owner.extent, self.owner.step
-            if all(isinstance(value, int) for value in (start, extent, step)):
-                result = 1 if step <= 0 or extent <= start else -(-(extent - start) // step)
-                self._trips_cache = result
-                return result
-        domain = self.domain
-        parent = self.parent.domain.align_params(domain.get_space())
-        domain = domain.align_params(parent.get_space())
-        try:
-            points = param_points(domain.params().intersect(parent.params()))
-        except UnboundedParameterBox as error:
-            raise AnalysisError(
-                f"loop {induction_name(self.owner)!r} has unbounded parameter "
-                f"{error.parameter!r}, so its trip count cannot be determined"
-            ) from error
-        except ParameterBoxTooLarge as error:
-            raise AnalysisError(
-                f"loop {induction_name(self.owner)!r} has a parameter box exceeding "
-                f"the {PARAM_POINT_LIMIT}-point analysis limit, so its trip count cannot be "
-                "determined"
-            ) from error
-        ratios = []
-        for point in points:
-            amount = cardinality(domain.intersect_params(point))
-            parent_count = cardinality(parent.intersect_params(point))
-            if amount is None or not parent_count:
-                continue
-            ratios.append(max(1, amount // parent_count))
-        result = max(ratios, default=1)
-        self._trips_cache = result
-        return result
+        if cached is None:
+            cached = self._counted()
+            self._trips_cache = cached
+        return cached[0]
+
+    @property
+    def trips_precision(self) -> AccessPrecision:
+        """How exactly :meth:`trips` counts this scope's iterations.
+
+        ``EXACT`` where the span between the bounds is a number, ``WIDENED``
+        where it is read at its widest because a bound names something no one
+        here fixes -- a coordinate of the scope the loop is entered from.
+        """
+        self.trips()
+        return self._trips_cache[1]
 
 
 class ScopeBuilder:

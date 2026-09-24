@@ -19,12 +19,10 @@ from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.types import DType, TensorType, TupleType, Type
 from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import (
-    ComposedLayout,
-    Layout,
     Mesh,
     flatten,
+    mesh_image,
     topology_axes,
-    try_c_order_strides,
 )
 from tilefoundry.target.base import Target, UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
@@ -87,47 +85,6 @@ class ReuseAxes:
         return -1 if self.space else None
 
 
-def _layout_image(mesh: Mesh) -> tuple[int, tuple[int, ...], tuple[int, ...]] | None:
-    """Return a statically stated ``(offset, shape, strides)`` image."""
-    layout = mesh.layout
-    if isinstance(layout, Layout):
-        stated = layout
-        offset = 0
-    elif (
-        isinstance(layout, ComposedLayout)
-        and layout.inner is None
-        and isinstance(layout.outer, Layout)
-    ):
-        stated = layout.outer
-        offset = layout.offset
-    else:
-        return None
-
-    shape = flatten(stated.shape)
-    if stated.strides is None:
-        strides = try_c_order_strides(shape)
-        if strides is None:
-            return None
-    else:
-        strides = tuple(static_dim_value(value) for value in flatten(stated.strides))
-        if any(value is None for value in strides):
-            return None
-
-    static_shape = tuple(static_dim_value(value) for value in shape)
-    static_offset = static_dim_value(offset)
-    if (
-        static_offset is None
-        or any(value is None for value in static_shape)
-        or len(static_shape) != len(strides)
-    ):
-        return None
-    return (
-        static_offset,
-        tuple(value for value in static_shape if value is not None),
-        tuple(value for value in strides if value is not None),
-    )
-
-
 def _mesh_parameters(scope: IterationScope) -> tuple[tuple[str, Call], ...]:
     """Mesh-coordinate parameters retained by this scope's loop domain."""
     return tuple(
@@ -144,7 +101,7 @@ def _linear_position(
     if not parameters:
         return 0, ()
     mesh = parameters[0][1].target.mesh
-    image = _layout_image(mesh)
+    image = mesh_image(mesh)
     if image is None:
         return None
     offset, shape, strides = image
@@ -364,7 +321,7 @@ def axis_label(mesh: Mesh, axis: int) -> str:
 
 def shared_units(mesh: Mesh, axes: tuple[int, ...], wave: tuple[int, int]) -> int:
     """Count wave positions after projecting out axes that do not share data."""
-    image = _layout_image(mesh)
+    image = mesh_image(mesh)
     if image is None:
         return 1
     offset, shape, strides = image

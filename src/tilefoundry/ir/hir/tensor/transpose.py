@@ -71,6 +71,14 @@ register_access_relation(Transpose)(
 
 @register_typeinfer(Transpose)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+    """The same bytes with the axes in another order, and the strides to match.
+
+    A tensor that states no layout is the C order every layer of this IR reads
+    it as, and permuting that is not the C order of the result: a (K, M) read
+    with strides (M, 1) transposes to an (M, K) view whose strides are (1, M),
+    not (K, 1). So an unstated layout is written out as the strides it stands
+    for and those are permuted with the shape.
+    """
     x_ty = ctx.type_of(call.args[0])
     perm = call.target.perm
     if len(perm) != len(x_ty.shape):
@@ -86,6 +94,10 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             new_layout = derived
     else:
         source = x_ty.layout
+        if source is None:
+            source = Layout(shape=tuple(x_ty.shape), strides=try_c_order_strides(tuple(x_ty.shape)))
+            if source.strides is None:
+                source = None
         if isinstance(source, Layout):
             new_layout = Layout(
                 shape=tuple(source.shape[p] for p in perm),

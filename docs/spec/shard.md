@@ -319,8 +319,10 @@ Mesh composition uses the following rules:
   product of positions in the levels below it:
   `offset = outer_offset * below + inner_offset`.
 - A sliced mesh is composable; its slice offset remains a
-  `ComposedLayout` offset after composition. A mesh whose level names partially
-  overlap the levels in force MUST be rejected rather than decomposed.
+  `ComposedLayout` offset after composition. A mesh naming a suffix of the
+  levels in force MUST replace those levels and keep the ones above unchanged,
+  with `offset = (outer_offset // below) * below + inner_offset`. Level names
+  overlapping in any other way MUST be rejected rather than decomposed.
 - `composed(meshes)` invokes `check_topology` on its result. For each named
   level with a concrete declared extent, its projected position count MUST NOT
   exceed that extent; symbolic extents are deferred until dimensions are bound.

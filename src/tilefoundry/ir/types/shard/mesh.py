@@ -5,7 +5,11 @@ from functools import lru_cache
 
 from tilefoundry.ir.types.shard.int_tuple import flatten
 from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
-from tilefoundry.ir.types.shard.layout_algebra import c_order_strides, unflatten
+from tilefoundry.ir.types.shard.layout_algebra import (
+    c_order_strides,
+    try_c_order_strides,
+    unflatten,
+)
 from tilefoundry.ir.types.tensor_type import ShapeDim
 
 
@@ -178,6 +182,128 @@ def _positions_layout(mesh: Mesh) -> tuple[tuple, tuple, int]:
     raise ValueError(f"mesh levels {mesh.topologies!r} have an unsupported layout")
 
 
+def mesh_image(mesh: Mesh) -> tuple[int, tuple[int, ...], tuple[int, ...]] | None:
+    """A mesh's positions as one static ``(offset, shape, strides)``, flattened.
+
+    The reading anything counting positions starts from: where the mesh's first
+    position sits and what walking each of its axes steps by, as numbers. A
+    layout stating no steps is the C order its shape gives it, which is what
+    every layer of this IR reads it as.
+
+    ``None`` where the mesh states something no number answers: a composition
+    through a transform, or an extent, step or offset that is symbolic.
+    """
+    from tilefoundry.ir.types.shape_helpers import (  # noqa: PLC0415 - cycle guard
+        static_dim_value,
+    )
+
+    layout = mesh.layout
+    if isinstance(layout, Layout):
+        stated, offset = layout, 0
+    elif isinstance(layout, ComposedLayout) and layout.inner is None and isinstance(
+        layout.outer, Layout
+    ):
+        stated, offset = layout.outer, layout.offset
+    else:
+        return None
+
+    shape = tuple(static_dim_value(value) for value in flatten(stated.shape))
+    if any(value is None for value in shape):
+        return None
+    if stated.strides is None:
+        strides = try_c_order_strides(shape)
+    else:
+        strides = tuple(static_dim_value(value) for value in flatten(stated.strides))
+        if any(value is None for value in strides):
+            strides = None
+    static_offset = static_dim_value(offset)
+    if strides is None or static_offset is None or len(shape) != len(strides):
+        return None
+    return static_offset, shape, strides
+
+
+def _coalesced(modes: list[tuple[int, int]]) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """One level's modes as a set of positions reads them: sorted by step, joined."""
+    joined: list[list[int]] = []
+    for extent, step in sorted(modes, key=lambda mode: (mode[1], mode[0])):
+        if joined and joined[-1][0] * joined[-1][1] == step:
+            joined[-1][0] *= extent
+        else:
+            joined.append([extent, step])
+    return tuple(extent for extent, _ in joined), tuple(step for _, step in joined)
+
+
+def level_positions(
+    mesh: Mesh,
+) -> dict[str, tuple[tuple[int, ...], tuple[int, ...], int]] | None:
+    """Each level's modes and offset, in that level's own numbering.
+
+    A mode belongs to the level its step falls in, split where it crosses a
+    boundary, so a level takes the positions its steps say are its own rather
+    than the axes standing where it does. A sub-mesh -- one warp of a CTA's
+    threads -- is a level whose modes do not multiply to its size, which is all
+    that separates this from :func:`topology_axes`. Modes of one position are
+    left out and the rest sorted by step and joined. ``None`` where a step, a
+    mode crossing a boundary, a level's end or a size is not read.
+    """
+    image = mesh_image(mesh)
+    if image is None:
+        return None
+    offset, extents, strides = image
+    names = tuple(getattr(topology, "name", topology) for topology in mesh.topologies)
+    sizes = tuple(getattr(topology, "size", None) for topology in mesh.topologies)
+    if any(
+        not isinstance(size, int) or isinstance(size, bool) or size < 1 for size in sizes
+    ):
+        if len(sizes) != 1:
+            return None
+        held = [
+            (extent, stride)
+            for extent, stride in zip(extents, strides)
+            if extent != 1 and stride != 0
+        ]
+        return {names[0]: (*_coalesced(held), offset)}
+    below: list[int] = []
+    count = 1
+    for size in reversed(sizes):
+        below.insert(0, count)
+        count *= size
+    modes: list[list[tuple[int, int]]] = [[] for _ in sizes]
+    pending = [
+        (extent, stride)
+        for extent, stride in zip(extents, strides)
+        if extent != 1 and stride != 0
+    ]
+    while pending:
+        extent, stride = pending.pop()
+        level = next(
+            (
+                index
+                for index, (unit, size) in enumerate(zip(below, sizes))
+                if unit <= stride < unit * size
+            ),
+            None,
+        )
+        if level is None or stride % below[level]:
+            return None
+        step, size = stride // below[level], sizes[level]
+        if extent * step <= size:
+            modes[level].append((extent, step))
+            continue
+        inside = size // step
+        if size % step or extent % inside:
+            return None
+        modes[level].append((inside, step))
+        pending.append((extent // inside, below[level] * size))
+    found: dict[str, tuple[tuple[int, ...], tuple[int, ...], int]] = {}
+    for name, unit, size, held in zip(names, below, sizes, modes):
+        start = (offset // unit) % size
+        if start + sum((extent - 1) * step for extent, step in held) >= size:
+            return None
+        found[name] = (*_coalesced(held), start)
+    return found
+
+
 @lru_cache(maxsize=None)
 def grouped_layout(mesh: Mesh) -> Layout:
     """*mesh*'s positions with one mode per level it names, in mesh numbering.
@@ -239,6 +365,75 @@ def positions_at(mesh: Mesh, topology_level: str) -> tuple[tuple, tuple]:
     return shape, _divided(flatten(grouped.strides[index]), below, topology_level)
 
 
+def _suffix_refine(outer: Mesh, inner: Mesh) -> "Mesh | None":
+    """*outer* with the levels *inner* names replaced, the ones above it kept.
+
+    A scope naming a suffix of the levels in force narrows those levels and
+    says nothing about the ones above, so those stay exactly as they were: a
+    grid of CTAs each running the same program over some of its threads is one
+    mesh, not a choice between naming the grid and naming the threads.
+
+    ``None`` when *inner* does not name a strict suffix of *outer*'s levels,
+    which leaves the composition to the rules that do apply. A level of one
+    position takes an axis of *outer* only where the mesh wrote one down.
+    """
+    outer_names = tuple(getattr(level, "name", level) for level in outer.topologies)
+    inner_names = tuple(getattr(level, "name", level) for level in inner.topologies)
+    if not inner_names or len(inner_names) >= len(outer_names):
+        return None
+    if outer_names[-len(inner_names) :] != inner_names:
+        return None
+
+    prefix = len(outer_names) - len(inner_names)
+    outer_image, inner_image = mesh_image(outer), mesh_image(inner)
+    if outer_image is None or inner_image is None:
+        raise ValueError(
+            f"composing {inner_names} into {outer_names} needs both scopes' "
+            "positions as numbers"
+        )
+    outer_offset, outer_shape, outer_strides = outer_image
+    inner_offset, inner_shape, inner_strides = inner_image
+
+    def positions(topologies) -> int:
+        count = 1
+        for topology in topologies:
+            size = getattr(topology, "size", None)
+            if not isinstance(size, int) or isinstance(size, bool) or size < 1:
+                raise ValueError(
+                    f"mesh level {getattr(topology, 'name', topology)!r} states extent "
+                    f"{size!r}; composing scopes needs each level's position count"
+                )
+            count *= size
+        return count
+
+    above = positions(outer.topologies[:prefix])
+    inside = positions(outer.topologies[prefix:])
+    taken, product = 0, 1
+    while taken < len(outer_shape) and product < above:
+        product *= outer_shape[taken]
+        taken += 1
+    if above == 1 and outer_shape and outer_shape[0] == 1:
+        taken = 1
+    if product != above:
+        raise ValueError(
+            f"composing {inner_names} into {outer_names} cannot tell which axes "
+            f"of {outer_shape} are {outer_names[:prefix]}'s {above} positions"
+        )
+
+    return Mesh(
+        topologies=(*outer.topologies[:prefix], *inner.topologies),
+        layout=ComposedLayout(
+            inner=None,
+            offset=(outer_offset // inside) * inside + inner_offset,
+            outer=Layout(
+                shape=(*outer_shape[:taken], *inner_shape),
+                strides=(*outer_strides[:taken], *inner_strides),
+            ),
+        ),
+        names=(*outer.names[:taken], *inner.names),
+    )
+
+
 def composed(meshes: "tuple[Mesh, ...]") -> "Mesh":
     """Compose scopes, replacing an existing level when the inner names it."""
     if len(meshes) == 1:
@@ -284,6 +479,10 @@ def composed(meshes: "tuple[Mesh, ...]") -> "Mesh":
 
     result = meshes[0]
     for inner in meshes[1:]:
+        refined = _suffix_refine(result, inner)
+        if refined is not None:
+            result = refined
+            continue
         current_names = {topology.name for topology in result.topologies}
         inner_names = {topology.name for topology in inner.topologies}
         if current_names.isdisjoint(inner_names):
@@ -356,6 +555,8 @@ __all__ = [
     "Topology",
     "composed",
     "grouped_layout",
+    "level_positions",
+    "mesh_image",
     "positions_at",
     "positions_below",
     "topology_axes",
