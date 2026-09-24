@@ -20,7 +20,7 @@ from tilefoundry.ir.types import (
     shard_layout_of,
     try_c_order_strides,
 )
-from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.dim import static_dim_value
 from tilefoundry.ir.types.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.shard_layout import Split as SplitAttr
 from tilefoundry.ir.types.shard_layout import layout_axis_to_tensor_axis, split_target_axes

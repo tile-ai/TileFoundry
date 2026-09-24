@@ -88,9 +88,9 @@ from tilefoundry.ir.types.dim import (
     DimVar,
     dim_expr,
     simplify_dim,
+    static_dim_value,
 )
 from tilefoundry.ir.types.layout import LayoutBase
-from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 from tilefoundry.ir.visitor import BindingSubstitutionCloner
 from tilefoundry.target import MemoryHierarchyFacts, Target, UnsupportedCapabilityError

@@ -24,9 +24,15 @@ from tilefoundry.ir.tir.memory.tensor_view import TensorView
 from tilefoundry.ir.tir.stmts import LetStmt
 from tilefoundry.ir.tir.sync import participation
 from tilefoundry.ir.types import c_order_strides, swizzle_of
-from tilefoundry.ir.types.dim import DimAdd, DimMul, DimSub, DimVar
+from tilefoundry.ir.types.dim import (
+    DimAdd,
+    DimMul,
+    DimSub,
+    DimVar,
+    shape_numel_upper_bound,
+    upper_bound,
+)
 from tilefoundry.ir.types.layout import Layout, LayoutBase
-from tilefoundry.ir.types.shape_helpers import shape_numel_upper_bound, upper_bound
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Dynamic,

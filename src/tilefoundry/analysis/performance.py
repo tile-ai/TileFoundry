@@ -11,7 +11,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.dim import static_dim_value
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts

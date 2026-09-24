@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.ir.tir.arith import Binary, BinaryKind, Unary, UnaryKind
-from tilefoundry.ir.types.shape_helpers import (
+from tilefoundry.ir.types.dim import (
     shape_has_dim_var,
     shape_numel_upper_bound,
     shape_runtime_total,

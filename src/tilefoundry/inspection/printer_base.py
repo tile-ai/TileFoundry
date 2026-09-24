@@ -20,10 +20,10 @@ from tilefoundry.ir.types.dim import (
     DimMul,
     DimSub,
     DimVar,
+    static_dim_value,
 )
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, Swizzle
 from tilefoundry.ir.types.mesh import Mesh
-from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard_layout import Broadcast, Partial, ShardLayout, Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import ExprFunctor, TypeFunctor

@@ -14,8 +14,7 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.isl_interop import dim_range
 from tilefoundry.ir.types import Mesh
-from tilefoundry.ir.types.dim import DimSub, simplify_dim
-from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.dim import DimSub, simplify_dim, static_dim_value
 from tilefoundry.ir.visitor import expr_children
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,

@@ -17,7 +17,7 @@ import isl
 from tilefoundry.ir.hir._helpers import is_one
 from tilefoundry.ir.isl_interop import index_set, isl_to_dim, shape_to_isl_domain
 from tilefoundry.ir.types import TensorType, TupleType, Type, tensor_bytes
-from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.dim import static_dim_value
 from tilefoundry.ir.types.shard_layout import layout_axis_to_tensor_axis
 from tilefoundry.utils.isl_utils import cardinality
 

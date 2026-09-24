@@ -9,9 +9,9 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Scalar
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.dim import static_dim_value
 from tilefoundry.ir.types.mesh import Mesh
 from tilefoundry.ir.types.scope_match import covered_by_scope
-from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (

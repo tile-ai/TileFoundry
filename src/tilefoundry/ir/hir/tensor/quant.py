@@ -25,8 +25,7 @@ from tilefoundry.ir.types import (
     canonical_shard_layout,
     try_c_order_strides,
 )
-from tilefoundry.ir.types.dim import DimFloorDiv, simplify_dim
-from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.dim import DimFloorDiv, simplify_dim, static_dim_value
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Split,

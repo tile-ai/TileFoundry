@@ -13,8 +13,14 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.isl_interop import normalize_dim
 from tilefoundry.ir.types import Layout, TensorType, try_c_order_strides
-from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
-from tilefoundry.ir.types.shape_helpers import i64_const, static_dim_value
+from tilefoundry.ir.types.dim import (
+    DimAdd,
+    DimFloorDiv,
+    DimSub,
+    i64_const,
+    simplify_dim,
+    static_dim_value,
+)
 from tilefoundry.ir.types.shard_layout import Split, shard_layout_of, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (

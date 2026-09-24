@@ -39,7 +39,7 @@ from tilefoundry.ir.types import (
     Topology,
     callable_type_for,
 )
-from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.dim import static_dim_value
 from tilefoundry.ir.types.substitute import (
     DimSubstitutionError,
     dim_vars_by_name,

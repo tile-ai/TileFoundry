@@ -34,8 +34,8 @@ from tilefoundry.ir.types.dim import (
     DimMod,
     DimMul,
     DimSub,
+    static_dim_value,
 )
-from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target import Target

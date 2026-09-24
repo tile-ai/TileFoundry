@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.ir.tir.memory.copy import Copy
-from tilefoundry.ir.types.shape_helpers import shape_has_dim_var, shape_runtime_total
+from tilefoundry.ir.types.dim import shape_has_dim_var, shape_runtime_total
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.registries import Role, register_codegen

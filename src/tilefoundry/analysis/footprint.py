@@ -25,7 +25,7 @@ from tilefoundry.ir.types import (
     flatten,
     level_axes,
 )
-from tilefoundry.ir.types.shape_helpers import static_dim_value
+from tilefoundry.ir.types.dim import static_dim_value
 from tilefoundry.target.base import Target, UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.isl_utils import cardinality

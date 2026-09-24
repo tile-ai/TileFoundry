@@ -24,9 +24,9 @@ from tilefoundry.ir.types.dim import (
     DimFloorDiv,
     DimMul,
     DimSub,
+    i64_const,
     simplify_dim,
 )
-from tilefoundry.ir.types.shape_helpers import i64_const
 from tilefoundry.ir.types.shard_layout import (
     layout_axis_to_tensor_axis,
     split_target_axes,

@@ -194,7 +194,7 @@ def layout_axis_to_tensor_axis(layout_shape: tuple, tensor_shape: tuple) -> list
 
     See [shard §7.1.1](docs/spec/shard.md#711-layoutshape).
     """
-    from .shape_helpers import static_dim_value  # noqa: PLC0415 - cycle guard
+    from .dim import static_dim_value  # noqa: PLC0415 - cycle guard
 
     result: list[int] = []
     layout_idx = 0

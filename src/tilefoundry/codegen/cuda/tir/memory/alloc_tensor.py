@@ -16,7 +16,7 @@ from tilefoundry.codegen.cuda.tir.memory.tensor_view import render_shard_layout_
 from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import program_topologies
 from tilefoundry.ir.tir.memory import AllocTensor
 from tilefoundry.ir.tir.stmts import LetStmt
-from tilefoundry.ir.types.shape_helpers import (
+from tilefoundry.ir.types.dim import (
     shape_numel_upper_bound,
     shape_upper_bound,
     upper_bound,
