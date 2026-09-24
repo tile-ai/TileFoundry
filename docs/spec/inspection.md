@@ -188,6 +188,10 @@ function's own execution domain. A mesh merely restated in another expression
 is not a binding. Without such a binding, the printer MUST use the verbose
 `ShardLayout(...)` form rather than inventing a name.
 
+Placement sugar states one dimension per tensor axis, so a layout that groups
+an axis's modes has no sugar and MUST use the verbose form. Elsewhere a group
+is written as the shape tuple it is.
+
 Placement sugar states the layout's own dimensions with each `Split` written on
 the dimension it divides, adds the stride tuple whenever the layout has one,
 and states the remaining mesh axes in a `{axis @ ...}` set. Because the parser

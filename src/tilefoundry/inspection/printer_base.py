@@ -89,6 +89,15 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             self._nested_dim = previous
 
     def dim_entry(self, value, ctx=None, *, nested: bool = False) -> str:
+        """One entry of a shape or stride tuple, which may itself be a group.
+
+        A layout groups the modes of one tensor axis by writing them as a
+        tuple in that axis's place, so an entry is read as the shape tuple it
+        is rather than as a single dimension.
+        """
+        if isinstance(value, tuple):
+            entries = ", ".join(self.dim_entry(item, ctx) for item in value)
+            return f"({entries}{',' if len(value) == 1 else ''})"
         with self.nested_dim(nested):
             return self.visit(value, ctx)
 
@@ -189,7 +198,12 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
         return added.args[0], divisor
 
     def shard_surface(self, value: ShardLayout, ctx=None) -> str | None:
-        """Render placement sugar only when every mesh axis has a scope binding."""
+        """Render placement sugar only when every mesh axis has a scope binding.
+
+        The sugar states one extent per tensor axis, each a dimension
+        expression, so it declines a layout whose modes are grouped by tile
+        axis: writing the groups in would emit a line the parser refuses.
+        """
         layout = value.layout
         names = value.mesh.names
         if (
@@ -197,6 +211,11 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             or not names
             or len(value.attrs) != len(names)
             or ctx is None
+        ):
+            return None
+        if any(
+            isinstance(entry, tuple)
+            for entry in (*layout.shape, *(layout.strides or ()))
         ):
             return None
         refs = tuple(ctx.mesh_axis_alias(value.mesh, index) for index in range(len(names)))

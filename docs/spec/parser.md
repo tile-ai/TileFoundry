@@ -75,6 +75,16 @@ inside a region but bound outside it are captured as `MeshRegion.args`, with a
 fresh `MeshRegion.params` binding used by the body. Capture is performed one
 region boundary at a time, so nested regions pass a value through each door.
 
+A loop body holds `with Mesh(...)` statements, and the loop carries what one
+binds. Because the body repeats, a name the `with` reads on its way to binding
+it escapes as well as one read after it, and the loop's carry list holds both.
+A `with` whose body states no value of its own yields the first name it rebound,
+so the region stays on the graph the loop reads.
+
+A TIR loop bound that is not a literal is read as the dimension arithmetic the
+loop was lowered from, so a bound naming a mesh coordinate reads back as the
+bound it was printed from rather than as value arithmetic.
+
 ## 2. Syntax and Rules
 
 ### 2.1 Syntax
@@ -169,6 +179,7 @@ loop-iterator         ::= 'tile' '(' expression ',' expression (',' expression)?
                             expression ',' expression) ')'
 loop-carry-statement  ::= expression '=' expression
                           | 'for' name 'in' expression ':' loop-carry
+                          | with
                           | statement
 loop-carry            ::= (loop-carry-statement (newline loop-carry-statement)*)?
 loop-header           ::= 'for' identifier 'in' loop-iterator ':' loop-carry

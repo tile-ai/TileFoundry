@@ -74,6 +74,7 @@ from tilefoundry.ir.types.dim import (
     dim_expr,
     simplify_dim,
 )
+from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard import (
     Broadcast,
     Layout,
@@ -298,6 +299,7 @@ runtime = SimpleNamespace(
     composed=composed,
     dim_expr=dim_expr,
     normalize_dim=normalize_dim,
+    static_dim_value=static_dim_value,
     slice_size=slice_size,
     simplify_dim=simplify_dim,
     resolve_storage=resolve_storage,

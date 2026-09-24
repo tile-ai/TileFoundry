@@ -15,6 +15,7 @@ from tilefoundry.ir.core.pattern import DimVarRangePat, locate_dim_var
 from tilefoundry.ir.hir.function import (
     Function as HirFunction,
 )
+from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.types import (
     DType,
@@ -31,10 +32,11 @@ from tilefoundry.ir.types.dim import (
     DimMul,
     DimSub,
 )
+from tilefoundry.ir.types.shape_helpers import static_dim_value
 from tilefoundry.ir.types.shard.mesh import Mesh
 from tilefoundry.ir.types.shard.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind
-from tilefoundry.ir.visitor import ExprVisitor
+from tilefoundry.ir.visitor import ExprVisitor, collect_exprs
 from tilefoundry.target import CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
 from tilefoundry.visitor_registry import verify_stmt_registry
@@ -145,6 +147,12 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
             _check_rank0_int(ctx, stmt, stmt.start, "For.start")
             _check_rank0_int(ctx, stmt, stmt.stop, "For.stop")
             _check_rank0_int(ctx, stmt, stmt.step, "For.step")
+            for field, bound in (
+                ("start", stmt.start),
+                ("stop", stmt.stop),
+                ("step", stmt.step),
+            ):
+                _check_bound_coordinates(field, bound, scope)
             if isinstance(stmt.step, Constant) and stmt.step.value == 0:
                 raise VerifyError("For.step must not be 0")
             iv_ty = stmt.induction_var.type
@@ -254,6 +262,30 @@ def _reject_nested_alloc_tensor(expr: Expr, *, at_letstmt_value: bool) -> None:
     """
     visitor = _AllocTensorRejectingVisitor(at_letstmt_value=at_letstmt_value)
     visitor.visit(expr)
+
+
+def _check_bound_coordinates(field: str, bound, scope) -> None:
+    """Hold a loop bound's mesh coordinates to the scopes around the loop.
+
+    A coordinate is a coordinate of one scope, read through that scope's
+    binding, so a bound naming one has to stand inside a ``MeshScope`` of the
+    mesh it names -- the enclosing scope is what says which unit it is about.
+    """
+    for expr in collect_exprs(bound):
+        if not (isinstance(expr, Call) and isinstance(expr.target, MeshCoord)):
+            continue
+        mesh = expr.target.mesh
+        axis = static_dim_value(expr.args[0]) if expr.args else None
+        if axis is None or not 0 <= axis < len(mesh.layout.shape):
+            raise VerifyError(
+                f"For.{field} reads axis {axis!r} of a mesh of rank "
+                f"{len(mesh.layout.shape)}"
+            )
+        if not any(held is mesh or held == mesh for held in scope):
+            raise VerifyError(
+                f"For.{field} reads a coordinate of {mesh!r}, which no enclosing "
+                "MeshScope binds"
+            )
 
 
 def _check_embedded_sharding(expr: Expr, scope, fn):

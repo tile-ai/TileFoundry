@@ -10,6 +10,7 @@ from tilefoundry.ir.core import Call, Constant, Op, Tuple, Var
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
+from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
@@ -18,6 +19,7 @@ from tilefoundry.ir.tir.stmts import (
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.visitor import StmtVisitor
 from tilefoundry.utils.python_source import PythonExpr, _merge_imports
 
@@ -69,6 +71,8 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
 
     def visit_program_call(self, expr: Call, ctx=None) -> str:
         target = expr.target
+        if isinstance(target, Slice):
+            return self._window_subscript(expr, ctx)
         scalar_binary = {
             BinaryKind.EQ: "==", BinaryKind.NE: "!=", BinaryKind.LT: "<",
             BinaryKind.LE: "<=", BinaryKind.GT: ">", BinaryKind.GE: ">=", BinaryKind.AND: "and",
@@ -88,6 +92,25 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         self.context.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
         return f"T.{name}({', '.join(args)})"
 
+    def _window_subscript(self, expr: Call, ctx=None) -> str:
+        """A window as the subscript it was authored as, which reads back.
+
+        The generic call form names an Op the parser does not bind, so a window
+        is written as the slice it is: each axis runs from its start to that
+        start plus what the window reaches, with a step where it has one.
+        """
+        spans = []
+        starts = expr.args[1].elements
+        for start, size, stride in zip(starts, expr.target.sizes, expr.target.strides):
+            low = (
+                self.dim_entry(start, ctx)
+                if is_dim_op_call(start)
+                else self.visit(start, ctx)
+            )
+            high = f"{low} + {size * stride}"
+            spans.append(f"{low}:{high}" if stride == 1 else f"{low}:{high}:{stride}")
+        return f"{self.visit(expr.args[0], ctx)}[{', '.join(spans)}]"
+
     def visit_Sequential(self, stmt, ctx=None):
         return [line for child in stmt.body for line in self.visit(child)]
 
@@ -105,7 +128,17 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         return lines
 
     def visit_For(self, stmt, ctx=None):
-        lines = [f"{self.indent}for {stmt.induction_var.name} in range({self.visit(stmt.start)}, {self.visit(stmt.stop)}, {self.visit(stmt.step)}):"]
+        """A loop, its bounds read through the scopes the loop stands in.
+
+        A bound may name a coordinate of an enclosing mesh -- a CTA grid deals
+        each CTA its own tiles -- and which scope binds that mesh is what the
+        print context holds, so the bounds are rendered through it.
+        """
+        bounds = ", ".join(
+            self.visit(bound, self.context)
+            for bound in (stmt.start, stmt.stop, stmt.step)
+        )
+        lines = [f"{self.indent}for {stmt.induction_var.name} in range({bounds}):"]
         lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body))
         return lines
 
