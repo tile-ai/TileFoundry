@@ -4,8 +4,8 @@ from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimMul, simplify_dim
 from tilefoundry.ir.types.layout import Layout
@@ -164,8 +164,6 @@ class Reshard(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     layout = ParamDef(kind="attribute", annotation=ShardLayout, default=None)
     storage = ParamDef(kind="attribute", default=None)
-
-
 
 
 @register_access_relation(Reshard)

@@ -482,6 +482,11 @@ class Op:
     (see [tir §2.3](./tir.md#23-tir-ops)).
 
 ```python
+class MemoryEffect(Flag):
+    READ = auto()
+    WRITE = auto()
+
+
 class ParamDef:
     """Declare one Op input or attribute.
 
@@ -491,6 +496,7 @@ class ParamDef:
         pattern: attribute; Optional input-type predicate.
         optional: attribute; Whether None is accepted.
         default: attribute; Call-site default or the required-value sentinel.
+        effect: attribute; Declared storage effect, or None when undeclared.
     """
 
     kind: Literal["input", "attribute"]
@@ -498,10 +504,14 @@ class ParamDef:
     pattern: Pattern | None = None
     optional: bool = False
     default: Any = MISSING
+    effect: MemoryEffect | None = None
 ```
 
 - constraints:
   - a single Op parameter descriptor; the order of input-kind ParamDefs fixes `Call.args` position.
+  - `MemoryEffect` is a `Flag` with `READ` and `WRITE`; an input may declare
+    either or both. `None` means undeclared, while the zero flag is invalid.
+    Attributes cannot carry a memory effect.
 
 Example:
 
@@ -592,62 +602,85 @@ and specialization dispatch.
 class Pattern:
     """Carry a reusable dispatch predicate."""
 
-    def match(self, subject) -> bool: ...
+    def match(self, subject, captures=None) -> Match | None: ...
 ```
 
 - constraints:
   - shared by parser dispatch (`ParamDef.pattern`) and specialization dispatch
     (`Function.specializations` / `PrimFunction.specializations`).
+  - a successful match returns a truthy `Match` carrying named captures;
+    failure is `None`.
+
+The implementation is split by responsibility under `ir/pattern/`:
+
+- `pattern.py` defines `Pattern` and the composable classes
+  `OrPattern`, `AndPattern`, `SequencePattern`, `CapturePattern`,
+  `ConstraintPattern`, `GuardPattern`, `SwitchPattern`, `RangePattern`,
+  `MultipleOfPattern`, `OneOfPattern`, `AttrPattern`, `BitsPattern`,
+  `LayoutPattern`, `SwizzlePattern`, `ComposedLayoutPattern`, `MeshPattern`,
+  `ShardLayoutPattern`, `ScalarPattern`, `TensorPattern`, and
+  `WildcardPattern`. It also owns the `Scalar` and `Tensor` singletons.
+- `match.py` owns matches, captures, symbolic resolution, layout-frame reading,
+  and the shared description helpers.
+- `constraint.py` owns cross-operand `Constraint`, `DistinctConstraint`,
+  `SameConstraint`, and `SameModesConstraint` values.
+- `utils.py` owns exact-layout construction plus specialization naming and
+  dimension lookup.
+
+`LayoutPattern` checks `forward` and `injective` over the whole flattened
+arrangement by default. With `per_mode=True`, it checks each top-level mode
+independently; `MeshPattern` requires this explicit form because each mesh
+level uses its own numbering space. `MeshPattern` never changes the supplied
+pattern implicitly.
 
 Two consumer surfaces:
 
 - **Parser dispatch** — `ParamDef.pattern` ([§2.3](#23-op)) is matched against an
   argument's `Expr.type` during overload resolution. Subclasses used:
-  `ScalarPat` (rank-0), `TensorPat(rank?, dtype?)` (non-scalar), and
-  `AndPat(parts)` (conjunction). Two singletons are exported as
-  convenience: `Scalar = ScalarPat()` and `Tensor = TensorPat()`.
+  `ScalarPattern` (rank-0), `TensorPattern(rank?, dtype?)` (non-scalar), and
+  `AndPattern(parts)` (conjunction). Two singletons are exported as
+  convenience: `Scalar = ScalarPattern()` and `Tensor = TensorPattern()`.
 - **Specialization dispatch** — patterns appearing in
   `hir.Function.specializations` ([hir.md §1.1](./hir.md#11-function))
   and `tir.PrimFunction.specializations` describe which runtime
   shape range a variant covers. The HIR→TIR lowering inspects each
   pattern's fields directly; it does not call `match`.
 
-### 3.1 `DimVarRangePat`
+### 3.1 `RangePattern`
 
 ```python
-class DimVarRangePat(Pattern):
-    """Match one sub-range of a named dimension.
+class RangePattern(Pattern):
+    """Match a closed integer range, optionally naming a dimension.
 
     Attributes:
-        dim_var: attribute; Name of the dimension.
-        lo: attribute; Inclusive lower bound.
-        hi: attribute; Exclusive upper bound.
+        dim_var: attribute; Specialization dimension name, or empty otherwise.
+        lo: attribute; Optional inclusive lower bound.
+        hi: attribute; Optional inclusive upper bound.
     """
 
     dim_var: str = ""
-    lo: int = 0
-    hi: int = 0
+    lo: int | None = None
+    hi: int | None = None
 ```
 
 - constraints:
-  - This is the per-variant sub-range for a named `DimVar`; `match(v)` is
-    `lo <= v <= hi` and ignores `dim_var`.
-  - `dim_var` MUST be a non-empty `str` — the name of the `DimVar` the
-    range applies to. The lowering resolves it to a runtime
+  - At least one of `lo` and `hi` MUST be stated. Each stated bound MUST be a
+    plain `int` (`bool` is rejected), and two stated bounds MUST satisfy
+    `lo <= hi`. `RangePattern(lo=k)` and `RangePattern(hi=k)` express the
+    one-sided relations formerly represented by separate pattern classes.
+  - A specialization states both bounds and a non-empty `dim_var`: the name
+    of the `DimVar` the range applies to. The lowering resolves it to a runtime
     `ShapeOf(param, axis)` by walking the enclosing function signature.
-  - `lo` and `hi` MUST be plain `int`s (`bool` is rejected).
-  - The interval is closed `[lo, hi]`; construction MUST satisfy `lo <= hi`. A single-point
-    range is `[k, k+1)`.
-  - `match(value)` returns `True` for an `int` value `v` iff
-    `lo <= v <= hi`. The `dim_var` field does not participate in
-    `match`.
+  - A two-sided interval is closed `[lo, hi]`; a single-point range is `[k, k]`.
+  - `match(value)` succeeds for an `int` value `v` iff every stated bound
+    admits it. The `dim_var` field does not participate in `match`.
   - The pattern references a `DimVar` by name only. The envelope of
     the named dim lives on the `DimVar(name, lo, hi)` itself (see
     [types.md §4](./types.md#4-dim--symbolic-shape-dimensions)); the
-    `DimVarRangePat` carries the per-variant sub-range. Envelope
+    `RangePattern` carries the per-variant sub-range. Envelope
     containment (`pattern ⊆ DimVar envelope`) is checked in
     signature context — by the `@tilefoundry.func` validator and the
-    HIR→TIR lowering — not by `DimVarRangePat.__post_init__`.
+    HIR→TIR lowering — not by `RangePattern.__post_init__`.
 
 ## 4. Shared operation kinds
 

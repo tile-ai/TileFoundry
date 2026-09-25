@@ -6,10 +6,10 @@ from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.tensor.index_add import _infer_index_write
 from tilefoundry.ir.hir.tensor.index_select import _norm_dim
+from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -81,14 +81,12 @@ def _index_copy_access(call: "Call", ctx) -> AccessRelations:
     payload = reached_at(rank, src, ctx.type_of(call.args[2]), carried, free=(dim,))
     return iterating(
         dst.shape,
-    AccessRelations(
+        AccessRelations(
             inputs=(
                 BoundaryRelation(identity),
                 BoundaryRelation(named),
                 BoundaryRelation(payload),
             ),
-            outputs=(
-                BoundaryRelation(rows),
-            ),
+            outputs=(BoundaryRelation(rows),),
         ),
     )

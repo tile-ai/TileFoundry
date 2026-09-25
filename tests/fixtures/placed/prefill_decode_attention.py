@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 
 from tilefoundry import func, module
-from tilefoundry.dsl import DimVar, DimVarRangePat, Mesh, Tensor, ceildiv, tf
+from tilefoundry.dsl import DimVar, Mesh, RangePattern, Tensor, ceildiv, tf
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- bare tile() in authored bodies
 from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
@@ -38,7 +38,7 @@ class PrefillDecodeAttention:
     ) -> Tensor[(1, SEQ, HEADS, HEAD_DIM), "bf16"]:
         pass
 
-    @attend.specialize(DimVarRangePat("seq", 1, 1))
+    @attend.specialize(RangePattern("seq", 1, 1))
     def decode(
         q: Tensor[(1, SEQ, HEADS, HEAD_DIM), "bf16"],
         k_cache: Tensor[(1, CTX, HEADS, HEAD_DIM), "bf16"],
@@ -112,7 +112,7 @@ class PrefillDecodeAttention:
                 "gmem",
             )
 
-    @attend.specialize(DimVarRangePat("seq", 2, 4096))
+    @attend.specialize(RangePattern("seq", 2, 4096))
     def prefill(
         q: Tensor[(1, SEQ, HEADS, HEAD_DIM), "bf16"],
         k_cache: Tensor[(1, CTX, HEADS, HEAD_DIM), "bf16"],

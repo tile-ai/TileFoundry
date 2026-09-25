@@ -6,20 +6,18 @@ from dataclasses import dataclass
 
 from tilefoundry.ir.types import Mesh
 
-from .base import ScheduleConstraint
+from .base import WhereClause
 
 
 @dataclass(frozen=True)
-class MeshConstraint(ScheduleConstraint):
+class MeshClause(WhereClause):
     """Filter an eventual ShardLayout by one existing Mesh value."""
 
     mesh: Mesh | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.mesh, Mesh):
-            raise TypeError(
-                f"mesh constraint requires a Mesh, got {type(self.mesh).__name__}"
-            )
+            raise TypeError(f"mesh constraint requires a Mesh, got {type(self.mesh).__name__}")
 
 
-__all__ = ["MeshConstraint"]
+__all__ = ["MeshClause"]

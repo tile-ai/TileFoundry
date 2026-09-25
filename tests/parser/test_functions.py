@@ -13,8 +13,8 @@ from tilefoundry.dsl import Mesh, Tensor, Topology, tf
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Call, SourceSpanMetadata, get_metadata
 from tilefoundry.ir.core.module import Module, subtree
-from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.pattern import RangePattern
 from tilefoundry.ir.types import TupleType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.storage import StorageKind
@@ -110,7 +110,7 @@ def test_a_dispatch_prototype_uses_its_tuple_annotation_as_a_variant_contract() 
         ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
             pass
 
-        @root.specialize(DimVarRangePat("prototype_size", 1, 8))
+        @root.specialize(RangePattern("prototype_size", 1, 8))
         def both(
             x: Tensor[(size,), "f32"],
         ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
@@ -139,7 +139,7 @@ def test_a_variant_body_must_satisfy_its_dispatch_return_contract() -> None:
             ) -> tuple[Tensor[(size,), "f32"], Tensor[(size,), "f32"]]:
                 pass
 
-            @root.specialize(DimVarRangePat("prototype_mismatch_size", 1, 8))
+            @root.specialize(RangePattern("prototype_mismatch_size", 1, 8))
             def scalar(x: Tensor[(size,), "f32"]):
                 return x
 
@@ -216,8 +216,7 @@ def test_every_parsed_call_knows_where_it_came_from(source: Path) -> None:
         ("tile(10)", "tile(extent) is not supported; use range(extent)"),
         (
             "tile(1, 2, 3, 4)",
-            "tile() takes 2 or 3 arguments, (stop, step) or "
-            "(start, stop, step), got 4",
+            "tile() takes 2 or 3 arguments, (stop, step) or (start, stop, step), got 4",
         ),
         ("range(1, 2, 3, 4)", "range() takes 1 to 3 arguments, got 4"),
         ("steps(1, 2)", "loop iterator must be tile(...) or range(...)"),

@@ -6,8 +6,8 @@ from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue
 from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import ComposedLayout, TensorType
 from tilefoundry.ir.types.layout import Layout, flatten
 from tilefoundry.ir.types.shard_layout import (
@@ -30,8 +30,6 @@ from tilefoundry.visitor_registry.access_relation import (
 class Reshape(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     new_shape = ParamDef(kind="attribute", annotation=tuple)
-
-
 
 
 def _reshape_view(call: "Call", ctx) -> tuple:

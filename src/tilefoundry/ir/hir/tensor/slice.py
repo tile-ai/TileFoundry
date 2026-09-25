@@ -8,9 +8,9 @@ from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue
 from tilefoundry.ir.core import Expr, Op, Tuple
 from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.isl_interop import dim_range
+from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Swizzle, TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMul, DimSub, simplify_dim
 from tilefoundry.ir.types.int_tuple import flatten
@@ -39,12 +39,6 @@ class Slice(Op):
 
     def __init__(self, **attrs):
         super().__init__(**attrs)
-
-
-
-
-
-
 
 
 class _Unbounded(ValueError):
@@ -145,11 +139,7 @@ class _Axis:
         if literal is None:
             self.params.append((name, value))
         self.guards.append(f"0 <= {name}")
-        reach = (
-            name
-            if self.size == "1"
-            else f"{name} + ({self.size} - 1) * {self.stride}"
-        )
+        reach = name if self.size == "1" else f"{name} + ({self.size} - 1) * {self.stride}"
         self.guards.append(f"{reach} <= {self.extent} - 1")
         return name
 
@@ -332,9 +322,7 @@ def _slice_shard_layout(call, ctx, x_ty, source, starts, inherited_offset):
         narrow_positions[tensor_axis] = position
         new_shape[position] = op.sizes[tensor_axis]
         if new_strides is not None:
-            new_strides[position] = _dim_mul(
-                new_strides[position], op.strides[tensor_axis]
-            )
+            new_strides[position] = _dim_mul(new_strides[position], op.strides[tensor_axis])
 
     sharded = ShardLayout(
         layout=Layout(
@@ -345,8 +333,7 @@ def _slice_shard_layout(call, ctx, x_ty, source, starts, inherited_offset):
         mesh=source.mesh,
     )
     if any(start is None for start in static_starts) or not all(
-        isinstance(stride, int) and not isinstance(stride, bool)
-        for stride in op.strides
+        isinstance(stride, int) and not isinstance(stride, bool) for stride in op.strides
     ):
         return sharded
 
@@ -457,9 +444,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     source = x_ty.layout
     inherited_offset = 0
     inherited_inner = None
-    if isinstance(source, ComposedLayout) and isinstance(
-        source.outer, (Layout, ShardLayout)
-    ):
+    if isinstance(source, ComposedLayout) and isinstance(source.outer, (Layout, ShardLayout)):
         if isinstance(source.inner, Swizzle) and isinstance(source.outer, Layout):
             inherited_inner = source.inner
         elif source.inner is not None:
@@ -482,9 +467,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
     new_layout = None
     if isinstance(source, ShardLayout):
-        new_layout = _slice_shard_layout(
-            call, ctx, x_ty, source, starts, inherited_offset
-        )
+        new_layout = _slice_shard_layout(call, ctx, x_ty, source, starts, inherited_offset)
     elif isinstance(source, Layout) and source.strides is not None:
         static_starts = []
         steps = []
@@ -499,9 +482,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             static_starts.append(int(start.value))
             steps.append(stride)
         else:
-            found = window_image(
-                source, tuple(static_starts), tuple(layout_shape), tuple(steps)
-            )
+            found = window_image(source, tuple(static_starts), tuple(layout_shape), tuple(steps))
             if found is not None:
                 moved, window = found
                 new_layout = ComposedLayout(
@@ -527,8 +508,7 @@ def _eval_slice(ctx):
     for axis, (start, size, stride) in enumerate(zip(start_values, sizes, strides)):
         if start < 0 or size < 0 or stride <= 0:
             raise EvalError(
-                f"Slice: invalid window on axis {axis}: start={start}, size={size}, "
-                f"stride={stride}"
+                f"Slice: invalid window on axis {axis}: start={start}, size={size}, stride={stride}"
             )
         last = start if size == 0 else start + (size - 1) * stride
         if size and last >= ctx.args[0].data.shape[axis]:

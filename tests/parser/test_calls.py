@@ -10,7 +10,6 @@ import pytest
 from tilefoundry import func, module, prim_func
 from tilefoundry.dsl import Mesh, Tensor, tf
 from tilefoundry.ir.core import Call, Constant, Tuple, VerifyError
-from tilefoundry.ir.core.pattern import Tensor as TensorPattern
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.matmul import MatMul
@@ -20,6 +19,7 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.stack import Stack
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
+from tilefoundry.ir.pattern import Tensor as TensorPattern
 from tilefoundry.ir.types import DType, Topology
 from tilefoundry.parser import ParseError
 from tilefoundry.target import CpuTarget, CudaTarget
@@ -524,7 +524,9 @@ def test_function_mesh_requires_a_module_topology_declaration() -> None:
 
 
 def test_placement_rejects_an_external_mesh_axis_binding() -> None:
-    with pytest.raises(ParseError, match="'_EXTERNAL_PLACEMENT_MESH' is not a lexical Mesh binding"):
+    with pytest.raises(
+        ParseError, match="'_EXTERNAL_PLACEMENT_MESH' is not a lexical Mesh binding"
+    ):
 
         @module(
             entry="run",

@@ -3,8 +3,8 @@ from __future__ import annotations
 from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import TupleType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -25,13 +25,7 @@ class TupleGetItem(Op):
     index = ParamDef(kind="attribute", annotation=int)
 
 
-
-
-
-
-register_access_relation(TupleGetItem)(
-    view_relations(0, field=lambda call, ctx: call.target.index)
-)
+register_access_relation(TupleGetItem)(view_relations(0, field=lambda call, ctx: call.target.index))
 
 
 @register_typeinfer(TupleGetItem)

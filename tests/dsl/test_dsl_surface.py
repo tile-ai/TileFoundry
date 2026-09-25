@@ -5,13 +5,13 @@ from __future__ import annotations
 import pytest
 
 from tilefoundry import func
-from tilefoundry.dsl import DimVar, DimVarRangePat, T, Tensor, tf
+from tilefoundry.dsl import DimVar, RangePattern, T, Tensor, tf
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core.op_registry import _schemas_by_dialect_name
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor as TensorPat
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.specialize import display_name
+from tilefoundry.ir.pattern import Tensor as TensorPattern
 from tilefoundry.ir.types.dim import DimVar as IrDimVar
 
 
@@ -35,8 +35,8 @@ def test_a_dialect_namespace_resolves_only_its_own_ops() -> None:
 
     @register_op(dialect="tf", category="math", name="my_add")
     class _MyAdd:
-        a = ParamDef(kind="input", pattern=TensorPat)
-        b = ParamDef(kind="input", pattern=TensorPat)
+        a = ParamDef(kind="input", pattern=TensorPattern)
+        b = ParamDef(kind="input", pattern=TensorPattern)
 
         def __init__(self, **kw):
             self.kw = kw
@@ -61,12 +61,12 @@ def sub(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
     pass
 
 
-@sub.specialize(DimVarRangePat("S", 1, 2))
+@sub.specialize(RangePattern("S", 1, 2))
 def narrow_s(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
     return x
 
 
-@sub.specialize(DimVarRangePat("S", 4, 6))
+@sub.specialize(RangePattern("S", 4, 6))
 def wide_s(x: Tensor[(_S,), "f32"]) -> Tensor[(_S,), "f32"]:
     return x
 
@@ -77,8 +77,8 @@ def test_func_specializations_parse_to_variants() -> None:
     variants = sub.variants
     assert len(variants) == 2
     assert [v.name for v in variants] == ["sub", "sub"]
-    assert variants[0].specializations == (DimVarRangePat("S", 1, 2),)
-    assert variants[1].specializations == (DimVarRangePat("S", 4, 6),)
+    assert variants[0].specializations == (RangePattern("S", 1, 2),)
+    assert variants[1].specializations == (RangePattern("S", 4, 6),)
 
     assert display_name(variants[0]) == "narrow_s"
     assert display_name(variants[1]) == "wide_s"

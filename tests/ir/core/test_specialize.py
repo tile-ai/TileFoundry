@@ -13,7 +13,7 @@ from tests.fixtures.placed.gqa_decode import (
 )
 from tests.fixtures.placed.specialize_through_call import ToCallee
 from tilefoundry import func, module
-from tilefoundry.dsl import DimVarRangePat, Tensor, Topology, tf
+from tilefoundry.dsl import RangePattern, Tensor, Topology, tf
 from tilefoundry.dsl.tf import *  # noqa: F401,F403 -- names resolved dynamically
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.hir.specialize import (
@@ -47,11 +47,11 @@ class _MissingCalleeDimension:
     def pick(x: Tensor[(_CALL_N,), "f32"]) -> Tensor[(_CALL_N,), "f32"]:
         pass
 
-    @pick.specialize(DimVarRangePat("call_n", 1, _DISPATCH_BOUND - 1))
+    @pick.specialize(RangePattern("call_n", 1, _DISPATCH_BOUND - 1))
     def pick_small(x: Tensor[(_CALL_N,), "f32"]) -> Tensor[(_CALL_N,), "f32"]:
         return tf.add(x, x)
 
-    @pick.specialize(DimVarRangePat("call_n", _DISPATCH_BOUND, _N_MAX))
+    @pick.specialize(RangePattern("call_n", _DISPATCH_BOUND, _N_MAX))
     def pick_big(x: Tensor[(_CALL_N,), "f32"]) -> Tensor[(_CALL_N,), "f32"]:
         return tf.add(tf.add(x, x), x)
 
@@ -70,11 +70,11 @@ class _NestedDispatch:
     def inner(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
         pass
 
-    @inner.specialize(DimVarRangePat("nested_n", 1, _DISPATCH_BOUND - 1))
+    @inner.specialize(RangePattern("nested_n", 1, _DISPATCH_BOUND - 1))
     def inner_small(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
         return tf.add(x, x)
 
-    @inner.specialize(DimVarRangePat("nested_n", _DISPATCH_BOUND, _N_MAX))
+    @inner.specialize(RangePattern("nested_n", _DISPATCH_BOUND, _N_MAX))
     def inner_big(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
         return tf.add(tf.add(x, x), x)
 
@@ -82,11 +82,11 @@ class _NestedDispatch:
     def mid(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
         pass
 
-    @mid.specialize(DimVarRangePat("nested_n", 1, _DISPATCH_BOUND - 1))
+    @mid.specialize(RangePattern("nested_n", 1, _DISPATCH_BOUND - 1))
     def mid_small(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
         return inner(x)  # noqa: F821
 
-    @mid.specialize(DimVarRangePat("nested_n", _DISPATCH_BOUND, _N_MAX))
+    @mid.specialize(RangePattern("nested_n", _DISPATCH_BOUND, _N_MAX))
     def mid_big(x: Tensor[(_NESTED_N,), "f32"]) -> Tensor[(_NESTED_N,), "f32"]:
         return inner(x)  # noqa: F821
 

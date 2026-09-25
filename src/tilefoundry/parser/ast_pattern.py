@@ -34,7 +34,6 @@ from tilefoundry.ir.core.expr import Tuple as IrTuple
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.op_schema import OpSchema
-from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
@@ -49,6 +48,7 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice, slice_size
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import normalize_dim
+from tilefoundry.ir.pattern import RangePattern
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import (
@@ -255,7 +255,7 @@ runtime = SimpleNamespace(
     DimMul=DimMul,
     DimSub=DimSub,
     DimVar=DimVar,
-    DimVarRangePat=DimVarRangePat,
+    RangePattern=RangePattern,
     Evaluate=Evaluate,
     For=For,
     Expr=Expr,
@@ -1199,9 +1199,7 @@ class ModuleBuildContext:
                 verify_function(function, module=result)
                 inference_type(
                     function,
-                    runtime.TypeInferContext(
-                        scope=runtime.FunctionScope(result, function)
-                    ),
+                    runtime.TypeInferContext(scope=runtime.FunctionScope(result, function)),
                     ranges=True,
                 )
             elif isinstance(function, runtime.PrimFunction):

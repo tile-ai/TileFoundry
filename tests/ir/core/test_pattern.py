@@ -1,62 +1,59 @@
-"""Pattern — minimal contract."""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
+"""Pattern — core scalar, tensor, composition, and range contracts."""
 
 import pytest
 
-from tilefoundry.ir.core.pattern import (
-    AndPat,
-    DimVarRangePat,
+from tilefoundry.ir.pattern import (
+    AndPattern,
+    RangePattern,
     Scalar,
     Tensor,
-    TensorPat,
+    TensorPattern,
 )
+from tilefoundry.ir.types import DType, TensorType
 
 
-@dataclass(frozen=True)
-class FakeTy:
-    shape: tuple[int, ...]
-    dtype: str = "f32"
+def _tensor(shape: tuple[int, ...], dtype: DType = DType.f32) -> TensorType:
+    return TensorType.umat_tensor(shape, dtype)
 
 
 def test_pattern_match_contract() -> None:
     """Singletons + parametric patterns + And combinator share one contract."""
-    assert Scalar.match(FakeTy(shape=()))
-    assert not Scalar.match(FakeTy(shape=(3,)))
-    assert Tensor.match(FakeTy(shape=(3, 4)))
-    assert not Tensor.match(FakeTy(shape=()))
+    assert Scalar.match(TensorType.umat_scalar())
+    assert not Scalar.match(_tensor((3,)))
+    assert Tensor.match(_tensor((3, 4)))
+    assert not Tensor.match(TensorType.umat_scalar())
+    assert not Tensor.match(type("FakeTy", (), {"shape": (3, 4)})())
 
-    rank2_bf16 = TensorPat(rank=2, dtype="bf16")
-    assert rank2_bf16.match(FakeTy(shape=(3, 4), dtype="bf16"))
-    assert not rank2_bf16.match(FakeTy(shape=(3,), dtype="bf16"))
-    assert not rank2_bf16.match(FakeTy(shape=(3, 4), dtype="f32"))
+    rank2_bf16 = TensorPattern(rank=2, dtype=DType.bf16)
+    assert rank2_bf16.match(_tensor((3, 4), DType.bf16))
+    assert not rank2_bf16.match(_tensor((3,), DType.bf16))
+    assert not rank2_bf16.match(_tensor((3, 4), DType.f32))
 
-    combined = AndPat(parts=(TensorPat(rank=2), TensorPat(dtype="f16")))
-    assert combined.match(FakeTy(shape=(3, 4), dtype="f16"))
-    assert not combined.match(FakeTy(shape=(3,), dtype="f16"))
-    assert AndPat(parts=()).match(FakeTy(shape=()))
+    combined = AndPattern(parts=(TensorPattern(rank=2), TensorPattern(dtype=DType.f16)))
+    assert combined.match(_tensor((3, 4), DType.f16))
+    assert not combined.match(_tensor((3,), DType.f16))
+    assert AndPattern(parts=()).match(TensorType.umat_scalar())
 
 
-def test_dim_var_range_pat_contract() -> None:
-    """Half-open ``[lo, hi)`` match semantics and the ``lo < hi`` rule.
-
-    A single point is spelled ``[k, k+1)``; ``lo >= hi`` is an empty range
-    and rejected at construction. Non-int values (incl. ``bool``, which
-    subclasses ``int`` but is not a shape value) never match.
-    """
-    p = DimVarRangePat("S", 1, 4)
+def test_range_pattern_contract() -> None:
+    """Specialization ranges are closed and reject non-integer values."""
+    p = RangePattern("S", 1, 4)
     assert p.match(1) and p.match(3)
     assert p.match(4)
     assert not p.match(0)
     assert not p.match(2.0)
     assert not p.match(True)
 
-    single = DimVarRangePat("S", 3, 4)
-    assert single.match(3)
-    assert not single.match(2) and single.match(4)
+    closed = RangePattern("S", 3, 4)
+    assert closed.match(3)
+    assert not closed.match(2) and closed.match(4)
 
-    assert DimVarRangePat("S", 4, 4).match(4)
+    assert RangePattern("S", 4, 4).match(4)
+    assert RangePattern(lo=3).match(3) and RangePattern(lo=3).match(30)
+    assert RangePattern(hi=3).match(-3) and RangePattern(hi=3).match(3)
+    with pytest.raises(ValueError, match="lower or upper"):
+        RangePattern()
+    with pytest.raises(ValueError, match="both lo and hi"):
+        RangePattern("S", lo=1)
     with pytest.raises(ValueError, match="lo <= hi"):
-        DimVarRangePat("S", 5, 4)
+        RangePattern("S", 5, 4)

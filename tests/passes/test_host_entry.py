@@ -12,7 +12,7 @@ import pytest
 from tests.fixtures.tir.square import TirSquare
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import DimVar, T, Tensor
-from tilefoundry.ir.core.pattern import DimVarRangePat
+from tilefoundry.ir.pattern import RangePattern
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.stmts import Evaluate
 from tilefoundry.ir.types import Layout, Mesh, S, ShardLayout, Topology
@@ -52,14 +52,14 @@ class _Prototype:
     def square(x: Tensor[(_S,), "f32"]):
         pass
 
-    @square.specialize(DimVarRangePat("S", 1, 127))
+    @square.specialize(RangePattern("S", 1, 127))
     def small(x: Tensor[(_S,), "f32"]):
         with Mesh((Topology("thread", 128),), Layout((128,), (1,))) as thread:
             view = T.tensor_view(x, layout=_rows(128))
             T.copy(view, view)
             T.sync(thread)
 
-    @square.specialize(DimVarRangePat("S", 128, 255))
+    @square.specialize(RangePattern("S", 128, 255))
     def large(x: Tensor[(_S,), "f32"]):
         with Mesh((Topology("thread", 128),), Layout((128,), (1,))) as thread:
             view = T.tensor_view(x, layout=_rows(128))

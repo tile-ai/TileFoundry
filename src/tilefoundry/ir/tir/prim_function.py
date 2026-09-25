@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from tilefoundry.ir.core import Var
-from tilefoundry.ir.core.pattern import Pattern
+from tilefoundry.ir.pattern import Pattern
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.tir.stmts import Sequential
 from tilefoundry.target.base import Target, target_instance
@@ -41,7 +41,9 @@ class PrimFunction(Stmt):
 
     def add_variant(self, variant: "PrimFunction") -> None:
         if getattr(self, "_sealed", False):
-            raise RuntimeError(f"tir PrimFunction {self.name!r}: cannot add a specialization variant after sealing")
+            raise RuntimeError(
+                f"tir PrimFunction {self.name!r}: cannot add a specialization variant after sealing"
+            )
         self.variants = (*self.variants, variant)
 
 

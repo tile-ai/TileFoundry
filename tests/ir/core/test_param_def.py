@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.core.param_def import ParamDef
+from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 
 
 def test_paramdef_rejects_an_unknown_kind_and_keeps_required_independent() -> None:
@@ -30,3 +30,16 @@ def test_paramdef_rejects_an_unknown_kind_and_keeps_required_independent() -> No
 
     omittable = ParamDef(kind="attribute", default=0)
     assert not omittable.is_required and omittable.has_default
+
+
+def test_paramdef_effect_is_an_explicit_input_only_flag() -> None:
+    read_write = ParamDef(kind="input", effect=MemoryEffect.READ | MemoryEffect.WRITE)
+    assert read_write.effect == MemoryEffect.READ | MemoryEffect.WRITE
+    assert ParamDef(kind="input").effect is None
+
+    with pytest.raises(TypeError, match="MemoryEffect"):
+        ParamDef(kind="input", effect="read")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="attributes"):
+        ParamDef(kind="attribute", effect=MemoryEffect.READ)
+    with pytest.raises(ValueError, match="READ, WRITE"):
+        ParamDef(kind="input", effect=MemoryEffect(0))

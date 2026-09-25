@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from tilefoundry.ir.core import Expr, VerifyError
 from tilefoundry.ir.core.expr import Call, Var
-from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.pattern import RangePattern
 from tilefoundry.ir.tir.stmt import Stmt
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimVar
@@ -17,9 +17,7 @@ from .specialize import canonical_specialization_signature
 def _verify_isolated(region: MeshRegion, ctx=None) -> None:
     """Ensure a region body reaches captured values only through its params."""
     if len(region.params) != len(region.args):
-        message = (
-            f"region has {len(region.params)} params but {len(region.args)} args"
-        )
+        message = f"region has {len(region.params)} params but {len(region.args)} args"
         if ctx is not None:
             ctx.error(region, message)
         raise VerifyError(f"MeshRegion: {message}")
@@ -28,8 +26,7 @@ def _verify_isolated(region: MeshRegion, ctx=None) -> None:
     if not leaked:
         return
     message = (
-        "region is not isolated: body reads an args value directly; "
-        "reference its param instead"
+        "region is not isolated: body reads an args value directly; reference its param instead"
     )
     if ctx is not None:
         ctx.error(region, message)
@@ -57,7 +54,6 @@ def verify_function(fn: Function, *, module=None) -> None:
             f"hir Function {fn.name!r}: body must be an Expr or None, got {type(fn.body).__name__}"
         )
     _reject_stmt_nodes(fn.body)
-
 
 
 def _verify_variants(base: Function, *, module=None) -> None:
@@ -106,9 +102,9 @@ def _verify_partition(base: Function) -> None:
     ranges: list[tuple[int, int]] = []
     for v in base.variants:
         for pat in v.specializations:
-            if not isinstance(pat, DimVarRangePat):
+            if not isinstance(pat, RangePattern):
                 raise VerifyError(
-                    f"hir Function {base.name!r}: only DimVarRangePat is "
+                    f"hir Function {base.name!r}: only RangePattern is "
                     f"supported for dispatch (got {type(pat).__name__})"
                 )
             dim_vars.add(pat.dim_var)
@@ -219,19 +215,19 @@ def _verify_signature_dim_vars(fn: Function) -> None:
     _check_signature_dim_var_consistency(fn)
     param_bounds = _collect_param_dim_vars(fn)
     for pat in fn.specializations:
-        if not isinstance(pat, DimVarRangePat):
+        if not isinstance(pat, RangePattern):
             continue
         dv_bounds = param_bounds.get(pat.dim_var)
         if dv_bounds is None:
             raise VerifyError(
-                f"specialization DimVarRangePat({pat.dim_var!r}, {pat.lo}, "
+                f"specialization RangePattern({pat.dim_var!r}, {pat.lo}, "
                 f"{pat.hi}) references unknown DimVar (specializations must "
                 f"anchor to a DimVar reachable from an input parameter)"
             )
         lo, hi = dv_bounds
         if not (lo <= pat.lo and pat.hi <= hi):
             raise VerifyError(
-                f"DimVarRangePat ({pat.dim_var!r}, {pat.lo}, {pat.hi}) is not "
+                f"RangePattern ({pat.dim_var!r}, {pat.lo}, {pat.hi}) is not "
                 f"contained in DimVar envelope [{lo}, {hi})"
             )
 

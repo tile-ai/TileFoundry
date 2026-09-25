@@ -27,10 +27,10 @@ from tilefoundry.ir.core.op_registry import (
     iter_schema_names,
 )
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor as TensorPat
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.math.binary import Binary
 from tilefoundry.ir.hir.math.unary import Unary
+from tilefoundry.ir.pattern import Tensor as TensorPattern
 from tilefoundry.ir.types import DType
 
 
@@ -84,8 +84,8 @@ def test_register_op_overload_and_iter_dedupe(clean_schema_registry) -> None:
 
     @register_op(dialect="T", category="nn", name="testdup_relu")
     class _B(_DummyBase):
-        src = ParamDef(kind="input", pattern=TensorPat)
-        dst = ParamDef(kind="input", pattern=TensorPat)
+        src = ParamDef(kind="input", pattern=TensorPattern)
+        dst = ParamDef(kind="input", pattern=TensorPattern)
 
     bucket = get_schemas("T", "testdup_relu")
     assert [s.op_class for s in bucket] == [_A, _B]

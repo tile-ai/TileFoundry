@@ -2,6 +2,7 @@
 
 Walks a HIR ``Function`` body and returns concrete torch values.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -20,18 +21,16 @@ from tilefoundry.evaluator.value import (
     to_torch_dtype,
 )
 from tilefoundry.ir.core import Call, Constant, Tuple, Var, describe_expr
-from tilefoundry.ir.core.pattern import locate_dim_var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.pattern import locate_dim_var
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.utils import types_compatible
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.spec_ref import spec_ref_render
 
-_MISSING_PREPARED_WEIGHT = (
-    "[runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)"
-)
+_MISSING_PREPARED_WEIGHT = "[runtime §1.3](docs/spec/runtime.md#13-runtimedecoratorpy)"
 
 
 def _device_of(values) -> str | None:
@@ -81,8 +80,7 @@ def _bind_dim_vars(params, values) -> dict[str, int]:
                 prev = binding.get(dim.name)
                 if prev is not None and prev != size:
                     raise EvalError(
-                        f"evaluator: inconsistent binding for DimVar "
-                        f"{dim.name!r}: {prev} vs {size}"
+                        f"evaluator: inconsistent binding for DimVar {dim.name!r}: {prev} vs {size}"
                     )
                 binding[dim.name] = size
     return binding
@@ -127,9 +125,7 @@ class EvaluatorVisitor(ExprVisitor):
     def visit_leaf_Var(self, var: Var, _operands, ctx: EvaluateContext) -> Value:
         raise EvalError(f"evaluator: unbound variable {var.name!r}")
 
-    def visit_leaf_Constant(
-        self, const: Constant, _operands, ctx: EvaluateContext
-    ) -> TensorValue:
+    def visit_leaf_Constant(self, const: Constant, _operands, ctx: EvaluateContext) -> TensorValue:
         data = torch.as_tensor(
             const.value, dtype=to_torch_dtype(const.type.dtype), device=ctx.device
         )
@@ -150,13 +146,9 @@ class EvaluatorVisitor(ExprVisitor):
         except Exception as error:
             raise EvalError(f"evaluator: {describe_expr(call)}: {error}") from error
 
-    def _call_function(
-        self, callee: Function, arg_values, ctx: EvaluateContext
-    ) -> Value:
+    def _call_function(self, callee: Function, arg_values, ctx: EvaluateContext) -> Value:
         child = child_module_instance(ctx.loaded_module, callee)
-        supplied = [
-            param for param in callee.params if not (child is not None and param.is_const)
-        ]
+        supplied = [param for param in callee.params if not (child is not None and param.is_const)]
         if len(arg_values) != len(supplied):
             kind = "activation(s)" if child is not None else "args"
             raise EvalError(
@@ -208,17 +200,11 @@ class EvaluatorVisitor(ExprVisitor):
         extent = self._resolve_loop_field(region.extent, "extent", ctx)
         step = self._resolve_loop_field(region.step, "step", ctx)
         if start < 0:
-            raise EvalError(
-                f"evaluator: LoopRegion start must be non-negative, got {start}"
-            )
+            raise EvalError(f"evaluator: LoopRegion start must be non-negative, got {start}")
         if extent < 0:
-            raise EvalError(
-                f"evaluator: LoopRegion extent must be non-negative, got {extent}"
-            )
+            raise EvalError(f"evaluator: LoopRegion extent must be non-negative, got {extent}")
         if step <= 0:
-            raise EvalError(
-                f"evaluator: LoopRegion step must be positive, got {step}"
-            )
+            raise EvalError(f"evaluator: LoopRegion step must be positive, got {step}")
         indices = range(start, extent, step)
 
         def iter_memo(i: int, carried) -> dict:
@@ -227,9 +213,9 @@ class EvaluatorVisitor(ExprVisitor):
                 id(iv): (
                     iv,
                     TensorValue(
-                    data=torch.as_tensor(i, dtype=iv_dtype, device=ctx.device),
-                    type=iv.type,
-                ),
+                        data=torch.as_tensor(i, dtype=iv_dtype, device=ctx.device),
+                        type=iv.type,
+                    ),
                 ),
             }
             for phi, value in zip(region.carried_args, carried):
@@ -237,14 +223,11 @@ class EvaluatorVisitor(ExprVisitor):
             return memo
 
         if not region.carried_args:
-
             last = None
             for i in indices:
                 last = EvaluatorVisitor(memo=iter_memo(i, ())).visit(region.body, ctx)
             if last is None:
-                raise EvalError(
-                    "evaluator: LoopRegion has an empty iteration domain"
-                )
+                raise EvalError("evaluator: LoopRegion has an empty iteration domain")
             return last
 
         carried = list(init_values)
@@ -318,9 +301,7 @@ def _run_selected(loaded_module, fn: Function, *activations, device: str | None)
         )
     supplied = iter(activations)
     args = [
-        _read_weight(loaded_module, param, device)
-        if param.is_const
-        else next(supplied)
+        _read_weight(loaded_module, param, device) if param.is_const else next(supplied)
         for param in fn.params
     ]
     return _run_bound(fn, args, device=device, reading=loaded_module)
@@ -335,7 +316,7 @@ def _unwrap(value: Value) -> Any:
 
 
 def _select_variant(callee: Function, arg_values) -> Function:
-    """Pick the variant whose ``DimVarRangePat`` matches the runtime arg shapes.
+    """Pick the variant whose ``RangePattern`` matches the runtime arg shapes.
 
     Errors unless exactly one matches — dispatch never falls back to the
     prototype body.

@@ -25,7 +25,6 @@ from tilefoundry.ir.core.module import (
     reachable_functions,
     subtree,
 )
-from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.specialize import (
@@ -35,6 +34,7 @@ from tilefoundry.ir.hir.specialize import (
     is_concrete,
     specialize_concretely,
 )
+from tilefoundry.ir.pattern import RangePattern
 from tilefoundry.ir.types import Topology, callable_type_for
 from tilefoundry.ir.types.substitute import (
     DimSubstitutionError,
@@ -92,8 +92,7 @@ class AnalysisCheckContext:
         """The topology level the analyses were asked about."""
         if self.topology_level is None:
             raise AnalysisError(
-                "no topology level was selected, so results cannot carry an "
-                "execution placement"
+                "no topology level was selected, so results cannot carry an execution placement"
             )
         return self.module.resolve_topology(self.topology_level)
 
@@ -209,9 +208,7 @@ def resolve_program_geometry(
         execution_module = _substitute_module_tree(module, dims)
     except DimSubstitutionError as error:
         raise SpecializationError(str(error)) from None
-    _require_concrete_geometry(
-        execution_module, function, error_type=SpecializationError
-    )
+    _require_concrete_geometry(execution_module, function, error_type=SpecializationError)
     return execution_module, function
 
 
@@ -228,7 +225,7 @@ def _pattern_dimension_names(function: Function) -> set[str]:
             return
         seen.add(id(fn))
         for pattern in fn.specializations:
-            if isinstance(pattern, DimVarRangePat):
+            if isinstance(pattern, RangePattern):
                 found.add(pattern.dim_var)
         for variant in fn.variants:
             visit(variant)
@@ -264,8 +261,7 @@ def _required_owner(module: Module, function: Function) -> Module:
 
 def _substitute_module_tree(module: Module, dims: Mapping[str, int]) -> Module:
     effective = tuple(
-        substitute_topology_dims(topology, dims)
-        for topology in module.effective_topologies()
+        substitute_topology_dims(topology, dims) for topology in module.effective_topologies()
     )
 
     def declared(node: Module) -> Module:
@@ -436,9 +432,7 @@ class _AnalysisViewCloner(BindingSubstitutionCloner):
 
     def visit_MeshRegion(self, expr: MeshRegion, ctx: Mapping[int, Expr]) -> MeshRegion:
         """Inline through a HIR execution region while preserving its boundary."""
-        params = tuple(
-            replace(param, metadata=_view_metadata(param)) for param in expr.params
-        )
+        params = tuple(replace(param, metadata=_view_metadata(param)) for param in expr.params)
         body_ctx = {**ctx, **{id(old): new for old, new in zip(expr.params, params)}}
         rebuilt = replace(
             expr,
@@ -519,9 +513,7 @@ class _Inliner:
 def _inline_view(module: Module, function: Function, budget: int) -> Function:
     declared_resources = _resource_parameters(module, function)
     paths = _module_paths(module)
-    params = tuple(
-        replace(param, metadata=_view_metadata(param)) for param in function.params
-    )
+    params = tuple(replace(param, metadata=_view_metadata(param)) for param in function.params)
     resources: dict[_ResourceKey, Var] = {}
     appended: list[Var] = []
     for key, declaration in declared_resources:
@@ -537,9 +529,7 @@ def _inline_view(module: Module, function: Function, budget: int) -> Function:
 
     view_params = (*params, *appended)
     env = {id(old): new for old, new in zip(function.params, params)}
-    inliner = _Inliner(
-        module, resources, paths, {param.name for param in view_params}
-    )
+    inliner = _Inliner(module, resources, paths, {param.name for param in view_params})
     body = inliner.function_body(function, env, (function.name,), frozenset())
     size = len(collect_exprs(body))
     if size > budget:
@@ -564,9 +554,7 @@ def _inline_view(module: Module, function: Function, budget: int) -> Function:
 class InlineCloner:
     """Clone and inline one authored Function into an analysis view."""
 
-    def __init__(
-        self, module: Module, function: Function, budget: int = _INLINE_NODES
-    ) -> None:
+    def __init__(self, module: Module, function: Function, budget: int = _INLINE_NODES) -> None:
         self.module = module
         self.function = function
         self.budget = budget
@@ -595,8 +583,7 @@ def check_program(
     """
     if isinstance(budget, bool) or not isinstance(budget, int) or budget < 0:
         raise AnalysisError(
-            f"inlining {function.name!r} needs a non-negative integer node budget, "
-            f"got {budget!r}"
+            f"inlining {function.name!r} needs a non-negative integer node budget, got {budget!r}"
         )
     derived = InlineCloner(module, function, budget).clone()
     inference_type(

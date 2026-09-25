@@ -74,21 +74,29 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         if isinstance(target, Slice):
             return self._window_subscript(expr, ctx)
         scalar_binary = {
-            BinaryKind.EQ: "==", BinaryKind.NE: "!=", BinaryKind.LT: "<",
-            BinaryKind.LE: "<=", BinaryKind.GT: ">", BinaryKind.GE: ">=", BinaryKind.AND: "and",
+            BinaryKind.EQ: "==",
+            BinaryKind.NE: "!=",
+            BinaryKind.LT: "<",
+            BinaryKind.LE: "<=",
+            BinaryKind.GT: ">",
+            BinaryKind.GE: ">=",
+            BinaryKind.AND: "and",
         }
         kind = getattr(target, "kind", None)
         if kind in scalar_binary and len(expr.args) == 2 and expr.type.dtype is DType.bool:
             return f"{self.visit(expr.args[0])} {scalar_binary[kind]} {self.visit(expr.args[1])}"
-        name = getattr(getattr(target, "_op_schema", None), "name", None) or re.sub(
-            r"(?<!^)(?=[A-Z])", "_", type(target).__name__
-        ).lower()
+        name = (
+            getattr(getattr(target, "_op_schema", None), "name", None)
+            or re.sub(r"(?<!^)(?=[A-Z])", "_", type(target).__name__).lower()
+        )
         args = [self.visit(item) for item in expr.args]
         for param in type(target).params():
             if param.kind == "attribute":
                 value = getattr(target, param.name, None)
                 if value is not None:
-                    args.append(f"{param.name}={self.render_value(value, self.context, self.indent + '    ')}")
+                    args.append(
+                        f"{param.name}={self.render_value(value, self.context, self.indent + '    ')}"
+                    )
         self.context.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
         return f"T.{name}({', '.join(args)})"
 
@@ -102,11 +110,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         spans = []
         starts = expr.args[1].elements
         for start, size, stride in zip(starts, expr.target.sizes, expr.target.strides):
-            low = (
-                self.dim_entry(start, ctx)
-                if is_dim_op_call(start)
-                else self.visit(start, ctx)
-            )
+            low = self.dim_entry(start, ctx) if is_dim_op_call(start) else self.visit(start, ctx)
             high = f"{low} + {size * stride}"
             spans.append(f"{low}:{high}" if stride == 1 else f"{low}:{high}:{stride}")
         return f"{self.visit(expr.args[0], ctx)}[{', '.join(spans)}]"
@@ -135,8 +139,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         print context holds, so the bounds are rendered through it.
         """
         bounds = ", ".join(
-            self.visit(bound, self.context)
-            for bound in (stmt.start, stmt.stop, stmt.step)
+            self.visit(bound, self.context) for bound in (stmt.start, stmt.stop, stmt.step)
         )
         lines = [f"{self.indent}for {stmt.induction_var.name} in range({bounds}):"]
         lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body))
@@ -144,24 +147,35 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
 
     def visit_If(self, stmt, ctx=None):
         lines = [f"{self.indent}if {self.visit(stmt.cond)}:"]
-        lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.then_body))
+        lines.extend(
+            TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.then_body)
+        )
         if stmt.else_body.body:
             lines.append(f"{self.indent}else:")
-            lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.else_body))
+            lines.extend(
+                TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.else_body)
+            )
         return lines
 
     def visit_While(self, stmt, ctx=None):
-        return [f"{self.indent}while {self.visit(stmt.cond)}:"] + TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body)
+        return [f"{self.indent}while {self.visit(stmt.cond)}:"] + TirPrinter(
+            context=self.context, indent=self.indent + "    "
+        ).visit(stmt.body)
 
     def visit_Return(self, stmt, ctx=None):
         return [f"{self.indent}return"]
 
-    def _join_args(self, args): return ", ".join(self.visit(arg) for arg in args)
+    def _join_args(self, args):
+        return ", ".join(self.visit(arg) for arg in args)
 
     def _emit_evaluate(self, stmt):
-        handler = _STMT_PRINTERS.get(type(stmt.callable)) or (_STMT_PRINTERS.get(Op) if isinstance(stmt.callable, Op) else None)
+        handler = _STMT_PRINTERS.get(type(stmt.callable)) or (
+            _STMT_PRINTERS.get(Op) if isinstance(stmt.callable, Op) else None
+        )
         if handler is None:
-            raise NotImplementedError(f"TIR printer has no emitter for {type(stmt.callable).__name__}")
+            raise NotImplementedError(
+                f"TIR printer has no emitter for {type(stmt.callable).__name__}"
+            )
         return handler(stmt, self)
 
 
@@ -170,9 +184,11 @@ _STMT_PRINTERS: dict[type, object] = {}
 
 def register_tir_printer(node_type: type):
     """Register the source emitter for one TIR callable/statement type."""
+
     def decorate(fn):
         _STMT_PRINTERS[node_type] = fn
         return fn
+
     return decorate
 
 
@@ -186,7 +202,9 @@ def _print_launch(stmt: Evaluate, printer: TirPrinter) -> list[str]:
     callee, grid = stmt.args[0], stmt.args[1:4]
     block = stmt.args[4:7]
     forwarded = stmt.args[7:]
-    return [f"{indent}launch({printer.visit(callee)}, {printer._join_args(forwarded)}, grid={printer.visit(Tuple(type=grid[0].type, elements=tuple(grid)))}, block={printer.visit(Tuple(type=block[0].type, elements=tuple(block)))})  # noqa: F821"]
+    return [
+        f"{indent}launch({printer.visit(callee)}, {printer._join_args(forwarded)}, grid={printer.visit(Tuple(type=grid[0].type, elements=tuple(grid)))}, block={printer.visit(Tuple(type=block[0].type, elements=tuple(block)))})  # noqa: F821"
+    ]
 
 
 @register_tir_printer(Op)
@@ -213,7 +231,13 @@ def _function_block(fn: PrimFunction) -> list[str]:
     target = ctx.use(fn.target.to_python())
     ctx.use(PythonExpr(("from tilefoundry import prim_func",), "prim_func"))
     ctx.use(PythonExpr(("from tilefoundry.dsl import Tensor",), "Tensor"))
-    dim_vars = {d.name: d for p in fn.params if isinstance(p.type, TensorType) for d in p.type.shape if hasattr(d, "name")}
+    dim_vars = {
+        d.name: d
+        for p in fn.params
+        if isinstance(p.type, TensorType)
+        for d in p.type.shape
+        if hasattr(d, "name")
+    }
     if dim_vars:
         ctx.use(PythonExpr(("from tilefoundry.dsl import DimVar",), "DimVar"))
     lines = [f'_{d.name} = DimVar("{d.name}", {d.lo}, {d.hi})' for d in dim_vars.values()]
@@ -226,12 +250,16 @@ def _function_block(fn: PrimFunction) -> list[str]:
     body = TirPrinter(context=ctx, indent="    ").visit(fn.body)
     lines.extend(body or ["    pass"])
     if fn.variants:
-        ctx.use(PythonExpr(("from tilefoundry.ir.core.pattern import DimVarRangePat",), "DimVarRangePat"))
+        ctx.use(PythonExpr(("from tilefoundry.ir.pattern import RangePattern",), "RangePattern"))
     for variant in fn.variants:
         pat = variant.specializations[0]
         lines.append("")
-        lines.append(f"@{_binding_name(fn.name)}.specialize({TirPrinter(context=ctx).render_pattern(pat, ctx)})")
-        lines.append(f"def {_binding_name(getattr(variant, '_display_name', variant.name))}({params}):")
+        lines.append(
+            f"@{_binding_name(fn.name)}.specialize({TirPrinter(context=ctx).render_pattern(pat, ctx)})"
+        )
+        lines.append(
+            f"def {_binding_name(getattr(variant, '_display_name', variant.name))}({params}):"
+        )
         vbody = TirPrinter(context=ctx, indent="    ").visit(variant.body)
         lines.extend(vbody or ["    pass"])
     return _RenderedLines(lines, ctx.imports)
@@ -281,7 +309,9 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
         if index:
             lines.append("")
         lines.extend(("    " + line) if line else "" for line in block if " = DimVar(" not in line)
-    declarations = list(dict.fromkeys(line for block in blocks for line in block if " = DimVar(" in line))
+    declarations = list(
+        dict.fromkeys(line for block in blocks for line in block if " = DimVar(" in line)
+    )
     if declarations:
         remaining = [line for line in lines if line not in declarations]
         while remaining and not remaining[0]:

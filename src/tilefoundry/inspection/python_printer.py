@@ -13,14 +13,14 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from tilefoundry.ir.constraints import (
-    LayoutConstraint,
-    MeshConstraint,
-    ScheduleConstraintMetadata,
-    StorageConstraint,
-    constraint_metadata,
+from tilefoundry.ir.clause import (
+    LayoutClause,
+    MeshClause,
+    StorageClause,
+    WhereClauseMetadata,
+    clause_metadata,
 )
-from tilefoundry.ir.constraints.layout import is_layout_wildcard
+from tilefoundry.ir.clause.layout import is_layout_wildcard
 from tilefoundry.ir.core import (
     Call,
     Constant,
@@ -97,9 +97,7 @@ class HirPrinter(PythonPrinter):
 
     def tuple_reference(self, elements) -> str:
         inner = ", ".join(
-            repr(element.value)
-            if isinstance(element, Constant)
-            else self.reference(element)
+            repr(element.value) if isinstance(element, Constant) else self.reference(element)
             for element in elements
         )
         return f"({inner}{',' if len(elements) == 1 else ''})"
@@ -168,12 +166,7 @@ class HirPrinter(PythonPrinter):
                     indexers.append(self._slice_start(start, size, stride))
                     continue
                 dim = expr.args[0].type.shape[axis]
-                if (
-                    isinstance(start, Constant)
-                    and start.value == 0
-                    and size == dim
-                    and stride == 1
-                ):
+                if isinstance(start, Constant) and start.value == 0 and size == dim and stride == 1:
                     indexers.append(":")
                     continue
                 if not (
@@ -186,17 +179,13 @@ class HirPrinter(PythonPrinter):
                     break
                 begin = int(start.value)
                 stop = begin + size * stride
-                indexers.append(
-                    f"{begin}:{stop}" if stride == 1 else f"{begin}:{stop}:{stride}"
-                )
+                indexers.append(f"{begin}:{stop}" if stride == 1 else f"{begin}:{stop}:{stride}")
             if runtime_starts:
                 if ctx is not None:
                     ctx.imports.add("from tilefoundry.dsl.tf import *")
                 start_refs = ", ".join(
                     self._slice_start(start, size, stride)
-                    for start, size, stride in zip(
-                        starts.elements, target.sizes, target.strides
-                    )
+                    for start, size, stride in zip(starts.elements, target.sizes, target.strides)
                 )
                 if len(starts.elements) == 1:
                     start_refs += ","
@@ -325,8 +314,7 @@ def _attr_tuple_str(value: tuple, printer: PythonPrinter, ctx) -> str:
     the header emits binds the name, not the repr.
     """
     rendered = tuple(
-        printer.visit(entry, ctx) if _is_dim_entry(entry) else repr(entry)
-        for entry in value
+        printer.visit(entry, ctx) if _is_dim_entry(entry) else repr(entry) for entry in value
     )
     if len(rendered) == 1:
         return f"({rendered[0]},)"
@@ -396,19 +384,33 @@ def _kinded_alias_name(target) -> str | None:
 def _build_kinded_alias_maps():
     return (
         {
-            BinaryKind.ADD: "add", BinaryKind.SUB: "sub", BinaryKind.MUL: "mul",
-            BinaryKind.DIV: "div", BinaryKind.FLOOR_DIV: "floor_div",
-            BinaryKind.MOD: "mod", BinaryKind.MIN: "min", BinaryKind.MAX: "max",
-            BinaryKind.EQ: "cmp_eq", BinaryKind.NE: "cmp_ne",
-            BinaryKind.LT: "cmp_lt", BinaryKind.LE: "cmp_le",
-            BinaryKind.GT: "cmp_gt", BinaryKind.GE: "cmp_ge",
-            BinaryKind.AND: "logical_and", BinaryKind.OR: "logical_or",
+            BinaryKind.ADD: "add",
+            BinaryKind.SUB: "sub",
+            BinaryKind.MUL: "mul",
+            BinaryKind.DIV: "div",
+            BinaryKind.FLOOR_DIV: "floor_div",
+            BinaryKind.MOD: "mod",
+            BinaryKind.MIN: "min",
+            BinaryKind.MAX: "max",
+            BinaryKind.EQ: "cmp_eq",
+            BinaryKind.NE: "cmp_ne",
+            BinaryKind.LT: "cmp_lt",
+            BinaryKind.LE: "cmp_le",
+            BinaryKind.GT: "cmp_gt",
+            BinaryKind.GE: "cmp_ge",
+            BinaryKind.AND: "logical_and",
+            BinaryKind.OR: "logical_or",
         },
         {
-            UnaryKind.NEG: "neg", UnaryKind.ABS: "abs", UnaryKind.NOT: "logical_not",
-            UnaryKind.EXP: "exp", UnaryKind.LOG: "log",
-            UnaryKind.CEIL: "ceil", UnaryKind.ROUND: "round",
-            UnaryKind.EXP2: "exp2", UnaryKind.LOG2: "log2",
+            UnaryKind.NEG: "neg",
+            UnaryKind.ABS: "abs",
+            UnaryKind.NOT: "logical_not",
+            UnaryKind.EXP: "exp",
+            UnaryKind.LOG: "log",
+            UnaryKind.CEIL: "ceil",
+            UnaryKind.ROUND: "round",
+            UnaryKind.EXP2: "exp2",
+            UnaryKind.LOG2: "log2",
         },
     )
 
@@ -448,7 +450,7 @@ def _constraint_value_str(value: object) -> str:
     return repr(value)
 
 
-def _layout_constraint_str(constraint: LayoutConstraint) -> str:
+def _layout_constraint_str(constraint: LayoutClause) -> str:
     split_bindings = {
         attr.axis: (topology, attr)
         for topology, attr in constraint.bindings
@@ -458,17 +460,12 @@ def _layout_constraint_str(constraint: LayoutConstraint) -> str:
     for index, extent in enumerate(constraint.layout.shape):
         if index in split_bindings:
             topology, _ = split_bindings[index]
-            dims.append(
-                f"{_constraint_value_str(extent)} @ "
-                f"{_constraint_value_str(topology)}"
-            )
+            dims.append(f"{_constraint_value_str(extent)} @ {_constraint_value_str(topology)}")
         else:
             dims.append(_constraint_value_str(extent))
     dims_str = "(" + ", ".join(dims) + ("," if len(dims) == 1 else "") + ")"
     bindings = [
-        (topology, attr)
-        for topology, attr in constraint.bindings
-        if not isinstance(attr, Split)
+        (topology, attr) for topology, attr in constraint.bindings if not isinstance(attr, Split)
     ]
     if not bindings:
         return dims_str
@@ -477,32 +474,30 @@ def _layout_constraint_str(constraint: LayoutConstraint) -> str:
         if isinstance(attr, Broadcast):
             binding_str.append(f"{_constraint_value_str(topology)} @ B()")
         elif isinstance(attr, Partial):
-            binding_str.append(
-                f'{_constraint_value_str(topology)} @ P("{attr.reduction}")'
-            )
-        else:  # pragma: no cover - LayoutConstraint validates this type
+            binding_str.append(f'{_constraint_value_str(topology)} @ P("{attr.reduction}")')
+        else:  # pragma: no cover - LayoutClause validates this type
             raise TypeError(f"unsupported layout binding {type(attr).__name__}")
     return f"({dims_str}, {{{', '.join(binding_str)}}})"
 
 
-def _where_str(metadata: ScheduleConstraintMetadata) -> str:
+def _where_str(metadata: WhereClauseMetadata) -> str:
     layout = next(
-        (item for item in metadata.constraints if isinstance(item, LayoutConstraint)),
+        (item for item in metadata.constraints if isinstance(item, LayoutClause)),
         None,
     )
     fields: list[str] = []
     if layout is not None:
         fields.append(f"layout={_layout_constraint_str(layout)}")
     for item in metadata.constraints:
-        if isinstance(item, MeshConstraint):
+        if isinstance(item, MeshClause):
             fields.append(f"mesh={PythonPrinter().visit(item.mesh, HirPrintContext())}")
-        elif isinstance(item, StorageConstraint):
+        elif isinstance(item, StorageClause):
             fields.append(f'storage="{item.storage.name.lower()}"')
     return "where(" + ", ".join(fields) + ")"
 
 
 def _constraint_line(expr: Expr, indent: str, name: str) -> str | None:
-    metadata = constraint_metadata(expr)
+    metadata = clause_metadata(expr)
     if metadata is None:
         return None
     return f"{indent}{name}: {_where_str(metadata)}"
@@ -533,9 +528,7 @@ def iter_exprs(root: Expr | None, seen: set[int] | None = None) -> Iterator[Expr
 def _region_projection(expr: Expr) -> LoopRegion | MeshRegion | None:
     """Return the region projected by a one-argument ``TupleGetItem``."""
     if not (
-        isinstance(expr, Call)
-        and isinstance(expr.target, TupleGetItem)
-        and len(expr.args) == 1
+        isinstance(expr, Call) and isinstance(expr.target, TupleGetItem) and len(expr.args) == 1
     ):
         return None
     region = expr.args[0]
@@ -565,8 +558,12 @@ def _module_callee_binding(target: HirFunction, child_entries: dict[int, str]) -
 
 
 def _emit_def(
-    fn: HirFunction, def_name: str, ctx: HirPrintContext, indent: str,
-    options: PythonPrintOptions, child_entries: dict[int, str] | None = None,
+    fn: HirFunction,
+    def_name: str,
+    ctx: HirPrintContext,
+    indent: str,
+    options: PythonPrintOptions,
+    child_entries: dict[int, str] | None = None,
     *,
     line_offset: int = 0,
     statements: dict[int, _PrintedStatement] | None = None,
@@ -581,18 +578,12 @@ def _emit_def(
     child_entries = {} if child_entries is None else child_entries
     lines: list[str] = []
     printer = HirPrinter()
-    root_mesh = (
-        fn.body.mesh
-        if isinstance(fn.body, MeshRegion) and not fn.specializations
-        else None
-    )
+    root_mesh = fn.body.mesh if isinstance(fn.body, MeshRegion) and not fn.specializations else None
     if root_mesh is not None:
         ctx.push_mesh(root_mesh, "mesh")
 
     _counter = [0]
     _names: dict[int, str] = {}
-
-
 
     _seen: set[int] = set()
     _order: list[Expr] = list(iter_exprs(fn.body, _seen))
@@ -606,7 +597,6 @@ def _emit_def(
         for scope in tuple(expr for expr in _order if isinstance(expr, MeshRegion))
         for param, arg in zip(scope.params, scope.args, strict=True)
     }
-
 
     _op_names_set: set[str] = set()
     for expr in _order:
@@ -634,30 +624,24 @@ def _emit_def(
     for expr in _order:
         if not isinstance(expr, LoopRegion):
             continue
-        if (
-            any(
-                isinstance(candidate, Call)
-                and isinstance(candidate.target, Slice)
-                and id(candidate) not in collapsed_slice_ids
-                and len(candidate.args) == 2
-                and isinstance(candidate.args[1], Tuple)
-                and any(
-                    window_base(start)[0] is expr.induction_var
-                    and size == expr.step
-                    and stride == 1
-                    for start, size, stride in zip(
-                        candidate.args[1].elements,
-                        candidate.target.sizes,
-                        candidate.target.strides,
-                    )
+        if any(
+            isinstance(candidate, Call)
+            and isinstance(candidate.target, Slice)
+            and id(candidate) not in collapsed_slice_ids
+            and len(candidate.args) == 2
+            and isinstance(candidate.args[1], Tuple)
+            and any(
+                window_base(start)[0] is expr.induction_var and size == expr.step and stride == 1
+                for start, size, stride in zip(
+                    candidate.args[1].elements,
+                    candidate.target.sizes,
+                    candidate.target.strides,
                 )
-                for candidate in _order
             )
+            for candidate in _order
         ):
             _tile_window_steps[id(expr.induction_var)] = expr.step
-        for carry, init, value in zip(
-            expr.carried_args, expr.init_args, expr.yield_values
-        ):
+        for carry, init, value in zip(expr.carried_args, expr.init_args, expr.yield_values):
             _forced_names[id(carry)] = _sanitize_name(carry.name)
             _forced_names[id(init)] = _sanitize_name(carry.name)
         for _ in iter_exprs(expr.body, _grid_internal_ids):
@@ -686,17 +670,13 @@ def _emit_def(
         if isinstance(expr, MeshRegion):
             for _ in iter_exprs(expr.body, _mesh_region_internal_ids):
                 pass
+
     def _moved_window(start, size, stride):
         """The tile window and offset *start* moves it by, else ``None``."""
         window, offset = window_base(start)
-        if (
-            isinstance(window, Var)
-            and stride == 1
-            and _tile_window_steps.get(id(window)) == size
-        ):
+        if isinstance(window, Var) and stride == 1 and _tile_window_steps.get(id(window)) == size:
             return window, offset
         return None
-
 
     _inlined_start_ids = {
         id(start)
@@ -737,7 +717,6 @@ def _emit_def(
             n += 1
         _names[key] = name
         return name
-
 
     for expr in _order:
         _assign_name(expr)
@@ -791,10 +770,7 @@ def _emit_def(
             )
         with printer.type_surface(indent=level):
             rendered = printer.visit(expr, ctx)
-        lines.append(
-            f"{level}{name} = {rendered}"
-            f"{_comments(expr, options, printer, ctx)}"
-        )
+        lines.append(f"{level}{name} = {rendered}{_comments(expr, options, printer, ctx)}")
         printed.add(id(expr))
 
     def _emit_expr(expr: Expr, level: str) -> None:
@@ -864,7 +840,9 @@ def _emit_def(
             loop = f"range({extent})"
         else:
             loop = f"range({start}, {extent}, {step})"
-        lines.append(f"{level}for {region.induction_var.name} in {loop}:{_comments(region, options, printer, ctx)}")
+        lines.append(
+            f"{level}for {region.induction_var.name} in {loop}:{_comments(region, options, printer, ctx)}"
+        )
         printed.add(key)
         inner = level + "    "
         _emit_expr(region.body, inner)
@@ -888,8 +866,7 @@ def _emit_def(
         mesh_text = printer.visit(region.mesh, ctx)
         mesh_name = ctx.scope_name(region.mesh)
         lines.append(
-            f"{level}with {mesh_text} as {mesh_name}:"
-            f"{_comments(region, options, printer, ctx)}"
+            f"{level}with {mesh_text} as {mesh_name}:{_comments(region, options, printer, ctx)}"
         )
         printed.add(key)
         inner = level + "    "
@@ -925,17 +902,15 @@ def _emit_def(
             continue
         if isinstance(expr, Constant):
             name = _names[id(expr)]
-            lines.append(f"{indent}{name} = {repr(expr.value)}{_comments(expr, options, printer, ctx)}")
+            lines.append(
+                f"{indent}{name} = {repr(expr.value)}{_comments(expr, options, printer, ctx)}"
+            )
             line = _constraint_line(expr, indent, name)
             if line is not None:
                 lines.append(line)
             printed.add(id(expr))
             continue
         if isinstance(expr, Tuple):
-
-
-
-
             continue
         if isinstance(expr, Call):
             name = _names[id(expr)]
@@ -946,16 +921,11 @@ def _emit_def(
                 )
             with printer.type_surface(indent=indent):
                 rendered = printer.visit(expr, ctx)
-            lines.append(
-                f"{indent}{name} = {rendered}"
-                f"{_comments(expr, options, printer, ctx)}"
-            )
+            lines.append(f"{indent}{name} = {rendered}{_comments(expr, options, printer, ctx)}")
             line = _constraint_line(expr, indent, name)
             if line is not None:
                 lines.append(line)
             printed.add(id(expr))
-
-
 
     if not isinstance(fn.body, MeshRegion):
         if isinstance(fn.body, Tuple):
@@ -972,7 +942,6 @@ def _emit_def(
     return lines
 
 
-
 def _new_hir_context(*, for_module: bool = False, target=None) -> HirPrintContext:
     """Create a HIR context with imports owned by the surrounding file."""
     ctx = HirPrintContext()
@@ -984,6 +953,7 @@ def _new_hir_context(*, for_module: bool = False, target=None) -> HirPrintContex
         ctx.imports.update(rendered.imports)
     return ctx
 
+
 def _variant_binding_name(variant: HirFunction) -> str:
     """Return a valid source binding for a variant without display metadata."""
     label = display_name(variant)
@@ -994,7 +964,10 @@ def _variant_binding_name(variant: HirFunction) -> str:
 
 
 def _emit_decorated_defs(
-    fn: HirFunction, ctx: HirPrintContext, indent: str, options: PythonPrintOptions,
+    fn: HirFunction,
+    ctx: HirPrintContext,
+    indent: str,
+    options: PythonPrintOptions,
     child_entries: dict[int, str] | None = None,
     *,
     line_offset: int = 0,
@@ -1029,7 +1002,6 @@ def _emit_decorated_defs(
         )
     )
 
-
     for variant in fn.variants:
         lines.append("")
         lines.append(
@@ -1037,7 +1009,11 @@ def _emit_decorated_defs(
         )
         lines.extend(
             _emit_def(
-                variant, _variant_binding_name(variant), ctx, indent, options,
+                variant,
+                _variant_binding_name(variant),
+                ctx,
+                indent,
+                options,
                 child_entries,
                 line_offset=line_offset + _physical_line_count(lines),
                 statements=statements,
@@ -1047,7 +1023,9 @@ def _emit_decorated_defs(
 
 
 def _render_hir_function(
-    fn: HirFunction, *, options: PythonPrintOptions | None = None,
+    fn: HirFunction,
+    *,
+    options: PythonPrintOptions | None = None,
 ) -> _PythonRendering:
     """Render a HIR Function and locate every Call equation in the same pass.
 
@@ -1077,14 +1055,18 @@ def _render_hir_function(
 
 
 def hir_function_to_python(
-    fn: HirFunction, *, options: PythonPrintOptions | None = None,
+    fn: HirFunction,
+    *,
+    options: PythonPrintOptions | None = None,
 ) -> str:
     """Convert a HIR Function to canonical Python DSL source."""
     return HirPrinter().print(fn, options=options)
 
 
 def as_script(
-    fn: HirFunction | PrimFunction | Module, *, module: str | None = None,
+    fn: HirFunction | PrimFunction | Module,
+    *,
+    module: str | None = None,
     options: PythonPrintOptions | None = None,
 ) -> str:
     """Convert an HIR function or module to Python DSL source.
@@ -1101,7 +1083,9 @@ def as_script(
         return tir_function_to_python(fn, options=options)
     if module is not None:
         if isinstance(fn, PrimFunction):
-            return tir_module_to_python(Module(name=module, functions=(fn,), entry=fn.name), options=options)
+            return tir_module_to_python(
+                Module(name=module, functions=(fn,), entry=fn.name), options=options
+            )
         return _module_to_python(fn, module, options=options)
     return hir_function_to_python(fn, options=options)
 
@@ -1152,17 +1136,17 @@ def _module_decorator_line(mod: Module, entry_name: str | None, ctx: HirPrintCon
         kwargs.append(f"target={rendered.text}")
     if mod.topologies is not None:
         ctx.imports.add("from tilefoundry.ir.types import Topology")
-        topo_strs = [
-            f'Topology("{t.name}", {printer.visit(t.size, ctx)})'
-            for t in mod.topologies
-        ]
-        rendered_topologies = f'({", ".join(topo_strs)},)' if topo_strs else "()"
+        topo_strs = [f'Topology("{t.name}", {printer.visit(t.size, ctx)})' for t in mod.topologies]
+        rendered_topologies = f"({', '.join(topo_strs)},)" if topo_strs else "()"
         kwargs.append(f"topologies={rendered_topologies}")
     return f"@module({', '.join(kwargs)})"
 
 
 def _emit_module_class(
-    mod: Module, module_name: str, ctx: HirPrintContext, indent: str,
+    mod: Module,
+    module_name: str,
+    ctx: HirPrintContext,
+    indent: str,
     options: PythonPrintOptions,
 ) -> list[str]:
     """One ``@module`` class block: its nested Modules, then its functions.
@@ -1178,8 +1162,7 @@ def _emit_module_class(
         if child.entry is not None and isinstance(child.entry_function(), HirFunction)
     }
     blocks: list[list[str]] = [
-        _emit_module_class(child, child.name, ctx, indent, options)
-        for child in mod.modules
+        _emit_module_class(child, child.name, ctx, indent, options) for child in mod.modules
     ]
     for fn in ordered:
         if isinstance(fn, HirFunction):
@@ -1198,8 +1181,10 @@ def _emit_module_class(
 
 
 def _module_to_python(
-    fn_or_module: HirFunction | Module, module_name: str | None = None,
-    *, options: PythonPrintOptions | None = None,
+    fn_or_module: HirFunction | Module,
+    module_name: str | None = None,
+    *,
+    options: PythonPrintOptions | None = None,
 ) -> str:
     """Render a function or a whole Module tree as ``@module`` source."""
     if isinstance(fn_or_module, Module):
@@ -1219,11 +1204,14 @@ def _module_to_python(
     if entry is not None and not isinstance(entry, (HirFunction, PrimFunction)):
         raise TypeError("Module printer requires a function entry")
 
-
     indent4 = "    "
     ctx = _new_hir_context(for_module=True, target=root.target)
     lines = _emit_module_class(
-        root, module_name, ctx, indent4, options or PythonPrintOptions(),
+        root,
+        module_name,
+        ctx,
+        indent4,
+        options or PythonPrintOptions(),
     )
     header = ctx.header()
     return "\n".join(header + lines) + "\n"

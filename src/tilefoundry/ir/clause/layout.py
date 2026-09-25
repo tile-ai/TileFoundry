@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from tilefoundry.ir.types import Layout, ShardAttr
 
-from .base import ScheduleConstraint
+from .base import WhereClause
 
 
 @dataclass(frozen=True)
@@ -26,7 +26,7 @@ def is_layout_wildcard(value: object) -> bool:
 
 
 @dataclass(frozen=True)
-class LayoutConstraint(ScheduleConstraint):
+class LayoutClause(WhereClause):
     """Fix a Layout pattern and its authored ShardAttr bindings."""
 
     layout: Layout = Layout(shape=())
@@ -34,18 +34,13 @@ class LayoutConstraint(ScheduleConstraint):
 
     def __post_init__(self) -> None:
         if not isinstance(self.layout, Layout):
-            raise TypeError(
-                f"layout constraint requires Layout, got "
-                f"{type(self.layout).__name__}"
-            )
+            raise TypeError(f"layout constraint requires Layout, got {type(self.layout).__name__}")
         bindings = tuple(self.bindings)
         for topology, attr in bindings:
             if not isinstance(topology, str) or not topology:
                 raise ValueError("layout binding topology must be non-empty")
             if not isinstance(attr, ShardAttr):
-                raise TypeError(
-                    f"layout binding requires ShardAttr, got {type(attr).__name__}"
-                )
+                raise TypeError(f"layout binding requires ShardAttr, got {type(attr).__name__}")
         if len({topology for topology, _ in bindings}) != len(bindings):
             raise ValueError("layout constraint cannot bind one topology more than once")
         object.__setattr__(self, "bindings", bindings)
@@ -57,6 +52,6 @@ class LayoutConstraint(ScheduleConstraint):
 
 
 __all__ = [
-    "LayoutConstraint",
+    "LayoutClause",
     "is_layout_wildcard",
 ]

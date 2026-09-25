@@ -42,10 +42,10 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.op import Op
 from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor as TensorPattern
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.slice import Slice as SliceOp
 from tilefoundry.ir.isl_interop import index_set
+from tilefoundry.ir.pattern import Tensor as TensorPattern
 from tilefoundry.ir.types import (
     DType,
     Layout,

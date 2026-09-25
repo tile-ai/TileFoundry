@@ -18,10 +18,11 @@ truth for the directory's structure and invariants.
 | Directory | Owning spec | Contents |
 |---|---|---|
 | `ir/core/` | [core-ir](./core-ir.md) | Shared node algebra: `Module` / `Expr` / `Var` / `Constant` / `Tuple` / `Op` / `Call` / `Stmt` (base class) / `OpSchema` / `ParamDef` / call-graph and ownership queries / typed metadata attach-detach and diagnostics / `@register_op` / `@register_alias` / `op_registry` / `errors`. |
+| `ir/pattern/` | [core-ir](./core-ir.md) | Operation-declaration predicates: composable pattern values in `pattern.py`, match/binding and rendering mechanics in `match.py`, cross-operand relations in `constraint.py`, and pattern construction/specialization helpers in `utils.py`. |
 | `ir/types/` | [types](./types.md) | Type-system root: `Type` / `TensorType` / `TupleType` / `UnitType` / `CallableType` / `DType` / `StorageKind` / `resolve_storage` / local projections (`local_type_of`) / tensor-leaf, byte-by-storage, and topology-extent queries / `dim.*` (with their typeinfer). |
 | `ir/types/{int_tuple,stride,layout,layout_algebra,shard_layout,mesh}.py` | [shard](./shard.md) | `Topology` / `Mesh` / `Layout` / `ComposedLayout` / `ShardLayout` / `ShardAttr` (`Split` / `Broadcast` / `Dynamic` / `Partial`), filed as CuTe files them: int tuples (`flatten` / `unflatten` / `repeat_like` / `product`), strides (`compact_major` / `idx2crd` / `crd2idx`), layouts and the algebra over them each in their own module; mesh construction, separation, and topology-bound checking stay with `Mesh`. |
 | `ir/mesh_scope.py` | [shard](./shard.md) | Which scope a statement stands inside and what it admits: `device_layout`, `covered_by_scope`. Neither a type nor a visitor, so it sits beside `ir/isl_interop.py` rather than in either. |
-| `ir/constraints/` | [parser](./parser.md) | Authored `where(layout=..., mesh=..., storage=...)` constraint records: the shared base plus layout, mesh, and storage constraints, attached by the parser and read back by the Python printer. |
+| `ir/clause/` | [parser](./parser.md) | Authored `where(layout=..., mesh=..., storage=...)` constraint records: the shared base plus layout, mesh, and storage constraints, attached by the parser and read back by the Python printer. |
 | `ir/visitor.py` | [visitor-mutator](./visitor-mutator.md) | `ExprFunctor` / `ExprVisitor` / `ExprWalker` / `ExprCollector` / `ExprCloner` / `BindingSubstitutionCloner` / `StmtVisitor` / `StmtMutator` / `StmtExprMutator`, plus `collect_exprs`, value-operand/function-value queries, and the canonical `PrimFunction` walk and rewrite entries. |
 | `ir/isl_interop.py` | [types](./types.md) | Interoperation between dimension and shape IR values and isl: expression rendering and decoding, normalization, value ranges, and shape-domain construction. Pure isl operations remain in `utils/isl_utils.py`. |
 | `ir/hir/` | [hir](./hir.md) | HIR Op layer; one subdirectory per category (`math/` / `tensor/` / `nn/` / `shape/` / `sharding/`). One real Op per `.py` ([§2](#2-file-naming-and-content-rules) rule 1); surface-alias schemas have no per-name file and live in each category's `aliases.py` ([§2](#2-file-naming-and-content-rules) rule 5). |
@@ -101,9 +102,9 @@ physical directory layout reflects that boundary directly.
   contracts are distinct even though both are consumed across the codegen
   boundary.
 
-`ir/constraints/`, `visitor_registry/`, and `dump/` are cross-cutting packages;
-their stable responsibilities are owned by [parser](./parser.md),
-[visitor-registry](./visitor-registry.md), and [inspection](./inspection.md),
+`ir/pattern/`, `ir/clause/`, `visitor_registry/`, and `dump/` are cross-cutting packages;
+their stable responsibilities are owned by [core-ir](./core-ir.md),
+[parser](./parser.md), [visitor-registry](./visitor-registry.md), and [inspection](./inspection.md),
 respectively. Their internal file layout is not a per-Op contract.
 
 ## 2. File naming and content rules

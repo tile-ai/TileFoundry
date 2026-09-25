@@ -14,9 +14,9 @@ import dataclasses
 from collections.abc import Mapping
 
 from tilefoundry.ir.core import Call, Constant, Expr, Op, Tuple, Var
-from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.pattern import Pattern, RangePattern
 from tilefoundry.ir.types.dim import is_dim_expr
 from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.substitute import (
@@ -40,7 +40,7 @@ def canonical_specialization_signature(
     """Deterministic identity string for a Function's specialization tuple."""
     parts: list[str] = []
     for pat in specializations:
-        if isinstance(pat, DimVarRangePat):
+        if isinstance(pat, RangePattern):
             parts.append(f"{pat.dim_var}${pat.lo}_{pat.hi}")
         else:
             parts.append(repr(pat))
@@ -63,9 +63,7 @@ def display_name(fn: Function) -> str | None:
     return getattr(fn, DISPLAY_NAME, None)
 
 
-def _record_provenance(
-    derived: Function, origin: Function, dims: Mapping[str, int] | None
-) -> None:
+def _record_provenance(derived: Function, origin: Function, dims: Mapping[str, int] | None) -> None:
     """Note that *derived* is *origin*, at *dims* when a size was chosen.
 
     These fields are declared on Function with ``compare=False`` because they
@@ -81,9 +79,7 @@ def _record_provenance(
         derived._specialized_dims = tuple(sorted(dims.items()))
 
 
-def _record_complete_bindings(
-    function: Function, dims: Mapping[str, int]
-) -> Function:
+def _record_complete_bindings(function: Function, dims: Mapping[str, int]) -> Function:
     """Record a public call's complete program bindings on a derived Function."""
     if bound_dims_of(function) is None:
         derived = dataclasses.replace(function)
@@ -137,7 +133,7 @@ def _covers(fn: Function, variant: Function, dims: Mapping[str, int]) -> bool:
     the caller does not yet know which implementation they are asking for.
     """
     for pattern in variant.specializations:
-        if not isinstance(pattern, DimVarRangePat):
+        if not isinstance(pattern, RangePattern):
             continue
         if pattern.dim_var not in dims:
             raise SpecializationError(
@@ -154,7 +150,7 @@ def _coverage(fn: Function) -> str:
         ", ".join(
             f"{pattern.dim_var} in [{pattern.lo}, {pattern.hi}]"
             for pattern in variant.specializations
-            if isinstance(pattern, DimVarRangePat)
+            if isinstance(pattern, RangePattern)
         )
         or "everything"
         for variant in fn.variants
@@ -185,7 +181,7 @@ def specialize_function(
 
     present = set(residual_dims(chosen))
     for pattern in chosen.specializations:
-        if isinstance(pattern, DimVarRangePat):
+        if isinstance(pattern, RangePattern):
             present.add(pattern.dim_var)
     unknown = sorted(set(dims) - present)
     if unknown:
@@ -256,14 +252,9 @@ class DimensionInstantiator(ExprCloner):
         new_args = tuple(self.visit(arg, ctx) for arg in call.args)
         new_target = call.target
         if isinstance(new_target, Function):
-            new_target = _specialize_callee(
-                new_target, ctx.dims, ctx.type_ctx
-            )
+            new_target = _specialize_callee(new_target, ctx.dims, ctx.type_ctx)
         new_target = _substitute_op_dims(new_target, ctx.dims)
-        if (
-            all(new is old for new, old in zip(new_args, call.args))
-            and new_target is call.target
-        ):
+        if all(new is old for new, old in zip(new_args, call.args)) and new_target is call.target:
             return call
         rebuilt = dataclasses.replace(call, args=new_args, target=new_target)
         return self._retyped(rebuilt, ctx)
@@ -272,9 +263,7 @@ class DimensionInstantiator(ExprCloner):
         """Rebuild loop bindings and shape fields excluded by generic cloning."""
         new_inits = tuple(self.visit(arg, ctx) for arg in region.init_args)
         new_phis = tuple(
-            old_phi
-            if new_init.type == old_phi.type
-            else Var(type=new_init.type, name=old_phi.name)
+            old_phi if new_init.type == old_phi.type else Var(type=new_init.type, name=old_phi.name)
             for old_phi, new_init in zip(region.carried_args, new_inits)
         )
         for old_phi, new_phi in zip(region.carried_args, new_phis):
@@ -309,9 +298,7 @@ class DimensionInstantiator(ExprCloner):
         return rebuilt if rebuilt is expr else self._retyped(rebuilt, ctx)
 
     def _retyped(self, rebuilt: Expr, ctx: InstantiateContext) -> Expr:
-        return dataclasses.replace(
-            rebuilt, type=ctx.type_visitor.visit(rebuilt, ctx.type_ctx)
-        )
+        return dataclasses.replace(rebuilt, type=ctx.type_visitor.visit(rebuilt, ctx.type_ctx))
 
 
 @dataclasses.dataclass

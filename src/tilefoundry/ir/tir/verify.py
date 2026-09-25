@@ -11,12 +11,12 @@ from typing import Iterable
 
 from tilefoundry.ir.core import Expr, Var, VerifyError
 from tilefoundry.ir.core.expr import Call, Constant
-from tilefoundry.ir.core.pattern import DimVarRangePat, locate_dim_var
 from tilefoundry.ir.hir.function import (
     Function as HirFunction,
 )
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.verify import verify_function
+from tilefoundry.ir.pattern import RangePattern, locate_dim_var
 from tilefoundry.ir.types import DType, TensorType, UnitType
 from tilefoundry.ir.types.callable_type import callable_type_for_prim_function
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMax, DimMin, DimMod, DimMul, DimSub
@@ -57,9 +57,11 @@ def verify_prim_function(
     _check_param_homogeneity(fn)
     if fn.variants:
         for variant in fn.variants:
-            if len(variant.specializations) != 1 or not isinstance(variant.specializations[0], DimVarRangePat):
+            if len(variant.specializations) != 1 or not isinstance(
+                variant.specializations[0], RangePattern
+            ):
                 raise VerifyError(
-                    f"PrimFunction {fn.name!r}: each variant must have one DimVarRangePat"
+                    f"PrimFunction {fn.name!r}: each variant must have one RangePattern"
                 )
             pat = variant.specializations[0]
             if locate_dim_var(fn.params, pat.dim_var) is None:
@@ -272,8 +274,7 @@ def _check_bound_coordinates(field: str, bound, scope) -> None:
             )
         if not any(held is mesh or held == mesh for held in scope):
             raise VerifyError(
-                f"For.{field} reads a coordinate of {mesh!r}, which no enclosing "
-                "MeshScope binds"
+                f"For.{field} reads a coordinate of {mesh!r}, which no enclosing MeshScope binds"
             )
 
 
@@ -537,9 +538,7 @@ def verify_module(fns) -> None:
     if isinstance(fns, Module):
         fns = module_functions(fns)
     prim_fns = [f for f in fns if isinstance(f, PrimFunction)]
-    prim_fns_with_variants = [
-        variant for f in prim_fns for variant in (f, *f.variants)
-    ]
+    prim_fns_with_variants = [variant for f in prim_fns for variant in (f, *f.variants)]
     for f in fns:
         if isinstance(f, HirFunction):
             verify_function(f)

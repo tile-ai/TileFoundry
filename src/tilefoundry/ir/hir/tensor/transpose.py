@@ -7,8 +7,8 @@ from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import ComposedLayout, Layout, TensorType
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.stride import try_compact_major
