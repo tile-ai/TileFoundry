@@ -11,7 +11,7 @@ from tilefoundry.ir.pattern import (
     TensorPattern,
     any_threads,
 )
-from tilefoundry.ir.tir.memory.copy import verify_between
+from tilefoundry.ir.tir.verify import verify_between
 from tilefoundry.ir.types import StorageKind, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 

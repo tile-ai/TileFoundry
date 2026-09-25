@@ -16,7 +16,7 @@ from tilefoundry.ir.hir.function import (
 )
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.verify import verify_function
-from tilefoundry.ir.pattern import RangePattern, locate_dim_var
+from tilefoundry.ir.pattern import RangePattern, between_rules, locate_dim_var
 from tilefoundry.ir.types import DType, TensorType, UnitType
 from tilefoundry.ir.types.callable_type import callable_type_for_prim_function
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMax, DimMin, DimMod, DimMul, DimSub
@@ -48,6 +48,38 @@ from .stmts import (
 from .symbol_ref import SymbolRef
 
 _PRIM_FUNCTION = "[tir §1.3](docs/spec/tir.md#13-primfunction)"
+
+
+def _input_params(op_type: type) -> tuple:
+    return tuple(param for param in op_type._op_schema.signature if param.kind == "input")
+
+
+def verify_between(call, ctx, lead: str = "") -> None:
+    """Hold one call to the relations declared between its operands."""
+    op_type = type(call.target)
+    rules = between_rules(op_type)
+    if not rules:
+        return
+    names = tuple(param.name for param in _input_params(op_type))
+    operands = dict(zip(names, (ctx.type_of(arg) for arg in call.args)))
+    for rule in rules:
+        if not rule.holds(operands):
+            ctx.error(call, lead + rule.refused(operands))
+
+
+def verify_operands(call, ctx, label: str) -> None:
+    """Hold each operand to the pattern declared for its parameter."""
+    for param, arg in zip(_input_params(type(call.target)), call.args):
+        if param.pattern is None:
+            continue
+        value = ctx.type_of(arg)
+        if param.pattern.match(value) is None:
+            ctx.error(
+                call,
+                f"{label} {param.name} is {tuple(value.shape)} "
+                f"{value.dtype.name} storage={value.storage}: "
+                f"{param.pattern.refusal(value)}",
+            )
 
 
 def verify_prim_function(
@@ -570,4 +602,4 @@ def verify_module(fns) -> None:
             )
 
 
-__all__ = ["verify_prim_function", "verify_module"]
+__all__ = ["verify_between", "verify_module", "verify_operands", "verify_prim_function"]

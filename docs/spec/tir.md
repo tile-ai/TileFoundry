@@ -513,8 +513,6 @@ class TensorView(Op):
 
     Attributes:
         pointer: input; a ``PointerType`` value or an smem byte offset.
-        coordinates: optional trailing inputs; one absolute element start per
-            logical window axis (or one absolute flat start for a rank-1 view).
         dtype: optional attribute; element type stated for a numeric address.
         storage: optional attribute; storage stated for a numeric address.
         layout: attribute; the view descriptor.
@@ -537,11 +535,7 @@ class TensorView(Op):
     non-integer numeric addresses are invalid.
   - A `PointerType` input MAY restate `dtype` or `storage`, but any stated value
     MUST equal the pointer descriptor.
-  - With trailing coordinates, codegen derives the view at those absolute
-    element starts. A coordinate is not a tile ordinal and MUST NOT be
-    multiplied by the view extent.
-  - The coordinate count MUST match the logical window rank before any
-    shard-owned layout axes are removed locally.
+  - Trailing coordinate inputs are not supported on pointer views.
   - `T.ptr_of` MAY point at an allocated `ShardTensor`; the view rebuilds over
     the engine pointer rather than reusing the existing shard layout.
 

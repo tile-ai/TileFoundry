@@ -2,10 +2,6 @@
 
 Constructs a logical tensor view over a typed pointer. ``layout`` can be a plain ``Layout``
 or a ``ShardLayout`` (→ shard tensor view, no allocation).
-
-A slice view carries an absolute element-start coordinate per axis after the
-memory source: a single coordinate is a flat rank-1 window, while multiple
-coordinates are a per-axis N-D window.
 """
 
 from __future__ import annotations
@@ -39,6 +35,8 @@ class TensorView(Op):
 
 @register_typeinfer(TensorView)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
+    if len(call.args) > 1:
+        ctx.error(call, "coordinates are not supported on a pointer view")
     pointer = ctx.type_of(call.args[0])
     op = call.target
     origin = call.args[0]
