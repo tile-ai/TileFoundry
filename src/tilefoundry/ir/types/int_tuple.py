@@ -23,6 +23,15 @@ def flatten(t: object) -> tuple[object, ...]:
     return tuple(value for item in t for value in flatten(item))
 
 
+def congruent(a, b) -> bool:
+    """Whether two int tuples have the same nesting, ignoring their leaves."""
+    if isinstance(a, tuple) != isinstance(b, tuple):
+        return False
+    if not isinstance(a, tuple):
+        return True
+    return len(a) == len(b) and all(congruent(x, y) for x, y in zip(a, b))
+
+
 def product(t) -> "ShapeDim":
     from .mesh import Topology  # noqa: PLC0415
 
@@ -74,4 +83,4 @@ def unflatten(flat: tuple, profile) -> tuple:
     return nested
 
 
-__all__ = ["IntTuple", "flatten", "product", "repeat_like", "unflatten"]
+__all__ = ["IntTuple", "congruent", "flatten", "product", "repeat_like", "unflatten"]

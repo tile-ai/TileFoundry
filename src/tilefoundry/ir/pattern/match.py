@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from tilefoundry.ir.clause.layout import is_layout_wildcard
-from tilefoundry.ir.types import ComposedLayout
 from tilefoundry.ir.types.dim import DimFloorDiv, DimMul, DimVar, is_dim_op_call
 from tilefoundry.ir.types.substitute import DimSubstitutionError, substitute_shape_dim
 
@@ -129,6 +128,8 @@ def alternatives_of(pattern, bindings=()) -> tuple:
 
 def matched(pattern, subject, captures=None) -> Match | None:
     """Match a nested pattern, symbolic dimension, wildcard, or fixed value."""
+    if pattern is None:
+        return Match(dict(captures or {}))
     held = Match(dict(captures or {}))
     if isinstance(pattern, DimVar):
         if pattern.name in held.captures:
@@ -141,25 +142,7 @@ def matched(pattern, subject, captures=None) -> Match | None:
         return held if found is not None and found == subject else None
     if isinstance(pattern, _pattern_type()):
         return pattern.match(subject, held.captures)
-    return held if fits(pattern, subject) else None
-
-
-def fits(wanted, held) -> bool:
-    """Whether one pattern position admits one concrete value."""
-    if wanted is None:
-        return True
-    if isinstance(wanted, _pattern_type()) or is_symbolic(wanted):
-        return matched(wanted, held) is not None
-    if is_layout_wildcard(wanted):
-        return type(held) is int
-    return wanted == held
-
-
-def grouping(modes):
-    """The tuple nesting of *modes*, with the concrete modes erased."""
-    if isinstance(modes, tuple):
-        return tuple(grouping(mode) for mode in modes)
-    return None
+    return held if pattern == subject else None
 
 
 def relations_of(values) -> tuple[str, ...]:
@@ -180,15 +163,6 @@ def refusals_between(op_type, operands: dict) -> tuple[str, ...]:
     )
 
 
-def affine_frame(layout) -> tuple | None:
-    """Read a bare layout or a composition through no transform as offset + layout."""
-    if not isinstance(layout, ComposedLayout):
-        return 0, layout
-    if layout.inner is not None:
-        return None
-    return layout.offset, layout.outer
-
-
 __all__ = [
     "ABSENT",
     "ARRANGEMENT",
@@ -196,12 +170,9 @@ __all__ = [
     "OPAQUE",
     "UNNAMED_PLACE",
     "_named",
-    "affine_frame",
     "alternatives_of",
     "between_rules",
     "evaluated",
-    "fits",
-    "grouping",
     "is_symbolic",
     "matched",
     "refusals_between",

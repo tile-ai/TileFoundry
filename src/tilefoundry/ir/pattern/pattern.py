@@ -15,8 +15,9 @@ from tilefoundry.ir.types import (
     TensorType,
     make_mesh,
 )
+from tilefoundry.ir.types.int_tuple import congruent
 from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.layout_algebra import is_inverse_projectable
+from tilefoundry.ir.types.layout_algebra import frame_of, is_inverse_projectable
 from tilefoundry.ir.types.mesh import separate
 
 from .match import (
@@ -25,10 +26,8 @@ from .match import (
     UNNAMED_PLACE,
     Match,
     _named,
-    affine_frame,
     alternatives_of,
     evaluated,
-    grouping,
     matched,
     relations_of,
     resolved,
@@ -426,13 +425,13 @@ class LayoutPattern(Pattern):
         return (*flatten(self.shape), *flatten(self.strides))
 
     def match(self, subject, captures=None):
-        framed = affine_frame(subject)
-        layout = None if framed is None else framed[1]
+        layout = subject
         if not isinstance(layout, Layout) or layout.strides is None:
             return None
-        if grouping(tuple(layout.shape)) != grouping(tuple(self.shape)) or grouping(
-            tuple(layout.strides)
-        ) != grouping(tuple(self.strides)):
+        if not (
+            congruent(layout.shape, self.shape)
+            and congruent(layout.strides, self.strides)
+        ):
             return None
         extents = tuple(flatten(layout.shape))
         strides = tuple(flatten(layout.strides))
@@ -710,7 +709,7 @@ class ShardLayoutPattern(Pattern):
             or any(not isinstance(attr, Broadcast) for attr in subject.attrs[:extra])
         ):
             return None
-        framed = affine_frame(subject.mesh.layout)
+        framed = frame_of(subject.mesh.layout)
         if framed is None:
             return None
         frame = framed[1]

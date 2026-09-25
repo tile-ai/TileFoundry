@@ -123,6 +123,15 @@ def coalesce(layout: Union[Layout, ComposedLayout]):
     return Layout(shape=tuple(result_shape), strides=tuple(result_stride))
 
 
+def frame_of(layout: Union[Layout, ComposedLayout]) -> tuple[int, Layout] | None:
+    """Read a bare layout or an affine composition as offset + outer layout."""
+    if isinstance(layout, Layout):
+        return 0, layout
+    if layout.inner is not None or not isinstance(layout.outer, Layout):
+        return None
+    return layout.offset, layout.outer
+
+
 def complement(layout: Layout, max_idx: int = 1) -> Layout:
     """CuTe ``complement``: the modes that fill the gaps below ``max_idx``."""
     result_shape: list[int] = []
@@ -404,6 +413,7 @@ __all__ = [
     "cosize",
     "apply",
     "coalesce",
+    "frame_of",
     "complement",
     "is_inverse_projectable",
     "right_inverse",

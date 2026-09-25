@@ -620,18 +620,20 @@ The implementation is split by responsibility under `ir/pattern/`:
   `LayoutPattern`, `SwizzlePattern`, `ComposedLayoutPattern`, `MeshPattern`,
   `ShardLayoutPattern`, `ScalarPattern`, `TensorPattern`, and
   `WildcardPattern`. It also owns the `Scalar` and `Tensor` singletons.
-- `match.py` owns matches, captures, symbolic resolution, layout-frame reading,
-  and the shared description helpers.
+- `match.py` owns matches, captures, symbolic resolution, and the shared
+  description helpers. An unstated (`None`) pattern field admits any value.
 - `constraint.py` owns cross-operand `Constraint`, `DistinctConstraint`,
   `SameConstraint`, and `SameModesConstraint` values.
 - `utils.py` owns exact-layout construction plus specialization naming and
   dimension lookup.
 
-`LayoutPattern` checks `forward` and `injective` over the whole flattened
-arrangement by default. With `per_mode=True`, it checks each top-level mode
-independently; `MeshPattern` requires this explicit form because each mesh
-level uses its own numbering space. `MeshPattern` never changes the supplied
-pattern implicitly.
+`LayoutPattern` matches only a bare `Layout`, preserves its nested mode
+structure, and checks `forward` and `injective` over the whole flattened
+arrangement by default. A sliced layout must be stated explicitly with
+`ComposedLayoutPattern`; callers that accept both forms use `OrPattern`.
+With `per_mode=True`, `LayoutPattern` checks each top-level mode independently;
+`MeshPattern` requires this explicit form because each mesh level uses its own
+numbering space. `MeshPattern` never changes the supplied pattern implicitly.
 
 Two consumer surfaces:
 
