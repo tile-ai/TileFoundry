@@ -12,7 +12,7 @@ from __future__ import annotations
 from tilefoundry.ir.types.int_tuple import flatten, product
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, size
 from tilefoundry.ir.types.layout_algebra import is_inverse_projectable
-from tilefoundry.ir.types.mesh import Mesh, _levels, _starts
+from tilefoundry.ir.types.mesh import Mesh, _levels, _starts, check_topology
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 from tilefoundry.ir.types.stride import compact_major
 
@@ -133,26 +133,6 @@ def _flat(mesh: Mesh) -> Layout:
         shape=tuple(flatten(stated.shape)),
         strides=None if strides is None else tuple(flatten(strides)),
     )
-
-
-def check_topology(mesh: Mesh) -> None:
-    """Reject static mesh positions beyond their declared topology extents.
-
-    A constant slice is already bounded by ``Mesh.__getitem__``; its shortened
-    axes no longer land on full topology boundaries and are therefore accepted.
-    """
-    if isinstance(mesh.layout, ComposedLayout):
-        return
-    for topology, arrangement in zip(mesh.topologies, _levels(mesh)):
-        declared = getattr(topology, "size", None)
-        if not isinstance(declared, int) or isinstance(declared, bool):
-            continue
-        count = product(tuple(flatten(arrangement.shape)))
-        if isinstance(count, int) and count > declared:
-            raise ValueError(
-                f"mesh level {getattr(topology, 'name', topology)!r} has {count} "
-                f"positions, exceeding declared extent {declared}"
-            )
 
 
 __all__ = [

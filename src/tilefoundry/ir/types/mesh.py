@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from tilefoundry.ir.types.int_tuple import product
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, flatten, get
 from tilefoundry.ir.types.layout import rank as _rank
 from tilefoundry.ir.types.stride import compact_major, compact_row_major, crd2idx, idx2crd
@@ -244,12 +245,34 @@ def _levels(mesh: Mesh) -> tuple[Layout, ...]:
 def _starts(mesh: Mesh) -> tuple[int, ...]:
     """Where each level's run starts, decoded from the device-numbered offset."""
     offset = mesh.layout.offset if isinstance(mesh.layout, ComposedLayout) else 0
-    if len(mesh.topologies) == 1 and isinstance(offset, int):
+    if not isinstance(offset, int):
+        return (0,) * len(mesh.topologies)
+    if len(mesh.topologies) == 1:
         return (offset,)
     sizes = tuple(topology.size for topology in mesh.topologies)
-    if not isinstance(offset, int) or any(not isinstance(one, int) for one in sizes):
+    if any(not isinstance(one, int) for one in sizes):
         return (0,) * len(sizes)
     return tuple(idx2crd(offset, sizes, compact_major(sizes)))
+
+
+def check_topology(mesh: Mesh) -> None:
+    """Reject static mesh positions beyond their declared topology extents.
+
+    A constant slice is already bounded by ``Mesh.__getitem__``; its shortened
+    axes no longer land on full topology boundaries and are therefore accepted.
+    """
+    if isinstance(mesh.layout, ComposedLayout):
+        return
+    for topology, arrangement in zip(mesh.topologies, _levels(mesh)):
+        declared = getattr(topology, "size", None)
+        if not isinstance(declared, int) or isinstance(declared, bool):
+            continue
+        count = product(tuple(flatten(arrangement.shape)))
+        if isinstance(count, int) and count > declared:
+            raise ValueError(
+                f"mesh level {getattr(topology, 'name', topology)!r} has {count} "
+                f"positions, exceeding declared extent {declared}"
+            )
 
 
 def _joined_layout(levels: tuple[Layout, ...]) -> Layout:
@@ -271,7 +294,7 @@ def _joined(
 ) -> Mesh:
     layout: Layout | ComposedLayout = _joined_layout(levels)
     if sliced:
-        sizes = tuple(getattr(topology, "size", None) for topology in topologies)
+        sizes = tuple(topology.size for topology in topologies)
         if not all(isinstance(size, int) for size in sizes):
             raise ValueError("joining sliced meshes needs static topology extents")
         layout = ComposedLayout(None, crd2idx(starts, sizes, compact_major(sizes)), layout)
@@ -320,8 +343,6 @@ def make_mesh(*meshes: Mesh) -> Mesh:
                 f"{shared} named again while {unnamed} is not; a scope either "
                 "replaces the levels in force or adds levels below them"
             )
-    from tilefoundry.ir.mesh_scope import check_topology  # noqa: PLC0415
-
     check_topology(result)
     return result
 
@@ -342,4 +363,4 @@ def separate(mesh: Mesh) -> tuple[Mesh, ...]:
     return tuple(separated)
 
 
-__all__ = ["Mesh", "Topology", "make_mesh", "separate"]
+__all__ = ["Mesh", "Topology", "check_topology", "make_mesh", "separate"]

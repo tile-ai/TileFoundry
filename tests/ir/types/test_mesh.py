@@ -4,7 +4,6 @@ import pytest
 
 from tests.fixtures.meshes import CT, CTA, RUN, THR
 from tilefoundry.ir.mesh_scope import (
-    check_topology,
     covered_by_scope,
     mesh_scope_matches_required_scope,
     states_consistent_positions,
@@ -12,7 +11,7 @@ from tilefoundry.ir.mesh_scope import (
 from tilefoundry.ir.types import ComposedLayout, Layout, Mesh, Topology, make_mesh
 from tilefoundry.ir.types.int_tuple import product
 from tilefoundry.ir.types.layout_algebra import size
-from tilefoundry.ir.types.mesh import separate
+from tilefoundry.ir.types.mesh import check_topology, separate
 
 
 def test_mesh_position_consistency_is_an_explicit_predicate() -> None:
