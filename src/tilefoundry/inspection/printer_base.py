@@ -8,6 +8,7 @@ from contextlib import contextmanager
 
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.mesh_scope import device_layout
 from tilefoundry.ir.pattern import Pattern, RangePattern
 from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom
@@ -133,6 +134,8 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             left, right = ceildiv_args
             return f"ceildiv({self.dim_entry(left, ctx)}, {self.dim_entry(right, ctx)})"
         target = value.target
+        if isinstance(target, TupleGetItem):
+            return self._tuple_get_item_text(value, ctx)
         if isinstance(target, MeshCoord):
             return self._mesh_coordinate_text(value, target, ctx)
         if isinstance(target, DimConst):
@@ -150,6 +153,10 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
                 args = ", ".join(self.dim_entry(arg, ctx) for arg in value.args)
                 return f"{name}({args})"
         return self.visit_program_call(value, ctx)
+
+    def _tuple_get_item_text(self, value: Call, ctx=None) -> str:
+        held, index = value.args
+        return f"{self.visit(held, ctx)}[{self.visit(index, ctx)}]"
 
     def _mesh_coordinate_text(self, value: Call, target: MeshCoord, ctx) -> str:
         """Render one coordinate through the active binding of its mesh."""

@@ -316,8 +316,8 @@ def test_value_less_mesh_region_exposes_multiple_values_through_a_tuple() -> Non
     assert isinstance(scope, MeshRegion)
     assert isinstance(scope.body, Tuple)
     assert len(scope.body.elements) == 2
-    assert first.target.index == 0
-    assert second.target.index == 1
+    assert isinstance(first.args[1], Constant) and first.args[1].value == 0
+    assert isinstance(second.args[1], Constant) and second.args[1].value == 1
 
 
 def test_valueful_mesh_region_also_wraps_escaping_bindings() -> None:

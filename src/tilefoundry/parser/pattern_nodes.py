@@ -3097,12 +3097,14 @@ class SubscriptExpressionPattern(ElementPattern):
         value = children["value"]
         index = children["index"]
         if isinstance(value.type, runtime.TupleType):
-            if isinstance(index, bool) or not isinstance(index, int):
+            if isinstance(index, bool) or not isinstance(index, (int, runtime.Expr)):
                 raise ParseError.from_node(
-                    match.node, context, "Tuple subscript requires an integer literal"
+                    match.node, context, "Tuple subscript requires an integer expression"
                 )
-            normalized = index + len(value.type.fields) if index < 0 else index
-            return _infer_call(runtime.TupleGetItem(index=normalized), (value,), context)
+            if isinstance(index, int):
+                normalized = index + len(value.type.fields) if index < 0 else index
+                index = _constant(normalized)
+            return _infer_call(runtime.TupleGetItem(), (value, index), context)
         if not isinstance(value.type, runtime.TensorType):
             raise ParseError.from_node(
                 match.node, context, "subscript requires TensorType or TupleType"
@@ -3592,7 +3594,7 @@ def _bind_region_results(context, region, names, node):
         context.lexical_scope.define(names[0], region)
         return
     for index, name in enumerate(names):
-        projection = _infer_call(runtime.TupleGetItem(index=index), (region,), context)
+        projection = _infer_call(runtime.TupleGetItem(), (region, _constant(index)), context)
         attach_authored_metadata(
             projection,
             node,
@@ -4524,7 +4526,7 @@ class TupleAssignmentPattern(ElementPattern):
         attach_metadata(value, BindingMetadata(parent_name))
         for index, (name, target_node) in enumerate(zip(names, target_nodes)):
             assert isinstance(target_node, ast.Name)
-            projection = _infer_call(runtime.TupleGetItem(index=index), (value,), context)
+            projection = _infer_call(runtime.TupleGetItem(), (value, _constant(index)), context)
             attach_authored_metadata(
                 projection,
                 target_node,

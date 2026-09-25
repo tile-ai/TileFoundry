@@ -943,20 +943,25 @@ class Stack(Op):
 
 ```python
 class TupleGetItem(Op):
-    """Extract one field from a tuple-typed expression.
+    """Extract one field from a tuple-typed expression by scalar index.
 
     Attributes:
         tuple_value: input; Tuple-typed expression.
-        index: attribute; Static field index.
+        index: input; Scalar field index.
     """
 
     tuple_value: Expr
-    index: int
+    index: Expr
 ```
 
 - constraints:
-  - `tuple_value.type` MUST be `TupleType` and `index` MUST be in range.
-  - The result type MUST be exactly the selected field type.
+  - `tuple_value.type` MUST be `TupleType`. A constant `index` MUST be in range,
+    and the result type is exactly the selected field type.
+  - A dynamic `index` requires a non-empty tuple whose field types are all equal;
+    the result has that common field type.
+  - Access through a constant index reads the selected field's leaf span. Dynamic
+    access conservatively reads every leaf because the selected field is known
+    only at runtime.
 
 ##### Reshape
 ```python

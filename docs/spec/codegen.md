@@ -192,6 +192,21 @@ class CpuCodegenContext(CodegenContext):
 
 ### 2.4 Effect Op dispatch
 
+CUDA value emission lowers `TupleGetItem` according to its index form. A constant
+index names the selected tuple element directly. A dynamic index requires the
+homogeneous tuple established by type inference and emits
+`cute::array{a, b, c}[index]`; dimension arithmetic in the index remains runtime
+C++ arithmetic.
+
+An IR `Tuple` is structural and has no target-side storage. A `LetStmt` binding
+one emits no C++ variable and continues with its body; its authored name (for
+example `lhs_stages`) therefore does not appear in generated C++. Each dynamic
+`TupleGetItem` use constructs its own `cute::array`, so indexing the same tuple
+N times constructs N arrays. Constant selection remains valid for heterogeneous
+tuples because it does not materialize an aggregate. The codegen context records
+the structural tuple by its fresh SSA `Var` identity so consumers can recover
+its elements without target-side storage.
+
 Effect Ops (`Copy`, `Fill`, `Mma`, `tir.nn.*`, ...) appear in Stmt
 position as `Evaluate(op, args)` rather than as Stmt subclasses. The
 walker matches `Evaluate` and dispatches on `type(callable)` through

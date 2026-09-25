@@ -110,15 +110,19 @@ class HirPrinter(PythonPrinter):
             return self.reference(self._param_alias[id(expr)])
         projection = _region_projection(expr)
         if isinstance(projection, LoopRegion):
-            return self._names[id(projection.carried_args[expr.target.index])]
+            return self._names[id(projection.carried_args[_projection_index(expr)])]
         if isinstance(expr, LoopRegion):
             carried = tuple(self._names[id(carry)] for carry in expr.carried_args)
             return carried[0] if len(carried) == 1 else "(" + ", ".join(carried) + ")"
         if isinstance(projection, MeshRegion):
-            return self.reference(projection.body.elements[expr.target.index])
+            return self.reference(projection.body.elements[_projection_index(expr)])
         if isinstance(expr, MeshRegion):
             return self.reference(expr.body)
         return self._names[id(expr)]
+
+    def _tuple_get_item_text(self, expr: Call, ctx=None) -> str:
+        held, index = expr.args
+        return f"{self.reference(held)}[{self.visit(index, ctx)}]"
 
     def _slice_start(self, start, size, stride) -> str:
         moved = self._moved_window(start, size, stride)
@@ -526,9 +530,13 @@ def iter_exprs(root: Expr | None, seen: set[int] | None = None) -> Iterator[Expr
 
 
 def _region_projection(expr: Expr) -> LoopRegion | MeshRegion | None:
-    """Return the region projected by a one-argument ``TupleGetItem``."""
+    """Return the region projected by a constant-index ``TupleGetItem``."""
     if not (
-        isinstance(expr, Call) and isinstance(expr.target, TupleGetItem) and len(expr.args) == 1
+        isinstance(expr, Call)
+        and isinstance(expr.target, TupleGetItem)
+        and len(expr.args) == 2
+        and isinstance(expr.args[1], Constant)
+        and isinstance(expr.args[1].value, int)
     ):
         return None
     region = expr.args[0]
@@ -537,6 +545,13 @@ def _region_projection(expr: Expr) -> LoopRegion | MeshRegion | None:
     if isinstance(region, MeshRegion) and isinstance(region.body, Tuple):
         return region
     return None
+
+
+def _projection_index(expr: Call) -> int:
+    """The literal field selected by a region projection."""
+    index = expr.args[1]
+    assert isinstance(index, Constant) and isinstance(index.value, int)
+    return index.value
 
 
 def _module_callee_binding(target: HirFunction, child_entries: dict[int, str]) -> str | None:
@@ -690,6 +705,13 @@ def _emit_def(
         )
         if _moved_window(start, size, stride) is not None
     }
+    _tuple_index_ids: set[int] = set()
+    for expr in _order:
+        if isinstance(expr, Call) and isinstance(expr.target, TupleGetItem):
+            for nested in iter_exprs(expr.args[1], set()):
+                if not isinstance(nested, Var):
+                    _tuple_index_ids.add(id(nested))
+    _inlined_start_ids.update(_tuple_index_ids)
 
     def _assign_name(expr: Expr) -> str:
         key = id(expr)
@@ -719,7 +741,8 @@ def _emit_def(
         return name
 
     for expr in _order:
-        _assign_name(expr)
+        if id(expr) not in _tuple_index_ids:
+            _assign_name(expr)
     for expr in _order:
         if isinstance(expr, LoopRegion):
             for carry in expr.carried_args:

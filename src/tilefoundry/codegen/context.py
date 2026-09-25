@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 
 from tilefoundry.codegen.signature import CallableSignature, Signature, TensorSignature
+from tilefoundry.ir.core import Tuple
 from tilefoundry.ir.tir.stmts import Evaluate
 from tilefoundry.target.base import Target
 from tilefoundry.visitor_registry.registries import DispatchRegistry, Role, spelled
@@ -48,6 +49,7 @@ class EmitContext:
         self._lines: list[str] = []
         self._indent = 0
         self._var_names: dict[int, str] = {}
+        self._tuple_values: dict[int, Tuple] = {}
         self._counter = 0
         self._kernel_param_ids: set[int] = set()
 
@@ -73,6 +75,19 @@ class EmitContext:
         key = id(var)
         self._var_names[key] = var.name
         self._kernel_param_ids.add(key)
+
+    def register_tuple(self, var, value: Tuple) -> None:
+        """Record the structural Tuple bound to one fresh SSA variable."""
+        self._tuple_values[id(var)] = value
+
+    def tuple_for(self, var) -> Tuple:
+        """Return the structural Tuple bound to *var*, refusing an unknown value."""
+        try:
+            return self._tuple_values[id(var)]
+        except KeyError:
+            raise KeyError(
+                f"codegen: {getattr(var, 'name', var)!r} has no structural tuple binding"
+            ) from None
 
     def is_kernel_param(self, var) -> bool:
         return id(var) in self._kernel_param_ids
