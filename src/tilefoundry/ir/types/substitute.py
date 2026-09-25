@@ -14,6 +14,7 @@ from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.isl_interop import normalize_dim
 
 from .dim import _DIM_OP_TYPES, DimVar, simplify_dim
+from .pointer import PointerType
 from .tensor_type import TensorType, TupleType, Type
 
 
@@ -131,6 +132,8 @@ def _collect(value: object, found: dict[str, "DimVar"]) -> None:
         for field in value.fields:
             _collect(field, found)
         return
+    if isinstance(value, PointerType):
+        return
     if isinstance(value, DimVar):
         found[value.name] = value
         return
@@ -195,6 +198,8 @@ def substitute_dims(value: Type, bindings: Mapping[str, int]) -> Type:
         if fields == value.fields:
             return value
         return TupleType(fields=fields)
+    if isinstance(value, PointerType):
+        return value
     return value
 
 
@@ -218,6 +223,8 @@ def canonicalize_dims(value: Type) -> Type:
         if fields == value.fields:
             return value
         return TupleType(fields=fields)
+    if isinstance(value, PointerType):
+        return value
     return value
 
 
@@ -400,6 +407,8 @@ def has_symbolic_dims(value: object) -> bool:
         return has_symbolic_dims(value.shape) or has_symbolic_dims(value.layout)
     if isinstance(value, TupleType):
         return any(has_symbolic_dims(field) for field in value.fields)
+    if isinstance(value, PointerType):
+        return False
     if isinstance(value, Topology):
         return has_symbolic_dims(value.size)
     if isinstance(value, Mesh):
@@ -407,10 +416,7 @@ def has_symbolic_dims(value: object) -> bool:
     if isinstance(value, ShardLayout):
         return has_symbolic_dims(value.layout) or has_symbolic_dims(value.mesh)
     if isinstance(value, ComposedLayout):
-        return any(
-            has_symbolic_dims(entry)
-            for entry in (value.inner, value.offset, value.outer)
-        )
+        return any(has_symbolic_dims(entry) for entry in (value.inner, value.offset, value.outer))
     if isinstance(value, Layout):
         return has_symbolic_dims(value.shape) or has_symbolic_dims(value.strides)
     if isinstance(value, tuple):

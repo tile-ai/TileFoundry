@@ -36,18 +36,12 @@ class ColumnBroadcast:
         a: Tensor[(32,), "f32"], r: Tensor[(4,), "f32"], out: Tensor[(32,), "f32"]
     ):
         with Mesh((Topology("thread", 32),), Layout(shape=(32,), strides=(1,)), ("t",)) as m:
-            a_view = T.tensor_view(a, layout=bcast((32,), (1,), m))
-            r_view = T.tensor_view(r, layout=bcast((4,), (1,), m))
-            out_view = T.tensor_view(out, layout=bcast((32,), (1,), m))
-            lhs = T.alloc_tensor(
-                Tensor[(4, 8), 'f32', bcast((4, 8), (8, 1), m), 'smem']
-            )
-            col = T.alloc_tensor(
-                Tensor[(4, 1), 'f32', bcast((4, 1), (1, 1), m), 'smem']
-            )
-            dst = T.alloc_tensor(
-                Tensor[(4, 8), 'f32', bcast((4, 8), (8, 1), m), 'smem']
-            )
+            a_view = T.tensor_view(T.ptr_of(a), layout=bcast((32,), (1,), m))
+            r_view = T.tensor_view(T.ptr_of(r), layout=bcast((4,), (1,), m))
+            out_view = T.tensor_view(T.ptr_of(out), layout=bcast((32,), (1,), m))
+            lhs = T.alloc_tensor(Tensor[(4, 8), "f32", bcast((4, 8), (8, 1), m), "smem"])
+            col = T.alloc_tensor(Tensor[(4, 1), "f32", bcast((4, 1), (1, 1), m), "smem"])
+            dst = T.alloc_tensor(Tensor[(4, 8), "f32", bcast((4, 8), (8, 1), m), "smem"])
             T.copy(a_view, lhs)
             T.copy(r_view, col)
             T.sync(m)
@@ -67,8 +61,8 @@ class TwoLevels:
             ("c", "t"),
         ) as m:
             row = ShardLayout(Layout((_ROWS,), (1,)), (Split(0), Split(0)), m)
-            source = T.tensor_view(a, layout=row)
-            written = T.tensor_view(out, layout=row)
+            source = T.tensor_view(T.ptr_of(a), layout=row)
+            written = T.tensor_view(T.ptr_of(out), layout=row)
             held = T.alloc_tensor(Tensor[(_ROWS,), "f32", row, "rmem"])
             T.copy(source, held)
             T.binary(held, held, held, kind=BinaryKind.MUL)
@@ -87,8 +81,8 @@ class TwoAxes:
             ("w", "t"),
         ) as m:
             row = ShardLayout(Layout((_ROWS,), (1,)), (Split(0), Split(0)), m)
-            source = T.tensor_view(a, layout=row)
-            written = T.tensor_view(out, layout=row)
+            source = T.tensor_view(T.ptr_of(a), layout=row)
+            written = T.tensor_view(T.ptr_of(out), layout=row)
             held = T.alloc_tensor(Tensor[(_ROWS,), "f32", row, "rmem"])
             T.copy(source, held)
             T.binary(held, held, held, kind=BinaryKind.MUL)
@@ -114,7 +108,12 @@ class Elementwise:
         axis_out: Tensor[(_ROWS,), "f32"],
     ):
         launch(  # noqa: F821
-            bcast_tier.col_bcast_device, a, r, out, grid=(1, 1, 1), block=(32, 1, 1)  # noqa: F821
+            bcast_tier.col_bcast_device,
+            a,
+            r,
+            out,
+            grid=(1, 1, 1),
+            block=(32, 1, 1),  # noqa: F821
         )
         launch(  # noqa: F821
             two_levels.two_levels_device,  # noqa: F821

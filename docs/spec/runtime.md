@@ -1259,6 +1259,9 @@ helpers genuinely capable of host compilation (e.g. `local_tensor`,
 <!-- generated: ops-copy -->
 ```cpp
 // include/tilefoundry/runtime/cuda/ops/copy.cuh
+template <class TPointer, class TLayout>
+CUTE_HOST_DEVICE auto tensor_view(TPointer pointer, TLayout layout);
+
 template <class TSrc, class TDst>
 __device__ void copy(TSrc const &src, TDst &dst);
 
@@ -1266,6 +1269,11 @@ template <class TSrc, class TDst>
 __device__ void copy_async(TSrc const &src, TDst &dst);
 ```
 <!-- /generated -->
+
+**`tensor_view`.** Rebuilds the CuTe tensor engine that a TIR `TensorView`
+describes from its typed pointer and emitted layout. Residency stays on the
+pointer engine; a later `make_shard_tensor` adds the logical global and shard
+layouts without recovering the source tensor.
 
 **`copy`.**
 

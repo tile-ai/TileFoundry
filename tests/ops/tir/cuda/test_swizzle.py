@@ -38,9 +38,7 @@ def _swizzled_rows(mesh: Mesh) -> ShardLayout:
     address really moves, and the four elements of a row stay together.
     """
     return ShardLayout(
-        ComposedLayout(
-            inner=_SWIZZLE, offset=0, outer=Layout((_ROWS, _COLS), (_COLS, 1))
-        ),
+        ComposedLayout(inner=_SWIZZLE, offset=0, outer=Layout((_ROWS, _COLS), (_COLS, 1))),
         (Split(0),),
         mesh,
     )
@@ -56,20 +54,15 @@ class SwizzledSquare:
         dst: Tensor[(_ROWS, _COLS), "f32"],
     ):
         with Mesh((Topology("thread", _ROWS),), Layout((_ROWS,), (1,)), ("t",)) as threads:
-            src_view = T.tensor_view(src, layout=_rows(threads))
-            dst_view = T.tensor_view(dst, layout=_rows(threads))
-            tile = T.alloc_tensor(
-                Tensor[(_ROWS, _COLS), "f32", _swizzled_rows(threads), "smem"]
-            )
-            fragment = T.alloc_tensor(
-                Tensor[(_ROWS, _COLS), "f32", _rows(threads), "rmem"]
-            )
+            src_view = T.tensor_view(T.ptr_of(src), layout=_rows(threads))
+            dst_view = T.tensor_view(T.ptr_of(dst), layout=_rows(threads))
+            tile = T.alloc_tensor(Tensor[(_ROWS, _COLS), "f32", _swizzled_rows(threads), "smem"])
+            fragment = T.alloc_tensor(Tensor[(_ROWS, _COLS), "f32", _rows(threads), "rmem"])
             T.copy(src_view, tile)
             T.sync(threads)
             T.copy(tile, fragment)
             T.binary(fragment, fragment, fragment, kind=BinaryKind.MUL)
             T.copy(fragment, dst_view)
-
 
     @prim_func(target=CpuTarget())
     def swizzled_square_host(

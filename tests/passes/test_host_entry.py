@@ -39,7 +39,7 @@ class _OneKernel:
     @prim_func(target=_CUDA)
     def copy_one(x: Tensor[(128,), "f32"]):
         with Mesh((Topology("thread", 128),), Layout((128,), (1,))) as thread:
-            view = T.tensor_view(x, layout=_rows(128))
+            view = T.tensor_view(T.ptr_of(x), layout=_rows(128))
             T.copy(view, view)
             T.sync(thread)
 
@@ -55,14 +55,14 @@ class _Prototype:
     @square.specialize(RangePattern("S", 1, 127))
     def small(x: Tensor[(_S,), "f32"]):
         with Mesh((Topology("thread", 128),), Layout((128,), (1,))) as thread:
-            view = T.tensor_view(x, layout=_rows(128))
+            view = T.tensor_view(T.ptr_of(x), layout=_rows(128))
             T.copy(view, view)
             T.sync(thread)
 
     @square.specialize(RangePattern("S", 128, 255))
     def large(x: Tensor[(_S,), "f32"]):
         with Mesh((Topology("thread", 128),), Layout((128,), (1,))) as thread:
-            view = T.tensor_view(x, layout=_rows(128))
+            view = T.tensor_view(T.ptr_of(x), layout=_rows(128))
             T.copy(view, view)
             T.sync(thread)
 

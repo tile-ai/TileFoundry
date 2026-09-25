@@ -5,6 +5,7 @@ import pkgutil
 
 from .abort import Abort
 from .async_copy import CopyAsync, CpAsyncCommit, CpAsyncWait
+from .cast import Cast
 from .launch import Launch
 from .prim_function import PrimFunction
 from .shape import ShapeOf
@@ -47,6 +48,7 @@ __all__ = [
     "classify",
     "participation",
     "CopyAsync",
+    "Cast",
     "CpAsyncCommit",
     "CpAsyncWait",
 ]

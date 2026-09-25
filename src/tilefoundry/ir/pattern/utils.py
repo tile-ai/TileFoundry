@@ -2,15 +2,79 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.types import ComposedLayout, Swizzle
+from tilefoundry.ir.core.param_def import ParamDef
+from tilefoundry.ir.types import ComposedLayout, Mesh, StorageKind, Swizzle
 
 from .pattern import (
+    AttrPattern,
+    CapturePattern,
     ComposedLayoutPattern,
     LayoutPattern,
+    MeshPattern,
+    MultipleOfPattern,
+    OneOfPattern,
+    OrPattern,
     Pattern,
     RangePattern,
     SwizzlePattern,
+    TensorPattern,
+    WildcardPattern,
 )
+
+MOVED_STORAGES = (StorageKind.GMEM, StorageKind.SMEM, StorageKind.RMEM)
+WHOLE_BYTES = AttrPattern("bit_width", MultipleOfPattern(8))
+
+
+def moved_tile(index: int, storage=None, layout=None) -> TensorPattern:
+    """A moved tensor tile, with dtype and storage captures named by end."""
+    storages = MOVED_STORAGES if storage is None else storage
+    return TensorPattern(
+        dtype=CapturePattern(dtype_place(index), WHOLE_BYTES),
+        storage=(
+            CapturePattern(storage_place(index), OneOfPattern(tuple(storages)))
+            if isinstance(storages, tuple)
+            else storages
+        ),
+        layout=layout,
+    )
+
+
+def dtype_place(index: int) -> str:
+    """The capture name for transfer end *index*'s dtype."""
+    return f"dtype{index}"
+
+
+def storage_place(index: int) -> str:
+    """The capture name for transfer end *index*'s storage."""
+    return f"storage{index}"
+
+
+_ANY_THREADS = OrPattern(
+    ComposedLayoutPattern(
+        offset=WildcardPattern(),
+        outer=LayoutPattern(
+            ((CapturePattern("n", RangePattern(lo=1)),),),
+            ((1,),),
+            per_mode=True,
+        ),
+    ),
+    LayoutPattern(
+        ((CapturePattern("n", RangePattern(lo=1)),),),
+        ((1,),),
+        per_mode=True,
+    ),
+)
+
+
+def any_threads() -> ParamDef:
+    """Declare an optional scope spanning one or more threads."""
+    return ParamDef(
+        kind="attribute",
+        annotation=Mesh,
+        pattern=MeshPattern(("thread",), _ANY_THREADS),
+        optional=True,
+        default=None,
+    )
 
 
 def arrangement_pattern(
@@ -65,4 +129,14 @@ def _mangle_variant_name(name: str, specializations: tuple[Pattern, ...]) -> str
     return f"{name}${pattern.dim_var}${pattern.lo}_{pattern.hi}"
 
 
-__all__ = ["_mangle_variant_name", "arrangement_pattern", "locate_dim_var"]
+__all__ = [
+    "MOVED_STORAGES",
+    "WHOLE_BYTES",
+    "_mangle_variant_name",
+    "any_threads",
+    "arrangement_pattern",
+    "dtype_place",
+    "locate_dim_var",
+    "moved_tile",
+    "storage_place",
+]

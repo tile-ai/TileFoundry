@@ -76,9 +76,7 @@ class TensorType:
         """
         from .layout import EMPTY_LAYOUT  # noqa: PLC0415 - cycle guard
 
-        return TensorType(
-            shape=(), dtype=dtype, layout=EMPTY_LAYOUT, storage=StorageKind.UMAT
-        )
+        return TensorType(shape=(), dtype=dtype, layout=EMPTY_LAYOUT, storage=StorageKind.UMAT)
 
     @staticmethod
     def umat_tensor(shape: tuple, dtype: DType = DType.i64) -> "TensorType":
@@ -109,6 +107,6 @@ class UnitType:
     """
 
 
-Type = Union[TensorType, TupleType, UnitType, "CallableType"]
+Type = Union[TensorType, TupleType, UnitType, "CallableType", "PointerType"]
 
 __all__ = ["DType", "TensorType", "TupleType", "UnitType", "Type"]

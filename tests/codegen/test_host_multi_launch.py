@@ -40,7 +40,7 @@ class _TwoCopyLaunches:
     def first(x: Tensor[(1, 128), "f32"], out: Tensor[(1, 128), "f32"]):
         with Mesh((Topology("thread", 1),), Layout((1,), (1,))) as thread:
             view = T.tensor_view(
-                x,
+                T.ptr_of(x),
                 layout=ShardLayout(
                     layout=Layout((1, 128), (128, 1)),
                     attrs=(B(),),
@@ -48,7 +48,7 @@ class _TwoCopyLaunches:
                 ),
             )
             out_view = T.tensor_view(
-                out,
+                T.ptr_of(out),
                 layout=ShardLayout(
                     layout=Layout((1, 128), (128, 1)),
                     attrs=(B(),),
@@ -62,7 +62,7 @@ class _TwoCopyLaunches:
     def second(x: Tensor[(1, 128), "f32"], out: Tensor[(1, 128), "f32"]):
         with Mesh((Topology("thread", 1),), Layout((1,), (1,))) as thread:
             view = T.tensor_view(
-                x,
+                T.ptr_of(x),
                 layout=ShardLayout(
                     layout=Layout((1, 128), (128, 1)),
                     attrs=(B(),),
@@ -70,7 +70,7 @@ class _TwoCopyLaunches:
                 ),
             )
             out_view = T.tensor_view(
-                out,
+                T.ptr_of(out),
                 layout=ShardLayout(
                     layout=Layout((1, 128), (128, 1)),
                     attrs=(B(),),

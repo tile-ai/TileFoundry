@@ -21,8 +21,8 @@ class _Left:
     def left_device(x: Tensor[(32,), "f32"], out: Tensor[(32,), "f32"]):
         with Mesh((Topology("thread", 32),), Layout((32,), (1,))) as thread:
             layout = ShardLayout(Layout((32,), (1,)), (Split(0),), thread)
-            src = T.tensor_view(x, layout=layout)
-            dst = T.tensor_view(out, layout=layout)
+            src = T.tensor_view(T.ptr_of(x), layout=layout)
+            dst = T.tensor_view(T.ptr_of(out), layout=layout)
             T.copy(src, dst)
             T.sync(thread)
 
@@ -33,8 +33,8 @@ class _Right:
     def right_device(x: Tensor[(128,), "f32"], out: Tensor[(128,), "f32"]):
         with Mesh((Topology("thread", 128),), Layout((128,), (1,))) as thread:
             layout = ShardLayout(Layout((128,), (1,)), (Split(0),), thread)
-            src = T.tensor_view(x, layout=layout)
-            dst = T.tensor_view(out, layout=layout)
+            src = T.tensor_view(T.ptr_of(x), layout=layout)
+            dst = T.tensor_view(T.ptr_of(out), layout=layout)
             T.copy(src, dst)
             T.sync(thread)
 

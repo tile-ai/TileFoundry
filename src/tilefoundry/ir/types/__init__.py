@@ -19,6 +19,7 @@ from .shard_layout import (
 )
 from .mesh import Mesh, Topology, make_mesh
 from .placement import Placement
+from .pointer import PointerType
 from .tensor_type import TensorType, TupleType, Type, UnitType
 from .utils import make_shard_tensor_type, make_tensor_type
 from .callable_type import CallableType, callable_type_for
@@ -41,6 +42,7 @@ __all__ = [
     "P",
     "Partial",
     "Placement",
+    "PointerType",
     "S",
     "ShardAttr",
     "ShardLayout",

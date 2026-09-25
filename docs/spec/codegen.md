@@ -144,6 +144,8 @@ class CudaCodegenContext(CodegenContext):
     def bind_extents(self, params) -> None: ...
     def reset_barrier_ids(self) -> None: ...
     def alloc_barrier_id(self) -> int: ...
+    def reset_smem_base(self) -> None: ...
+    def smem_base(self) -> str: ...
     def dtype_to_cpp(self, dtype_name: str) -> str: ...
 
 
@@ -181,6 +183,9 @@ class CpuCodegenContext(CodegenContext):
     types alone. `launches` is the geometry each device function is called at,
     keyed by `id(fn)`, settled where the `Launch` was written
     ([passes §7.3](./passes.md#73-insert_default_host_entry)).
+  - `smem_base` declares and returns one byte-addressed dynamic shared-memory
+    base per kernel. A numeric `TensorView` address adds its byte offset before
+    converting the result to a CuTe shared-memory pointer.
   - A target subclass owns the type strings and hardware counters only it can
     state; a handler MUST reach them through the context rather than reading
     the IR for them. Other helpers MAY be added per target.
@@ -440,4 +445,3 @@ variant runs is decided on the device.
     the call already carries -- the parameter the open axis expands into. A
     shape outside every variant's range is a call-contract violation and the
     kernel traps.
-

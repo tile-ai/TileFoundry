@@ -46,8 +46,8 @@ class GpuPlacedRows:
             ("g", "c", "t"),
         ) as m:
             rows = _split_rows(m)
-            source = T.tensor_view(a, layout=rows)
-            written = T.tensor_view(out, layout=rows)
+            source = T.tensor_view(T.ptr_of(a), layout=rows)
+            written = T.tensor_view(T.ptr_of(out), layout=rows)
             T.copy(source, written)
 
     @prim_func(target=CpuTarget())

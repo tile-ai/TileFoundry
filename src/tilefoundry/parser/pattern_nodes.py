@@ -1184,17 +1184,35 @@ class TensorPattern(ElementPattern):
 class ScalarTypePattern(ElementPattern):
     element_name = "scalar_type"
     syntax = LazyPattern(
-        lambda: BranchPattern(
-            "type_reference",
-            ReferencePattern(),
-            pattern_id="type.reference",
+        lambda: ChoicePattern(
+            BranchPattern(
+                "type_reference",
+                ReferencePattern(),
+                pattern_id="type.reference",
+            ),
+            BranchPattern(
+                "type_call",
+                ChildPattern(
+                    "value",
+                    lambda: StaticCallPattern(),
+                    "type_constructor",
+                ),
+                pattern_id="type.call",
+            ),
         )
     )
 
     @staticmethod
     def construct(match, children, context):
-        value = _resolve_reference(match.node, context)
-        if not isinstance(value, (runtime.TensorType, runtime.TupleType, runtime.UnitType)):
+        value = (
+            children["value"]
+            if match.branch_id == "type_call"
+            else _resolve_reference(match.node, context)
+        )
+        if not isinstance(
+            value,
+            (runtime.TensorType, runtime.TupleType, runtime.UnitType, runtime.PointerType),
+        ):
             raise ParseError.from_node(match.node, context, "annotation did not resolve to IR Type")
         return value
 

@@ -52,7 +52,7 @@ class MmaTile:
             names=("warp", "lane"),
         ) as m:
             a_view = T.tensor_view(
-                a,
+                T.ptr_of(a),
                 layout=ShardLayout(
                     layout=Layout(shape=(256,), strides=(1,)),
                     attrs=(Broadcast(), Broadcast()),
@@ -60,7 +60,7 @@ class MmaTile:
                 ),
             )
             b_view = T.tensor_view(
-                b,
+                T.ptr_of(b),
                 layout=ShardLayout(
                     layout=Layout(shape=(128,), strides=(1,)),
                     attrs=(Broadcast(), Broadcast()),
@@ -97,7 +97,7 @@ class MmaTile:
             T.fill(acc, 0.0)
             T.sync(m)
             T.mma(acc, a_tile, b_tile)
-            c_view = T.tensor_view(c, layout=atom.C)
+            c_view = T.tensor_view(T.ptr_of(c), layout=atom.C)
             T.copy(acc, c_view)
 
     @prim_func(target=CpuTarget())

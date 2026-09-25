@@ -25,8 +25,8 @@ class SyncSlices:
         with Mesh((Topology("thread", 128),), Layout((4, 32), (32, 1))) as full:
             with full[0:1] as m:
                 sl = ShardLayout(Layout((1, 32), (32, 1)), (S(0), S(1)), m)
-                src = T.tensor_view(a, layout=sl)
-                dst = T.tensor_view(o, layout=sl)
+                src = T.tensor_view(T.ptr_of(a), layout=sl)
+                dst = T.tensor_view(T.ptr_of(o), layout=sl)
                 reg = T.alloc_tensor(Tensor[(1, 32), "f32", sl, "rmem"])
                 T.copy(src, reg)
                 T.sync(m)
@@ -37,8 +37,8 @@ class SyncSlices:
         with Mesh((Topology("thread", 128),), Layout((4, 32), (32, 1))) as full:
             with full[2:4] as m:
                 sl = ShardLayout(Layout((2, 32), (32, 1)), (S(0), S(1)), m)
-                src = T.tensor_view(a, layout=sl)
-                dst = T.tensor_view(o, layout=sl)
+                src = T.tensor_view(T.ptr_of(a), layout=sl)
+                dst = T.tensor_view(T.ptr_of(o), layout=sl)
                 reg = T.alloc_tensor(Tensor[(2, 32), "f32", sl, "rmem"])
                 T.copy(src, reg)
                 T.sync(m)

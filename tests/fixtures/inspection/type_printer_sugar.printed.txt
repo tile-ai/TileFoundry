@@ -10,14 +10,14 @@ from tilefoundry.target import CudaTarget
 
 @module(entry="composed_mesh_pipeline", target=CudaTarget("nvidia.h200_sxm"), topologies=(Topology("cta", 4), Topology("thread", 8),))
 class TypePrinterSugar:
-    @func(mesh=Mesh((Topology("thread", 8),), Layout((8,), (1,)), names=('lane',)))
+    @func(mesh=Mesh((Topology("thread", 8),), Layout((8,), (1,)), names=("lane",)))
     def nested_loop_tuple(
         x: Tensor[(8, 16), "f32"],
         weight: Tensor[(8, 16), "f32",
             ShardLayout(
                 layout=Layout((8, 16), None),
                 attrs=(B(), P("max")),
-                mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane')),
+                mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=("warp", "lane")),
             )]
     ):
         split = reshard(x, layout=(8 @ mesh.lane, 16), storage=rmem)
@@ -29,12 +29,12 @@ class TypePrinterSugar:
             whole = whole_2
         v1 = reshard(split, layout=((8, 16), (16, 1), {mesh.lane @ B()}), storage=gmem)
         v2 = reshard(whole, layout=((8, 16), (16, 1), {mesh.lane @ B()}), storage=gmem)
-        with Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane')) as thread:
+        with Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=("warp", "lane")) as thread:
             per_warp = reshard(weight, layout=(2 @ thread.warp, 4, 16), storage=rmem)
             unfolded = reshard(per_warp, layout=((8, 16), {thread.warp @ B()}), storage=gmem)
         return (v1, v2, unfolded)
 
-    @func(mesh=Mesh((Topology("cta", 4),), Layout((4,), (1,)), names=('tile',)))
+    @func(mesh=Mesh((Topology("cta", 4),), Layout((4,), (1,)), names=("tile",)))
     def named_and_out_of_scope(
         x: Tensor[(8, 16), "f32"],
         held: Tensor[(8, 16), "f32", (4 @ mesh.tile, 2, 16), "rmem"],
@@ -42,7 +42,7 @@ class TypePrinterSugar:
             ShardLayout(
                 layout=Layout((2, 4, 2), (8, 2, 1)),
                 attrs=(S(0), S(1)),
-                mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane')),
+                mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=("warp", "lane")),
             ), "rmem"]
     ):
         mine = reshard(x, layout=(4 @ mesh.tile, 2, 16), storage=rmem)
@@ -50,11 +50,11 @@ class TypePrinterSugar:
         escaped = reshard(x, layout=ShardLayout(
             layout=Layout((2, 4, 16), None),
             attrs=(S(0), B()),
-            mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane')),
+            mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=("warp", "lane")),
         ), storage=rmem)
         return (v0, held, frag, escaped)
 
-    @func(mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane')))
+    @func(mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=("warp", "lane")))
     def composed_mesh_pipeline(
         x: Tensor[(8, 4, 16), "f32"],
         seed: Tensor[(16,), "f32"],
@@ -63,10 +63,10 @@ class TypePrinterSugar:
             ShardLayout(
                 layout=Layout((4, 2, 16), None),
                 attrs=(S(0), B(), P("sum")),
-                mesh=Mesh((Topology("cta", 4), Topology("thread", 8)), Layout((4, 2, 4), (8, 4, 1)), names=('tile', 'warp', 'lane')),
+                mesh=Mesh((Topology("cta", 4), Topology("thread", 8)), Layout((4, 2, 4), (8, 4, 1)), names=("tile", "warp", "lane")),
             ), "rmem"]
     ):
-        with Mesh((Topology("cta", 4),), Layout((4,), (1,)), names=('tile',)) as cta:
+        with Mesh((Topology("cta", 4),), Layout((4,), (1,)), names=("tile",)) as cta:
             composed = reshard(x, layout=(4 @ cta.tile, 2, 2 @ mesh.warp, 2, 4 @ mesh.lane, 4), storage=rmem)
             v0 = unary(composed, kind="square")
             staged = reshard(v0, layout=(4 @ cta.tile, 2, 4, 16), storage=smem)

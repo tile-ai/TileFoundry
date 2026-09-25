@@ -34,13 +34,14 @@ def test_handwritten_tir_dynamic_cta_matches_torch_at_several_shapes() -> None:
     One compiled artifact squares the tensor at three ``Ntile`` shapes via
     the host-computed grid; all match torch with no recompile.
     """
+
     @module(entry="dyn_square_host")
     class DynSquare:
         @prim_func(target=CudaTarget("nvidia.h200_sxm"))
         def dyn_square(a: Tensor[(_NT, _TILE), "f32"]):
             with Mesh((Topology("cta", _NT),), Layout(shape=(_NT,), strides=(1,))) as cta:
                 a_view = T.tensor_view(
-                    a,
+                    T.ptr_of(a),
                     layout=ShardLayout(
                         layout=Layout(shape=(_NT, _TILE), strides=(_TILE, 1)),
                         attrs=(Split(0),),

@@ -1,8 +1,6 @@
 """TIR view Expr Op: `tir.view.PtrOf`.
 
-Takes an Expr of tensor/scalar type, returns a raw
-pointer descriptor. Placeholder: typeinfer returns the input type until a
-dedicated PointerType lands.
+Takes a tensor Expr and returns its typed physical-memory pointer descriptor.
 """
 
 from __future__ import annotations
@@ -11,7 +9,7 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import Tensor
-from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types import PointerType
 from tilefoundry.visitor_registry import register_typeinfer
 
 
@@ -19,9 +17,10 @@ from tilefoundry.visitor_registry import register_typeinfer
 class PtrOf(Op):
     """Take the device address of a tensor for downstream view ops (value form)."""
 
-    x = ParamDef(kind="input", pattern=Tensor)
+    tensor = ParamDef(kind="input", pattern=Tensor)
 
 
 @register_typeinfer(PtrOf)
-def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    return ctx.type_of(call.args[0])
+def _(call: "Call", ctx: "TypeInferContext") -> PointerType:
+    tensor = ctx.type_of(call.args[0])
+    return PointerType(tensor.dtype, tensor.storage)

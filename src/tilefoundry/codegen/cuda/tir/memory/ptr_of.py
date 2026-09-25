@@ -18,8 +18,7 @@ def _emit(let_stmt, ctx: CudaCodegenContext) -> None:
     call = let_stmt.value
     src = call.args[0]
     src_name = ctx.name_for(src)
+    if ctx.is_kernel_param(src):
+        src_name += "_tensor"
     var_name = ctx.name_for(let_stmt.var)
-
-
-
-    ctx.emit(f"auto {var_name} = {src_name}.engine.data();")
+    ctx.emit(f"auto {var_name} = {src_name}.data();")

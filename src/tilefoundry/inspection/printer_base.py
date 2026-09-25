@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+import json
 from contextlib import contextmanager
 
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
@@ -10,7 +11,7 @@ from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.mesh_scope import device_layout
 from tilefoundry.ir.pattern import Pattern, RangePattern
 from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom
-from tilefoundry.ir.types import DType, TensorType, TupleType, UnitType
+from tilefoundry.ir.types import DType, PointerType, TensorType, TupleType, UnitType
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimConst,
@@ -299,6 +300,16 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
     def visit_TupleType(self, value: TupleType, ctx=None) -> str:
         return f"Tuple[{', '.join(self.visit(field, ctx) for field in value.fields)}]"
 
+    def visit_PointerType(self, value: PointerType, ctx=None) -> str:
+        if ctx is not None:
+            ctx.use(
+                PythonExpr(
+                    ("from tilefoundry.ir.types import DType, PointerType, StorageKind",),
+                    "",
+                )
+            )
+        return f"PointerType(DType.{value.dtype.name}, StorageKind.{value.storage.name})"
+
     def visit_UnitType(self, value: UnitType, ctx=None) -> str:
         return "None"
 
@@ -326,7 +337,8 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             )
         result = f"Mesh({topologies}, {self.visit(written, ctx)}"
         if value.names:
-            result += f", names={tuple(value.names)!r}"
+            names = ", ".join(json.dumps(name) for name in value.names)
+            result += f", names=({names}{',' if len(value.names) == 1 else ''})"
         return result + ")"
 
     def visit_NoneType(self, value: None, ctx=None) -> str:
@@ -399,7 +411,7 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
 
     def render_value(self, value, ctx=None, indent: str = "") -> str:
         """Render a non-expression attribute through the same visitor when possible."""
-        if isinstance(value, (TensorType, Mesh, LayoutBase, DType)):
+        if isinstance(value, (TensorType, PointerType, Mesh, LayoutBase, DType)):
             with self.type_surface(indent=indent):
                 return self.visit(value, ctx)
         if isinstance(value, MmaAtom):

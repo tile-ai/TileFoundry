@@ -50,7 +50,17 @@ from .pattern import (
     TensorPattern,
     WildcardPattern,
 )
-from .utils import _mangle_variant_name, arrangement_pattern, locate_dim_var
+from .utils import (
+    MOVED_STORAGES,
+    WHOLE_BYTES,
+    _mangle_variant_name,
+    any_threads,
+    arrangement_pattern,
+    dtype_place,
+    locate_dim_var,
+    moved_tile,
+    storage_place,
+)
 
 __all__ = [
     "ABSENT",
@@ -67,6 +77,7 @@ __all__ = [
     "LayoutPattern",
     "Match",
     "MeshPattern",
+    "MOVED_STORAGES",
     "MultipleOfPattern",
     "OPAQUE",
     "OneOfPattern",
@@ -85,19 +96,24 @@ __all__ = [
     "TensorPattern",
     "UNNAMED_PLACE",
     "WildcardPattern",
+    "WHOLE_BYTES",
     "_mangle_variant_name",
     "affine_frame",
     "affine_part",
     "alternatives_of",
+    "any_threads",
     "arrangement_pattern",
     "between_rules",
     "evaluated",
     "fits",
     "grouping",
+    "dtype_place",
     "is_symbolic",
     "locate_dim_var",
     "matched",
+    "moved_tile",
     "refusals_between",
     "relations_of",
     "resolved",
+    "storage_place",
 ]

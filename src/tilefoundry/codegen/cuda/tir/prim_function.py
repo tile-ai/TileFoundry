@@ -93,6 +93,7 @@ def _subject(fn: PrimFunction, pattern: RangePattern, ctx: CudaCodegenContext) -
 @register_codegen(CudaTarget, Role.EMIT, PrimFunction)
 def _emit(fn: PrimFunction, ctx: CudaCodegenContext) -> None:
     """Write what runs inside one ``__global__``: its buffers, then its statements."""
+    ctx.reset_smem_base()
     if fn.variants:
         _dispatch(fn, ctx)
         return
