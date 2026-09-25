@@ -6,7 +6,7 @@ from tilefoundry.dsl.storage import gmem, rmem, smem
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
 from tilefoundry.ir.types import B, Layout, Mesh, P, S, ShardLayout, Topology
 
-@func(mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=('warp', 'lane')))
+@func(mesh=Mesh((Topology("thread", 8),), Layout((2, 4), (4, 1)), names=("warp", "lane")))
 def composed_mesh_pipeline(
     x: Tensor[(8, 4, 16), "f32"],
     seed: Tensor[(16,), "f32"],
@@ -15,10 +15,10 @@ def composed_mesh_pipeline(
         ShardLayout(
             layout=Layout((4, 2, 16), None),
             attrs=(S(0), B(), P("sum")),
-            mesh=Mesh((Topology("cta", 4), Topology("thread", 8)), Layout((4, 2, 4), (8, 4, 1)), names=('tile', 'warp', 'lane')),
+            mesh=Mesh((Topology("cta", 4), Topology("thread", 8)), Layout((4, 2, 4), (8, 4, 1)), names=("tile", "warp", "lane")),
         ), "rmem"]
 ):
-    with Mesh((Topology("cta", 4),), Layout((4,), (1,)), names=('tile',)) as cta:
+    with Mesh((Topology("cta", 4),), Layout((4,), (1,)), names=("tile",)) as cta:
         v0 = reshard(x, layout=(4 @ cta.tile, 2, 2 @ mesh.warp, 2, 4 @ mesh.lane, 4), storage=rmem)  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 2 @ mesh.warp, 2, 4 @ mesh.lane, 4), (0, 8, 0, 4, 0, 1)), "rmem"]; compute-cost; memory traffic=gmem:r2.00KB/w0@logical,r2.00KB/w0@total,r512B/w0@cta,r64B/w0@thread;rmem:r0/w2.00KB@logical,r0/w2.00KB@total,r0/w512B@cta,r0/w64B@thread footprint=x:2.00KB
         v1 = unary(v0, kind="square")  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 2 @ mesh.warp, 2, 4 @ mesh.lane, 4), (0, 8, 0, 4, 0, 1)), "rmem"]; compute-cost flops=f32:512@logical,512@total,128@cta,16@thread; memory traffic=rmem:r2.00KB/w2.00KB@logical,r2.00KB/w2.00KB@total,r512B/w512B@cta,r64B/w64B@thread
         v2 = reshard(v1, layout=(4 @ cta.tile, 2, 4, 16), storage=smem)  # Tensor[(8, 4, 16), "f32", ((4 @ cta.tile, 2, 4, 16), (128, 64, 16, 1)), "smem"]; compute-cost; memory traffic=rmem:r2.00KB/w0@logical,r2.00KB/w0@total,r512B/w0@cta,r64B/w0@thread;smem:r0/w2.00KB@logical,r0/w2.00KB@total,r0/w512B@cta,r0/w64B@thread
