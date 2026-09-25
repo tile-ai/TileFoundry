@@ -446,7 +446,7 @@ class LayoutPattern(Pattern):
         arrangements = (
             tuple(
                 Layout(tuple(flatten(shape)), tuple(flatten(steps)))
-                for shape, steps in zip(self.shape, self.strides)
+                for shape, steps in zip(layout.shape, layout.strides)
             )
             if self.per_mode
             else (Layout(extents, strides),)
