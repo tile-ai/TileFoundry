@@ -115,15 +115,11 @@ class MmaTile:
             T.copy(a_view, a_tile)
             T.copy(b_view, b_tile)
             T.sync(m)
-            a_fragment_view = T.tensor_view(
-                T.ptr_of(a_tile),
-                layout=((2, 4 @ m.warp, 2, 8 @ m.lane, 2), (1, 2, 8, 16, 128)),
-            )
             b_fragment_view = T.tensor_view(
                 T.ptr_of(b_tile),
                 layout=((8 @ m.lane, 2, 4 @ m.warp, 2), (1, 8, 16, 64)),
             )
-            T.copy(a_fragment_view, a_frag)
+            T.ldmatrix(a_tile, a_frag)
             T.copy(b_fragment_view, b_frag)
             T.fill(acc, 0.0)
             T.tiled_mma(acc, a_frag, b_frag, atom=T.cuda.sm80.Mma())

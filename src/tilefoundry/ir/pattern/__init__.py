@@ -45,6 +45,7 @@ from .pattern import (
     SwizzlePattern,
     Tensor,
     TensorPattern,
+    VectorPattern,
     WildcardPattern,
 )
 from .utils import (
@@ -57,6 +58,7 @@ from .utils import (
     locate_dim_var,
     moved_tile,
     storage_place,
+    vector,
 )
 
 __all__ = [
@@ -110,4 +112,6 @@ __all__ = [
     "relations_of",
     "resolved",
     "storage_place",
+    "VectorPattern",
+    "vector",
 ]

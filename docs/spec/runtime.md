@@ -1197,12 +1197,13 @@ the one time it was written down as the rule it argued a dependency chain into
 | `mma` | one atom's per-lane operand fragments |
 | `rmsnorm` | the row dependency chain and the destination's shard layout |
 | `sync` | the mesh's scope, base and count |
-| `tma_copy` | both shard layouts, asserted: one contiguous run each, whole tiles, matching element types |
+| `copy_async_bulk` | both shard layouts, asserted: one contiguous run each, whole tiles, matching element types |
+| `ldmatrix` | the source tile's declared shared-memory layout and the destination atom fragment |
 
 Anything that takes a raw pointer, an `int` or a type and answers a question
 about it is not an op but a utility, and belongs outside `ops::` — the
 warp-scoped primitives of [§2.7](#27-cudautility) and the `mbarrier`
-instructions a caller writes around `tma_copy` are both that. In particular the
+instructions a caller writes around `copy_async_bulk` are both that. In particular the
 runtime publishes **no predicate and no constant reporting which tier an op
 selected or how wide a move it chose**: a caller cannot use one to decide how to
 build its operands, since the answer is a function of the operand types it would
@@ -1538,17 +1539,18 @@ __device__ inline void sync(Mesh<TMesh, Topos...> const &mesh,
     launch, so the caller passes it; with none, a cooperative launch's grid
     group is used instead.
 
-#### 2.6.9 `ops/tma.cuh`
+#### 2.6.9 `ops/copy_async_bulk.cuh`
 
-<!-- generated: ops-tma -->
+<!-- generated: ops-copy-async-bulk -->
 ```cpp
-// include/tilefoundry/runtime/cuda/ops/tma.cuh
+// include/tilefoundry/runtime/cuda/ops/copy_async_bulk.cuh
 template <class Src, class Dst>
-__device__ inline void tma_copy(Src const &src, Dst &dst, uint64_t *bar);
+__device__ inline void copy_async_bulk(Src const &src, Dst &dst,
+                                       uint64_t *bar);
 ```
 <!-- /generated -->
 
-**`tma_copy`.**
+**`copy_async_bulk`.**
 
 Stage a tile into shared memory and signal an mbarrier when it is readable. It
 is not a tier of `ops::copy_async`: there every thread issues its own load and
@@ -1597,6 +1599,31 @@ tile it did not fetch.
     have defined behaviour. The extent is what the shard leaves behind, not a
     property of the layout type, so an off-grain extent is a run-time hand-off
     to the element path inside the same entry — same barrier, same result.
+
+#### 2.6.10 `ops/ldmatrix.cuh`
+
+<!-- generated: ops-ldmatrix -->
+```cpp
+// include/tilefoundry/runtime/cuda/ops/ldmatrix.cuh
+template <class Src, class Dst>
+__device__ inline void ldmatrix(Src const &src, Dst &dst);
+```
+<!-- /generated -->
+
+**`ldmatrix`.**
+
+One warp loads a dense shared-memory `(16, 16)` bf16 tile into the per-lane A
+fragment consumed by `ops::mma`'s current SM80 atom.
+
+- constraints:
+  - All 32 lanes issue `ldmatrix.sync.aligned.m8n8.x4.shared.b16` together.
+    Each lane contributes the 16-byte-aligned address selected by the source's
+    declared shard layout; a full-broadcast shard still uses that declaration,
+    not the backing allocation's incidental layout.
+  - The four returned registers are stored in the destination fragment's
+    layout order so that `ops::mma` observes the PTX register order unchanged.
+  - The TIR declaration fixes the source shape/dtype and destination fragment;
+    the runtime entry does not choose an atom or a fragment layout.
 
 ### 2.7 `cuda/utility/`
 

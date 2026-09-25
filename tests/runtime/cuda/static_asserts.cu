@@ -416,7 +416,7 @@ __global__ void k(float *p) {
 #endif
 
 #if CASE == 24
-/// A ``tma_copy`` source a mesh really does divide.
+/// A ``copy_async_bulk`` source a mesh really does divide.
 __global__ void k(float *p, float *q, uint64_t *bar) {
     auto mesh = tmesh<128>();
     auto src_lay =
@@ -430,7 +430,7 @@ __global__ void k(float *p, float *q, uint64_t *bar) {
     auto dst = make_shard_tensor(
         cute::make_tensor(cute::make_smem_ptr(q), dst_lay), dst_lay,
         make_shard_layout(dst_lay, mesh, cute::make_tuple(shard::B{})));
-    tilefoundry::ops::tma_copy(src, dst, bar);
+    tilefoundry::ops::copy_async_bulk(src, dst, bar);
 }
 #endif
 

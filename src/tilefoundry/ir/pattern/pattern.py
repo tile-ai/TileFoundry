@@ -17,7 +17,12 @@ from tilefoundry.ir.types import (
 )
 from tilefoundry.ir.types.int_tuple import congruent
 from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.layout_algebra import frame_of, is_inverse_projectable
+from tilefoundry.ir.types.layout_algebra import (
+    ASYNC_WIDTHS,
+    frame_of,
+    is_inverse_projectable,
+    vector_widths,
+)
 from tilefoundry.ir.types.mesh import separate
 
 from .match import (
@@ -74,6 +79,49 @@ class WildcardPattern(Pattern):
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return name
+
+
+VECTOR_READING = (
+    "every run: each tile axis's modes walked fastest first, contiguous ones joined; "
+    "the run at step 1 and every other step a whole number of vectors"
+)
+
+
+@dataclass(frozen=True)
+class VectorPattern(Pattern):
+    """An arrangement that moves whole 4-, 8-, or 16-byte vectors."""
+
+    width: CapturePattern
+    dtype: str
+
+    def widths(self, subject, captures) -> tuple[int, ...]:
+        bits = getattr(dict(captures or {}).get(self.dtype), "bit_width", None)
+        return () if type(bits) is not int else vector_widths(subject, bits)
+
+    def match(self, subject, captures=None):
+        held = dict(captures or {})
+        widths = self.widths(subject, held)
+        if not widths:
+            return None
+        if self.width.name in held:
+            return Match(held) if held[self.width.name] in widths else None
+        return matched(self.width, widths[-1], held)
+
+    def refusal(self, subject, captures=None) -> str | None:
+        if self.match(subject, captures) is not None:
+            return None
+        sizes = ", ".join(map(str, ASYNC_WIDTHS[:-1])) + f" or {ASYNC_WIDTHS[-1]}"
+        return (
+            f"{subject!r} moves no whole vector of {sizes} bytes -- its run at step 1 "
+            "and every other step are no whole number of one -- so the two ends share "
+            "no run wide enough for cp.async"
+        )
+
+    def describe(self, name: str = UNNAMED_PLACE) -> str:
+        return f"vectors of {self.width.name} bytes"
+
+    def relations(self) -> tuple[str, ...]:
+        return (VECTOR_READING, *relations_of((self.width,)))
 
 
 @dataclass(frozen=True, init=False)

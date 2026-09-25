@@ -957,15 +957,23 @@ class CopyAsync(Op):
     """Effect form; async gmem→smem copy, non-blocking.
 
     Attributes:
-        source: input; gmem staging source.
-        destination: input; smem staging destination.
+        src: input; gmem staging source.
+        dst: input; smem staging destination.
+        smem_layout: attribute; optional landing arrangement.
     """
 
-    source: Tensor
-    destination: Tensor
+    src: Tensor
+    dst: Tensor
+    smem_layout: Layout | None = None
 ```
 - constraints:
   - Lowers to `tilefoundry::ops::copy_async(src, dst)`.
+  - `src` is gmem and `dst` is smem, with the same dtype. Each layout MUST
+    admit the same 4-, 8-, or 16-byte vector width and MUST walk the same tile
+    mode at step 1. For a `ShardLayout`, vector width is read from the whole
+    tile arrangement; its other strides ensure every participant's start is
+    aligned. Two split layouts compare their tile modes only when their mesh
+    and shard attrs are identical.
   - A later read of `dst` is ordered by `CpAsyncCommit` followed by
     `CpAsyncWait`.
 
@@ -994,7 +1002,7 @@ class CpAsyncWait(Op):
   - `n` is a non-negative compile-time count.
   - `n = 0` drains every outstanding committed group.
 
-##### TmaCopy
+##### CopyAsyncBulk
 
 A staging copy whose completion lands on an mbarrier, and not a tier of
 `CopyAsync`: there every thread issues its own load and a commit closes the
@@ -1013,7 +1021,7 @@ place of a size, which is a different operand list rather than a different tier,
 and are outside this op.
 
 ```python
-class TmaCopy(Op):
+class CopyAsyncBulk(Op):
     """Effect form; gmem→smem staging copy completing on an mbarrier.
 
     Attributes:
@@ -1036,10 +1044,53 @@ class TmaCopy(Op):
     transferred bytes is the implementation's, issued on the same instruction as
     the copy; a caller pairing this with its own `MBarrierArriveExpectTx` would
     be declaring a count the op already knows.
-  - Lowers to `tilefoundry::ops::tma_copy(src, dst, bar)`
+  - Lowers to `tilefoundry::ops::copy_async_bulk(src, dst, bar)`
     ([runtime §2.6](./runtime.md#26-cudaops)). `barrier` is a tensor here
     because that is what TIR names a piece of shared memory with, and a word to
     the runtime, so the emitted call hands over the word's own address.
+
+##### CopyAsyncTensor
+
+`T.copy_async_tensor` declares the SM90 tensor-map form separately from
+`CopyAsyncBulk`: its operands describe a tensor-map global layout and the box
+landed in shared memory, rather than carrying an explicit mbarrier operand.
+
+```python
+class CopyAsyncTensor(Op):
+    src: Tensor
+    dst: Tensor
+    smem_layout: Layout | None = None
+    scope: Mesh | None = None
+```
+
+- constraints:
+  - Exactly one end is gmem and one is smem; dtype and logical shape agree.
+  - The global end is a static tensor-map layout of at most five dimensions,
+    with one contiguous mode and every other byte stride a multiple of 16.
+    The shared end is an at-most-five-dimensional box, each extent at most
+    256, optionally using a 32-, 64-, or 128-byte TMA swizzle.
+  - Both ends walk the same tile modes. The issuing scope is one aligned warp.
+  - The declaration requires the target's `tma` capability. CUDA codegen MUST
+    reject it until host-encoded tensor-map construction exists; this stage
+    does not silently lower it to another copy instruction.
+
+##### LdMatrix
+
+```python
+class LdMatrix(Op):
+    src: Tensor
+    dst: Tensor
+    scope: Mesh | None = None
+```
+
+- constraints:
+  - `src` is a shared-memory `(16, 16)` bf16 tile and `dst` is exactly the
+    register A fragment declared by `T.cuda.sm80.Mma()`; their dtype and shape
+    agree under the ordinary `Copy` verifier.
+  - One canonical SM80 warp issues the operation. It requires the target's
+    `tensor_core` capability and lowers to `tilefoundry::ops::ldmatrix`.
+  - The destination layout is the atom's declaration, not a caller-selectable
+    `rmem_layout` attribute.
 
 #### Barrier object Ops (`tir.sync.mbarrier_*`)
 
@@ -1059,9 +1110,9 @@ generic-to-shared conversion the instruction takes — they name `.shared::cta`
 explicitly rather than leaving the assembler to redo that window conversion on
 every use.
 
-The group is what a `TmaCopy` ring needs and no more: arm the word, arrive on it
+The group is what a `CopyAsyncBulk` ring needs and no more: arm the word, arrive on it
 declaring bytes, wait on its phase, release it. A bare `mbarrier.arrive` is
-absent because `ops::tma_copy` issues its own for the strided tier, and a bare
+absent because `ops::copy_async_bulk` issues its own for the strided tier, and a bare
 `mbarrier.expect_tx` because nothing pairs with it.
 
 ##### MBarrierInit
@@ -1110,12 +1161,12 @@ class MBarrierArriveExpectTx(Op):
   - `tx_bytes` MUST equal the bytes the paired copy delivers. A phase expecting a
     different count never completes, and that failure presents as a hang rather
     than as a wrong value.
-  - This is not paired with a `TmaCopy`, which declares its own bytes on the
+  - This is not paired with a `CopyAsyncBulk`, which declares its own bytes on the
     instruction that issues the copy. It belongs to a producer issuing one
     itself.
   - Lowers to `mbarrier.arrive.expect_tx.shared::cta.b64`, with the arrival
     token discarded: consumers wait on the phase parity, not on a token handed
-    between threads. The runtime publishes no entry for it; `ops::tma_copy`
+    between threads. The runtime publishes no entry for it; `ops::copy_async_bulk`
     writes its own for the bulk tier.
 
 ##### MBarrierWaitParity

@@ -39,7 +39,7 @@ CASES: dict[int, str | None] = {
     19: "ops::sync: a mesh's scope must be cta or thread",
     20: "ops::sync: a CTA mesh needs the module's grid-barrier counter",
     22: "a reduced mesh axis must divide into whole lanes and whole warps",
-    24: "both operands must leave the tile whole on every ",
+    24: "ops::copy_async_bulk: both operands must leave the tile whole on every ",
     25: "ops::sync: a mesh that skips warps names no barrier",
     26: "get<level>: this mesh does not name that level",
 }

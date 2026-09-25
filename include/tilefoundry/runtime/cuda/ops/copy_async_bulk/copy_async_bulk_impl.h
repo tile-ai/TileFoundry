@@ -1,14 +1,12 @@
-/// TMA op internals. Included in-context from ``ops/tma.cuh``.
+/// CUDA bulk asynchronous copy internals.
 #pragma once
 
-namespace tma_impl {
+namespace copy_async_bulk_impl {
 
-/// The shared-window address of a generic pointer.
 __device__ inline uint32_t smem_addr(void const *ptr) {
     return static_cast<uint32_t>(__cvta_generic_to_shared(ptr));
 }
 
-/// Whether an operand is one unbroken run of bytes.
 template <class T>
 inline constexpr bool one_run_v = [] {
     using L = typename cute::remove_cvref_t<T>::layout_type;
@@ -20,7 +18,6 @@ template <class T>
 using elem_t = cute::remove_cvref_t<decltype(tilefoundry::local_tensor(
     std::declval<T const &>())(0))>;
 
-/// Whether an operand leaves the tile whole on every instance of its mesh.
 template <class T> CUTE_HOST_DEVICE constexpr bool leaves_tile_whole() {
     if constexpr (tilefoundry::ShardTensorLike<T>)
         return detail::shard_layout_is_full_broadcast<
@@ -29,29 +26,28 @@ template <class T> CUTE_HOST_DEVICE constexpr bool leaves_tile_whole() {
         return true;
 }
 
-/// What this op needs of its operands, asked once at the entry.
 template <class Src, class Dst>
-CUTE_HOST_DEVICE constexpr void check_tma_operands() {
+CUTE_HOST_DEVICE constexpr void check_operands() {
     using s_view = tilefoundry::local_view_t<Src>;
     using d_view = tilefoundry::local_view_t<Dst>;
-    static_assert(
-        leaves_tile_whole<Src>() && leaves_tile_whole<Dst>(),
-        "ops::tma_copy: both operands must leave the tile whole on every "
-        "instance");
+    static_assert(leaves_tile_whole<Src>() && leaves_tile_whole<Dst>(),
+                  "ops::copy_async_bulk: both operands must leave the tile "
+                  "whole on every "
+                  "instance");
     static_assert(tilefoundry::ShardTensorLike<Dst>,
-                  "ops::tma_copy: the destination must name a mesh");
+                  "ops::copy_async_bulk: the destination must name a mesh");
+    static_assert(one_run_v<s_view> && one_run_v<d_view>,
+                  "ops::copy_async_bulk: both projected views must be one "
+                  "static unbroken run");
     static_assert(
-        one_run_v<s_view> && one_run_v<d_view>,
-        "ops::tma_copy: both projected views must be one static unbroken run");
-    static_assert(std::is_same_v<elem_t<Src>, elem_t<Dst>>,
-                  "ops::tma_copy: both operands need the same element type");
-    static_assert(
-        copy_impl::same_slice_size<s_view, d_view>(),
-        "ops::tma_copy: the two projected views must hold the same number of "
-        "elements");
+        std::is_same_v<elem_t<Src>, elem_t<Dst>>,
+        "ops::copy_async_bulk: both operands need the same element type");
+    static_assert(copy_impl::same_slice_size<s_view, d_view>(),
+                  "ops::copy_async_bulk: the two projected views must hold the "
+                  "same number of "
+                  "elements");
 }
 
-/// The element loop `Bulk` hands off to: every instance strides the one run.
 template <int Instances> struct StridedCopy {
     template <class SV, class DV>
     __device__ void operator()(SV const &sv, DV &dv) const {
@@ -63,7 +59,6 @@ template <int Instances> struct StridedCopy {
     }
 };
 
-/// Every thread copies its share, then one arrival says the tile is readable.
 struct Strided {
     template <class Src, class Dst>
     __device__ void operator()(Src const &src, Dst &dst, uint64_t *bar) const {
@@ -80,7 +75,6 @@ struct Strided {
     }
 };
 
-/// ``cp.async.bulk`` global to shared, completing on the barrier.
 struct Bulk {
     template <class Src, class Dst>
     __device__ void operator()(Src const &src, Dst &dst, uint64_t *bar) const {

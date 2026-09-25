@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.types import ComposedLayout, Mesh, StorageKind, Swizzle
+from tilefoundry.ir.types.layout_algebra import ASYNC_WIDTHS
 
 from .pattern import (
     AttrPattern,
@@ -18,6 +19,7 @@ from .pattern import (
     RangePattern,
     SwizzlePattern,
     TensorPattern,
+    VectorPattern,
     WildcardPattern,
 )
 
@@ -47,6 +49,14 @@ def dtype_place(index: int) -> str:
 def storage_place(index: int) -> str:
     """The capture name for transfer end *index*'s storage."""
     return f"storage{index}"
+
+
+def vector(index: int) -> VectorPattern:
+    """End *index* of a cp.async, counted in that end's element dtype."""
+    return VectorPattern(
+        CapturePattern("width", OneOfPattern(ASYNC_WIDTHS)),
+        dtype_place(index),
+    )
 
 
 _ANY_THREADS = OrPattern(
@@ -139,4 +149,5 @@ __all__ = [
     "locate_dim_var",
     "moved_tile",
     "storage_place",
+    "vector",
 ]
