@@ -24,7 +24,7 @@ from tests.ops.ir.typeinfer_utils import (
     run_typeinfer_case,
 )
 from tilefoundry.evaluator import evaluate
-from tilefoundry.ir.core import Call, Var
+from tilefoundry.ir.core import Call, Constant, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.index_select import IndexSelect
 from tilefoundry.ir.hir.tensor.reshape import Reshape
@@ -33,8 +33,10 @@ from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import (
     DType,
     Layout,
+    Mesh,
+    TensorType,
+    Topology,
     TupleType,
-    make_mesh,
     make_shard_tensor_type,
     make_tensor_type,
 )
@@ -57,13 +59,25 @@ CASES = [
     TypeInferCase(
         "split_on_selected_axis_rejected",
         TopK(k=2, axis=-1),
-        (make_shard_tensor_type((4, 256), mesh=make_mesh((4,)), attrs=(Split(1),)),),
+        (
+            make_shard_tensor_type(
+                (4, 256),
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Split(1),),
+            ),
+        ),
         ExpectedError(match="must not be Split-sharded"),
     ),
     TypeInferCase(
         "partial_input_rejected",
         TopK(k=2, axis=-1),
-        (make_shard_tensor_type((4, 256), mesh=make_mesh((4,)), attrs=(Partial("max"),)),),
+        (
+            make_shard_tensor_type(
+                (4, 256),
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Partial("max"),),
+            ),
+        ),
         ExpectedError(match="x carries Partial"),
     ),
 ]
@@ -110,7 +124,9 @@ def test_topk_output_layout_shrinks_selected_axis_preserving_split():
     A Split on a non-selected axis must be preserved, and the output shard
     layout's selected axis must shrink to k so size(layout)==size(shape).
     """
-    x_ty = make_shard_tensor_type((4, 256), mesh=make_mesh((4,)), attrs=(Split(0),))
+    x_ty = make_shard_tensor_type(
+        (4, 256), mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)), attrs=(Split(0),)
+    )
     out = infer_call(TopK(k=6, axis=-1), x_ty)
     values_ty, indices_ty = out.fields
     assert values_ty.shape == (4, 6) and indices_ty.shape == (4, 6)
@@ -149,7 +165,7 @@ def test_topk_all_broadcast_layout_with_dynamic_dim():
         (256, s),
         None,
         (Broadcast(),),
-        make_mesh((4,)),
+        Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
         dtype=_F32,
     )
     values_ty, indices_ty = infer_call(TopK(k=6, axis=0), x_ty).fields
@@ -265,7 +281,8 @@ def test_topk_dynamic_k_downstream_index_select_shape_consistent():
     topk_ty = TypeInferVisitor().visit(topk_call, TypeInferContext())
     topk_call = replace(topk_call, type=topk_ty)
 
-    idx_call = Call(type=topk_ty.fields[1], target=TupleGetItem(index=1), args=(topk_call,))
+    index = Constant(type=TensorType.umat_scalar(), value=1)
+    idx_call = Call(type=topk_ty.fields[1], target=TupleGetItem(), args=(topk_call, index))
     idx_ty = TypeInferVisitor().visit(idx_call, TypeInferContext())
     idx_call = replace(idx_call, type=idx_ty)
 

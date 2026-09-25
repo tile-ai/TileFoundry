@@ -6,11 +6,11 @@ from dataclasses import dataclass
 
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 
-from .base import ScheduleConstraint
+from .base import WhereClause
 
 
 @dataclass(frozen=True)
-class StorageConstraint(ScheduleConstraint):
+class StorageClause(WhereClause):
     """Filter a value by one current IR StorageKind."""
 
     storage: StorageKind | None = None
@@ -22,4 +22,4 @@ class StorageConstraint(ScheduleConstraint):
         object.__setattr__(self, "storage", value)
 
 
-__all__ = ["StorageConstraint"]
+__all__ = ["StorageClause"]

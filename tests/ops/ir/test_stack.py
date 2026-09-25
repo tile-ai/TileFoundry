@@ -19,9 +19,10 @@ from tilefoundry.ir.hir.tensor.stack import Stack
 from tilefoundry.ir.types import (
     DType,
     Layout,
+    Mesh,
     Partial,
     ShardLayout,
-    make_mesh,
+    Topology,
     make_shard_tensor_type,
     make_tensor_type,
 )
@@ -48,7 +49,7 @@ def test_stack_plain_result_has_a_fresh_layout_and_value() -> None:
 
 
 def test_stack_relation_carries_a_single_split_past_the_inserted_axis() -> None:
-    mesh = make_mesh((4,))
+    mesh = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
     plain = make_tensor_type((2, 8))
     sharded = make_shard_tensor_type((2, 8), mesh=mesh, attrs=(Split(1),))
 
@@ -61,7 +62,11 @@ def test_stack_relation_carries_a_single_split_past_the_inserted_axis() -> None:
 
 
 def test_stack_relation_carries_uniform_partial_slices() -> None:
-    partial = make_shard_tensor_type((2, 8), mesh=make_mesh((4,)), attrs=(Partial("sum"),))
+    partial = make_shard_tensor_type(
+        (2, 8),
+        mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+        attrs=(Partial("sum"),),
+    )
 
     result = infer_call(Stack(axis=1), partial, partial)
 
@@ -75,8 +80,16 @@ CASES = [
         "incompatible_split_axes",
         Stack(axis=0),
         (
-            make_shard_tensor_type((8, 8), mesh=make_mesh((4,)), attrs=(Split(0),)),
-            make_shard_tensor_type((8, 8), mesh=make_mesh((4,)), attrs=(Split(1),)),
+            make_shard_tensor_type(
+                (8, 8),
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Split(0),),
+            ),
+            make_shard_tensor_type(
+                (8, 8),
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Split(1),),
+            ),
         ),
         ExpectedError(match=r"input 1 .*incompatible.*Reshard"),
     ),
@@ -84,7 +97,11 @@ CASES = [
         "partial_and_plain_slices",
         Stack(axis=0),
         (
-            make_shard_tensor_type((8, 8), mesh=make_mesh((4,)), attrs=(Partial("sum"),)),
+            make_shard_tensor_type(
+                (8, 8),
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Partial("sum"),),
+            ),
             make_tensor_type((8, 8)),
         ),
         ExpectedError(match=r"input 1 does not carry Partial.*Reshard"),

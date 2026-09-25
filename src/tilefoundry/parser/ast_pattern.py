@@ -34,7 +34,6 @@ from tilefoundry.ir.core.expr import Tuple as IrTuple
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.core.op_schema import OpSchema
-from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary
@@ -49,7 +48,7 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice, slice_size
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import normalize_dim
-from tilefoundry.ir.mesh_scope import merge_mesh
+from tilefoundry.ir.pattern import RangePattern
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import (
@@ -69,6 +68,7 @@ from tilefoundry.ir.types import (
     Layout,
     Mesh,
     Partial,
+    PointerType,
     ShardLayout,
     Split,
     TensorType,
@@ -88,6 +88,7 @@ from tilefoundry.ir.types.dim import (
     simplify_dim,
 )
 from tilefoundry.ir.types.layout import LayoutBase
+from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.shard_layout import canonical_shard_layout
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 from tilefoundry.ir.types.stride import compact_row_major
@@ -245,6 +246,7 @@ runtime = SimpleNamespace(
     BindingSubstitutionCloner=BindingSubstitutionCloner,
     Broadcast=Broadcast,
     Partial=Partial,
+    PointerType=PointerType,
     Binary=Binary,
     BinaryKind=BinaryKind,
     Constant=Constant,
@@ -255,7 +257,7 @@ runtime = SimpleNamespace(
     DimMul=DimMul,
     DimSub=DimSub,
     DimVar=DimVar,
-    DimVarRangePat=DimVarRangePat,
+    RangePattern=RangePattern,
     Evaluate=Evaluate,
     For=For,
     Expr=Expr,
@@ -299,7 +301,7 @@ runtime = SimpleNamespace(
     DISPLAY_NAME=DISPLAY_NAME,
     compact_row_major=compact_row_major,
     canonical_shard_layout=canonical_shard_layout,
-    merge_mesh=merge_mesh,
+    make_mesh=make_mesh,
     dim_expr=dim_expr,
     normalize_dim=normalize_dim,
     static_dim_value=static_dim_value,
@@ -1199,9 +1201,7 @@ class ModuleBuildContext:
                 verify_function(function, module=result)
                 inference_type(
                     function,
-                    runtime.TypeInferContext(
-                        scope=runtime.FunctionScope(result, function)
-                    ),
+                    runtime.TypeInferContext(scope=runtime.FunctionScope(result, function)),
                     ranges=True,
                 )
             elif isinstance(function, runtime.PrimFunction):

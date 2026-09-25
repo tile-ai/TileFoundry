@@ -17,11 +17,10 @@ from tests.ops.ir.typeinfer_utils import (
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.hir.tensor.cast import Cast
-from tilefoundry.ir.types import DType, make_mesh, make_tensor_type
-from tilefoundry.ir.types.layout import Layout
+from tilefoundry.ir.types import DType, Layout, Mesh, Topology, make_tensor_type
 from tilefoundry.ir.types.shard_layout import ShardLayout, Split
 
-_M = make_mesh((4,))
+_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 
 
 def test_cast_carries_sharded_layout():

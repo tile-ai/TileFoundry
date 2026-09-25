@@ -7,8 +7,8 @@ from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.shard_layout import Broadcast, ShardLayout
 from tilefoundry.visitor_registry import register_typeinfer
@@ -100,9 +100,11 @@ def _repeat_interleave_access(call: "Call", ctx) -> AccessRelations:
         produced *= extent if isinstance(extent, int) else 1
     return iterating(
         out_shape,
-    AccessRelations(
+        AccessRelations(
             inputs=(
-                BoundaryRelation(AffineAccess(isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}"))),
+                BoundaryRelation(
+                    AffineAccess(isl.multi_aff(f"{{ [{domain}] -> [{', '.join(reads)}] }}"))
+                ),
             ),
             outputs=(BoundaryRelation(identity_access(rank)),),
         ),

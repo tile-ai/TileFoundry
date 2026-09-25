@@ -236,7 +236,7 @@ the Op typeinfer registry. `TypeInferVisitor` handles it directly as a
 - Within a `Function` signature, every occurrence of a same-name
   `DimVar` across `params` and `return_type` MUST agree on its
   `(lo, hi)` bounds; a disagreement is a verify error. A
-  `DimVarRangePat` specialization MUST anchor to a `DimVar` reachable
+  `RangePattern` specialization MUST anchor to a `DimVar` reachable
   from an input parameter and lie within that `DimVar`'s envelope
   (see **Shape dispatch and specializations** below).
 
@@ -290,15 +290,15 @@ freeze** below).
   `return_type`: a variant specializes the body, not the signature. A variant
   runs in the same execution domain as its base because both are owned by the
   same `Module`.
-- A variant carries exactly one `DimVarRangePat` in `specializations`.
+- A variant carries exactly one `RangePattern` in `specializations`.
   The canonical signature is
   `";".join(f"{p.dim_var}${p.lo}_{p.hi}" for p in specializations)`
-  (v0 allows only `DimVarRangePat`). Two variants of one base MUST have
+  (v0 allows only `RangePattern`). Two variants of one base MUST have
   distinct canonical signatures.
 
 *Envelope coverage.* A dispatched function's parameter
 `TensorType.shape` carries a `DimVar(name, lo, hi)` whose `(lo, hi)` is
-the dispatch envelope; `DimVarRangePat` references that `DimVar` by name.
+the dispatch envelope; `RangePattern` references that `DimVar` by name.
 The variants' closed ranges MUST **partition** the envelope — pairwise
 **disjoint** and jointly **complete** (their union is exactly the DimVar's
 half-open `[lo, hi)` envelope). Adjacent closed ranges are written
@@ -310,7 +310,7 @@ typeinferred, lowered, or evaluated as a body. Only its variants carry
 executable bodies. There is no base body to fall back to.
 
 *Dispatch resolution.* A `Call` whose target is a dispatch prototype
-(`variants != ()`) is a dispatch call: the variant whose `DimVarRangePat`
+(`variants != ()`) is a dispatch call: the variant whose `RangePattern`
 matches is selected and is the call's result. Evaluation selects from the
 call's concrete argument shapes; specialization selects from the caller's
 stated dimension bindings. Both use the same variant table. A shape outside
@@ -943,20 +943,25 @@ class Stack(Op):
 
 ```python
 class TupleGetItem(Op):
-    """Extract one field from a tuple-typed expression.
+    """Extract one field from a tuple-typed expression by scalar index.
 
     Attributes:
         tuple_value: input; Tuple-typed expression.
-        index: attribute; Static field index.
+        index: input; Scalar field index.
     """
 
     tuple_value: Expr
-    index: int
+    index: Expr
 ```
 
 - constraints:
-  - `tuple_value.type` MUST be `TupleType` and `index` MUST be in range.
-  - The result type MUST be exactly the selected field type.
+  - `tuple_value.type` MUST be `TupleType`. A constant `index` MUST be in range,
+    and the result type is exactly the selected field type.
+  - A dynamic `index` requires a non-empty tuple whose field types are all equal;
+    the result has that common field type.
+  - Access through a constant index reads the selected field's leaf span. Dynamic
+    access conservatively reads every leaf because the selected field is known
+    only at runtime.
 
 ##### Reshape
 ```python

@@ -20,7 +20,14 @@ from tests.ops.ir.typeinfer_utils import (
 )
 from tilefoundry.ir.core.kinds import UnaryKind
 from tilefoundry.ir.hir.math.unary import Unary
-from tilefoundry.ir.types import DType, make_mesh, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types import (
+    DType,
+    Layout,
+    Mesh,
+    Topology,
+    make_shard_tensor_type,
+    make_tensor_type,
+)
 from tilefoundry.ir.types.shard_layout import Partial
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
@@ -28,7 +35,7 @@ _NEG = Unary(kind=UnaryKind.NEG)
 _EXP = Unary(kind=UnaryKind.EXP)
 _ABS = Unary(kind=UnaryKind.ABS)
 _RSQRT = Unary(kind=UnaryKind.RSQRT)
-_M = make_mesh((4,))
+_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 _PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
 _PMAX = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("max"),))
 

@@ -33,8 +33,7 @@ from tilefoundry.ir.tir.stmts import (
     While,
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
-from tilefoundry.ir.types import CallableType, DType, TensorType, UnitType, make_mesh
-from tilefoundry.ir.types.mesh import Topology
+from tilefoundry.ir.types import CallableType, DType, Layout, Mesh, TensorType, Topology, UnitType
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import (
     ExprCloner,
@@ -355,7 +354,7 @@ def test_stmt_mutator_covers_all_subclasses_with_identity_invariant() -> None:
         While(cond=_var("c"), body=_seq(_eval_call(Copy(), _var("s2"), _var("d2")))),
         If(cond=_var("c2"), then_body=_seq(), else_body=_seq()),
         MeshScope(
-            mesh=make_mesh((2,), topology=Topology(name="chip", size=2)),
+            mesh=Mesh((Topology(name="chip", size=2),), Layout((2,), (1,)), ("g",)),
             binding=binding,
             body=_seq(_eval_call(Copy(), _var("s3"), _var("d3"))),
         ),

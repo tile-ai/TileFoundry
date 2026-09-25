@@ -7,6 +7,7 @@ flowchart TB
     TupleType["<b>TupleType</b>"]
     UnitType["<b>UnitType</b>"]
     CallableType["<b>CallableType</b>"]
+    PointerType["<b>PointerType</b>"]
 
     DType["<b>DType</b>"]
     dim["<b>dim ops</b>"]
@@ -16,10 +17,12 @@ flowchart TB
     TupleType -. member of .-> Type
     UnitType -. member of .-> Type
     CallableType -. member of .-> Type
+    PointerType -. member of .-> Type
 
     DType -. dtype .-> TensorType
     dim -. shape elements .-> TensorType
     Layout -. layout .-> TensorType
+    DType -. dtype .-> PointerType
 
     TensorType -. element of .-> TupleType
     Type -. return type and parameter types .-> CallableType
@@ -28,8 +31,26 @@ flowchart TB
 ## 1. `Type`
 
 ```python
-Type = TensorType | TupleType | UnitType | CallableType
+Type = TensorType | TupleType | UnitType | CallableType | PointerType
 ```
+
+---
+
+### 1.1 `PointerType`
+
+```python
+class PointerType:
+    """Typed physical-memory engine consumed by ``T.tensor_view``."""
+
+    dtype: DType
+    storage: StorageKind
+```
+
+- constraints:
+  - `dtype` is the element type read through the pointer.
+  - `storage` is concrete and normalized to `StorageKind`; `None` is invalid.
+  - A pointer carries no logical shape or layout. `TensorView` supplies those
+    facts when it reconstructs a tensor value.
 
 ---
 

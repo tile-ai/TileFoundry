@@ -13,9 +13,9 @@ from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import EvalError, TensorValue, TupleValue, to_torch_dtype
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
+from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import DType, Layout, ShardLayout, TensorType, TupleType
 from tilefoundry.ir.types.dim import DimFloorDiv, simplify_dim
 from tilefoundry.ir.types.layout import flatten
@@ -127,8 +127,7 @@ def _result_layouts(call, ctx, x_ty, scale_shape, group: int):
         except ValueError as error:
             ctx.error(
                 call,
-                f"cannot derive result sharding: {error}; use an explicit "
-                "Reshard before Quant",
+                f"cannot derive result sharding: {error}; use an explicit Reshard before Quant",
             )
     if x_ty.layout is None:
         return None, None
@@ -193,9 +192,7 @@ def _eval_quant(ctx):
     group = ctx.op.group
     last = x.shape[-1]
     if last % group:
-        raise EvalError(
-            f"Quant: runtime last dim {last} not divisible by group={group}"
-        )
+        raise EvalError(f"Quant: runtime last dim {last} not divisible by group={group}")
     grouped = x.reshape(*x.shape[:-1], last // group, group)
     absmax = grouped.abs().amax(dim=-1)
     scale = torch.where(absmax == 0, torch.ones_like(absmax), absmax / 448.0)
@@ -236,9 +233,7 @@ def _quant_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelat
         outer = ", ".join(f"i{k}" for k in range(rank - 1))
         last = f"i{rank - 1}"
         out_dims = (outer + ", ") if outer else ""
-        scale_rel = AffineAccess(
-            isl.map(f"{{ [{dims}] -> [{out_dims}floor({last}/{group})] }}")
-        )
+        scale_rel = AffineAccess(isl.map(f"{{ [{dims}] -> [{out_dims}floor({last}/{group})] }}"))
 
     return iterating(
         x_ty.shape,

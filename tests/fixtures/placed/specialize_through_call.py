@@ -1,7 +1,7 @@
 """A dispatch on a callee: check and analyze both select its implementation."""
 
 from tilefoundry import func, module
-from tilefoundry.dsl import DimVar, DimVarRangePat, Mesh, Tensor, tf
+from tilefoundry.dsl import DimVar, Mesh, RangePattern, Tensor, tf
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
 from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
@@ -21,18 +21,14 @@ class ToCallee:
     def pick(x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
         pass
 
-    @pick.specialize(DimVarRangePat("n", 1, BOUND - 1))
-    def pick_small(
-        x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]
-    ) -> Tensor[(1, D), "f32"]:
+    @pick.specialize(RangePattern("n", 1, BOUND - 1))
+    def pick_small(x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
             xs = tf.reshard(x, (1, D @ m.w), "smem")
             return tf.reshard(xs + xs, (1, D), "gmem")
 
-    @pick.specialize(DimVarRangePat("n", BOUND, N_MAX))
-    def pick_big(
-        x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]
-    ) -> Tensor[(1, D), "f32"]:
+    @pick.specialize(RangePattern("n", BOUND, N_MAX))
+    def pick_big(x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
             xs = tf.reshard(x, (1, D @ m.w), "smem")
             return tf.reshard(xs + xs + xs, (1, D), "gmem")
@@ -50,18 +46,14 @@ class Direct:
     def pick(x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
         pass
 
-    @pick.specialize(DimVarRangePat("n", 1, BOUND - 1))
-    def pick_small(
-        x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]
-    ) -> Tensor[(1, D), "f32"]:
+    @pick.specialize(RangePattern("n", 1, BOUND - 1))
+    def pick_small(x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
             xs = tf.reshard(x, (1, D @ m.w), "smem")
             return tf.reshard(xs + xs, (1, D), "gmem")
 
-    @pick.specialize(DimVarRangePat("n", BOUND, N_MAX))
-    def pick_big(
-        x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]
-    ) -> Tensor[(1, D), "f32"]:
+    @pick.specialize(RangePattern("n", BOUND, N_MAX))
+    def pick_big(x: Tensor[(1, D), "f32"], k: Tensor[(1, N), "f32"]) -> Tensor[(1, D), "f32"]:
         with Mesh(("cta",), layout=(W,), names=("w",)) as m:
             xs = tf.reshard(x, (1, D @ m.w), "smem")
             return tf.reshard(xs + xs + xs, (1, D), "gmem")

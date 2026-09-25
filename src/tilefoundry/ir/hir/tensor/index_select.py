@@ -6,8 +6,8 @@ from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.layout import Layout
 from tilefoundry.ir.types.shard_layout import (
@@ -128,12 +128,14 @@ def _index_select_access_relation(call: "Call", ctx) -> AccessRelations:
         out_shape,
         AccessRelations(
             inputs=(
-                BoundaryRelation(reached_at(rank, source_ty, logical_source, carried, free=(axis,))),
-                BoundaryRelation(reached_at(rank, index_ty, logical_index, {0: carried.get(axis, "0")})),
+                BoundaryRelation(
+                    reached_at(rank, source_ty, logical_source, carried, free=(axis,))
+                ),
+                BoundaryRelation(
+                    reached_at(rank, index_ty, logical_index, {0: carried.get(axis, "0")})
+                ),
             ),
-            outputs=(
-                BoundaryRelation(identity_access(rank)),
-            ),
+            outputs=(BoundaryRelation(identity_access(rank)),),
         ),
     )
 

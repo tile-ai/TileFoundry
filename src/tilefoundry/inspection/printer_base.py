@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import enum
+import json
 from contextlib import contextmanager
 
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
-from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.mesh_scope import device_layout
+from tilefoundry.ir.pattern import Pattern, RangePattern
 from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom
-from tilefoundry.ir.types import DType, TensorType, TupleType, UnitType
+from tilefoundry.ir.types import DType, PointerType, TensorType, TupleType, UnitType
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimConst,
@@ -132,6 +134,8 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             left, right = ceildiv_args
             return f"ceildiv({self.dim_entry(left, ctx)}, {self.dim_entry(right, ctx)})"
         target = value.target
+        if isinstance(target, TupleGetItem):
+            return self._tuple_get_item_text(value, ctx)
         if isinstance(target, MeshCoord):
             return self._mesh_coordinate_text(value, target, ctx)
         if isinstance(target, DimConst):
@@ -149,6 +153,10 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
                 args = ", ".join(self.dim_entry(arg, ctx) for arg in value.args)
                 return f"{name}({args})"
         return self.visit_program_call(value, ctx)
+
+    def _tuple_get_item_text(self, value: Call, ctx=None) -> str:
+        held, index = value.args
+        return f"{self.visit(held, ctx)}[{self.visit(index, ctx)}]"
 
     def _mesh_coordinate_text(self, value: Call, target: MeshCoord, ctx) -> str:
         """Render one coordinate through the active binding of its mesh."""
@@ -214,10 +222,7 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             or ctx is None
         ):
             return None
-        if any(
-            isinstance(entry, tuple)
-            for entry in (*layout.shape, *(layout.strides or ()))
-        ):
+        if any(isinstance(entry, tuple) for entry in (*layout.shape, *(layout.strides or ()))):
             return None
         refs = tuple(ctx.mesh_axis_alias(value.mesh, index) for index in range(len(names)))
         if any(ref is None for ref in refs):
@@ -236,7 +241,7 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
                 splits.setdefault(attr.axis, []).append(ref)
                 named_bindings.add(binding)
             elif isinstance(attr, Partial):
-                partials.append(f'{ref} @ {self.visit(attr, ctx)}')
+                partials.append(f"{ref} @ {self.visit(attr, ctx)}")
                 named_bindings.add(binding)
             elif isinstance(attr, Broadcast):
                 broadcasts.append((binding, ref, attr))
@@ -255,8 +260,7 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
 
         explicit = layout.strides is not None
         if explicit and any(
-            axis in splits
-            and self.dim_entry(dim, ctx, nested=True) != self.dim_entry(dim, ctx)
+            axis in splits and self.dim_entry(dim, ctx, nested=True) != self.dim_entry(dim, ctx)
             for axis, dim in enumerate(layout.shape)
         ):
             return None
@@ -280,7 +284,9 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
 
     def visit_TensorType(self, value: TensorType, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr((f"from tilefoundry.dsl import {self._tensor_head}",), self._tensor_head))
+            ctx.use(
+                PythonExpr((f"from tilefoundry.dsl import {self._tensor_head}",), self._tensor_head)
+            )
         result = (
             f"{self._tensor_head}["
             f'{self.shape_tuple(value.shape, ctx)}, "{self.dtype_str(value.dtype, ctx)}"'
@@ -300,6 +306,16 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
 
     def visit_TupleType(self, value: TupleType, ctx=None) -> str:
         return f"Tuple[{', '.join(self.visit(field, ctx) for field in value.fields)}]"
+
+    def visit_PointerType(self, value: PointerType, ctx=None) -> str:
+        if ctx is not None:
+            ctx.use(
+                PythonExpr(
+                    ("from tilefoundry.ir.types import DType, PointerType, StorageKind",),
+                    "",
+                )
+            )
+        return f"PointerType(DType.{value.dtype.name}, StorageKind.{value.storage.name})"
 
     def visit_UnitType(self, value: UnitType, ctx=None) -> str:
         return "None"
@@ -328,7 +344,8 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             )
         result = f"Mesh({topologies}, {self.visit(written, ctx)}"
         if value.names:
-            result += f", names={tuple(value.names)!r}"
+            names = ", ".join(json.dumps(name) for name in value.names)
+            result += f", names=({names}{',' if len(value.names) == 1 else ''})"
         return result + ")"
 
     def visit_NoneType(self, value: None, ctx=None) -> str:
@@ -401,7 +418,7 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
 
     def render_value(self, value, ctx=None, indent: str = "") -> str:
         """Render a non-expression attribute through the same visitor when possible."""
-        if isinstance(value, (TensorType, Mesh, LayoutBase, DType)):
+        if isinstance(value, (TensorType, PointerType, Mesh, LayoutBase, DType)):
             with self.type_surface(indent=indent):
                 return self.visit(value, ctx)
         if isinstance(value, MmaAtom):
@@ -410,7 +427,11 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             return self.atom_reference(value, ctx)
         if isinstance(value, enum.Enum):
             if ctx is not None:
-                ctx.use(PythonExpr((f"from {type(value).__module__} import {type(value).__name__}",), ""))
+                ctx.use(
+                    PythonExpr(
+                        (f"from {type(value).__module__} import {type(value).__name__}",), ""
+                    )
+                )
             return f"{type(value).__name__}.{value.name}"
         if isinstance(value, Target):
             rendered = value.to_python()
@@ -423,10 +444,10 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
         raise NotImplementedError(f"no canonical Python form for {type(value).__name__}")
 
     def render_pattern(self, pattern: Pattern, ctx=None) -> str:
-        if isinstance(pattern, DimVarRangePat):
+        if isinstance(pattern, RangePattern):
             if ctx is not None:
-                ctx.use(PythonExpr(("from tilefoundry.ir.core.pattern import DimVarRangePat",), ""))
-            return f'DimVarRangePat("{pattern.dim_var}", {pattern.lo}, {pattern.hi})'
+                ctx.use(PythonExpr(("from tilefoundry.ir.pattern import RangePattern",), ""))
+            return f'RangePattern("{pattern.dim_var}", {pattern.lo}, {pattern.hi})'
         return repr(pattern)
 
 

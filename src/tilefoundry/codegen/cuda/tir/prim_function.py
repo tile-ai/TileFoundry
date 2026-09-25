@@ -13,7 +13,7 @@ from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.codegen.cuda.tir.memory.tensor_view import render_shard_layout_value
 from tilefoundry.codegen.emitter import CudaEmitter
 from tilefoundry.codegen.signature import TensorSignature, tensor_signature_of
-from tilefoundry.ir.core.pattern import DimVarRangePat
+from tilefoundry.ir.pattern import RangePattern
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.utils import shape_numel_upper_bound
@@ -68,10 +68,10 @@ def _dispatch(fn: PrimFunction, ctx: CudaCodegenContext) -> None:
     ctx.emit("}")
 
 
-def _range_over_one_dimension(fn: PrimFunction, variant: PrimFunction) -> DimVarRangePat:
+def _range_over_one_dimension(fn: PrimFunction, variant: PrimFunction) -> RangePattern:
     """The pattern selecting *variant*, which a branch can only be a range."""
     pattern = variant.specializations[0]
-    if not isinstance(pattern, DimVarRangePat):
+    if not isinstance(pattern, RangePattern):
         raise NotImplementedError(
             f"CUDA dispatch: {fn.name!r} selects {variant.name!r} by "
             f"{type(pattern).__name__}; only a range over one dimension is written"
@@ -79,7 +79,7 @@ def _range_over_one_dimension(fn: PrimFunction, variant: PrimFunction) -> DimVar
     return pattern
 
 
-def _subject(fn: PrimFunction, pattern: DimVarRangePat, ctx: CudaCodegenContext) -> str:
+def _subject(fn: PrimFunction, pattern: RangePattern, ctx: CudaCodegenContext) -> str:
     """Where this kernel reads the dimension *pattern* ranges over."""
     subject = ctx.dynamic_extents.get(pattern.dim_var)
     if subject is None:
@@ -93,6 +93,7 @@ def _subject(fn: PrimFunction, pattern: DimVarRangePat, ctx: CudaCodegenContext)
 @register_codegen(CudaTarget, Role.EMIT, PrimFunction)
 def _emit(fn: PrimFunction, ctx: CudaCodegenContext) -> None:
     """Write what runs inside one ``__global__``: its buffers, then its statements."""
+    ctx.reset_smem_base()
     if fn.variants:
         _dispatch(fn, ctx)
         return

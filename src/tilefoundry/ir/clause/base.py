@@ -1,4 +1,4 @@
-"""Stage-neutral schedule constraint metadata and source locations."""
+"""Stage-neutral where-clause metadata and source locations."""
 
 from __future__ import annotations
 
@@ -24,54 +24,51 @@ class SourceLocation:
         return f"{self.filename}:{self.line}:{self.column}"
 
 
-class ConstraintProvenance(Enum):
-    """Source category for a schedule constraint."""
+class ClauseProvenance(Enum):
+    """Source category for a where clause."""
 
     AUTHOR = "author"
 
 
 @dataclass(frozen=True)
-class ScheduleConstraint:
+class WhereClause:
     """Base value for one stage-neutral hard constraint."""
 
     source_loc: SourceLocation = field(default_factory=SourceLocation)
-    provenance: ConstraintProvenance = ConstraintProvenance.AUTHOR
+    provenance: ClauseProvenance = ClauseProvenance.AUTHOR
 
 
 @dataclass(frozen=True)
-class ScheduleConstraintMetadata(IRMetadata):
+class WhereClauseMetadata(IRMetadata):
     """Aggregate hard constraints attached to one concrete tensor Expr."""
 
-    constraints: tuple[ScheduleConstraint, ...] = ()
+    constraints: tuple[WhereClause, ...] = ()
     source_loc: SourceLocation = field(default_factory=SourceLocation)
 
     def __post_init__(self) -> None:
         constraints = tuple(self.constraints)
         if not constraints:
-            raise ValueError(
-                f"schedule constraints at {self.source_loc.describe()} cannot be empty"
-            )
-        if any(not isinstance(item, ScheduleConstraint) for item in constraints):
-            bad = next(item for item in constraints if not isinstance(item, ScheduleConstraint))
+            raise ValueError(f"where clauses at {self.source_loc.describe()} cannot be empty")
+        if any(not isinstance(item, WhereClause) for item in constraints):
+            bad = next(item for item in constraints if not isinstance(item, WhereClause))
             raise TypeError(
-                f"schedule constraint metadata expects ScheduleConstraint values, "
-                f"got {type(bad).__name__}"
+                f"where-clause metadata expects WhereClause values, got {type(bad).__name__}"
             )
         object.__setattr__(self, "constraints", constraints)
 
 
-def constraint_metadata(expr: Any) -> ScheduleConstraintMetadata | None:
+def clause_metadata(expr: Any) -> WhereClauseMetadata | None:
     """Return schedule metadata attached to ``expr``, if present."""
     for item in getattr(expr, "metadata", ()):
-        if type(item) is ScheduleConstraintMetadata:
+        if type(item) is WhereClauseMetadata:
             return item
     return None
 
 
 __all__ = [
-    "ConstraintProvenance",
-    "ScheduleConstraint",
-    "ScheduleConstraintMetadata",
+    "ClauseProvenance",
+    "WhereClause",
+    "WhereClauseMetadata",
     "SourceLocation",
-    "constraint_metadata",
+    "clause_metadata",
 ]

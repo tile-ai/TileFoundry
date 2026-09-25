@@ -19,8 +19,14 @@ from tests.ops.ir.typeinfer_utils import (
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.types import DType, make_mesh, make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.layout import Layout
+from tilefoundry.ir.types import (
+    DType,
+    Layout,
+    Mesh,
+    Topology,
+    make_shard_tensor_type,
+    make_tensor_type,
+)
 from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import TrafficBytes
@@ -31,8 +37,8 @@ _SUB = Binary(kind=BinaryKind.SUB)
 _F = DType.f32
 
 
-_M = make_mesh((4,))
-_MAB = make_mesh((2, 4), ("a", "b"))
+_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
+_MAB = Mesh((Topology("gpu", 8),), Layout((2, 4), (4, 1)), ("a", "b"))
 _PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
 _PMAX = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("max"),))
 _BCAST = make_tensor_type((16, 8), _F)

@@ -78,7 +78,7 @@ class DotWarp:
     ):
         with Mesh((Topology("thread", 32),), Layout(shape=(32,), strides=(1,)), ("t",)) as mw:
             warp_a_view = T.tensor_view(
-                warp_a,
+                T.ptr_of(warp_a),
                 layout=ShardLayout(
                     layout=Layout(shape=(32, 32), strides=(32, 1)),
                     attrs=(Split(0),),
@@ -86,13 +86,13 @@ class DotWarp:
                 ),
             )
             warp_b_view = T.tensor_view(
-                warp_b,
+                T.ptr_of(warp_b),
                 layout=ShardLayout(
                     layout=Layout(shape=(32,), strides=(1,)), attrs=(Broadcast(),), mesh=mw
                 ),
             )
             warp_c_view = T.tensor_view(
-                warp_c,
+                T.ptr_of(warp_c),
                 layout=ShardLayout(
                     layout=Layout(shape=(32,), strides=(1,)), attrs=(Split(0),), mesh=mw
                 ),
@@ -107,9 +107,15 @@ class DotCta:
         cta_a: Tensor[(128,), "f32"], cta_b: Tensor[(128,), "f32"], cta_c: Tensor[(1,), "f32"]
     ):
         with Mesh((Topology("thread", 128),), Layout(shape=(128,), strides=(1,)), ("t",)) as mc:
-            cta_a_view = T.tensor_view(cta_a, layout=ShardLayout(Layout((128,), (1,)), (Split(0),), mc))
-            cta_b_view = T.tensor_view(cta_b, layout=ShardLayout(Layout((128,), (1,)), (Split(0),), mc))
-            cta_c_view = T.tensor_view(cta_c, layout=ShardLayout(Layout((1,), (1,)), (Broadcast(),), mc))
+            cta_a_view = T.tensor_view(
+                T.ptr_of(cta_a), layout=ShardLayout(Layout((128,), (1,)), (Split(0),), mc)
+            )
+            cta_b_view = T.tensor_view(
+                T.ptr_of(cta_b), layout=ShardLayout(Layout((128,), (1,)), (Split(0),), mc)
+            )
+            cta_c_view = T.tensor_view(
+                T.ptr_of(cta_c), layout=ShardLayout(Layout((1,), (1,)), (Broadcast(),), mc)
+            )
             cta_ws = T.alloc_tensor(Tensor[(4,), "f32", None, "smem"])
             T.dot(cta_a_view, cta_b_view, cta_c_view, cta_ws)
 
@@ -120,7 +126,14 @@ class DotTiers:
     cta = DotCta
 
     @prim_func(target=CpuTarget())
-    def dot_tiers_host(warp_a: Tensor[(32, 32), "f32"], warp_b: Tensor[(32,), "f32"], warp_c: Tensor[(32,), "f32"], cta_a: Tensor[(128,), "f32"], cta_b: Tensor[(128,), "f32"], cta_c: Tensor[(1,), "f32"]):
+    def dot_tiers_host(
+        warp_a: Tensor[(32, 32), "f32"],
+        warp_b: Tensor[(32,), "f32"],
+        warp_c: Tensor[(32,), "f32"],
+        cta_a: Tensor[(128,), "f32"],
+        cta_b: Tensor[(128,), "f32"],
+        cta_c: Tensor[(1,), "f32"],
+    ):
         launch(warp.dot_warp, warp_a, warp_b, warp_c, grid=(1, 1, 1), block=(32, 1, 1))
         launch(cta.dot_cta, cta_a, cta_b, cta_c, grid=(1, 1, 1), block=(128, 1, 1))
 

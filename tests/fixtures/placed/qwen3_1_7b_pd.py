@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 
 from tilefoundry import func, module
-from tilefoundry.dsl import ConstTensor, DimVar, DimVarRangePat, Mesh, Tensor, tf
+from tilefoundry.dsl import ConstTensor, DimVar, Mesh, RangePattern, Tensor, tf
 from tilefoundry.dsl.tf import *  # noqa: F401,F403
 from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
@@ -419,7 +419,7 @@ class PrefillLayer:
     ) -> Tensor[(SEQ, V), "f32"]:
         pass
 
-    @model.specialize(DimVarRangePat("seq", 2, 8192))  # noqa: F821
+    @model.specialize(RangePattern("seq", 2, 8192))  # noqa: F821
     def prefill(
         ids: Tensor[(SEQ,), "i32"],
         w_embed: ConstTensor[(V, HID), "bf16"],
@@ -507,7 +507,7 @@ class PrefillLayer:
                     lg = tf.insert_slice(lg, tf.reshard(acc, (ROWS, BN), "gmem"), (m, n))
         return lg
 
-    @model.specialize(DimVarRangePat("seq", 1, 1))  # noqa: F821
+    @model.specialize(RangePattern("seq", 1, 1))  # noqa: F821
     def decode(
         ids: Tensor[(SEQ,), "i32"],
         w_embed: ConstTensor[(V, HID), "bf16"],

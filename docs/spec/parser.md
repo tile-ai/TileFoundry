@@ -48,10 +48,10 @@ physical source-file coordinates with a one-based start column.
 
 ### 1.3 Tuple Binding Metadata
 
-For `a, b = producer(...)`, detached `TupleGetItem(index=0)` and
-`TupleGetItem(index=1)` lexical values carry the respective target Name spans (`a` and `b`) and
-matching `BindingMetadata`; later reads do not replace that identity. A multi-carry loop's
-derived projections carry the `for` statement span and their carry binding name.
+For `a, b = producer(...)`, detached `TupleGetItem` values with scalar inputs `0` and `1`
+carry the respective target Name spans (`a` and `b`) and matching `BindingMetadata`; later
+reads do not replace that identity. A multi-carry loop's derived projections carry the `for`
+statement span and their carry binding name.
 
 ### 1.4 Context and Diagnostics
 
@@ -82,6 +82,11 @@ bound that is not a literal is read as the dimension arithmetic the loop was
 lowered from, so a bound naming a mesh coordinate reads back as it was printed.
 
 ## 2. Syntax and Rules
+
+Tuple subscripting lowers `stages[index]` to `TupleGetItem(stages, index)`.
+Literal negative indices are normalized against the tuple arity before lowering.
+A non-literal scalar index is accepted only when type inference can establish one
+common field type for every possible result.
 
 ### 2.1 Syntax
 

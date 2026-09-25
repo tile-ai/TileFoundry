@@ -20,9 +20,9 @@ from tilefoundry.ir.hir.nn.conv2d import Conv2D
 from tilefoundry.ir.types import (
     DType,
     Layout,
+    Mesh,
     ShardLayout,
     Topology,
-    make_mesh,
     make_shard_tensor_type,
     make_tensor_type,
 )
@@ -38,7 +38,7 @@ _OP = Conv2D(stride=(2, 1), padding=(1, 0), dilation=(1, 1), groups=2)
 _X = make_tensor_type((2, 4, 7, 7), _F)
 _W = make_tensor_type((6, 2, 3, 3), _F)
 _BIAS = make_tensor_type((6,), _F)
-_MESH = make_mesh((2,))
+_MESH = Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("g",))
 
 
 VALIDATION_CASES = [
@@ -245,7 +245,11 @@ SHARD_ERROR_CASES = [
         "translated_spatial_split_is_underivable",
         Conv2D(stride=(1, 1), padding=(4, 0), dilation=(1, 1), groups=1),
         (
-            make_shard_tensor_type((1, 4, 8, 8), mesh=make_mesh((4,)), attrs=(Split(2),)),
+            make_shard_tensor_type(
+                (1, 4, 8, 8),
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Split(2),),
+            ),
             make_tensor_type((4, 4, 1, 1)),
             make_tensor_type((4,)),
         ),
@@ -260,7 +264,7 @@ def test_conv2d_rejects_underivable_ownership(case) -> None:
 
 
 _CTA = Topology("cta", 2)
-_CTA_MESH = make_mesh((2,), topology=_CTA)
+_CTA_MESH = Mesh((_CTA,), Layout((2,), (1,)), ("g",))
 _INPUT_BYTES = 2 * 4 * 7 * 7 * 4
 _WEIGHT_BYTES = 6 * 2 * 3 * 3 * 4
 _BIAS_BYTES = 6 * 4

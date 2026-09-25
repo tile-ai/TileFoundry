@@ -8,7 +8,7 @@ the work, structural Stmts carry control flow.
   `body` is a `Sequential`; the function returns no value.
 - **Stmt tree**: function bodies are nested Stmts only. Exprs appear
   inside Stmt fields (e.g. `LetStmt.value`, `For.start`).
-- **Effect Ops** (`Copy`, `Fill`, `Mma`, `ReLU`, `RMSNorm`, `Reduce`)
+- **Effect Ops** (`Copy`, `Fill`, `Cast`, `Mma`, `ReLU`, `RMSNorm`, `Reduce`)
   are value-class Ops registered with `@register_op`; in Stmt
   position they are invoked as `Evaluate(op, args)`
   ([§1.4](#14-evaluate)).
@@ -497,40 +497,47 @@ class PtrOf(Op):
     """Value form; take the device address of a tensor.
 
     Attributes:
-        x: input; the tensor whose device address is taken.
+        tensor: input; the tensor whose device address is taken.
     """
 
-    x: Tensor
+    tensor: Tensor
 ```
-- constraints: []
+- constraints:
+  - returns `PointerType(tensor.dtype, tensor.storage)`; it does not preserve
+    the tensor's shape or layout in the pointer type.
 
 ##### TensorView
 ```python
 class TensorView(Op):
-    """Value form; derive a sub-view of a tensor.
+    """Value form; construct a logical tensor over a typed pointer.
 
     Attributes:
-        memory: input; the base tensor (may be a ``PtrOf`` result).
-        coordinates: optional trailing inputs; one absolute element start per
-            logical window axis (or one absolute flat start for a rank-1 view).
-        layout: attribute; the sub-view descriptor — a plain ``Layout`` or a
-            ``ShardLayout`` placed over ``memory``.
-        shape: attribute; optional logical-shape override (reshape).
+        pointer: input; a ``PointerType`` value or an smem byte offset.
+        dtype: optional attribute; element type stated for a numeric address.
+        storage: optional attribute; storage stated for a numeric address.
+        layout: attribute; the view descriptor.
+        shape: attribute; logical shape, optionally inherited from ``PtrOf``.
     """
 
-    memory: Tensor
+    pointer: object
+    dtype: str | None = None
+    storage: StorageKind | None = None
     layout: object
     shape: tuple | None = None
 ```
 - constraints:
-  - With trailing coordinates, codegen derives the view at those absolute
-    element starts. A coordinate is not a tile ordinal and MUST NOT be
-    multiplied by the view extent.
-  - The coordinate count MUST match the logical window rank before any
-    shard-owned layout axes are removed locally.
-  - `memory` MAY be an allocated `ShardTensor`; in that case the view
-    reprojects the same storage with a new shard layout, using the tensor's
-    engine rather than its existing shard layout.
+  - An explicit `shape` is authoritative. If omitted, it is inherited only
+    when the input syntax is exactly `T.ptr_of(tensor)`, from that tensor's
+    `TensorType.shape`. No other pointer provenance and no layout is inspected
+    to guess a shape.
+  - An integer input is a byte offset from the kernel's dynamic shared-memory
+    base. It MUST state `dtype`, `storage="smem"`, and `shape`; booleans and
+    non-integer numeric addresses are invalid.
+  - A `PointerType` input MAY restate `dtype` or `storage`, but any stated value
+    MUST equal the pointer descriptor.
+  - Trailing coordinate inputs are not supported on pointer views.
+  - `T.ptr_of` MAY point at an allocated `ShardTensor`; the view rebuilds over
+    the engine pointer rather than reusing the existing shard layout.
 
 ##### Copy
 ```python
@@ -545,7 +552,12 @@ class Copy(Op):
     src: Tensor
     dst: Tensor
 ```
-- constraints: []
+- constraints:
+  - `src` declares `READ`; `dst` declares `WRITE`.
+  - both operands are whole-byte tensors in gmem, smem, or rmem, with equal
+    dtype. Their storages MAY be equal; same-storage copy is still a byte move.
+  - `scope` optionally states any non-empty run of threads. `rmem_layout` and
+    `smem_layout` optionally state the author's landing arrangements.
 
 ##### Fill
 ```python
@@ -560,7 +572,25 @@ class Fill(Op):
     tensor: Tensor
     value: Tensor
 ```
-- constraints: []
+- constraints:
+  - `tensor` declares `WRITE`; `value` declares `READ` and MUST be scalar.
+  - a nonconstant value's dtype MUST equal the destination dtype. Constant zero
+    is convertible and MAY use the parser's default scalar dtype.
+  - `scope` optionally states any non-empty run of threads.
+
+##### Cast
+```python
+class Cast(Op):
+    """Effect form; convert a register tile to another dtype."""
+
+    src: Tensor
+    dst: Tensor
+    scope: Mesh | None = None
+```
+- constraints:
+  - `src` declares `READ`; `dst` declares `WRITE`; both are rmem tensors.
+  - the operands have equal shapes and distinct dtypes.
+  - `scope` optionally states any non-empty run of threads.
 
 #### NN Ops (`tir.nn.*`)
 
@@ -964,10 +994,10 @@ atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
 with Mesh((Topology("thread", 32),), Layout(shape=(4, 8), strides=(1, 4))) as warp:
     a_frag = T.alloc_tensor(TensorType(..., layout=atom.A, storage=rmem))
     acc    = T.alloc_tensor(TensorType(..., layout=atom.C, storage=rmem))
-    T.copy(T.tensor_view(a, layout=atom.A), a_frag)   # load
+    T.copy(T.tensor_view(T.ptr_of(a), layout=atom.A), a_frag)   # load
     T.fill(acc, 0.0)
     T.mma(acc, a_frag, b_frag, atom=atom)             # compute
-    T.copy(acc, T.tensor_view(c, layout=atom.C))      # store
+    T.copy(acc, T.tensor_view(T.ptr_of(c), layout=atom.C))      # store
 ```
 
 - The author allocates each register fragment with the matching

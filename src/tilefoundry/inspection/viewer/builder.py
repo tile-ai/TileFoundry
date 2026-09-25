@@ -686,9 +686,14 @@ class ViewerBuilder:
 
 
 
-        tuple_index = (
-            call.target.index if _op_display_name(call.target) == "TupleGetItem" else None
-        )
+        tuple_index = None
+        if (
+            _op_display_name(call.target) == "TupleGetItem"
+            and len(call.args) == 2
+            and isinstance(call.args[1], Constant)
+            and isinstance(call.args[1].value, int)
+        ):
+            tuple_index = call.args[1].value
         for i, arg in enumerate(call.args):
             src = self._walk_expr(
                 g, arg, call_path=call_path, visited=visited, local_counter=local_counter

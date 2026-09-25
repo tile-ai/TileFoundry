@@ -256,12 +256,12 @@ variant as an `@<name>.specialize(pattern)` block in declared order:
 def f(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
     pass
 
-@f.specialize(DimVarRangePat("S", 1, 3))
+@f.specialize(RangePattern("S", 1, 3))
 def small_sequence(x: Tensor[(S,), "f32"]) -> Tensor[(S,), "f32"]:
     ...
 ```
 
-The pattern prints in its constructor form (`DimVarRangePat("S", 1, 3)`;
+The pattern prints in its constructor form (`RangePattern("S", 1, 3)`;
 other `Pattern` subclasses fall back to `repr(pattern)`). The emitted binding
 mirrors the authoring surface ([parser.md §2.1](./parser.md#21-syntax));
 when an IR variant has no display label, the printer synthesizes a valid binding

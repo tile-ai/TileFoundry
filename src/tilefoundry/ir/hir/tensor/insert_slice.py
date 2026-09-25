@@ -6,9 +6,9 @@ from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue
 from tilefoundry.ir.core import Constant, Op, Tuple
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Scalar, Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
+from tilefoundry.ir.pattern import Scalar, Tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
@@ -34,8 +34,6 @@ class InsertSlice(Op):
     offsets = ParamDef(kind="input", pattern=Scalar)
 
 
-
-
 def _offset_axes(call: "Call", rank: int) -> tuple:
     """Where the window starts on each axis, as a number or as the value it is.
 
@@ -47,15 +45,11 @@ def _offset_axes(call: "Call", rank: int) -> tuple:
     given = call.args[2]
     if isinstance(given, Tuple):
         return tuple(
-            int(item.value)
-            if isinstance(item, Constant) and isinstance(item.value, int)
-            else item
+            int(item.value) if isinstance(item, Constant) and isinstance(item.value, int) else item
             for item in given.elements
         )
     start = (
-        int(given.value)
-        if isinstance(given, Constant) and isinstance(given.value, int)
-        else given
+        int(given.value) if isinstance(given, Constant) and isinstance(given.value, int) else given
     )
     return (start, *(0 for _ in range(rank - 1)))
 
@@ -78,23 +72,16 @@ def _insert_slice_access(call: "Call", ctx) -> AccessRelations:
     complement, written = placed_window(
         offsets, tuple(update.shape), rank, within=tuple(result.shape)
     )
-    read_update = window_source(
-        offsets, rank, update, update, logical_coordinates(result, result)
-    )
+    read_update = window_source(offsets, rank, update, update, logical_coordinates(result, result))
     return iterating(
         result.shape,
-    AccessRelations(
+        AccessRelations(
             inputs=(
                 BoundaryRelation(complement),
                 BoundaryRelation(read_update),
-                *(
-                    BoundaryRelation(control_read(rank, ctx, arg))
-                    for arg in call.args[2:]
-                ),
+                *(BoundaryRelation(control_read(rank, ctx, arg)) for arg in call.args[2:]),
             ),
-            outputs=(
-                BoundaryRelation(written),
-            ),
+            outputs=(BoundaryRelation(written),),
         ),
     )
 
@@ -168,8 +155,6 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             )
         _check_axis(0, dst_ty.shape[0], upd_ty.shape[0], off_expr, ctx, call)
     return dst_ty
-
-
 
 
 @register_eval(InsertSlice)

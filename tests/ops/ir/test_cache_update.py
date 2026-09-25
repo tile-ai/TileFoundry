@@ -31,8 +31,8 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.types import (
     DType,
+    Layout,
     Topology,
-    make_mesh,
     make_shard_tensor_type,
     make_tensor_type,
 )
@@ -76,7 +76,10 @@ TYPEINFER_CASES = [
         CacheUpdate(),
         (
             make_shard_tensor_type(
-                (1, 16, 4, 8), DType.bf16, mesh=make_mesh((4,)), attrs=(Partial("sum"),)
+                (1, 16, 4, 8),
+                DType.bf16,
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Partial("sum"),),
             ),
             make_tensor_type((1,), DType.i32),
             make_tensor_type((1,), DType.i32),
@@ -92,7 +95,10 @@ TYPEINFER_CASES = [
             make_tensor_type((1,), DType.i32),
             make_tensor_type((1,), DType.i32),
             make_shard_tensor_type(
-                (1, 4, 4, 8), DType.bf16, mesh=make_mesh((4,)), attrs=(Partial("sum"),)
+                (1, 4, 4, 8),
+                DType.bf16,
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Partial("sum"),),
             ),
         ),
         ExpectedError(match="new carries Partial"),
@@ -166,7 +172,7 @@ def test_cache_update_cost_is_independent_of_cache_length(cache_len) -> None:
 
 
 _CTA = Topology("cta", 2)
-_CTA_MESH = make_mesh((2,), topology=_CTA)
+_CTA_MESH = Mesh((_CTA,), Layout((2,), (1,)), ("g",))
 
 
 @module(

@@ -16,7 +16,7 @@ from tilefoundry.dsl._tensor import ConstTensor, Tensor
 
 
 from tilefoundry.script import func
-from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
+from tilefoundry.ir.pattern import RangePattern, Pattern
 from tilefoundry.ir.types.dim import DimVar, ceildiv
 from tilefoundry.ir.types import B, Broadcast, Mesh, P, Partial, S, Split, Topology
 from tilefoundry.ir.core.kinds import ReduceKind, UnaryKind, BinaryKind
@@ -28,7 +28,7 @@ __all__ = [
     "Tensor",
     "func",
     "Pattern",
-    "DimVarRangePat",
+    "RangePattern",
     "DimVar",
     "ceildiv",
     "Mesh",

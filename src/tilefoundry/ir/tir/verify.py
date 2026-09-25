@@ -11,12 +11,12 @@ from typing import Iterable
 
 from tilefoundry.ir.core import Expr, Var, VerifyError
 from tilefoundry.ir.core.expr import Call, Constant
-from tilefoundry.ir.core.pattern import DimVarRangePat, locate_dim_var
 from tilefoundry.ir.hir.function import (
     Function as HirFunction,
 )
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.verify import verify_function
+from tilefoundry.ir.pattern import RangePattern, between_rules, locate_dim_var
 from tilefoundry.ir.types import DType, TensorType, UnitType
 from tilefoundry.ir.types.callable_type import callable_type_for_prim_function
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMax, DimMin, DimMod, DimMul, DimSub
@@ -50,6 +50,38 @@ from .symbol_ref import SymbolRef
 _PRIM_FUNCTION = "[tir §1.3](docs/spec/tir.md#13-primfunction)"
 
 
+def _input_params(op_type: type) -> tuple:
+    return tuple(param for param in op_type._op_schema.signature if param.kind == "input")
+
+
+def verify_between(call, ctx, lead: str = "") -> None:
+    """Hold one call to the relations declared between its operands."""
+    op_type = type(call.target)
+    rules = between_rules(op_type)
+    if not rules:
+        return
+    names = tuple(param.name for param in _input_params(op_type))
+    operands = dict(zip(names, (ctx.type_of(arg) for arg in call.args)))
+    for rule in rules:
+        if not rule.holds(operands):
+            ctx.error(call, lead + rule.refused(operands))
+
+
+def verify_operands(call, ctx, label: str) -> None:
+    """Hold each operand to the pattern declared for its parameter."""
+    for param, arg in zip(_input_params(type(call.target)), call.args):
+        if param.pattern is None:
+            continue
+        value = ctx.type_of(arg)
+        if param.pattern.match(value) is None:
+            ctx.error(
+                call,
+                f"{label} {param.name} is {tuple(value.shape)} "
+                f"{value.dtype.name} storage={value.storage}: "
+                f"{param.pattern.refusal(value)}",
+            )
+
+
 def verify_prim_function(
     fn: PrimFunction, *, module_fns: Iterable[PrimFunction] | Module = ()
 ) -> None:
@@ -57,9 +89,11 @@ def verify_prim_function(
     _check_param_homogeneity(fn)
     if fn.variants:
         for variant in fn.variants:
-            if len(variant.specializations) != 1 or not isinstance(variant.specializations[0], DimVarRangePat):
+            if len(variant.specializations) != 1 or not isinstance(
+                variant.specializations[0], RangePattern
+            ):
                 raise VerifyError(
-                    f"PrimFunction {fn.name!r}: each variant must have one DimVarRangePat"
+                    f"PrimFunction {fn.name!r}: each variant must have one RangePattern"
                 )
             pat = variant.specializations[0]
             if locate_dim_var(fn.params, pat.dim_var) is None:
@@ -272,8 +306,7 @@ def _check_bound_coordinates(field: str, bound, scope) -> None:
             )
         if not any(held is mesh or held == mesh for held in scope):
             raise VerifyError(
-                f"For.{field} reads a coordinate of {mesh!r}, which no enclosing "
-                "MeshScope binds"
+                f"For.{field} reads a coordinate of {mesh!r}, which no enclosing MeshScope binds"
             )
 
 
@@ -537,9 +570,7 @@ def verify_module(fns) -> None:
     if isinstance(fns, Module):
         fns = module_functions(fns)
     prim_fns = [f for f in fns if isinstance(f, PrimFunction)]
-    prim_fns_with_variants = [
-        variant for f in prim_fns for variant in (f, *f.variants)
-    ]
+    prim_fns_with_variants = [variant for f in prim_fns for variant in (f, *f.variants)]
     for f in fns:
         if isinstance(f, HirFunction):
             verify_function(f)
@@ -571,4 +602,4 @@ def verify_module(fns) -> None:
             )
 
 
-__all__ = ["verify_prim_function", "verify_module"]
+__all__ = ["verify_between", "verify_module", "verify_operands", "verify_prim_function"]

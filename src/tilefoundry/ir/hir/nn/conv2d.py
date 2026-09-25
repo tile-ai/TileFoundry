@@ -8,10 +8,10 @@ from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Expr, Op
 from tilefoundry.ir.core.expr import Call, Constant
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.isl_interop import normalize_dim
+from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import Layout, TensorType
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimSub, simplify_dim
 from tilefoundry.ir.types.shard_layout import Split, shard_layout_of, split_target_axes

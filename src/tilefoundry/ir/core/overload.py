@@ -40,19 +40,14 @@ def _pattern_matches(pd: ParamDef, arg_type: Any) -> bool:
     """True iff ``pd.pattern`` accepts ``arg_type`` (or no pattern given)."""
     if pd.pattern is None:
         return True
-    return pd.pattern.match(arg_type)
-
-
-
+    return pd.pattern.match(arg_type) is not None
 
 
 class OverloadError(LookupError):
     """No OpSchema candidate matched the given arg types."""
 
 
-def filter_candidates(
-    candidates: Iterable[OpSchema], arg_types: Sequence[Any]
-) -> list[OpSchema]:
+def filter_candidates(candidates: Iterable[OpSchema], arg_types: Sequence[Any]) -> list[OpSchema]:
     """Return candidates whose arity + every input pattern matches.
 
     Order is preserved; this is the raw filter without first-match
@@ -75,9 +70,7 @@ def filter_candidates(
     return out
 
 
-def resolve(
-    candidates: Iterable[OpSchema], arg_types: Sequence[Any]
-) -> OpSchema:
+def resolve(candidates: Iterable[OpSchema], arg_types: Sequence[Any]) -> OpSchema:
     """Return the first matching candidate (F3 first-match lock).
 
     Raises :class:`OverloadError` if no candidate matches.

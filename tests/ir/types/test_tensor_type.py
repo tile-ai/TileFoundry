@@ -15,7 +15,6 @@ from tilefoundry.ir.types import (
     Split,
     TensorType,
     Topology,
-    make_mesh,
     make_shard_tensor_type,
 )
 from tilefoundry.ir.types.dim import DimVar, ceildiv
@@ -62,7 +61,9 @@ def test_zero_extent_has_zero_logical_and_local_size() -> None:
     assert numel(type) == 0
     assert tensor_bytes(type) == 0
 
-    sharded = make_shard_tensor_type((0,), mesh=make_mesh((2,)), attrs=(Split(0),))
+    sharded = make_shard_tensor_type(
+        (0,), mesh=Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("g",)), attrs=(Split(0),)
+    )
     assert local_type_of(sharded, topology_level="gpu", topologies=(Topology("gpu", 2),)).shape == (
         1,
         0,
@@ -84,7 +85,7 @@ def test_size_rejects_symbolic_and_negative_extents() -> None:
 
 
 def test_local_type_rejects_a_zero_mesh_extent() -> None:
-    mesh = make_mesh((0,))
+    mesh = Mesh((Topology("gpu", 0),), Layout((0,), (1,)), ("g",))
     layout = ShardLayout(Layout(shape=(0,), strides=(1,)), (Split(0),), mesh)
     type = TensorType(shape=(0,), dtype=DType.f32, layout=layout, storage="gmem")
 

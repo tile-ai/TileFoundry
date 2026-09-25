@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core import Var
-from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function as HirFunction
+from tilefoundry.ir.pattern import RangePattern
 from tilefoundry.ir.types import make_tensor_type
 from tilefoundry.ir.types.dim import DimVar
 
@@ -27,7 +27,7 @@ def _fn(*, body_is_self: bool, lo: int = 0, hi: int = 0) -> HirFunction:
         params=(x,),
         body=x if body_is_self else None,
         return_type=ty,
-        specializations=(DimVarRangePat("S", lo, hi),) if lo else (),
+        specializations=(RangePattern("S", lo, hi),) if lo else (),
     )
 
 
@@ -43,7 +43,7 @@ def test_prototype_prints_pass_base_and_specialize_blocks() -> None:
 
     The base is a pass-bodied prototype and each variant a ``.specialize`` block
     over a generated binding. The ``@module``-wrapped form must emit the same
-    ``DimVarRangePat`` import as the standalone form — module and standalone output
+    ``RangePattern`` import as the standalone form — module and standalone output
     share one header emitter, so a construct requiring an extra import in one mode
     requires it in both.
     """
@@ -54,10 +54,10 @@ def test_prototype_prints_pass_base_and_specialize_blocks() -> None:
         assert "    pass" in src
         assert "def variant_S_1_2(" in src
         assert "def variant_S_4_6(" in src
-        assert '@main.specialize(DimVarRangePat("S", 1, 2))' in src
-        assert '@main.specialize(DimVarRangePat("S", 4, 6))' in src
+        assert '@main.specialize(RangePattern("S", 1, 2))' in src
+        assert '@main.specialize(RangePattern("S", 4, 6))' in src
 
-        assert "from tilefoundry.ir.core.pattern import DimVarRangePat" in src
+        assert "from tilefoundry.ir.pattern import RangePattern" in src
         compile(src, "<test>", "exec")
 
     assert "@func\ndef main(" in standalone
@@ -67,5 +67,5 @@ def test_prototype_prints_pass_base_and_specialize_blocks() -> None:
 def test_normal_function_omits_specialize() -> None:
     src = as_script(_fn(body_is_self=True))
     assert ".specialize(" not in src
-    assert "DimVarRangePat" not in src
+    assert "RangePattern" not in src
     assert "    pass" not in src

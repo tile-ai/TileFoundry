@@ -15,7 +15,14 @@ from tests.ops.ir.typeinfer_utils import (
     raw_shard_tensor_type,
 )
 from tilefoundry.ir.hir.tensor.transpose import Transpose
-from tilefoundry.ir.types import DType, Layout, make_mesh, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types import (
+    DType,
+    Layout,
+    Mesh,
+    Topology,
+    make_shard_tensor_type,
+    make_tensor_type,
+)
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     ShardLayout,
@@ -23,7 +30,11 @@ from tilefoundry.ir.types.shard_layout import (
     shard_layout_local_shape,
 )
 
-_M = make_mesh((1, 128, 8, 32), ("cluster", "cta", "warp", "lane"))
+_M = Mesh(
+    (Topology("gpu", 32768),),
+    Layout((1, 128, 8, 32), (32768, 256, 32, 1)),
+    ("cluster", "cta", "warp", "lane"),
+)
 _B4 = (Broadcast(), Broadcast(), Broadcast(), Broadcast())
 _T10 = Transpose(perm=(1, 0))
 

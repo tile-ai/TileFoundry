@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from tests.models.deepseek_v4_flash.model import REAL, deepseek_v4_flash_module
 from tilefoundry.inspection import as_script
-from tilefoundry.ir.constraints import LayoutConstraint, constraint_metadata
+from tilefoundry.ir.clause import LayoutClause, clause_metadata
 from tilefoundry.ir.core import Call, Tuple
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.nn.matmul import MatMul
@@ -53,8 +53,8 @@ def test_root_helpers_and_constraints_keep_real_model_contract() -> None:
         for call in _calls(deepseek_v4_flash_moe)
         if isinstance(call.target, Function) and call.target.name == "moe_topk"
     )
-    routed = constraint_metadata(routed_call).constraints[0]
-    assert isinstance(routed, LayoutConstraint)
+    routed = clause_metadata(routed_call).constraints[0]
+    assert isinstance(routed, LayoutClause)
     assert repr(routed.layout.shape[0]) == "_"
     assert routed.layout.shape[1:] == (N_ACT, DIM)
     assert routed.bindings == (("cta", Split(1)),)
@@ -65,8 +65,8 @@ def test_root_helpers_and_constraints_keep_real_model_contract() -> None:
         for call in _calls(deepseek_v4_flash_moe)
         if isinstance(call.target, Function) and call.target.name == "combine_expert_outputs"
     )
-    combined = constraint_metadata(combined_call).constraints[0]
-    assert isinstance(combined, LayoutConstraint)
+    combined = clause_metadata(combined_call).constraints[0]
+    assert isinstance(combined, LayoutClause)
     assert combined.bindings == (("cta", Broadcast()),)
 
 

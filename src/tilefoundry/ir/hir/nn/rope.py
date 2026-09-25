@@ -18,10 +18,10 @@ from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue, TupleValue, to_torch_dtype
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials, reject_partials
 from tilefoundry.ir.isl_interop import index_set
+from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import TupleType
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -113,13 +113,15 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
         logical_table = ctx.type_of(call.args[operand])
         rows = len(logical_table.shape) - 1
         tables.append(
-            BoundaryRelation(reached_at(
+            BoundaryRelation(
+                reached_at(
                     rank + 1,
                     table,
                     logical_table,
                     {rows: carried.get(head_dim, "0")},
                     free=tuple(range(rows)),
-                ))
+                )
+            )
         )
     return iterating(
         (*q_ty.shape, 2),
@@ -128,13 +130,15 @@ def _rope_access_relation(call: "Call", ctx: "TypeInferContext") -> AccessRelati
                 BoundaryRelation(value),
                 BoundaryRelation(grouped),
                 *tables,
-                BoundaryRelation(reached_at(
+                BoundaryRelation(
+                    reached_at(
                         rank + 1,
                         positions,
                         ctx.type_of(call.args[4]),
                         {},
                         free=tuple(range(len(ctx.type_of(call.args[4]).shape))),
-                    )),
+                    )
+                ),
             ),
             outputs=(
                 BoundaryRelation(value),

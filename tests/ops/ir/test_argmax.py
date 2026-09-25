@@ -16,8 +16,9 @@ from tilefoundry.ir.hir.tensor.argmax import ArgMax
 from tilefoundry.ir.types import (
     DType,
     Layout,
+    Mesh,
     ShardLayout,
-    make_mesh,
+    Topology,
     make_shard_tensor_type,
     make_tensor_type,
 )
@@ -45,13 +46,25 @@ CASES = [
     TypeInferCase(
         "partial_input_rejected",
         ArgMax(),
-        (make_shard_tensor_type((4, 256), mesh=make_mesh((4,)), attrs=(Partial("max"),)),),
+        (
+            make_shard_tensor_type(
+                (4, 256),
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Partial("max"),),
+            ),
+        ),
         ExpectedError(match="x carries Partial"),
     ),
     TypeInferCase(
         "reduction_axis_split_rejected",
         ArgMax(axis=-1),
-        (make_shard_tensor_type((4, 256), mesh=make_mesh((4,)), attrs=(Split(1),)),),
+        (
+            make_shard_tensor_type(
+                (4, 256),
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Split(1),),
+            ),
+        ),
         ExpectedError(match=r"reduction axis 1.*Split-sharded.*Reshard"),
     ),
 ]
@@ -66,7 +79,9 @@ def test_argmax_layout_describes_result_and_preserves_surviving_split():
     plain = make_tensor_type((4, 256), DType.f32, layout=Layout(shape=(4, 256), strides=(256, 1)))
     assert infer_call(ArgMax(axis=-1), plain).layout == Layout(shape=(4,), strides=(1,))
 
-    sharded = make_shard_tensor_type((4, 256), mesh=make_mesh((4,)), attrs=(Split(0),))
+    sharded = make_shard_tensor_type(
+        (4, 256), mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)), attrs=(Split(0),)
+    )
     result = infer_call(ArgMax(axis=-1), sharded)
     assert isinstance(result.layout, ShardLayout)
     assert result.layout.attrs == (Split(0),)

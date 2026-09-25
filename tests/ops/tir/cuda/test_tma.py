@@ -101,7 +101,7 @@ class TmaTiers:
     ):
         with Mesh((Topology("thread", 128),), Layout(shape=(128,), strides=(1,)), ("t",)) as m:
             bulk_view = T.tensor_view(
-                bulk_a,
+                T.ptr_of(bulk_a),
                 layout=ShardLayout(
                     layout=Layout(shape=(256,), strides=(1,)), attrs=(Broadcast(),), mesh=m
                 ),
@@ -126,7 +126,7 @@ class TmaTiers:
             T.copy(bulk_stage, bulk_b)
         with Mesh((Topology("thread", 128),), Layout(shape=(128,), strides=(1,)), ("t",)) as mo:
             odd_view = T.tensor_view(
-                odd_a,
+                T.ptr_of(odd_a),
                 layout=ShardLayout(
                     layout=Layout(shape=(5,), strides=(1,)), attrs=(Broadcast(),), mesh=mo
                 ),

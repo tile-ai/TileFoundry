@@ -7,9 +7,9 @@ from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
+from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.shard_layout import ShardLayout, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
@@ -44,9 +44,7 @@ def _normalized_axis(call: "Call", ctx: "TypeInferContext", rank: int) -> int:
 def _reject_normalized_splits(call, ctx, name, type_, first_axis: int) -> None:
     if not isinstance(type_.layout, ShardLayout):
         return
-    for mesh_axis, logical_axis in enumerate(
-        split_target_axes(type_.layout, type_.shape)
-    ):
+    for mesh_axis, logical_axis in enumerate(split_target_axes(type_.layout, type_.shape)):
         if logical_axis is not None and logical_axis >= first_axis:
             ctx.error(
                 call,
@@ -123,9 +121,9 @@ def _layer_norm_access(call: "Call", ctx) -> AccessRelations:
     where = f" : {' and '.join(guards)}" if guards else ""
     row = AffineAccess(isl.map(f"{{ [{domain}] -> [{', '.join(names)}]{where} }}"))
     belongs = logical_axes_of(x, x)
-    suffix = ", ".join(
-        names[position] for position, owner in enumerate(belongs) if owner >= axis
-    ) or "0"
+    suffix = (
+        ", ".join(names[position] for position, owner in enumerate(belongs) if owner >= axis) or "0"
+    )
     across = AffineAccess(isl.map(f"{{ [{domain}] -> [{suffix}]{where} }}"))
     return iterating(
         rows,

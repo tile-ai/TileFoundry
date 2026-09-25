@@ -20,8 +20,8 @@ from tilefoundry import func, module
 from tilefoundry.dsl import (  # noqa: F401
     ConstTensor,
     DimVar,
-    DimVarRangePat,
     Mesh,
+    RangePattern,
     Tensor,
     tf,
 )
@@ -73,9 +73,7 @@ def test_prefill_decode_specializations_survive_the_round_trip() -> None:
         assert len(variants) == 2
         for variant in variants:
             targets = {
-                type(expr.target)
-                for expr in collect_exprs(variant.body)
-                if isinstance(expr, Call)
+                type(expr.target) for expr in collect_exprs(variant.body) if isinstance(expr, Call)
             }
             assert Arange in targets
             assert Where in targets
@@ -265,9 +263,7 @@ def test_a_child_before_the_functions_naming_it() -> None:
 @module(entry="run")
 class _WeightedAtAnySize:
     @func
-    def run(
-        x: Tensor[(_N, 8), "f32"], w: ConstTensor[(8, 8), "f32"]
-    ) -> Tensor[(_N, 8), "f32"]:
+    def run(x: Tensor[(_N, 8), "f32"], w: ConstTensor[(8, 8), "f32"]) -> Tensor[(_N, 8), "f32"]:
         return tf.matmul(x, w)
 
 
@@ -279,7 +275,7 @@ class _Dispatching:
     def dispatch(x: Tensor[(_N, 8), "f32"]) -> Tensor[(_N, 8), "f32"]:
         pass
 
-    @dispatch.specialize(DimVarRangePat("n_print", 1, 8))
+    @dispatch.specialize(RangePattern("n_print", 1, 8))
     def child_dispatch(x: Tensor[(_N, 8), "f32"]) -> Tensor[(_N, 8), "f32"]:
         return leaf(x)  # noqa: F821
 
@@ -298,7 +294,7 @@ def test_a_child_call_in_a_specialization_body_survives_the_round_trip() -> None
     (imported_child,) = imported.modules
     (variant,) = imported.entry_function().variants
     assert imported.entry_function().body is None
-    assert variant.specializations == (DimVarRangePat("n_print", 1, 8),)
+    assert variant.specializations == (RangePattern("n_print", 1, 8),)
     assert variant.body.target is imported_child.entry_function()
     assert len(variant.body.args) == 1
     assert [param.is_const for param in variant.body.target.params] == [False, True]
@@ -308,6 +304,6 @@ def test_hir_function_dot_keeps_loop_regions_as_opaque_leaves() -> None:
     """The public DOT form keeps structured regions as white leaf boxes."""
     dot = hir_function_to_dot(static_online_attend.entry_function())
 
-    assert len(dot.splitlines()) == 29
+    assert len(dot.splitlines()) == 33
     assert 'label="LoopRegion", fillcolor="#ffffff"' in dot
     assert "TupleType(" not in dot

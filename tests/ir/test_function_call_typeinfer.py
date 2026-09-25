@@ -21,8 +21,10 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.types import (
     DType,
+    Layout,
+    Mesh,
+    Topology,
     TupleType,
-    make_mesh,
     make_shard_tensor_type,
     make_tensor_type,
 )
@@ -32,7 +34,7 @@ from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 _F = DType.f32
-_M = make_mesh((4,))
+_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 _PLAIN = make_tensor_type((4, 8), _F)
 _SPLIT0 = make_shard_tensor_type((4, 8), mesh=_M, attrs=(Split(0),))
 
@@ -152,7 +154,7 @@ def test_plain_formal_rejects_shape_or_dtype_mismatch():
 
 
 def test_function_call_preserves_partial_in_tuple_return():
-    mesh_ab = make_mesh((2, 4), ("a", "b"))
+    mesh_ab = Mesh((Topology("gpu", 8),), Layout((2, 4), (4, 1)), ("a", "b"))
     partial = make_shard_tensor_type((4, 8), mesh=mesh_ab, attrs=(Broadcast(), Partial("max")))
     param = Var(type=_PLAIN, name="x")
     return_type = TupleType(fields=(_PLAIN, _PLAIN))

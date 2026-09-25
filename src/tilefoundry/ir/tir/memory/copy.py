@@ -9,10 +9,10 @@ Load / Store too. The Op is placed in Stmt position as
 from __future__ import annotations
 
 from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor
+from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.types import UnitType
+from tilefoundry.ir.pattern import any_threads, moved_tile
+from tilefoundry.ir.types import LayoutBase, UnitType
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
@@ -21,8 +21,12 @@ from tilefoundry.visitor_registry import register_typeinfer, register_verify_stm
 class Copy(Op):
     """Copies ``src`` into ``dst`` (in-place memory write)."""
 
-    src = ParamDef(kind="input", pattern=Tensor)
-    dst = ParamDef(kind="input", pattern=Tensor)
+    src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=moved_tile(0))
+    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=moved_tile(1))
+    rmem_layout = ParamDef(kind="attribute", annotation=LayoutBase, optional=True, default=None)
+    smem_layout = ParamDef(kind="attribute", annotation=LayoutBase, optional=True, default=None)
+
+    scope = any_threads()
 
 
 @register_typeinfer(Copy)

@@ -12,16 +12,50 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.tir.launch import Launch
+from tilefoundry.ir.tir.memory import AllocTensor
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import (
     Evaluate,
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
-from tilefoundry.ir.types import DType, TensorType
+from tilefoundry.ir.types import DType, PointerType, TensorType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.visitor import StmtVisitor
 from tilefoundry.utils.python_source import PythonExpr, _merge_imports
+
+_LINE_LENGTH = 100
+
+
+def _split_top_level(text: str) -> list[str]:
+    """Split comma-separated Python fragments without cutting nested forms."""
+    parts: list[str] = []
+    start = 0
+    depth = 0
+    quote = None
+    escaped = False
+    for index, char in enumerate(text):
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in {'"', "'"}:
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(text[start:index].strip())
+            start = index + 1
+    tail = text[start:].strip()
+    if tail:
+        parts.append(tail)
+    return parts
 
 
 class _RenderedLines(list):
@@ -74,21 +108,29 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         if isinstance(target, Slice):
             return self._window_subscript(expr, ctx)
         scalar_binary = {
-            BinaryKind.EQ: "==", BinaryKind.NE: "!=", BinaryKind.LT: "<",
-            BinaryKind.LE: "<=", BinaryKind.GT: ">", BinaryKind.GE: ">=", BinaryKind.AND: "and",
+            BinaryKind.EQ: "==",
+            BinaryKind.NE: "!=",
+            BinaryKind.LT: "<",
+            BinaryKind.LE: "<=",
+            BinaryKind.GT: ">",
+            BinaryKind.GE: ">=",
+            BinaryKind.AND: "and",
         }
         kind = getattr(target, "kind", None)
         if kind in scalar_binary and len(expr.args) == 2 and expr.type.dtype is DType.bool:
             return f"{self.visit(expr.args[0])} {scalar_binary[kind]} {self.visit(expr.args[1])}"
-        name = getattr(getattr(target, "_op_schema", None), "name", None) or re.sub(
-            r"(?<!^)(?=[A-Z])", "_", type(target).__name__
-        ).lower()
+        name = (
+            getattr(getattr(target, "_op_schema", None), "name", None)
+            or re.sub(r"(?<!^)(?=[A-Z])", "_", type(target).__name__).lower()
+        )
         args = [self.visit(item) for item in expr.args]
         for param in type(target).params():
             if param.kind == "attribute":
                 value = getattr(target, param.name, None)
                 if value is not None:
-                    args.append(f"{param.name}={self.render_value(value, self.context, self.indent + '    ')}")
+                    args.append(
+                        f"{param.name}={self.render_value(value, self.context, self.indent + '    ')}"
+                    )
         self.context.use(PythonExpr(("from tilefoundry.dsl import T",), "T"))
         return f"T.{name}({', '.join(args)})"
 
@@ -102,11 +144,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         spans = []
         starts = expr.args[1].elements
         for start, size, stride in zip(starts, expr.target.sizes, expr.target.strides):
-            low = (
-                self.dim_entry(start, ctx)
-                if is_dim_op_call(start)
-                else self.visit(start, ctx)
-            )
+            low = self.dim_entry(start, ctx) if is_dim_op_call(start) else self.visit(start, ctx)
             high = f"{low} + {size * stride}"
             spans.append(f"{low}:{high}" if stride == 1 else f"{low}:{high}:{stride}")
         return f"{self.visit(expr.args[0], ctx)}[{', '.join(spans)}]"
@@ -115,13 +153,70 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         return [line for child in stmt.body for line in self.visit(child)]
 
     def visit_LetStmt(self, stmt, ctx=None):
-        return [f"{self.indent}{stmt.var.name} = {self.visit(stmt.value)}"] + self.visit(stmt.body)
+        rendered = self.visit(stmt.value)
+        line = f"{self.indent}{stmt.var.name} = {rendered}"
+        if len(line) + 4 <= _LINE_LENGTH or not isinstance(stmt.value, Call):
+            return [line] + self.visit(stmt.body)
+        if isinstance(stmt.value.target, AllocTensor):
+            lines = self._wrapped_alloc(stmt)
+        else:
+            lines = self._wrapped_call(f"{stmt.var.name} = ", rendered)
+        return lines + self.visit(stmt.body)
+
+    def _wrapped_call(self, prefix: str, rendered: str) -> list[str]:
+        head, separator, arguments = rendered.partition("(")
+        if not separator or not arguments.endswith(")"):
+            return [f"{self.indent}{prefix}{rendered}"]
+        content = arguments[:-1]
+        continuation = f"{self.indent}    {content}"
+        if len(continuation) + 4 <= _LINE_LENGTH:
+            middle = [continuation]
+        else:
+            middle = [f"{self.indent}    {part}," for part in _split_top_level(content)]
+        return [f"{self.indent}{prefix}{head}(", *middle, f"{self.indent})"]
+
+    def _wrapped_alloc(self, stmt) -> list[str]:
+        target = stmt.value.target
+        tensor = self.render_value(target.tensor_type, self.context)
+        argument = f"tensor_type={tensor}"
+        continuation = f"{self.indent}    {argument}"
+        if len(continuation) + 4 <= _LINE_LENGTH:
+            middle = [continuation]
+        else:
+            assert tensor.startswith("Tensor[") and tensor.endswith("]")
+            fields = _split_top_level(tensor[len("Tensor[") : -1])
+            packed = ", ".join(fields)
+            field_indent = f"{self.indent}        "
+            if len(field_indent + packed) + 4 <= _LINE_LENGTH:
+                field_lines = [field_indent + packed]
+            else:
+                field_lines = [field_indent + field + "," for field in fields]
+            middle = [
+                f"{self.indent}    tensor_type=Tensor[",
+                *field_lines,
+                f"{self.indent}    ]",
+            ]
+        return [
+            f"{self.indent}{stmt.var.name} = T.alloc_tensor(",
+            *middle,
+            f"{self.indent})",
+        ]
 
     def visit_Evaluate(self, stmt, ctx=None):
         return self._emit_evaluate(stmt)
 
     def visit_MeshScope(self, stmt, ctx=None):
-        lines = [f"{self.indent}with {self.visit(stmt.mesh, self.context)} as {stmt.binding.name}:"]
+        rendered = self.visit(stmt.mesh, self.context)
+        line = f"{self.indent}with {rendered} as {stmt.binding.name}:"
+        if len(line) + 4 <= _LINE_LENGTH:
+            lines = [line]
+        else:
+            content = rendered.removeprefix("Mesh(").removesuffix(")")
+            lines = [
+                f"{self.indent}with Mesh(",
+                f"{self.indent}    {content}",
+                f"{self.indent}) as {stmt.binding.name}:",
+            ]
         self.context.push_mesh(stmt.mesh, stmt.binding.name)
         lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body))
         self.context.pop_mesh()
@@ -135,8 +230,7 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
         print context holds, so the bounds are rendered through it.
         """
         bounds = ", ".join(
-            self.visit(bound, self.context)
-            for bound in (stmt.start, stmt.stop, stmt.step)
+            self.visit(bound, self.context) for bound in (stmt.start, stmt.stop, stmt.step)
         )
         lines = [f"{self.indent}for {stmt.induction_var.name} in range({bounds}):"]
         lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body))
@@ -144,24 +238,35 @@ class TirPrinter(PythonPrinter, StmtVisitor[list[str]]):
 
     def visit_If(self, stmt, ctx=None):
         lines = [f"{self.indent}if {self.visit(stmt.cond)}:"]
-        lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.then_body))
+        lines.extend(
+            TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.then_body)
+        )
         if stmt.else_body.body:
             lines.append(f"{self.indent}else:")
-            lines.extend(TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.else_body))
+            lines.extend(
+                TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.else_body)
+            )
         return lines
 
     def visit_While(self, stmt, ctx=None):
-        return [f"{self.indent}while {self.visit(stmt.cond)}:"] + TirPrinter(context=self.context, indent=self.indent + "    ").visit(stmt.body)
+        return [f"{self.indent}while {self.visit(stmt.cond)}:"] + TirPrinter(
+            context=self.context, indent=self.indent + "    "
+        ).visit(stmt.body)
 
     def visit_Return(self, stmt, ctx=None):
         return [f"{self.indent}return"]
 
-    def _join_args(self, args): return ", ".join(self.visit(arg) for arg in args)
+    def _join_args(self, args):
+        return ", ".join(self.visit(arg) for arg in args)
 
     def _emit_evaluate(self, stmt):
-        handler = _STMT_PRINTERS.get(type(stmt.callable)) or (_STMT_PRINTERS.get(Op) if isinstance(stmt.callable, Op) else None)
+        handler = _STMT_PRINTERS.get(type(stmt.callable)) or (
+            _STMT_PRINTERS.get(Op) if isinstance(stmt.callable, Op) else None
+        )
         if handler is None:
-            raise NotImplementedError(f"TIR printer has no emitter for {type(stmt.callable).__name__}")
+            raise NotImplementedError(
+                f"TIR printer has no emitter for {type(stmt.callable).__name__}"
+            )
         return handler(stmt, self)
 
 
@@ -170,9 +275,11 @@ _STMT_PRINTERS: dict[type, object] = {}
 
 def register_tir_printer(node_type: type):
     """Register the source emitter for one TIR callable/statement type."""
+
     def decorate(fn):
         _STMT_PRINTERS[node_type] = fn
         return fn
+
     return decorate
 
 
@@ -186,7 +293,9 @@ def _print_launch(stmt: Evaluate, printer: TirPrinter) -> list[str]:
     callee, grid = stmt.args[0], stmt.args[1:4]
     block = stmt.args[4:7]
     forwarded = stmt.args[7:]
-    return [f"{indent}launch({printer.visit(callee)}, {printer._join_args(forwarded)}, grid={printer.visit(Tuple(type=grid[0].type, elements=tuple(grid)))}, block={printer.visit(Tuple(type=block[0].type, elements=tuple(block)))})  # noqa: F821"]
+    return [
+        f"{indent}launch({printer.visit(callee)}, {printer._join_args(forwarded)}, grid={printer.visit(Tuple(type=grid[0].type, elements=tuple(grid)))}, block={printer.visit(Tuple(type=block[0].type, elements=tuple(block)))})  # noqa: F821"
+    ]
 
 
 @register_tir_printer(Op)
@@ -205,7 +314,16 @@ def _print_op_evaluate(stmt: Evaluate, printer: TirPrinter) -> list[str]:
         rendered = printer.render_value(value, printer.context, printer.indent + "    ")
         attrs.append(rendered if op_name == "sync" and p.name == "mesh" else f"{p.name}={rendered}")
     rendered_args = [printer.visit(arg) for arg in args]
-    return [f"{indent}{printer.visit_Op(target)}({', '.join(rendered_args + attrs)})"]
+    head = printer.visit_Op(target)
+    arguments = rendered_args + attrs
+    line = f"{indent}{head}({', '.join(arguments)})"
+    if len(line) + 4 <= _LINE_LENGTH:
+        return [line]
+    return [
+        f"{indent}{head}(",
+        *(f"{indent}    {argument}," for argument in arguments),
+        f"{indent})",
+    ]
 
 
 def _function_block(fn: PrimFunction) -> list[str]:
@@ -213,25 +331,42 @@ def _function_block(fn: PrimFunction) -> list[str]:
     target = ctx.use(fn.target.to_python())
     ctx.use(PythonExpr(("from tilefoundry import prim_func",), "prim_func"))
     ctx.use(PythonExpr(("from tilefoundry.dsl import Tensor",), "Tensor"))
-    dim_vars = {d.name: d for p in fn.params if isinstance(p.type, TensorType) for d in p.type.shape if hasattr(d, "name")}
+    dim_vars = {
+        d.name: d
+        for p in fn.params
+        if isinstance(p.type, TensorType)
+        for d in p.type.shape
+        if hasattr(d, "name")
+    }
     if dim_vars:
         ctx.use(PythonExpr(("from tilefoundry.dsl import DimVar",), "DimVar"))
     lines = [f'_{d.name} = DimVar("{d.name}", {d.lo}, {d.hi})' for d in dim_vars.values()]
     lines.append("@prim_func(target=" + target + ")")
     params = ", ".join(
-        f"{p.name}: {TirPrinter(context=ctx).visit(p.type, ctx) if isinstance(p.type, TensorType) else repr(p.type)}"
+        f"{p.name}: {TirPrinter(context=ctx).visit(p.type, ctx) if isinstance(p.type, (TensorType, PointerType)) else repr(p.type)}"
         for p in fn.params
     )
-    lines.append(f"def {_binding_name(fn.name)}({params}):")
+    definition = f"def {_binding_name(fn.name)}({params}):"
+    if len(definition) + 4 <= _LINE_LENGTH:
+        lines.append(definition)
+    else:
+        lines.extend((f"def {_binding_name(fn.name)}(", f"    {params}", "):"))
     body = TirPrinter(context=ctx, indent="    ").visit(fn.body)
     lines.extend(body or ["    pass"])
     if fn.variants:
-        ctx.use(PythonExpr(("from tilefoundry.ir.core.pattern import DimVarRangePat",), "DimVarRangePat"))
+        ctx.use(PythonExpr(("from tilefoundry.ir.pattern import RangePattern",), "RangePattern"))
     for variant in fn.variants:
         pat = variant.specializations[0]
         lines.append("")
-        lines.append(f"@{_binding_name(fn.name)}.specialize({TirPrinter(context=ctx).render_pattern(pat, ctx)})")
-        lines.append(f"def {_binding_name(getattr(variant, '_display_name', variant.name))}({params}):")
+        lines.append(
+            f"@{_binding_name(fn.name)}.specialize({TirPrinter(context=ctx).render_pattern(pat, ctx)})"
+        )
+        variant_name = _binding_name(getattr(variant, "_display_name", variant.name))
+        definition = f"def {variant_name}({params}):"
+        if len(definition) + 4 <= _LINE_LENGTH:
+            lines.append(definition)
+        else:
+            lines.extend((f"def {variant_name}(", f"    {params}", "):"))
         vbody = TirPrinter(context=ctx, indent="    ").visit(variant.body)
         lines.extend(vbody or ["    pass"])
     return _RenderedLines(lines, ctx.imports)
@@ -262,7 +397,15 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
         imports.add("from tilefoundry.ir.types import Topology")
         rendered = ", ".join(f'Topology("{t.name}", {t.size!r})' for t in mod.topologies)
         kwargs.append(f"topologies=({rendered},)" if rendered else "topologies=()")
-    lines.append(f"@module({', '.join(kwargs)})")
+    decorator = f"@module({', '.join(kwargs)})"
+    if len(decorator) > _LINE_LENGTH:
+        packed = f"    {', '.join(kwargs)}"
+        if len(packed) <= _LINE_LENGTH:
+            lines.extend(("@module(", packed, ")"))
+        else:
+            lines.extend(("@module(", *(f"    {item}," for item in kwargs), ")"))
+    else:
+        lines.append(decorator)
     lines.append(f"class {name}:")
     blocks: list[list[str]] = []
     for child in mod.modules:
@@ -281,7 +424,9 @@ def tir_module_to_python(mod: Module, module_name: str | None = None, *, options
         if index:
             lines.append("")
         lines.extend(("    " + line) if line else "" for line in block if " = DimVar(" not in line)
-    declarations = list(dict.fromkeys(line for block in blocks for line in block if " = DimVar(" in line))
+    declarations = list(
+        dict.fromkeys(line for block in blocks for line in block if " = DimVar(" in line)
+    )
     if declarations:
         remaining = [line for line in lines if line not in declarations]
         while remaining and not remaining[0]:

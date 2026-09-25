@@ -327,18 +327,26 @@ that numbering.
 
 Mesh composition uses the following rules:
 
-- `merge_mesh(meshes)` MUST `append` a mesh whose level names are disjoint from
+- `make_mesh(*meshes)` MUST append a mesh whose level names are disjoint from
   those in force, MUST replace them entirely when the inner mesh names every
-  one, and MUST `replace` the trailing levels when the inner mesh names a
-  suffix of them, keeping the levels above and their names unchanged. Level
-  names overlapping in any other way MUST be rejected rather than decomposed.
-- `append` and `replace` concatenate the per-level arrangements; no stride or
-  offset is rescaled, because each level already states its own numbering.
-- `merge_mesh(meshes)` invokes `check_topology` on its result. For each named
+  one, and MUST replace the trailing levels when the inner mesh names a suffix
+  of them, keeping the levels above and their names unchanged. Level names
+  overlapping in any other way MUST be rejected rather than decomposed.
+- Append concatenates the per-level arrangements. When an appended mesh is
+  sliced, its per-level start is re-encoded in the combined device numbering
+  and retained in the result's `ComposedLayout.offset`.
+- Replacing a suffix with a sliced mesh MUST be rejected. The slice belongs on
+  the combined multi-level mesh, where every axis contributing to its device
+  offset is stated together. Replacing an unsliced suffix and replacing the
+  whole mesh retain their existing behavior.
+- `make_mesh(*meshes)` invokes `check_topology` on its result. For each named
   level with a concrete declared extent, its position count MUST NOT exceed
   that extent; symbolic extents are deferred until dimensions are bound. A
   level stating a run is already bounded by `Mesh.__getitem__` and is not
   checked again.
+- `separate(mesh)` is the inverse construction: it returns one single-level
+  `Mesh` per topology, with that level's arrangement, slice start, and share of
+  the axis names. It is imported from `tilefoundry.ir.types.mesh`.
 
 HIR `MeshRegion` applies this composition only at its body boundary. Its `args`
 are evaluated in the enclosing scope and are not recomposed merely because the
@@ -347,9 +355,11 @@ value is consumed by a region.
 - constraints:
   - `Topology` construction rejects a `None` size. `Mesh` construction rejects
     a `None` entry in its layout shape and normalizes the layout into one mode
-    per level; beyond that it performs no position-consistency check. Its `topologies` field is a
-    `tuple[Topology, ...]`; helpers such as `make_mesh` construct that tuple for
-    handwritten Python.
+    per level; beyond that it performs no position-consistency check. Its
+    `topologies` field is a `tuple[Topology | str, ...]`: a single-level mesh
+    may temporarily name its topology by string until the parser resolves it
+    from the enclosing module declaration, while a multi-level mesh MUST carry
+    `Topology` values. Topology names in one mesh MUST be unique.
   - The author surface is `with Mesh(("cta",), layout=(128,)) as cta:`. The
     parser resolves the non-empty tuple of declared topology names to the
     `Topology` tuple before it constructs the record. A bare string and the
@@ -369,7 +379,9 @@ value is consumed by a region.
     of the levels below it; a stride that division does not divide exactly MUST
     be refused. A Mesh naming one level takes every axis into its single mode,
     which needs no division and therefore no declared extent. A Mesh naming
-    several MUST NOT also be sliced.
+    several may be sliced: the key addresses all level axes in order, every
+    level retains its own arrangement, and the slice offset is the sum of each
+    selected start times that axis's step in device numbering.
   - Nested single-level Mesh scopes compose to exactly that shape: the axes join
     outermost first and each outer stride is scaled by the positions below it.
     A value distributed at two levels at once may therefore be written either
@@ -395,7 +407,7 @@ value is consumed by a region.
 The placed-layout constructor has one additional guard: a single layout may
 split a named level only once. If two distinct meshes used by one placed layout
 name the same topology level, parsing MUST reject that layout at its source
-node. This is a layout-construction rule, independent of `merge_mesh()`'s
+node. This is a layout-construction rule, independent of `make_mesh()`'s
 scope-composition rules.
 
 ### 5.1 `Placement`

@@ -8,10 +8,10 @@ from tests.ops.ir.typeinfer_utils import (
     run_typeinfer_case,
 )
 from tilefoundry.ir.hir.nn.sigmoid import Sigmoid
-from tilefoundry.ir.types import make_mesh, make_shard_tensor_type
+from tilefoundry.ir.types import Layout, Mesh, Topology, make_shard_tensor_type
 from tilefoundry.ir.types.shard_layout import Partial
 
-_M = make_mesh((4,))
+_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 
 
 def test_sigmoid_rejects_partial_sum_input():

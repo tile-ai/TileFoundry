@@ -13,9 +13,9 @@ from types import FunctionType
 from typing import Any, Callable, ClassVar, Literal, Mapping
 
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern, _mangle_variant_name
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.verify import verify_function
+from tilefoundry.ir.pattern import Pattern, RangePattern, _mangle_variant_name
 from tilefoundry.ir.tir.intrinsic import intrinsic as _intrinsic
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.verify import verify_prim_function
@@ -107,9 +107,7 @@ class ParsedFuncRules:
         ParsedFuncKind.VARIANT: HandleRule(
             lambda fn, key: _mangle_variant_name(fn.name, (key,)), "base"
         ),
-        ParsedFuncKind.CONVERTER: HandleRule(
-            lambda fn, key: f"{fn.name}.converter[{key}]", "base"
-        ),
+        ParsedFuncKind.CONVERTER: HandleRule(lambda fn, key: f"{fn.name}.converter[{key}]", "base"),
     }
 
     @classmethod
@@ -132,9 +130,7 @@ class ParsedFuncRules:
         )
 
 
-def _binding_scope(
-    kind: ParsedFuncKind, entry: _Entry | None, base_name: str | None
-) -> str:
+def _binding_scope(kind: ParsedFuncKind, entry: _Entry | None, base_name: str | None) -> str:
     if entry is not None:
         module_name = entry.owner_name or "<module>"
         if kind is ParsedFuncKind.VARIANT:
@@ -163,9 +159,9 @@ def _validate_one_pattern(pattern: Any) -> Pattern:
             f"tilefoundry.specialize: pattern must be a Pattern instance, got "
             f"{type(pattern).__name__}"
         )
-    if not isinstance(pattern, DimVarRangePat):
+    if not isinstance(pattern, RangePattern):
         raise TypeError(
-            f"tilefoundry.specialize: only DimVarRangePat is supported for v0, "
+            f"tilefoundry.specialize: only RangePattern is supported for v0, "
             f"got {type(pattern).__name__}"
         )
     return pattern
@@ -182,8 +178,7 @@ def _validate_converter_weight_name(base: HirFunction, weight_name: str) -> None
                 )
             return
     raise TypeError(
-        f"tilefoundry.converter: {base.name!r} has no ConstTensor param named "
-        f"{weight_name!r}"
+        f"tilefoundry.converter: {base.name!r} has no ConstTensor param named {weight_name!r}"
     )
 
 
@@ -426,7 +421,7 @@ def func(fn=None, *, topologies=UNDECLARED, target=None, mesh=None):
 
 
 def _specialize(self: HirFunction, pattern: Any):
-    """``@base.specialize(DimVarRangePat(...))`` — register a shape variant.
+    """``@base.specialize(RangePattern(...))`` — register a shape variant.
 
     Parses the decorated ``def`` into a variant ``hir.Function`` and appends it to
     ``base.variants``. The identifier becomes the variant's display label and the
@@ -467,7 +462,6 @@ def _specialize(self: HirFunction, pattern: Any):
     return _wrap_variant
 
 
-
 HirFunction.specialize = _specialize
 
 PrimFunction.specialize = _specialize
@@ -492,10 +486,7 @@ def _converter(self: HirFunction, weight_name: str):
             topologies=_enclosing_topologies(),
         )
         if ir.body is None:
-            raise TypeError(
-                "tilefoundry.converter: a converter must have a real body, "
-                "not `pass`"
-            )
+            raise TypeError("tilefoundry.converter: a converter must have a real body, not `pass`")
 
         ir.name = f"{self.name}.converter[{weight_name}]"
         verify_function(ir)

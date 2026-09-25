@@ -75,6 +75,18 @@ class CudaCodegenContext(EmitContext):
         self._next_barrier_id = 1
         self.needs_grid_barrier_state = False
         """Set while emitting a grid barrier, which the module declares state for."""
+        self._has_smem_base = False
+
+    def reset_smem_base(self) -> None:
+        """Start a kernel with no dynamic shared-memory base declaration."""
+        self._has_smem_base = False
+
+    def smem_base(self) -> str:
+        """Return the byte-addressed dynamic shared-memory base, declaring it once."""
+        if not self._has_smem_base:
+            self.emit("extern __shared__ unsigned char smem_base[];")
+            self._has_smem_base = True
+        return "smem_base"
 
     def bind_extents(self, params: Iterable[TensorSignature]) -> None:
         """Say where the kernel reads the extent of every dimension its types leave open.

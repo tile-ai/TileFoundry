@@ -9,13 +9,13 @@ from tilefoundry.evaluator.registry import register_eval
 from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import (
     reject_dynamic_shards,
     require_uniform_partial_slices,
 )
+from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import Layout, TensorType
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.stride import try_compact_major

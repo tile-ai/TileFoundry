@@ -10,7 +10,6 @@ from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Expr, Op
 from tilefoundry.ir.core.expr import Call
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import (
@@ -18,6 +17,7 @@ from tilefoundry.ir.hir._shard_checks import (
     require_uniform_partial_slices,
 )
 from tilefoundry.ir.isl_interop import normalize_dim_entries
+from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import Layout, Split, TensorType
 from tilefoundry.ir.types.dim import DimAdd, simplify_dim
 from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes

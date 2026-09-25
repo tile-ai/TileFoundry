@@ -20,6 +20,7 @@ from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import (
 )
 from tilefoundry.ir.core import Call, Constant
 from tilefoundry.ir.core.kinds import ReduceKind
+from tilefoundry.ir.tir.memory.ptr_of import PtrOf
 from tilefoundry.ir.tir.memory.tensor_view import TensorView
 from tilefoundry.ir.tir.stmts import LetStmt
 from tilefoundry.ir.tir.sync import participation
@@ -66,9 +67,7 @@ def _render_layout_type(layout: LayoutBase) -> str:
         shape_args = ", ".join(f"cute::Int<{s}>" for s in layout.shape)
         stride_args = ", ".join(f"cute::Int<{s}>" for s in layout.strides)
         return f"cute::Layout<cute::Shape<{shape_args}>, cute::Stride<{stride_args}>>"
-    raise NotImplementedError(
-        f"tensor_view: no CuTe layout type for {type(layout).__name__}"
-    )
+    raise NotImplementedError(f"tensor_view: no CuTe layout type for {type(layout).__name__}")
 
 
 def _render_layout_value(layout: LayoutBase, dim, stride) -> str:
@@ -89,12 +88,9 @@ def _render_layout_value(layout: LayoutBase, dim, stride) -> str:
         shape_args = ", ".join(dim(d) for d in layout.shape)
         stride_args = ", ".join(stride(s) for s in layout.strides)
         return (
-            f"cute::make_layout(cute::make_shape({shape_args}), "
-            f"cute::make_stride({stride_args}))"
+            f"cute::make_layout(cute::make_shape({shape_args}), cute::make_stride({stride_args}))"
         )
-    raise NotImplementedError(
-        f"tensor_view: no CuTe layout value for {type(layout).__name__}"
-    )
+    raise NotImplementedError(f"tensor_view: no CuTe layout value for {type(layout).__name__}")
 
 
 def _scope_mesh_value(mesh, ctx) -> "str | None":
@@ -104,9 +100,7 @@ def _scope_mesh_value(mesh, ctx) -> "str | None":
     entry = ctx._mesh_aliases.get(id(mesh))
     if entry is None:
         inline = mesh_type(mesh)
-        entry = next(
-            (e for e in ctx._mesh_aliases.values() if e[1] == inline), None
-        )
+        entry = next((e for e in ctx._mesh_aliases.values() if e[1] == inline), None)
     if entry is None:
         return None
     alias = entry[0]
@@ -197,9 +191,7 @@ def register_strides(sl: SL) -> tuple[int, ...]:
     return tuple(strides)
 
 
-def render_shard_layout_value(
-    var_name: str, sl: SL, dynamic_extents=None, storage=None, ctx=None
-):
+def render_shard_layout_value(var_name: str, sl: SL, dynamic_extents=None, storage=None, ctx=None):
     """Render a shard layout as runtime C++ preamble and value expression.
 
     Static values retain the type produced by the type renderer. Runtime
@@ -353,14 +345,49 @@ def _coord_ref(index_var, ctx: CudaCodegenContext) -> str:
     return _CoordinateVisitor().visit(index_var, ctx)
 
 
+def _tensor_ref(var, ctx: CudaCodegenContext) -> str:
+    name = ctx.name_for(var)
+    return f"{name}_tensor" if ctx.is_kernel_param(var) else name
+
+
+def _pointer_ref(pointer, ctx: CudaCodegenContext) -> tuple[str, object | None]:
+    """Render a TensorView pointer and return its syntactic source tensor, if any."""
+    if isinstance(pointer, Call) and isinstance(pointer.target, PtrOf):
+        source = pointer.args[0]
+        return f"{_tensor_ref(source, ctx)}.data()", source
+    if isinstance(pointer, Constant):
+        cpp_type = ctx.dtype_to_cpp(pointer.type.dtype.name)
+        base = ctx.smem_base()
+        return (
+            f"cute::make_smem_ptr(reinterpret_cast<{cpp_type} *>({base} + {pointer.value}))",
+            None,
+        )
+    return ctx.name_for(pointer), None
+
+
+def _plain_layout_value(layout: LayoutBase) -> str:
+    def dim(value):
+        return f"cute::Int<{int(upper_bound(value))}>{{}}"
+
+    def stride(value):
+        return f"cute::Int<{int(value)}>{{}}"
+
+    return _render_layout_value(layout, dim, stride)
+
+
 @register_codegen(CudaTarget, Role.EMIT, TensorView)
 def _emit(let: LetStmt, ctx: CudaCodegenContext) -> None:
     call = let.value
-    memory_var = call.args[0]
+    pointer = call.args[0]
+    pointer_ref, memory_var = _pointer_ref(pointer, ctx)
     var_name = ctx.name_for(let.var)
     layout = call.target.layout
 
     if len(call.args) > 1:
+        if memory_var is None:
+            raise NotImplementedError(
+                "tensor_view coordinates require a syntactic T.ptr_of(tensor) source"
+            )
         mem_name = ctx.name_for(memory_var)
 
         if len(call.args) > 2:
@@ -456,54 +483,40 @@ def _emit(let: LetStmt, ctx: CudaCodegenContext) -> None:
         return
 
     if isinstance(layout, SL):
-        mem_name = ctx.name_for(memory_var)
-
-        if ctx.is_kernel_param(memory_var):
-            tensor_ref = f"{mem_name}_tensor"
-            global_total = shape_numel_upper_bound(memory_var.type.shape)
-            global_layout = f"cute::make_layout(cute::Shape<cute::Int<{global_total}>>{{}})"
-            preamble, shard_value = render_shard_layout_value(
-                var_name,
-                layout,
-                ctx.dynamic_extents,
-                getattr(let.var.type, "storage", None),
-                ctx,
-            )
-            for line in preamble:
-                ctx.emit(line)
-            ctx.emit(
-                f"auto {var_name} = tilefoundry::make_shard_tensor("
-                f"{tensor_ref}, {global_layout}, {shard_value});"
-            )
-        else:
-            source_layout = getattr(memory_var.type, "layout", None)
-            if isinstance(source_layout, SL):
-                ctx.emit(f"auto {var_name}_tensor = {mem_name}.engine;")
+        target_total = shape_numel_upper_bound(let.var.type.shape)
+        target_global = f"cute::make_layout(cute::Shape<cute::Int<{target_total}>>{{}})"
+        if memory_var is not None and not ctx.is_kernel_param(memory_var):
+            local_shape = shard_layout_local_shape(layout)
+            local_shape = tuple(s for s in local_shape if s != 1) or (1,)
+            if len(local_shape) > 1:
+                shape_args = ", ".join(f"cute::Int<{int(s)}>" for s in local_shape)
+                engine_layout = f"cute::make_layout(cute::Shape<{shape_args}>{{}})"
             else:
-                local_shape = shard_layout_local_shape(layout)
-                local_shape = tuple(s for s in local_shape if s != 1) or (1,)
-                if len(local_shape) > 1:
-                    shape_args = ", ".join(f"cute::Int<{int(s)}>" for s in local_shape)
-                    tensor_layout = f"cute::make_layout(cute::Shape<{shape_args}>{{}})"
-                else:
-                    tensor_layout = (
-                        f"cute::make_layout(cute::Shape<cute::Int<{int(local_shape[0])}>>{{}})"
-                    )
-                ctx.emit(
-                    f"auto {var_name}_tensor = cute::make_tensor({mem_name}, {tensor_layout});"
+                engine_layout = (
+                    f"cute::make_layout(cute::Shape<cute::Int<{int(local_shape[0])}>>{{}})"
                 )
-            target_total = shape_numel_upper_bound(let.var.type.shape)
-            target_global = f"cute::make_layout(cute::Shape<cute::Int<{target_total}>>{{}})"
-            preamble, shard_value = render_shard_layout_value(
-                var_name,
-                layout,
-                ctx.dynamic_extents,
-                getattr(let.var.type, "storage", None),
-                ctx,
-            )
-            for line in preamble:
-                ctx.emit(line)
-            ctx.emit(
-                f"auto {var_name} = tilefoundry::make_shard_tensor("
-                f"{var_name}_tensor, {target_global}, {shard_value});"
-            )
+        else:
+            engine_layout = target_global
+        ctx.emit(
+            f"auto {var_name}_tensor = "
+            f"tilefoundry::ops::tensor_view({pointer_ref}, {engine_layout});"
+        )
+        preamble, shard_value = render_shard_layout_value(
+            var_name,
+            layout,
+            ctx.dynamic_extents,
+            getattr(let.var.type, "storage", None),
+            ctx,
+        )
+        for line in preamble:
+            ctx.emit(line)
+        ctx.emit(
+            f"auto {var_name} = tilefoundry::make_shard_tensor("
+            f"{var_name}_tensor, {target_global}, {shard_value});"
+        )
+        return
+
+    ctx.emit(
+        f"auto {var_name} = tilefoundry::ops::tensor_view("
+        f"{pointer_ref}, {_plain_layout_value(layout)});"
+    )

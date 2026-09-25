@@ -144,6 +144,8 @@ class CudaCodegenContext(CodegenContext):
     def bind_extents(self, params) -> None: ...
     def reset_barrier_ids(self) -> None: ...
     def alloc_barrier_id(self) -> int: ...
+    def reset_smem_base(self) -> None: ...
+    def smem_base(self) -> str: ...
     def dtype_to_cpp(self, dtype_name: str) -> str: ...
 
 
@@ -181,11 +183,29 @@ class CpuCodegenContext(CodegenContext):
     types alone. `launches` is the geometry each device function is called at,
     keyed by `id(fn)`, settled where the `Launch` was written
     ([passes §7.3](./passes.md#73-insert_default_host_entry)).
+  - `smem_base` declares and returns one byte-addressed dynamic shared-memory
+    base per kernel. A numeric `TensorView` address adds its byte offset before
+    converting the result to a CuTe shared-memory pointer.
   - A target subclass owns the type strings and hardware counters only it can
     state; a handler MUST reach them through the context rather than reading
     the IR for them. Other helpers MAY be added per target.
 
 ### 2.4 Effect Op dispatch
+
+CUDA value emission lowers `TupleGetItem` according to its index form. A constant
+index names the selected tuple element directly. A dynamic index requires the
+homogeneous tuple established by type inference and emits
+`cute::array{a, b, c}[index]`; dimension arithmetic in the index remains runtime
+C++ arithmetic.
+
+An IR `Tuple` is structural and has no target-side storage. A `LetStmt` binding
+one emits no C++ variable and continues with its body; its authored name (for
+example `lhs_stages`) therefore does not appear in generated C++. Each dynamic
+`TupleGetItem` use constructs its own `cute::array`, so indexing the same tuple
+N times constructs N arrays. Constant selection remains valid for heterogeneous
+tuples because it does not materialize an aggregate. The codegen context records
+the structural tuple by its fresh SSA `Var` identity so consumers can recover
+its elements without target-side storage.
 
 Effect Ops (`Copy`, `Fill`, `Mma`, `tir.nn.*`, ...) appear in Stmt
 position as `Evaluate(op, args)` rather than as Stmt subclasses. The
@@ -440,4 +460,3 @@ variant runs is decided on the device.
     the call already carries -- the parameter the open axis expands into. A
     shape outside every variant's range is a call-contract violation and the
     kernel traps.
-

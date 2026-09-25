@@ -10,36 +10,11 @@ either.
 from __future__ import annotations
 
 from tilefoundry.ir.types.int_tuple import flatten, product
-from tilefoundry.ir.types.layout import ComposedLayout, Layout, get, rank, size
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, size
 from tilefoundry.ir.types.layout_algebra import is_inverse_projectable
-from tilefoundry.ir.types.mesh import Mesh
+from tilefoundry.ir.types.mesh import Mesh, _levels, _starts, check_topology
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
-from tilefoundry.ir.types.stride import compact_major, idx2crd
-
-
-def _levels(mesh: Mesh) -> tuple[Layout, ...]:
-    """Each level's own arrangement: mode ``i`` of the mesh is level ``i``."""
-    stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
-    if stated is None:
-        raise ValueError(
-            "a mesh whose slice states an identity box states no arrangement of "
-            "its own, so its levels select nothing"
-        )
-    return tuple(get(stated, index) for index in range(rank(stated)))
-
-
-def _starts(mesh: Mesh) -> tuple[int, ...]:
-    """Where each level's run begins, read out of the offset the mesh states.
-
-    The offset is one index in the numbering the device gives every position,
-    and the levels are its shape, so the coordinate it stands for is what each
-    level starts at.
-    """
-    offset = mesh.layout.offset if isinstance(mesh.layout, ComposedLayout) else 0
-    sizes = tuple(getattr(topology, "size", 1) for topology in mesh.topologies)
-    if not isinstance(offset, int) or any(not isinstance(one, int) for one in sizes):
-        return (0,) * len(sizes)
-    return tuple(idx2crd(offset, sizes, compact_major(sizes)))
+from tilefoundry.ir.types.stride import compact_major
 
 
 def device_layout(mesh: Mesh) -> Layout:
@@ -160,90 +135,10 @@ def _flat(mesh: Mesh) -> Layout:
     )
 
 
-def check_topology(mesh: Mesh) -> None:
-    """Reject static mesh positions beyond their declared topology extents.
-
-    A constant slice is already bounded by ``Mesh.__getitem__``; its shortened
-    axes no longer land on full topology boundaries and are therefore accepted.
-    """
-    if isinstance(mesh.layout, ComposedLayout):
-        return
-    for topology, arrangement in zip(mesh.topologies, _levels(mesh)):
-        declared = getattr(topology, "size", None)
-        if not isinstance(declared, int) or isinstance(declared, bool):
-            continue
-        count = product(tuple(flatten(arrangement.shape)))
-        if isinstance(count, int) and count > declared:
-            raise ValueError(
-                f"mesh level {getattr(topology, 'name', topology)!r} has {count} "
-                f"positions, exceeding declared extent {declared}"
-            )
-
-
-def _joined(topologies: tuple, levels: tuple, names: tuple) -> Mesh:
-    """One mesh out of the levels it names, each stating its own arrangement."""
-    if len(levels) == 1:
-        return Mesh(topologies=topologies, layout=levels[0], names=names)
-    return Mesh(
-        topologies=topologies,
-        layout=Layout(
-            shape=tuple(tuple(flatten(one.shape)) for one in levels),
-            strides=tuple(tuple(flatten(one.strides)) for one in levels),
-        ),
-        names=names,
-    )
-
-
-def _named(mesh: Mesh) -> tuple[str, ...]:
-    return tuple(getattr(topology, "name", topology) for topology in mesh.topologies)
-
-
-def merge_mesh(meshes: "tuple[Mesh, ...]") -> Mesh:
-    """The scope in force once each of *meshes* has been entered in turn.
-
-    A scope naming levels none of those in force name is appended below them.
-    One naming every level in force replaces them. One naming a suffix of them
-    replaces that suffix and keeps what is above. Any other overlap is refused
-    rather than decomposed: which positions the half-named levels would then
-    state is nobody's statement. No stride is rescaled, because every level
-    already states its own numbering.
-    """
-    result = meshes[0]
-    for inner in meshes[1:]:
-        here, there = _named(result), _named(inner)
-        if set(here).isdisjoint(there):
-            result = _joined(
-                (*result.topologies, *inner.topologies),
-                (*_levels(result), *_levels(inner)),
-                (*result.names, *inner.names),
-            )
-        elif set(here) <= set(there):
-            result = inner
-        elif len(there) < len(here) and here[-len(there) :] == there:
-            kept = len(here) - len(there)
-            above = _levels(result)[:kept]
-            named = sum(len(flatten(one.shape)) for one in above)
-            result = _joined(
-                (*result.topologies[:kept], *inner.topologies),
-                (*above, *_levels(inner)),
-                (*result.names[:named], *inner.names),
-            )
-        else:
-            shared = sorted(set(here) & set(there))
-            unnamed = sorted(set(here) - set(there))
-            raise ValueError(
-                f"{shared} named again while {unnamed} is not; a scope either "
-                "replaces the levels in force or adds levels below them"
-            )
-    check_topology(result)
-    return result
-
-
 __all__ = [
     "check_topology",
     "device_layout",
     "covered_by_scope",
-    "merge_mesh",
     "mesh_scope_matches_required_scope",
     "states_consistent_positions",
     "storage_reaches",

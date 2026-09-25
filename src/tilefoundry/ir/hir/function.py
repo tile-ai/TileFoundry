@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 from tilefoundry import evaluator
 from tilefoundry.ir.core import Expr, Var
-from tilefoundry.ir.core.pattern import Pattern
+from tilefoundry.ir.pattern import Pattern
 from tilefoundry.ir.types import Type, callable_type_for
 from tilefoundry.ir.types.substitute import canonicalize_dims
 
@@ -34,9 +34,7 @@ class Function(Expr):
     _specialized_dims: tuple[tuple[str, int], ...] | None = field(
         default=None, compare=False, hash=False, repr=False
     )
-    _display_name: str | None = field(
-        default=None, compare=False, hash=False, repr=False
-    )
+    _display_name: str | None = field(default=None, compare=False, hash=False, repr=False)
 
     @classmethod
     def build(

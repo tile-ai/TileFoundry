@@ -16,7 +16,7 @@ import math
 from tilefoundry import func, module
 from tilefoundry.dsl import Tensor, tf  # noqa: F401 — tf used by the @func body
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op names for the @func body
-from tilefoundry.ir.core.pattern import DimVarRangePat
+from tilefoundry.ir.pattern import RangePattern
 from tilefoundry.ir.types import Broadcast, Layout, Mesh, ShardLayout, Topology
 from tilefoundry.ir.types.dim import DimVar
 
@@ -81,7 +81,7 @@ class GqaOnline:
 
         pass
 
-    @gqa_online_attend.specialize(DimVarRangePat("ctx_len", 0, SMALL_CONTEXT_T))
+    @gqa_online_attend.specialize(RangePattern("ctx_len", 0, SMALL_CONTEXT_T))
     def head_on_cta(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
         k_cache: Tensor[(1, C, _HKV, _D), "bf16", _CACHE_LAYOUT],
@@ -213,7 +213,7 @@ class GqaOnline:
             corr_n = tf.exp(score_n - m_all)
             return tf.cast((o * corr + corr_n * v_n) / (l_blk * corr + corr_n), dtype="bf16")
 
-    @gqa_online_attend.specialize(DimVarRangePat("ctx_len", SMALL_CONTEXT_T + 1, MAX_CTX))
+    @gqa_online_attend.specialize(RangePattern("ctx_len", SMALL_CONTEXT_T + 1, MAX_CTX))
     def ctx_split_kv(
         q: Tensor[(1, S, _HQ, _D), "bf16"],
         k_cache: Tensor[(1, C, _HKV, _D), "bf16", _CACHE_LAYOUT],

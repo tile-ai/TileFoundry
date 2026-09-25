@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from tilefoundry.ir.core import Op, VerifyError
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import DType, Layout, Mesh, ShardLayout, Split, Topology, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
@@ -89,8 +89,7 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
         )
 
         if not any(
-            mesh_scope_matches_required_scope(s, atom.required_scope)
-            for s in ctx.mesh_scope
+            mesh_scope_matches_required_scope(s, atom.required_scope) for s in ctx.mesh_scope
         ):
             raise VerifyError(
                 "T.mma: no enclosing mesh scope hosts the atom's required thread "

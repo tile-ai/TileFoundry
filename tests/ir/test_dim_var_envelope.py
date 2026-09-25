@@ -12,9 +12,9 @@ from __future__ import annotations
 import pytest
 
 from tilefoundry.ir.core import Var, VerifyError
-from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.verify import verify_function
+from tilefoundry.ir.pattern import RangePattern
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.tensor_type import TupleType
@@ -51,7 +51,7 @@ def test_a_signature_may_not_forge_its_dim_var_envelope() -> None:
     s = DimVar(name="S_env", lo=1, hi=8)
     forged = _identity_fn(
         params=(Var(type=_tensor((s,)), name="x"),),
-        specializations=(DimVarRangePat("S_env", 0, 99),),
+        specializations=(RangePattern("S_env", 0, 99),),
     )
     with pytest.raises(VerifyError, match="not contained in DimVar envelope"):
         verify_function(forged)
@@ -59,7 +59,7 @@ def test_a_signature_may_not_forge_its_dim_var_envelope() -> None:
     known = Var(type=_tensor((DimVar(name="S_known", lo=1, hi=8),)), name="x")
     with pytest.raises(VerifyError, match="references unknown DimVar"):
         verify_function(
-            _identity_fn(params=(known,), specializations=(DimVarRangePat("OTHER", 1, 3),))
+            _identity_fn(params=(known,), specializations=(RangePattern("OTHER", 1, 3),))
         )
 
     r = DimVar(name="R_ret_only", lo=1, hi=8)
@@ -68,7 +68,7 @@ def test_a_signature_may_not_forge_its_dim_var_envelope() -> None:
             _identity_fn(
                 params=(Var(type=_tensor((4,)), name="x"),),
                 return_type=_tensor((r,)),
-                specializations=(DimVarRangePat("R_ret_only", 1, 3),),
+                specializations=(RangePattern("R_ret_only", 1, 3),),
             )
         )
 
@@ -103,7 +103,7 @@ def _dispatch_proto(name: str, env, ranges):
                 params=(x,),
                 body=x,
                 return_type=ty,
-                specializations=(DimVarRangePat(name, lo, hi),),
+                specializations=(RangePattern(name, lo, hi),),
             )
         )
     return base

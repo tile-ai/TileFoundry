@@ -23,7 +23,7 @@ from tests.fixtures.shapes.scaled_modules import (
     ScaledChild,
 )
 from tilefoundry import func, module
-from tilefoundry.dsl import DimVarRangePat, Tensor
+from tilefoundry.dsl import RangePattern, Tensor
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.core import Var
@@ -118,7 +118,7 @@ class _Weights:
     def subtree(self, name: str) -> "_Weights":
         prefix = f"{name}."
         return _Weights(
-            {k[len(prefix):]: v for k, v in self.values.items() if k.startswith(prefix)}
+            {k[len(prefix) :]: v for k, v in self.values.items() if k.startswith(prefix)}
         )
 
 
@@ -176,7 +176,7 @@ def test_a_variant_body_reaches_its_child_the_same_way() -> None:
         def dispatch(x: Tensor[(_N_EVAL,), "f32"]) -> Tensor[(_N_EVAL,), "f32"]:
             pass
 
-        @dispatch.specialize(DimVarRangePat("N_eval", 1, 7))
+        @dispatch.specialize(RangePattern("N_eval", 1, 7))
         def dynamic_variant(x: Tensor[(_N_EVAL,), "f32"]) -> Tensor[(_N_EVAL,), "f32"]:
             return scaled(x)  # noqa: F821
 

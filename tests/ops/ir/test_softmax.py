@@ -8,13 +8,13 @@ from tests.ops.ir.typeinfer_utils import (
     run_typeinfer_case,
 )
 from tilefoundry.ir.hir.nn.softmax import SoftMax
-from tilefoundry.ir.types import make_mesh, make_shard_tensor_type
+from tilefoundry.ir.types import Layout, Mesh, Topology, make_shard_tensor_type
 from tilefoundry.ir.types.shard_layout import Partial
 
 
 def test_softmax_typeinfer_partial_input_errors():
 
-    m = make_mesh((4,))
+    m = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
     run_typeinfer_case(
         TypeInferCase(
             "partial_sum_errors",

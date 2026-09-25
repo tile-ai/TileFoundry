@@ -9,9 +9,9 @@ from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.mesh_scope import merge_mesh
 from tilefoundry.ir.types import DType, Mesh
 from tilefoundry.ir.types.layout import ComposedLayout, get, size
+from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TrafficBytes
 from tilefoundry.visitor_registry.visitors import CostEvaluator
@@ -257,7 +257,7 @@ class ComputeCostVisitor(ExprVisitor[None]):
         child = next(item for item in ctx.current.children if item.owner is expr)
         for arg in expr.args:
             self.visit(arg, ctx)
-        mesh = merge_mesh((ctx.current_mesh, expr.mesh)) if ctx.current_mesh else expr.mesh
+        mesh = make_mesh(ctx.current_mesh, expr.mesh) if ctx.current_mesh else expr.mesh
         topologies = ctx.module.effective_topologies()
         positions = {
             unit: _scope_position_count(mesh, unit, topologies) for unit in ctx.locals_by_unit

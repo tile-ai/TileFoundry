@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -10,18 +9,12 @@ import pytest
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.core.overload import OverloadError, filter_candidates, resolve
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.core.pattern import Scalar, Tensor, TensorPat
+from tilefoundry.ir.pattern import Scalar, Tensor, TensorPattern
+from tilefoundry.ir.types import TensorType
 
-
-@dataclass(frozen=True)
-class _FakeType:
-    shape: tuple[int, ...]
-    dtype: str = "f32"
-
-
-_S = _FakeType(shape=())
-_T1 = _FakeType(shape=(8,))
-_T2 = _FakeType(shape=(4, 8))
+_S = TensorType.umat_scalar()
+_T1 = TensorType.umat_tensor((8,))
+_T2 = TensorType.umat_tensor((4, 8))
 
 
 def _schema(name: str, *patterns: Any, defaults: tuple = ()) -> OpSchema:
@@ -49,7 +42,7 @@ def _schema(name: str, *patterns: Any, defaults: tuple = ()) -> OpSchema:
 
 def test_resolve_picks_first_matching_candidate() -> None:
     """Arity + pattern filter; first-match wins; raises when no match."""
-    rank2 = _schema("matmul", TensorPat(rank=2), TensorPat(rank=2))
+    rank2 = _schema("matmul", TensorPattern(rank=2), TensorPattern(rank=2))
     any_t = _schema("matmul", Tensor, Tensor)
 
     assert resolve([rank2, any_t], [_T2, _T2]) is rank2
