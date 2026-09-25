@@ -16,7 +16,6 @@ from typing import Optional, Union
 from tilefoundry.ir.types.layout import flatten
 
 from .layout import ComposedLayout, Layout, Swizzle, size
-from .shard_layout import ShardLayout
 from .stride import compact_col_major, idx2crd
 
 
@@ -176,36 +175,6 @@ def box_runs(
             else:
                 runs.append(Run(extent, step, axis, mode))
     return tuple(sorted(runs, key=lambda run: run.step))
-
-
-def vector_widths(layout, element_bits: int) -> tuple[int, ...]:
-    """Every cp.async width that divides every run in an arrangement."""
-    from tilefoundry.ir.pattern.constraint import affine_part  # noqa: PLC0415
-
-    widest = ASYNC_WIDTHS[-1]
-    if isinstance(layout, ShardLayout):
-        layout = layout.layout
-    inner = getattr(layout, "inner", None)
-    if inner is not None and hasattr(inner, "base"):
-        widest = min(widest, 1 << inner.base)
-    held = affine_part(layout)
-    if held is None or any(
-        type(value) is not int
-        for group in (held.shape, held.strides)
-        for value in flatten(group)
-    ):
-        return ()
-    runs = box_runs(held, element_bits, None, limit=None)
-    unit = [run.extent for run in runs if run.step == 1]
-    if len(unit) != 1:
-        return ()
-    counted = (unit[0], *(run.step for run in runs if run.step != 1))
-    return tuple(
-        width
-        for width in ASYNC_WIDTHS
-        if width <= widest
-        and all(value * element_bits % (width * 8) == 0 for value in counted)
-    )
 
 
 def complement(layout: Layout, max_idx: int = 1) -> Layout:
@@ -500,5 +469,4 @@ __all__ = [
     "image",
     "project",
     "contains",
-    "vector_widths",
 ]

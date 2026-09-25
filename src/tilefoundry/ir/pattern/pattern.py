@@ -19,12 +19,13 @@ from tilefoundry.ir.types.int_tuple import congruent
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.layout_algebra import (
     ASYNC_WIDTHS,
+    box_runs,
     frame_of,
     is_inverse_projectable,
-    vector_widths,
 )
 from tilefoundry.ir.types.mesh import separate
 
+from .constraint import affine_part
 from .match import (
     ABSENT,
     ARRANGEMENT,
@@ -85,6 +86,34 @@ VECTOR_READING = (
     "every run: each tile axis's modes walked fastest first, contiguous ones joined; "
     "the run at step 1 and every other step a whole number of vectors"
 )
+
+
+def vector_widths(layout, element_bits: int) -> tuple[int, ...]:
+    """Every cp.async width that divides every run in an arrangement."""
+    widest = ASYNC_WIDTHS[-1]
+    if isinstance(layout, ShardLayout):
+        layout = layout.layout
+    inner = getattr(layout, "inner", None)
+    if inner is not None and hasattr(inner, "base"):
+        widest = min(widest, 1 << inner.base)
+    held = affine_part(layout)
+    if held is None or any(
+        type(value) is not int
+        for group in (held.shape, held.strides)
+        for value in flatten(group)
+    ):
+        return ()
+    runs = box_runs(held, element_bits, None, limit=None)
+    unit = [run.extent for run in runs if run.step == 1]
+    if len(unit) != 1:
+        return ()
+    counted = (unit[0], *(run.step for run in runs if run.step != 1))
+    return tuple(
+        width
+        for width in ASYNC_WIDTHS
+        if width <= widest
+        and all(value * element_bits % (width * 8) == 0 for value in counted)
+    )
 
 
 @dataclass(frozen=True)
@@ -831,5 +860,7 @@ __all__ = [
     "SwitchPattern",
     "Tensor",
     "TensorPattern",
+    "VectorPattern",
     "WildcardPattern",
+    "vector_widths",
 ]

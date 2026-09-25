@@ -47,6 +47,7 @@ from .pattern import (
     TensorPattern,
     VectorPattern,
     WildcardPattern,
+    vector_widths,
 )
 from .utils import (
     MOVED_STORAGES,
@@ -114,4 +115,5 @@ __all__ = [
     "storage_place",
     "VectorPattern",
     "vector",
+    "vector_widths",
 ]
