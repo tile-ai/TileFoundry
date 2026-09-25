@@ -12,9 +12,10 @@ from __future__ import annotations
 
 from typing import Optional, Union
 
-from .int_tuple import flatten, product
-from .layout import ComposedLayout, Layout, Swizzle
-from .stride import idx2crd, prefix_product
+from tilefoundry.ir.types.layout import flatten
+
+from .layout import ComposedLayout, Layout, Swizzle, size
+from .stride import compact_col_major, idx2crd
 
 
 class NotProjectable(ValueError):
@@ -28,11 +29,7 @@ def _shape(layout: Layout) -> tuple[int, ...]:
 def _stride(layout: Layout) -> tuple[int, ...]:
     if layout.strides is not None:
         return layout.strides
-    return prefix_product(_shape(layout))
-
-
-def size(layout: Layout) -> int:
-    return product(layout.shape)
+    return compact_col_major(_shape(layout))
 
 
 def swizzle_of(layout: object) -> Optional[Swizzle]:
@@ -179,7 +176,7 @@ def _right_inverse_layout(layout: Layout) -> Layout:
     current_idx = 1
     shape = _shape(layout)
     stride = _stride(layout)
-    triples = sorted(zip(stride, shape, prefix_product(shape)))
+    triples = sorted(zip(stride, shape, compact_col_major(shape)))
     for st, sh, rstride in triples:
         if sh == 1:
             continue
@@ -205,7 +202,7 @@ def _is_identity_inner(inner: object) -> bool:
     if inner is None:
         return True
     if isinstance(inner, Layout):
-        return _stride(inner) == prefix_product(_shape(inner))
+        return _stride(inner) == compact_col_major(_shape(inner))
     return False
 
 
@@ -392,7 +389,7 @@ def project(scope: ComposedLayout, t: int) -> Optional[tuple[int, ...]]:
         return None
 
     shape = _shape(outer)
-    return idx2crd(coord_1d, shape, prefix_product(shape))
+    return idx2crd(coord_1d, shape, compact_col_major(shape))
 
 
 def contains(scope: ComposedLayout, t: int) -> bool:
@@ -402,7 +399,6 @@ def contains(scope: ComposedLayout, t: int) -> bool:
 
 __all__ = [
     "NotProjectable",
-    "size",
     "swizzle_of",
     "composition",
     "cosize",

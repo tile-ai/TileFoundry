@@ -54,10 +54,10 @@ from tilefoundry.ir.types import (
     make_mesh,
     make_shard_tensor_type,
     make_tensor_type,
-    tensor_bytes,
 )
 from tilefoundry.ir.types.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types.utils import tensor_bytes
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     AffineAccess,

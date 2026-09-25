@@ -55,19 +55,15 @@ from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.where import Where
 from tilefoundry.ir.hir.tensor.zeros import Zeros
-from tilefoundry.ir.types import (
-    DType,
-    IntegerDType,
-    ShardLayout,
-    TensorType,
-    Type,
-    flatten,
-    level_axes,
-    numel,
+from tilefoundry.ir.types import DType, IntegerDType, ShardLayout, TensorType, Type
+from tilefoundry.ir.types.int_tuple import repeat_like
+from tilefoundry.ir.types.layout import ComposedLayout, flatten
+from tilefoundry.ir.types.shard_layout import (
+    layout_axis_to_tensor_axis,
     shard_layout_of,
-    tensor_bytes,
+    split_target_axes,
 )
-from tilefoundry.ir.types.shard_layout import layout_axis_to_tensor_axis, split_target_axes
+from tilefoundry.ir.types.utils import numel, tensor_bytes
 from tilefoundry.visitor_registry.access_relation import logical_axes_of
 
 from .contexts import Cost, CostContext, TrafficBytes
@@ -560,12 +556,21 @@ def _sent(source, destination) -> tuple[tuple[str, TrafficBytes], ...]:
     if before is None or after is None or before == after:
         return ()
     mesh = shard_layout_of(source.layout).mesh
-    extents = flatten(mesh.positions.shape)
+    extents = flatten(flatten(mesh.layout).shape)
+    stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
+    levels = flatten(
+        tuple(
+            repeat_like(mode, topology.name)
+            for mode, topology in zip(stated.shape, mesh.topologies, strict=True)
+        )
+    )
     held = tensor_bytes(source)
     moved: dict[str, int] = {}
-    for topology, axes in zip(mesh.topologies, level_axes(mesh)):
+    for topology in mesh.topologies:
         units = 1
-        for mesh_axis in axes:
+        for mesh_axis, level in enumerate(levels):
+            if level != topology.name:
+                continue
             if before.get(mesh_axis) != after.get(mesh_axis):
                 units *= extents[mesh_axis]
         if units > 1:

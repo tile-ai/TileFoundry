@@ -16,16 +16,10 @@ from tilefoundry.ir.core import Call, Expr, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
-from tilefoundry.ir.types import (
-    DType,
-    Mesh,
-    TensorType,
-    TupleType,
-    Type,
-    flatten,
-    level_axes,
-)
-from tilefoundry.ir.types.dim import static_dim_value
+from tilefoundry.ir.types import DType, Mesh, TensorType, TupleType, Type
+from tilefoundry.ir.types.int_tuple import repeat_like
+from tilefoundry.ir.types.layout import ComposedLayout, flatten
+from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.target.base import Target, UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.isl_utils import cardinality
@@ -90,8 +84,8 @@ class ReuseAxes:
 def _static_axes(mesh: Mesh) -> "tuple[int, tuple[int, ...], tuple[int, ...]] | None":
     """A mesh's device-numbered positions, when every one of them is a number."""
     try:
-        axes = mesh.positions
-        offset = mesh.offset
+        axes = flatten(mesh.layout)
+        offset = (mesh.layout.offset if isinstance(mesh.layout, ComposedLayout) else 0)
     except ValueError:
         return None
     shape = tuple(static_dim_value(extent) for extent in flatten(axes.shape))
@@ -313,7 +307,7 @@ def space_axes(
     wave_reached = boundary.space_wave_reached(window)
     shared = []
     for axis, parameter_name in enumerate(boundary.axis_parameters):
-        shape = flatten(boundary.mesh.positions.shape)
+        shape = flatten(flatten(boundary.mesh.layout).shape)
         extent = static_dim_value(shape[axis]) if axis < len(shape) else None
         unit_reached = boundary.unit_reached(window, parameter_name)
         if extent is not None and extent > 1 and unit_reached is not None:
@@ -324,11 +318,14 @@ def space_axes(
 
 def axis_label(mesh: Mesh, axis: int) -> str:
     """Name a mesh axis, falling back to its factual numeric position."""
-    level_name = ""
-    for level, axes in zip(mesh.topologies, level_axes(mesh), strict=True):
-        if axis in axes:
-            level_name = getattr(level, "name", str(level))
-            break
+    stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
+    levels = flatten(
+        tuple(
+            repeat_like(mode, getattr(level, "name", str(level)))
+            for mode, level in zip(stated.shape, mesh.topologies, strict=True)
+        )
+    )
+    level_name = levels[axis] if axis < len(levels) else ""
     if axis < len(mesh.names):
         name = mesh.names[axis]
         return f"{level_name}.{name}" if level_name else name
@@ -464,7 +461,7 @@ def _axis_parameters(
         and (axis := static_dim_value(coordinate.args[0])) is not None
     }
     return tuple(
-        names_by_axis.get(axis) for axis in range(len(flatten(mesh.positions.shape)))
+        names_by_axis.get(axis) for axis in range(len(flatten(flatten(mesh.layout).shape)))
     )
 
 

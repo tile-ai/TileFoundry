@@ -7,8 +7,9 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.dim import static_dim_value
+from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.shard_layout import ShardLayout, Split
+from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     measures_without_reading,
@@ -33,7 +34,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_shape = list(x_ty.shape)
     for mesh_axis, attr in enumerate(sl.attrs):
         if isinstance(attr, Split):
-            mesh_extent = sl.mesh.positions.shape[mesh_axis]
+            mesh_extent = flatten(sl.mesh.layout).shape[mesh_axis]
             dim = new_shape[attr.axis]
             v = static_dim_value(dim)
             if v is not None:

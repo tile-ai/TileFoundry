@@ -44,9 +44,7 @@ from tilefoundry.ir.hir.specialize import (
     variant_for,
 )
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
-from tilefoundry.ir.types import (
-    Topology,
-)
+from tilefoundry.ir.types import Topology
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFacts
 

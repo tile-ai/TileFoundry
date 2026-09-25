@@ -17,25 +17,14 @@ from tilefoundry.ir.hir.function import (
 )
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.verify import verify_function
-from tilefoundry.ir.types import (
-    DType,
-    TensorType,
-    UnitType,
-    callable_type_for_prim_function,
-)
-from tilefoundry.ir.types.dim import (
-    DimAdd,
-    DimFloorDiv,
-    DimMax,
-    DimMin,
-    DimMod,
-    DimMul,
-    DimSub,
-    static_dim_value,
-)
+from tilefoundry.ir.types import DType, TensorType, UnitType
+from tilefoundry.ir.types.callable_type import callable_type_for_prim_function
+from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMax, DimMin, DimMod, DimMul, DimSub
+from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.mesh import Mesh
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import ExprVisitor, collect_exprs
 from tilefoundry.target import CudaTarget
 from tilefoundry.utils.spec_ref import spec_ref_render
@@ -276,10 +265,10 @@ def _check_bound_coordinates(field: str, bound, scope) -> None:
             continue
         mesh = expr.target.mesh
         axis = static_dim_value(expr.args[0]) if expr.args else None
-        if axis is None or not 0 <= axis < len(mesh.positions.shape):
+        if axis is None or not 0 <= axis < len(flatten(mesh.layout).shape):
             raise VerifyError(
                 f"For.{field} reads axis {axis!r} of a mesh of rank "
-                f"{len(mesh.positions.shape)}"
+                f"{len(flatten(mesh.layout).shape)}"
             )
         if not any(held is mesh or held == mesh for held in scope):
             raise VerifyError(

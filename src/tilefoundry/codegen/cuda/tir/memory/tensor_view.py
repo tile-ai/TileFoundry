@@ -23,16 +23,10 @@ from tilefoundry.ir.core.kinds import ReduceKind
 from tilefoundry.ir.tir.memory.tensor_view import TensorView
 from tilefoundry.ir.tir.stmts import LetStmt
 from tilefoundry.ir.tir.sync import participation
-from tilefoundry.ir.types import c_order_strides, swizzle_of
-from tilefoundry.ir.types.dim import (
-    DimAdd,
-    DimMul,
-    DimSub,
-    DimVar,
-    shape_numel_upper_bound,
-    upper_bound,
-)
-from tilefoundry.ir.types.layout import Layout, LayoutBase
+from tilefoundry.ir.types import ComposedLayout
+from tilefoundry.ir.types.dim import DimAdd, DimMul, DimSub, DimVar
+from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten
+from tilefoundry.ir.types.layout_algebra import swizzle_of
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Dynamic,
@@ -42,6 +36,8 @@ from tilefoundry.ir.types.shard_layout import (
 )
 from tilefoundry.ir.types.shard_layout import ShardLayout as SL
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types.stride import compact_row_major
+from tilefoundry.ir.types.utils import shape_numel_upper_bound, upper_bound
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.registries import Role, register_codegen
@@ -223,15 +219,16 @@ def render_shard_layout_value(
                 "and rebuilding this layout from register strides would drop it"
             )
         sll = Layout(shape=sll.shape, strides=register_strides(sl))
-    try:
-        mesh_axes, mesh_base = sl.mesh.positions, sl.mesh.offset
-    except ValueError as error:
-        raise NotImplementedError(
-            "render_shard_layout_value: a sliced mesh needs its participating box "
-            f"as a strided Layout; this states an identity box, with no sub-box ({error})"
-        ) from error
-    if sl.mesh.sliced:
+    mesh_base = 0
+    if isinstance(sl.mesh.layout, ComposedLayout):
+        if sl.mesh.layout.outer is None:
+            raise NotImplementedError(
+                "render_shard_layout_value: a sliced mesh needs its participating box "
+                "as a strided Layout; this states an identity box, with no sub-box"
+            )
+        mesh_base = sl.mesh.layout.offset
         participation(sl.mesh)
+    mesh_axes = flatten(sl.mesh.layout)
     ml_shape, ml_strides, ml_base = mesh_axes.shape, mesh_axes.strides, int(mesh_base)
     topo = program_topologies(sl.mesh)[0]
 
@@ -397,7 +394,7 @@ def _emit(let: LetStmt, ctx: CudaCodegenContext) -> None:
                 )
                 source_stride_args = ", ".join(
                     f"cute::Int<{stride}>{{}}"
-                    for stride in c_order_strides(
+                    for stride in compact_row_major(
                         tuple(int(upper_bound(dim)) for dim in source_shape)
                     )
                 )

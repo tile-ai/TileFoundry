@@ -34,6 +34,18 @@ def product(t) -> "ShapeDim":
     return result
 
 
+def repeat_like(profile, value) -> object:
+    """CuTe ``repeat_like``: *value* at every leaf, nested like *profile*.
+
+    What a flat tuple has to say about a nested one is said by building it
+    against the nesting and flattening that, rather than by working out which
+    flat positions each mode covers.
+    """
+    if not isinstance(profile, tuple):
+        return value
+    return tuple(repeat_like(item, value) for item in profile)
+
+
 def _unflatten(flat: tuple, profile) -> tuple:
     """Take *profile*'s worth of *flat*, returning it nested and what is left."""
     if not isinstance(profile, tuple):
@@ -62,4 +74,4 @@ def unflatten(flat: tuple, profile) -> tuple:
     return nested
 
 
-__all__ = ["IntTuple", "flatten", "product", "unflatten"]
+__all__ = ["IntTuple", "flatten", "product", "repeat_like", "unflatten"]

@@ -12,7 +12,8 @@ from __future__ import annotations
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.tir.cuda.nn.mma import SM80_16x8x16_F32BF16BF16F32_TN, make_atom
-from tilefoundry.ir.types import DType, ShardLayout, Split, TensorType, product
+from tilefoundry.ir.types import DType, ShardLayout, Split, TensorType
+from tilefoundry.ir.types.int_tuple import flatten, product
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.typeinfer import inference_type
 
@@ -46,12 +47,12 @@ def _product(shape: tuple[int, ...]) -> int:
 
 def _per_thread_size(sl: ShardLayout) -> int:
     """Layout product divided by mesh size (= per-thread element count)."""
-    mesh_size = _product(sl.mesh.positions.shape)
+    mesh_size = _product(flatten(sl.mesh.layout.shape))
     return _product(sl.layout.shape) // mesh_size
 
 
 def _check_split_extents_match_mesh(sl: ShardLayout) -> None:
-    mesh_shape = sl.mesh.positions.shape
+    mesh_shape = flatten(sl.mesh.layout.shape)
     assert len(sl.attrs) == len(mesh_shape), (
         f"attrs len {len(sl.attrs)} != mesh rank {len(mesh_shape)}"
     )

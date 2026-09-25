@@ -9,7 +9,9 @@ from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.types import DType, Mesh, flatten, level_axes, merge_mesh
+from tilefoundry.ir.mesh_scope import merge_mesh
+from tilefoundry.ir.types import DType, Mesh
+from tilefoundry.ir.types.layout import ComposedLayout, get, size
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TrafficBytes
 from tilefoundry.visitor_registry.visitors import CostEvaluator
@@ -185,18 +187,18 @@ def _scope_position_count(mesh: Mesh, topology_level: str | None, topologies: tu
         return 1
     declared = {topology.name: index for index, topology in enumerate(topologies)}
     selected = declared[topology_level]
-    shape = tuple(flatten(mesh.positions.shape))
+    stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
     positions = 1
-    for topology, axes in zip(mesh.topologies, level_axes(mesh)):
+    for index, topology in enumerate(mesh.topologies):
         if declared[topology.name] > selected:
             continue
-        for axis in axes:
-            extent = shape[axis]
-            if not isinstance(extent, int) or isinstance(extent, bool) or extent < 1:
-                raise AnalysisError(
-                    f"compute-cost: mesh axis {axis} needs a positive static extent, got {extent!r}"
-                )
-            positions *= extent
+        count = size(get(stated, index))
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+            raise AnalysisError(
+                f"compute-cost: mesh level {topology.name!r} needs positive static "
+                f"extents, got {count!r}"
+            )
+        positions *= count
     return positions
 
 

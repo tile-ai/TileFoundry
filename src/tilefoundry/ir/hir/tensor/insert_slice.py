@@ -10,7 +10,7 @@ from tilefoundry.ir.core.pattern import Scalar, Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.dim import static_dim_value
+from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,

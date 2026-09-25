@@ -35,17 +35,14 @@ from tilefoundry.ir.hir.specialize import (
     is_concrete,
     specialize_concretely,
 )
-from tilefoundry.ir.types import (
-    Topology,
-    callable_type_for,
-)
-from tilefoundry.ir.types.dim import static_dim_value
+from tilefoundry.ir.types import Topology, callable_type_for
 from tilefoundry.ir.types.substitute import (
     DimSubstitutionError,
     dim_vars_by_name,
     substitute_shape_dim,
     substitute_topology_dims,
 )
+from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import BindingSubstitutionCloner, collect_exprs
 from tilefoundry.target import UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts

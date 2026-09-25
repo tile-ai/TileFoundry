@@ -9,8 +9,9 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.types import ComposedLayout, Layout, TensorType, try_c_order_strides
+from tilefoundry.ir.types import ComposedLayout, Layout, TensorType
 from tilefoundry.ir.types.shard_layout import shard_layout_of
+from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AffineAccess,
@@ -38,7 +39,7 @@ def _strides(type_: TensorType) -> tuple | None:
         return None
     if layout.strides is not None:
         return tuple(layout.strides)
-    return try_c_order_strides(tuple(layout.shape))
+    return try_compact_major(tuple(layout.shape))
 
 
 def _transpose_view(call: "Call", ctx) -> tuple:
@@ -94,7 +95,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     else:
         source = x_ty.layout
         if source is None:
-            source = Layout(shape=tuple(x_ty.shape), strides=try_c_order_strides(tuple(x_ty.shape)))
+            source = Layout(shape=tuple(x_ty.shape), strides=try_compact_major(tuple(x_ty.shape)))
             if source.strides is None:
                 source = None
         if isinstance(source, Layout):

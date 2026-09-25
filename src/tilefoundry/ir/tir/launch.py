@@ -121,6 +121,8 @@ def launch_call(
         CallableType,
         DType,
         TensorType,
+    )
+    from tilefoundry.ir.types.callable_type import (  # noqa: PLC0415
         callable_type_for_prim_function,
     )
     from tilefoundry.ir.types.dim import (  # noqa: PLC0415

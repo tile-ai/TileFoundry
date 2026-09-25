@@ -21,7 +21,7 @@ from tilefoundry.ir.tir.stmts import (
     Sequential,
     While,
 )
-from tilefoundry.ir.types import UnitType
+from tilefoundry.ir.types import ComposedLayout, UnitType
 from tilefoundry.ir.visitor import StmtVisitor
 
 
@@ -129,7 +129,7 @@ class CudaEmitter(CppEmitter):
         name = ctx.name_for(node.binding)
         ctx.emit(f"// mesh scope: {program_topologies(node.mesh)[0].name}")
 
-        is_slice = node.mesh.sliced
+        is_slice = isinstance(node.mesh.layout, ComposedLayout)
         ctx.emit("{")
         ctx.indent()
         outer_aliases = ctx._mesh_aliases

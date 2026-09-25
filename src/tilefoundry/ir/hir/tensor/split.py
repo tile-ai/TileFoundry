@@ -9,21 +9,18 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.types import (
-    Broadcast,
-    Layout,
-    Partial,
-    ShardLayout,
-    TensorType,
-    TupleType,
-    canonical_shard_layout,
-    shard_layout_of,
-    try_c_order_strides,
-)
-from tilefoundry.ir.types.dim import static_dim_value
+from tilefoundry.ir.types import Broadcast, Layout, Partial, ShardLayout, TensorType, TupleType
+from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.shard_layout import Split as ShardSplit
 from tilefoundry.ir.types.shard_layout import Split as SplitAttr
-from tilefoundry.ir.types.shard_layout import layout_axis_to_tensor_axis, split_target_axes
+from tilefoundry.ir.types.shard_layout import (
+    canonical_shard_layout,
+    layout_axis_to_tensor_axis,
+    shard_layout_of,
+    split_target_axes,
+)
+from tilefoundry.ir.types.stride import try_compact_major
+from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -56,7 +53,7 @@ def _reject_redistribution(ctx, call: "Call", x_ty, axis: int, parts: int) -> No
     if layout is None:
         return
     targets = split_target_axes(layout, x_ty.shape)
-    mesh = layout.mesh.positions.shape if layout.mesh is not None else ()
+    mesh = flatten(layout.mesh.layout).shape if layout.mesh is not None else ()
     for mesh_axis, attr in enumerate(layout.attrs):
         divides = mesh_axis < len(mesh) and mesh[mesh_axis] > 1
         if isinstance(attr, ShardSplit) and divides and targets[mesh_axis] == axis:
@@ -106,7 +103,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     elif x_ty.layout is None:
         part_layout = None
     else:
-        part_layout = Layout(shape=part_shape, strides=try_c_order_strides(part_shape))
+        part_layout = Layout(shape=part_shape, strides=try_compact_major(part_shape))
     part_ty = TensorType(
         shape=part_shape, dtype=x_ty.dtype, layout=part_layout, storage=x_ty.storage
     )

@@ -7,9 +7,8 @@ from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import topology_scope_str
 from tilefoundry.ir.tir.sync import participation
-from tilefoundry.ir.types.int_tuple import flatten
-from tilefoundry.ir.types.layout import ComposedLayout, Layout
-from tilefoundry.ir.types.mesh import Mesh, Topology, level_index, stated_layout
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, flatten, get
+from tilefoundry.ir.types.mesh import Mesh, Topology
 from tilefoundry.target import validate_cuda_topology_levels
 
 
@@ -49,7 +48,9 @@ def _levelwise_layout(mesh: Mesh, topos) -> str:
     """
     shapes, strides = [], []
     for topology in topos:
-        arrangement = stated_layout(mesh.levels[level_index(mesh, topology.name)])
+        stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
+        index = [t.name for t in mesh.topologies].index(topology.name)
+        arrangement = get(stated, index)
         level_shape = tuple(flatten(arrangement.shape))
         level_strides = tuple(flatten(arrangement.strides))
         if not level_shape:
@@ -73,7 +74,7 @@ def _levelwise_layout(mesh: Mesh, topos) -> str:
 def mesh_type(mesh: Mesh) -> str:
     """The C++ ``tilefoundry::Mesh`` type for *mesh*, offset included."""
     topos = program_topologies(mesh)
-    layout_value = mesh.written
+    layout_value = mesh.layout
     if isinstance(layout_value, ComposedLayout):
         outer = layout_value.outer
         if not isinstance(outer, Layout) or outer.strides is None:
@@ -81,14 +82,15 @@ def mesh_type(mesh: Mesh) -> str:
                 "CUDA mesh emission: a sliced mesh needs its participating box "
                 "as a strided Layout; this states an identity box, with no sub-box"
             )
-        shape, strides, base = outer.shape, outer.strides, participation(mesh).base
+        stated, base = outer, participation(mesh).base
     else:
         if layout_value.strides is None:
             raise NotImplementedError("CUDA mesh emission: mesh layout needs strides")
-        shape, strides, base = layout_value.shape, layout_value.strides, 0
+        stated, base = layout_value, 0
     if len(topos) == 1:
-        shape_types = ", ".join(f"cute::Int<{s}>" for s in shape)
-        stride_types = ", ".join(f"cute::Int<{s}>" for s in strides)
+        level = get(stated, 0)
+        shape_types = ", ".join(f"cute::Int<{s}>" for s in flatten(level.shape))
+        stride_types = ", ".join(f"cute::Int<{s}>" for s in flatten(level.strides))
         layout = (
             f"cute::Layout<cute::Shape<{shape_types}>, "
             f"cute::Stride<{stride_types}>>"
@@ -114,7 +116,7 @@ def _is_dynamic_mesh(mesh: Mesh) -> bool:
     """
     if any(t.size is None for t in program_topologies(mesh)):
         return True
-    return any(s is None for s in mesh.positions.shape)
+    return any(s is None for s in flatten(mesh.layout).shape)
 
 
 __all__ = ["mesh_type", "program_topologies"]

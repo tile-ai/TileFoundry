@@ -285,28 +285,13 @@ class Mesh:
 
     Attributes:
         topologies: attribute; Ordered topology sequence.
-        layout: attribute; One arrangement, or one per level it names.
+        layout: attribute; One nested arrangement, mode i being level i.
         names: attribute; Human-readable layout-axis names.
     """
 
     topologies: tuple[Topology, ...]
-    layout: LayoutBase | tuple[LayoutBase, ...]
+    layout: Layout | ComposedLayout
     names: tuple[str, ...] = ()
-
-    @property
-    def levels(self) -> tuple[LayoutBase, ...]: ...
-
-    @property
-    def positions(self) -> Layout: ...
-
-    @property
-    def written(self) -> LayoutBase: ...
-
-    @property
-    def offset(self) -> int: ...
-
-    @property
-    def sliced(self) -> bool: ...
 
     def __getitem__(self, key) -> Mesh: ...
 ```
@@ -318,25 +303,27 @@ class Mesh:
 Field meanings:
 
 - `topologies` — the ordered device-domain descriptions (`name` + `size`)
-- `layout` — the mesh's own shape / strides (a `Layout`); a constant slice
-  (`m[...]`) replaces it with a `ComposedLayout` recording the sub-box
-  ([tir §1.5](./tir.md#15-sync))
+- `layout` — a nested `Layout` whose mode `i` is level `i`'s own arrangement; a
+  constant slice (`m[...]`) replaces it with a `ComposedLayout` recording the
+  sub-box ([tir §1.5](./tir.md#15-sync))
 - `names` — optional human-readable names (`cta.x`, `cta.y`, …)
 
-A mesh naming several levels MUST state one arrangement per level, each in
-that level's own numbering, and `Mesh` normalizes what was written into that
-form at construction: one arrangement over all the levels' axes is cut at the
-level boundaries, each level taking axes left to right until their extents
-multiply to its own size and its steps divided by what the levels under it
-hold. A boundary no prefix of axes lands on MUST be refused. A level stating a
-run rather than all of its positions states it as a `ComposedLayout` whose
-offset is where that run starts within the level.
+Every mesh MUST state one arrangement per level it names, each in that level's
+own numbering, as one nested `Layout` whose mode `i` is level `i` -- a mesh
+naming one level included. `Mesh` normalizes what was written into that form at
+construction: one arrangement over all the levels' axes is cut at the level
+boundaries, each level taking axes left to right until their extents multiply to
+its own size and its steps divided by what the levels under it hold. An axis of
+extent one adds no positions and joins the level being filled. A boundary no
+prefix of axes lands on MUST be refused.
 
-`Mesh.levels` is that per-level statement; `Mesh.positions` is every level's
-axes end to end as the device numbers them, each axis stepping by what its
-level states times what the levels under it hold; `Mesh.offset` is where the
-whole mesh starts in that numbering; and `Mesh.written` is the two of them as
-the single arrangement the mesh was written as.
+Because the layout is a nested `Layout`, the layout operations read it: `get(mesh.layout, i)`
+is level `i`'s own arrangement, `flatten(mesh.layout)` is every level's axes end
+to end, and `repeat_like` against `mesh.layout.shape` states per axis whatever is
+stated per level. `device_layout(mesh)` is those axes as the device numbers its
+positions, each stepping by what its level states times what the levels under it
+hold, and a slice's `ComposedLayout.offset` is where the whole mesh starts in
+that numbering.
 
 Mesh composition uses the following rules:
 
@@ -359,9 +346,8 @@ value is consumed by a region.
 
 - constraints:
   - `Topology` construction rejects a `None` size. `Mesh` construction rejects
-    a `None` entry in its layout shape. Beyond that explicit-extent check,
-    `Mesh` is a frozen record: it performs no construction-time normalization
-    or position-consistency check. Its `topologies` field is a
+    a `None` entry in its layout shape and normalizes the layout into one mode
+    per level; beyond that it performs no position-consistency check. Its `topologies` field is a
     `tuple[Topology, ...]`; helpers such as `make_mesh` construct that tuple for
     handwritten Python.
   - The author surface is `with Mesh(("cta",), layout=(128,)) as cta:`. The
@@ -381,8 +367,9 @@ value is consumed by a region.
   - The layout of the positions one level has is the axes up to and including
     that level's segment, with their strides divided by the product of the sizes
     of the levels below it; a stride that division does not divide exactly MUST
-    be refused. A Mesh naming one level states its own layout and is not
-    projected. A Mesh naming several MUST NOT also be sliced.
+    be refused. A Mesh naming one level takes every axis into its single mode,
+    which needs no division and therefore no declared extent. A Mesh naming
+    several MUST NOT also be sliced.
   - Nested single-level Mesh scopes compose to exactly that shape: the axes join
     outermost first and each outer stride is scaled by the positions below it.
     A value distributed at two levels at once may therefore be written either

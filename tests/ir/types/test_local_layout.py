@@ -15,16 +15,15 @@ from itertools import product
 
 import pytest
 
-from tilefoundry.ir.types import (
-    DType,
-    Mesh,
-    Topology,
-    make_mesh,
-    make_shard_tensor_type,
+from tilefoundry.ir.types import DType, Mesh, Topology, make_mesh, make_shard_tensor_type
+from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.shard_layout import (
+    Broadcast,
+    Split,
+    local_layout,
+    local_layout_and_offset,
     shard_layout_of,
 )
-from tilefoundry.ir.types.local import local_layout, local_layout_and_offset
-from tilefoundry.ir.types.shard_layout import Broadcast, Split
 from tilefoundry.ir.types.utils import local_type_of
 
 _GPU, _THREAD = Topology("gpu", 2), Topology("thread", 32)
@@ -59,7 +58,7 @@ _CASES = {
 def _instances(mesh: Mesh) -> int:
     """How many programs the mesh spreads a tensor over."""
     count = 1
-    for extent in mesh.positions.shape:
+    for extent in flatten(mesh.layout).shape:
         count *= extent
     return count
 

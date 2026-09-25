@@ -34,6 +34,7 @@ from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.tir.launch import launch_call
 from tilefoundry.ir.types import Broadcast, Layout, Partial, Split, TensorType
 from tilefoundry.ir.types.dim import DimVar
+from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.utils import types_compatible
 
@@ -339,7 +340,7 @@ class PlainLayoutPattern(ElementPattern):
         shape = tuple(children.values())
         layout = runtime.Layout(
             shape=shape,
-            strides=runtime.c_order_strides(shape, mul=operator.mul),
+            strides=runtime.compact_row_major(shape, mul=operator.mul),
         )
         if (
             context.situation != "mesh_layout"
@@ -349,7 +350,7 @@ class PlainLayoutPattern(ElementPattern):
             mesh = context.function.state.mesh_stack[-1]
             return runtime.ShardLayout(
                 layout=layout,
-                attrs=tuple(runtime.Broadcast() for _ in mesh.positions.shape),
+                attrs=tuple(runtime.Broadcast() for _ in flatten(mesh.layout).shape),
                 mesh=mesh,
             )
         return layout
@@ -391,7 +392,7 @@ class MeshAxisPattern(ElementPattern):
                 node, context, f"{binding!r} is not a lexical Mesh binding"
             )
         if axis_name is None:
-            if len(mesh.positions.shape) != 1:
+            if len(flatten(mesh.layout).shape) != 1:
                 raise ParseError.from_node(
                     node, context, "bare Mesh placement requires a one-axis mesh"
                 )
@@ -662,8 +663,8 @@ class PlacementConstructionRule:
         offset = 0
         for source in meshes:
             source_offsets[id(source)] = offset
-            offset += len(source.positions.shape)
-        attrs: list[object] = [runtime.Broadcast() for _ in mesh.positions.shape]
+            offset += len(flatten(source.layout).shape)
+        attrs: list[object] = [runtime.Broadcast() for _ in flatten(mesh.layout).shape]
         for source, source_axis, tensor_axis in value.splits:
             attrs[source_offsets[id(source)] + source_axis] = runtime.Split(tensor_axis)
         for source, source_axis, kind, reduction in value.states:
@@ -3129,7 +3130,7 @@ class MeshCoordinatePattern(ElementPattern):
         )
         if axis is None and node.attr in {"x", "y", "z"}:
             candidate = ("x", "y", "z").index(node.attr)
-            if candidate < len(mesh.positions.shape):
+            if candidate < len(flatten(mesh.layout).shape):
                 axis = candidate
         if axis is None:
             named = ", ".join(mesh.names)
@@ -3151,7 +3152,7 @@ class MeshCoordinatePattern(ElementPattern):
             raise ParseError.from_node(match.node, context, "mesh coordinate lacks context")
         mesh = match.captures["mesh"]
         axis = match.captures["axis"]
-        extent = mesh.positions.shape[axis]
+        extent = flatten(mesh.layout).shape[axis]
         if isinstance(extent, bool) or not isinstance(extent, int):
             raise ParseError.from_node(
                 match.node, context, "mesh coordinate requires a concrete axis extent"

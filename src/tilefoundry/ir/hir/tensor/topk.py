@@ -19,7 +19,7 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
-from tilefoundry.ir.types import DType, Layout, TensorType, TupleType, try_c_order_strides
+from tilefoundry.ir.types import DType, Layout, TensorType, TupleType
 from tilefoundry.ir.types.dim import (
     DimAdd,
     DimFloorDiv,
@@ -36,6 +36,7 @@ from tilefoundry.ir.types.shard_layout import (
     layout_axis_to_tensor_axis,
     shard_layout_of,
 )
+from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.ir.types.tensor_type import ShapeDim
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry import register_typeinfer
@@ -150,7 +151,7 @@ def _canonical_shard(sl: "ShardLayout", out_shape) -> "ShardLayout":
     when the shape is non-static; ``attrs`` and ``mesh`` pass through.
     """
     out_shape = tuple(out_shape)
-    strides = try_c_order_strides(out_shape) or tuple(1 for _ in out_shape)
+    strides = try_compact_major(out_shape) or tuple(1 for _ in out_shape)
     return ShardLayout(
         layout=Layout(shape=out_shape, strides=strides),
         attrs=sl.attrs,
@@ -201,7 +202,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TupleType:
     new_layout = (
         None
         if x_ty.layout is None
-        else Layout(shape=out_shape, strides=try_c_order_strides(out_shape))
+        else Layout(shape=out_shape, strides=try_compact_major(out_shape))
     )
     if source_shard is not None:
         relation = relations_of(call, ctx)

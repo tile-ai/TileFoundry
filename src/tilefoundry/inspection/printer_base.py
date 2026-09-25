@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
+from tilefoundry.ir.mesh_scope import device_layout
 from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom
 from tilefoundry.ir.types import DType, TensorType, TupleType, UnitType
 from tilefoundry.ir.types.dim import (
@@ -20,12 +21,12 @@ from tilefoundry.ir.types.dim import (
     DimMul,
     DimSub,
     DimVar,
-    static_dim_value,
 )
-from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, Swizzle
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, Swizzle, flatten
 from tilefoundry.ir.types.mesh import Mesh
 from tilefoundry.ir.types.shard_layout import Broadcast, Partial, ShardLayout, Split
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import ExprFunctor, TypeFunctor
 from tilefoundry.target import Target
 from tilefoundry.utils.python_source import PythonExpr
@@ -152,7 +153,7 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
     def _mesh_coordinate_text(self, value: Call, target: MeshCoord, ctx) -> str:
         """Render one coordinate through the active binding of its mesh."""
         axis = static_dim_value(value.args[0]) if value.args else None
-        if axis is None or axis < 0 or axis >= len(target.mesh.positions.shape):
+        if axis is None or axis < 0 or axis >= len(flatten(target.mesh.layout).shape):
             raise ValueError("MeshCoord requires a literal in-range axis to print")
         if ctx is None:
             raise ValueError("MeshCoord requires an active mesh binding to print")
@@ -320,7 +321,12 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             for topology in value.topologies
         )
         topologies = f"({topologies}{',' if len(value.topologies) == 1 else ''})"
-        result = f"Mesh({topologies}, {self.visit(value.written, ctx)}"
+        written = device_layout(value)
+        if isinstance(value.layout, ComposedLayout):
+            written = ComposedLayout(
+                inner=value.layout.inner, offset=value.layout.offset, outer=written
+            )
+        result = f"Mesh({topologies}, {self.visit(written, ctx)}"
         if value.names:
             result += f", names={tuple(value.names)!r}"
         return result + ")"

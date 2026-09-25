@@ -16,12 +16,9 @@ from tilefoundry.ir.hir._shard_checks import (
     reject_dynamic_shards,
     require_uniform_partial_slices,
 )
-from tilefoundry.ir.types import (
-    Layout,
-    TensorType,
-    shard_layout_of,
-    try_c_order_strides,
-)
+from tilefoundry.ir.types import Layout, TensorType
+from tilefoundry.ir.types.shard_layout import shard_layout_of
+from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -89,7 +86,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 "layout; use an explicit Reshard before Stack",
             )
     else:
-        layout = Layout(shape=new_shape, strides=try_c_order_strides(new_shape))
+        layout = Layout(shape=new_shape, strides=try_compact_major(new_shape))
     storage = resolve_anchor_storage(ctx, call, *(t.storage for t in types))
     return TensorType(shape=new_shape, dtype=base.dtype, layout=layout, storage=storage)
 

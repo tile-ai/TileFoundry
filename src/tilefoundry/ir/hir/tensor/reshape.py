@@ -8,14 +8,15 @@ from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.types import ComposedLayout, TensorType, try_c_order_strides
-from tilefoundry.ir.types.layout import Layout
+from tilefoundry.ir.types import ComposedLayout, TensorType
+from tilefoundry.ir.types.layout import Layout, flatten
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     ShardLayout,
     Split,
 )
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     identity_access,
@@ -86,7 +87,7 @@ def _carry_sharded_reshape(layout: ShardLayout, new_shape: tuple):
     axis_strides = axis_layout.strides
     n_axis = len(axis_shape)
 
-    mesh_shape = layout.mesh.positions.shape
+    mesh_shape = flatten(layout.mesh.layout).shape
     split_mesh_extent: dict[int, int] = {}
     for mesh_axis_idx, attr in enumerate(layout.attrs):
         if isinstance(attr, Split) and mesh_axis_idx < len(mesh_shape):
@@ -192,18 +193,18 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         source = x_ty.layout
         if isinstance(source, Layout):
             source_strides = source.strides
-            expected_strides = try_c_order_strides(source.shape)
+            expected_strides = try_compact_major(source.shape)
             if source_strides is None or source_strides == expected_strides:
                 new_layout = Layout(
                     shape=new_shape,
-                    strides=try_c_order_strides(new_shape),
+                    strides=try_compact_major(new_shape),
                 )
         elif (
             isinstance(source, ComposedLayout)
             and isinstance(source.outer, Layout)
             and (
                 source.outer.strides is None
-                or source.outer.strides == try_c_order_strides(source.outer.shape)
+                or source.outer.strides == try_compact_major(source.outer.shape)
             )
         ):
             new_layout = ComposedLayout(
@@ -211,7 +212,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 offset=source.offset,
                 outer=Layout(
                     shape=new_shape,
-                    strides=try_c_order_strides(new_shape),
+                    strides=try_compact_major(new_shape),
                 ),
             )
     return TensorType(

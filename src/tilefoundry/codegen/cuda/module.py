@@ -25,7 +25,7 @@ from tilefoundry.codegen.registry import CodeGenerator
 from tilefoundry.codegen.signature import CallableSignature
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.types.dim import static_dim_value
+from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.target import Target
 
 Geometry = tuple[tuple[object, object, object], tuple[object, object, object]]

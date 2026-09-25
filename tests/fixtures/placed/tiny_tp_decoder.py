@@ -12,8 +12,9 @@ import torch
 
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, Mesh, Tensor, Topology, tf
-from tilefoundry.ir.types import Layout, Split, canonical_shard_layout
+from tilefoundry.ir.types import Layout, Split
 from tilefoundry.ir.types import Mesh as ShardMesh
+from tilefoundry.ir.types.shard_layout import canonical_shard_layout
 from tilefoundry.runtime import runtime_func, runtime_module
 from tilefoundry.target import CudaTarget
 

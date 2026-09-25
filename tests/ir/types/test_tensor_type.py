@@ -15,13 +15,11 @@ from tilefoundry.ir.types import (
     Split,
     TensorType,
     Topology,
-    local_type_of,
     make_mesh,
     make_shard_tensor_type,
-    numel,
-    tensor_bytes,
 )
 from tilefoundry.ir.types.dim import DimVar, ceildiv
+from tilefoundry.ir.types.utils import local_type_of, numel, tensor_bytes
 
 
 def test_tensor_type_equality_over_a_dim_var_shape_entry() -> None:

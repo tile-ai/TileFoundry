@@ -22,7 +22,7 @@ def symbol_call(callee, args) -> "Evaluate":  # noqa: F821 -- lazy Evaluate
     callee ``PrimFunction`` by symbol.
     """
     from tilefoundry.ir.tir.stmts import Evaluate  # noqa: PLC0415
-    from tilefoundry.ir.types import callable_type_for_prim_function  # noqa: PLC0415
+    from tilefoundry.ir.types.callable_type import callable_type_for_prim_function  # noqa: PLC0415
 
     ref = SymbolRef(name=callee.name, type=callable_type_for_prim_function(callee))
     return Evaluate(callable=ref, args=tuple(args))

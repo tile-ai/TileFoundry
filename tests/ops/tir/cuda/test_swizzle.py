@@ -16,15 +16,7 @@ from tilefoundry.codegen.cuda.tir.memory.tensor_view import render_shard_layout_
 from tilefoundry.dsl import T, Tensor
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.types import (
-    ComposedLayout,
-    Layout,
-    Mesh,
-    ShardLayout,
-    Split,
-    Swizzle,
-    Topology,
-)
+from tilefoundry.ir.types import ComposedLayout, Layout, Mesh, ShardLayout, Split, Swizzle, Topology
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")

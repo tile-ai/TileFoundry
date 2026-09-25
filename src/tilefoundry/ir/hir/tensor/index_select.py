@@ -16,7 +16,7 @@ from tilefoundry.ir.types.shard_layout import (
     Split,
     split_target_axes,
 )
-from tilefoundry.ir.types.stride import prefix_product
+from tilefoundry.ir.types.stride import compact_col_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -71,7 +71,7 @@ def _index_select_shard_layout(call, ctx, x_ty, dim: int, out_shape: tuple):
             f"dim {dim} index_select over a shard layout with multiple Split "
             "axes including the selected dim; cannot derive an output layout",
         )
-    natural = Layout(shape=out_shape, strides=prefix_product(out_shape))
+    natural = Layout(shape=out_shape, strides=compact_col_major(out_shape))
     if on_dim:
         mesh_idx = on_dim[0]
         new_attrs = tuple(

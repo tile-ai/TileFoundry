@@ -8,8 +8,10 @@ from enum import Enum
 from tilefoundry.ir.core import Op, VerifyError
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.types import UnitType, product
-from tilefoundry.ir.types.layout import ComposedLayout, Layout
+from tilefoundry.ir.mesh_scope import device_layout
+from tilefoundry.ir.types import UnitType
+from tilefoundry.ir.types.int_tuple import flatten, product
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, get
 from tilefoundry.ir.types.layout_algebra import apply as _apply
 from tilefoundry.ir.types.layout_algebra import size as _size
 from tilefoundry.ir.types.mesh import Mesh
@@ -43,9 +45,10 @@ def _legal_slice_of(m: Mesh, e: Mesh) -> bool:
     region = m.layout
     if not isinstance(region, ComposedLayout):
         return False
-    outer = region.outer
-    p = e.layout
-    if not isinstance(outer, Layout) or outer.strides != p.strides:
+    if not isinstance(region.outer, Layout):
+        return False
+    outer, p = get(region.outer, 0), get(e.layout, 0)
+    if outer.strides != p.strides:
         return False
     sub, pshape = outer.shape, p.shape
     if len(sub) != len(pshape):
@@ -77,7 +80,7 @@ def _legal_slice_of(m: Mesh, e: Mesh) -> bool:
 def _mesh_str(mesh: Mesh) -> str:
     """A mesh as its topologies and the shape they are viewed through."""
     topologies = ", ".join(f"{t.name}({t.size})" for t in mesh.topologies)
-    return f"({topologies})[{', '.join(str(d) for d in mesh.positions.shape)}]"
+    return f"({topologies})[{', '.join(str(d) for d in flatten(mesh.layout.shape))}]"
 
 
 def _no_enclosing_mesh_error(m: Mesh, scope: "tuple[Mesh, ...]") -> VerifyError:
@@ -120,7 +123,7 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
             f"T.sync expects a Mesh argument (m or a slice m[...]), got {type(m).__name__}"
         )
     scope = ctx.mesh_scope
-    if not m.sliced:
+    if not isinstance(m.layout, ComposedLayout):
         ok = any(m == e for e in scope)
     else:
         ok = any(_legal_slice_of(m, e) for e in scope)
@@ -158,7 +161,9 @@ def _participant_layout(mesh: Mesh) -> "tuple[Layout, int]":
     runs read as the device numbers them: the mesh's axes, at its offset.
     """
     try:
-        return mesh.positions, mesh.offset
+        return device_layout(mesh), (
+            mesh.layout.offset if isinstance(mesh.layout, ComposedLayout) else 0
+        )
     except ValueError as error:
         raise VerifyError(f"T.sync: {error}") from error
 
@@ -222,7 +227,7 @@ def classify(mesh: Mesh) -> SyncBarrier:
     """
     topos = mesh.topologies
     if all(t.name == "cta" for t in topos):
-        if mesh.sliced:
+        if isinstance(mesh.layout, ComposedLayout):
             raise VerifyError("T.sync: a partial grid sync (cta mesh slice) is unsupported")
         return SyncBarrier.GRID
     p = participation(mesh)

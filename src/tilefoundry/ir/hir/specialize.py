@@ -17,8 +17,8 @@ from tilefoundry.ir.core import Call, Constant, Expr, Op, Tuple, Var
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.mesh_scope import merge_mesh
 from tilefoundry.ir.types.dim import is_dim_expr
-from tilefoundry.ir.types.mesh import merge_mesh
 from tilefoundry.ir.types.substitute import (
     dim_vars_by_name,
     has_symbolic_dims,

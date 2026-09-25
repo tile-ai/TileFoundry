@@ -11,27 +11,15 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.isl_interop import dim_range
-from tilefoundry.ir.types import (
-    ComposedLayout,
-    Layout,
-    ShardLayout,
-    Swizzle,
-    TensorType,
-    flatten,
-)
-from tilefoundry.ir.types.dim import (
-    DimAdd,
-    DimFloorDiv,
-    DimMul,
-    DimSub,
-    i64_const,
-    simplify_dim,
-)
+from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Swizzle, TensorType
+from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMul, DimSub, simplify_dim
+from tilefoundry.ir.types.int_tuple import flatten
 from tilefoundry.ir.types.shard_layout import (
     layout_axis_to_tensor_axis,
     split_target_axes,
 )
 from tilefoundry.ir.types.substitute import dim_vars_by_name
+from tilefoundry.ir.types.utils import i64_const
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (

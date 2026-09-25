@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from .int_tuple import flatten
+from .int_tuple import flatten as _flat
+from .int_tuple import product
 
 
 class LayoutBase:
@@ -111,6 +112,39 @@ class ComposedLayout(LayoutBase):
 EMPTY_LAYOUT = Layout(shape=(), strides=())
 
 
+def size(layout: Layout) -> int:
+    return product(layout.shape)
+
+
+def flatten(layout):
+    """CuTe ``flatten``: every mode at the top level, of an arrangement or a tuple.
+
+    CuTe spells this once for each (``layout.hpp`` and the tuple algorithms);
+    here one name reads both, because which was handed over is plain from what
+    comes back.
+    """
+    if not isinstance(layout, LayoutBase):
+        return _flat(layout)
+    if isinstance(layout, ComposedLayout):
+        return flatten(layout.outer) if layout.outer is not None else EMPTY_LAYOUT
+    strides = getattr(layout, "strides", None)
+    return Layout(
+        shape=_flat(layout.shape),
+        strides=None if strides is None else _flat(strides),
+    )
+
+
+def unflatten(layout: LayoutBase, profile) -> "Layout":
+    """CuTe ``unflatten``: a flat arrangement nested to *profile*'s shape."""
+    from .int_tuple import unflatten as unflatten_tuple  # noqa: PLC0415 - cycle guard
+
+    strides = getattr(layout, "strides", None)
+    return Layout(
+        shape=unflatten_tuple(tuple(layout.shape), profile),
+        strides=None if strides is None else unflatten_tuple(tuple(strides), profile),
+    )
+
+
 def rank(layout: LayoutBase) -> int:
     """CuTe ``rank``: how many modes a layout states at its top level."""
     return len(layout.shape)
@@ -137,6 +171,9 @@ def take(layout: LayoutBase, begin: int, end: int) -> "Layout":
 
 __all__ = [
     "LayoutBase",
+    "flatten",
+    "size",
+    "unflatten",
     "Layout",
     "Swizzle",
     "ComposedLayout",
