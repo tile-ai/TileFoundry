@@ -23,7 +23,7 @@ from tests.fixtures.placed.tiny_tp_decoder import (
     TinyTPDecoderLM,
     TinyTPDecoderLMTwin,
 )
-from tilefoundry.ir.types.shard import Placement
+from tilefoundry.ir.types import Placement
 from tilefoundry.runtime.resource import DictResource, SafetensorsResource
 
 

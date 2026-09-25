@@ -2,19 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from tilefoundry.ir.types.shard import (
-    Layout,
-    Mesh,
-    Topology,
+from tilefoundry.ir.mesh_scope import (
     check_topology,
-    make_mesh,
-    product,
-)
-from tilefoundry.ir.types.shard.layout_algebra import size
-from tilefoundry.ir.types.shard.scope_match import (
     mesh_scope_matches_required_scope,
     states_consistent_positions,
 )
+from tilefoundry.ir.types import Layout, Mesh, Topology, make_mesh
+from tilefoundry.ir.types.int_tuple import product
+from tilefoundry.ir.types.layout_algebra import size
 
 
 def test_mesh_position_consistency_is_an_explicit_predicate() -> None:
@@ -45,14 +40,14 @@ def test_mesh_is_a_frozen_record_without_axis_attributes() -> None:
     mesh = Mesh(topologies, layout, ("warp", "lane"))
 
     assert mesh.topologies is topologies
-    assert mesh.layout is layout
+    assert mesh.layout == Layout(shape=((4, 8),), strides=((8, 1),))
     assert mesh.names == ("warp", "lane")
     assert not hasattr(mesh, "topology")
     assert not hasattr(mesh, "axes")
 
     normalized = make_mesh((4, 8), topology="cta")
     assert normalized.topologies == (Topology("cta", 32),)
-    assert normalized.layout == Layout(shape=(4, 8), strides=(8, 1))
+    assert normalized.layout == Layout(shape=((4, 8),), strides=((8, 1),))
 
 
 def test_mesh_slice_keeps_the_parent_topologies() -> None:
@@ -61,7 +56,7 @@ def test_mesh_slice_keeps_the_parent_topologies() -> None:
     sliced = mesh[0, :]
 
     assert sliced.topologies is mesh.topologies
-    assert sliced.layout.shape == (1, 32)
+    assert sliced.layout.shape == ((1, 32),)
 
 
 def test_check_topology_rejects_positions_beyond_a_declared_extent() -> None:

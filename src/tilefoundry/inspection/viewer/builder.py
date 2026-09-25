@@ -13,7 +13,7 @@ from tilefoundry.ir.core.expr import Call, Constant, Var
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.tensor_type import TensorType, TupleType
 
 from .htmltable import Cell, Span, Table

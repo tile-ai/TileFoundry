@@ -15,9 +15,8 @@ from tests.ops.ir.typeinfer_utils import (
     raw_shard_tensor_type,
 )
 from tilefoundry.ir.hir.tensor.transpose import Transpose
-from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.shard import Layout, make_mesh
-from tilefoundry.ir.types.shard.shard_layout import (
+from tilefoundry.ir.types import DType, Layout, make_mesh, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     ShardLayout,
     Split,
@@ -29,12 +28,13 @@ _B4 = (Broadcast(), Broadcast(), Broadcast(), Broadcast())
 _T10 = Transpose(perm=(1, 0))
 
 
-def test_plain_input_permutes_its_layout_when_one_is_stated():
+def test_plain_input_permutes_its_layout():
+    """An unstated layout is the C order it stands for, and is permuted as one."""
     source = make_tensor_type((16, 8), DType.bf16, layout=Layout(shape=(16, 8), strides=(8, 1)))
     ty = infer_call(_T10, source)
 
     assert ty.layout == Layout(shape=(8, 16), strides=(1, 8))
-    assert infer_call(_T10, make_tensor_type((16, 8), DType.bf16)).layout is None
+    assert infer_call(_T10, make_tensor_type((16, 8), DType.bf16)).layout == ty.layout
 
 
 def test_factorized_split_reorders_subaxes():

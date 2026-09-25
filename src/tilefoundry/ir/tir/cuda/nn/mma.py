@@ -13,14 +13,7 @@ from tilefoundry.ir.core import Op, VerifyError
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.types import DType, UnitType
-from tilefoundry.ir.types.shard import (
-    Layout,
-    Mesh,
-    ShardLayout,
-    Split,
-    Topology,
-)
+from tilefoundry.ir.types import DType, Layout, Mesh, ShardLayout, Split, Topology, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
 from .mma_atom import MmaAtom, MmaOpSpec
@@ -91,7 +84,7 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
                     call,
                     f"Mma {role} fragment layout does not match atom {_ATOM_ROLE[role]}",
                 )
-        from tilefoundry.ir.types.shard.scope_match import (  # noqa: PLC0415
+        from tilefoundry.ir.mesh_scope import (  # noqa: PLC0415
             mesh_scope_matches_required_scope,
         )
 

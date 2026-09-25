@@ -17,10 +17,9 @@ from tests.ops.ir.typeinfer_utils import (
 from tilefoundry.evaluator import evaluate
 from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.hir.tensor.cast import Cast
-from tilefoundry.ir.types import DType, make_tensor_type
-from tilefoundry.ir.types.shard import make_mesh
-from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout, Split
+from tilefoundry.ir.types import DType, make_mesh, make_tensor_type
+from tilefoundry.ir.types.layout import Layout
+from tilefoundry.ir.types.shard_layout import ShardLayout, Split
 
 _M = make_mesh((4,))
 

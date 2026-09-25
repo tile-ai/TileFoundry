@@ -74,7 +74,7 @@ class TensorType:
         Shape elements and dimension arithmetic results use this single form
         so structural type equality holds across construction sites.
         """
-        from .shard.layout import EMPTY_LAYOUT  # noqa: PLC0415 - cycle guard
+        from .layout import EMPTY_LAYOUT  # noqa: PLC0415 - cycle guard
 
         return TensorType(
             shape=(), dtype=dtype, layout=EMPTY_LAYOUT, storage=StorageKind.UMAT
@@ -83,7 +83,7 @@ class TensorType:
     @staticmethod
     def umat_tensor(shape: tuple, dtype: DType = DType.i64) -> "TensorType":
         """Canonical ranked value whose residency is not decided."""
-        from .shard.layout import EMPTY_LAYOUT  # noqa: PLC0415 - cycle guard
+        from .layout import EMPTY_LAYOUT  # noqa: PLC0415 - cycle guard
 
         return TensorType(
             shape=tuple(shape),

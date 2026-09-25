@@ -8,11 +8,12 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Scalar
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.mesh_scope import covered_by_scope
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.shard.mesh import Mesh
-from tilefoundry.ir.types.shard.scope_match import covered_by_scope
+from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.mesh import Mesh
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     measures_without_reading,
@@ -47,7 +48,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TypeInferResults:
         ctx.error(call, "MeshCoord.mesh must be bound by the current mesh scope")
     if not call.args:
         ctx.error(call, "missing required input 'axis'")
-    shape = call.target.mesh.layout.shape
+    shape = flatten(call.target.mesh.layout).shape
     axis = static_dim_value(call.args[0])
     if axis is not None and not 0 <= axis < len(shape):
         ctx.error(call, f"axis {axis} is out of range for rank-{len(shape)} mesh")

@@ -15,9 +15,8 @@ from tests.ops.ir.cost_utils import CostCase, run_cost_case
 from tests.ops.ir.typeinfer_utils import ExpectedError, TypeInferCase, run_typeinfer_case
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.hir.tensor.where import Where
-from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.shard import Layout, make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Split
+from tilefoundry.ir.types import DType, Layout, make_mesh, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard_layout import Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 

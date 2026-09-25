@@ -13,8 +13,8 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import require_matching_partial_state
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import shard_layout_of
-from tilefoundry.ir.types.shard.shard_layout import Split, split_target_axes
+from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.shard_layout import Split, shard_layout_of, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -182,7 +182,7 @@ def _divided_axes(type_) -> set[int]:
     if layout is None:
         return set()
     targets = split_target_axes(layout, type_.shape)
-    mesh = layout.mesh.layout.shape if layout.mesh is not None else ()
+    mesh = flatten(layout.mesh.layout).shape if layout.mesh is not None else ()
     return {
         targets[mesh_axis]
         for mesh_axis, attr in enumerate(layout.attrs)

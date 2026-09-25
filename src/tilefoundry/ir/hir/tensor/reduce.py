@@ -13,13 +13,9 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard import (
-    Layout,
-    canonical_shard_layout,
-    try_c_order_strides,
-)
-from tilefoundry.ir.types.shard.shard_layout import shard_layout_of
+from tilefoundry.ir.types import Layout, TensorType
+from tilefoundry.ir.types.shard_layout import canonical_shard_layout, shard_layout_of
+from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -79,7 +75,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     new_layout = (
         None
         if x_ty.layout is None
-        else Layout(shape=out_shape, strides=try_c_order_strides(out_shape))
+        else Layout(shape=out_shape, strides=try_compact_major(out_shape))
     )
     source_shard = shard_layout_of(x_ty.layout)
     if source_shard is not None:

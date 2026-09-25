@@ -11,7 +11,7 @@ from typing import Callable, ClassVar, Mapping, Sequence
 import torch
 
 from tilefoundry.evaluator.value import from_torch_dtype
-from tilefoundry.ir.types.shard import shard_layout_of
+from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.runtime.tensor import ShardTensor
 
 _NEAR_ZERO = 1e-12

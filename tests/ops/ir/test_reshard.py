@@ -18,10 +18,9 @@ from tests.ops.ir.typeinfer_utils import (
 )
 from tilefoundry.dsl.storage import gmem, rmem
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.types import make_tensor_type
+from tilefoundry.ir.types import Layout, Mesh, ShardLayout, Topology, make_mesh, make_tensor_type
 from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
-from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Topology, make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Split
+from tilefoundry.ir.types.shard_layout import Split
 from tilefoundry.ir.types.storage import StorageKind
 
 

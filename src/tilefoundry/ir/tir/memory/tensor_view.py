@@ -16,8 +16,8 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard import c_order_strides
-from tilefoundry.ir.types.shard.layout import Layout, LayoutBase
+from tilefoundry.ir.types.layout import Layout, LayoutBase
+from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.visitor_registry import register_typeinfer
 
 
@@ -54,7 +54,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
 def _c_order_strides(src_shape: tuple) -> list:
     """C-order contiguous strides of the source buffer a slice view reads."""
-    return list(c_order_strides(tuple(src_shape)))
+    return list(compact_row_major(tuple(src_shape)))
 
 
 def layout_for_slice(src_shape: tuple, axis: int, sliced_shape: tuple) -> Layout:

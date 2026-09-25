@@ -18,8 +18,9 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.types import TensorType, TupleType, Type, bytes_by_storage
+from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types.utils import bytes_by_storage
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.units import format_bytes
 from tilefoundry.visitor_registry.access_relation import (

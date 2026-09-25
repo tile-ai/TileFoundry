@@ -23,9 +23,9 @@ from tilefoundry.ir.core import Call, get_metadata
 from tilefoundry.ir.core.module import reachable_functions
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.nn.matmul import MatMul
-from tilefoundry.ir.types import tensor_types
-from tilefoundry.ir.types.shard.layout import ComposedLayout
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.layout import ComposedLayout, flatten
+from tilefoundry.ir.types.shard_layout import ShardLayout
+from tilefoundry.ir.types.utils import tensor_types
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget
 
@@ -216,5 +216,5 @@ def test_each_placed_branch_keeps_its_slice_on_its_primitive_results() -> None:
         assert placed, branch
         assert {op for op, _ in placed} - {"Reshard"}, branch
         for _op, layout in placed:
-            assert layout.outer.shape == shape
+            assert flatten(layout.outer).shape == shape
             assert layout.offset == offset

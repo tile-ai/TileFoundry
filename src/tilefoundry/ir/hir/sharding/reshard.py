@@ -8,14 +8,14 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.dim import DimMul, simplify_dim
-from tilefoundry.ir.types.shard import c_order_strides
-from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.shard_layout import (
+from tilefoundry.ir.types.layout import Layout
+from tilefoundry.ir.types.shard_layout import (
     ShardLayout,
     Split,
     shard_layout_local_shape,
 )
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -46,7 +46,7 @@ def _c_order_strides(shape: tuple) -> tuple:
     symbolic stride for the axes above it via ``_dim_mul``; static inner
     strides stay plain ints.
     """
-    return c_order_strides(shape, mul=_dim_mul)
+    return compact_row_major(shape, mul=_dim_mul)
 
 
 def _shared_engine_strides(sl: ShardLayout) -> tuple:

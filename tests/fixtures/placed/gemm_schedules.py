@@ -5,7 +5,7 @@ from __future__ import annotations
 from tilefoundry import func, module
 from tilefoundry.dsl import Mesh, Tensor, tf
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- authored tile loops
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
 
 _H200 = CudaTarget("nvidia.h200_sxm")

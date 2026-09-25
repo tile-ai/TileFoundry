@@ -17,7 +17,7 @@ from tilefoundry.evaluator.interpreter import _run_bound
 from tilefoundry.evaluator.value import tensor_type_of
 from tilefoundry.ir.hir.function import Function as HirFunction
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.types.shard.mesh import Topology
+from tilefoundry.ir.types.mesh import Topology
 from tilefoundry.ir.types.substitute import canonicalize_topology_dims
 from tilefoundry.ir.types.tensor_type import TensorType
 from tilefoundry.ir.types.utils import types_compatible

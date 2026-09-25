@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.types.shard import Layout, ShardLayout, Split
-from tilefoundry.ir.types.shard.shard_layout import Broadcast
+from tilefoundry.ir.types import Layout, ShardLayout, Split
+from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.shard_layout import Broadcast
 
 
 def bcast(shape, strides, mesh) -> ShardLayout:
     """A tile held whole by every instance, so ``local()`` returns that tile."""
     return ShardLayout(
         layout=Layout(shape=shape, strides=strides),
-        attrs=tuple(Broadcast() for _ in mesh.layout.shape),
+        attrs=tuple(Broadcast() for _ in flatten(mesh.layout).shape),
         mesh=mesh,
     )
 

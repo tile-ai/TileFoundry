@@ -18,15 +18,10 @@ from tilefoundry.ir.hir._shard_checks import (
     require_uniform_partial_slices,
 )
 from tilefoundry.ir.isl_interop import normalize_dim_entries
-from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types import Layout, Split, TensorType
 from tilefoundry.ir.types.dim import DimAdd, simplify_dim
-from tilefoundry.ir.types.shard import (
-    Layout,
-    Split,
-    shard_layout_of,
-    try_c_order_strides,
-)
-from tilefoundry.ir.types.shard.shard_layout import split_target_axes
+from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
+from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -178,7 +173,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                 "layout; use an explicit Reshard before Concat",
             )
     else:
-        layout = Layout(shape=new_shape, strides=try_c_order_strides(new_shape))
+        layout = Layout(shape=new_shape, strides=try_compact_major(new_shape))
     storage = resolve_anchor_storage(ctx, call, *(t.storage for t in types))
     return TensorType(shape=new_shape, dtype=base.dtype, layout=layout, storage=storage)
 

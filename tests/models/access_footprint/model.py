@@ -5,7 +5,7 @@ from __future__ import annotations
 from tests.fixtures.placed.flash_split_k_decode import FlashSplitKDecode
 from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, Mesh, Tensor, tf
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
 
 _H200 = CudaTarget("nvidia.h200_sxm")

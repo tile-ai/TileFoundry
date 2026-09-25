@@ -7,7 +7,7 @@ this program. It deliberately carries no Mesh, Reshard, or ShardLayout.
 from tilefoundry import func, module
 from tilefoundry.dsl import Tensor
 from tilefoundry.dsl.tf import matmul, rms_norm
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
 
 

@@ -12,7 +12,7 @@ from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.registry import Analyzer
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget, Target
 
 

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import CudaCodegenContext
 from tilefoundry.ir.tir.arith import Binary, BinaryKind, Unary, UnaryKind
-from tilefoundry.ir.types.shape_helpers import (
+from tilefoundry.ir.types.shard_layout import ShardLayout, shard_layout_local_shape
+from tilefoundry.ir.types.utils import (
     shape_has_dim_var,
     shape_numel_upper_bound,
     shape_runtime_total,
     shape_upper_bound,
 )
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout, shard_layout_local_shape
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.registries import Role, register_codegen
 

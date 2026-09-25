@@ -13,7 +13,7 @@ from __future__ import annotations
 import tilefoundry.codegen.cuda  # noqa: F401 -- trigger emitter autodiscovery
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
-from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Split, Topology
+from tilefoundry.ir.types import Layout, Mesh, ShardLayout, Split, Topology
 from tilefoundry.target import CpuTarget, CudaTarget
 
 GPUS, CTAS, THREADS = 2, 4, 16

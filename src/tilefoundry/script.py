@@ -19,7 +19,7 @@ from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.tir.intrinsic import intrinsic as _intrinsic
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.verify import verify_prim_function
-from tilefoundry.ir.types.shard import Mesh
+from tilefoundry.ir.types import Mesh
 from tilefoundry.module import UNDECLARED, _Entry
 from tilefoundry.parser import FuncParserContext, FunctionRole, parse_function
 from tilefoundry.parser.ast_pattern import (

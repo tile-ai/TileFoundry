@@ -14,7 +14,7 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import broadcast_shapes, is_one, resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shard.shard_layout import shard_layout_of, split_target_axes
+from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,

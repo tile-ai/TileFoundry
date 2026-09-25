@@ -12,8 +12,10 @@ from __future__ import annotations
 
 from typing import Optional, Union
 
-from .int_tuple import flatten, product
-from .layout import ComposedLayout, Layout, Swizzle
+from tilefoundry.ir.types.layout import flatten
+
+from .layout import ComposedLayout, Layout, Swizzle, size
+from .stride import compact_col_major, idx2crd
 
 
 class NotProjectable(ValueError):
@@ -27,52 +29,7 @@ def _shape(layout: Layout) -> tuple[int, ...]:
 def _stride(layout: Layout) -> tuple[int, ...]:
     if layout.strides is not None:
         return layout.strides
-    return prefix_product(_shape(layout))
-
-
-def prefix_product(shape: tuple[int, ...]) -> tuple[int, ...]:
-    """Exclusive prefix product (column-major natural strides)."""
-    out: list[int] = []
-    acc = 1
-    for s in shape:
-        out.append(acc)
-        acc *= s
-    return tuple(out)
-
-
-def c_order_strides(shape: tuple, *, mul=None) -> tuple:
-    """Row-major (C-order) contiguous strides.
-
-    Row-major (C-order) contiguous strides: ``strides[-1] == 1``,
-    ``strides[i] == strides[i+1] * shape[i+1]``.
-
-    The single home for this computation. *mul* defaults to ``int``
-    multiplication; pass a dim-expression fold (e.g. wrapping
-    ``simplify_dim(DimMul, ...)``) for shapes with symbolic entries.
-    """
-    if not shape:
-        return ()
-    if mul is None:
-        mul = lambda a, b: a * b  # noqa: E731
-    strides = [1] * len(shape)
-    for i in range(len(shape) - 2, -1, -1):
-        strides[i] = mul(strides[i + 1], shape[i + 1])
-    return tuple(strides)
-
-
-def try_c_order_strides(shape: tuple) -> tuple[int, ...] | None:
-    """``c_order_strides`` when every entry is a static non-bool ``int``, else ``None``.
-
-    ``c_order_strides`` when every entry is a static non-bool ``int``,
-    else ``None`` (symbolic / dynamic shapes have no static strides).
-    """
-    if not all(isinstance(s, int) and not isinstance(s, bool) for s in shape):
-        return None
-    return c_order_strides(shape)
-
-
-def size(layout: Layout) -> int:
-    return product(layout.shape)
+    return compact_col_major(_shape(layout))
 
 
 def swizzle_of(layout: object) -> Optional[Swizzle]:
@@ -138,39 +95,6 @@ def cosize(layout: Union[Layout, ComposedLayout]) -> int:
     if swizzle_of(layout) is not None:
         return cosize(layout.outer)
     return apply(layout, size(layout) - 1) + 1
-
-
-def idx2crd(idx: int, shape: tuple[int, ...], stride: tuple[int, ...]) -> tuple[int, ...]:
-    """Per-mode ``(idx // stride_i) % shape_i`` (CuTe ``idx2crd``)."""
-    return tuple((idx // d) % s for s, d in zip(shape, stride))
-
-
-def _unflatten(flat: tuple, profile) -> tuple:
-    """Take *profile*'s worth of *flat*, returning it nested and what is left."""
-    if not isinstance(profile, tuple):
-        if not flat:
-            raise ValueError("unflatten: the profile asks for more modes than the tuple has")
-        return flat[0], flat[1:]
-    nested: list = []
-    for item in profile:
-        value, flat = _unflatten(flat, item)
-        nested.append(value)
-    return tuple(nested), flat
-
-
-def unflatten(flat: tuple, profile) -> tuple:
-    """CuTe ``unflatten``: nest a flat tuple to *profile*'s structure.
-
-    Only *profile*'s nesting is read, never its leaves, so the profile may be
-    the grouping itself. ``flatten(unflatten(t, p)) == t``.
-    """
-    nested, rest = _unflatten(flat, profile)
-    if rest:
-        raise ValueError(
-            f"unflatten: the profile accounts for {len(flat) - len(rest)} of the "
-            f"tuple's {len(flat)} modes"
-        )
-    return nested
 
 
 def coalesce(layout: Union[Layout, ComposedLayout]):
@@ -252,7 +176,7 @@ def _right_inverse_layout(layout: Layout) -> Layout:
     current_idx = 1
     shape = _shape(layout)
     stride = _stride(layout)
-    triples = sorted(zip(stride, shape, prefix_product(shape)))
+    triples = sorted(zip(stride, shape, compact_col_major(shape)))
     for st, sh, rstride in triples:
         if sh == 1:
             continue
@@ -278,7 +202,7 @@ def _is_identity_inner(inner: object) -> bool:
     if inner is None:
         return True
     if isinstance(inner, Layout):
-        return _stride(inner) == prefix_product(_shape(inner))
+        return _stride(inner) == compact_col_major(_shape(inner))
     return False
 
 
@@ -465,7 +389,7 @@ def project(scope: ComposedLayout, t: int) -> Optional[tuple[int, ...]]:
         return None
 
     shape = _shape(outer)
-    return idx2crd(coord_1d, shape, prefix_product(shape))
+    return idx2crd(coord_1d, shape, compact_col_major(shape))
 
 
 def contains(scope: ComposedLayout, t: int) -> bool:
@@ -475,14 +399,10 @@ def contains(scope: ComposedLayout, t: int) -> bool:
 
 __all__ = [
     "NotProjectable",
-    "prefix_product",
-    "size",
     "swizzle_of",
     "composition",
     "cosize",
     "apply",
-    "idx2crd",
-    "unflatten",
     "coalesce",
     "complement",
     "is_inverse_projectable",

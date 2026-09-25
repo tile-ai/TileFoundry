@@ -89,7 +89,7 @@ def test_tir_for_if_and_sync_mesh_forms_roundtrip() -> None:
     function = import_dsl(
         "from tilefoundry import prim_func\n"
         "from tilefoundry.dsl import T, Tensor\n"
-        "from tilefoundry.ir.types.shard import Layout, Mesh, Topology\n"
+        "from tilefoundry.ir.types import Layout, Mesh, Topology\n"
         "from tilefoundry.target import CudaTarget\n\n"
         "@prim_func(target=CudaTarget('nvidia.h200_sxm'))\n"
         "def device(a: Tensor[(64,), 'f32'], out: Tensor[(64,), 'f32']):\n"

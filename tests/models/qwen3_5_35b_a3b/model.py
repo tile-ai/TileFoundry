@@ -21,7 +21,7 @@ from tilefoundry.dsl import ConstTensor, Tensor, tf  # noqa: F401 -- tf used by 
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 -- bare op bindings
 from tilefoundry.evaluator import to_torch_dtype
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
 
 

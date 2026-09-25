@@ -19,10 +19,9 @@ from tests.ops.ir.typeinfer_utils import (
 from tilefoundry.ir.core.errors import VerifyError
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.hir.math.binary import Binary
-from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.shard import make_mesh
-from tilefoundry.ir.types.shard.layout import Layout
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, Split
+from tilefoundry.ir.types import DType, make_mesh, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.layout import Layout
+from tilefoundry.ir.types.shard_layout import Broadcast, Partial, Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 

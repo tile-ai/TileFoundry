@@ -60,7 +60,7 @@ from tilefoundry import func, module
 from tilefoundry.dsl import ConstTensor, Mesh, Tensor, tf  # noqa: F401 — used by @func bodies
 from tilefoundry.dsl.tf import *  # noqa: F401, F403 — bare op bindings for @func bodies
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
 
 

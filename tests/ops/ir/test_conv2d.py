@@ -17,9 +17,16 @@ from tests.ops.ir.typeinfer_utils import (
     run_typeinfer_case,
 )
 from tilefoundry.ir.hir.nn.conv2d import Conv2D
-from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.shard import Layout, ShardLayout, Topology, make_mesh
-from tilefoundry.ir.types.shard.shard_layout import (
+from tilefoundry.ir.types import (
+    DType,
+    Layout,
+    ShardLayout,
+    Topology,
+    make_mesh,
+    make_shard_tensor_type,
+    make_tensor_type,
+)
+from tilefoundry.ir.types.shard_layout import (
     Partial,
     Split,
     split_target_axes,

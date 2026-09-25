@@ -8,7 +8,7 @@ See [shard §8](docs/spec/shard.md#8-layout-propagation).
 
 from __future__ import annotations
 
-from tilefoundry.ir.types.shard.shard_layout import (
+from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Dynamic,
     Partial,

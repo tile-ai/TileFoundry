@@ -6,8 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
 from tilefoundry.ir.core import Call, Var
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import DType, TensorType, Topology
 from tilefoundry.visitor_registry.contexts import CostContext, TrafficBytes, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 from tilefoundry.visitor_registry.visitors import CostEvaluator

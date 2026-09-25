@@ -8,12 +8,13 @@ from enum import Enum
 from tilefoundry.ir.core import Op, VerifyError
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.mesh_scope import device_layout
 from tilefoundry.ir.types import UnitType
-from tilefoundry.ir.types.shard import product
-from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
-from tilefoundry.ir.types.shard.layout_algebra import apply as _apply
-from tilefoundry.ir.types.shard.layout_algebra import size as _size
-from tilefoundry.ir.types.shard.mesh import Mesh
+from tilefoundry.ir.types.int_tuple import flatten, product
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, get
+from tilefoundry.ir.types.layout_algebra import apply as _apply
+from tilefoundry.ir.types.layout_algebra import size as _size
+from tilefoundry.ir.types.mesh import Mesh
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
 _WARP_SIZE = 32
@@ -44,9 +45,10 @@ def _legal_slice_of(m: Mesh, e: Mesh) -> bool:
     region = m.layout
     if not isinstance(region, ComposedLayout):
         return False
-    outer = region.outer
-    p = e.layout
-    if not isinstance(outer, Layout) or outer.strides != p.strides:
+    if not isinstance(region.outer, Layout):
+        return False
+    outer, p = get(region.outer, 0), get(e.layout, 0)
+    if outer.strides != p.strides:
         return False
     sub, pshape = outer.shape, p.shape
     if len(sub) != len(pshape):
@@ -78,7 +80,7 @@ def _legal_slice_of(m: Mesh, e: Mesh) -> bool:
 def _mesh_str(mesh: Mesh) -> str:
     """A mesh as its topologies and the shape they are viewed through."""
     topologies = ", ".join(f"{t.name}({t.size})" for t in mesh.topologies)
-    return f"({topologies})[{', '.join(str(d) for d in mesh.layout.shape)}]"
+    return f"({topologies})[{', '.join(str(d) for d in flatten(mesh.layout.shape))}]"
 
 
 def _no_enclosing_mesh_error(m: Mesh, scope: "tuple[Mesh, ...]") -> VerifyError:
@@ -155,17 +157,15 @@ class Participation:
 def _participant_layout(mesh: Mesh) -> "tuple[Layout, int]":
     """The (outer layout, offset) describing which threads participate.
 
-    For a sliced mesh ``layout`` is a ``ComposedLayout`` whose ``outer`` is the
-    participating sub-box and ``offset`` the slice origin; for an un-sliced mesh
-    the whole plain-``Layout`` ``layout`` participates at offset 0.
+    Every level states its own run, and which threads participate is those
+    runs read as the device numbers them: the mesh's axes, at its offset.
     """
-    ly = mesh.layout
-    if isinstance(ly, ComposedLayout):
-        outer = ly.outer
-        if not isinstance(outer, Layout):
-            raise VerifyError("T.sync: mesh slice must be a plain-Layout affine scope")
-        return outer, ly.offset
-    return ly, 0
+    try:
+        return device_layout(mesh), (
+            mesh.layout.offset if isinstance(mesh.layout, ComposedLayout) else 0
+        )
+    except ValueError as error:
+        raise VerifyError(f"T.sync: {error}") from error
 
 
 def participation(mesh: Mesh) -> Participation:

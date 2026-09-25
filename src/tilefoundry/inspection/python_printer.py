@@ -50,7 +50,7 @@ from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.types import DType, TensorType, TupleType
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard.shard_layout import (
+from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Partial,
     ShardLayout,
@@ -1151,7 +1151,7 @@ def _module_decorator_line(mod: Module, entry_name: str | None, ctx: HirPrintCon
         ctx.imports.update(rendered.imports)
         kwargs.append(f"target={rendered.text}")
     if mod.topologies is not None:
-        ctx.imports.add("from tilefoundry.ir.types.shard import Topology")
+        ctx.imports.add("from tilefoundry.ir.types import Topology")
         topo_strs = [
             f'Topology("{t.name}", {printer.visit(t.size, ctx)})'
             for t in mod.topologies

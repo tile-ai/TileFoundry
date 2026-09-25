@@ -37,24 +37,7 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.types import DType, TensorType, TupleType, Type
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard import (
-    B,
-    Broadcast,
-    ComposedLayout,
-    Swizzle,
-    Dynamic,
-    IntTuple,
-    Layout,
-    LayoutBase,
-    Mesh,
-    P,
-    Partial,
-    S,
-    ShardAttr,
-    ShardLayout,
-    Split,
-    Topology,
-)
+from tilefoundry.ir.types import B, Broadcast, ComposedLayout, Dynamic, IntTuple, Layout, LayoutBase, Mesh, P, Partial, S, ShardAttr, ShardLayout, Split, Swizzle, Topology
 
 
 from tilefoundry.ir.tir.stmt import Stmt

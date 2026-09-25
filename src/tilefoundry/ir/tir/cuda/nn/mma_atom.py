@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard import Mesh, ShardLayout
+from tilefoundry.ir.types import DType, Mesh, ShardLayout
 
 
 @dataclass(frozen=True)

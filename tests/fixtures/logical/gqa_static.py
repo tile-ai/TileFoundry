@@ -14,7 +14,7 @@ import math
 from tilefoundry import func
 from tilefoundry.dsl import Tensor, tf
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
-from tilefoundry.ir.types.shard import Layout, Mesh, Topology
+from tilefoundry.ir.types import Layout, Mesh, Topology
 from tilefoundry.target import CudaTarget
 
 S = 1

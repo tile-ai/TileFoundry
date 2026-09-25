@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tilefoundry.ir.types.shard import Mesh
+from tilefoundry.ir.types import Mesh
 
 from .base import ScheduleConstraint
 

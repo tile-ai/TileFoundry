@@ -285,7 +285,7 @@ class Mesh:
 
     Attributes:
         topologies: attribute; Ordered topology sequence.
-        layout: attribute; Mesh layout or constant sliced layout.
+        layout: attribute; One nested arrangement, mode i being level i.
         names: attribute; Human-readable layout-axis names.
     """
 
@@ -303,42 +303,51 @@ class Mesh:
 Field meanings:
 
 - `topologies` — the ordered device-domain descriptions (`name` + `size`)
-- `layout` — the mesh's own shape / strides (a `Layout`); a constant slice
-  (`m[...]`) replaces it with a `ComposedLayout` recording the sub-box
-  ([tir §1.5](./tir.md#15-sync))
+- `layout` — a nested `Layout` whose mode `i` is level `i`'s own arrangement; a
+  constant slice (`m[...]`) replaces it with a `ComposedLayout` recording the
+  sub-box ([tir §1.5](./tir.md#15-sync))
 - `names` — optional human-readable names (`cta.x`, `cta.y`, …)
 
-`Mesh` describes the parallel device domain; it is not a tensor layout
-object.
+Every mesh MUST state one arrangement per level it names, each in that level's
+own numbering, as one nested `Layout` whose mode `i` is level `i` -- a mesh
+naming one level included. `Mesh` normalizes what was written into that form at
+construction: one arrangement over all the levels' axes is cut at the level
+boundaries, each level taking axes left to right until their extents multiply to
+its own size and its steps divided by what the levels under it hold. An axis of
+extent one adds no positions and joins the level being filled. A boundary no
+prefix of axes lands on MUST be refused.
+
+Because the layout is a nested `Layout`, the layout operations read it: `get(mesh.layout, i)`
+is level `i`'s own arrangement, `flatten(mesh.layout)` is every level's axes end
+to end, and `repeat_like` against `mesh.layout.shape` states per axis whatever is
+stated per level. `device_layout(mesh)` is those axes as the device numbers its
+positions, each stepping by what its level states times what the levels under it
+hold, and a slice's `ComposedLayout.offset` is where the whole mesh starts in
+that numbering.
 
 Mesh composition uses the following rules:
 
-- `composed(meshes)` MUST replace all levels in force when the inner mesh names
-  every current level, and MUST concatenate meshes whose level-name sets are
-  disjoint. For concatenation, each outer stride and offset is scaled by the
-  product of positions in the levels below it:
-  `offset = outer_offset * below + inner_offset`.
-- A sliced mesh is composable; its slice offset remains a
-  `ComposedLayout` offset after composition. A mesh whose level names partially
-  overlap the levels in force MUST be rejected rather than decomposed.
-- `composed(meshes)` invokes `check_topology` on its result. For each named
-  level with a concrete declared extent, its projected position count MUST NOT
-  exceed that extent; symbolic extents are deferred until dimensions are bound.
-  This check does not reject same-level nesting, because replacement determines
-  the final position count.
+- `merge_mesh(meshes)` MUST `append` a mesh whose level names are disjoint from
+  those in force, MUST replace them entirely when the inner mesh names every
+  one, and MUST `replace` the trailing levels when the inner mesh names a
+  suffix of them, keeping the levels above and their names unchanged. Level
+  names overlapping in any other way MUST be rejected rather than decomposed.
+- `append` and `replace` concatenate the per-level arrangements; no stride or
+  offset is rescaled, because each level already states its own numbering.
+- `merge_mesh(meshes)` invokes `check_topology` on its result. For each named
+  level with a concrete declared extent, its position count MUST NOT exceed
+  that extent; symbolic extents are deferred until dimensions are bound. A
+  level stating a run is already bounded by `Mesh.__getitem__` and is not
+  checked again.
 
 HIR `MeshRegion` applies this composition only at its body boundary. Its `args`
 are evaluated in the enclosing scope and are not recomposed merely because the
 value is consumed by a region.
 
-`Mesh` MAY carry more than one `Topology` (e.g. `warp(4) x thread(32)`); the
-full sequence is always `topologies`.
-
 - constraints:
   - `Topology` construction rejects a `None` size. `Mesh` construction rejects
-    a `None` entry in its layout shape. Beyond that explicit-extent check,
-    `Mesh` is a frozen record: it performs no construction-time normalization
-    or position-consistency check. Its `topologies` field is a
+    a `None` entry in its layout shape and normalizes the layout into one mode
+    per level; beyond that it performs no position-consistency check. Its `topologies` field is a
     `tuple[Topology, ...]`; helpers such as `make_mesh` construct that tuple for
     handwritten Python.
   - The author surface is `with Mesh(("cta",), layout=(128,)) as cta:`. The
@@ -358,8 +367,9 @@ full sequence is always `topologies`.
   - The layout of the positions one level has is the axes up to and including
     that level's segment, with their strides divided by the product of the sizes
     of the levels below it; a stride that division does not divide exactly MUST
-    be refused. A Mesh naming one level states its own layout and is not
-    projected. A Mesh naming several MUST NOT also be sliced.
+    be refused. A Mesh naming one level takes every axis into its single mode,
+    which needs no division and therefore no declared extent. A Mesh naming
+    several MUST NOT also be sliced.
   - Nested single-level Mesh scopes compose to exactly that shape: the axes join
     outermost first and each outer stride is scaled by the positions below it.
     A value distributed at two levels at once may therefore be written either
@@ -385,7 +395,7 @@ full sequence is always `topologies`.
 The placed-layout constructor has one additional guard: a single layout may
 split a named level only once. If two distinct meshes used by one placed layout
 name the same topology level, parsing MUST reject that layout at its source
-node. This is a layout-construction rule, independent of `composed()`'s
+node. This is a layout-construction rule, independent of `merge_mesh()`'s
 scope-composition rules.
 
 ### 5.1 `Placement`
@@ -761,6 +771,10 @@ copy that displacement to a materialized consumer.
 ---
 
 ## 9. Layout construction and mesh-scope projection
+
+Making the steps of a compact arrangement and reading an index back into the
+coordinate that reaches it are not operations on layouts, so they are filed
+apart from the algebra, as CuTe files `stride.hpp` apart from `layout.hpp`.
 
 ```python
 class NotProjectable(ValueError):

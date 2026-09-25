@@ -33,9 +33,8 @@ from tilefoundry.ir.tir.stmts import (
     While,
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
-from tilefoundry.ir.types import CallableType, DType, TensorType, UnitType
-from tilefoundry.ir.types.shard import make_mesh
-from tilefoundry.ir.types.shard.mesh import Topology
+from tilefoundry.ir.types import CallableType, DType, TensorType, UnitType, make_mesh
+from tilefoundry.ir.types.mesh import Topology
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.visitor import (
     ExprCloner,

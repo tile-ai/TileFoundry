@@ -5,25 +5,21 @@ from __future__ import annotations
 import pytest
 
 from tilefoundry.ir.types import (
-    DType,
-    TensorType,
-    local_type_of,
-    make_shard_tensor_type,
-    numel,
-    tensor_bytes,
-)
-from tilefoundry.ir.types.dim import DimVar, ceildiv
-from tilefoundry.ir.types.shard import (
     Broadcast,
     ComposedLayout,
+    DType,
     Layout,
     Mesh,
     Partial,
     ShardLayout,
     Split,
+    TensorType,
     Topology,
     make_mesh,
+    make_shard_tensor_type,
 )
+from tilefoundry.ir.types.dim import DimVar, ceildiv
+from tilefoundry.ir.types.utils import local_type_of, numel, tensor_bytes
 
 
 def test_tensor_type_equality_over_a_dim_var_shape_entry() -> None:

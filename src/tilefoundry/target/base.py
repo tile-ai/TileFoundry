@@ -10,8 +10,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, ClassVar, Mapping, TypeVar
 
-from tilefoundry.ir.types import DType
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import DType, Topology
 from tilefoundry.target.facts import TopologyFacts, facts_result
 from tilefoundry.target.hardware.envelope import (
     DuplicateRegistrationError,

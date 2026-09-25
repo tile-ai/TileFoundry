@@ -16,16 +16,10 @@ from tilefoundry.ir.core import Call, Expr, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
-from tilefoundry.ir.types import DType, TensorType, TupleType, Type
-from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.shard import (
-    ComposedLayout,
-    Layout,
-    Mesh,
-    flatten,
-    topology_axes,
-    try_c_order_strides,
-)
+from tilefoundry.ir.types import DType, Mesh, TensorType, TupleType, Type
+from tilefoundry.ir.types.int_tuple import repeat_like
+from tilefoundry.ir.types.layout import ComposedLayout, flatten
+from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.target.base import Target, UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.isl_utils import cardinality
@@ -87,45 +81,18 @@ class ReuseAxes:
         return -1 if self.space else None
 
 
-def _layout_image(mesh: Mesh) -> tuple[int, tuple[int, ...], tuple[int, ...]] | None:
-    """Return a statically stated ``(offset, shape, strides)`` image."""
-    layout = mesh.layout
-    if isinstance(layout, Layout):
-        stated = layout
-        offset = 0
-    elif (
-        isinstance(layout, ComposedLayout)
-        and layout.inner is None
-        and isinstance(layout.outer, Layout)
-    ):
-        stated = layout.outer
-        offset = layout.offset
-    else:
+def _static_axes(mesh: Mesh) -> "tuple[int, tuple[int, ...], tuple[int, ...]] | None":
+    """A mesh's device-numbered positions, when every one of them is a number."""
+    try:
+        axes = flatten(mesh.layout)
+        offset = (mesh.layout.offset if isinstance(mesh.layout, ComposedLayout) else 0)
+    except ValueError:
         return None
-
-    shape = flatten(stated.shape)
-    if stated.strides is None:
-        strides = try_c_order_strides(shape)
-        if strides is None:
-            return None
-    else:
-        strides = tuple(static_dim_value(value) for value in flatten(stated.strides))
-        if any(value is None for value in strides):
-            return None
-
-    static_shape = tuple(static_dim_value(value) for value in shape)
-    static_offset = static_dim_value(offset)
-    if (
-        static_offset is None
-        or any(value is None for value in static_shape)
-        or len(static_shape) != len(strides)
-    ):
+    shape = tuple(static_dim_value(extent) for extent in flatten(axes.shape))
+    strides = tuple(static_dim_value(stride) for stride in flatten(axes.strides))
+    if any(value is None for value in (*shape, *strides, static_dim_value(offset))):
         return None
-    return (
-        static_offset,
-        tuple(value for value in static_shape if value is not None),
-        tuple(value for value in strides if value is not None),
-    )
+    return offset, shape, strides
 
 
 def _mesh_parameters(scope: IterationScope) -> tuple[tuple[str, Call], ...]:
@@ -144,7 +111,7 @@ def _linear_position(
     if not parameters:
         return 0, ()
     mesh = parameters[0][1].target.mesh
-    image = _layout_image(mesh)
+    image = _static_axes(mesh)
     if image is None:
         return None
     offset, shape, strides = image
@@ -340,7 +307,7 @@ def space_axes(
     wave_reached = boundary.space_wave_reached(window)
     shared = []
     for axis, parameter_name in enumerate(boundary.axis_parameters):
-        shape = flatten(boundary.mesh.layout.shape)
+        shape = flatten(flatten(boundary.mesh.layout).shape)
         extent = static_dim_value(shape[axis]) if axis < len(shape) else None
         unit_reached = boundary.unit_reached(window, parameter_name)
         if extent is not None and extent > 1 and unit_reached is not None:
@@ -351,11 +318,14 @@ def space_axes(
 
 def axis_label(mesh: Mesh, axis: int) -> str:
     """Name a mesh axis, falling back to its factual numeric position."""
-    level_name = ""
-    for level, axes in zip(mesh.topologies, topology_axes(mesh), strict=True):
-        if axis in axes:
-            level_name = getattr(level, "name", str(level))
-            break
+    stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
+    levels = flatten(
+        tuple(
+            repeat_like(mode, getattr(level, "name", str(level)))
+            for mode, level in zip(stated.shape, mesh.topologies, strict=True)
+        )
+    )
+    level_name = levels[axis] if axis < len(levels) else ""
     if axis < len(mesh.names):
         name = mesh.names[axis]
         return f"{level_name}.{name}" if level_name else name
@@ -364,7 +334,7 @@ def axis_label(mesh: Mesh, axis: int) -> str:
 
 def shared_units(mesh: Mesh, axes: tuple[int, ...], wave: tuple[int, int]) -> int:
     """Count wave positions after projecting out axes that do not share data."""
-    image = _layout_image(mesh)
+    image = _static_axes(mesh)
     if image is None:
         return 1
     offset, shape, strides = image
@@ -491,7 +461,7 @@ def _axis_parameters(
         and (axis := static_dim_value(coordinate.args[0])) is not None
     }
     return tuple(
-        names_by_axis.get(axis) for axis in range(len(flatten(mesh.layout.shape)))
+        names_by_axis.get(axis) for axis in range(len(flatten(flatten(mesh.layout).shape)))
     )
 
 

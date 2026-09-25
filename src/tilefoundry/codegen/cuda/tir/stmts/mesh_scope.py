@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from tilefoundry.codegen.cuda.context import topology_scope_str
 from tilefoundry.ir.tir.sync import participation
-from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
-from tilefoundry.ir.types.shard.mesh import Mesh, Topology, positions_at
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, flatten, get
+from tilefoundry.ir.types.mesh import Mesh, Topology
 from tilefoundry.target import validate_cuda_topology_levels
 
 
@@ -40,17 +40,19 @@ def _validate_topology(mesh: Mesh, target) -> None:
 def _levelwise_layout(mesh: Mesh, topos) -> str:
     """One nest per topology level, each in that level's own numbering.
 
-    A flat shape says nothing about which axes are whose, so the runtime's
-    ``get<level>`` needs the boundary stated. ``level_axes`` hands the axes to
-    the levels left to right and ``positions_at`` divides each level's strides
-    by what the levels under it contribute, so a nest reads as the layout that
-    level would have alone. The composite is a grouping, not a map: only the
+    A mesh states one arrangement per level already, each in that level's own
+    numbering, so a nest is that arrangement written out: nothing here decides
+    where a boundary falls. The composite is a grouping, not a map: only the
     nests are evaluated. A level every instance shares keeps a mode of one, so
     that ``get<level>`` still has something to pick.
     """
     shapes, strides = [], []
     for topology in topos:
-        level_shape, level_strides = positions_at(mesh, topology.name)
+        stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
+        index = [t.name for t in mesh.topologies].index(topology.name)
+        arrangement = get(stated, index)
+        level_shape = tuple(flatten(arrangement.shape))
+        level_strides = tuple(flatten(arrangement.strides))
         if not level_shape:
             level_shape, level_strides = (1,), (0,)
         shapes.append(
@@ -80,14 +82,15 @@ def mesh_type(mesh: Mesh) -> str:
                 "CUDA mesh emission: a sliced mesh needs its participating box "
                 "as a strided Layout; this states an identity box, with no sub-box"
             )
-        shape, strides, base = outer.shape, outer.strides, participation(mesh).base
+        stated, base = outer, participation(mesh).base
     else:
         if layout_value.strides is None:
             raise NotImplementedError("CUDA mesh emission: mesh layout needs strides")
-        shape, strides, base = layout_value.shape, layout_value.strides, 0
+        stated, base = layout_value, 0
     if len(topos) == 1:
-        shape_types = ", ".join(f"cute::Int<{s}>" for s in shape)
-        stride_types = ", ".join(f"cute::Int<{s}>" for s in strides)
+        level = get(stated, 0)
+        shape_types = ", ".join(f"cute::Int<{s}>" for s in flatten(level.shape))
+        stride_types = ", ".join(f"cute::Int<{s}>" for s in flatten(level.strides))
         layout = (
             f"cute::Layout<cute::Shape<{shape_types}>, "
             f"cute::Stride<{stride_types}>>"
@@ -113,7 +116,7 @@ def _is_dynamic_mesh(mesh: Mesh) -> bool:
     """
     if any(t.size is None for t in program_topologies(mesh)):
         return True
-    return any(s is None for s in mesh.layout.shape)
+    return any(s is None for s in flatten(mesh.layout).shape)
 
 
 __all__ = ["mesh_type", "program_topologies"]

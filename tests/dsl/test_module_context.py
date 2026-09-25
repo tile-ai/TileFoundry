@@ -21,7 +21,7 @@ from tilefoundry.dsl import Mesh, Tensor, tf  # noqa: F401 -- used by bodies
 from tilefoundry.ir.core import VerifyError
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _CTA = context_fixture.CONTEXT_CTA
@@ -190,7 +190,7 @@ def test_declaring_context_on_a_function_yields_its_own_module() -> None:
 _MEMBER_CONTEXT_SOURCE = """
 import tilefoundry
 from tilefoundry.dsl import Mesh, Tensor, tf
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
 
 @tilefoundry.module(

@@ -185,12 +185,13 @@ placement sugar of [parser §2.1](./parser.md#21-syntax), in both type slots and
 op-attribute slots, when every mesh identifier in that sugar has an explicit
 scope binding. A binding is either a `with <mesh> as <name>` region or the
 function's own execution domain. A mesh merely restated in another expression
-is not a binding. Without such a binding, the printer MUST use the verbose
-`ShardLayout(...)` form rather than inventing a name.
+is not a binding, and the printer never invents a name for one.
 
-Placement sugar states the layout's own dimensions with each `Split` written on
-the dimension it divides, adds the stride tuple whenever the layout has one,
-and states the remaining mesh axes in a `{axis @ ...}` set. Because the parser
+Placement sugar states one dimension per tensor axis, with each `Split` written
+on the dimension it divides, adds the stride tuple whenever the layout has one,
+and states the remaining mesh axes in a `{axis @ ...}` set. A layout that groups
+an axis's modes has no sugar; elsewhere a group is written as the shape tuple
+it is. Because the parser
 reads an unstated mesh axis as `Broadcast`, the set carries every `Partial` and
 carries `Broadcast` only when no `Split` or `Partial` would otherwise name the
 mesh.

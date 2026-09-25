@@ -23,10 +23,15 @@ from tests.ops.ir.typeinfer_utils import (
 )
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.types import make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types import (
+    Layout,
+    ShardLayout,
+    make_mesh,
+    make_shard_tensor_type,
+    make_tensor_type,
+)
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard import Layout, ShardLayout, make_mesh
-from tilefoundry.ir.types.shard.shard_layout import (
+from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Partial,
     Split,

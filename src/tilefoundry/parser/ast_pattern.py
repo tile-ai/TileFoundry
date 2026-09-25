@@ -49,6 +49,7 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice, slice_size
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import normalize_dim
+from tilefoundry.ir.mesh_scope import merge_mesh
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import (
@@ -62,7 +63,19 @@ from tilefoundry.ir.tir.stmts import (
     While,
 )
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
-from tilefoundry.ir.types import DType, TensorType, TupleType, UnitType
+from tilefoundry.ir.types import (
+    Broadcast,
+    DType,
+    Layout,
+    Mesh,
+    Partial,
+    ShardLayout,
+    Split,
+    TensorType,
+    Topology,
+    TupleType,
+    UnitType,
+)
 from tilefoundry.ir.types.callable_type import CallableType
 from tilefoundry.ir.types.dim import (
     DimAdd,
@@ -74,20 +87,11 @@ from tilefoundry.ir.types.dim import (
     dim_expr,
     simplify_dim,
 )
-from tilefoundry.ir.types.shard import (
-    Broadcast,
-    Layout,
-    Mesh,
-    Partial,
-    ShardLayout,
-    Split,
-    Topology,
-    c_order_strides,
-    canonical_shard_layout,
-    composed,
-)
-from tilefoundry.ir.types.shard.layout import LayoutBase
+from tilefoundry.ir.types.layout import LayoutBase
+from tilefoundry.ir.types.shard_layout import canonical_shard_layout
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
+from tilefoundry.ir.types.stride import compact_row_major
+from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import BindingSubstitutionCloner
 from tilefoundry.target import MemoryHierarchyFacts, Target, UnsupportedCapabilityError
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
@@ -293,11 +297,12 @@ runtime = SimpleNamespace(
     UnitType=UnitType,
     Var=Var,
     DISPLAY_NAME=DISPLAY_NAME,
-    c_order_strides=c_order_strides,
+    compact_row_major=compact_row_major,
     canonical_shard_layout=canonical_shard_layout,
-    composed=composed,
+    merge_mesh=merge_mesh,
     dim_expr=dim_expr,
     normalize_dim=normalize_dim,
+    static_dim_value=static_dim_value,
     slice_size=slice_size,
     simplify_dim=simplify_dim,
     resolve_storage=resolve_storage,

@@ -14,9 +14,14 @@ from tests.ops.ir.typeinfer_utils import (
     run_typeinfer_case,
 )
 from tilefoundry.ir.hir.nn.layer_norm import LayerNorm
-from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.shard import ShardLayout, make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Partial, Split, split_target_axes
+from tilefoundry.ir.types import (
+    DType,
+    ShardLayout,
+    make_mesh,
+    make_shard_tensor_type,
+    make_tensor_type,
+)
+from tilefoundry.ir.types.shard_layout import Partial, Split, split_target_axes
 
 _OP = LayerNorm(axis=-1, eps=1e-5)
 _F = DType.f32

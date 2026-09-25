@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from tilefoundry.ir.core import Call, Constant, Tuple, Var
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
+from tilefoundry.ir.mesh_scope import device_layout
 from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom
 from tilefoundry.ir.types import DType, TensorType, TupleType, UnitType
 from tilefoundry.ir.types.dim import (
@@ -21,11 +22,11 @@ from tilefoundry.ir.types.dim import (
     DimSub,
     DimVar,
 )
-from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout, LayoutBase, Swizzle
-from tilefoundry.ir.types.shard.mesh import Mesh
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, Partial, ShardLayout, Split
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, LayoutBase, Swizzle, flatten
+from tilefoundry.ir.types.mesh import Mesh
+from tilefoundry.ir.types.shard_layout import Broadcast, Partial, ShardLayout, Split
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import ExprFunctor, TypeFunctor
 from tilefoundry.target import Target
 from tilefoundry.utils.python_source import PythonExpr
@@ -89,6 +90,15 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             self._nested_dim = previous
 
     def dim_entry(self, value, ctx=None, *, nested: bool = False) -> str:
+        """One entry of a shape or stride tuple, which may itself be a group.
+
+        A layout groups the modes of one tensor axis by writing them as a
+        tuple in that axis's place, so an entry is read as the shape tuple it
+        is rather than as a single dimension.
+        """
+        if isinstance(value, tuple):
+            entries = ", ".join(self.dim_entry(item, ctx) for item in value)
+            return f"({entries}{',' if len(value) == 1 else ''})"
         with self.nested_dim(nested):
             return self.visit(value, ctx)
 
@@ -143,7 +153,7 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
     def _mesh_coordinate_text(self, value: Call, target: MeshCoord, ctx) -> str:
         """Render one coordinate through the active binding of its mesh."""
         axis = static_dim_value(value.args[0]) if value.args else None
-        if axis is None or axis < 0 or axis >= len(target.mesh.layout.shape):
+        if axis is None or axis < 0 or axis >= len(flatten(target.mesh.layout).shape):
             raise ValueError("MeshCoord requires a literal in-range axis to print")
         if ctx is None:
             raise ValueError("MeshCoord requires an active mesh binding to print")
@@ -189,7 +199,12 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
         return added.args[0], divisor
 
     def shard_surface(self, value: ShardLayout, ctx=None) -> str | None:
-        """Render placement sugar only when every mesh axis has a scope binding."""
+        """Render placement sugar only when every mesh axis has a scope binding.
+
+        The sugar states one extent per tensor axis, each a dimension
+        expression, so it declines a layout whose modes are grouped by tile
+        axis: writing the groups in would emit a line the parser refuses.
+        """
         layout = value.layout
         names = value.mesh.names
         if (
@@ -197,6 +212,11 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             or not names
             or len(value.attrs) != len(names)
             or ctx is None
+        ):
+            return None
+        if any(
+            isinstance(entry, tuple)
+            for entry in (*layout.shape, *(layout.strides or ()))
         ):
             return None
         refs = tuple(ctx.mesh_axis_alias(value.mesh, index) for index in range(len(names)))
@@ -295,13 +315,18 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
             sliced = ctx.mesh_slice(value)
             if sliced is not None:
                 return sliced
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Mesh, Topology",), "Mesh"))
+            ctx.use(PythonExpr(("from tilefoundry.ir.types import Mesh, Topology",), "Mesh"))
         topologies = ", ".join(
             f'Topology("{topology.name}", {self.dim_entry(topology.size, ctx)})'
             for topology in value.topologies
         )
         topologies = f"({topologies}{',' if len(value.topologies) == 1 else ''})"
-        result = f"Mesh({topologies}, {self.visit(value.layout, ctx)}"
+        written = device_layout(value)
+        if isinstance(value.layout, ComposedLayout):
+            written = ComposedLayout(
+                inner=value.layout.inner, offset=value.layout.offset, outer=written
+            )
+        result = f"Mesh({topologies}, {self.visit(written, ctx)}"
         if value.names:
             result += f", names={tuple(value.names)!r}"
         return result + ")"
@@ -311,18 +336,18 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
 
     def visit_Layout(self, value: Layout, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Layout",), "Layout"))
+            ctx.use(PythonExpr(("from tilefoundry.ir.types import Layout",), "Layout"))
         strides = self.shape_tuple(value.strides, ctx) if value.strides is not None else "None"
         return f"Layout({self.shape_tuple(value.shape, ctx)}, {strides})"
 
     def visit_Swizzle(self, value: Swizzle, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import Swizzle",), ""))
+            ctx.use(PythonExpr(("from tilefoundry.ir.types import Swizzle",), ""))
         return f"Swizzle({value.bits}, {value.base}, {value.shift})"
 
     def visit_ComposedLayout(self, value: ComposedLayout, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import ComposedLayout",), ""))
+            ctx.use(PythonExpr(("from tilefoundry.ir.types import ComposedLayout",), ""))
         outer, child = self._indent, self._indent + "    "
         with self.type_surface(indent=child):
             inner_text = self.visit(value.inner, ctx)
@@ -340,7 +365,7 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
         if surface is not None:
             return surface
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import ShardLayout",), ""))
+            ctx.use(PythonExpr(("from tilefoundry.ir.types import ShardLayout",), ""))
         outer, child = self._indent, self._indent + "    "
         attrs = ", ".join(self.visit(attr, ctx) for attr in value.attrs)
         if len(value.attrs) == 1:
@@ -358,17 +383,17 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
 
     def visit_Broadcast(self, value: Broadcast, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import B",), "B"))
+            ctx.use(PythonExpr(("from tilefoundry.ir.types import B",), "B"))
         return "B()"
 
     def visit_Split(self, value: Split, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import S",), "S"))
+            ctx.use(PythonExpr(("from tilefoundry.ir.types import S",), "S"))
         return f"S({value.axis})"
 
     def visit_Partial(self, value: Partial, ctx=None) -> str:
         if ctx is not None:
-            ctx.use(PythonExpr(("from tilefoundry.ir.types.shard import P",), "P"))
+            ctx.use(PythonExpr(("from tilefoundry.ir.types import P",), "P"))
         return f'P("{value.reduction}")'
 
     def atom_reference(self, value: MmaAtom, ctx=None) -> str:

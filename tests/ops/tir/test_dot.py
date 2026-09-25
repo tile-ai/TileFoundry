@@ -17,9 +17,8 @@ from tilefoundry.ir.tir.dot import Dot
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
 from tilefoundry.ir.tir.verify import verify_prim_function
-from tilefoundry.ir.types import DType, make_tensor_type
-from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Split, Topology
-from tilefoundry.ir.types.shard.shard_layout import Broadcast
+from tilefoundry.ir.types import DType, Layout, Mesh, ShardLayout, Split, Topology, make_tensor_type
+from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.target import CpuTarget, CudaTarget
 
 

@@ -10,7 +10,7 @@ from tilefoundry.ir.tir.cuda.sync.mbarrier import (
     MBarrierInvalidate,
     MBarrierWaitParity,
 )
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.target import CudaTarget
 from tilefoundry.visitor_registry.registries import Role, register_codegen
 

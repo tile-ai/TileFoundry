@@ -663,12 +663,14 @@ Tensor structural operations; consensus ops (`Transpose` / `Slice` / `Concat`
 ([torch tensor manipulation ops](https://pytorch.org/docs/stable/torch.html#indexing-slicing-joining-mutating-ops)).
 
 `Transpose`, statically positioned `Slice`, and `Reshape` derive a view layout from
-their input when it states one. An input with `layout=None` produces a view with
-`layout=None`. Neither case says that the view materialized.
+their input when it states one. For `Slice` and `Reshape`, an input with
+`layout=None` produces a view with `layout=None`. Neither case says that the
+view materialized.
 
 - `Transpose` MUST permute the layout shape and strides by the same permutation
   as the tensor shape. A `ShardLayout` MUST remap its split positions through
-  the registered relation.
+  the registered relation. An input with `layout=None` MUST permute the C order
+  it stands for and state the result as a `Layout`.
 - `Slice` is normalized as `Slice(x, starts, sizes=..., strides=...)`.
   `starts` is a tuple of rank-0 integer operands; `sizes` and `strides` are
   `ShapeDim` attributes stored in the same IR normal form as every other dim.
@@ -681,6 +683,11 @@ their input when it states one. An input with `layout=None` produces a view with
   offset is the source offset plus the starts multiplied by the source strides,
   and its outer layout carries the sliced shape and retained strides (multiplied
   by any slice step).
+- A source axis written as a group of modes has no single stride: its start
+  MUST be read through the group as a mixed-radix coordinate, and the window
+  MUST be the group's least-stepping modes, as many as its size takes, in the
+  order the group wrote them. A start that is not a multiple of the size, a
+  size landing on no mode boundary, and a step MUST each be refused.
 - A `ShardLayout` slice MUST preserve its mesh attributes when every narrowed
   logical axis is unsplit. The corresponding primitive layout position takes
   the window size and stepped stride. Static starts wrap that shard layout in a

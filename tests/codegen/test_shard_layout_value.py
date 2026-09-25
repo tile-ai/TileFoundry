@@ -12,8 +12,8 @@ import pytest
 from tilefoundry.codegen.cuda.tir.memory.tensor_view import render_shard_layout_value
 from tilefoundry.codegen.cuda.tir.stmts.mesh_scope import mesh_type
 from tilefoundry.ir.core.errors import VerifyError
-from tilefoundry.ir.types.shard import Layout, Mesh, ShardLayout, Split, Topology
-from tilefoundry.ir.types.shard.layout import ComposedLayout
+from tilefoundry.ir.types import Layout, Mesh, ShardLayout, Split, Topology
+from tilefoundry.ir.types.layout import ComposedLayout
 
 _BLOCK = Mesh(
     (Topology("thread", 128),), Layout(shape=(4, 32), strides=(32, 1)), ("w", "t")

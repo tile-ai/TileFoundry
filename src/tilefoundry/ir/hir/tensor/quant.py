@@ -16,22 +16,19 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._shard_checks import reject_partials
-from tilefoundry.ir.types import DType, TensorType, TupleType
+from tilefoundry.ir.types import DType, Layout, ShardLayout, TensorType, TupleType
 from tilefoundry.ir.types.dim import DimFloorDiv, simplify_dim
-from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.shard import (
-    Layout,
-    ShardLayout,
-    canonical_shard_layout,
-    try_c_order_strides,
-)
-from tilefoundry.ir.types.shard.shard_layout import (
+from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Split,
+    canonical_shard_layout,
     layout_axis_to_tensor_axis,
     shard_layout_local_shape,
     split_target_axes,
 )
+from tilefoundry.ir.types.stride import try_compact_major
+from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -95,7 +92,7 @@ def _logical_shard_attrs(call, ctx, x_ty, group: int):
                 if not isinstance(attr, Split) or target != last_axis:
                     continue
                 split_extent = static_dim_value(layout.layout.shape[attr.axis])
-                mesh_extent = static_dim_value(layout.mesh.layout.shape[mesh_axis])
+                mesh_extent = static_dim_value(flatten(layout.mesh.layout).shape[mesh_axis])
                 aligned = (
                     aligned
                     and split_extent is not None
@@ -136,8 +133,8 @@ def _result_layouts(call, ctx, x_ty, scale_shape, group: int):
     if x_ty.layout is None:
         return None, None
     return (
-        Layout(shape=x_ty.shape, strides=try_c_order_strides(x_ty.shape)),
-        Layout(shape=scale_shape, strides=try_c_order_strides(scale_shape)),
+        Layout(shape=x_ty.shape, strides=try_compact_major(x_ty.shape)),
+        Layout(shape=scale_shape, strides=try_compact_major(scale_shape)),
     )
 
 

@@ -21,8 +21,7 @@ from tilefoundry.ir.tir.stmts import (
     Sequential,
     While,
 )
-from tilefoundry.ir.types import UnitType
-from tilefoundry.ir.types.shard.layout import ComposedLayout
+from tilefoundry.ir.types import ComposedLayout, UnitType
 from tilefoundry.ir.visitor import StmtVisitor
 
 

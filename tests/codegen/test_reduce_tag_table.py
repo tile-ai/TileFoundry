@@ -10,7 +10,7 @@ import pytest
 from tilefoundry.codegen.cuda.tir.memory.tensor_view import _render_attr
 from tilefoundry.codegen.cuda.tir.reduce import REDUCE_TAG
 from tilefoundry.ir.core.kinds import ReduceKind
-from tilefoundry.ir.types.shard.shard_layout import Partial
+from tilefoundry.ir.types.shard_layout import Partial
 
 
 def test_every_reduce_kind_has_a_runtime_tag() -> None:

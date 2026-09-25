@@ -14,8 +14,7 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.isl_interop import index_set
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.shape_helpers import static_dim_value
-from tilefoundry.ir.types.utils import local_type_of
+from tilefoundry.ir.types.utils import local_type_of, static_dim_value
 from tilefoundry.utils.isl_utils import cardinality, has_unbounded_param
 from tilefoundry.visitor_registry.access_relation import (
     BoundaryRelation,

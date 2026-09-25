@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from tilefoundry import func, module
 from tilefoundry.dsl import Tensor, tf
-from tilefoundry.ir.types.shard import B, Layout, Mesh, P, S, ShardLayout, Topology
+from tilefoundry.ir.types import B, Layout, Mesh, P, S, ShardLayout, Topology
 from tilefoundry.target import CudaTarget
 
 _H200 = CudaTarget("nvidia.h200_sxm")

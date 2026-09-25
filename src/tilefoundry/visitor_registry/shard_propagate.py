@@ -12,19 +12,17 @@ from dataclasses import replace
 
 import isl
 
-from tilefoundry.ir.types.shard import (
-    Layout,
-    ShardLayout,
-    canonical_shard_layout,
-    try_c_order_strides,
-)
-from tilefoundry.ir.types.shard.shard_layout import (
+from tilefoundry.ir.types import Layout, ShardLayout
+from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Partial,
     Split,
+    canonical_shard_layout,
     layout_axis_to_tensor_axis,
     shard_layout_of,
 )
+from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.utils.isl_utils import as_multi_aff, equates, involved_dims
 from tilefoundry.visitor_registry.access_relation import boundary_maps
 
@@ -168,7 +166,7 @@ def _carrier_layout(
     if fresh_strides:
 
 
-        c = try_c_order_strides(tuple(new_shape)) or tuple(1 for _ in new_shape)
+        c = try_compact_major(tuple(new_shape)) or tuple(1 for _ in new_shape)
         new_strides = [
             0 if (isinstance(sz, int) and sz == 1) else cc
             for sz, cc in zip(new_shape, c)
@@ -242,7 +240,7 @@ def derive_output_shard_layout(
     if not sharded:
         return None
     mesh = sharded[0][1].mesh
-    mesh_rank = len(mesh.layout.shape)
+    mesh_rank = len(flatten(mesh.layout).shape)
 
     *input_maps, output_map = boundary_maps(relations)
     out_access = _result_access(output_map, folded=True)

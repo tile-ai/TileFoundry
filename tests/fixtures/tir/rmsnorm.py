@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
-from tilefoundry.ir.types.shard import B, Layout, Mesh, Topology
+from tilefoundry.ir.types import B, Layout, Mesh, Topology
 from tilefoundry.target import CpuTarget, CudaTarget
 
 

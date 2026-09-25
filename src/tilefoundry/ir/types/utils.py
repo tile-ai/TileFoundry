@@ -3,22 +3,21 @@ from __future__ import annotations
 import math
 from typing import Optional
 
+from tilefoundry.ir.types.int_tuple import repeat_like
+from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.storage import StorageKind
 
 from .dtype import DType
-from .shard import (
-    ComposedLayout,
-    Layout,
-    Mesh,
+from .layout import ComposedLayout, Layout
+from .layout_algebra import size
+from .mesh import Mesh, Topology
+from .shard_layout import (
     ShardLayout,
     Split,
-    Topology,
     canonical_shard_layout,
     shard_layout_of,
-    topology_axes,
+    split_target_axes,
 )
-from .shard.layout_algebra import size
-from .shard.shard_layout import split_target_axes
 from .tensor_type import TensorType, TupleType, Type
 
 
@@ -146,7 +145,7 @@ def topology_extent(type: Type, name: str) -> int | None:
         names = tuple(topology.name for topology in layout.mesh.topologies)
         if len(names) != 1 or names[0] != name:
             continue
-        count = size(layout.mesh.layout)
+        count = size(flatten(layout.mesh.layout))
         if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
             raise ValueError(
                 f"topology_extent: {name!r} needs a positive static layout size"
@@ -213,7 +212,7 @@ def local_type_of(
         for mesh_axis, tensor_axis in enumerate(split_target_axes(layout, type.shape)):
             if tensor_axis is None:
                 continue
-            extent = layout.mesh.layout.shape[mesh_axis]
+            extent = flatten(layout.mesh.layout).shape[mesh_axis]
             if extent is None:
                 local[tensor_axis] = 1
                 continue
@@ -300,20 +299,29 @@ def _local_layout_shape(
         )
     )
     declared = {topology.name: index for index, topology in enumerate(topologies)}
-    axis_topology_level: dict[int, int] = {}
-    for topology, axes in zip(layout.mesh.topologies, topology_axes(layout.mesh)):
-        position = declared.get(topology.name)
-        if position is None:
+    for topology in layout.mesh.topologies:
+        if topology.name not in declared:
             raise ValueError(
                 f"local_type_of: shard uses undeclared topology level {topology.name!r}"
             )
-        for mesh_axis in axes:
-            axis_topology_level[mesh_axis] = position
-    mesh_shape = layout.mesh.layout.shape
+    mesh_layout = layout.mesh.layout
+    stated = mesh_layout.outer if isinstance(mesh_layout, ComposedLayout) else mesh_layout
+    axis_topology_level = flatten(
+        tuple(
+            repeat_like(mode, declared[topology.name])
+            for mode, topology in zip(stated.shape, layout.mesh.topologies, strict=True)
+        )
+    )
+    mesh_shape = flatten(layout.mesh.layout).shape
     for mesh_axis, attr in enumerate(layout.attrs):
         if not isinstance(attr, Split):
             continue
-        if axis_topology_level.get(mesh_axis, selected_topology_level) > selected_topology_level:
+        here = (
+            axis_topology_level[mesh_axis]
+            if mesh_axis < len(axis_topology_level)
+            else selected_topology_level
+        )
+        if here > selected_topology_level:
             continue
         if mesh_axis >= len(mesh_shape):
             raise ValueError("local_type_of: shard attribute exceeds mesh layout rank")
@@ -341,3 +349,99 @@ def _local_layout_shape(
             shape[axis] //= extent
     _require_concrete(shape)
     return tuple(shape)
+
+
+def static_dim_value(dim):
+    """Return the compile-time ``int`` value of a *static* shape dim, else ``None``.
+
+    A static dim is a plain ``int`` or an integer-valued ``Constant`` (the latter
+    only appears transiently before ``TensorType`` canonicalizes it to ``int``).
+    ``DimVar`` / dynamic dim ``Call`` exprs are not static → ``None``. The
+    detection is exact (real ``Constant`` with an ``int`` value), never "anything
+    with a ``.value``".
+    """
+    from .dim import Constant  # noqa: PLC0415 - cycle guard
+
+    if isinstance(dim, int) and not isinstance(dim, bool):
+        return dim
+    if isinstance(dim, Constant) and isinstance(dim.value, int) and not isinstance(dim.value, bool):
+        return int(dim.value)
+    return None
+
+
+def i64_const(value: int) -> "Constant":
+    """The canonical i64 shape-scalar ``Constant`` (meta-scalar typed)."""
+    from .dim import Constant  # noqa: PLC0415 - cycle guard
+    from .tensor_type import TensorType  # noqa: PLC0415 - cycle guard
+
+    return Constant(type=TensorType.umat_scalar(), value=int(value))
+
+
+def upper_bound(dim) -> int:
+    """Return a concrete int upper-bound element count for ``dim``."""
+    from .dim import DimVar  # noqa: PLC0415 - cycle guard
+
+    if isinstance(dim, DimVar):
+        return int(dim.hi) - 1
+    static = static_dim_value(dim)
+    if static is not None:
+        return static
+    return int(dim)
+
+
+def shape_numel_upper_bound(shape) -> int:
+    """Product of per-dim upper bounds.
+
+    Product of per-dim upper bounds: the static element count a buffer or
+    layout must hold across every runtime shape in the dispatch envelope.
+    """
+    n = 1
+    for s in shape:
+        n *= upper_bound(s)
+    return n
+
+
+def shape_upper_bound(shape) -> tuple[int, ...]:
+    """Map ``upper_bound`` over every entry of *shape*."""
+    return tuple(upper_bound(s) for s in shape)
+
+
+def shape_has_dim_var(shape) -> bool:
+    """True iff *shape* contains at least one ``DimVar`` entry."""
+    from .dim import DimVar  # noqa: PLC0415 - cycle guard
+
+    return any(isinstance(s, DimVar) for s in shape)
+
+
+def shape_runtime_total(shape, dim_var_expr: dict[str, str]) -> object:
+    """Return the runtime element count of *shape*.
+
+    All-static shape → an ``int``. Any ``DimVar`` axis pulls its
+    runtime extent from ``dim_var_expr[name]``; the result is a C++
+    expression string ``"(a * b * ...)"`` that the codegen splices
+    verbatim into the generated source. Static dims fold into a single
+    leading constant factor when present, otherwise the constant is
+    elided.
+    """
+    from .dim import DimVar  # noqa: PLC0415 - cycle guard
+
+    if not shape:
+        return 1
+    static_prod = 1
+    dyn_terms: list[str] = []
+    for s in shape:
+        if isinstance(s, DimVar):
+            expr = dim_var_expr.get(s.name)
+            if expr is None:
+                static_prod *= upper_bound(s)
+            else:
+                dyn_terms.append(expr)
+        else:
+            static_prod *= upper_bound(s)
+    if not dyn_terms:
+        return static_prod
+    if static_prod == 1:
+        if len(dyn_terms) == 1:
+            return dyn_terms[0]
+        return "(" + " * ".join(dyn_terms) + ")"
+    return "(" + " * ".join([str(static_prod), *dyn_terms]) + ")"

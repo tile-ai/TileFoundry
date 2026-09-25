@@ -11,26 +11,15 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.isl_interop import dim_range
-from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.dim import (
-    DimAdd,
-    DimFloorDiv,
-    DimMul,
-    DimSub,
-    simplify_dim,
-)
-from tilefoundry.ir.types.shape_helpers import i64_const
-from tilefoundry.ir.types.shard import (
-    ComposedLayout,
-    Layout,
-    ShardLayout,
-    Swizzle,
-)
-from tilefoundry.ir.types.shard.shard_layout import (
+from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Swizzle, TensorType
+from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMul, DimSub, simplify_dim
+from tilefoundry.ir.types.int_tuple import flatten
+from tilefoundry.ir.types.shard_layout import (
     layout_axis_to_tensor_axis,
     split_target_axes,
 )
 from tilefoundry.ir.types.substitute import dim_vars_by_name
+from tilefoundry.ir.types.utils import i64_const
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
@@ -377,6 +366,62 @@ def _slice_shard_layout(call, ctx, x_ty, source, starts, inherited_offset):
     return ComposedLayout(inner=None, offset=offset, outer=sharded)
 
 
+def window_image(layout, starts: tuple, sizes: tuple, steps: tuple) -> "tuple[int, Layout] | None":
+    """Where a window of *layout* starts and how it lies, at static starts.
+
+    One axis at a time, in the tensor's own order. An axis written as a single
+    mode is a run: its start walks its stride into the offset and the window
+    keeps that stride, stepped. An axis written as a group has no single stride
+    to walk, so its start is read through the group as the mixed-radix
+    coordinate it is and the window is the modes the group steps the least by,
+    as many as its size takes, in the order the group wrote them. A grouped
+    axis straddling modes is refused; ``None`` is no window at all.
+    """
+    if not isinstance(layout, Layout) or layout.strides is None:
+        return None
+    shape, strides = tuple(layout.shape), tuple(layout.strides)
+    if not len(shape) == len(strides) == len(starts) == len(sizes) == len(steps):
+        return None
+
+    offset = 0
+    window_shape: list = []
+    window_strides: list = []
+    for group, walk, start, size, step in zip(shape, strides, starts, sizes, steps):
+        if not isinstance(group, tuple) and not isinstance(walk, tuple):
+            if any(_literal(value) is None for value in (walk, start, step)):
+                return None
+            offset += _literal(start) * _literal(walk)
+            window_shape.append(size)
+            window_strides.append(_literal(walk) * _literal(step))
+            continue
+
+        extents, walked = flatten(group), flatten(walk)
+        numbers = (*extents, *walked, start, size, step)
+        if len(extents) != len(walked) or any(_literal(value) is None for value in numbers):
+            return None
+        extents = tuple(_literal(value) for value in extents)
+        walked = tuple(_literal(value) for value in walked)
+        start, size, step = _literal(start), _literal(size), _literal(step)
+        if step != 1 or size < 1 or start % size:
+            return None
+
+        below, reach = 1, 1
+        kept: list[int] = []
+        for index in sorted(range(len(extents)), key=lambda axis: walked[axis]):
+            offset += ((start // below) % extents[index]) * walked[index]
+            if below < size:
+                kept.append(index)
+                reach *= extents[index]
+            below *= extents[index]
+        if reach != size:
+            return None
+        kept.sort()
+        window_shape.append(tuple(extents[index] for index in kept))
+        window_strides.append(tuple(walked[index] for index in kept))
+
+    return offset, Layout(shape=tuple(window_shape), strides=tuple(window_strides))
+
+
 @register_typeinfer(Slice)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
     """The window's type, its source layout carried where the window keeps it.
@@ -454,18 +499,16 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
             static_starts.append(int(start.value))
             steps.append(stride)
         else:
-            new_layout = ComposedLayout(
-                inner=inherited_inner,
-                offset=inherited_offset
-                + sum(
-                    start * stride
-                    for start, stride in zip(static_starts, source.strides)
-                ),
-                outer=Layout(
-                    shape=layout_shape,
-                    strides=tuple(stride * step for stride, step in zip(source.strides, steps)),
-                ),
+            found = window_image(
+                source, tuple(static_starts), tuple(layout_shape), tuple(steps)
             )
+            if found is not None:
+                moved, window = found
+                new_layout = ComposedLayout(
+                    inner=inherited_inner,
+                    offset=inherited_offset + moved,
+                    outer=window,
+                )
     return TensorType(shape=shape, dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage)
 
 
@@ -497,4 +540,4 @@ def _eval_slice(ctx):
     return TensorValue(data=ctx.args[0].data[tuple(key)], type=ctx.result_type)
 
 
-__all__ = ["Slice", "slice_size", "window_base"]
+__all__ = ["Slice", "slice_size", "window_base", "window_image"]

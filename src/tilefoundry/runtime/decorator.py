@@ -11,7 +11,8 @@ from dataclasses import replace
 from typing import Callable
 
 from tilefoundry.ir.core.module import Module, _refuse_bare_call
-from tilefoundry.ir.types.shard import Placement, shard_layout_of
+from tilefoundry.ir.types import Placement
+from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.tensor_type import TensorType
 from tilefoundry.runtime.function import RuntimeFunction
 from tilefoundry.runtime.module import RuntimeModule

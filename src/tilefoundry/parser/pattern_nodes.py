@@ -32,9 +32,9 @@ from tilefoundry.ir.core import (
 from tilefoundry.ir.core.pattern import _mangle_variant_name
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.tir.launch import launch_call
-from tilefoundry.ir.types import TensorType
+from tilefoundry.ir.types import Broadcast, Layout, Partial, Split, TensorType
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.shard import Broadcast, Layout, Partial, Split
+from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.utils import types_compatible
 
@@ -340,7 +340,7 @@ class PlainLayoutPattern(ElementPattern):
         shape = tuple(children.values())
         layout = runtime.Layout(
             shape=shape,
-            strides=runtime.c_order_strides(shape, mul=operator.mul),
+            strides=runtime.compact_row_major(shape, mul=operator.mul),
         )
         if (
             context.situation != "mesh_layout"
@@ -350,7 +350,7 @@ class PlainLayoutPattern(ElementPattern):
             mesh = context.function.state.mesh_stack[-1]
             return runtime.ShardLayout(
                 layout=layout,
-                attrs=tuple(runtime.Broadcast() for _ in mesh.layout.shape),
+                attrs=tuple(runtime.Broadcast() for _ in flatten(mesh.layout).shape),
                 mesh=mesh,
             )
         return layout
@@ -392,7 +392,7 @@ class MeshAxisPattern(ElementPattern):
                 node, context, f"{binding!r} is not a lexical Mesh binding"
             )
         if axis_name is None:
-            if len(mesh.layout.shape) != 1:
+            if len(flatten(mesh.layout).shape) != 1:
                 raise ParseError.from_node(
                     node, context, "bare Mesh placement requires a one-axis mesh"
                 )
@@ -658,13 +658,13 @@ class PlacementConstructionRule:
                 shape=value.shape, layout=runtime.Layout(shape=value.shape, strides=value.strides)
             )
         meshes = _placement_meshes(value, context, match)
-        mesh = meshes[0] if len(meshes) == 1 else runtime.composed(meshes)
+        mesh = meshes[0] if len(meshes) == 1 else runtime.merge_mesh(meshes)
         source_offsets: dict[int, int] = {}
         offset = 0
         for source in meshes:
             source_offsets[id(source)] = offset
-            offset += len(source.layout.shape)
-        attrs: list[object] = [runtime.Broadcast() for _ in mesh.layout.shape]
+            offset += len(flatten(source.layout).shape)
+        attrs: list[object] = [runtime.Broadcast() for _ in flatten(mesh.layout).shape]
         for source, source_axis, tensor_axis in value.splits:
             attrs[source_offsets[id(source)] + source_axis] = runtime.Split(tensor_axis)
         for source, source_axis, kind, reduction in value.states:
@@ -3130,7 +3130,7 @@ class MeshCoordinatePattern(ElementPattern):
         )
         if axis is None and node.attr in {"x", "y", "z"}:
             candidate = ("x", "y", "z").index(node.attr)
-            if candidate < len(mesh.layout.shape):
+            if candidate < len(flatten(mesh.layout).shape):
                 axis = candidate
         if axis is None:
             named = ", ".join(mesh.names)
@@ -3152,7 +3152,7 @@ class MeshCoordinatePattern(ElementPattern):
             raise ParseError.from_node(match.node, context, "mesh coordinate lacks context")
         mesh = match.captures["mesh"]
         axis = match.captures["axis"]
-        extent = mesh.layout.shape[axis]
+        extent = flatten(mesh.layout).shape[axis]
         if isinstance(extent, bool) or not isinstance(extent, int):
             raise ParseError.from_node(
                 match.node, context, "mesh coordinate requires a concrete axis extent"
@@ -3338,6 +3338,10 @@ class MeshContextPattern(ElementPattern):
                     "Mesh topologies must be a tuple",
                 )
             names = children.get("names", ())
+            if any(isinstance(topology, str) for topology in topology_names):
+                topology_names = _resolve_mesh_topologies_at(
+                    topology_names, context.function.topologies, match.node, context
+                )
             try:
                 mesh = runtime.Mesh(
                     topologies=topology_names,
@@ -3346,7 +3350,6 @@ class MeshContextPattern(ElementPattern):
                 )
             except (TypeError, ValueError) as error:
                 raise ParseError.from_node(match.node, context, str(error)) from error
-            mesh = _resolved_mesh(mesh, match, context)
         elif match.branch_id == "mesh_reference":
             mesh = children["value"]
             if not isinstance(mesh, runtime.Mesh):
@@ -3401,18 +3404,37 @@ def _loaded_names(statements):
     )
 
 
-def _block_escaping_names(statements):
-    """Return each with child's escaping bindings in one reverse block scan."""
+def _read_before_bound(statements):
+    """Return names a block reads before it binds them, in statement order.
+
+    A name a block reads on its way to binding it came from outside the block:
+    an accumulator reads what the last round left before it writes this one.
+    """
+    bound: set[str] = set()
+    live: set[str] = set()
+    for statement in statements:
+        live.update(_loaded_names((statement,)) - bound)
+        bound.update(_directly_bound_names((statement,)))
+    return frozenset(live)
+
+
+def _block_escaping_names(statements, *, repeated: bool = False):
+    """Return each with child's escaping bindings in one reverse block scan.
+
+    A block that repeats carries what it reads on its way to binding it, so a
+    `with` that both reads and binds a name states that name's next value and
+    the region it is bound through is what the round after reads.
+    """
     read_after: set[str] = set()
     escaping: dict[int, Mapping[str, object]] = {}
     for index in range(len(statements) - 1, -1, -1):
         statement = statements[index]
         if isinstance(statement, ast.With):
-            escaping[index] = {
-                "escaping_names": frozenset(
-                    _directly_bound_names(statement.body) & read_after
-                )
-            }
+            bound = _directly_bound_names(statement.body)
+            reached = set(read_after)
+            if repeated:
+                reached.update(_read_before_bound(statement.body))
+            escaping[index] = {"escaping_names": frozenset(bound & reached)}
         read_after.update(_loaded_names((statement,)))
     return escaping
 
@@ -3428,7 +3450,7 @@ def _enter_mesh_scope(context, mesh, match):
     infer = _parser_infer_context(context)
     try:
         entered_mesh = (
-            runtime.composed((infer.current_mesh, mesh))
+            runtime.merge_mesh((infer.current_mesh, mesh))
             if infer.current_mesh
             else mesh
         )
@@ -3534,7 +3556,9 @@ def _rebind_through_region(context, mesh, names, frame, node, params=(), args=()
 
     A region's computed values are named, and those names are how code after it
     reads them. Rebinding each through the region is what keeps who-ran-this on
-    the graph instead of leaving it to be guessed from a layout.
+    the graph instead of leaving it to be guessed from a layout. The first name
+    rebound comes back, so a caller with no body value of its own still has one
+    that reaches the region.
     """
     values = [
         (name, frame[name])
@@ -3552,13 +3576,14 @@ def _rebind_through_region(context, mesh, names, frame, node, params=(), args=()
     if len(values) == 1:
         scoped = _scoped_region(mesh, values[0][1], params, args)
         _bind_region_results(context, scoped, [values[0][0]], node)
-        return
+        return values[0][0]
     tuple_type = runtime.TupleType(fields=tuple(value.type for _name, value in values))
     tuple_body = runtime.IrTuple(
         type=tuple_type, elements=tuple(value for _name, value in values)
     )
     scoped = _scoped_region(mesh, tuple_body, params, args)
     _bind_region_results(context, scoped, [name for name, _value in values], node)
+    return values[0][0]
 
 
 class WithPattern(ElementPattern):
@@ -3658,13 +3683,14 @@ class WithPattern(ElementPattern):
             escaping = context.values.get("escaping_names", frozenset())
             params = match.captures.get("region_params", ())
             args = match.captures.get("region_args", ())
+            rebound = None
             if escaping:
-                _rebind_through_region(
+                rebound = _rebind_through_region(
                     context, mesh, escaping, frame, match.node, params, args
                 )
             if body is not None:
                 return _scoped_region(mesh, body, params, args)
-            return None
+            return None if rebound is None else context.lexical_scope.lookup(rebound)
         binding = runtime.Var(
             type=runtime.TensorType.scalar(runtime.DType.i64, storage=runtime.StorageKind.RMEM),
             name=match.captures["binding"],
@@ -3788,12 +3814,35 @@ class LoopCarryStatementPattern(ElementPattern):
                 "loop_carry_statement",
                 AstNodePattern(
                     ast.stmt,
-                    CapturePattern("names", lambda node, context: ()),
+                    CapturePattern("names", LoopCarryStatementPattern._statement_names),
                 ),
                 pattern_id="loop.carry_statement",
             ),
         )
     )
+
+    @staticmethod
+    def _statement_names(node: object, context: MatchContext) -> tuple[str, ...]:
+        """Names a statement binds that the loop carries rather than the loop itself.
+
+        An assignment states its own; a `with` states what its body binds,
+        because a region delimits who runs the work and not who owns the value.
+        Every other statement binds nothing the loop carries.
+        """
+        if not isinstance(node, ast.With):
+            return ()
+        found: list[str] = []
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Assign):
+                continue
+            target = child.targets[0]
+            targets = target.elts if isinstance(target, ast.Tuple) else (target,)
+            found.extend(
+                item.id
+                for item in targets
+                if isinstance(item, ast.Name) and item.id not in found
+            )
+        return tuple(found)
 
     @staticmethod
     def _target_names(node: object, context: MatchContext) -> tuple[str, ...]:
@@ -4065,6 +4114,11 @@ class LoopHeaderPattern(ElementPattern):
             values.update({name: value for name, value in children.items() if name != "carry"})
             bounds = [values[name] for name in ("start", "extent", "step")]
             bounds = [_constant(v) if isinstance(v, (bool, int, float)) else v for v in bounds]
+            bounds = [
+                bound if runtime.static_dim_value(bound) is not None
+                else runtime.normalize_dim(bound)
+                for bound in bounds
+            ]
             context.lexical_scope.push_frame()
             context.lexical_scope.define(match.captures["target"], iv)
             return (iv, *bounds)
@@ -4118,40 +4172,73 @@ class LoopHeaderPattern(ElementPattern):
 class LoopBodyPattern(ElementPattern):
     element_name = "loop_body"
     syntax = LazyPattern(
-        lambda: BranchPattern(
-            "loop_body",
-            AstNodePattern(
-                ast.Module,
-                PredicatePattern(
-                    "assignment-suite",
-                    lambda node, context: (
-                        not any(
-                            isinstance(statement, (ast.Return, ast.With, ast.Expr, ast.Pass))
-                            for statement in node.body
-                        )
+        lambda: BindPattern(
+            BranchPattern(
+                "loop_body",
+                AstNodePattern(
+                    ast.Module,
+                    PredicatePattern(
+                        "assignment-suite",
+                        lambda node, context: (
+                            not any(
+                                isinstance(statement, (ast.Return, ast.Expr, ast.Pass))
+                                for statement in node.body
+                            )
+                        ),
+                    ),
+                    FieldPattern(
+                        "body",
+                        RepeatPattern(
+                            ChildPattern(
+                                "statement_{index}",
+                                StatementPattern(),
+                                "loop_statement",
+                                "loop_statement",
+                            )
+                        ),
                     ),
                 ),
-                FieldPattern(
-                    "body",
-                    RepeatPattern(
-                        ChildPattern(
-                            "statement_{index}",
-                            StatementPattern(),
-                            "loop_statement",
-                            "loop_statement",
-                        )
-                    ),
-                ),
+                pattern_id="loop.body",
             ),
-            pattern_id="loop.body",
+            LoopBodyPattern._bind,
         )
     )
 
     @staticmethod
+    def _bind(node, _context, matched):
+        """Tell each `with` in the body which of its names the loop reads later.
+
+        A `with Mesh(...)` states who runs the statements it holds, so a value
+        assigned inside one and read after it leaves through the region rather
+        than around it. Which names those are is the same reverse scan a
+        function block makes, asked of the loop's own statements.
+        """
+        assert isinstance(node, ast.Module)
+        escaping = _block_escaping_names(node.body, repeated=True)
+        child_values = {f"statement_{index}": values for index, values in escaping.items()}
+        return dataclasses.replace(
+            matched,
+            children=tuple(
+                dataclasses.replace(child, values={**child.values, **child_values[child.name]})
+                if child.name in child_values
+                else child
+                for child in matched.children
+            ),
+        )
+
+    @staticmethod
     def construct(match, children, context):
+        """The loop body's value: the last statement that has one.
+
+        A `with` that only rebinds the names escaping it has no value of its
+        own -- the names it rebound reach its region, and the loop reads them
+        as its carried values -- so the body's value is the statement before.
+        """
         if not children:
             raise ParseError.from_node(match.node, context, "loop body cannot be empty")
-        value = tuple(children.values())[-1]
+        value = next(
+            (item for item in reversed(tuple(children.values())) if item is not None), None
+        )
         if not isinstance(value, runtime.Expr):
             raise ParseError.from_node(match.node, context, "loop body must yield an Expr")
         return value

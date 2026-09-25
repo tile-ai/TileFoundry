@@ -20,10 +20,15 @@ from tilefoundry.ir.core.pattern import Tensor
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir._helpers import broadcast_shapes, resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
-from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard import Layout, canonical_shard_layout, try_c_order_strides
-from tilefoundry.ir.types.shard.shard_layout import Broadcast, ShardLayout, shard_layout_of
+from tilefoundry.ir.types import DType, Layout, TensorType
+from tilefoundry.ir.types.shard_layout import (
+    Broadcast,
+    ShardLayout,
+    canonical_shard_layout,
+    shard_layout_of,
+)
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -178,7 +183,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         ctx.error(call, f"Binary {op.kind.name}: {e}")
     storage = resolve_anchor_storage(ctx, call, lhs_ty.storage, rhs_ty.storage)
     if layout is None and storage in (StorageKind.RMEM, StorageKind.SMEM) and out_shape:
-        layout = Layout(shape=out_shape, strides=try_c_order_strides(out_shape))
+        layout = Layout(shape=out_shape, strides=try_compact_major(out_shape))
     return TensorType(
         shape=out_shape,
         dtype=out_dtype,

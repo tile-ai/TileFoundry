@@ -5,9 +5,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from math import prod
 
-from tilefoundry.ir.types.shard.int_tuple import flatten
-from tilefoundry.ir.types.shard.layout import ComposedLayout, Layout
-from tilefoundry.ir.types.shard.mesh import Mesh, topology_axes
+from tilefoundry.ir.types.int_tuple import repeat_like
+from tilefoundry.ir.types.layout import ComposedLayout, Layout, flatten
+from tilefoundry.ir.types.mesh import Mesh
 from tilefoundry.utils.python_source import PythonExpr, _merge_imports
 
 
@@ -89,11 +89,14 @@ class PrintContext:
 
     @staticmethod
     def _axis_levels(mesh: Mesh) -> tuple[str, ...]:
-        levels = [""] * len(flatten(mesh.layout.shape))
-        for topology, axes in zip(mesh.topologies, topology_axes(mesh), strict=True):
-            for axis in axes:
-                levels[axis] = topology.name
-        return tuple(levels)
+        """The level each of the mesh's axes stands in, one name per axis."""
+        stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
+        return flatten(
+            tuple(
+                repeat_like(mode, topology.name)
+                for mode, topology in zip(stated.shape, mesh.topologies, strict=True)
+            )
+        )
 
     def mesh_axis_alias(self, mesh: Mesh, axis: int) -> str | None:
         """Name one mesh axis through an active scope binding, if one dominates it."""
@@ -111,8 +114,7 @@ class PrintContext:
             if (
                 self._type_annotation_surface
                 and bound is mesh
-                and isinstance(mesh.layout, ComposedLayout)
-                and mesh.layout.offset != 0
+                and (mesh.layout.offset if isinstance(mesh.layout, ComposedLayout) else 0) != 0
             ):
                 continue
             if not bound.names or target_name not in bound.names:
@@ -130,11 +132,7 @@ class PrintContext:
 
     def mesh_slice(self, mesh: Mesh) -> str | None:
         """Recover ``binding[start:stop]`` for a sliced active mesh."""
-        if not (
-            isinstance(mesh.layout, ComposedLayout)
-            and mesh.layout.inner is None
-            and isinstance(mesh.layout.outer, Layout)
-        ):
+        if not isinstance(mesh.layout, ComposedLayout):
             return None
         for parent, alias in reversed(self._mesh_bindings):
             text = self._slice_from_parent(parent, mesh, alias)

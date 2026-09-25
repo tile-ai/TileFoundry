@@ -22,8 +22,17 @@ from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
 from tilefoundry.ir.tir.verify import verify_prim_function
-from tilefoundry.ir.types import CallableType, DType, TensorType, UnitType
-from tilefoundry.ir.types.shard import Layout, Mesh, S, ShardLayout, Topology
+from tilefoundry.ir.types import (
+    CallableType,
+    DType,
+    Layout,
+    Mesh,
+    S,
+    ShardLayout,
+    TensorType,
+    Topology,
+    UnitType,
+)
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import CpuTarget, CudaTarget
 

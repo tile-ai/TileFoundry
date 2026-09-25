@@ -15,7 +15,7 @@ from tilefoundry.dsl import DimVar, T, Tensor
 from tilefoundry.ir.core.pattern import DimVarRangePat
 from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.stmts import Evaluate
-from tilefoundry.ir.types.shard import Layout, Mesh, S, ShardLayout, Topology
+from tilefoundry.ir.types import Layout, Mesh, S, ShardLayout, Topology
 from tilefoundry.passes.transforms import insert_default_host_entry
 from tilefoundry.target import CpuTarget, CudaTarget
 

@@ -15,7 +15,7 @@ import math
 
 from tilefoundry import func, module
 from tilefoundry.dsl import DimVar, Mesh, Tensor, tf
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
 
 HEADS = 16

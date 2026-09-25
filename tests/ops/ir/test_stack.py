@@ -16,9 +16,16 @@ from tests.ops.ir.typeinfer_utils import (
     run_typeinfer_case,
 )
 from tilefoundry.ir.hir.tensor.stack import Stack
-from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.shard import Layout, Partial, ShardLayout, make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Split, split_target_axes
+from tilefoundry.ir.types import (
+    DType,
+    Layout,
+    Partial,
+    ShardLayout,
+    make_mesh,
+    make_shard_tensor_type,
+    make_tensor_type,
+)
+from tilefoundry.ir.types.shard_layout import Split, split_target_axes
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
 

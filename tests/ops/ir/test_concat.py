@@ -8,9 +8,8 @@ from tests.ops.ir.typeinfer_utils import (
     run_typeinfer_case,
 )
 from tilefoundry.ir.hir.tensor.concat import Concat
-from tilefoundry.ir.types import DType, make_shard_tensor_type, make_tensor_type
-from tilefoundry.ir.types.shard import make_mesh
-from tilefoundry.ir.types.shard.shard_layout import Split
+from tilefoundry.ir.types import DType, make_mesh, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types.shard_layout import Split
 
 _F = DType.f32
 _M = make_mesh((4,))

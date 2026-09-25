@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 import torch
 
 from tilefoundry.ir.types import DType, TensorType
-from tilefoundry.ir.types.shard.shard_layout import ShardLayout
+from tilefoundry.ir.types.shard_layout import ShardLayout
 
 
 class EvalError(Exception):

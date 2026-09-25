@@ -3,7 +3,7 @@
 from tilefoundry import func, module
 from tilefoundry.dsl import DimVar, DimVarRangePat, Mesh, Tensor, tf
 from tilefoundry.dsl.tf import *  # noqa: F401, F403
-from tilefoundry.ir.types.shard import Topology
+from tilefoundry.ir.types import Topology
 from tilefoundry.target import CudaTarget
 
 D, W, BOUND = 64, 4, 128
