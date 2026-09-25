@@ -16,8 +16,10 @@ from tests.ops.ir.typeinfer_utils import (
 from tilefoundry.ir.hir.nn.layer_norm import LayerNorm
 from tilefoundry.ir.types import (
     DType,
+    Layout,
+    Mesh,
     ShardLayout,
-    make_mesh,
+    Topology,
     make_shard_tensor_type,
     make_tensor_type,
 )
@@ -25,7 +27,7 @@ from tilefoundry.ir.types.shard_layout import Partial, Split, split_target_axes
 
 _OP = LayerNorm(axis=-1, eps=1e-5)
 _F = DType.f32
-_M = make_mesh((4,))
+_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 _X = make_tensor_type((4, 8), _F)
 _W = make_tensor_type((8,), _F)
 _B = make_tensor_type((8,), _F)

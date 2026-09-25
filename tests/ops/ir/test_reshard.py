@@ -18,7 +18,7 @@ from tests.ops.ir.typeinfer_utils import (
 )
 from tilefoundry.dsl.storage import gmem, rmem
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.types import Layout, Mesh, ShardLayout, Topology, make_mesh, make_tensor_type
+from tilefoundry.ir.types import Layout, Mesh, ShardLayout, Topology, make_tensor_type
 from tilefoundry.ir.types.dim import DimMul, DimVar, simplify_dim
 from tilefoundry.ir.types.shard_layout import Split
 from tilefoundry.ir.types.storage import StorageKind
@@ -28,7 +28,7 @@ def _shard_layout(shape) -> ShardLayout:
     return ShardLayout(
         layout=Layout(shape=shape, strides=tuple([1] * len(shape))),
         attrs=(),
-        mesh=make_mesh((128,), topology=Topology("cta", 128)),
+        mesh=Mesh((Topology("cta", 128),), Layout((128,), (1,)), ("g",)),
     )
 
 

@@ -15,12 +15,19 @@ from tests.ops.ir.cost_utils import CostCase, run_cost_case
 from tests.ops.ir.typeinfer_utils import ExpectedError, TypeInferCase, run_typeinfer_case
 from tilefoundry.evaluator import evaluate
 from tilefoundry.ir.hir.tensor.where import Where
-from tilefoundry.ir.types import DType, Layout, make_mesh, make_shard_tensor_type, make_tensor_type
+from tilefoundry.ir.types import (
+    DType,
+    Layout,
+    Mesh,
+    Topology,
+    make_shard_tensor_type,
+    make_tensor_type,
+)
 from tilefoundry.ir.types.shard_layout import Split
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.contexts import TrafficBytes
 
-_MESH = make_mesh((4,))
+_MESH = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 
 
 def test_where_evaluates_right_aligned_broadcast():

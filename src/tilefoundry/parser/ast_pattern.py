@@ -49,7 +49,6 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice, slice_size
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import normalize_dim
-from tilefoundry.ir.mesh_scope import merge_mesh
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import (
@@ -88,6 +87,7 @@ from tilefoundry.ir.types.dim import (
     simplify_dim,
 )
 from tilefoundry.ir.types.layout import LayoutBase
+from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.shard_layout import canonical_shard_layout
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 from tilefoundry.ir.types.stride import compact_row_major
@@ -299,7 +299,7 @@ runtime = SimpleNamespace(
     DISPLAY_NAME=DISPLAY_NAME,
     compact_row_major=compact_row_major,
     canonical_shard_layout=canonical_shard_layout,
-    merge_mesh=merge_mesh,
+    make_mesh=make_mesh,
     dim_expr=dim_expr,
     normalize_dim=normalize_dim,
     static_dim_value=static_dim_value,

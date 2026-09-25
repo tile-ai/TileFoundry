@@ -19,8 +19,8 @@ truth for the directory's structure and invariants.
 |---|---|---|
 | `ir/core/` | [core-ir](./core-ir.md) | Shared node algebra: `Module` / `Expr` / `Var` / `Constant` / `Tuple` / `Op` / `Call` / `Stmt` (base class) / `OpSchema` / `ParamDef` / call-graph and ownership queries / typed metadata attach-detach and diagnostics / `@register_op` / `@register_alias` / `op_registry` / `errors`. |
 | `ir/types/` | [types](./types.md) | Type-system root: `Type` / `TensorType` / `TupleType` / `UnitType` / `CallableType` / `DType` / `StorageKind` / `resolve_storage` / local projections (`local_type_of`) / tensor-leaf, byte-by-storage, and topology-extent queries / `dim.*` (with their typeinfer). |
-| `ir/types/{int_tuple,stride,layout,layout_algebra,shard_layout,mesh}.py` | [shard](./shard.md) | `Topology` / `Mesh` / `Layout` / `ComposedLayout` / `ShardLayout` / `ShardAttr` (`Split` / `Broadcast` / `Dynamic` / `Partial`), filed as CuTe files them: int tuples (`flatten` / `unflatten` / `repeat_like` / `product`), strides (`compact_major` / `idx2crd` / `crd2idx`), layouts and the algebra over them each in their own module. |
-| `ir/mesh_scope.py` | [shard](./shard.md) | Which scope a statement stands inside and what it admits: `merge_mesh`, `device_layout`, `covered_by_scope`, `check_topology`. Neither a type nor a visitor, so it sits beside `ir/isl_interop.py` rather than in either. |
+| `ir/types/{int_tuple,stride,layout,layout_algebra,shard_layout,mesh}.py` | [shard](./shard.md) | `Topology` / `Mesh` / `Layout` / `ComposedLayout` / `ShardLayout` / `ShardAttr` (`Split` / `Broadcast` / `Dynamic` / `Partial`), filed as CuTe files them: int tuples (`flatten` / `unflatten` / `repeat_like` / `product`), strides (`compact_major` / `idx2crd` / `crd2idx`), layouts and the algebra over them each in their own module; mesh construction and separation stay with `Mesh`. |
+| `ir/mesh_scope.py` | [shard](./shard.md) | Which scope a statement stands inside and what it admits: `device_layout`, `covered_by_scope`, `check_topology`. Neither a type nor a visitor, so it sits beside `ir/isl_interop.py` rather than in either. |
 | `ir/constraints/` | [parser](./parser.md) | Authored `where(layout=..., mesh=..., storage=...)` constraint records: the shared base plus layout, mesh, and storage constraints, attached by the parser and read back by the Python printer. |
 | `ir/visitor.py` | [visitor-mutator](./visitor-mutator.md) | `ExprFunctor` / `ExprVisitor` / `ExprWalker` / `ExprCollector` / `ExprCloner` / `BindingSubstitutionCloner` / `StmtVisitor` / `StmtMutator` / `StmtExprMutator`, plus `collect_exprs`, value-operand/function-value queries, and the canonical `PrimFunction` walk and rewrite entries. |
 | `ir/isl_interop.py` | [types](./types.md) | Interoperation between dimension and shape IR values and isl: expression rendering and decoding, normalization, value ranges, and shape-domain construction. Pure isl operations remain in `utils/isl_utils.py`. |
@@ -180,6 +180,13 @@ go through [parser §2](./parser.md#2-syntax-and-rules).
 
 **Rule 7 — what template files contain.** `codegen/<target>/templates/*.j2`
 carry boilerplate assembly only; emitters live in Python walkers.
+
+### 2.1 Package export rule
+
+`tilefoundry.ir.types` re-exports type classes and `make_*` constructors. Other
+functions are imported from the module that owns them; for example,
+`make_mesh` is available at the package surface, while `separate` is imported
+from `tilefoundry.ir.types.mesh`.
 
 ## 3. Multi-agent parallelism guarantee
 

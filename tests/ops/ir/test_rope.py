@@ -19,15 +19,17 @@ from tests.ops.ir.typeinfer_utils import (
 from tilefoundry.ir.hir.nn.rope import RoPE
 from tilefoundry.ir.types import (
     DType,
+    Layout,
+    Mesh,
+    Topology,
     TupleType,
-    make_mesh,
     make_shard_tensor_type,
     make_tensor_type,
 )
 from tilefoundry.ir.types.shard_layout import Partial
 
 _BF = DType.bf16
-_M = make_mesh((4,))
+_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 
 
 def _rope_inputs(q_shape, k_shape, *, q=None, k=None, cos=None, sin=None, pos=None):

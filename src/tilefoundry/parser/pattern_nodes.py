@@ -658,7 +658,7 @@ class PlacementConstructionRule:
                 shape=value.shape, layout=runtime.Layout(shape=value.shape, strides=value.strides)
             )
         meshes = _placement_meshes(value, context, match)
-        mesh = meshes[0] if len(meshes) == 1 else runtime.merge_mesh(meshes)
+        mesh = meshes[0] if len(meshes) == 1 else runtime.make_mesh(*meshes)
         source_offsets: dict[int, int] = {}
         offset = 0
         for source in meshes:
@@ -3449,11 +3449,7 @@ def _enter_mesh_scope(context, mesh, match):
     """
     infer = _parser_infer_context(context)
     try:
-        entered_mesh = (
-            runtime.merge_mesh((infer.current_mesh, mesh))
-            if infer.current_mesh
-            else mesh
-        )
+        entered_mesh = runtime.make_mesh(infer.current_mesh, mesh) if infer.current_mesh else mesh
     except ValueError as error:
         raise ParseError.from_node(match.node, context, str(error)) from error
     context.lexical_scope.push_frame()

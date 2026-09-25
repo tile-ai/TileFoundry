@@ -25,8 +25,9 @@ from tests.ops.ir.typeinfer_utils import (
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.types import (
     DType,
+    Layout,
+    Mesh,
     Topology,
-    make_mesh,
     make_shard_tensor_type,
     make_tensor_type,
 )
@@ -39,11 +40,11 @@ from tilefoundry.visitor_registry.contexts import TrafficBytes
 _MM = MatMul()
 
 
-_M = make_mesh((4,))
+_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 
 
 _CTA = Topology("cta", 5)
-_CTA_MESH = make_mesh((5,), topology=_CTA)
+_CTA_MESH = Mesh((_CTA,), Layout((5,), (1,)), ("g",))
 
 
 COST_CASES = [

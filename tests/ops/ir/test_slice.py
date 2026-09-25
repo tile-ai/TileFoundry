@@ -21,8 +21,9 @@ from tilefoundry.ir.types import (
     ComposedLayout,
     DType,
     Layout,
+    Mesh,
+    Topology,
     TupleType,
-    make_mesh,
     make_shard_tensor_type,
     make_tensor_type,
 )
@@ -33,7 +34,7 @@ from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 _F = DType.f32
-_M = make_mesh((4,))
+_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 
 
 def _slice_call(source, starts, sizes, strides, *, source_expr=None):
@@ -150,7 +151,7 @@ def test_runtime_window_preserves_distribution_without_claiming_an_offset():
 
 def test_runtime_window_before_a_split_axis_preserves_the_split_target():
     seq = DimVar("slice_seq", 1, 4097)
-    mesh = make_mesh((16,))
+    mesh = Mesh((Topology("gpu", 16),), Layout((16,), (1,)), ("g",))
     source = make_shard_tensor_type((1, seq, 16, 128), mesh=mesh, attrs=(Split(2),))
     start = Var(type=make_tensor_type((), DType.i64), name="start")
 
@@ -165,7 +166,7 @@ def test_runtime_window_before_a_split_axis_preserves_the_split_target():
 
 def test_fused_gqa_qkv_slices_keep_distribution_visible_to_consumers():
     """32 Q / 8 KV heads use group slices 4/1/1 and retain HKV sharding."""
-    mesh = make_mesh((8,))
+    mesh = Mesh((Topology("gpu", 8),), Layout((8,), (1,)), ("g",))
     source = make_tensor_type(
         (64, 8, 6, 16),
         _F,

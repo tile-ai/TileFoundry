@@ -20,9 +20,10 @@ from tilefoundry.ir.hir.tensor.split import Split
 from tilefoundry.ir.types import (
     DType,
     Layout,
+    Mesh,
     ShardLayout,
+    Topology,
     TupleType,
-    make_mesh,
     make_shard_tensor_type,
     make_tensor_type,
 )
@@ -68,7 +69,9 @@ def test_split_rebuilds_plain_and_sharded_result_layouts():
     plain_parts = infer_call(Split(axis=0, num_splits=4), plain).fields
     assert all(part.layout == Layout(shape=(4, 8), strides=(8, 1)) for part in plain_parts)
 
-    sharded = make_shard_tensor_type((16, 8), mesh=make_mesh((4,)), attrs=(SplitAttr(0),))
+    sharded = make_shard_tensor_type(
+        (16, 8), mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)), attrs=(SplitAttr(0),)
+    )
     sharded_parts = infer_call(Split(axis=1, num_splits=2), sharded).fields
     assert all(isinstance(part.layout, ShardLayout) for part in sharded_parts)
     assert all(part.layout.attrs == (SplitAttr(0),) for part in sharded_parts)
@@ -91,7 +94,7 @@ def test_split_values_carry_their_exact_inferred_field_types() -> None:
         (8, 4),
         dtype=DType.f32,
         storage="rmem",
-        mesh=make_mesh((4,)),
+        mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
         attrs=(SplitAttr(0),),
     )
     op = Split(axis=1, num_splits=2)

@@ -16,11 +16,11 @@ from tests.ops.ir.typeinfer_utils import (
     run_typeinfer_case,
 )
 from tilefoundry.ir.hir.math.softplus import Softplus
-from tilefoundry.ir.types import make_mesh, make_shard_tensor_type
+from tilefoundry.ir.types import Layout, Mesh, Topology, make_shard_tensor_type
 from tilefoundry.ir.types.shard_layout import Partial
 
 _OP = Softplus()
-_M = make_mesh((4,))
+_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 _PSUM = make_shard_tensor_type((16, 8), mesh=_M, attrs=(Partial("sum"),))
 
 

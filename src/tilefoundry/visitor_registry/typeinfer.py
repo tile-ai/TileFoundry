@@ -14,9 +14,10 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.reshard import Reshard as HirReshard
-from tilefoundry.ir.mesh_scope import covered_by_scope, merge_mesh, storage_reaches
+from tilefoundry.ir.mesh_scope import covered_by_scope, storage_reaches
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.types.callable_type import callable_type_for
+from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.substitute import canonicalize_dims
 from tilefoundry.ir.types.tensor_type import TupleType, Type
@@ -220,7 +221,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
         from tilefoundry.ir.hir.verify import _verify_isolated  # noqa: PLC0415
 
         _verify_isolated(expr, ctx)
-        mesh = merge_mesh((ctx.current_mesh, expr.mesh)) if ctx.current_mesh else expr.mesh
+        mesh = make_mesh(ctx.current_mesh, expr.mesh) if ctx.current_mesh else expr.mesh
         return self.visit(expr.body, replace(ctx, current_mesh=mesh, memo=memo))
 
     def visit_Function(self, fn: Function, ctx: TypeInferContext) -> Type:

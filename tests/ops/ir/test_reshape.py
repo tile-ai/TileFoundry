@@ -25,8 +25,9 @@ from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.types import (
     Layout,
+    Mesh,
     ShardLayout,
-    make_mesh,
+    Topology,
     make_shard_tensor_type,
     make_tensor_type,
 )
@@ -39,7 +40,7 @@ from tilefoundry.ir.types.shard_layout import (
 )
 from tilefoundry.ir.types.storage import StorageKind
 
-_M = make_mesh((4,))
+_M = Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",))
 
 
 def _reshape(new_shape):
@@ -90,7 +91,13 @@ def test_straddling_split_fails_closed():
         TypeInferCase(
             "straddle_fails_closed",
             _reshape((3, 8)),
-            (make_shard_tensor_type((6, 4), mesh=make_mesh((2,)), attrs=(Split(0),)),),
+            (
+                make_shard_tensor_type(
+                    (6, 4),
+                    mesh=Mesh((Topology("gpu", 2),), Layout((2,), (1,)), ("g",)),
+                    attrs=(Split(0),),
+                ),
+            ),
             ExpectedError(match="align"),
         )
     )
@@ -125,7 +132,11 @@ def test_split_remaps_partial_carries():
     """
     ty = infer_call(
         _reshape((1, 32, 128)),
-        make_shard_tensor_type((32, 128), mesh=make_mesh((2, 2)), attrs=(Split(0), Partial("sum"))),
+        make_shard_tensor_type(
+            (32, 128),
+            mesh=Mesh((Topology("gpu", 4),), Layout((2, 2), (2, 1)), ("a", "b")),
+            attrs=(Split(0), Partial("sum")),
+        ),
     )
     assert tuple(ty.shape) == (1, 32, 128)
     assert _split_mesh_axes(ty) == {0}

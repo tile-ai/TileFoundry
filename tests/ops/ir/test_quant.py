@@ -23,9 +23,10 @@ from tilefoundry.ir.hir.tensor.quant import Quant
 from tilefoundry.ir.types import (
     DType,
     Layout,
+    Mesh,
     ShardLayout,
+    Topology,
     TupleType,
-    make_mesh,
     make_shard_tensor_type,
     make_tensor_type,
 )
@@ -99,13 +100,25 @@ CASES = [
     TypeInferCase(
         "partial_input_rejected",
         Quant(),
-        (make_shard_tensor_type((1, 2048), mesh=make_mesh((4,)), attrs=(Partial("max"),)),),
+        (
+            make_shard_tensor_type(
+                (1, 2048),
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Partial("max"),),
+            ),
+        ),
         ExpectedError(match="x carries Partial"),
     ),
     TypeInferCase(
         "last_split_through_group_rejected",
         Quant(group=128),
-        (make_shard_tensor_type((2, 256), mesh=make_mesh((4,)), attrs=(Split(1),)),),
+        (
+            make_shard_tensor_type(
+                (2, 256),
+                mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+                attrs=(Split(1),),
+            ),
+        ),
         ExpectedError(match=r"last axis 1 Split cuts through group=128.*Reshard"),
     ),
     TypeInferCase(
@@ -117,7 +130,7 @@ CASES = [
                 (2, 4, 256),
                 (1024, 256, 2),
                 (Split(1),),
-                make_mesh((4,)),
+                Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
             ),
         ),
         ExpectedError(match=r"last axis 1 Split cuts through group=128.*Reshard"),
@@ -131,7 +144,7 @@ CASES = [
                 (2, 4, 256),
                 (1024, 128, 1),
                 (Split(1),),
-                make_mesh((4,)),
+                Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
             ),
         ),
         ExpectedError(match=r"last axis 1 Split cuts through group=128.*Reshard"),
@@ -218,7 +231,12 @@ def test_quant_plain_layouts_describe_each_result() -> None:
     ids=("outer_axis", "whole_group_last_axis"),
 )
 def test_quant_propagates_representable_sharding(shape, split_axis, expected_scale_shape) -> None:
-    source = make_shard_tensor_type(shape, _BF, mesh=make_mesh((4,)), attrs=(Split(split_axis),))
+    source = make_shard_tensor_type(
+        shape,
+        _BF,
+        mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+        attrs=(Split(split_axis),),
+    )
     quantized, scale = infer_call(Quant(group=128), source).fields
 
     assert quantized.shape == shape
@@ -236,7 +254,7 @@ def test_quant_accepts_factorized_contiguous_whole_groups() -> None:
         (2, 256, 4),
         (1024, 4, 1),
         (Split(1),),
-        make_mesh((4,)),
+        Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
         dtype=_BF,
     )
     quantized, scale = infer_call(Quant(group=128), source).fields
@@ -247,7 +265,12 @@ def test_quant_accepts_factorized_contiguous_whole_groups() -> None:
 
 
 def test_quant_drops_fully_broadcast_mesh_ownership() -> None:
-    source = make_shard_tensor_type((2, 256), _BF, mesh=make_mesh((4,)), attrs=(Broadcast(),))
+    source = make_shard_tensor_type(
+        (2, 256),
+        _BF,
+        mesh=Mesh((Topology("gpu", 4),), Layout((4,), (1,)), ("g",)),
+        attrs=(Broadcast(),),
+    )
     quantized, scale = infer_call(Quant(group=128), source).fields
 
     assert quantized.layout is None

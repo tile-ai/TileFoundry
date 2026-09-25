@@ -48,10 +48,11 @@ from tilefoundry.ir.hir.tensor.slice import Slice as SliceOp
 from tilefoundry.ir.isl_interop import index_set
 from tilefoundry.ir.types import (
     DType,
+    Layout,
+    Mesh,
     TensorType,
     Topology,
     TupleType,
-    make_mesh,
     make_shard_tensor_type,
     make_tensor_type,
 )
@@ -129,7 +130,7 @@ def test_a_boundary_reaching_past_its_operand_is_held_to_what_it_was_handed() ->
     that rather than from a read nobody could perform.
     """
     cta = Topology("cta", 2)
-    mesh = make_mesh((2,), ("c",), topology=cta)
+    mesh = Mesh((cta,), Layout((2,), (1,)), ("c",))
     destination = make_shard_tensor_type((8,), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32)
     update = make_shard_tensor_type((4,), mesh=mesh, attrs=(ShardSplit(0),), dtype=DType.f32)
     call = Call(

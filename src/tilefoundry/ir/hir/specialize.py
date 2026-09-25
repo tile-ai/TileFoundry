@@ -17,8 +17,8 @@ from tilefoundry.ir.core import Call, Constant, Expr, Op, Tuple, Var
 from tilefoundry.ir.core.pattern import DimVarRangePat, Pattern
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.mesh_scope import merge_mesh
 from tilefoundry.ir.types.dim import is_dim_expr
+from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.substitute import (
     dim_vars_by_name,
     has_symbolic_dims,
@@ -223,18 +223,14 @@ class DimensionInstantiator(ExprCloner):
         mesh = substitute_mesh_dims(expr.mesh, ctx.dims)
         new_args = tuple(self.visit(arg, ctx) for arg in expr.args)
         new_params = tuple(
-            param
-            if new_arg.type == param.type
-            else Var(type=new_arg.type, name=param.name)
+            param if new_arg.type == param.type else Var(type=new_arg.type, name=param.name)
             for param, new_arg in zip(expr.params, new_args, strict=True)
         )
         for old, new in zip(expr.params, new_params, strict=True):
             if old is not new:
                 ctx.subst[id(old)] = new
         current_mesh = (
-            merge_mesh((ctx.type_ctx.current_mesh, mesh))
-            if ctx.type_ctx.current_mesh
-            else mesh
+            make_mesh(ctx.type_ctx.current_mesh, mesh) if ctx.type_ctx.current_mesh else mesh
         )
         body_ctx = dataclasses.replace(
             ctx,

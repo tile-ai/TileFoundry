@@ -15,7 +15,7 @@ from itertools import product
 
 import pytest
 
-from tilefoundry.ir.types import DType, Mesh, Topology, make_mesh, make_shard_tensor_type
+from tilefoundry.ir.types import DType, Layout, Mesh, Topology, make_shard_tensor_type
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
@@ -24,13 +24,14 @@ from tilefoundry.ir.types.shard_layout import (
     local_layout_and_offset,
     shard_layout_of,
 )
+from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.ir.types.utils import local_type_of
 
 _GPU, _THREAD = Topology("gpu", 2), Topology("thread", 32)
 
 
 def _mesh(topology: Topology, extents: tuple[int, ...], names: tuple[str, ...]) -> Mesh:
-    return make_mesh(extents, names, topology=topology)
+    return Mesh((topology,), Layout(extents, try_compact_major(extents)), names)
 
 
 _CASES = {
@@ -120,7 +121,7 @@ def test_every_instance_together_tile_the_tensor(case: str) -> None:
 
 def test_the_layout_keeps_the_whole_tensors_strides() -> None:
     """A slice is the same rows the same distance apart, begun further in."""
-    mesh = make_mesh((2,), ("g",), topology=_GPU)
+    mesh = Mesh((_GPU,), Layout((2,), (1,)), ("g",))
     held = make_shard_tensor_type((4, 4), mesh=mesh, attrs=(Split(1),), dtype=DType.f32)
     shard = shard_layout_of(held.layout)
 
@@ -134,10 +135,8 @@ def test_the_outer_axis_steps_over_what_the_inner_one_holds() -> None:
     One step of the outer axis clears the eight the inner one holds, rather
     than the whole the outer axis was already narrowed out of.
     """
-    mesh = make_mesh((4, 8), ("w", "t"), topology=_THREAD)
-    held = make_shard_tensor_type(
-        (32,), mesh=mesh, attrs=(Split(0), Split(0)), dtype=DType.f32
-    )
+    mesh = Mesh((_THREAD,), Layout((4, 8), (8, 1)), ("w", "t"))
+    held = make_shard_tensor_type((32,), mesh=mesh, attrs=(Split(0), Split(0)), dtype=DType.f32)
     shard = shard_layout_of(held.layout)
 
     offsets = [local_layout_and_offset(shard, (32,), (pid,))[1] for pid in range(32)]
@@ -146,10 +145,8 @@ def test_the_outer_axis_steps_over_what_the_inner_one_holds() -> None:
 
 def test_a_level_with_no_id_is_left_whole() -> None:
     """A level the host did not place divides nothing; the device does that."""
-    mesh = make_mesh((2, 4), ("g", "c"), topology=_GPU)
-    held = make_shard_tensor_type(
-        (8, 4), mesh=mesh, attrs=(Split(0), Split(1)), dtype=DType.f32
-    )
+    mesh = Mesh((_GPU,), Layout((2, 4), (4, 1)), ("g", "c"))
+    held = make_shard_tensor_type((8, 4), mesh=mesh, attrs=(Split(0), Split(1)), dtype=DType.f32)
     shard = shard_layout_of(held.layout)
 
     layout, offset = local_layout_and_offset(shard, (8, 4), (None,))
@@ -163,7 +160,7 @@ def test_an_extent_its_mesh_axis_does_not_divide_is_refused() -> None:
     shape asked about here is one the layout was not built for -- which is the
     only way the two can disagree, and worth naming rather than slicing.
     """
-    mesh = make_mesh((4,), ("g",), topology=_GPU)
+    mesh = Mesh((_GPU,), Layout((4,), (1,)), ("g",))
     held = make_shard_tensor_type((8,), mesh=mesh, attrs=(Split(0),), dtype=DType.f32)
     shard = shard_layout_of(held.layout)
 
