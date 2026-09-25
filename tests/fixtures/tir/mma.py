@@ -45,12 +45,7 @@ class MmHandwritten:
             T.copy(a_view, a_frag)
             T.copy(b_view, b_frag)
             T.fill(acc, 0.0)
-            T.mma(
-                acc,
-                a_frag,
-                b_frag,
-                atom=T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN),
-            )
+            T.tiled_mma(acc, a_frag, b_frag, atom=T.cuda.sm80.Mma())
             c_view = T.tensor_view(
                 T.ptr_of(c), layout=((2, 4 @ _warp.warp, 8 @ _warp.lane, 2), (1, 2, 8, 64))
             )

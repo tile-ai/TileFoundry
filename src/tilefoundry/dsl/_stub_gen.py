@@ -207,33 +207,68 @@ _DIALECT_INTRINSICS: dict[str, tuple[str, ...]] = {
 
 
 def _platform_namespace_stub(dialect: str) -> str | None:
-    """Typed stubs for ``T`` platform sub-namespaces (``T.cuda.mma.*``).
+    """Typed stubs for declarative ``T.cuda.sm80`` / ``T.cuda.sm90`` atoms.
 
     These are compile-time descriptor surfaces, not OpSchema-backed ops, so the
-    schema walk never sees them. The namespace *shape* (``cuda.mma`` + the
-    ``atom(op)`` builder) is fixed; the op set is introspected from the live
-    namespace so a new ``MmaOpSpec`` shows up automatically.
+    schema walk never sees them. Each constructor signature is reflected from
+    the declaration's ``ParamDef`` fields.
     """
     if dialect != "T":
         return None
     from tilefoundry.dsl.T._platforms import cuda  # noqa: PLC0415
-    from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaOpSpec  # noqa: PLC0415
+    from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom  # noqa: PLC0415
 
-    op_names = sorted(n for n, v in vars(type(cuda.mma)).items() if isinstance(v, MmaOpSpec))
+    def constructor(name: str, declaration: type[MmaAtom]) -> str:
+        params = []
+        for param in declaration.parameters:
+            annotation = getattr(param.annotation, "__name__", "Any")
+            rendered = f"{param.name}: {annotation}"
+            if param.has_default:
+                rendered += " = ..."
+            params.append(rendered)
+        params.append("mesh: Mesh | None = ...")
+        return (
+            "    @staticmethod\n"
+            f"    def {name}(*, {', '.join(params)}) -> MmaAtom: ..."
+        )
+
+    namespaces = []
+    for namespace_name in ("sm80", "sm90"):
+        namespace = getattr(cuda, namespace_name)
+        declarations = sorted(
+            (name, value)
+            for name, value in vars(type(namespace)).items()
+            if isinstance(value, type) and issubclass(value, MmaAtom)
+        )
+        namespaces.append((namespace_name, namespace, declarations))
+
     lines = [
         "# Platform sub-namespaces (not OpSchema-backed).",
-        "from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom as MmaAtom, MmaOpSpec as MmaOpSpec",
+        "from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom as MmaAtom",
+        "from tilefoundry.ir.tir.cuda.nn.wgmma import Form as Form, Major as Major",
+        "from tilefoundry.ir.types import Mesh as Mesh",
         "",
-        "class _CudaMma:",
-        *[f"    {n}: MmaOpSpec" for n in op_names],
-        "    @staticmethod",
-        "    def atom(op: MmaOpSpec) -> MmaAtom: ...",
-        "",
-        "class _Cuda:",
-        "    mma: _CudaMma",
-        "",
-        "cuda: _Cuda",
     ]
+    for namespace_name, namespace, declarations in namespaces:
+        class_name = f"_Cuda{namespace_name.title()}"
+        lines.append(f"class {class_name}:")
+        enum_names = sorted(
+            name
+            for name, value in vars(type(namespace)).items()
+            if isinstance(value, type) and issubclass(value, enum.Enum)
+        )
+        lines.extend(f"    {name}: type[{name}]" for name in enum_names)
+        lines.extend(constructor(name, declaration) for name, declaration in declarations)
+        lines.append("")
+    lines.extend(
+        [
+            "class _Cuda:",
+            "    sm80: _CudaSm80",
+            "    sm90: _CudaSm90",
+            "",
+            "cuda: _Cuda",
+        ]
+    )
     return "\n".join(lines)
 
 

@@ -594,28 +594,30 @@ class Cast(Op):
 
 #### NN Ops (`tir.nn.*`)
 
-##### Mma
+##### TiledMma
 ```python
-class Mma(Op):
+class TiledMma(Op):
     """Effect form; matrix-multiply-accumulate ``acc += lhs @ rhs``.
 
     Attributes:
         acc: input; accumulator fragment.
         lhs: input; left-hand operand fragment.
         rhs: input; right-hand operand fragment.
-        atom: attribute; optional compile-time ``MmaAtom``, absent ⇒ bare-Mma
-            per-target path.
+        atom: attribute; required compile-time ``MmaAtom`` declaration.
+        scope: attribute; optional warp-aligned thread scope.
     """
 
     acc: Tensor
     lhs: Tensor
     rhs: Tensor
-    atom: MmaAtom | None = None
+    atom: MmaAtom
+    scope: Mesh | None = None
 ```
 - constraints:
   - matrix-multiply-accumulate `acc += lhs @ rhs`; per-target PTX lowering lives in
     [target](./target.md), the atom calling convention in
     [§2.3](#23-tir-ops).
+  - `acc` declares `READ | WRITE`; `lhs` and `rhs` declare `READ`.
 
 ##### ReLU
 ```python
@@ -874,162 +876,74 @@ block_y, block_z, *forwarded_args)`:
   non-grid/block launch configuration. A `cluster` / `stream` / `attrs` value
   the active CUDA target does not support MUST be rejected in target lowering.
 
-#### MMA atom and the hand-written calling convention
+#### Declarative MMA atoms and `T.tiled_mma`
 
-A hand-written kernel issues an MMA through an explicit **atom** — a
-realized instruction descriptor — instead of the bare `Mma` op whose
-fragment layouts the per-target lowering chooses
-([hir §1.3](./hir.md#13-op), [passes](./passes.md)). An MMA atom fixes a
-concrete hardware instruction, so the whole MMA surface is **target-owned**:
-the `Mma` op and the `MmaOpSpec` / `MmaAtom` descriptors
-(`tilefoundry.ir.tir.cuda.nn`, mirroring the CuTe `MMA_Op` → `MMA_Atom`
-layering), the concrete instructions, and their fragment layouts all live
-under `tilefoundry.ir.tir.cuda.nn.mma` / `mma_atom`, following IR's dialect-first
-layout `ir/{dialect}/{target}/{category}`.
-
-##### `MmaOpSpec`
-
-A named, fully-specified MMA instruction (the CuTe `MMA_Op` analog).
-
-```python
-class MmaOpSpec:
-    name: str                         # uniquely identifies the instruction; the other fields mirror it
-    shape_mnk: tuple[int, int, int]   # the instruction's static (M, N, K)
-    dtype_a: DType                    # lhs operand element type
-    dtype_b: DType                    # rhs operand element type
-    dtype_c: DType                    # accumulator element type
-    operand_layout: str               # source operand order string (e.g. "TN")
-```
-
-- constraints:
-  - a fully-specified MMA instruction descriptor carrying no fragment-layout
-    knowledge. Per-field rules below.
-
-###### `name`
-
-- MUST uniquely identify the instruction. dtype / shape / source layout
-  are fixed by it; the remaining fields mirror the name so verify and
-  codegen do not re-parse the string.
-
-###### `shape_mnk`
-
-- MUST be the instruction's `(M, N, K)` tuple; every entry MUST be a
-  static int.
-
-###### `dtype_a`
-
-- MUST be the `lhs` operand element type (`DType`).
-
-###### `dtype_b`
-
-- MUST be the `rhs` operand element type (`DType`); it MAY differ from
-  `dtype_a`.
-
-###### `dtype_c`
-
-- MUST be the accumulator element type (`DType`); it MAY differ from the
-  operand types (e.g. `f32` accumulation over `bf16` operands).
-
-###### `operand_layout`
-
-- MUST encode the source operand order as a string, e.g. `"TN"` (A
-  row-major, B col-major). An `MmaOpSpec` MUST NOT carry fragment-layout
-  knowledge.
-
-##### `MmaAtom`
-
-The realized atom for an `op` (the CuTe `MMA_Atom` analog), built by
-`T.cuda.mma.atom(op=...)`
-([parser §2](./parser.md#2-syntax-and-rules)).
+An MMA instruction is a target-owned `MmaAtom` declaration. The declaration
+class states its authored parameters, required physical scope, target
+capability, and the `TensorPattern` read for each `A`, `B`, and `C` role. An
+instance binds the parameters for one call; it does not carry a second copy of
+concrete fragment layouts that could drift from those patterns.
 
 ```python
 class MmaAtom:
-    op: MmaOpSpec         # the MmaOpSpec this atom realizes
-    A: ShardLayout        # lhs fragment ShardLayout contract
-    B: ShardLayout        # rhs fragment ShardLayout contract
-    C: ShardLayout        # accumulator fragment ShardLayout contract
-    required_scope: Mesh  # the thread-participation contract, carried as its own Mesh
+    namespace: str
+    scope: Mesh
+    capability: str
+    A: TensorPattern | SwitchPattern
+    B: TensorPattern | SwitchPattern
+    C: TensorPattern | SwitchPattern
+    parameters: tuple[ParamDef, ...]
+    bindings: dict[str, object]
+    mesh: Mesh | None
+
+    def role(self, role: str) -> TensorPattern: ...
+    def scope_pattern(self) -> MeshPattern: ...
 ```
 
 - constraints:
-  - the realized atom for an `op`; fragment layouts are returned as-is and not
-    rebound onto the caller's mesh. Per-field rules below.
+  - `parameters` MUST preserve declaration order. Construction MUST reject an
+    unknown binding and a value refused by its `ParamDef.pattern`; an omitted
+    parameter MUST take the value implied by earlier bindings or its declared
+    default, and otherwise construction MUST fail.
+  - `role("A")`, `role("B")`, and `role("C")` MUST resolve the declaration's
+    role pattern under the instance bindings. The logical TIR orientation is
+    always A `(M,K)`, B `(K,N)`, C `(M,N)`; each role pattern separately states
+    the fragment's physical arrangement.
+  - `scope_pattern()` MUST require the declaration's exact participant count
+    at an aligned offset. `mesh`, when present, binds the atom to one concrete
+    frame and MUST match the active frame at verify.
+  - `capability` MUST be present in the active CUDA architecture's
+    `instruction_capabilities`.
 
-###### `op`
-
-- MUST be the `MmaOpSpec` this atom realizes.
-
-###### `A`
-
-- MUST be the `lhs` operand fragment `ShardLayout` contract — the
-  lane→value layout the instruction reads. It MUST be returned **as-is**
-  at a use site and MUST NOT be rebound onto the caller's mesh.
-
-###### `B`
-
-- MUST be the `rhs` operand fragment `ShardLayout` contract; the same
-  as-is / no-rebind rule as `A` applies.
-
-###### `C`
-
-- MUST be the accumulator fragment `ShardLayout` contract; the same
-  as-is / no-rebind rule as `A` applies.
-
-###### `required_scope`
-
-- MUST be the thread-participation contract the atom needs, carried as
-  its own `Mesh` (for the SM80 `16x8x16` instruction, 32 lanes arranged
-  as a `(4, 8)` thread mesh). It MUST NOT be the caller's mesh; the
-  caller's enclosing scope MUST be checked against it at verify (below).
+The public declarations are `T.cuda.sm80.Mma()` (BF16 `16x8x16`, F32
+accumulator, register A/B/C over one warp) and
+`T.cuda.sm90.Wgmma(n=..., form=..., a_major=..., mesh=...)` (BF16
+`64 x n x 16` over one warpgroup). `Form` and `Major` live beside `Wgmma`
+under `T.cuda.sm90`.
 
 ##### Calling convention
 
-Load, compute, and store are **three separate** effect statements under
-an enclosing `MeshScope` ([§1.2](#12-structural-stmts-tirstmts)); `T.mma` is
-verify-only and MUST NOT fuse the loads or the store.
+Load, compute, and store are separate effect statements under an enclosing
+`MeshScope` ([§1.2](#12-structural-stmts-tirstmts)). `T.tiled_mma` has exactly
+three input operands plus one required compile-time `atom` attribute:
 
 ```python
-# example
-atom = T.cuda.mma.atom(op=T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN)
-with Mesh((Topology("thread", 32),), Layout(shape=(4, 8), strides=(1, 4))) as warp:
-    a_frag = T.alloc_tensor(TensorType(..., layout=atom.A, storage=rmem))
-    acc    = T.alloc_tensor(TensorType(..., layout=atom.C, storage=rmem))
-    T.copy(T.tensor_view(T.ptr_of(a), layout=atom.A), a_frag)   # load
-    T.fill(acc, 0.0)
-    T.mma(acc, a_frag, b_frag, atom=atom)             # compute
-    T.copy(acc, T.tensor_view(T.ptr_of(c), layout=atom.C))      # store
+T.tiled_mma(acc, lhs, rhs, atom=T.cuda.sm80.Mma())
 ```
 
-- The author allocates each register fragment with the matching
-  `atom.A/B/C` layout and fills it with its own `T.copy`. The
-  accumulator is initialised with `Fill` and then read-modify-written.
-- `atom` is a compile-time attribute on the `Mma` Op
-  ([parser §2](./parser.md#2-syntax-and-rules)), not a runtime
-  operand. When absent, lowering takes the bare-`Mma` per-target path.
+- `acc` MUST match `atom.role("C")` and is read-write.
+- `lhs` MUST match `atom.role("A")` and is read-only.
+- `rhs` MUST match `atom.role("B")` and is read-only.
+- A, B, and C shapes MUST be `(M,K)`, `(K,N)`, and `(M,N)` respectively;
+  operands MUST use the atom's declared dtypes and fragment arrangements.
+- The active physical mesh MUST satisfy `atom.scope_pattern()`. If the atom
+  carries `mesh=...`, its affine offset and ordered lanes MUST equal the active
+  frame.
 
-##### Verify
-
-A `T.mma` carrying an `atom` MUST satisfy:
-
-- **operand contracts**: `acc.layout == atom.C`, `lhs.layout == atom.A`,
-  `rhs.layout == atom.B`.
-- **scope**: some mesh on the active TIR `MeshScope` traversal cache provides the
-  atom's required thread scope —
-  `mesh_scope_matches_required_scope(mesh, atom.required_scope)`. The
-  match is identity- and name-independent (mesh object identity, the
-  binding-var name, and axis names are not compared); it holds iff:
-  - the two meshes share the same program topology level — a `cta`
-    scope is never a `thread` / warp scope, even when its layout carries
-    the same shape;
-  - both topology domains (the product of the topology extents) are
-    statically known;
-  - each mesh is self-consistent (`topology domain == layout extent`),
-    and the enclosing mesh is inverse-projectable;
-  - the thread-value decomposition matches **exactly** — same layout
-    shape and strides. A flat lane layout cannot host the atom's
-    multi-axis fragment `Split` and is rejected.
-
-Per-target PTX emission dispatches on the atom ([target](./target.md)).
+There is one TIR MMA op: `T.tiled_mma`. There is no optional-atom or bare-MMA
+path. Per-target emission dispatches on the atom ([target](./target.md)); the
+current CUDA emitter accepts the SM80 declaration and rejects WGMMA because
+this stage provides no WGMMA runtime emitter.
 
 #### Async copy Ops (`tir.async.*`)
 

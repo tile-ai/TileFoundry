@@ -135,9 +135,10 @@ are not IR classes, so they go through Rule 1a.
 nodes are target-neutral. A node or descriptor that is specific to one
 compilation target nests as `ir/{dialect}/{target}/{category}/<name>.py`;
 target-neutral abstractions stay at `ir/{dialect}/{category}/`. For
-example the whole MMA surface is target-owned — the `Mma` op, the
-`MmaOpSpec` / `MmaAtom` descriptors, the CUDA SM80 instruction spec, and its
-fragment layouts all live under `ir/tir/cuda/nn/` (`mma.py` + `mma_atom.py`).
+example the whole MMA surface is target-owned — `mma.py` defines the `TiledMma`
+op, `mma_atom.py` defines `MmaAtom` / `AtomPattern`, and `sm80_mma.py` /
+`wgmma.py` define the CUDA instruction declarations. All four live under
+`ir/tir/cuda/nn/`.
 The backend-bound construction stays in TIR: HIR is the checking reference
 side, and carrying the instruction name in that reference would make two GPU
 targets require different HIR references. (`codegen/` and `runtime/` are

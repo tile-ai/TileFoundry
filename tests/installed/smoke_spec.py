@@ -49,27 +49,6 @@ def test_spec_lists_and_prints_cache_update(tf) -> None:
     assert "eval/runtime, not typeinfer" in done.stdout
 
 
-def test_spec_separates_two_sections_that_would_share_a_key(tf) -> None:
-    """`tir.md` names a field `name` twice, under `SymbolRef` and under `MmaOpSpec`.
-
-    `tir.md` names a field `name` twice, under `SymbolRef` and under
-    `MmaOpSpec`. Each is reachable by its enclosing section; the bare key is
-    not, because it would have to pick one.
-    """
-    symbol = tf("spec", "tir", "symbolref/name")
-    assert symbol.returncode == 0, symbol.stderr
-    assert "canonical name of a `PrimFunction`" in symbol.stdout
-    assert "uniquely identify the instruction" not in symbol.stdout
-
-    atom = tf("spec", "tir", "mmaopspec/name")
-    assert atom.returncode == 0, atom.stderr
-    assert "uniquely identify the instruction" in atom.stdout
-
-    bare = tf("spec", "tir", "name")
-    assert bare.returncode == 1
-    assert "no section 'name'" in bare.stderr
-
-
 def test_spec_rejects_a_section_that_does_not_exist(tf) -> None:
     done = tf("spec", "dsl", "9.9")
     assert done.returncode == 1

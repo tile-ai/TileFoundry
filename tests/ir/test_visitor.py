@@ -18,7 +18,8 @@ import pytest
 from tilefoundry.ir.core import Call, Constant, Expr, Op, Var
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.tir.cuda.nn.mma import Mma
+from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
+from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
 from tilefoundry.ir.tir.memory import Copy, Fill
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
@@ -360,7 +361,7 @@ def test_stmt_mutator_covers_all_subclasses_with_identity_invariant() -> None:
         ),
         _eval_call(Copy(), _var("s4"), _var("d4")),
         _eval_call(Fill(), _var("t"), _const(0.0)),
-        _eval_call(Mma(), _var("L"), _var("R"), _var("A")),
+        _eval_call(TiledMma(atom=Mma()), _var("L"), _var("R"), _var("A")),
         Sequential(body=()),
     )
     m = StmtMutator()

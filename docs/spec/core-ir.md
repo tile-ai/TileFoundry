@@ -588,7 +588,7 @@ from `op.params()`.
 An Op is **value-form** when its `Call` produces an observable
 result the IR consumes — `Call.type` is then `TensorType` or
 `TupleType`. An Op is **effect-form** when it performs an in-place
-effect (e.g. `tir.memory.Copy` / `tir.cuda.nn.Mma`) and produces no
+effect (e.g. `tir.memory.Copy` / `tir.cuda.nn.TiledMma`) and produces no
 readable value (`UnitType`, [types §6](./types.md#6-unittype)); in Stmt position
 it appears as `Evaluate(op, args)`
 ([tir §1.4](./tir.md#14-evaluate)).

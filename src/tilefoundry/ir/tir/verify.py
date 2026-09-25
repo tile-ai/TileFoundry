@@ -50,7 +50,7 @@ from .symbol_ref import SymbolRef
 _PRIM_FUNCTION = "[tir §1.3](docs/spec/tir.md#13-primfunction)"
 
 
-def _input_params(op_type: type) -> tuple:
+def input_params(op_type: type) -> tuple:
     return tuple(param for param in op_type._op_schema.signature if param.kind == "input")
 
 
@@ -60,7 +60,7 @@ def verify_between(call, ctx, lead: str = "") -> None:
     rules = between_rules(op_type)
     if not rules:
         return
-    names = tuple(param.name for param in _input_params(op_type))
+    names = tuple(param.name for param in input_params(op_type))
     operands = dict(zip(names, (ctx.type_of(arg) for arg in call.args)))
     for rule in rules:
         if not rule.holds(operands):
@@ -69,7 +69,7 @@ def verify_between(call, ctx, lead: str = "") -> None:
 
 def verify_operands(call, ctx, label: str) -> None:
     """Hold each operand to the pattern declared for its parameter."""
-    for param, arg in zip(_input_params(type(call.target)), call.args):
+    for param, arg in zip(input_params(type(call.target)), call.args):
         if param.pattern is None:
             continue
         value = ctx.type_of(arg)
@@ -602,4 +602,10 @@ def verify_module(fns) -> None:
             )
 
 
-__all__ = ["verify_between", "verify_module", "verify_operands", "verify_prim_function"]
+__all__ = [
+    "input_params",
+    "verify_between",
+    "verify_module",
+    "verify_operands",
+    "verify_prim_function",
+]

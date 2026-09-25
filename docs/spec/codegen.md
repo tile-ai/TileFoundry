@@ -207,7 +207,7 @@ tuples because it does not materialize an aggregate. The codegen context records
 the structural tuple by its fresh SSA `Var` identity so consumers can recover
 its elements without target-side storage.
 
-Effect Ops (`Copy`, `Fill`, `Mma`, `tir.nn.*`, ...) appear in Stmt
+Effect Ops (`Copy`, `Fill`, `TiledMma`, `tir.nn.*`, ...) appear in Stmt
 position as `Evaluate(op, args)` rather than as Stmt subclasses. The
 walker matches `Evaluate` and dispatches on `type(callable)` through
 the handler registry. Handlers stay small; the runtime function they
