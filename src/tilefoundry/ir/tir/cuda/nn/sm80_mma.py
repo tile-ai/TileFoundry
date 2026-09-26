@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from tilefoundry.ir.pattern import (
     ComposedLayoutPattern,
+    LayoutPattern,
     MeshPattern,
     OrPattern,
     ShardLayoutPattern,
     TensorPattern,
     WildcardPattern,
-    arrangement_pattern,
 )
 from tilefoundry.ir.types import DType, Layout, Mesh, ShardLayout, Split, Topology
 from tilefoundry.ir.types.storage import StorageKind as S
@@ -38,7 +38,7 @@ _C_FRAGMENT = ShardLayout(
     mesh=WARP,
 )
 
-_WARP_LAYOUT = arrangement_pattern(WARP.layout, per_mode=True)
+_WARP_LAYOUT = LayoutPattern.from_layout(WARP.layout, per_mode=True)
 _WARP_PATTERN = MeshPattern(
     ("thread",),
     OrPattern(
@@ -54,7 +54,7 @@ def _fragment(shape: tuple, dtype, held: ShardLayout) -> TensorPattern:
         dtype=dtype,
         storage=S.RMEM,
         layout=ShardLayoutPattern(
-            layout=arrangement_pattern(held.layout),
+            layout=LayoutPattern.from_layout(held.layout),
             attrs=held.attrs,
             mesh=_WARP_PATTERN,
         ),

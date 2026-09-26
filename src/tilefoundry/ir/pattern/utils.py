@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.types import ComposedLayout, Mesh, StorageKind, Swizzle
+from tilefoundry.ir.types import Mesh, StorageKind
 
 from .pattern import (
     AttrPattern,
@@ -16,7 +16,6 @@ from .pattern import (
     OrPattern,
     Pattern,
     RangePattern,
-    SwizzlePattern,
     TensorPattern,
     VectorPattern,
     WildcardPattern,
@@ -87,37 +86,6 @@ def any_threads() -> ParamDef:
     )
 
 
-def arrangement_pattern(
-    layout,
-    *,
-    forward: bool = True,
-    injective: bool = True,
-    per_mode: bool = False,
-):
-    """Build the exact pattern for one authored arrangement."""
-    if isinstance(layout, ComposedLayout):
-        inner = layout.inner
-        return ComposedLayoutPattern(
-            SwizzlePattern(inner.bits, inner.base, inner.shift)
-            if isinstance(inner, Swizzle)
-            else inner,
-            layout.offset,
-            arrangement_pattern(
-                layout.outer,
-                forward=forward,
-                injective=injective,
-                per_mode=per_mode,
-            ),
-        )
-    return LayoutPattern(
-        tuple(layout.shape),
-        tuple(layout.strides),
-        forward=forward,
-        injective=injective,
-        per_mode=per_mode,
-    )
-
-
 def locate_dim_var(params: tuple, name: str) -> tuple[int, int] | None:
     """Return the first parameter/axis carrying a ``DimVar`` named *name*."""
     for index, param in enumerate(params):
@@ -144,7 +112,6 @@ __all__ = [
     "WHOLE_BYTES",
     "_mangle_variant_name",
     "any_threads",
-    "arrangement_pattern",
     "dtype_place",
     "locate_dim_var",
     "operand_tile",

@@ -624,13 +624,14 @@ The implementation is split by responsibility under `ir/pattern/`:
   description helpers. An unstated (`None`) pattern field admits any value.
 - `constraint.py` owns cross-operand `Constraint`, `DistinctConstraint`,
   `SameConstraint`, and `SameModesConstraint` values.
-- `utils.py` owns exact-layout construction plus specialization naming and
-  dimension lookup.
+- `utils.py` owns specialization naming and dimension lookup.
 
 `LayoutPattern` matches only a bare `Layout`, preserves its nested mode
 structure, and checks `forward` and `injective` over the whole flattened
 arrangement by default. A sliced layout must be stated explicitly with
 `ComposedLayoutPattern`; callers that accept both forms use `OrPattern`.
+`LayoutPattern.from_layout(layout, ...)` constructs the exact bare or composed
+pattern for an authored arrangement, preserving its nested structure.
 With `per_mode=True`, `LayoutPattern` checks each top-level mode independently;
 `MeshPattern` requires this explicit form because each mesh level uses its own
 numbering space. `MeshPattern` never changes the supplied pattern implicitly.

@@ -520,6 +520,38 @@ class LayoutPattern(Pattern):
     injective: bool = True
     per_mode: bool = False
 
+    @classmethod
+    def from_layout(
+        cls,
+        layout,
+        *,
+        forward: bool = True,
+        injective: bool = True,
+        per_mode: bool = False,
+    ):
+        """Build the exact pattern for one authored arrangement."""
+        if isinstance(layout, ComposedLayout):
+            inner = layout.inner
+            return ComposedLayoutPattern(
+                SwizzlePattern(inner.bits, inner.base, inner.shift)
+                if isinstance(inner, Swizzle)
+                else inner,
+                layout.offset,
+                cls.from_layout(
+                    layout.outer,
+                    forward=forward,
+                    injective=injective,
+                    per_mode=per_mode,
+                ),
+            )
+        return cls(
+            tuple(layout.shape),
+            tuple(layout.strides),
+            forward=forward,
+            injective=injective,
+            per_mode=per_mode,
+        )
+
     def positions(self) -> tuple:
         return (*flatten(self.shape), *flatten(self.strides))
 

@@ -10,6 +10,7 @@ from tilefoundry.ir.pattern import (
     ABSENT,
     CapturePattern,
     ComposedLayoutPattern,
+    LayoutPattern,
     Match,
     MeshPattern,
     MultipleOfPattern,
@@ -17,7 +18,6 @@ from tilefoundry.ir.pattern import (
     OrPattern,
     Pattern,
     alternatives_of,
-    arrangement_pattern,
     matched,
     resolved,
 )
@@ -145,10 +145,10 @@ class MmaAtom:
     def scope_pattern(cls) -> MeshPattern:
         topology, = cls.scope.topologies
         size = topology.size
-        bare = arrangement_pattern(cls.scope.layout, per_mode=True)
+        bare = LayoutPattern.from_layout(cls.scope.layout, per_mode=True)
         sliced = ComposedLayoutPattern(
             offset=CapturePattern("p0", MultipleOfPattern(size)),
-            outer=arrangement_pattern(cls.scope.layout, per_mode=True),
+            outer=LayoutPattern.from_layout(cls.scope.layout, per_mode=True),
         )
         return MeshPattern((topology.name,), OrPattern(sliced, bare))
 
