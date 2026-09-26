@@ -9,7 +9,7 @@ import pytest
 from tilefoundry.ir.core.op_schema import OpSchema
 from tilefoundry.ir.core.overload import OverloadError, filter_candidates, resolve
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.pattern import Scalar, Tensor, TensorPattern
+from tilefoundry.ir.pattern import Scalar, Tensor, TensorPattern, WildcardPattern
 from tilefoundry.ir.types import TensorType
 
 _S = TensorType.umat_scalar()
@@ -42,7 +42,11 @@ def _schema(name: str, *patterns: Any, defaults: tuple = ()) -> OpSchema:
 
 def test_resolve_picks_first_matching_candidate() -> None:
     """Arity + pattern filter; first-match wins; raises when no match."""
-    rank2 = _schema("matmul", TensorPattern(rank=2), TensorPattern(rank=2))
+    rank2 = _schema(
+        "matmul",
+        TensorPattern(shape=(WildcardPattern(),) * 2),
+        TensorPattern(shape=(WildcardPattern(),) * 2),
+    )
     any_t = _schema("matmul", Tensor, Tensor)
 
     assert resolve([rank2, any_t], [_T2, _T2]) is rank2

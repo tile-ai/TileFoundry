@@ -634,14 +634,20 @@ arrangement by default. A sliced layout must be stated explicitly with
 With `per_mode=True`, `LayoutPattern` checks each top-level mode independently;
 `MeshPattern` requires this explicit form because each mesh level uses its own
 numbering space. `MeshPattern` never changes the supplied pattern implicitly.
+`ShardLayoutPattern` names the same `layout`, `attrs`, and `mesh` fields as
+`ShardLayout`: `layout` and `mesh` are nested patterns, while `attrs` remains
+an exact structural value. Its mesh pattern may state bare and sliced forms
+explicitly; the matcher does not normalize one into the other.
 
 Two consumer surfaces:
 
 - **Parser dispatch** — `ParamDef.pattern` ([§2.3](#23-op)) is matched against an
   argument's `Expr.type` during overload resolution. Subclasses used:
-  `ScalarPattern` (rank-0), `TensorPattern(rank?, dtype?)` (non-scalar), and
+  `ScalarPattern` (rank-0), `TensorPattern(shape?, dtype?)` (non-scalar), and
   `AndPattern(parts)` (conjunction). Two singletons are exported as
   convenience: `Scalar = ScalarPattern()` and `Tensor = TensorPattern()`.
+  A tensor rank is stated by giving `shape` that many positions; wildcard
+  positions constrain only the sequence length.
 - **Specialization dispatch** — patterns appearing in
   `hir.Function.specializations` ([hir.md §1.1](./hir.md#11-function))
   and `tir.PrimFunction.specializations` describe which runtime

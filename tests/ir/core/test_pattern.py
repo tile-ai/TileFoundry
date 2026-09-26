@@ -8,6 +8,7 @@ from tilefoundry.ir.pattern import (
     Scalar,
     Tensor,
     TensorPattern,
+    WildcardPattern,
 )
 from tilefoundry.ir.types import DType, TensorType
 
@@ -24,12 +25,17 @@ def test_pattern_match_contract() -> None:
     assert not Tensor.match(TensorType.umat_scalar())
     assert not Tensor.match(type("FakeTy", (), {"shape": (3, 4)})())
 
-    rank2_bf16 = TensorPattern(rank=2, dtype=DType.bf16)
+    rank2_bf16 = TensorPattern(shape=(WildcardPattern(),) * 2, dtype=DType.bf16)
     assert rank2_bf16.match(_tensor((3, 4), DType.bf16))
     assert not rank2_bf16.match(_tensor((3,), DType.bf16))
     assert not rank2_bf16.match(_tensor((3, 4), DType.f32))
 
-    combined = AndPattern(parts=(TensorPattern(rank=2), TensorPattern(dtype=DType.f16)))
+    combined = AndPattern(
+        parts=(
+            TensorPattern(shape=(WildcardPattern(),) * 2),
+            TensorPattern(dtype=DType.f16),
+        )
+    )
     assert combined.match(_tensor((3, 4), DType.f16))
     assert not combined.match(_tensor((3,), DType.f16))
     assert AndPattern(parts=()).match(TensorType.umat_scalar())

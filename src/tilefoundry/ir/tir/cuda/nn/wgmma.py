@@ -11,13 +11,17 @@ from tilefoundry.ir.pattern import (
     ComposedLayoutPattern,
     GuardPattern,
     LayoutPattern,
+    MeshPattern,
     MultipleOfPattern,
     OneOfPattern,
+    OrPattern,
     RangePattern,
     ShardLayoutPattern,
     SwitchPattern,
     SwizzlePattern,
     TensorPattern,
+    WildcardPattern,
+    arrangement_pattern,
 )
 from tilefoundry.ir.pattern.match import is_symbolic
 from tilefoundry.ir.types import Broadcast, DType, Layout, Mesh, Split, Topology
@@ -145,13 +149,22 @@ def Fragment(rows: int, cols) -> LayoutPattern:
 SHARED_BY_ALL = (Broadcast(), Broadcast(), Broadcast())
 HELD_PER_THREAD = (Split(2), Split(0), Split(4))
 
+_WARPGROUP_LAYOUT = arrangement_pattern(WARPGROUP.layout, per_mode=True)
+_WARPGROUP_PATTERN = MeshPattern(
+    ("thread",),
+    OrPattern(
+        ComposedLayoutPattern(offset=WildcardPattern(), outer=_WARPGROUP_LAYOUT),
+        _WARPGROUP_LAYOUT,
+    ),
+)
+
 
 def shared(arrangement) -> ShardLayoutPattern:
-    return ShardLayoutPattern(arrangement, SHARED_BY_ALL, WARPGROUP)
+    return ShardLayoutPattern(arrangement, SHARED_BY_ALL, _WARPGROUP_PATTERN)
 
 
 def held(arrangement) -> ShardLayoutPattern:
-    return ShardLayoutPattern(arrangement, HELD_PER_THREAD, WARPGROUP)
+    return ShardLayoutPattern(arrangement, HELD_PER_THREAD, _WARPGROUP_PATTERN)
 
 
 N = DimVar("n", 8, 257)

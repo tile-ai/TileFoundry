@@ -6,7 +6,6 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from tilefoundry.ir.types import (
-    Broadcast,
     ComposedLayout,
     Layout,
     Mesh,
@@ -20,7 +19,6 @@ from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.layout_algebra import (
     ASYNC_WIDTHS,
     box_runs,
-    frame_of,
     is_inverse_projectable,
 )
 from tilefoundry.ir.types.mesh import separate
@@ -686,7 +684,6 @@ class ScalarPattern(Pattern):
 class TensorPattern(Pattern):
     """Match a non-scalar ``TensorType`` field by field."""
 
-    rank: int | None = None
     dtype: Any = None
     shape: tuple | None = None
     storage: Any = None
@@ -696,7 +693,6 @@ class TensorPattern(Pattern):
         if not isinstance(subject, TensorType) or subject.shape == ():
             return None
         wanted = (
-            (self.rank, len(subject.shape)),
             (self.dtype, subject.dtype),
             (self.storage, subject.storage),
         )
@@ -720,7 +716,6 @@ class TensorPattern(Pattern):
                 None if self.shape is None else SequencePattern(*self.shape),
                 tuple(subject.shape),
             ),
-            ("rank", self.rank, len(subject.shape)),
             ("dtype", self.dtype, subject.dtype),
             ("storage", self.storage, subject.storage),
             ("layout", self.layout, subject.layout),
@@ -743,8 +738,6 @@ class TensorPattern(Pattern):
         stated = []
         if self.shape is not None:
             stated.append("shape=" + written_tuple(tuple(written_place(x) for x in self.shape)))
-        if self.rank is not None:
-            stated.append(f"rank={self.rank}")
         if self.dtype is not None:
             stated.append(f"dtype={_named(self.dtype)}")
         if self.storage is not None:
@@ -759,7 +752,6 @@ class TensorPattern(Pattern):
     def relations(self) -> tuple[str, ...]:
         return relations_of(
             (
-                self.rank,
                 self.dtype,
                 self.storage,
                 *(self.shape or ()),
@@ -770,51 +762,37 @@ class TensorPattern(Pattern):
 
 @dataclass(frozen=True)
 class ShardLayoutPattern(Pattern):
-    """Match a sharded layout's arrangement, shard attrs, and mesh frame."""
+    """Match a sharded layout's layout, shard attrs, and mesh frame."""
 
-    arrangement: object
+    layout: object
     attrs: tuple
-    mesh: Mesh
+    mesh: MeshPattern
 
     def match(self, subject, captures=None):
         if not isinstance(subject, ShardLayout):
             return None
-        extra = len(subject.attrs) - len(self.attrs)
-        if (
-            extra < 0
-            or subject.attrs[extra:] != self.attrs
-            or any(not isinstance(attr, Broadcast) for attr in subject.attrs[:extra])
+        held = Match(dict(captures or {}))
+        for pattern, value in (
+            (self.layout, subject.layout),
+            (self.attrs, subject.attrs),
+            (self.mesh, subject.mesh),
         ):
-            return None
-        framed = frame_of(subject.mesh.layout)
-        if framed is None:
-            return None
-        frame = framed[1]
-        if extra:
-            if not isinstance(frame, Layout):
+            held = matched(pattern, value, held.captures)
+            if held is None:
                 return None
-            frame = Layout(frame.shape[extra:], frame.strides[extra:])
-        subject_names = tuple(
-            getattr(topology, "name", topology) for topology in subject.mesh.topologies
-        )
-        wanted_names = tuple(
-            getattr(topology, "name", topology) for topology in self.mesh.topologies
-        )
-        if frame != self.mesh.layout or subject_names != wanted_names:
-            return None
-        return self.reads(subject.layout, captures)
+        return held
 
     def reads(self, layout, captures=None):
-        return matched(self.arrangement, layout, captures)
+        return matched(self.layout, layout, captures)
 
     def accepts_layout(self, layout) -> bool:
         return self.reads(layout) is not None
 
     def alternatives(self, bindings=()) -> tuple:
-        return alternatives_of(self.arrangement, bindings)
+        return alternatives_of(self.layout, bindings)
 
     def relations(self) -> tuple[str, ...]:
-        return relations_of((self.arrangement,))
+        return relations_of((self.layout,))
 
     def rules(self, arrangements=None) -> tuple[str, ...]:
         items = self.alternatives() if arrangements is None else tuple(arrangements)
