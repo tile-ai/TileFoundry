@@ -771,6 +771,11 @@ class ShardLayoutPattern(Pattern):
     def match(self, subject, captures=None):
         if not isinstance(subject, ShardLayout):
             return None
+        subject_names = tuple(
+            getattr(topology, "name", topology) for topology in subject.mesh.topologies
+        )
+        if subject_names != self.mesh.topologies:
+            return None
         held = Match(dict(captures or {}))
         for pattern, value in (
             (self.layout, subject.layout),
