@@ -655,7 +655,10 @@ Two consumer surfaces:
   `AndPattern(parts)` (conjunction). Two singletons are exported as
   convenience: `Scalar = ScalarPattern()` and `Tensor = TensorPattern()`.
   A tensor rank is stated by giving `shape` that many positions; wildcard
-  positions constrain only the sequence length.
+  positions constrain only the sequence length. During effect-Op verification,
+  input patterns match in `ParamDef` order against one shared capture
+  environment, so a later operand can require a value captured by an earlier
+  operand.
 - **Specialization dispatch** — patterns appearing in
   `hir.Function.specializations` ([hir.md §1.1](./hir.md#11-function))
   and `tir.PrimFunction.specializations` describe which runtime

@@ -70,6 +70,7 @@ def verify_between(call, ctx) -> None:
 def verify_operands(call, ctx) -> None:
     """Hold each operand to the pattern declared for its parameter."""
     label = type(call.target)._op_schema.name
+    held = {}
     for param, arg in zip(input_params(type(call.target)), call.args):
         if param.pattern is None:
             continue
@@ -79,13 +80,16 @@ def verify_operands(call, ctx) -> None:
             if hasattr(param.pattern, "read_on")
             else param.pattern
         )
-        if pattern.match(value) is None:
+        found = pattern.match(value, held)
+        if found is None:
             ctx.error(
                 call,
                 f"{label} {param.name} is {tuple(value.shape)} "
                 f"{value.dtype.name} storage={value.storage}: "
-                f"{pattern.refusal(value)}",
+                f"{pattern.refusal(value, held)}",
             )
+            continue
+        held = found.captures
 
 
 def verify_prim_function(
