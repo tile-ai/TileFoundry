@@ -26,7 +26,6 @@ from tilefoundry.ir.pattern import (
 from tilefoundry.ir.pattern import (
     predicates as P,
 )
-from tilefoundry.ir.tir.verify import verify_between, verify_operands
 from tilefoundry.ir.types import ComposedLayout, Layout, Mesh, Swizzle, UnitType
 from tilefoundry.ir.types.storage import StorageKind as S
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
@@ -209,13 +208,6 @@ def verify_copy_async_tensor(call: "Call", ctx: "VerifyContext") -> None:
             f"copy_async_tensor moves one tile: src is {tuple(src.shape)} "
             f"{src.dtype.name} and dst is {tuple(dst.shape)} {dst.dtype.name}",
         )
-    moves = " and ".join(map(str, TMA_STORAGES))
-    verify_between(
-        call,
-        ctx,
-        f"copy_async_tensor moves a tile between {moves}, one end each: ",
-    )
-    verify_operands(call, ctx, "copy_async_tensor")
 
 
 __all__ = [

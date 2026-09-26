@@ -6,7 +6,6 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import DistinctConstraint, SameModesConstraint, utils
-from tilefoundry.ir.tir.verify import verify_between, verify_operands
 from tilefoundry.ir.types import Layout, UnitType
 from tilefoundry.ir.types.storage import StorageKind as S
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
@@ -57,8 +56,6 @@ def verify_copy_async(call: "Call", ctx: "VerifyContext") -> None:
         ctx.error(call, f"CopyAsync source must be gmem, got {src.storage}")
     if src.dtype != dst.dtype:
         ctx.error(call, f"CopyAsync dtype mismatch: {src.dtype} vs {dst.dtype}")
-    verify_between(call, ctx)
-    verify_operands(call, ctx, "copy_async")
 
 
 @register_op(dialect="T", category="async", name="cp_async_commit")

@@ -16,11 +16,10 @@ from tilefoundry.ir.pattern import (
 from tilefoundry.ir.pattern import (
     predicates as P,
 )
-from tilefoundry.ir.tir.verify import input_params
 from tilefoundry.ir.types import DType, Mesh, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
-from .mma_atom import AtomPattern, FromAtom, MmaAtom, physical_frames_match, read_on
+from .mma_atom import AtomPattern, FromAtom, MmaAtom, physical_frames_match
 from .sm80_mma import Mma as _Sm80Mma
 from .wgmma import Wgmma
 
@@ -89,15 +88,6 @@ def verify_mma(call: "Call", ctx: "VerifyContext") -> None:
     """Check each operand against its atom and the active physical frame."""
     op = call.target
     atom = op.atom
-    held = tuple(ctx.type_of(arg) for arg in call.args)
-    for param, value in zip(input_params(type(op)), held):
-        pattern = read_on(param.pattern, op)
-        if pattern.match(value) is None:
-            ctx.error(
-                call,
-                f"MMA {param.name} is not one {atom.reference} reads; "
-                f"it reads {pattern.describe()}",
-            )
     if ctx.scope is not None and ctx.scope.module is not None:
         capabilities = ctx.scope.module.target.architecture.instruction_capabilities
         if op.capability not in capabilities:

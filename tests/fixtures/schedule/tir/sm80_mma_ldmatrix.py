@@ -73,7 +73,12 @@ def gemm(a: Tensor[(16, 32), "bf16"], b: Tensor[(32, 8), "bf16"], out: Tensor[(1
     outer=Layout((4, 8), (1, 4)),
 ), names=("d0", "d1")
                     ) as threads_3:
-                        T.ldmatrix(lhs_stages[(k // 16) % 2], ldmatrix)
+                        ldmatrix_view = T.tensor_view(
+                            T.ptr_of(ldmatrix),
+                            layout=((2, 4 @ threads_3.d0, 2, 8 @ threads_3.d1, 2), (1, 2, 8, 16, 128)),
+                            shape=(16, 16),
+                        )
+                        T.ldmatrix(lhs_stages[(k // 16) % 2], ldmatrix_view)
                     copy = T.alloc_tensor(
                         tensor_type=Tensor[
                             (16, 8), "bf16", Layout((8, 2, 4, 2), (1, 8, 16, 64)), "rmem"

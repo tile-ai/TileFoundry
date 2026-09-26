@@ -67,18 +67,24 @@ def verify_between(call, ctx, lead: str = "") -> None:
             ctx.error(call, lead + rule.refused(operands))
 
 
-def verify_operands(call, ctx, label: str) -> None:
+def verify_operands(call, ctx) -> None:
     """Hold each operand to the pattern declared for its parameter."""
+    label = type(call.target)._op_schema.name
     for param, arg in zip(input_params(type(call.target)), call.args):
         if param.pattern is None:
             continue
         value = ctx.type_of(arg)
-        if param.pattern.match(value) is None:
+        pattern = (
+            param.pattern.read_on(call.target)
+            if hasattr(param.pattern, "read_on")
+            else param.pattern
+        )
+        if pattern.match(value) is None:
             ctx.error(
                 call,
                 f"{label} {param.name} is {tuple(value.shape)} "
                 f"{value.dtype.name} storage={value.storage}: "
-                f"{param.pattern.refusal(value)}",
+                f"{pattern.refusal(value)}",
             )
 
 
@@ -212,12 +218,13 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
                 op = stmt.callable
                 op_cls = type(op)
                 fn_verify = verify_stmt_registry.lookup(op_cls)
-                if fn_verify is None:
-                    raise VerifyError(f"no verify_stmt registered for Op {op_cls.__name__}")
 
                 ctx.mesh_scope = tuple(scope)
                 call = Call(type=UnitType(), target=op, args=stmt.args)
-                fn_verify(call, ctx)
+                if fn_verify is not None:
+                    fn_verify(call, ctx)
+                verify_between(call, ctx)
+                verify_operands(call, ctx)
 
             for arg in stmt.args:
                 _reject_nested_alloc_tensor(arg, at_letstmt_value=False)

@@ -187,8 +187,10 @@ class PrimFunction(Stmt):
   `PrimFunction` of that name in the enclosing `Module`, `args` length
   MUST match the resolved callee's `params`, and the `SymbolRef.type`
   MUST equal the resolved callee's `CallableType`. When `callable` is
-  an `Op`, the per-Op verifier registered via
-  `@register_verify_stmt(Op)` runs.
+  an `Op`, every input operand MUST match its `ParamDef.pattern` and every
+  declared `between` relation MUST hold. A per-Op verifier registered via
+  `@register_verify_stmt(Op)` MAY impose additional rules that the declaration
+  does not express.
 
 ### 1.4 `Evaluate`
 
@@ -206,16 +208,18 @@ The `callable` is one of:
 
 - an effect-form `Op` (e.g. `tir.memory.Copy`, `tir.cuda.nn.Mma`,
   `tir.tensor.Reduce`, `tir.Launch` [§2.3](#23-tir-ops)). `args` are
-  the Op's operands in `ParamDef` order; the per-Op verifier
-  registered via `@register_verify_stmt(Op)` runs.
+  the Op's operands in `ParamDef` order. Verification runs its optional
+  per-Op verifier, then the declared `between` relations and operand patterns;
+  a context-dependent operand pattern MAY resolve itself against the callable
+  before matching.
 - a `SymbolRef` ([§2.1](#21-symbolref)) — a reference to a callee
   `PrimFunction` in the enclosing `Module`. `args` follow the callee's
   parameter order, the final `output_count` positions binding output
   buffers; the callee is resolved uniquely at module level
   ([§1.3](#13-primfunction)).
 
-The per-Op verify / codegen handlers are keyed by `Op` type and receive the Op
-together with `args`; an `Op` callable carries no result, so its
+Per-Op verify and codegen handlers, when present, are keyed by `Op` type and
+receive the Op together with `args`; an `Op` callable carries no result, so its
 `Call` form is unit-typed.
 
 The value-producing counterpart is the `Call(Op, args)` Expr

@@ -28,7 +28,35 @@ def gemm(
         with Mesh(
             (Topology("thread", 256),), Layout((2, 128), (128, 1)), names=("d0", "d1")
         ) as scope_4:
-            T.cast(b_f32, value)
+            stage_f32 = T.alloc_tensor(
+                tensor_type=Tensor[
+                    (32, 32),
+                    "f32",
+                    ((2 @ scope_4.d0, 128 @ scope_4.d1, 4), (512, 4, 1)),
+                    "rmem",
+                ]
+            )
+            stage_bf16 = T.alloc_tensor(
+                tensor_type=Tensor[
+                    (32, 32),
+                    "bf16",
+                    ((2 @ scope_4.d0, 128 @ scope_4.d1, 4), (512, 4, 1)),
+                    "rmem",
+                ]
+            )
+            b_f32_view = T.tensor_view(
+                T.ptr_of(b_f32),
+                layout=((2 @ scope_4.d0, 128 @ scope_4.d1, 4), (512, 4, 1)),
+                shape=(32, 32),
+            )
+            value_view = T.tensor_view(
+                T.ptr_of(scratch[0:0 + 1024]),
+                layout=((2 @ scope_4.d0, 128 @ scope_4.d1, 4), (512, 4, 1)),
+                shape=(32, 32),
+            )
+            T.copy(b_f32_view, stage_f32)
+            T.cast(stage_f32, stage_bf16)
+            T.copy(stage_bf16, value_view)
             lhs_stages = (T.tensor_view(1024, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)), T.tensor_view(2048, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((8, 8), (2, 8)), ((128, 8), (64, 1))), shape=(64, 16)))
             rhs_stages = (T.tensor_view(0, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)), T.tensor_view(512, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)))
             with Mesh(
