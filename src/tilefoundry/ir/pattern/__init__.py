@@ -1,11 +1,11 @@
 """Public operation-declaration pattern language."""
 
+from . import predicates
 from .constraint import (
     Constraint,
     DistinctConstraint,
     SameConstraint,
     SameModesConstraint,
-    affine_part,
 )
 from .match import (
     ABSENT,
@@ -36,6 +36,7 @@ from .pattern import (
     OneOfPattern,
     OrPattern,
     Pattern,
+    Predicate,
     RangePattern,
     Scalar,
     ScalarPattern,
@@ -45,9 +46,7 @@ from .pattern import (
     SwizzlePattern,
     Tensor,
     TensorPattern,
-    VectorPattern,
     WildcardPattern,
-    vector_widths,
 )
 from .utils import (
     MOVED_STORAGES,
@@ -82,6 +81,7 @@ __all__ = [
     "OneOfPattern",
     "OrPattern",
     "Pattern",
+    "Predicate",
     "RangePattern",
     "SameConstraint",
     "SameModesConstraint",
@@ -97,7 +97,6 @@ __all__ = [
     "WildcardPattern",
     "WHOLE_BYTES",
     "_mangle_variant_name",
-    "affine_part",
     "alternatives_of",
     "any_threads",
     "between_rules",
@@ -111,7 +110,6 @@ __all__ = [
     "relations_of",
     "resolved",
     "storage_place",
-    "VectorPattern",
+    "predicates",
     "whole_vectors",
-    "vector_widths",
 ]

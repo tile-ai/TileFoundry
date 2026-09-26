@@ -22,6 +22,9 @@ from tilefoundry.ir.pattern import (
     TensorPattern,
     WildcardPattern,
 )
+from tilefoundry.ir.pattern import (
+    predicates as P,
+)
 from tilefoundry.ir.pattern.match import is_symbolic
 from tilefoundry.ir.types import Broadcast, DType, Layout, Mesh, Split, Topology
 from tilefoundry.ir.types.dim import DimVar
@@ -148,7 +151,10 @@ def Fragment(rows: int, cols) -> LayoutPattern:
 SHARED_BY_ALL = (Broadcast(), Broadcast(), Broadcast())
 HELD_PER_THREAD = (Split(2), Split(0), Split(4))
 
-_WARPGROUP_LAYOUT = LayoutPattern.from_layout(WARPGROUP.layout, per_mode=True)
+_WARPGROUP_LAYOUT = LayoutPattern.from_layout(
+    WARPGROUP.layout,
+    predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
+)
 _WARPGROUP_PATTERN = MeshPattern(
     ("thread",),
     OrPattern(

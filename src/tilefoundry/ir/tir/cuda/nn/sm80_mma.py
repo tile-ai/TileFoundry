@@ -11,6 +11,9 @@ from tilefoundry.ir.pattern import (
     TensorPattern,
     WildcardPattern,
 )
+from tilefoundry.ir.pattern import (
+    predicates as P,
+)
 from tilefoundry.ir.types import DType, Layout, Mesh, ShardLayout, Split, Topology
 from tilefoundry.ir.types.storage import StorageKind as S
 
@@ -38,7 +41,10 @@ _C_FRAGMENT = ShardLayout(
     mesh=WARP,
 )
 
-_WARP_LAYOUT = LayoutPattern.from_layout(WARP.layout, per_mode=True)
+_WARP_LAYOUT = LayoutPattern.from_layout(
+    WARP.layout,
+    predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
+)
 _WARP_PATTERN = MeshPattern(
     ("thread",),
     OrPattern(

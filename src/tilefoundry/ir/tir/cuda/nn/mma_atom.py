@@ -21,6 +21,9 @@ from tilefoundry.ir.pattern import (
     matched,
     resolved,
 )
+from tilefoundry.ir.pattern import (
+    predicates as P,
+)
 from tilefoundry.ir.pattern.match import written_binding, written_bindings, written_place
 from tilefoundry.ir.types import ComposedLayout, Layout, Mesh
 from tilefoundry.ir.types.dim import DimVar
@@ -145,10 +148,11 @@ class MmaAtom:
     def scope_pattern(cls) -> MeshPattern:
         topology, = cls.scope.topologies
         size = topology.size
-        bare = LayoutPattern.from_layout(cls.scope.layout, per_mode=True)
+        per_mode = (P.Forward(per_mode=True), P.Injective(per_mode=True))
+        bare = LayoutPattern.from_layout(cls.scope.layout, predicates=per_mode)
         sliced = ComposedLayoutPattern(
             offset=CapturePattern("p0", MultipleOfPattern(size)),
-            outer=LayoutPattern.from_layout(cls.scope.layout, per_mode=True),
+            outer=LayoutPattern.from_layout(cls.scope.layout, predicates=per_mode),
         )
         return MeshPattern((topology.name,), OrPattern(sliced, bare))
 

@@ -613,28 +613,35 @@ class Pattern:
 
 The implementation is split by responsibility under `ir/pattern/`:
 
-- `pattern.py` defines `Pattern` and the composable classes
+- `pattern.py` defines `Pattern`, the computed-condition base `Predicate`, and
+  the composable classes
   `OrPattern`, `AndPattern`, `SequencePattern`, `CapturePattern`,
   `ConstraintPattern`, `GuardPattern`, `SwitchPattern`, `RangePattern`,
   `MultipleOfPattern`, `OneOfPattern`, `AttrPattern`, `BitsPattern`,
   `LayoutPattern`, `SwizzlePattern`, `ComposedLayoutPattern`, `MeshPattern`,
   `ShardLayoutPattern`, `ScalarPattern`, `TensorPattern`, and
   `WildcardPattern`. It also owns the `Scalar` and `Tensor` singletons.
+- `predicates.py` defines named arrangement predicates: `Forward`,
+  `Injective`, `WholeVectors`, `PlainArrangement`, `BoxDims`, and `TensorMap`.
 - `match.py` owns matches, captures, symbolic resolution, and the shared
   description helpers. An unstated (`None`) pattern field admits any value.
 - `constraint.py` owns cross-operand `Constraint`, `DistinctConstraint`,
   `SameConstraint`, and `SameModesConstraint` values.
 - `utils.py` owns specialization naming and dimension lookup.
 
-`LayoutPattern` matches only a bare `Layout`, preserves its nested mode
-structure, and checks `forward` and `injective` over the whole flattened
-arrangement by default. A sliced layout must be stated explicitly with
-`ComposedLayoutPattern`; callers that accept both forms use `OrPattern`.
+`LayoutPattern` optionally matches a bare `Layout`'s nested `shape` and
+`strides`, then applies its table of named predicates. Omitting both structural
+fields leaves the structure unconstrained and lets predicates read through
+supported composed or sharded forms. `Forward()` and `Injective()` express the
+corresponding computed properties; they are not implicit.
 `LayoutPattern.from_layout(layout, ...)` constructs the exact bare or composed
-pattern for an authored arrangement, preserving its nested structure.
-With `per_mode=True`, `LayoutPattern` checks each top-level mode independently;
-`MeshPattern` requires this explicit form because each mesh level uses its own
-numbering space. `MeshPattern` never changes the supplied pattern implicitly.
+pattern for an authored arrangement, preserving its nested structure and the
+explicitly supplied predicate table. `Forward(per_mode=True)` and
+`Injective(per_mode=True)` check each top-level mode independently.
+`MeshPattern` rejects any supplied arrangement predicate that exposes
+`per_mode=False`, because each mesh level uses its own numbering space; an
+empty predicate table is allowed. It never changes the supplied pattern
+implicitly.
 `ShardLayoutPattern` names the same `layout`, `attrs`, and `mesh` fields as
 `ShardLayout`: `layout` and `mesh` are nested patterns, while `attrs` remains
 an exact structural value. Its mesh pattern may state bare and sliced forms

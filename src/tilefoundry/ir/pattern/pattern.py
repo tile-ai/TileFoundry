@@ -16,13 +16,10 @@ from tilefoundry.ir.types import (
 )
 from tilefoundry.ir.types.int_tuple import congruent
 from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.layout_algebra import coalesce, is_inverse_projectable
 from tilefoundry.ir.types.mesh import separate
 
-from .constraint import affine_part
 from .match import (
     ABSENT,
-    ARRANGEMENT,
     UNNAMED_PLACE,
     Match,
     _named,
@@ -66,6 +63,51 @@ class Pattern:
 
 
 @dataclass(frozen=True)
+class Predicate(Pattern):
+    """A named computed condition over one authored arrangement."""
+
+    @staticmethod
+    def arrangement(subject) -> Layout | None:
+        """Read the static strided layout beneath shard and composition wrappers."""
+        if isinstance(subject, ShardLayout):
+            subject = subject.layout
+        if isinstance(subject, ComposedLayout):
+            if subject.inner is not None and not isinstance(subject.inner, Swizzle):
+                return None
+            subject = subject.outer
+        if not isinstance(subject, Layout) or subject.strides is None:
+            return None
+        extents = tuple(flatten(subject.shape))
+        strides = tuple(flatten(subject.strides))
+        if any(type(number) is not int for number in (*extents, *strides)):
+            return None
+        if any(extent <= 0 for extent in extents):
+            return None
+        return subject
+
+    def holds(self, arrangement: Layout, captures: dict) -> bool:
+        raise NotImplementedError
+
+    def match(self, subject, captures=None) -> Match | None:
+        held = dict(captures or {})
+        arrangement = self.arrangement(subject)
+        return Match(held) if arrangement is not None and self.holds(arrangement, held) else None
+
+    def refusal(self, subject, captures=None) -> str | None:
+        return (
+            None
+            if self.match(subject, captures) is not None
+            else f"{subject!r} does not satisfy {self.describe()}"
+        )
+
+    def describe(self, name: str = UNNAMED_PLACE) -> str:
+        raise NotImplementedError
+
+    def relations(self) -> tuple[str, ...]:
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
 class WildcardPattern(Pattern):
     """Match any value without binding it."""
 
@@ -74,105 +116,6 @@ class WildcardPattern(Pattern):
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return name
-
-
-VECTOR_READING = (
-    "every run: each tile axis's modes walked fastest first, contiguous ones joined; "
-    "the run at step 1 and every other step a whole number of vectors"
-)
-
-
-def _reverse_group(group):
-    if isinstance(group, tuple):
-        return tuple(_reverse_group(mode) for mode in reversed(group))
-    return group
-
-
-def _row_major_groups_for_cute(layout: Layout) -> Layout:
-    """Reverse modes within each tile axis for CuTe's mode-0-fast algebra."""
-    return Layout(
-        shape=tuple(_reverse_group(group) for group in layout.shape),
-        strides=tuple(_reverse_group(group) for group in layout.strides),
-    )
-
-
-def vector_widths(layout, element_bits: int, widths: tuple[int, ...]) -> tuple[int, ...]:
-    """Every requested byte width that divides every run in an arrangement."""
-    if not widths:
-        return ()
-    widest = widths[-1]
-    if isinstance(layout, ShardLayout):
-        layout = layout.layout
-    inner = getattr(layout, "inner", None)
-    if inner is not None and hasattr(inner, "base"):
-        widest = min(widest, 1 << inner.base)
-    held = affine_part(layout)
-    if held is None or any(
-        type(value) is not int
-        for group in (held.shape, held.strides)
-        for value in flatten(group)
-    ):
-        return ()
-    grouped = coalesce(
-        _row_major_groups_for_cute(held),
-        (0,) * len(held.shape),
-    )
-    runs = tuple(
-        sorted(
-            zip(flatten(grouped.shape), flatten(grouped.strides)),
-            key=lambda run: run[1],
-        )
-    )
-    unit = [extent for extent, step in runs if step == 1]
-    if len(unit) != 1:
-        return ()
-    counted = (unit[0], *(step for _, step in runs if step != 1))
-    return tuple(
-        width
-        for width in widths
-        if width <= widest
-        and all(value * element_bits % (width * 8) == 0 for value in counted)
-    )
-
-
-@dataclass(frozen=True)
-class VectorPattern(Pattern):
-    """An arrangement that moves whole vectors at the requested byte widths."""
-
-    width: CapturePattern
-    dtype: str
-    widths: tuple[int, ...]
-
-    def available_widths(self, subject, captures) -> tuple[int, ...]:
-        bits = getattr(dict(captures or {}).get(self.dtype), "bit_width", None)
-        return () if type(bits) is not int else vector_widths(subject, bits, self.widths)
-
-    def match(self, subject, captures=None):
-        held = dict(captures or {})
-        widths = self.available_widths(subject, held)
-        if not widths:
-            return None
-        if self.width.name in held:
-            return Match(held) if held[self.width.name] in widths else None
-        return matched(self.width, widths[-1], held)
-
-    def refusal(self, subject, captures=None) -> str | None:
-        if self.match(subject, captures) is not None:
-            return None
-        sizes = " or ".join(map(str, self.widths))
-        if len(self.widths) > 2:
-            sizes = ", ".join(map(str, self.widths[:-1])) + f" or {self.widths[-1]}"
-        return (
-            f"{subject!r} moves no whole vector of {sizes} bytes -- its run at step 1 "
-            "and every other step are no whole number of one -- so the two ends share "
-            "no run wide enough for the requested vector widths"
-        )
-
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return f"vectors of {self.width.name} bytes"
-
-    def relations(self) -> tuple[str, ...]:
-        return (VECTOR_READING, *relations_of((self.width,)))
 
 
 @dataclass(frozen=True, init=False)
@@ -512,24 +455,21 @@ class GuardPattern(Pattern):
 
 @dataclass(frozen=True)
 class LayoutPattern(Pattern):
-    """An affine layout, preserving grouping and optional whole-layout rules."""
+    """An optional layout structure with named computed predicates."""
 
-    shape: tuple
-    strides: tuple
-    forward: bool = True
-    injective: bool = True
-    per_mode: bool = False
+    shape: tuple | None = None
+    strides: tuple | None = None
+    predicates: tuple[Predicate, ...] = field(default_factory=tuple)
 
     @classmethod
     def from_layout(
         cls,
         layout,
         *,
-        forward: bool = True,
-        injective: bool = True,
-        per_mode: bool = False,
+        predicates: tuple[Predicate, ...] = (),
     ):
         """Build the exact pattern for one authored arrangement."""
+        held = tuple(predicates)
         if isinstance(layout, ComposedLayout):
             inner = layout.inner
             return ComposedLayoutPattern(
@@ -539,71 +479,83 @@ class LayoutPattern(Pattern):
                 layout.offset,
                 cls.from_layout(
                     layout.outer,
-                    forward=forward,
-                    injective=injective,
-                    per_mode=per_mode,
+                    predicates=held,
                 ),
             )
         return cls(
             tuple(layout.shape),
             tuple(layout.strides),
-            forward=forward,
-            injective=injective,
-            per_mode=per_mode,
+            predicates=held,
         )
 
     def positions(self) -> tuple:
-        return (*flatten(self.shape), *flatten(self.strides))
+        return (
+            *(flatten(self.shape) if self.shape is not None else ()),
+            *(flatten(self.strides) if self.strides is not None else ()),
+        )
 
-    def match(self, subject, captures=None):
-        layout = subject
-        if not isinstance(layout, Layout) or layout.strides is None:
+    def _match_structure(self, subject, captures=None) -> Match | None:
+        held = Match(dict(captures or {}))
+        if self.shape is None and self.strides is None:
+            return held
+        if not isinstance(subject, Layout) or subject.strides is None:
             return None
-        if not (
-            congruent(layout.shape, self.shape)
-            and congruent(layout.strides, self.strides)
-        ):
+        if self.shape is not None and not congruent(subject.shape, self.shape):
             return None
-        extents = tuple(flatten(layout.shape))
-        strides = tuple(flatten(layout.strides))
+        if self.strides is not None and not congruent(subject.strides, self.strides):
+            return None
+        extents = tuple(flatten(subject.shape))
+        strides = tuple(flatten(subject.strides))
         if any(type(number) is not int for number in (*extents, *strides)):
             return None
         if any(number <= 0 for number in extents):
             return None
-        held = matched(SequencePattern(*self.positions()), (*extents, *strides), captures)
+        values = (
+            *(extents if self.shape is not None else ()),
+            *(strides if self.strides is not None else ()),
+        )
+        return matched(SequencePattern(*self.positions()), values, held.captures)
+
+    def match(self, subject, captures=None):
+        held = self._match_structure(subject, captures)
         if held is None:
             return None
-        arrangements = (
-            tuple(
-                Layout(tuple(flatten(shape)), tuple(flatten(steps)))
-                for shape, steps in zip(layout.shape, layout.strides)
-            )
-            if self.per_mode
-            else (Layout(extents, strides),)
-        )
-        for arrangement in arrangements:
-            held_strides = tuple(flatten(arrangement.strides))
-            if self.forward and any(stride < 0 for stride in held_strides):
-                return None
-            if self.injective and not is_inverse_projectable(arrangement):
+        for predicate in self.predicates:
+            held = matched(predicate, subject, held.captures)
+            if held is None:
                 return None
         return held
 
+    def refusal(self, subject, captures=None) -> str | None:
+        held = self._match_structure(subject, captures)
+        if held is None:
+            return f"{subject!r} is not {self.describe()}"
+        for predicate in self.predicates:
+            found = matched(predicate, subject, held.captures)
+            if found is not None:
+                held = found
+                continue
+            explained = getattr(predicate, "refusal", None)
+            return (
+                explained(subject, held.captures)
+                if explained is not None
+                else f"{subject!r} does not satisfy {predicate.describe()}"
+            )
+        return None
+
     def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return (
-            f"Layout({written_grouped(tuple(self.shape))}, {written_grouped(tuple(self.strides))})"
-        )
+        if self.shape is None and self.strides is None:
+            return "layout"
+        shape = name if self.shape is None else written_grouped(tuple(self.shape))
+        strides = name if self.strides is None else written_grouped(tuple(self.strides))
+        return f"Layout({shape}, {strides})"
 
     def relations(self) -> tuple[str, ...]:
-        lines = list(relations_of(self.positions()))
-        subject = "each top-level mode" if self.per_mode else ARRANGEMENT
-        if self.forward:
-            lines.append(f"{subject} has no backward step")
-        if self.injective:
-            lines.append(f"{subject} reaches each of its own slots exactly once")
-        return tuple(lines)
+        return (*relations_of(self.positions()), *relations_of(self.predicates))
 
     def fixed(self):
+        if self.shape is None or self.strides is None:
+            return None
         if any(isinstance(value, Pattern) for value in self.positions()):
             return None
         return Layout(tuple(self.shape), tuple(self.strides))
@@ -695,10 +647,12 @@ class MeshPattern(Pattern):
                 return
             if isinstance(pattern, ComposedLayoutPattern):
                 pattern = pattern.outer
-            if not isinstance(pattern, LayoutPattern) or not pattern.per_mode:
+            if not isinstance(pattern, LayoutPattern) or any(
+                getattr(predicate, "per_mode", True) is False for predicate in pattern.predicates
+            ):
                 raise ValueError(
-                    "MeshPattern layout must be a LayoutPattern(per_mode=True), "
-                    "or a ComposedLayoutPattern whose outer uses per_mode=True"
+                    "MeshPattern layout predicates must check each top-level mode, "
+                    "or a ComposedLayoutPattern outer must use per-mode predicates"
                 )
 
         require_per_mode(self.layout)
@@ -890,6 +844,7 @@ __all__ = [
     "OneOfPattern",
     "OrPattern",
     "Pattern",
+    "Predicate",
     "RangePattern",
     "Scalar",
     "ScalarPattern",
@@ -899,7 +854,5 @@ __all__ = [
     "SwitchPattern",
     "Tensor",
     "TensorPattern",
-    "VectorPattern",
     "WildcardPattern",
-    "vector_widths",
 ]

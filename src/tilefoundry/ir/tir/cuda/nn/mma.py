@@ -13,6 +13,9 @@ from tilefoundry.ir.pattern import (
     MultipleOfPattern,
     OrPattern,
 )
+from tilefoundry.ir.pattern import (
+    predicates as P,
+)
 from tilefoundry.ir.tir.verify import input_params
 from tilefoundry.ir.types import DType, Mesh, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
@@ -34,7 +37,7 @@ def _warp_layout_pattern() -> LayoutPattern:
     return LayoutPattern(
         ((CapturePattern("n", MultipleOfPattern(32)),),),
         ((1,),),
-        per_mode=True,
+        predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
     )
 
 

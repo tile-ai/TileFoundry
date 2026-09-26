@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import prod
 
-from tilefoundry.ir.types import Broadcast, ComposedLayout, Layout, ShardLayout, Swizzle
+from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Swizzle
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.tensor_type import TensorType
 
@@ -64,24 +64,6 @@ class SameConstraint(Constraint):
         return f"{self.left}.{self.field} = {self.right}.{self.field}"
 
 
-def affine_part(layout, *, plain: bool = False):
-    """Return the strided affine part beneath shard frames and swizzles.
-
-    When *plain* is true, refuse a composition with a transform or offset.
-    """
-    if isinstance(layout, ShardLayout):
-        if not all(isinstance(attr, Broadcast) for attr in layout.attrs):
-            return None
-        layout = layout.layout
-    if isinstance(layout, ComposedLayout):
-        if plain and (layout.inner is not None or layout.offset != 0):
-            return None
-        if layout.inner is not None and not isinstance(layout.inner, Swizzle):
-            return None
-        layout = layout.outer
-    return layout if isinstance(layout, Layout) and layout.strides is not None else None
-
-
 @dataclass(frozen=True, init=False)
 class SameModesConstraint(Constraint):
     """Require two tensor layouts to run along the same final mode of one axis."""
@@ -97,8 +79,13 @@ class SameModesConstraint(Constraint):
 
     @staticmethod
     def reading(tensor: TensorType, arrangement=None):
-        layout = affine_part(tensor.layout if arrangement is None else arrangement)
-        if layout is None:
+        layout = tensor.layout if arrangement is None else arrangement
+        if isinstance(layout, ComposedLayout):
+            if layout.inner is not None and not isinstance(layout.inner, Swizzle):
+                layout = None
+            else:
+                layout = layout.outer
+        if not isinstance(layout, Layout) or layout.strides is None:
             return None, f"{tensor.layout!r} is no strided arrangement"
         shape, strides = tuple(layout.shape), tuple(layout.strides)
         extents = tuple(tensor.shape)
@@ -190,5 +177,4 @@ __all__ = [
     "DistinctConstraint",
     "SameConstraint",
     "SameModesConstraint",
-    "affine_part",
 ]

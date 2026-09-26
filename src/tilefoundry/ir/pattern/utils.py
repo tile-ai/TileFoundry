@@ -5,6 +5,7 @@ from __future__ import annotations
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.types import Mesh, StorageKind
 
+from . import predicates as P
 from .pattern import (
     AttrPattern,
     CapturePattern,
@@ -17,7 +18,6 @@ from .pattern import (
     Pattern,
     RangePattern,
     TensorPattern,
-    VectorPattern,
     WildcardPattern,
 )
 
@@ -49,12 +49,16 @@ def storage_place(index: int) -> str:
     return f"storage{index}"
 
 
-def whole_vectors(index: int, widths: tuple[int, ...]) -> VectorPattern:
+def whole_vectors(index: int, widths: tuple[int, ...]) -> LayoutPattern:
     """Whole vectors at *widths*, counted in operand *index*'s element dtype."""
-    return VectorPattern(
-        CapturePattern("width", OneOfPattern(widths)),
-        dtype_place(index),
-        widths,
+    return LayoutPattern(
+        predicates=(
+            P.WholeVectors(
+                CapturePattern("width", OneOfPattern(widths)),
+                dtype_place(index),
+                widths,
+            ),
+        )
     )
 
 
@@ -64,13 +68,13 @@ _ANY_THREADS = OrPattern(
         outer=LayoutPattern(
             ((CapturePattern("n", RangePattern(lo=1)),),),
             ((1,),),
-            per_mode=True,
+            predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
         ),
     ),
     LayoutPattern(
         ((CapturePattern("n", RangePattern(lo=1)),),),
         ((1,),),
-        per_mode=True,
+        predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
     ),
 )
 
