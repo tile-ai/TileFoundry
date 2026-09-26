@@ -5,7 +5,7 @@ from __future__ import annotations
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import moved_tile
+from tilefoundry.ir.pattern import utils
 from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
 from tilefoundry.ir.tir.memory.copy import Copy
 from tilefoundry.ir.types import Mesh
@@ -20,7 +20,9 @@ class LdMatrix(Op):
 
     capability = "tensor_core"
 
-    src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=moved_tile(0, S.SMEM))
+    src = ParamDef(
+        kind="input", effect=MemoryEffect.READ, pattern=utils.operand_tile(0, S.SMEM)
+    )
     dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=Mma.A)
     scope = ParamDef(
         kind="attribute",

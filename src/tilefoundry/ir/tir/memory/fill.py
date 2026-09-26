@@ -9,7 +9,7 @@ from __future__ import annotations
 from tilefoundry.ir.core import Constant, Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Scalar, any_threads, moved_tile
+from tilefoundry.ir.pattern import Scalar, utils
 from tilefoundry.ir.types import UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
@@ -18,9 +18,9 @@ from tilefoundry.visitor_registry import register_typeinfer, register_verify_stm
 class Fill(Op):
     """Fills ``tensor`` element-wise with ``value`` (rank-0 scalar)."""
 
-    tensor = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=moved_tile(0))
+    tensor = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=utils.operand_tile(0))
     value = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=Scalar)
-    scope = any_threads()
+    scope = utils.any_threads()
 
 
 @register_typeinfer(Fill)

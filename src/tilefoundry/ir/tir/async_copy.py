@@ -5,17 +5,13 @@ from __future__ import annotations
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import (
-    DistinctConstraint,
-    SameModesConstraint,
-    any_threads,
-    moved_tile,
-    vector,
-)
+from tilefoundry.ir.pattern import DistinctConstraint, SameModesConstraint, utils
 from tilefoundry.ir.tir.verify import verify_between, verify_operands
 from tilefoundry.ir.types import Layout, UnitType
 from tilefoundry.ir.types.storage import StorageKind as S
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+
+ASYNC_WIDTHS = (4, 8, 16)
 
 
 @register_op(dialect="T", category="async", name="copy_async")
@@ -25,12 +21,12 @@ class CopyAsync(Op):
     src = ParamDef(
         kind="input",
         effect=MemoryEffect.READ,
-        pattern=moved_tile(0, S.GMEM, vector(0)),
+        pattern=utils.operand_tile(0, S.GMEM, utils.whole_vectors(0, ASYNC_WIDTHS)),
     )
     dst = ParamDef(
         kind="input",
         effect=MemoryEffect.WRITE,
-        pattern=moved_tile(1, S.SMEM, vector(1)),
+        pattern=utils.operand_tile(1, S.SMEM, utils.whole_vectors(1, ASYNC_WIDTHS)),
     )
     between = (
         DistinctConstraint("storage", "src", "dst"),
@@ -42,7 +38,7 @@ class CopyAsync(Op):
         optional=True,
         default=None,
     )
-    scope = any_threads()
+    scope = utils.any_threads()
 
 
 @register_typeinfer(CopyAsync)
@@ -99,4 +95,4 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
         ctx.error(call, f"CpAsyncWait.n must be a non-negative int, got {n!r}")
 
 
-__all__ = ["CopyAsync", "CpAsyncCommit", "CpAsyncWait"]
+__all__ = ["ASYNC_WIDTHS", "CopyAsync", "CpAsyncCommit", "CpAsyncWait"]

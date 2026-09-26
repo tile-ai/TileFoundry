@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.types import ComposedLayout, Mesh, StorageKind, Swizzle
-from tilefoundry.ir.types.layout_algebra import ASYNC_WIDTHS
 
 from .pattern import (
     AttrPattern,
@@ -27,8 +26,8 @@ MOVED_STORAGES = (StorageKind.GMEM, StorageKind.SMEM, StorageKind.RMEM)
 WHOLE_BYTES = AttrPattern("bit_width", MultipleOfPattern(8))
 
 
-def moved_tile(index: int, storage=None, layout=None) -> TensorPattern:
-    """A moved tensor tile, with dtype and storage captures named by end."""
+def operand_tile(index: int, storage=None, layout=None) -> TensorPattern:
+    """A tensor tile whose dtype and storage captures are named by operand slot."""
     storages = MOVED_STORAGES if storage is None else storage
     return TensorPattern(
         dtype=CapturePattern(dtype_place(index), WHOLE_BYTES),
@@ -51,11 +50,12 @@ def storage_place(index: int) -> str:
     return f"storage{index}"
 
 
-def vector(index: int) -> VectorPattern:
-    """End *index* of a cp.async, counted in that end's element dtype."""
+def whole_vectors(index: int, widths: tuple[int, ...]) -> VectorPattern:
+    """Whole vectors at *widths*, counted in operand *index*'s element dtype."""
     return VectorPattern(
-        CapturePattern("width", OneOfPattern(ASYNC_WIDTHS)),
+        CapturePattern("width", OneOfPattern(widths)),
         dtype_place(index),
+        widths,
     )
 
 
@@ -147,7 +147,7 @@ __all__ = [
     "arrangement_pattern",
     "dtype_place",
     "locate_dim_var",
-    "moved_tile",
+    "operand_tile",
     "storage_place",
-    "vector",
+    "whole_vectors",
 ]

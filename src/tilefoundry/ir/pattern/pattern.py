@@ -16,11 +16,7 @@ from tilefoundry.ir.types import (
 )
 from tilefoundry.ir.types.int_tuple import congruent
 from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.layout_algebra import (
-    ASYNC_WIDTHS,
-    coalesce,
-    is_inverse_projectable,
-)
+from tilefoundry.ir.types.layout_algebra import coalesce, is_inverse_projectable
 from tilefoundry.ir.types.mesh import separate
 
 from .constraint import affine_part
@@ -100,9 +96,11 @@ def _row_major_groups_for_cute(layout: Layout) -> Layout:
     )
 
 
-def vector_widths(layout, element_bits: int) -> tuple[int, ...]:
-    """Every cp.async width that divides every run in an arrangement."""
-    widest = ASYNC_WIDTHS[-1]
+def vector_widths(layout, element_bits: int, widths: tuple[int, ...]) -> tuple[int, ...]:
+    """Every requested byte width that divides every run in an arrangement."""
+    if not widths:
+        return ()
+    widest = widths[-1]
     if isinstance(layout, ShardLayout):
         layout = layout.layout
     inner = getattr(layout, "inner", None)
@@ -131,7 +129,7 @@ def vector_widths(layout, element_bits: int) -> tuple[int, ...]:
     counted = (unit[0], *(step for _, step in runs if step != 1))
     return tuple(
         width
-        for width in ASYNC_WIDTHS
+        for width in widths
         if width <= widest
         and all(value * element_bits % (width * 8) == 0 for value in counted)
     )
@@ -139,18 +137,19 @@ def vector_widths(layout, element_bits: int) -> tuple[int, ...]:
 
 @dataclass(frozen=True)
 class VectorPattern(Pattern):
-    """An arrangement that moves whole 4-, 8-, or 16-byte vectors."""
+    """An arrangement that moves whole vectors at the requested byte widths."""
 
     width: CapturePattern
     dtype: str
+    widths: tuple[int, ...]
 
-    def widths(self, subject, captures) -> tuple[int, ...]:
+    def available_widths(self, subject, captures) -> tuple[int, ...]:
         bits = getattr(dict(captures or {}).get(self.dtype), "bit_width", None)
-        return () if type(bits) is not int else vector_widths(subject, bits)
+        return () if type(bits) is not int else vector_widths(subject, bits, self.widths)
 
     def match(self, subject, captures=None):
         held = dict(captures or {})
-        widths = self.widths(subject, held)
+        widths = self.available_widths(subject, held)
         if not widths:
             return None
         if self.width.name in held:
@@ -160,11 +159,13 @@ class VectorPattern(Pattern):
     def refusal(self, subject, captures=None) -> str | None:
         if self.match(subject, captures) is not None:
             return None
-        sizes = ", ".join(map(str, ASYNC_WIDTHS[:-1])) + f" or {ASYNC_WIDTHS[-1]}"
+        sizes = " or ".join(map(str, self.widths))
+        if len(self.widths) > 2:
+            sizes = ", ".join(map(str, self.widths[:-1])) + f" or {self.widths[-1]}"
         return (
             f"{subject!r} moves no whole vector of {sizes} bytes -- its run at step 1 "
             "and every other step are no whole number of one -- so the two ends share "
-            "no run wide enough for cp.async"
+            "no run wide enough for the requested vector widths"
         )
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:

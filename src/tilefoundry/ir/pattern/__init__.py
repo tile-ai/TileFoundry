@@ -57,9 +57,9 @@ from .utils import (
     arrangement_pattern,
     dtype_place,
     locate_dim_var,
-    moved_tile,
+    operand_tile,
     storage_place,
-    vector,
+    whole_vectors,
 )
 
 __all__ = [
@@ -108,12 +108,12 @@ __all__ = [
     "is_symbolic",
     "locate_dim_var",
     "matched",
-    "moved_tile",
+    "operand_tile",
     "refusals_between",
     "relations_of",
     "resolved",
     "storage_place",
     "VectorPattern",
-    "vector",
+    "whole_vectors",
     "vector_widths",
 ]

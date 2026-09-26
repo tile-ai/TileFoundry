@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
 from tilefoundry.ir.core import Op
@@ -26,17 +26,15 @@ from tilefoundry.ir.pattern import (
     SwitchPattern,
     SwizzlePattern,
     affine_part,
-    dtype_place,
     matched,
-    moved_tile,
     relations_of,
-    storage_place,
+    utils,
 )
 from tilefoundry.ir.pattern.match import written_place, written_tuple
 from tilefoundry.ir.tir.verify import verify_between, verify_operands
 from tilefoundry.ir.types import ComposedLayout, Layout, Mesh, ShardLayout, Swizzle, UnitType
 from tilefoundry.ir.types.int_tuple import flatten
-from tilefoundry.ir.types.layout_algebra import box_runs, frame_of
+from tilefoundry.ir.types.layout_algebra import frame_of
 from tilefoundry.ir.types.storage import StorageKind as S
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
@@ -52,6 +50,47 @@ TENSORMAP_READING = (
     "every tensormap: one dim per mode of the tile, the mode at step 1 first"
 )
 TMA_STORAGES = (S.GMEM, S.SMEM)
+
+
+@dataclass(frozen=True)
+class Run:
+    """One contiguous run of modes from one logical tile axis."""
+
+    extent: int
+    step: int
+    axis: int
+    mode: int
+
+
+def box_runs(
+    layout: Layout,
+    element_bits: int,
+    span: int | None,
+    limit: int | None = BOX_EXTENT,
+) -> tuple[Run, ...]:
+    """Read TMA box runs by tile axis, ordered by increasing step."""
+    runs: list[Run] = []
+    for axis, (extents, steps) in enumerate(zip(layout.shape, layout.strides)):
+        modes = tuple(enumerate(zip(flatten(extents), flatten(steps))))
+        for mode, (extent, step) in reversed(modes):
+            if extent == 1:
+                continue
+            last = runs[-1] if runs and runs[-1].axis == axis else None
+            joined = None if last is None else last.extent * extent
+            if (
+                last is not None
+                and step == last.step * last.extent
+                and (limit is None or joined <= limit)
+                and not (
+                    span is not None
+                    and last.step == 1
+                    and joined * element_bits > span * 8
+                )
+            ):
+                runs[-1] = replace(last, extent=joined)
+            else:
+                runs.append(Run(extent, step, axis, mode))
+    return tuple(sorted(runs, key=lambda run: run.step))
 
 
 class TmaSwizzle(Enum):
@@ -324,19 +363,19 @@ class CopyAsyncTensor(Op):
     src = ParamDef(
         kind="input",
         effect=MemoryEffect.READ,
-        pattern=moved_tile(
+        pattern=utils.operand_tile(
             0,
             TMA_STORAGES,
-            TmaOperandPattern(storage_place(0), dtype_place(0)),
+            TmaOperandPattern(utils.storage_place(0), utils.dtype_place(0)),
         ),
     )
     dst = ParamDef(
         kind="input",
         effect=MemoryEffect.WRITE,
-        pattern=moved_tile(
+        pattern=utils.operand_tile(
             1,
             TMA_STORAGES,
-            TmaOperandPattern(storage_place(1), dtype_place(1)),
+            TmaOperandPattern(utils.storage_place(1), utils.dtype_place(1)),
         ),
     )
     between = (
@@ -387,6 +426,7 @@ __all__ = [
     "BoxFamily",
     "BoxPattern",
     "CopyAsyncTensor",
+    "Run",
     "SWIZZLE_PLACE",
     "TENSORMAP_READING",
     "TMA_RANK",
@@ -397,5 +437,6 @@ __all__ = [
     "TmaGlobalPattern",
     "TmaOperandPattern",
     "TmaSwizzle",
+    "box_runs",
     "unframed",
 ]

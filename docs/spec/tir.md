@@ -953,6 +953,9 @@ producer issues copies, groups them, and a consumer waits on the group queue.
 ##### CopyAsync
 
 ```python
+ASYNC_WIDTHS = (4, 8, 16)
+
+
 class CopyAsync(Op):
     """Effect form; async gmem→smem copy, non-blocking.
 
@@ -969,7 +972,7 @@ class CopyAsync(Op):
 - constraints:
   - Lowers to `tilefoundry::ops::copy_async(src, dst)`.
   - `src` is gmem and `dst` is smem, with the same dtype. Each layout MUST
-    admit the same 4-, 8-, or 16-byte vector width and MUST walk the same tile
+    admit the same width from `ASYNC_WIDTHS` and MUST walk the same tile
     mode at step 1. For a `ShardLayout`, vector width is read from the whole
     tile arrangement; its other strides ensure every participant's start is
     aligned. Two split layouts compare their tile modes only when their mesh

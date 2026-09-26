@@ -10,10 +10,7 @@ See [shard §9](docs/spec/shard.md#9-layout-construction-and-mesh-scope-projecti
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 from typing import Optional, Union
-
-from tilefoundry.ir.types.layout import flatten
 
 from . import swizzle_layout
 from .layout import ComposedLayout, Layout, Swizzle, flat_shape, flat_stride, size
@@ -23,19 +20,6 @@ from .swizzle_layout import get_swizzle_portion
 
 class NotProjectable(ValueError):
     """A layout cannot serve as a mesh execution scope (not inverse-projectable)."""
-
-
-ASYNC_WIDTHS = (4, 8, 16)
-
-
-@dataclass(frozen=True)
-class Run:
-    """One contiguous run of modes from one logical tile axis."""
-
-    extent: int
-    step: int
-    axis: int
-    mode: int
 
 
 def apply(layout: Union[Layout, ComposedLayout], coord: int) -> int:
@@ -164,37 +148,6 @@ def frame_of(layout: Union[Layout, ComposedLayout]) -> tuple[int, Layout] | None
     if layout.inner is not None or not isinstance(layout.outer, Layout):
         return None
     return layout.offset, layout.outer
-
-
-def box_runs(
-    layout: Layout,
-    element_bits: int,
-    span: int | None,
-    limit: int | None = 256,
-) -> tuple[Run, ...]:
-    """Read contiguous runs by tile axis, ordered by increasing step."""
-    runs: list[Run] = []
-    for axis, (extents, steps) in enumerate(zip(layout.shape, layout.strides)):
-        modes = tuple(enumerate(zip(flatten(extents), flatten(steps))))
-        for mode, (extent, step) in reversed(modes):
-            if extent == 1:
-                continue
-            last = runs[-1] if runs and runs[-1].axis == axis else None
-            joined = None if last is None else last.extent * extent
-            if (
-                last is not None
-                and step == last.step * last.extent
-                and (limit is None or joined <= limit)
-                and not (
-                    span is not None
-                    and last.step == 1
-                    and joined * element_bits > span * 8
-                )
-            ):
-                runs[-1] = replace(last, extent=joined)
-            else:
-                runs.append(Run(extent, step, axis, mode))
-    return tuple(sorted(runs, key=lambda run: run.step))
 
 
 def complement(layout: Layout, max_idx: int = 1) -> Layout:
@@ -398,15 +351,12 @@ def contains(scope: ComposedLayout, t: int) -> bool:
 
 
 __all__ = [
-    "ASYNC_WIDTHS",
     "NotProjectable",
-    "Run",
     "composition",
     "cosize",
     "apply",
     "coalesce",
     "frame_of",
-    "box_runs",
     "complement",
     "is_inverse_projectable",
     "right_inverse",
