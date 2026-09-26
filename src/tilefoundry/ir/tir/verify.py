@@ -54,7 +54,7 @@ def input_params(op_type: type) -> tuple:
     return tuple(param for param in op_type._op_schema.signature if param.kind == "input")
 
 
-def verify_between(call, ctx, lead: str = "") -> None:
+def verify_between(call, ctx) -> None:
     """Hold one call to the relations declared between its operands."""
     op_type = type(call.target)
     rules = between_rules(op_type)
@@ -64,7 +64,7 @@ def verify_between(call, ctx, lead: str = "") -> None:
     operands = dict(zip(names, (ctx.type_of(arg) for arg in call.args)))
     for rule in rules:
         if not rule.holds(operands):
-            ctx.error(call, lead + rule.refused(operands))
+            ctx.error(call, rule.refused(operands))
 
 
 def verify_operands(call, ctx) -> None:
@@ -218,6 +218,13 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
                 op = stmt.callable
                 op_cls = type(op)
                 fn_verify = verify_stmt_registry.lookup(op_cls)
+                if fn_verify is None and not (
+                    any(param.pattern is not None for param in input_params(op_cls))
+                    or between_rules(op_cls)
+                ):
+                    raise VerifyError(
+                        f"Op {op_cls.__name__} states no verifier and no declaration"
+                    )
 
                 ctx.mesh_scope = tuple(scope)
                 call = Call(type=UnitType(), target=op, args=stmt.args)

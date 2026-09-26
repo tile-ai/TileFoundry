@@ -190,7 +190,8 @@ class PrimFunction(Stmt):
   an `Op`, every input operand MUST match its `ParamDef.pattern` and every
   declared `between` relation MUST hold. A per-Op verifier registered via
   `@register_verify_stmt(Op)` MAY impose additional rules that the declaration
-  does not express.
+  does not express. An effect Op with neither an input pattern nor a `between`
+  relation MUST register such a verifier; an Op stating no contract is rejected.
 
 ### 1.4 `Evaluate`
 
