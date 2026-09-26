@@ -317,6 +317,16 @@ def levels(mesh: Mesh) -> tuple[Layout, ...]:
 def starts(mesh: Mesh) -> tuple[int, ...]:
     """Decode each topology level's start from device numbering."""
     ...
+
+
+def selected_run(arrangement: Layout, start: int) -> tuple[tuple, tuple, int]:
+    """Reduce one level's selected positions to its joined modes and start."""
+    ...
+
+
+def within_scope(mesh: Mesh, current: Mesh) -> bool:
+    """Return whether each continuous run selected by mesh is within current."""
+    ...
 ```
 
 - constraints:
@@ -362,7 +372,10 @@ Mesh composition uses the following rules:
   level's start and take each replaced level's start and arrangement from the
   inner mesh. The combined `ComposedLayout.offset` MUST then be re-encoded in
   device numbering from those per-level starts. Replacing an unsliced suffix
-  and replacing the whole mesh retain their existing behavior.
+  and replacing the whole mesh retain their existing behavior. Every replaced
+  level MUST reduce to one continuous run contained in the enclosing level's
+  continuous run. A replacement or enclosing selection that does not reduce to
+  one continuous run MUST be rejected rather than approximated as an interval.
 - `make_mesh(*meshes)` invokes `check_topology` on its result. For each named
   level with a concrete declared extent, its position count MUST NOT exceed
   that extent; symbolic extents are deferred until dimensions are bound. A

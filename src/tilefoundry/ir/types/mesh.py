@@ -255,6 +255,61 @@ def starts(mesh: Mesh) -> tuple[int, ...]:
     return tuple(idx2crd(offset, sizes, compact_major(sizes)))
 
 
+def selected_run(arrangement: Layout, start: int) -> tuple[tuple, tuple, int]:
+    """Reduce one level's selected positions to its joined modes and start."""
+    strides = arrangement.strides
+    if strides is None:
+        return tuple(flatten(arrangement.shape)), (), start
+    modes = [
+        (extent, stride)
+        for extent, stride in zip(flatten(arrangement.shape), flatten(strides))
+        if extent != 1
+    ]
+    joined: list[list] = []
+    for extent, stride in sorted(modes, key=lambda mode: (mode[1], mode[0])):
+        if joined and joined[-1][0] * joined[-1][1] == stride:
+            joined[-1][0] *= extent
+        else:
+            joined.append([extent, stride])
+    return (
+        tuple(extent for extent, _ in joined),
+        tuple(stride for _, stride in joined),
+        start,
+    )
+
+
+def _continuous_interval(run: tuple[tuple, tuple, int]) -> tuple[int, int] | None:
+    extents, strides, start = run
+    if not isinstance(start, int):
+        return None
+    if not extents:
+        return start, start + 1
+    if len(extents) != 1 or strides != (1,) or not isinstance(extents[0], int):
+        return None
+    return start, start + extents[0]
+
+
+def within_scope(mesh: Mesh, current: Mesh) -> bool:
+    """Whether each continuous run selected by *mesh* is within *current*."""
+    scope = {
+        getattr(topology, "name", topology): selected_run(arrangement, start)
+        for topology, arrangement, start in zip(
+            current.topologies, levels(current), starts(current)
+        )
+    }
+    for topology, arrangement, start in zip(
+        mesh.topologies, levels(mesh), starts(mesh)
+    ):
+        name = getattr(topology, "name", topology)
+        inner = _continuous_interval(selected_run(arrangement, start))
+        outer = _continuous_interval(scope[name]) if name in scope else None
+        if inner is None or outer is None:
+            return False
+        if not (outer[0] <= inner[0] and inner[1] <= outer[1]):
+            return False
+    return True
+
+
 def check_topology(mesh: Mesh) -> None:
     """Reject static mesh positions beyond their declared topology extents.
 
@@ -324,6 +379,7 @@ def make_mesh(*meshes: Mesh) -> Mesh:
         elif set(here) <= set(there):
             result = inner
         elif len(there) < len(here) and here[-len(there) :] == there:
+            current = result
             kept = len(here) - len(there)
             above = levels(result)[:kept]
             named = sum(len(flatten(level.shape)) for level in above)
@@ -335,6 +391,25 @@ def make_mesh(*meshes: Mesh) -> Mesh:
                 sliced=isinstance(result.layout, ComposedLayout)
                 or isinstance(inner.layout, ComposedLayout),
             )
+            if not within_scope(result, current):
+                parent_runs = {
+                    name: selected_run(arrangement, start)
+                    for name, arrangement, start in zip(
+                        here, levels(current), starts(current)
+                    )
+                    if name in there
+                }
+                inner_runs = {
+                    name: selected_run(arrangement, start)
+                    for name, arrangement, start in zip(
+                        there, levels(inner), starts(inner)
+                    )
+                }
+                raise ValueError(
+                    f"replacement scope selects runs {inner_runs}, outside parent "
+                    f"scope runs {parent_runs}; both must be continuous and each "
+                    "replacement run must be contained in its parent run"
+                )
         else:
             shared = sorted(set(here) & set(there))
             unnamed = sorted(set(here) - set(there))
@@ -368,6 +443,8 @@ __all__ = [
     "check_topology",
     "levels",
     "make_mesh",
+    "selected_run",
     "separate",
     "starts",
+    "within_scope",
 ]
