@@ -27,7 +27,6 @@ from tilefoundry.ir.tir.sync import participation
 from tilefoundry.ir.types import ComposedLayout
 from tilefoundry.ir.types.dim import DimAdd, DimMul, DimSub, DimVar
 from tilefoundry.ir.types.layout import Layout, LayoutBase, flatten
-from tilefoundry.ir.types.layout_algebra import swizzle_of
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
     Dynamic,
@@ -38,6 +37,7 @@ from tilefoundry.ir.types.shard_layout import (
 from tilefoundry.ir.types.shard_layout import ShardLayout as SL
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.stride import compact_row_major
+from tilefoundry.ir.types.swizzle_layout import get_swizzle_portion
 from tilefoundry.ir.types.utils import shape_numel_upper_bound, upper_bound
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.target import CudaTarget
@@ -57,7 +57,7 @@ def _render_layout_type(layout: LayoutBase) -> str:
     underneath. The XOR mapping is not expressible as strides, so there is no
     affine form to fall back to.
     """
-    swizzle = swizzle_of(layout)
+    swizzle = get_swizzle_portion(layout)
     if swizzle is not None:
         return (
             f"cute::ComposedLayout<cute::Swizzle<{_swizzle_args(swizzle)}>, "
@@ -76,7 +76,7 @@ def _render_layout_value(layout: LayoutBase, dim, stride) -> str:
     *dim* and *stride* render one shape entry and one stride entry, which is
     where a runtime-provided extent reaches the emitted layout.
     """
-    swizzle = swizzle_of(layout)
+    swizzle = get_swizzle_portion(layout)
     if swizzle is not None:
         return (
             f"cute::make_composed_layout("
@@ -204,7 +204,7 @@ def render_shard_layout_value(var_name: str, sl: SL, dynamic_extents=None, stora
     """
     sll = sl.layout
     if storage is StorageKind.RMEM:
-        if swizzle_of(sll) is not None:
+        if get_swizzle_portion(sll) is not None:
             raise NotImplementedError(
                 "render_shard_layout_value: a Swizzle states how a shared-memory "
                 "bank pattern is arranged; a register engine has no such addresses, "

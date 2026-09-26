@@ -231,6 +231,14 @@ class Swizzle:
     shift: int
 
     def __call__(self, offset: int) -> int: ...
+
+
+def get_swizzle_portion(layout: Layout | ComposedLayout) -> Swizzle | None:
+    """Return the final swizzle of a composed layout, when present."""
+
+
+def make_swizzle(active_y: int, active_z: int) -> Swizzle:
+    """Build the representable CuTe swizzle that maps Y bits onto Z bits."""
 ```
 
 **Terms.** The *Y bits* are the ones read out of the index
@@ -246,6 +254,11 @@ the ones they are XORed onto
   - Because the two ranges do not overlap, a `Swizzle` is an involution:
     `swizzle(swizzle(offset)) == offset`, so it is its own left and right
     inverse. `bits == 0` is the identity.
+  - Swizzle-specialized `composition`, `left_inverse`, and `right_inverse`
+    MUST follow the corresponding CuTe `swizzle_layout.hpp` overloads.
+    `get_swizzle_portion` returns `None` for a layout with no final swizzle;
+    `make_swizzle` MUST reject mask pairs that are not equal-width contiguous
+    runs rather than inventing a representation.
   - A `Swizzle` is a mapping on an index, not a layout. It is not a
     `LayoutBase`, it states no `shape`, and it MUST NOT be a
     `TensorType.layout` or a `ShardLayout.layout` on its own. It reaches a

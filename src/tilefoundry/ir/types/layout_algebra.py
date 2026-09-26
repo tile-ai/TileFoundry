@@ -15,8 +15,10 @@ from typing import Optional, Union
 
 from tilefoundry.ir.types.layout import flatten
 
+from . import swizzle_layout
 from .layout import ComposedLayout, Layout, Swizzle, size
 from .stride import compact_col_major, idx2crd
+from .swizzle_layout import get_swizzle_portion
 
 
 class NotProjectable(ValueError):
@@ -46,17 +48,6 @@ def _stride(layout: Layout) -> tuple[int, ...]:
     return compact_col_major(_shape(layout))
 
 
-def swizzle_of(layout: object) -> Optional[Swizzle]:
-    """The ``Swizzle`` a composed layout applies last, or ``None``.
-
-    CuTe ``get_swizzle_portion``, answering ``None`` rather than the identity
-    ``Swizzle<0,4,3>`` so a caller can branch on "is this swizzled at all".
-    """
-    if isinstance(layout, ComposedLayout) and isinstance(layout.inner, Swizzle):
-        return layout.inner
-    return None
-
-
 def apply(layout: Union[Layout, ComposedLayout], coord: int) -> int:
     """``crd2idx`` of a 1-D domain coord: decompose by shape, dot with strides.
 
@@ -76,29 +67,6 @@ def apply(layout: Union[Layout, ComposedLayout], coord: int) -> int:
     return idx
 
 
-def _crd2idx_unbounded(layout: Layout, coord: int) -> int:
-    """``apply`` as CuTe's ``crd2idx`` has it: the last mode is not wrapped.
-
-    ``apply`` wraps every mode, which is the same answer for an in-domain
-    coord and the one this module's callers want. The swizzle composition
-    rules feed a *bit mask* through a layout instead, which is routinely
-    larger than the domain, and CuTe leaves the final mode unwrapped so those
-    high bits keep contributing. Only that port reads this.
-    """
-    shape = _shape(layout)
-    stride = _stride(layout)
-    idx = 0
-    rem = coord
-    last = len(shape) - 1
-    for position, (s, d) in enumerate(zip(shape, stride)):
-        if position == last:
-            idx += rem * d
-        else:
-            idx += (rem % s) * d
-            rem //= s
-    return idx
-
-
 def cosize(layout: Union[Layout, ComposedLayout]) -> int:
     """The codomain extent.
 
@@ -106,7 +74,7 @@ def cosize(layout: Union[Layout, ComposedLayout]) -> int:
     so it adds nothing to it: CuTe ``cosize`` of a swizzled composed layout is
     ``cosize`` of the layout underneath (``swizzle_layout.hpp:172``).
     """
-    if swizzle_of(layout) is not None:
+    if get_swizzle_portion(layout) is not None:
         return cosize(layout.outer)
     return apply(layout, size(layout) - 1) + 1
 
@@ -117,7 +85,7 @@ def coalesce(layout: Union[Layout, ComposedLayout]):
     Coalescing renames the domain and leaves the index mapping alone, so a
     swizzled composed layout coalesces underneath its swizzle.
     """
-    if swizzle_of(layout) is not None:
+    if get_swizzle_portion(layout) is not None:
         return ComposedLayout(
             inner=layout.inner, offset=layout.offset, outer=coalesce(layout.outer)
         )
@@ -275,85 +243,13 @@ def _check_admissible(scope: ComposedLayout) -> None:
         raise NotProjectable("outer layout is not inverse-projectable (injective + compact)")
 
 
-def _make_swizzle(active_y: int, active_z: int) -> Swizzle:
-    """CuTe ``make_swizzle<Y,Z>()``: the swizzle that XORs *Y* onto *Z*.
-
-    The two masks must hold the same number of bits; their trailing-zero
-    counts give ``base`` and the signed ``shift``, and the reconstructed
-    ``swizzle_code`` must give the masks back, which is how CuTe checks that
-    the pair is a swizzle it can represent at all.
-    """
-    bits_y, bits_z = active_y.bit_count(), active_z.bit_count()
-    if bits_y != bits_z:
-        raise NotImplementedError(
-            f"composition: the Y mask {active_y:#x} holds {bits_y} bits and the Z "
-            f"mask {active_z:#x} holds {bits_z}; only an equal-width pair is a "
-            f"Swizzle"
-        )
-    if bits_y == 0:
-        return Swizzle(0, 0, 0)
-    trailing_y = (active_y & -active_y).bit_length() - 1
-    trailing_z = (active_z & -active_z).bit_length() - 1
-    swizzle = Swizzle(bits_y, min(trailing_y, trailing_z), trailing_y - trailing_z)
-    if swizzle.swizzle_code != (active_y | active_z):
-        raise NotImplementedError(
-            f"composition: the mask pair ({active_y:#x}, {active_z:#x}) is not a "
-            f"Swizzle<B,M,S>; its bits are not two contiguous equal-width runs"
-        )
-    return swizzle
-
-
 def composition(left, right, offset: int = 0):
-    """CuTe ``composition`` for the swizzle cases (``swizzle_layout.hpp:302``).
-
-    ``composition(Swizzle, Layout)`` builds a swizzled layout, which states
-    ``Swizzle(offset + Layout(coord))``.
-
-    ``composition(Layout, Swizzle)`` would otherwise want the ``Swizzle`` in
-    ``outer``, which has no domain to be a domain-side component of. CuTe
-    instead reads which of the swizzle's bits the layout leaves active,
-    rebuilds a ``Swizzle`` over those, and puts it back on the inner side.
-    """
-    if isinstance(left, Swizzle) and isinstance(right, Layout):
-        if left.bits == 0 and offset == 0:
-            return right
-        return ComposedLayout(inner=left, offset=offset, outer=right)
-    if isinstance(left, Layout) and isinstance(right, Swizzle):
-        if offset:
-            raise NotImplementedError(
-                f"composition: a non-zero offset ({offset}) between a Layout and a "
-                f"Swizzle has no canonical ComposedLayout form"
-            )
-        active_y = _crd2idx_unbounded(left, right.yyy_mask)
-        active_z = _crd2idx_unbounded(left, right.zzz_mask)
-        return composition(_make_swizzle(active_y, active_z), left)
+    """CuTe ``composition``, dispatched to the supported overloads."""
+    if swizzle_layout._supports_composition(left, right):
+        return swizzle_layout.composition(left, right, offset)
     raise NotImplementedError(
         f"composition: no rule for {type(left).__name__} ∘ {type(right).__name__}"
     )
-
-
-def _swizzled_inverse(layout: ComposedLayout, inverse_of_layout):
-    """CuTe's swizzled ``left_inverse``/``right_inverse`` (``swizzle_layout.hpp:344``).
-
-    ``inverse(Swizzle(offset + outer(c)))`` passes the swizzle back to the
-    left of the inverted ``outer``, which ``composition(Layout, Swizzle)``
-    then canonicalizes back into this IR's one legal shape. CuTe's non-zero
-    ``offset`` branch composes ``inverse(offset)`` between the two, which
-    lands a bare ``Swizzle`` in ``outer``; that is not a layout, so this
-    refuses it by name rather than building something unrepresentable.
-    """
-    if layout.offset != 0:
-        raise NotImplementedError(
-            f"inverse: a swizzled composed layout with a non-zero offset "
-            f"({layout.offset}) inverts to a Swizzle on the domain side, which "
-            f"ComposedLayout.outer cannot hold"
-        )
-    if not isinstance(layout.outer, Layout):
-        raise NotImplementedError(
-            f"inverse: a swizzled composed layout inverts through its outer "
-            f"Layout; this one states {type(layout.outer).__name__}"
-        )
-    return composition(inverse_of_layout(layout.outer), layout.inner)
 
 
 def left_inverse(layout: Union[Layout, ComposedLayout, Swizzle]):
@@ -366,10 +262,8 @@ def left_inverse(layout: Union[Layout, ComposedLayout, Swizzle]):
     outer=None)`` (``outer=None`` ≡ identity), i.e. ``image⁻¹(t) =
     outer⁻¹(t − offset)``.
     """
-    if isinstance(layout, Swizzle):
-        return layout
-    if swizzle_of(layout) is not None:
-        return _swizzled_inverse(layout, left_inverse)
+    if swizzle_layout._supports_inverse(layout):
+        return swizzle_layout.left_inverse(layout)
     if isinstance(layout, ComposedLayout):
         _check_admissible(layout)
         return ComposedLayout(
@@ -386,10 +280,8 @@ def right_inverse(layout: Union[Layout, ComposedLayout, Swizzle]):
     A ``Swizzle`` is an involution -- its Y and Z bit ranges do not overlap --
     so it is its own inverse on both sides (``swizzle_layout.hpp:371``).
     """
-    if isinstance(layout, Swizzle):
-        return layout
-    if swizzle_of(layout) is not None:
-        return _swizzled_inverse(layout, right_inverse)
+    if swizzle_layout._supports_inverse(layout):
+        return swizzle_layout.right_inverse(layout)
     if isinstance(layout, ComposedLayout):
         _check_admissible(layout)
         return ComposedLayout(
@@ -455,7 +347,6 @@ __all__ = [
     "ASYNC_WIDTHS",
     "NotProjectable",
     "Run",
-    "swizzle_of",
     "composition",
     "cosize",
     "apply",
