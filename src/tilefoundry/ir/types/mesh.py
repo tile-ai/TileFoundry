@@ -324,8 +324,6 @@ def make_mesh(*meshes: Mesh) -> Mesh:
         elif set(here) <= set(there):
             result = inner
         elif len(there) < len(here) and here[-len(there) :] == there:
-            if isinstance(inner.layout, ComposedLayout):
-                raise ValueError("cannot replace a mesh suffix with a sliced mesh")
             kept = len(here) - len(there)
             above = _levels(result)[:kept]
             named = sum(len(flatten(level.shape)) for level in above)
@@ -334,7 +332,8 @@ def make_mesh(*meshes: Mesh) -> Mesh:
                 (*above, *_levels(inner)),
                 (*_starts(result)[:kept], *_starts(inner)),
                 (*result.names[:named], *inner.names),
-                sliced=isinstance(result.layout, ComposedLayout),
+                sliced=isinstance(result.layout, ComposedLayout)
+                or isinstance(inner.layout, ComposedLayout),
             )
         else:
             shared = sorted(set(here) & set(there))

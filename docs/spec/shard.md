@@ -335,10 +335,11 @@ Mesh composition uses the following rules:
 - Append concatenates the per-level arrangements. When an appended mesh is
   sliced, its per-level start is re-encoded in the combined device numbering
   and retained in the result's `ComposedLayout.offset`.
-- Replacing a suffix with a sliced mesh MUST be rejected. The slice belongs on
-  the combined multi-level mesh, where every axis contributing to its device
-  offset is stated together. Replacing an unsliced suffix and replacing the
-  whole mesh retain their existing behavior.
+- Replacing a suffix with a sliced mesh MUST preserve each retained upper
+  level's start and take each replaced level's start and arrangement from the
+  inner mesh. The combined `ComposedLayout.offset` MUST then be re-encoded in
+  device numbering from those per-level starts. Replacing an unsliced suffix
+  and replacing the whole mesh retain their existing behavior.
 - `make_mesh(*meshes)` invokes `check_topology` on its result. For each named
   level with a concrete declared extent, its position count MUST NOT exceed
   that extent; symbolic extents are deferred until dimensions are bound. A

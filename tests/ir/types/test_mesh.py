@@ -84,9 +84,31 @@ def test_make_mesh_appends_a_sliced_scope_with_its_offset() -> None:
     assert not covered_by_scope(make_mesh(CTA, THR[0:128]), make_mesh(CTA, THR[128:256]))
 
 
-def test_make_mesh_refuses_a_sliced_suffix_replacement() -> None:
-    with pytest.raises(ValueError):
-        make_mesh(CT, THR[128:256])
+def test_make_mesh_replaces_a_sliced_suffix_by_component() -> None:
+    cta = Mesh(
+        (Topology("cta", 4352),),
+        Layout((64, 68), (68, 1)),
+    )
+    current = make_mesh(cta[2:3, :], THR)
+    inner = Mesh(
+        (Topology("thread", 384),),
+        ComposedLayout(None, 128, Layout((4, 8, 4), (32, 4, 1))),
+    )
+
+    replaced = make_mesh(current, inner)
+
+    assert replaced.layout == ComposedLayout(
+        None,
+        52352,
+        Layout(((1, 68), (4, 8, 4)), ((68, 1), (32, 4, 1))),
+    )
+    assert separate(replaced) == (
+        Mesh(
+            (Topology("cta", 4352),),
+            ComposedLayout(None, 136, Layout((1, 68), (68, 1))),
+        ),
+        inner,
+    )
 
 
 def test_mesh_with_several_levels_slices_in_device_numbering() -> None:
