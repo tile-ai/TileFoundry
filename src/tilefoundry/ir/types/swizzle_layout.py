@@ -7,27 +7,22 @@ the other layout value types.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
-from .int_tuple import flatten
-from .layout import ComposedLayout, Layout, Swizzle
-from .stride import compact_col_major
-
-
-def _shape(layout: Layout) -> tuple[int, ...]:
-    return flatten(layout.shape)
-
-
-def _stride(layout: Layout) -> tuple[int, ...]:
-    if layout.strides is not None:
-        return layout.strides
-    return compact_col_major(_shape(layout))
+from .layout import (
+    ComposedLayout,
+    Layout,
+    Swizzle,
+    flat_shape,
+    flat_stride,
+    make_swizzle,
+)
 
 
 def _crd2idx_unbounded(layout: Layout, coord: int) -> int:
     """Apply CuTe ``crd2idx`` while leaving the final mode unwrapped."""
-    shape = _shape(layout)
-    stride = _stride(layout)
+    shape = flat_shape(layout)
+    stride = flat_stride(layout)
     idx = 0
     rem = coord
     last = len(shape) - 1
@@ -51,29 +46,8 @@ def get_swizzle_portion(layout: object) -> Optional[Swizzle]:
     return None
 
 
-def make_swizzle(active_y: int, active_z: int) -> Swizzle:
-    """CuTe ``make_swizzle<Y,Z>()``: build the swizzle XORing *Y* onto *Z*."""
-    bits_y, bits_z = active_y.bit_count(), active_z.bit_count()
-    if bits_y != bits_z:
-        raise NotImplementedError(
-            f"composition: the Y mask {active_y:#x} holds {bits_y} bits and the Z "
-            f"mask {active_z:#x} holds {bits_z}; only an equal-width pair is a "
-            f"Swizzle"
-        )
-    if bits_y == 0:
-        return Swizzle(0, 0, 0)
-    trailing_y = (active_y & -active_y).bit_length() - 1
-    trailing_z = (active_z & -active_z).bit_length() - 1
-    swizzle = Swizzle(bits_y, min(trailing_y, trailing_z), trailing_y - trailing_z)
-    if swizzle.swizzle_code != (active_y | active_z):
-        raise NotImplementedError(
-            f"composition: the mask pair ({active_y:#x}, {active_z:#x}) is not a "
-            f"Swizzle<B,M,S>; its bits are not two contiguous equal-width runs"
-        )
-    return swizzle
-
-
-def _supports_composition(left: object, right: object) -> bool:
+def supports_composition(left: object, right: object) -> bool:
+    """Return whether the operands select a CuTe swizzle composition overload."""
     return (isinstance(left, Swizzle) and isinstance(right, Layout)) or (
         isinstance(left, Layout) and isinstance(right, Swizzle)
     )
@@ -99,12 +73,13 @@ def composition(left, right, offset: int = 0):
     )
 
 
-def _supports_inverse(layout: object) -> bool:
+def supports_inverse(layout: object) -> bool:
+    """Return whether a CuTe swizzle inverse overload accepts *layout*."""
     return isinstance(layout, Swizzle) or get_swizzle_portion(layout) is not None
 
 
-def _inverse(layout, inverse_of_layout):
-    """CuTe's composed swizzle inverse, shared by both inverse overloads."""
+def inverse(layout, inverse_of_layout: Callable):
+    """Apply the CuTe swizzle inverse using the injected general inverse."""
     if isinstance(layout, Swizzle):
         return layout
     if layout.offset != 0:
@@ -121,24 +96,10 @@ def _inverse(layout, inverse_of_layout):
     return composition(inverse_of_layout(layout.outer), layout.inner)
 
 
-def left_inverse(layout):
-    """CuTe's swizzled ``left_inverse`` overload."""
-    from .layout_algebra import left_inverse as inverse_of_layout  # noqa: PLC0415
-
-    return _inverse(layout, inverse_of_layout)
-
-
-def right_inverse(layout):
-    """CuTe's swizzled ``right_inverse`` overload."""
-    from .layout_algebra import right_inverse as inverse_of_layout  # noqa: PLC0415
-
-    return _inverse(layout, inverse_of_layout)
-
-
 __all__ = [
     "composition",
     "get_swizzle_portion",
-    "left_inverse",
-    "make_swizzle",
-    "right_inverse",
+    "inverse",
+    "supports_composition",
+    "supports_inverse",
 ]

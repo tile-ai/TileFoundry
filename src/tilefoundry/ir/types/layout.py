@@ -5,6 +5,7 @@ from typing import Optional
 
 from .int_tuple import flatten as _flat
 from .int_tuple import product
+from .stride import compact_col_major
 
 
 class LayoutBase:
@@ -84,6 +85,28 @@ class Swizzle:
         return offset ^ moved
 
 
+def make_swizzle(active_y: int, active_z: int) -> Swizzle:
+    """CuTe ``make_swizzle<Y,Z>()``: build the swizzle XORing *Y* onto *Z*."""
+    bits_y, bits_z = active_y.bit_count(), active_z.bit_count()
+    if bits_y != bits_z:
+        raise NotImplementedError(
+            f"composition: the Y mask {active_y:#x} holds {bits_y} bits and the Z "
+            f"mask {active_z:#x} holds {bits_z}; only an equal-width pair is a "
+            f"Swizzle"
+        )
+    if bits_y == 0:
+        return Swizzle(0, 0, 0)
+    trailing_y = (active_y & -active_y).bit_length() - 1
+    trailing_z = (active_z & -active_z).bit_length() - 1
+    swizzle = Swizzle(bits_y, min(trailing_y, trailing_z), trailing_y - trailing_z)
+    if swizzle.swizzle_code != (active_y | active_z):
+        raise NotImplementedError(
+            f"composition: the mask pair ({active_y:#x}, {active_z:#x}) is not a "
+            f"Swizzle<B,M,S>; its bits are not two contiguous equal-width runs"
+        )
+    return swizzle
+
+
 @dataclass(frozen=True)
 class ComposedLayout(LayoutBase):
     """Represent ``image(c) = inner(offset + outer(c))``.
@@ -110,6 +133,18 @@ class ComposedLayout(LayoutBase):
 
 
 EMPTY_LAYOUT = Layout(shape=(), strides=())
+
+
+def flat_shape(layout: Layout) -> tuple[int, ...]:
+    """Return CuTe ``flatten(layout.shape())`` as a flat tuple."""
+    return _flat(layout.shape)
+
+
+def flat_stride(layout: Layout) -> tuple[int, ...]:
+    """Flatten stated strides, or synthesize the compact column-major default."""
+    if layout.strides is not None:
+        return _flat(layout.strides)
+    return compact_col_major(flat_shape(layout))
 
 
 def size(layout: Layout) -> int:
@@ -178,7 +213,10 @@ __all__ = [
     "Swizzle",
     "ComposedLayout",
     "EMPTY_LAYOUT",
+    "flat_shape",
+    "flat_stride",
     "get",
+    "make_swizzle",
     "rank",
     "take",
 ]

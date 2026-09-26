@@ -16,7 +16,7 @@ from typing import Optional, Union
 from tilefoundry.ir.types.layout import flatten
 
 from . import swizzle_layout
-from .layout import ComposedLayout, Layout, Swizzle, size
+from .layout import ComposedLayout, Layout, Swizzle, flat_shape, flat_stride, size
 from .stride import compact_col_major, idx2crd
 from .swizzle_layout import get_swizzle_portion
 
@@ -38,16 +38,6 @@ class Run:
     mode: int
 
 
-def _shape(layout: Layout) -> tuple[int, ...]:
-    return flatten(layout.shape)
-
-
-def _stride(layout: Layout) -> tuple[int, ...]:
-    if layout.strides is not None:
-        return layout.strides
-    return compact_col_major(_shape(layout))
-
-
 def apply(layout: Union[Layout, ComposedLayout], coord: int) -> int:
     """``crd2idx`` of a 1-D domain coord: decompose by shape, dot with strides.
 
@@ -57,8 +47,8 @@ def apply(layout: Union[Layout, ComposedLayout], coord: int) -> int:
     """
     if isinstance(layout, ComposedLayout):
         return _apply_any(layout, coord)
-    shape = _shape(layout)
-    stride = _stride(layout)
+    shape = flat_shape(layout)
+    stride = flat_stride(layout)
     idx = 0
     rem = coord
     for s, d in zip(shape, stride):
@@ -91,7 +81,7 @@ def coalesce(layout: Union[Layout, ComposedLayout]):
         )
     result_shape: list[int] = [1]
     result_stride: list[int] = [0]
-    for shape, stride in zip(_shape(layout), _stride(layout)):
+    for shape, stride in zip(flat_shape(layout), flat_stride(layout)):
         if shape == 1:
             continue
         if result_shape[-1] == 1:
@@ -150,7 +140,7 @@ def complement(layout: Layout, max_idx: int = 1) -> Layout:
     result_shape: list[int] = []
     result_stride: list[int] = []
     current_idx = 1
-    for stride, shape in sorted(zip(_stride(layout), _shape(layout))):
+    for stride, shape in sorted(zip(flat_stride(layout), flat_shape(layout))):
         if stride == 0 or shape == 1:
             continue
         if current_idx > shape * stride:
@@ -165,7 +155,7 @@ def complement(layout: Layout, max_idx: int = 1) -> Layout:
 
 def _make_flat(a: Layout, b: Layout) -> Layout:
     """Concatenate two flat layouts into one (CuTe ``make_layout`` after flatten)."""
-    return Layout(shape=_shape(a) + _shape(b), strides=_stride(a) + _stride(b))
+    return Layout(shape=flat_shape(a) + flat_shape(b), strides=flat_stride(a) + flat_stride(b))
 
 
 def is_inverse_projectable(layout: Layout) -> bool:
@@ -182,7 +172,9 @@ def is_inverse_projectable(layout: Layout) -> bool:
     """
     current = 1
     modes = sorted(
-        (stride, shape) for shape, stride in zip(_shape(layout), _stride(layout)) if shape != 1
+        (stride, shape)
+        for shape, stride in zip(flat_shape(layout), flat_stride(layout))
+        if shape != 1
     )
     for stride, shape in modes:
         if stride == 0 or stride % current != 0:
@@ -196,8 +188,8 @@ def _right_inverse_layout(layout: Layout) -> Layout:
     result_shape: list[int] = []
     result_stride: list[int] = []
     current_idx = 1
-    shape = _shape(layout)
-    stride = _stride(layout)
+    shape = flat_shape(layout)
+    stride = flat_stride(layout)
     triples = sorted(zip(stride, shape, compact_col_major(shape)))
     for st, sh, rstride in triples:
         if sh == 1:
@@ -224,7 +216,7 @@ def _is_identity_inner(inner: object) -> bool:
     if inner is None:
         return True
     if isinstance(inner, Layout):
-        return _stride(inner) == compact_col_major(_shape(inner))
+        return flat_stride(inner) == compact_col_major(flat_shape(inner))
     return False
 
 
@@ -245,7 +237,7 @@ def _check_admissible(scope: ComposedLayout) -> None:
 
 def composition(left, right, offset: int = 0):
     """CuTe ``composition``, dispatched to the supported overloads."""
-    if swizzle_layout._supports_composition(left, right):
+    if swizzle_layout.supports_composition(left, right):
         return swizzle_layout.composition(left, right, offset)
     raise NotImplementedError(
         f"composition: no rule for {type(left).__name__} ∘ {type(right).__name__}"
@@ -262,8 +254,8 @@ def left_inverse(layout: Union[Layout, ComposedLayout, Swizzle]):
     outer=None)`` (``outer=None`` ≡ identity), i.e. ``image⁻¹(t) =
     outer⁻¹(t − offset)``.
     """
-    if swizzle_layout._supports_inverse(layout):
-        return swizzle_layout.left_inverse(layout)
+    if swizzle_layout.supports_inverse(layout):
+        return swizzle_layout.inverse(layout, left_inverse)
     if isinstance(layout, ComposedLayout):
         _check_admissible(layout)
         return ComposedLayout(
@@ -280,8 +272,8 @@ def right_inverse(layout: Union[Layout, ComposedLayout, Swizzle]):
     A ``Swizzle`` is an involution -- its Y and Z bit ranges do not overlap --
     so it is its own inverse on both sides (``swizzle_layout.hpp:371``).
     """
-    if swizzle_layout._supports_inverse(layout):
-        return swizzle_layout.right_inverse(layout)
+    if swizzle_layout.supports_inverse(layout):
+        return swizzle_layout.inverse(layout, right_inverse)
     if isinstance(layout, ComposedLayout):
         _check_admissible(layout)
         return ComposedLayout(
@@ -334,7 +326,7 @@ def project(scope: ComposedLayout, t: int) -> Optional[tuple[int, ...]]:
     if image(scope, coord_1d) != t:
         return None
 
-    shape = _shape(outer)
+    shape = flat_shape(outer)
     return idx2crd(coord_1d, shape, compact_col_major(shape))
 
 
