@@ -13,7 +13,7 @@ import tilefoundry.codegen.cuda  # noqa: F401 -- trigger emitter autodiscovery
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
 from tilefoundry.ir.core import Var, VerifyError
-from tilefoundry.ir.tir.cuda.memory.tma import TmaCopy
+from tilefoundry.ir.tir.cuda.memory.copy_async_bulk import CopyAsyncBulk
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
 from tilefoundry.ir.tir.verify import verify_prim_function
@@ -29,7 +29,7 @@ def _pf(src, dst, bar=_BAR) -> PrimFunction:
     return PrimFunction(
         name="fn",
         params=args,
-        body=Sequential(body=(Evaluate(callable=TmaCopy(), args=args), Return())),
+        body=Sequential(body=(Evaluate(callable=CopyAsyncBulk(), args=args), Return())),
     )
 
 
@@ -121,7 +121,7 @@ class TmaTiers:
             bulk_bar = T.alloc_tensor(Tensor[(1,), "i64", None, "smem"])
             T.mbarrier_init(bulk_bar, arrive_count=1)
             T.sync(m)
-            T.tma_copy(bulk_view, bulk_stage, bulk_bar)
+            T.copy_async_bulk(bulk_view, bulk_stage, bulk_bar)
             T.mbarrier_wait_parity(bulk_bar, 0)
             T.copy(bulk_stage, bulk_b)
         with Mesh((Topology("thread", 128),), Layout(shape=(128,), strides=(1,)), ("t",)) as mo:
@@ -146,7 +146,7 @@ class TmaTiers:
             odd_bar = T.alloc_tensor(Tensor[(1,), "i64", None, "smem"])
             T.mbarrier_init(odd_bar, arrive_count=1)
             T.sync(mo)
-            T.tma_copy(odd_view, odd_stage, odd_bar)
+            T.copy_async_bulk(odd_view, odd_stage, odd_bar)
             T.mbarrier_wait_parity(odd_bar, 0)
             T.copy(odd_stage, odd_b)
 

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from tilefoundry.ir.core.param_def import ParamDef
-from tilefoundry.ir.types import ComposedLayout, Mesh, StorageKind, Swizzle
+from tilefoundry.ir.types import Mesh, StorageKind
 
+from . import predicates as P
 from .pattern import (
     AttrPattern,
     CapturePattern,
@@ -16,7 +17,6 @@ from .pattern import (
     OrPattern,
     Pattern,
     RangePattern,
-    SwizzlePattern,
     TensorPattern,
     WildcardPattern,
 )
@@ -25,8 +25,8 @@ MOVED_STORAGES = (StorageKind.GMEM, StorageKind.SMEM, StorageKind.RMEM)
 WHOLE_BYTES = AttrPattern("bit_width", MultipleOfPattern(8))
 
 
-def moved_tile(index: int, storage=None, layout=None) -> TensorPattern:
-    """A moved tensor tile, with dtype and storage captures named by end."""
+def operand_tile(index: int, storage=None, layout=None) -> TensorPattern:
+    """A tensor tile whose dtype and storage captures are named by operand slot."""
     storages = MOVED_STORAGES if storage is None else storage
     return TensorPattern(
         dtype=CapturePattern(dtype_place(index), WHOLE_BYTES),
@@ -49,19 +49,32 @@ def storage_place(index: int) -> str:
     return f"storage{index}"
 
 
+def whole_vectors(index: int, widths: tuple[int, ...]) -> LayoutPattern:
+    """Whole vectors at *widths*, counted in operand *index*'s element dtype."""
+    return LayoutPattern(
+        predicates=(
+            P.WholeVectors(
+                CapturePattern("width", OneOfPattern(widths)),
+                dtype_place(index),
+                widths,
+            ),
+        )
+    )
+
+
 _ANY_THREADS = OrPattern(
     ComposedLayoutPattern(
         offset=WildcardPattern(),
         outer=LayoutPattern(
             ((CapturePattern("n", RangePattern(lo=1)),),),
             ((1,),),
-            per_mode=True,
+            predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
         ),
     ),
     LayoutPattern(
         ((CapturePattern("n", RangePattern(lo=1)),),),
         ((1,),),
-        per_mode=True,
+        predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
     ),
 )
 
@@ -74,37 +87,6 @@ def any_threads() -> ParamDef:
         pattern=MeshPattern(("thread",), _ANY_THREADS),
         optional=True,
         default=None,
-    )
-
-
-def arrangement_pattern(
-    layout,
-    *,
-    forward: bool = True,
-    injective: bool = True,
-    per_mode: bool = False,
-):
-    """Build the exact pattern for one authored arrangement."""
-    if isinstance(layout, ComposedLayout):
-        inner = layout.inner
-        return ComposedLayoutPattern(
-            SwizzlePattern(inner.bits, inner.base, inner.shift)
-            if isinstance(inner, Swizzle)
-            else inner,
-            layout.offset,
-            arrangement_pattern(
-                layout.outer,
-                forward=forward,
-                injective=injective,
-                per_mode=per_mode,
-            ),
-        )
-    return LayoutPattern(
-        tuple(layout.shape),
-        tuple(layout.strides),
-        forward=forward,
-        injective=injective,
-        per_mode=per_mode,
     )
 
 
@@ -134,9 +116,9 @@ __all__ = [
     "WHOLE_BYTES",
     "_mangle_variant_name",
     "any_threads",
-    "arrangement_pattern",
     "dtype_place",
     "locate_dim_var",
-    "moved_tile",
+    "operand_tile",
     "storage_place",
+    "whole_vectors",
 ]

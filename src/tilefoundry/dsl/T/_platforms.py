@@ -1,31 +1,30 @@
-"""``T.cuda`` — the CUDA (NVIDIA-GPU) platform sub-namespace of ``dsl.T``."""
+"""``T.cuda`` — CUDA instruction declarations."""
 
 from __future__ import annotations
 
-from tilefoundry.ir.tir.cuda.nn import mma as _cuda_mma
-from tilefoundry.ir.tir.cuda.nn.mma_atom import MmaAtom, MmaOpSpec
+from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
+from tilefoundry.ir.tir.cuda.nn.wgmma import Form, Major, Wgmma
 
 
-class _MmaNamespace:
-    """``T.cuda.mma`` — named MMA instructions + the ``atom(op=...)`` builder."""
+class _Sm80Namespace:
+    Mma = Mma
 
-    SM80_16x8x16_F32BF16BF16F32_TN: MmaOpSpec = _cuda_mma.SM80_16x8x16_F32BF16BF16F32_TN
 
-    @staticmethod
-    def atom(op: MmaOpSpec) -> MmaAtom:
-        """Realize an :class:`MmaAtom` from a named op (CuTe ``make_tiled_mma``)."""
-        return _cuda_mma.make_atom(op)
+class _Sm90Namespace:
+    Wgmma = Wgmma
+    Form = Form
+    Major = Major
 
 
 class _CudaNamespace:
-    """``T.cuda`` — the CUDA platform namespace."""
+    """``T.cuda`` — compile-time CUDA instruction declarations."""
 
-    mma = _MmaNamespace()
+    sm80 = _Sm80Namespace()
+    sm90 = _Sm90Namespace()
 
 
 cuda = _CudaNamespace()
 
-
 PLATFORM_NAMESPACES = {"cuda": cuda}
 
-__all__ = ["cuda", "PLATFORM_NAMESPACES"]
+__all__ = ["PLATFORM_NAMESPACES", "cuda"]

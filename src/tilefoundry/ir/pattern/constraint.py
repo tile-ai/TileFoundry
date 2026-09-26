@@ -64,19 +64,6 @@ class SameConstraint(Constraint):
         return f"{self.left}.{self.field} = {self.right}.{self.field}"
 
 
-def affine_part(layout):
-    """Return the strided affine part beneath shard frames and swizzles."""
-    if isinstance(layout, ShardLayout):
-        if not all(isinstance(attr, Broadcast) for attr in layout.attrs):
-            return None
-        layout = layout.layout
-    if isinstance(layout, ComposedLayout):
-        if layout.inner is not None and not isinstance(layout.inner, Swizzle):
-            return None
-        layout = layout.outer
-    return layout if isinstance(layout, Layout) and layout.strides is not None else None
-
-
 @dataclass(frozen=True, init=False)
 class SameModesConstraint(Constraint):
     """Require two tensor layouts to run along the same final mode of one axis."""
@@ -91,9 +78,19 @@ class SameModesConstraint(Constraint):
         return None if any(not isinstance(value, TensorType) for value in held) else held
 
     @staticmethod
-    def reading(tensor: TensorType):
-        layout = affine_part(tensor.layout)
-        if layout is None:
+    def reading(tensor: TensorType, arrangement=None):
+        layout = tensor.layout if arrangement is None else arrangement
+        if isinstance(layout, ShardLayout):
+            if not all(isinstance(attr, Broadcast) for attr in layout.attrs):
+                layout = None
+            else:
+                layout = layout.layout
+        if isinstance(layout, ComposedLayout):
+            if layout.inner is not None and not isinstance(layout.inner, Swizzle):
+                layout = None
+            else:
+                layout = layout.outer
+        if not isinstance(layout, Layout) or layout.strides is None:
             return None, f"{tensor.layout!r} is no strided arrangement"
         shape, strides = tuple(layout.shape), tuple(layout.strides)
         extents = tuple(tensor.shape)
@@ -117,11 +114,28 @@ class SameModesConstraint(Constraint):
             return None, f"{layout!r} has {len(unit)} modes at step 1, not one"
         return unit[0], None
 
+    def readings(self, pair: tuple[TensorType, TensorType]):
+        """Read below one shared shard frame only after proving it is the same."""
+        left, right = (value.layout for value in pair)
+        if (
+            isinstance(left, ShardLayout)
+            and isinstance(right, ShardLayout)
+            and left.attrs == right.attrs
+            and left.mesh == right.mesh
+        ):
+            arrangements = (left.layout, right.layout)
+        else:
+            arrangements = (None, None)
+        return tuple(
+            self.reading(value, arrangement)
+            for value, arrangement in zip(pair, arrangements)
+        )
+
     def holds(self, operands: dict) -> bool:
         pair = self.pair(operands)
         if pair is None:
             return True
-        (left, _), (right, _) = (self.reading(value) for value in pair)
+        (left, _), (right, _) = self.readings(pair)
         return (
             left is not None and right is not None and left[0] == right[0] and left[2] and right[2]
         )
@@ -137,7 +151,8 @@ class SameModesConstraint(Constraint):
         if pair is None:
             return self.written()
         readings = tuple(
-            (name, *self.reading(value)) for name, value in zip((self.left, self.right), pair)
+            (name, *reading)
+            for name, reading in zip((self.left, self.right), self.readings(pair))
         )
         for name, _, why in readings:
             if why is not None:
@@ -167,5 +182,4 @@ __all__ = [
     "DistinctConstraint",
     "SameConstraint",
     "SameModesConstraint",
-    "affine_part",
 ]

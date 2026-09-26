@@ -425,7 +425,7 @@ def register_verify_stmt(cls: type): ...        # decorator: register a verify h
     through `ctx.error(node, msg)`, which raises `VerifyError`.
 
 **`Evaluate(op, args)` dispatch.** TIR effect-form Ops
-(`Copy` / `Fill` / `Mma` / `ReLU` / `RMSNorm` / `Reduce`) appear in
+(`Copy` / `Fill` / `TiledMma` / `ReLU` / `RMSNorm` / `Reduce`) appear in
 Stmt position as `Evaluate(callable=op, args)`. The verify path keys
 on the Op class, not on `Evaluate` itself: `register_verify_stmt`
 takes the **Op class**, and `VerifyVisitor.generic_visit` —

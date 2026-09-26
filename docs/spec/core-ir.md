@@ -588,7 +588,7 @@ from `op.params()`.
 An Op is **value-form** when its `Call` produces an observable
 result the IR consumes — `Call.type` is then `TensorType` or
 `TupleType`. An Op is **effect-form** when it performs an in-place
-effect (e.g. `tir.memory.Copy` / `tir.cuda.nn.Mma`) and produces no
+effect (e.g. `tir.memory.Copy` / `tir.cuda.nn.TiledMma`) and produces no
 readable value (`UnitType`, [types §6](./types.md#6-unittype)); in Stmt position
 it appears as `Evaluate(op, args)`
 ([tir §1.4](./tir.md#14-evaluate)).
@@ -613,33 +613,52 @@ class Pattern:
 
 The implementation is split by responsibility under `ir/pattern/`:
 
-- `pattern.py` defines `Pattern` and the composable classes
+- `pattern.py` defines `Pattern`, the computed-condition base `Predicate`, and
+  the composable classes
   `OrPattern`, `AndPattern`, `SequencePattern`, `CapturePattern`,
   `ConstraintPattern`, `GuardPattern`, `SwitchPattern`, `RangePattern`,
   `MultipleOfPattern`, `OneOfPattern`, `AttrPattern`, `BitsPattern`,
   `LayoutPattern`, `SwizzlePattern`, `ComposedLayoutPattern`, `MeshPattern`,
   `ShardLayoutPattern`, `ScalarPattern`, `TensorPattern`, and
   `WildcardPattern`. It also owns the `Scalar` and `Tensor` singletons.
-- `match.py` owns matches, captures, symbolic resolution, layout-frame reading,
-  and the shared description helpers.
+- `predicates.py` defines named arrangement predicates: `Forward`,
+  `Injective`, `WholeVectors`, `PlainArrangement`, `BoxDims`, and `TensorMap`.
+- `match.py` owns matches, captures, symbolic resolution, and the shared
+  description helpers. An unstated (`None`) pattern field admits any value.
 - `constraint.py` owns cross-operand `Constraint`, `DistinctConstraint`,
   `SameConstraint`, and `SameModesConstraint` values.
-- `utils.py` owns exact-layout construction plus specialization naming and
-  dimension lookup.
+- `utils.py` owns specialization naming and dimension lookup.
 
-`LayoutPattern` checks `forward` and `injective` over the whole flattened
-arrangement by default. With `per_mode=True`, it checks each top-level mode
-independently; `MeshPattern` requires this explicit form because each mesh
-level uses its own numbering space. `MeshPattern` never changes the supplied
-pattern implicitly.
+`LayoutPattern` optionally matches a bare `Layout`'s nested `shape` and
+`strides`, then applies its table of named predicates. Omitting both structural
+fields leaves the structure unconstrained and lets predicates read through
+supported composed or sharded forms. `Forward()` and `Injective()` express the
+corresponding computed properties; they are not implicit.
+`LayoutPattern.from_layout(layout, ...)` constructs the exact bare or composed
+pattern for an authored arrangement, preserving its nested structure and the
+explicitly supplied predicate table. `Forward(per_mode=True)` and
+`Injective(per_mode=True)` check each top-level mode independently.
+`MeshPattern` rejects any supplied arrangement predicate that exposes
+`per_mode=False`, because each mesh level uses its own numbering space; an
+empty predicate table is allowed. It never changes the supplied pattern
+implicitly.
+`ShardLayoutPattern` names the same `layout`, `attrs`, and `mesh` fields as
+`ShardLayout`: `layout` and `mesh` are nested patterns, while `attrs` remains
+an exact structural value. Its mesh pattern may state bare and sliced forms
+explicitly; the matcher does not normalize one into the other.
 
 Two consumer surfaces:
 
 - **Parser dispatch** — `ParamDef.pattern` ([§2.3](#23-op)) is matched against an
   argument's `Expr.type` during overload resolution. Subclasses used:
-  `ScalarPattern` (rank-0), `TensorPattern(rank?, dtype?)` (non-scalar), and
+  `ScalarPattern` (rank-0), `TensorPattern(shape?, dtype?)` (non-scalar), and
   `AndPattern(parts)` (conjunction). Two singletons are exported as
   convenience: `Scalar = ScalarPattern()` and `Tensor = TensorPattern()`.
+  A tensor rank is stated by giving `shape` that many positions; wildcard
+  positions constrain only the sequence length. During effect-Op verification,
+  input patterns match in `ParamDef` order against one shared capture
+  environment, so a later operand can require a value captured by an earlier
+  operand.
 - **Specialization dispatch** — patterns appearing in
   `hir.Function.specializations` ([hir.md §1.1](./hir.md#11-function))
   and `tir.PrimFunction.specializations` describe which runtime

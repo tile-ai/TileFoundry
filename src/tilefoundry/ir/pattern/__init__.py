@@ -1,11 +1,11 @@
 """Public operation-declaration pattern language."""
 
+from . import predicates
 from .constraint import (
     Constraint,
     DistinctConstraint,
     SameConstraint,
     SameModesConstraint,
-    affine_part,
 )
 from .match import (
     ABSENT,
@@ -13,12 +13,9 @@ from .match import (
     OPAQUE,
     UNNAMED_PLACE,
     Match,
-    affine_frame,
     alternatives_of,
     between_rules,
     evaluated,
-    fits,
-    grouping,
     is_symbolic,
     matched,
     refusals_between,
@@ -39,6 +36,7 @@ from .pattern import (
     OneOfPattern,
     OrPattern,
     Pattern,
+    Predicate,
     RangePattern,
     Scalar,
     ScalarPattern,
@@ -55,11 +53,11 @@ from .utils import (
     WHOLE_BYTES,
     _mangle_variant_name,
     any_threads,
-    arrangement_pattern,
     dtype_place,
     locate_dim_var,
-    moved_tile,
+    operand_tile,
     storage_place,
+    whole_vectors,
 )
 
 __all__ = [
@@ -83,6 +81,7 @@ __all__ = [
     "OneOfPattern",
     "OrPattern",
     "Pattern",
+    "Predicate",
     "RangePattern",
     "SameConstraint",
     "SameModesConstraint",
@@ -98,22 +97,19 @@ __all__ = [
     "WildcardPattern",
     "WHOLE_BYTES",
     "_mangle_variant_name",
-    "affine_frame",
-    "affine_part",
     "alternatives_of",
     "any_threads",
-    "arrangement_pattern",
     "between_rules",
     "evaluated",
-    "fits",
-    "grouping",
     "dtype_place",
     "is_symbolic",
     "locate_dim_var",
     "matched",
-    "moved_tile",
+    "operand_tile",
     "refusals_between",
     "relations_of",
     "resolved",
     "storage_place",
+    "predicates",
+    "whole_vectors",
 ]

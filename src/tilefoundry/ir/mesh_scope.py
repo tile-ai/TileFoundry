@@ -12,7 +12,7 @@ from __future__ import annotations
 from tilefoundry.ir.types.int_tuple import flatten, product
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, size
 from tilefoundry.ir.types.layout_algebra import is_inverse_projectable
-from tilefoundry.ir.types.mesh import Mesh, _levels, _starts, check_topology
+from tilefoundry.ir.types.mesh import Mesh, check_topology, levels, selected_run, starts
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 from tilefoundry.ir.types.stride import compact_major
 
@@ -31,7 +31,7 @@ def device_layout(mesh: Mesh) -> Layout:
     units = compact_major(sizes, major="row") if all(
         isinstance(one, int) for one in sizes
     ) else (1,) * len(sizes)
-    for arrangement, unit in zip(_levels(mesh), units):
+    for arrangement, unit in zip(levels(mesh), units):
         stated = arrangement.strides
         shape.extend(flatten(arrangement.shape))
         strides.extend(
@@ -45,34 +45,6 @@ def device_layout(mesh: Mesh) -> Layout:
     return Layout(shape=tuple(shape), strides=tuple(strides))
 
 
-def _selected(arrangement: Layout, start: int) -> tuple[tuple, tuple, int]:
-    """One level's positions as a set of them reads: its modes, and where it starts.
-
-    An axis of one position names no instance, and modes written in another
-    order state the same positions, so the modes come back sorted by step with
-    the adjacent ones joined and the ones of a single position left out.
-    """
-    strides = arrangement.strides
-    if strides is None:
-        return tuple(flatten(arrangement.shape)), (), start
-    modes = [
-        (extent, stride)
-        for extent, stride in zip(flatten(arrangement.shape), flatten(strides))
-        if extent != 1
-    ]
-    joined: list[list] = []
-    for extent, stride in sorted(modes, key=lambda mode: (mode[1], mode[0])):
-        if joined and joined[-1][0] * joined[-1][1] == stride:
-            joined[-1][0] *= extent
-        else:
-            joined.append([extent, stride])
-    return (
-        tuple(extent for extent, _ in joined),
-        tuple(stride for _, stride in joined),
-        start,
-    )
-
-
 def covered_by_scope(mesh: Mesh, current: Mesh) -> bool:
     """Whether *mesh* selects exactly the positions the enclosing scope does.
 
@@ -83,17 +55,17 @@ def covered_by_scope(mesh: Mesh, current: Mesh) -> bool:
     however either of them wrote the axes down.
     """
     scope = {
-        getattr(topology, "name", topology): _selected(arrangement, start)
+        getattr(topology, "name", topology): selected_run(arrangement, start)
         for topology, arrangement, start in zip(
-            current.topologies, _levels(current), _starts(current)
+            current.topologies, levels(current), starts(current)
         )
     }
     return all(
         getattr(topology, "name", topology) in scope
-        and _selected(arrangement, start)
+        and selected_run(arrangement, start)
         == scope[getattr(topology, "name", topology)]
         for topology, arrangement, start in zip(
-            mesh.topologies, _levels(mesh), _starts(mesh)
+            mesh.topologies, levels(mesh), starts(mesh)
         )
     )
 

@@ -11,9 +11,8 @@ from tilefoundry.ir.pattern import (
     TensorPattern,
     any_threads,
 )
-from tilefoundry.ir.tir.verify import verify_between
 from tilefoundry.ir.types import StorageKind, UnitType
-from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+from tilefoundry.visitor_registry import register_typeinfer
 
 _REGISTER = TensorPattern(storage=StorageKind.RMEM)
 
@@ -34,9 +33,6 @@ class Cast(Op):
 @register_typeinfer(Cast)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
-
-
-register_verify_stmt(Cast)(verify_between)
 
 
 __all__ = ["Cast"]

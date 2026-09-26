@@ -414,7 +414,8 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
         return f'P("{value.reduction}")'
 
     def atom_reference(self, value: MmaAtom, ctx=None) -> str:
-        return f"T.cuda.mma.atom(op=T.cuda.mma.{value.op.name})"
+        mesh = None if value.mesh is None else self.visit(value.mesh, ctx)
+        return value.written(mesh)
 
     def render_value(self, value, ctx=None, indent: str = "") -> str:
         """Render a non-expression attribute through the same visitor when possible."""

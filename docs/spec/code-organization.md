@@ -20,7 +20,7 @@ truth for the directory's structure and invariants.
 | `ir/core/` | [core-ir](./core-ir.md) | Shared node algebra: `Module` / `Expr` / `Var` / `Constant` / `Tuple` / `Op` / `Call` / `Stmt` (base class) / `OpSchema` / `ParamDef` / call-graph and ownership queries / typed metadata attach-detach and diagnostics / `@register_op` / `@register_alias` / `op_registry` / `errors`. |
 | `ir/pattern/` | [core-ir](./core-ir.md) | Operation-declaration predicates: composable pattern values in `pattern.py`, match/binding and rendering mechanics in `match.py`, cross-operand relations in `constraint.py`, and pattern construction/specialization helpers in `utils.py`. |
 | `ir/types/` | [types](./types.md) | Type-system root: `Type` / `TensorType` / `TupleType` / `UnitType` / `CallableType` / `DType` / `StorageKind` / `resolve_storage` / local projections (`local_type_of`) / tensor-leaf, byte-by-storage, and topology-extent queries / `dim.*` (with their typeinfer). |
-| `ir/types/{int_tuple,stride,layout,layout_algebra,shard_layout,mesh}.py` | [shard](./shard.md) | `Topology` / `Mesh` / `Layout` / `ComposedLayout` / `ShardLayout` / `ShardAttr` (`Split` / `Broadcast` / `Dynamic` / `Partial`), filed as CuTe files them: int tuples (`flatten` / `unflatten` / `repeat_like` / `product`), strides (`compact_major` / `idx2crd` / `crd2idx`), layouts and the algebra over them each in their own module; mesh construction, separation, and topology-bound checking stay with `Mesh`. |
+| `ir/types/{int_tuple,stride,layout,layout_algebra,swizzle_layout,shard_layout,mesh}.py` | [shard](./shard.md) | `Topology` / `Mesh` / `Layout` / `ComposedLayout` / `ShardLayout` / `ShardAttr` (`Split` / `Broadcast` / `Dynamic` / `Partial`), filed as CuTe files them: int tuples (`flatten` / `unflatten` / `repeat_like` / `product`), strides (`compact_major` / `idx2crd` / `crd2idx`), layouts, general layout algebra, and swizzle-specialized layout algebra each in their own module; mesh construction, separation, and topology-bound checking stay with `Mesh`. |
 | `ir/mesh_scope.py` | [shard](./shard.md) | Which scope a statement stands inside and what it admits: `device_layout`, `covered_by_scope`. Neither a type nor a visitor, so it sits beside `ir/isl_interop.py` rather than in either. |
 | `ir/clause/` | [parser](./parser.md) | Authored `where(layout=..., mesh=..., storage=...)` constraint records: the shared base plus layout, mesh, and storage constraints, attached by the parser and read back by the Python printer. |
 | `ir/visitor.py` | [visitor-mutator](./visitor-mutator.md) | `ExprFunctor` / `ExprVisitor` / `ExprWalker` / `ExprCollector` / `ExprCloner` / `BindingSubstitutionCloner` / `StmtVisitor` / `StmtMutator` / `StmtExprMutator`, plus `collect_exprs`, value-operand/function-value queries, and the canonical `PrimFunction` walk and rewrite entries. |
@@ -102,6 +102,15 @@ physical directory layout reflects that boundary directly.
   contracts are distinct even though both are consumed across the codegen
   boundary.
 
+`ir/types/layout_algebra.py` has a mechanically checkable public surface:
+every name in its `__all__` MUST have the same name in CuTe, with
+`is_inverse_projectable` as its sole exception. Python's missing overload
+dispatch requires the separately named `supports_composition`,
+`supports_inverse`, and `inverse` adapters in `swizzle_layout.py`;
+`NotProjectable` in `layout.py` is the named Python diagnostic needed by
+composed application and inversion. These are explicit exceptions, not a
+license for unrelated helpers in the algebra modules.
+
 `ir/pattern/`, `ir/clause/`, `visitor_registry/`, and `dump/` are cross-cutting packages;
 their stable responsibilities are owned by [core-ir](./core-ir.md),
 [parser](./parser.md), [visitor-registry](./visitor-registry.md), and [inspection](./inspection.md),
@@ -135,9 +144,10 @@ are not IR classes, so they go through Rule 1a.
 nodes are target-neutral. A node or descriptor that is specific to one
 compilation target nests as `ir/{dialect}/{target}/{category}/<name>.py`;
 target-neutral abstractions stay at `ir/{dialect}/{category}/`. For
-example the whole MMA surface is target-owned — the `Mma` op, the
-`MmaOpSpec` / `MmaAtom` descriptors, the CUDA SM80 instruction spec, and its
-fragment layouts all live under `ir/tir/cuda/nn/` (`mma.py` + `mma_atom.py`).
+example the whole MMA surface is target-owned — `mma.py` defines the `TiledMma`
+op, `mma_atom.py` defines `MmaAtom` / `AtomPattern`, and `sm80_mma.py` /
+`wgmma.py` define the CUDA instruction declarations. All four live under
+`ir/tir/cuda/nn/`.
 The backend-bound construction stays in TIR: HIR is the checking reference
 side, and carrying the instruction name in that reference would make two GPU
 targets require different HIR references. (`codegen/` and `runtime/` are

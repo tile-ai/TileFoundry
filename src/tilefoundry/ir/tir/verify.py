@@ -50,36 +50,46 @@ from .symbol_ref import SymbolRef
 _PRIM_FUNCTION = "[tir §1.3](docs/spec/tir.md#13-primfunction)"
 
 
-def _input_params(op_type: type) -> tuple:
+def input_params(op_type: type) -> tuple:
     return tuple(param for param in op_type._op_schema.signature if param.kind == "input")
 
 
-def verify_between(call, ctx, lead: str = "") -> None:
+def verify_between(call, ctx) -> None:
     """Hold one call to the relations declared between its operands."""
     op_type = type(call.target)
     rules = between_rules(op_type)
     if not rules:
         return
-    names = tuple(param.name for param in _input_params(op_type))
+    names = tuple(param.name for param in input_params(op_type))
     operands = dict(zip(names, (ctx.type_of(arg) for arg in call.args)))
     for rule in rules:
         if not rule.holds(operands):
-            ctx.error(call, lead + rule.refused(operands))
+            ctx.error(call, rule.refused(operands))
 
 
-def verify_operands(call, ctx, label: str) -> None:
+def verify_operands(call, ctx) -> None:
     """Hold each operand to the pattern declared for its parameter."""
-    for param, arg in zip(_input_params(type(call.target)), call.args):
+    label = type(call.target)._op_schema.name
+    held = {}
+    for param, arg in zip(input_params(type(call.target)), call.args):
         if param.pattern is None:
             continue
         value = ctx.type_of(arg)
-        if param.pattern.match(value) is None:
+        pattern = (
+            param.pattern.read_on(call.target)
+            if hasattr(param.pattern, "read_on")
+            else param.pattern
+        )
+        found = pattern.match(value, held)
+        if found is None:
             ctx.error(
                 call,
                 f"{label} {param.name} is {tuple(value.shape)} "
                 f"{value.dtype.name} storage={value.storage}: "
-                f"{param.pattern.refusal(value)}",
+                f"{pattern.refusal(value, held)}",
             )
+            continue
+        held = found.captures
 
 
 def verify_prim_function(
@@ -212,12 +222,20 @@ def _walk_stmt(stmt, ctx, scope, fn, module_fn_map, bound_var_ids: set[int]):
                 op = stmt.callable
                 op_cls = type(op)
                 fn_verify = verify_stmt_registry.lookup(op_cls)
-                if fn_verify is None:
-                    raise VerifyError(f"no verify_stmt registered for Op {op_cls.__name__}")
+                if fn_verify is None and not (
+                    any(param.pattern is not None for param in input_params(op_cls))
+                    or between_rules(op_cls)
+                ):
+                    raise VerifyError(
+                        f"Op {op_cls.__name__} states no verifier and no declaration"
+                    )
 
                 ctx.mesh_scope = tuple(scope)
                 call = Call(type=UnitType(), target=op, args=stmt.args)
-                fn_verify(call, ctx)
+                if fn_verify is not None:
+                    fn_verify(call, ctx)
+                verify_between(call, ctx)
+                verify_operands(call, ctx)
 
             for arg in stmt.args:
                 _reject_nested_alloc_tensor(arg, at_letstmt_value=False)
@@ -602,4 +620,10 @@ def verify_module(fns) -> None:
             )
 
 
-__all__ = ["verify_between", "verify_module", "verify_operands", "verify_prim_function"]
+__all__ = [
+    "input_params",
+    "verify_between",
+    "verify_module",
+    "verify_operands",
+    "verify_prim_function",
+]

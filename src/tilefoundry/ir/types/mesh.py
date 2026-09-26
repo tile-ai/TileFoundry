@@ -73,8 +73,8 @@ class Mesh:
         """
         if isinstance(self.layout, ComposedLayout):
             raise ValueError("cannot slice an already-sliced mesh (nested slice unsupported)")
-        levels = _levels(self)
-        rank = sum(len(flatten(level.shape)) for level in levels)
+        held_levels = levels(self)
+        rank = sum(len(flatten(level.shape)) for level in held_levels)
         keys = key if isinstance(key, tuple) else (key,)
         if len(keys) > rank:
             raise ValueError(f"mesh slice has {len(keys)} indices but the mesh has {rank} axes")
@@ -88,7 +88,7 @@ class Mesh:
             if len(self.topologies) == 1
             else compact_major(tuple(topology.size for topology in self.topologies))
         )
-        for level, unit in zip(levels, units):
+        for level, unit in zip(held_levels, units):
             level_shape = tuple(flatten(level.shape))
             stated = level.strides
             level_strides = (
@@ -231,7 +231,7 @@ def _nested(layout, topologies: tuple) -> "Layout | ComposedLayout":
     return Layout(shape=tuple(shape), strides=tuple(strides))
 
 
-def _levels(mesh: Mesh) -> tuple[Layout, ...]:
+def levels(mesh: Mesh) -> tuple[Layout, ...]:
     """Each level's arrangement, in that level's own numbering."""
     stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
     if stated is None:
@@ -242,7 +242,7 @@ def _levels(mesh: Mesh) -> tuple[Layout, ...]:
     return tuple(get(stated, index) for index in range(_rank(stated)))
 
 
-def _starts(mesh: Mesh) -> tuple[int, ...]:
+def starts(mesh: Mesh) -> tuple[int, ...]:
     """Where each level's run starts, decoded from the device-numbered offset."""
     offset = mesh.layout.offset if isinstance(mesh.layout, ComposedLayout) else 0
     if not isinstance(offset, int):
@@ -255,6 +255,61 @@ def _starts(mesh: Mesh) -> tuple[int, ...]:
     return tuple(idx2crd(offset, sizes, compact_major(sizes)))
 
 
+def selected_run(arrangement: Layout, start: int) -> tuple[tuple, tuple, int]:
+    """Reduce one level's selected positions to its joined modes and start."""
+    strides = arrangement.strides
+    if strides is None:
+        return tuple(flatten(arrangement.shape)), (), start
+    modes = [
+        (extent, stride)
+        for extent, stride in zip(flatten(arrangement.shape), flatten(strides))
+        if extent != 1
+    ]
+    joined: list[list] = []
+    for extent, stride in sorted(modes, key=lambda mode: (mode[1], mode[0])):
+        if joined and joined[-1][0] * joined[-1][1] == stride:
+            joined[-1][0] *= extent
+        else:
+            joined.append([extent, stride])
+    return (
+        tuple(extent for extent, _ in joined),
+        tuple(stride for _, stride in joined),
+        start,
+    )
+
+
+def _continuous_interval(run: tuple[tuple, tuple, int]) -> tuple[int, int] | None:
+    extents, strides, start = run
+    if not isinstance(start, int):
+        return None
+    if not extents:
+        return start, start + 1
+    if len(extents) != 1 or strides != (1,) or not isinstance(extents[0], int):
+        return None
+    return start, start + extents[0]
+
+
+def within_scope(mesh: Mesh, current: Mesh) -> bool:
+    """Whether each continuous run selected by *mesh* is within *current*."""
+    scope = {
+        getattr(topology, "name", topology): selected_run(arrangement, start)
+        for topology, arrangement, start in zip(
+            current.topologies, levels(current), starts(current)
+        )
+    }
+    for topology, arrangement, start in zip(
+        mesh.topologies, levels(mesh), starts(mesh)
+    ):
+        name = getattr(topology, "name", topology)
+        inner = _continuous_interval(selected_run(arrangement, start))
+        outer = _continuous_interval(scope[name]) if name in scope else None
+        if inner is None or outer is None:
+            return False
+        if not (outer[0] <= inner[0] and inner[1] <= outer[1]):
+            return False
+    return True
+
+
 def check_topology(mesh: Mesh) -> None:
     """Reject static mesh positions beyond their declared topology extents.
 
@@ -263,7 +318,7 @@ def check_topology(mesh: Mesh) -> None:
     """
     if isinstance(mesh.layout, ComposedLayout):
         return
-    for topology, arrangement in zip(mesh.topologies, _levels(mesh)):
+    for topology, arrangement in zip(mesh.topologies, levels(mesh)):
         declared = getattr(topology, "size", None)
         if not isinstance(declared, int) or isinstance(declared, bool):
             continue
@@ -315,8 +370,8 @@ def make_mesh(*meshes: Mesh) -> Mesh:
         if set(here).isdisjoint(there):
             result = _joined(
                 (*result.topologies, *inner.topologies),
-                (*_levels(result), *_levels(inner)),
-                (*_starts(result), *_starts(inner)),
+                (*levels(result), *levels(inner)),
+                (*starts(result), *starts(inner)),
                 (*result.names, *inner.names),
                 sliced=isinstance(result.layout, ComposedLayout)
                 or isinstance(inner.layout, ComposedLayout),
@@ -324,18 +379,37 @@ def make_mesh(*meshes: Mesh) -> Mesh:
         elif set(here) <= set(there):
             result = inner
         elif len(there) < len(here) and here[-len(there) :] == there:
-            if isinstance(inner.layout, ComposedLayout):
-                raise ValueError("cannot replace a mesh suffix with a sliced mesh")
+            current = result
             kept = len(here) - len(there)
-            above = _levels(result)[:kept]
+            above = levels(result)[:kept]
             named = sum(len(flatten(level.shape)) for level in above)
             result = _joined(
                 (*result.topologies[:kept], *inner.topologies),
-                (*above, *_levels(inner)),
-                (*_starts(result)[:kept], *_starts(inner)),
+                (*above, *levels(inner)),
+                (*starts(result)[:kept], *starts(inner)),
                 (*result.names[:named], *inner.names),
-                sliced=isinstance(result.layout, ComposedLayout),
+                sliced=isinstance(result.layout, ComposedLayout)
+                or isinstance(inner.layout, ComposedLayout),
             )
+            if not within_scope(result, current):
+                parent_runs = {
+                    name: selected_run(arrangement, start)
+                    for name, arrangement, start in zip(
+                        here, levels(current), starts(current)
+                    )
+                    if name in there
+                }
+                inner_runs = {
+                    name: selected_run(arrangement, start)
+                    for name, arrangement, start in zip(
+                        there, levels(inner), starts(inner)
+                    )
+                }
+                raise ValueError(
+                    f"replacement scope selects runs {inner_runs}, outside parent "
+                    f"scope runs {parent_runs}; both must be continuous and each "
+                    "replacement run must be contained in its parent run"
+                )
         else:
             shared = sorted(set(here) & set(there))
             unnamed = sorted(set(here) - set(there))
@@ -352,7 +426,7 @@ def separate(mesh: Mesh) -> tuple[Mesh, ...]:
     sliced = isinstance(mesh.layout, ComposedLayout)
     names_at = 0
     separated: list[Mesh] = []
-    for topology, level, start in zip(mesh.topologies, _levels(mesh), _starts(mesh)):
+    for topology, level, start in zip(mesh.topologies, levels(mesh), starts(mesh)):
         axis_count = len(flatten(level.shape))
         names = mesh.names[names_at : names_at + axis_count]
         layout: Layout | ComposedLayout = level
@@ -363,4 +437,14 @@ def separate(mesh: Mesh) -> tuple[Mesh, ...]:
     return tuple(separated)
 
 
-__all__ = ["Mesh", "Topology", "check_topology", "make_mesh", "separate"]
+__all__ = [
+    "Mesh",
+    "Topology",
+    "check_topology",
+    "levels",
+    "make_mesh",
+    "selected_run",
+    "separate",
+    "starts",
+    "within_scope",
+]

@@ -15,20 +15,17 @@ from tilefoundry.ir.types import (
     TensorType,
     make_mesh,
 )
+from tilefoundry.ir.types.int_tuple import congruent
 from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.layout_algebra import is_inverse_projectable
 from tilefoundry.ir.types.mesh import separate
 
 from .match import (
     ABSENT,
-    ARRANGEMENT,
     UNNAMED_PLACE,
     Match,
     _named,
-    affine_frame,
     alternatives_of,
     evaluated,
-    grouping,
     matched,
     relations_of,
     resolved,
@@ -64,6 +61,53 @@ class Pattern:
             self,
             **{name: resolved(value, bindings) for name, value in vars(self).items()},
         )
+
+
+@dataclass(frozen=True)
+class Predicate(Pattern):
+    """A named computed condition over one authored arrangement."""
+
+    @staticmethod
+    def arrangement(subject) -> Layout | None:
+        """Read the static strided layout beneath shard and composition wrappers."""
+        if isinstance(subject, ShardLayout):
+            if not all(isinstance(attr, Broadcast) for attr in subject.attrs):
+                return None
+            subject = subject.layout
+        if isinstance(subject, ComposedLayout):
+            if subject.inner is not None and not isinstance(subject.inner, Swizzle):
+                return None
+            subject = subject.outer
+        if not isinstance(subject, Layout) or subject.strides is None:
+            return None
+        extents = tuple(flatten(subject.shape))
+        strides = tuple(flatten(subject.strides))
+        if any(type(number) is not int for number in (*extents, *strides)):
+            return None
+        if any(extent <= 0 for extent in extents):
+            return None
+        return subject
+
+    def holds(self, arrangement: Layout, captures: dict) -> bool:
+        raise NotImplementedError
+
+    def match(self, subject, captures=None) -> Match | None:
+        held = dict(captures or {})
+        arrangement = self.arrangement(subject)
+        return Match(held) if arrangement is not None and self.holds(arrangement, held) else None
+
+    def refusal(self, subject, captures=None) -> str | None:
+        return (
+            None
+            if self.match(subject, captures) is not None
+            else f"{subject!r} does not satisfy {self.describe()}"
+        )
+
+    def describe(self, name: str = UNNAMED_PLACE) -> str:
+        raise NotImplementedError
+
+    def relations(self) -> tuple[str, ...]:
+        raise NotImplementedError
 
 
 @dataclass(frozen=True)
@@ -414,66 +458,107 @@ class GuardPattern(Pattern):
 
 @dataclass(frozen=True)
 class LayoutPattern(Pattern):
-    """An affine layout, preserving grouping and optional whole-layout rules."""
+    """An optional layout structure with named computed predicates."""
 
-    shape: tuple
-    strides: tuple
-    forward: bool = True
-    injective: bool = True
-    per_mode: bool = False
+    shape: tuple | None = None
+    strides: tuple | None = None
+    predicates: tuple[Predicate, ...] = field(default_factory=tuple)
+
+    @classmethod
+    def from_layout(
+        cls,
+        layout,
+        *,
+        predicates: tuple[Predicate, ...] = (),
+    ):
+        """Build the exact pattern for one authored arrangement."""
+        held = tuple(predicates)
+        if isinstance(layout, ComposedLayout):
+            inner = layout.inner
+            return ComposedLayoutPattern(
+                SwizzlePattern(inner.bits, inner.base, inner.shift)
+                if isinstance(inner, Swizzle)
+                else inner,
+                layout.offset,
+                cls.from_layout(
+                    layout.outer,
+                    predicates=held,
+                ),
+            )
+        return cls(
+            tuple(layout.shape),
+            tuple(layout.strides),
+            predicates=held,
+        )
 
     def positions(self) -> tuple:
-        return (*flatten(self.shape), *flatten(self.strides))
+        return (
+            *(flatten(self.shape) if self.shape is not None else ()),
+            *(flatten(self.strides) if self.strides is not None else ()),
+        )
 
-    def match(self, subject, captures=None):
-        framed = affine_frame(subject)
-        layout = None if framed is None else framed[1]
-        if not isinstance(layout, Layout) or layout.strides is None:
+    def _match_structure(self, subject, captures=None) -> Match | None:
+        held = Match(dict(captures or {}))
+        if self.shape is None and self.strides is None:
+            return held
+        if not isinstance(subject, Layout) or subject.strides is None:
             return None
-        if grouping(tuple(layout.shape)) != grouping(tuple(self.shape)) or grouping(
-            tuple(layout.strides)
-        ) != grouping(tuple(self.strides)):
+        if self.shape is not None and not congruent(subject.shape, self.shape):
             return None
-        extents = tuple(flatten(layout.shape))
-        strides = tuple(flatten(layout.strides))
+        if self.strides is not None and not congruent(subject.strides, self.strides):
+            return None
+        extents = tuple(flatten(subject.shape))
+        strides = tuple(flatten(subject.strides))
         if any(type(number) is not int for number in (*extents, *strides)):
             return None
         if any(number <= 0 for number in extents):
             return None
-        held = matched(SequencePattern(*self.positions()), (*extents, *strides), captures)
+        values = (
+            *(extents if self.shape is not None else ()),
+            *(strides if self.strides is not None else ()),
+        )
+        return matched(SequencePattern(*self.positions()), values, held.captures)
+
+    def match(self, subject, captures=None):
+        held = self._match_structure(subject, captures)
         if held is None:
             return None
-        arrangements = (
-            tuple(
-                Layout(tuple(flatten(shape)), tuple(flatten(steps)))
-                for shape, steps in zip(layout.shape, layout.strides)
-            )
-            if self.per_mode
-            else (Layout(extents, strides),)
-        )
-        for arrangement in arrangements:
-            held_strides = tuple(flatten(arrangement.strides))
-            if self.forward and any(stride < 0 for stride in held_strides):
-                return None
-            if self.injective and not is_inverse_projectable(arrangement):
+        for predicate in self.predicates:
+            held = matched(predicate, subject, held.captures)
+            if held is None:
                 return None
         return held
 
+    def refusal(self, subject, captures=None) -> str | None:
+        held = self._match_structure(subject, captures)
+        if held is None:
+            return f"{subject!r} is not {self.describe()}"
+        for predicate in self.predicates:
+            found = matched(predicate, subject, held.captures)
+            if found is not None:
+                held = found
+                continue
+            explained = getattr(predicate, "refusal", None)
+            return (
+                explained(subject, held.captures)
+                if explained is not None
+                else f"{subject!r} does not satisfy {predicate.describe()}"
+            )
+        return None
+
     def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return (
-            f"Layout({written_grouped(tuple(self.shape))}, {written_grouped(tuple(self.strides))})"
-        )
+        if self.shape is None and self.strides is None:
+            return "layout"
+        shape = name if self.shape is None else written_grouped(tuple(self.shape))
+        strides = name if self.strides is None else written_grouped(tuple(self.strides))
+        return f"Layout({shape}, {strides})"
 
     def relations(self) -> tuple[str, ...]:
-        lines = list(relations_of(self.positions()))
-        subject = "each top-level mode" if self.per_mode else ARRANGEMENT
-        if self.forward:
-            lines.append(f"{subject} has no backward step")
-        if self.injective:
-            lines.append(f"{subject} reaches each of its own slots exactly once")
-        return tuple(lines)
+        return (*relations_of(self.positions()), *relations_of(self.predicates))
 
     def fixed(self):
+        if self.shape is None or self.strides is None:
+            return None
         if any(isinstance(value, Pattern) for value in self.positions()):
             return None
         return Layout(tuple(self.shape), tuple(self.strides))
@@ -565,10 +650,12 @@ class MeshPattern(Pattern):
                 return
             if isinstance(pattern, ComposedLayoutPattern):
                 pattern = pattern.outer
-            if not isinstance(pattern, LayoutPattern) or not pattern.per_mode:
+            if not isinstance(pattern, LayoutPattern) or any(
+                getattr(predicate, "per_mode", True) is False for predicate in pattern.predicates
+            ):
                 raise ValueError(
-                    "MeshPattern layout must be a LayoutPattern(per_mode=True), "
-                    "or a ComposedLayoutPattern whose outer uses per_mode=True"
+                    "MeshPattern layout predicates must check each top-level mode, "
+                    "or a ComposedLayoutPattern outer must use per-mode predicates"
                 )
 
         require_per_mode(self.layout)
@@ -610,7 +697,6 @@ class ScalarPattern(Pattern):
 class TensorPattern(Pattern):
     """Match a non-scalar ``TensorType`` field by field."""
 
-    rank: int | None = None
     dtype: Any = None
     shape: tuple | None = None
     storage: Any = None
@@ -620,7 +706,6 @@ class TensorPattern(Pattern):
         if not isinstance(subject, TensorType) or subject.shape == ():
             return None
         wanted = (
-            (self.rank, len(subject.shape)),
             (self.dtype, subject.dtype),
             (self.storage, subject.storage),
         )
@@ -644,7 +729,6 @@ class TensorPattern(Pattern):
                 None if self.shape is None else SequencePattern(*self.shape),
                 tuple(subject.shape),
             ),
-            ("rank", self.rank, len(subject.shape)),
             ("dtype", self.dtype, subject.dtype),
             ("storage", self.storage, subject.storage),
             ("layout", self.layout, subject.layout),
@@ -667,8 +751,6 @@ class TensorPattern(Pattern):
         stated = []
         if self.shape is not None:
             stated.append("shape=" + written_tuple(tuple(written_place(x) for x in self.shape)))
-        if self.rank is not None:
-            stated.append(f"rank={self.rank}")
         if self.dtype is not None:
             stated.append(f"dtype={_named(self.dtype)}")
         if self.storage is not None:
@@ -683,7 +765,6 @@ class TensorPattern(Pattern):
     def relations(self) -> tuple[str, ...]:
         return relations_of(
             (
-                self.rank,
                 self.dtype,
                 self.storage,
                 *(self.shape or ()),
@@ -694,51 +775,42 @@ class TensorPattern(Pattern):
 
 @dataclass(frozen=True)
 class ShardLayoutPattern(Pattern):
-    """Match a sharded layout's arrangement, shard attrs, and mesh frame."""
+    """Match a sharded layout's layout, shard attrs, and mesh frame."""
 
-    arrangement: object
+    layout: object
     attrs: tuple
-    mesh: Mesh
+    mesh: MeshPattern
 
     def match(self, subject, captures=None):
         if not isinstance(subject, ShardLayout):
             return None
-        extra = len(subject.attrs) - len(self.attrs)
-        if (
-            extra < 0
-            or subject.attrs[extra:] != self.attrs
-            or any(not isinstance(attr, Broadcast) for attr in subject.attrs[:extra])
-        ):
-            return None
-        framed = affine_frame(subject.mesh.layout)
-        if framed is None:
-            return None
-        frame = framed[1]
-        if extra:
-            if not isinstance(frame, Layout):
-                return None
-            frame = Layout(frame.shape[extra:], frame.strides[extra:])
         subject_names = tuple(
             getattr(topology, "name", topology) for topology in subject.mesh.topologies
         )
-        wanted_names = tuple(
-            getattr(topology, "name", topology) for topology in self.mesh.topologies
-        )
-        if frame != self.mesh.layout or subject_names != wanted_names:
+        if subject_names != self.mesh.topologies:
             return None
-        return self.reads(subject.layout, captures)
+        held = Match(dict(captures or {}))
+        for pattern, value in (
+            (self.layout, subject.layout),
+            (self.attrs, subject.attrs),
+            (self.mesh, subject.mesh),
+        ):
+            held = matched(pattern, value, held.captures)
+            if held is None:
+                return None
+        return held
 
     def reads(self, layout, captures=None):
-        return matched(self.arrangement, layout, captures)
+        return matched(self.layout, layout, captures)
 
     def accepts_layout(self, layout) -> bool:
         return self.reads(layout) is not None
 
     def alternatives(self, bindings=()) -> tuple:
-        return alternatives_of(self.arrangement, bindings)
+        return alternatives_of(self.layout, bindings)
 
     def relations(self) -> tuple[str, ...]:
-        return relations_of((self.arrangement,))
+        return relations_of((self.layout,))
 
     def rules(self, arrangements=None) -> tuple[str, ...]:
         items = self.alternatives() if arrangements is None else tuple(arrangements)
@@ -775,6 +847,7 @@ __all__ = [
     "OneOfPattern",
     "OrPattern",
     "Pattern",
+    "Predicate",
     "RangePattern",
     "Scalar",
     "ScalarPattern",

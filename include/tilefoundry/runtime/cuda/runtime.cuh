@@ -200,7 +200,8 @@ namespace ops {
 #include "ops/elementwise.cuh"
 #include "ops/copy.cuh"
 
-#include "ops/tma.cuh"
+#include "ops/copy_async_bulk.cuh"
+#include "ops/ldmatrix.cuh"
 #include "ops/reduce.cuh"
 /// dot after reduce: it reuses reduce's no-workspace tag.
 #include "ops/dot.cuh"

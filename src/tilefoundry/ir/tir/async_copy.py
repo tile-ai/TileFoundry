@@ -3,20 +3,41 @@
 from __future__ import annotations
 
 from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
+from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Tensor
-from tilefoundry.ir.types import UnitType
-from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.pattern import DistinctConstraint, SameModesConstraint, utils
+from tilefoundry.ir.types import Layout, UnitType
+from tilefoundry.ir.types.storage import StorageKind as S
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+
+ASYNC_WIDTHS = (4, 8, 16)
 
 
 @register_op(dialect="T", category="async", name="copy_async")
 class CopyAsync(Op):
     """Async gmem→smem copy (``cp.async.cg.shared.global``); non-blocking."""
 
-    src = ParamDef(kind="input", pattern=Tensor)
-    dst = ParamDef(kind="input", pattern=Tensor)
+    src = ParamDef(
+        kind="input",
+        effect=MemoryEffect.READ,
+        pattern=utils.operand_tile(0, S.GMEM, utils.whole_vectors(0, ASYNC_WIDTHS)),
+    )
+    dst = ParamDef(
+        kind="input",
+        effect=MemoryEffect.WRITE,
+        pattern=utils.operand_tile(1, S.SMEM, utils.whole_vectors(1, ASYNC_WIDTHS)),
+    )
+    between = (
+        DistinctConstraint("storage", "src", "dst"),
+        SameModesConstraint("src", "dst"),
+    )
+    smem_layout = ParamDef(
+        kind="attribute",
+        annotation=Layout,
+        optional=True,
+        default=None,
+    )
+    scope = utils.any_threads()
 
 
 @register_typeinfer(CopyAsync)
@@ -25,12 +46,13 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 
 @register_verify_stmt(CopyAsync)
-def _(call: "Call", ctx: "VerifyContext") -> None:
+def verify_copy_async(call: "Call", ctx: "VerifyContext") -> None:
+    """Run native storage checks before layout relations and vector patterns."""
     src = ctx.type_of(call.args[0])
     dst = ctx.type_of(call.args[1])
-    if dst.storage != StorageKind.SMEM:
+    if dst.storage != S.SMEM:
         ctx.error(call, f"CopyAsync destination must be smem, got {dst.storage}")
-    if src.storage != StorageKind.GMEM:
+    if src.storage != S.GMEM:
         ctx.error(call, f"CopyAsync source must be gmem, got {src.storage}")
     if src.dtype != dst.dtype:
         ctx.error(call, f"CopyAsync dtype mismatch: {src.dtype} vs {dst.dtype}")
@@ -70,4 +92,4 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
         ctx.error(call, f"CpAsyncWait.n must be a non-negative int, got {n!r}")
 
 
-__all__ = ["CopyAsync", "CpAsyncCommit", "CpAsyncWait"]
+__all__ = ["ASYNC_WIDTHS", "CopyAsync", "CpAsyncCommit", "CpAsyncWait"]

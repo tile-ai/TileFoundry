@@ -5,6 +5,7 @@ from typing import Optional
 
 from .int_tuple import flatten as _flat
 from .int_tuple import product
+from .stride import compact_col_major
 
 
 class LayoutBase:
@@ -13,6 +14,10 @@ class LayoutBase:
     @property
     def domain_rank(self) -> int:
         return len(flatten(self.shape))
+
+
+class NotProjectable(ValueError):
+    """A layout cannot serve as a mesh execution scope (not inverse-projectable)."""
 
 
 @dataclass(frozen=True)
@@ -84,6 +89,28 @@ class Swizzle:
         return offset ^ moved
 
 
+def make_swizzle(active_y: int, active_z: int) -> Swizzle:
+    """CuTe ``make_swizzle<Y,Z>()``: build the swizzle XORing *Y* onto *Z*."""
+    bits_y, bits_z = active_y.bit_count(), active_z.bit_count()
+    if bits_y != bits_z:
+        raise NotImplementedError(
+            f"composition: the Y mask {active_y:#x} holds {bits_y} bits and the Z "
+            f"mask {active_z:#x} holds {bits_z}; only an equal-width pair is a "
+            f"Swizzle"
+        )
+    if bits_y == 0:
+        return Swizzle(0, 0, 0)
+    trailing_y = (active_y & -active_y).bit_length() - 1
+    trailing_z = (active_z & -active_z).bit_length() - 1
+    swizzle = Swizzle(bits_y, min(trailing_y, trailing_z), trailing_y - trailing_z)
+    if swizzle.swizzle_code != (active_y | active_z):
+        raise NotImplementedError(
+            f"composition: the mask pair ({active_y:#x}, {active_z:#x}) is not a "
+            f"Swizzle<B,M,S>; its bits are not two contiguous equal-width runs"
+        )
+    return swizzle
+
+
 @dataclass(frozen=True)
 class ComposedLayout(LayoutBase):
     """Represent ``image(c) = inner(offset + outer(c))``.
@@ -110,6 +137,50 @@ class ComposedLayout(LayoutBase):
 
 
 EMPTY_LAYOUT = Layout(shape=(), strides=())
+
+
+def flat_shape(layout: Layout) -> tuple[int, ...]:
+    """Return CuTe ``flatten(layout.shape())`` as a flat tuple."""
+    return _flat(layout.shape)
+
+
+def flat_stride(layout: Layout) -> tuple[int, ...]:
+    """Flatten stated strides, or synthesize the compact column-major default."""
+    if layout.strides is not None:
+        return _flat(layout.strides)
+    return compact_col_major(flat_shape(layout))
+
+
+def apply(layout: Layout | ComposedLayout, coord: int) -> int:
+    """``crd2idx`` of a 1-D domain coord: decompose by shape, dot with strides.
+
+    A ``ComposedLayout`` applies its components in order, so this is
+    ``inner(offset + outer(coord))`` — the swizzle case included, since a
+    ``Swizzle`` is exactly a mapping on that index.
+    """
+    if isinstance(layout, ComposedLayout):
+        return _apply_any(layout, coord)
+    shape = flat_shape(layout)
+    stride = flat_stride(layout)
+    idx = 0
+    rem = coord
+    for extent, step in zip(shape, stride):
+        idx += (rem % extent) * step
+        rem //= extent
+    return idx
+
+
+def _apply_any(layout, x: int) -> int:
+    """Apply a ``Layout`` / ``ComposedLayout`` (``None`` ≡ identity) to ``x``."""
+    if layout is None:
+        return x
+    if isinstance(layout, Swizzle):
+        return layout(x)
+    if isinstance(layout, Layout):
+        return apply(layout, x)
+    if isinstance(layout, ComposedLayout):
+        return _apply_any(layout.inner, layout.offset + _apply_any(layout.outer, x))
+    raise NotProjectable(f"cannot apply layout of type {type(layout).__name__}")
 
 
 def size(layout: Layout) -> int:
@@ -171,6 +242,8 @@ def take(layout: LayoutBase, begin: int, end: int) -> "Layout":
 
 __all__ = [
     "LayoutBase",
+    "NotProjectable",
+    "apply",
     "flatten",
     "size",
     "unflatten",
@@ -178,7 +251,10 @@ __all__ = [
     "Swizzle",
     "ComposedLayout",
     "EMPTY_LAYOUT",
+    "flat_shape",
+    "flat_stride",
     "get",
+    "make_swizzle",
     "rank",
     "take",
 ]

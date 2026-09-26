@@ -1,4 +1,4 @@
-"""``ops::mma``'s tile tier: the atom looped over a whole shared-memory tile.
+"""``ops::mma`` on explicitly gathered per-lane fragments.
 
 See [runtime §2.6](docs/spec/runtime.md#26-cudaops).
 """
@@ -18,8 +18,6 @@ from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.target import CpuTarget, CudaTarget
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
-_OP = T.cuda.mma.SM80_16x8x16_F32BF16BF16F32_TN
-
 _MESH_LAYOUT = Layout(shape=(4, 8), strides=(1, 4))
 
 
@@ -37,7 +35,7 @@ def test_handwritten_mma_matches_torch() -> None:
 
 @module(entry="tile_host", target=_CUDA, topologies=(Topology("thread", 32),))
 class MmaTile:
-    """A 16x16 by 16x8 product done as one atom, looped by the tile's shape."""
+    """A 16x16 by 16x8 product done as one atom."""
 
     @prim_func(target=_CUDA)
     def tile_device(
@@ -45,7 +43,6 @@ class MmaTile:
         b: Tensor[(128,), "bf16"],
         c: Tensor[(128,), "f32"],
     ):
-        atom = T.cuda.mma.atom(op=_OP)
         with Mesh(
             (Topology("thread", 32),),
             _MESH_LAYOUT,
@@ -81,23 +78,54 @@ class MmaTile:
             )
             b_tile = T.alloc_tensor(
                 Tensor[
-                    (8, 16),
+                    (16, 8),
                     "bf16",
                     ShardLayout(
-                        layout=Layout(shape=(8, 16), strides=(1, 8)),
+                        layout=Layout(shape=(16, 8), strides=(8, 1)),
                         attrs=(Broadcast(), Broadcast()),
                         mesh=m,
                     ),
                     "smem",
                 ]
             )
-            acc = T.alloc_tensor(Tensor[(16, 8), "f32", atom.C, "rmem"])
+            a_frag = T.alloc_tensor(
+                Tensor[
+                    (16, 16),
+                    "bf16",
+                    ((2, 4 @ m.warp, 2, 8 @ m.lane, 2), (1, 2, 8, 16, 128)),
+                    "rmem",
+                ]
+            )
+            b_frag = T.alloc_tensor(
+                Tensor[
+                    (16, 8),
+                    "bf16",
+                    ((8 @ m.lane, 2, 4 @ m.warp, 2), (1, 8, 16, 64)),
+                    "rmem",
+                ]
+            )
+            acc = T.alloc_tensor(
+                Tensor[
+                    (16, 8),
+                    "f32",
+                    ((2, 4 @ m.warp, 8 @ m.lane, 2), (1, 2, 8, 64)),
+                    "rmem",
+                ]
+            )
             T.copy(a_view, a_tile)
             T.copy(b_view, b_tile)
-            T.fill(acc, 0.0)
             T.sync(m)
-            T.mma(acc, a_tile, b_tile)
-            c_view = T.tensor_view(T.ptr_of(c), layout=atom.C)
+            b_fragment_view = T.tensor_view(
+                T.ptr_of(b_tile),
+                layout=((8 @ m.lane, 2, 4 @ m.warp, 2), (1, 8, 16, 64)),
+            )
+            T.ldmatrix(a_tile, a_frag)
+            T.copy(b_fragment_view, b_frag)
+            T.fill(acc, 0.0)
+            T.tiled_mma(acc, a_frag, b_frag, atom=T.cuda.sm80.Mma())
+            c_view = T.tensor_view(
+                T.ptr_of(c), layout=((2, 4 @ m.warp, 8 @ m.lane, 2), (1, 2, 8, 64))
+            )
             T.copy(acc, c_view)
 
     @prim_func(target=CpuTarget())
@@ -110,8 +138,7 @@ class MmaTile:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_tile_tier_matches_torch_matmul() -> None:
-    """Selected by rank-2 static A and B local views over the whole tile."""
+def test_fragment_mma_matches_torch_matmul() -> None:
     rm = tilefoundry.compile(MmaTile, target=_CUDA)
     torch.manual_seed(0)
     a = torch.randn(256, dtype=torch.bfloat16, device="cuda")
@@ -119,5 +146,5 @@ def test_tile_tier_matches_torch_matmul() -> None:
     c = torch.zeros(128, dtype=torch.float32, device="cuda")
     rm(a, b, c)
     torch.cuda.synchronize()
-    expected = a.view(16, 16).float().t() @ b.view(16, 8).float()
+    expected = a.view(16, 16).float() @ b.view(16, 8).float()
     assert torch.allclose(c.view(16, 8), expected, rtol=2e-2, atol=2e-2)

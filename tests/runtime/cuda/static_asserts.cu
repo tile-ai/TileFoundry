@@ -375,7 +375,7 @@ __global__ void k(float *p) {
 #endif
 
 #if CASE == 18
-/// mma: operands that are neither a tile nor the atom's fragments.
+/// mma: operands that are not the atom's fragments.
 __global__ void k(float *p) {
     float a[3] = {}, b[3] = {}, c[3] = {};
     auto at = cute::make_tensor(cute::make_rmem_ptr(&a[0]), cute::Int<3>{});
@@ -404,30 +404,6 @@ __global__ void k() {
 }
 #endif
 
-#if CASE == 21
-/// mma's tile tier: an accumulator mesh that is not a whole number of warps.
-__global__ void k(cute::bfloat16_t *p, float *q) {
-    auto mesh = tmesh<16>();
-    auto alay =
-        cute::make_layout(cute::make_shape(cute::Int<16>{}, cute::Int<16>{}),
-                          cute::make_stride(cute::Int<16>{}, cute::Int<1>{}));
-    auto a = make_shard_tensor(
-        cute::make_tensor(cute::make_smem_ptr(p), alay), alay,
-        make_shard_layout(alay, mesh, cute::make_tuple(shard::B{})));
-    auto blay =
-        cute::make_layout(cute::make_shape(cute::Int<8>{}, cute::Int<16>{}),
-                          cute::make_stride(cute::Int<16>{}, cute::Int<1>{}));
-    auto b = make_shard_tensor(
-        cute::make_tensor(cute::make_smem_ptr(p + 256), blay), blay,
-        make_shard_layout(blay, mesh, cute::make_tuple(shard::B{})));
-    auto clay = cute::make_layout(cute::make_shape(cute::Int<8>{}));
-    auto c = make_shard_tensor(
-        cute::make_tensor(cute::make_rmem_ptr(q), clay), clay,
-        make_shard_layout(clay, mesh, cute::make_tuple(shard::B{})));
-    mma(a, b, c);
-}
-#endif
-
 #if CASE == 22
 /// A reduced axis that divides into neither whole lanes nor whole warps.
 __global__ void k(float *p) {
@@ -440,7 +416,7 @@ __global__ void k(float *p) {
 #endif
 
 #if CASE == 24
-/// A ``tma_copy`` source a mesh really does divide.
+/// A ``copy_async_bulk`` source a mesh really does divide.
 __global__ void k(float *p, float *q, uint64_t *bar) {
     auto mesh = tmesh<128>();
     auto src_lay =
@@ -454,7 +430,7 @@ __global__ void k(float *p, float *q, uint64_t *bar) {
     auto dst = make_shard_tensor(
         cute::make_tensor(cute::make_smem_ptr(q), dst_lay), dst_lay,
         make_shard_layout(dst_lay, mesh, cute::make_tuple(shard::B{})));
-    tilefoundry::ops::tma_copy(src, dst, bar);
+    tilefoundry::ops::copy_async_bulk(src, dst, bar);
 }
 #endif
 

@@ -1194,15 +1194,16 @@ the one time it was written down as the rule it argued a dependency chain into
 | `copy` / `copy_async` | both operands' shard layouts: shape, strides, share and move width |
 | `reduce` | the axes the destination broadcasts that the source splits |
 | `dot` | the axes the operands' meshes contract |
-| `mma` | rank-2 static layouts are a tile; the warp count is the accumulator's mesh |
+| `mma` | one atom's per-lane operand fragments |
 | `rmsnorm` | the row dependency chain and the destination's shard layout |
 | `sync` | the mesh's scope, base and count |
-| `tma_copy` | both shard layouts, asserted: one contiguous run each, whole tiles, matching element types |
+| `copy_async_bulk` | both shard layouts, asserted: one contiguous run each, whole tiles, matching element types |
+| `ldmatrix` | the source tile's declared shared-memory layout and the destination atom fragment |
 
 Anything that takes a raw pointer, an `int` or a type and answers a question
 about it is not an op but a utility, and belongs outside `ops::` — the
 warp-scoped primitives of [§2.7](#27-cudautility) and the `mbarrier`
-instructions a caller writes around `tma_copy` are both that. In particular the
+instructions a caller writes around `copy_async_bulk` are both that. In particular the
 runtime publishes **no predicate and no constant reporting which tier an op
 selected or how wide a move it chose**: a caller cannot use one to decide how to
 build its operands, since the answer is a function of the operand types it would
@@ -1404,32 +1405,14 @@ __device__ void mma(TA const &a, TB const &b, TC &c);
 
 **`mma`.**
 
-`c += a @ b`, one entry, with the tier read off the operand layouts: rank-2
-static shard layouts on `a` and `b` are a tile and the entry loops the atom over
-it; anything else is a lane's already-gathered fragment and takes the single
-instruction. Codegen emits this one call either way.
+`c += a @ b` for one atom. The operands are the calling lane's already-gathered
+fragments, and the entry issues one instruction.
 
 - constraints:
-  - The tile tier reads `a` as `(M, K)` and `b` as `(N, K)`. **There is no
-    transpose flag.** Whether the buffer behind `b` is k-major or n-major is a
-    stride in its layout, and the indexing picks that up, so the same call reads
-    both.
-  - `M` and `K` must be whole multiples of the atom's `16` and `16`, and every
-    warp must receive a whole number of `N` atoms of `8`. Violations are
-    `static_assert`s, not run-time checks.
-  - Warps split `N`. The warp count comes from the accumulator's mesh — that is
-    what `c` being a `ShardTensor` is for — not from `blockDim`.
-  - The accumulator's engine is the lane's own registers, which is what
-    `local_tensor` ([§2.4.1](#241-tensor_viewshard_tensorcuh)) hands back for register storage, while its
-    `ShardLayout` states which entries of the tile those registers are: the
-    fragment map is warp-split over `N` and lane-split within each atom, and
-    saying so is the layout's job, not an accessor's. **The runtime publishes no
-    fragment-coordinate function and no accumulator constructor.** A caller that
-    needs the map writes it as modes and attrs, the way it writes any other
-    layout, and the tile it moves the fragment to or from is then the same map
-    over a buffer — so rescaling a row of the accumulator or storing it out is
-    one `ops::elementwise` between two shards of one layout, with no fragment
-    index at the call site.
+  - `a`, `b`, and `c` contain exactly the atom's `(8, 4, 4)` values per lane.
+    Other shapes are compile-time errors.
+  - The fragment map is stated by each operand's `ShardLayout`; the runtime
+    publishes no fragment-coordinate function and no accumulator constructor.
   - Today's atom is `SM80_16x8x16_F32BF16BF16F32_TN`: bf16 operands, f32
     accumulate. Another instruction is another atom under the same entry, not
     another entry.
@@ -1556,17 +1539,18 @@ __device__ inline void sync(Mesh<TMesh, Topos...> const &mesh,
     launch, so the caller passes it; with none, a cooperative launch's grid
     group is used instead.
 
-#### 2.6.9 `ops/tma.cuh`
+#### 2.6.9 `ops/copy_async_bulk.cuh`
 
-<!-- generated: ops-tma -->
+<!-- generated: ops-copy-async-bulk -->
 ```cpp
-// include/tilefoundry/runtime/cuda/ops/tma.cuh
+// include/tilefoundry/runtime/cuda/ops/copy_async_bulk.cuh
 template <class Src, class Dst>
-__device__ inline void tma_copy(Src const &src, Dst &dst, uint64_t *bar);
+__device__ inline void copy_async_bulk(Src const &src, Dst &dst,
+                                       uint64_t *bar);
 ```
 <!-- /generated -->
 
-**`tma_copy`.**
+**`copy_async_bulk`.**
 
 Stage a tile into shared memory and signal an mbarrier when it is readable. It
 is not a tier of `ops::copy_async`: there every thread issues its own load and
@@ -1615,6 +1599,31 @@ tile it did not fetch.
     have defined behaviour. The extent is what the shard leaves behind, not a
     property of the layout type, so an off-grain extent is a run-time hand-off
     to the element path inside the same entry — same barrier, same result.
+
+#### 2.6.10 `ops/ldmatrix.cuh`
+
+<!-- generated: ops-ldmatrix -->
+```cpp
+// include/tilefoundry/runtime/cuda/ops/ldmatrix.cuh
+template <class Src, class Dst>
+__device__ inline void ldmatrix(Src const &src, Dst &dst);
+```
+<!-- /generated -->
+
+**`ldmatrix`.**
+
+One warp loads a dense shared-memory `(16, 16)` bf16 tile into the per-lane A
+fragment consumed by `ops::mma`'s current SM80 atom.
+
+- constraints:
+  - All 32 lanes issue `ldmatrix.sync.aligned.m8n8.x4.shared.b16` together.
+    Each lane contributes the 16-byte-aligned address selected by the source's
+    declared shard layout; a full-broadcast shard still uses that declaration,
+    not the backing allocation's incidental layout.
+  - The four returned registers are stored in the destination fragment's
+    layout order so that `ops::mma` observes the PTX register order unchanged.
+  - The TIR declaration fixes the source shape/dtype and destination fragment;
+    the runtime entry does not choose an atom or a fragment layout.
 
 ### 2.7 `cuda/utility/`
 

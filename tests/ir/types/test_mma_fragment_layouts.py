@@ -9,18 +9,30 @@ See [tir §2.3](docs/spec/tir.md#23-tir-ops).
 
 from __future__ import annotations
 
+from tilefoundry.dsl import T
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.tir.cuda.nn.mma import SM80_16x8x16_F32BF16BF16F32_TN, make_atom
+from tilefoundry.ir.tir.cuda.nn.sm80_mma import WARP
 from tilefoundry.ir.types import DType, ShardLayout, Split, TensorType
 from tilefoundry.ir.types.int_tuple import flatten, product
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry.typeinfer import inference_type
 
-_ATOM = make_atom(SM80_16x8x16_F32BF16BF16F32_TN)
-A_FRAG_SHARD = _ATOM.A
-B_FRAG_SHARD = _ATOM.B
-C_FRAG_SHARD = _ATOM.C
+_ATOM = T.cuda.sm80.Mma()
+
+
+def _realized_fragment(role: str) -> ShardLayout:
+    declared = _ATOM.role(role).layout
+    return ShardLayout(
+        layout=declared.layout.fixed(),
+        attrs=declared.attrs,
+        mesh=WARP,
+    )
+
+
+A_FRAG_SHARD = _realized_fragment("A")
+B_FRAG_SHARD = _realized_fragment("B")
+C_FRAG_SHARD = _realized_fragment("C")
 
 
 def test_per_thread_element_counts_and_split_extents() -> None:
