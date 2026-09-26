@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import prod
 
-from tilefoundry.ir.types import ComposedLayout, Layout, ShardLayout, Swizzle
+from tilefoundry.ir.types import Broadcast, ComposedLayout, Layout, ShardLayout, Swizzle
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.tensor_type import TensorType
 
@@ -80,6 +80,11 @@ class SameModesConstraint(Constraint):
     @staticmethod
     def reading(tensor: TensorType, arrangement=None):
         layout = tensor.layout if arrangement is None else arrangement
+        if isinstance(layout, ShardLayout):
+            if not all(isinstance(attr, Broadcast) for attr in layout.attrs):
+                layout = None
+            else:
+                layout = layout.layout
         if isinstance(layout, ComposedLayout):
             if layout.inner is not None and not isinstance(layout.inner, Swizzle):
                 layout = None

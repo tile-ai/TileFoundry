@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from tilefoundry.ir.types import (
+    Broadcast,
     ComposedLayout,
     Layout,
     Mesh,
@@ -70,6 +71,8 @@ class Predicate(Pattern):
     def arrangement(subject) -> Layout | None:
         """Read the static strided layout beneath shard and composition wrappers."""
         if isinstance(subject, ShardLayout):
+            if not all(isinstance(attr, Broadcast) for attr in subject.attrs):
+                return None
             subject = subject.layout
         if isinstance(subject, ComposedLayout):
             if subject.inner is not None and not isinstance(subject.inner, Swizzle):

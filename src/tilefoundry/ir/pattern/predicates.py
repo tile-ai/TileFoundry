@@ -133,7 +133,8 @@ class WholeVectors(Predicate):
 
     def available_widths(self, subject, captures) -> tuple[int, ...]:
         bits = getattr(dict(captures or {}).get(self.dtype), "bit_width", None)
-        return () if type(bits) is not int else _vector_widths(subject, bits, self.widths)
+        layout = subject.layout if isinstance(subject, ShardLayout) else subject
+        return () if type(bits) is not int else _vector_widths(layout, bits, self.widths)
 
     def match(self, subject, captures=None):
         held = dict(captures or {})
