@@ -69,16 +69,11 @@ def cosize(layout: Union[Layout, ComposedLayout]) -> int:
     return apply(layout, size(layout) - 1) + 1
 
 
-def coalesce(layout: Union[Layout, ComposedLayout]):
-    """Flatten + merge contiguous modes, drop shape-1 modes (CuTe ``coalesce``).
+_NO_PROFILE = object()
 
-    Coalescing renames the domain and leaves the index mapping alone, so a
-    swizzled composed layout coalesces underneath its swizzle.
-    """
-    if get_swizzle_portion(layout) is not None:
-        return ComposedLayout(
-            inner=layout.inner, offset=layout.offset, outer=coalesce(layout.outer)
-        )
+
+def _coalesce_flat(layout: Layout) -> Layout:
+    """Apply the flat CuTe ``coalesce`` rule to one layout."""
     result_shape: list[int] = [1]
     result_stride: list[int] = [0]
     for shape, stride in zip(flat_shape(layout), flat_stride(layout)):
@@ -93,6 +88,73 @@ def coalesce(layout: Union[Layout, ComposedLayout]):
             result_shape.append(shape)
             result_stride.append(stride)
     return Layout(shape=tuple(result_shape), strides=tuple(result_stride))
+
+
+def _profile_place(path: tuple[int, ...]) -> str:
+    return "profile" + "".join(f"[{index}]" for index in path)
+
+
+def _coalesce_profile(layout: Layout, profile, path: tuple[int, ...]) -> Layout:
+    """Apply flat coalescing at the terminals selected by one profile."""
+    if not isinstance(profile, tuple):
+        return _coalesce_flat(layout)
+
+    strides = layout.strides
+    if strides is None:
+        strides = compact_col_major(layout.shape)
+    if not isinstance(strides, tuple) or len(layout.shape) != len(strides):
+        raise ValueError(
+            f"coalesce: layout shape has {len(layout.shape)} modes at "
+            f"{_profile_place(path)}, but its strides do not"
+        )
+    if len(profile) > len(layout.shape):
+        raise ValueError(
+            f"coalesce: {_profile_place(path)} has {len(profile)} modes, but the "
+            f"layout there has {len(layout.shape)}"
+        )
+
+    result_shape: list = []
+    result_stride: list = []
+    for index, (shape, stride) in enumerate(zip(layout.shape, strides)):
+        if index >= len(profile):
+            result_shape.append(shape)
+            result_stride.append(stride)
+            continue
+
+        nested = isinstance(shape, tuple)
+        child = Layout(
+            shape=shape if nested else (shape,),
+            strides=stride if isinstance(stride, tuple) else (stride,),
+        )
+        child_profile = profile[index]
+        child = _coalesce_profile(child, child_profile, (*path, index))
+        if nested or isinstance(child_profile, tuple):
+            result_shape.append(child.shape)
+            result_stride.append(child.strides)
+        else:
+            result_shape.append(child.shape[0])
+            result_stride.append(child.strides[0])
+    return Layout(shape=tuple(result_shape), strides=tuple(result_stride))
+
+
+def coalesce(layout: Union[Layout, ComposedLayout], trg_profile=_NO_PROFILE):
+    """CuTe ``coalesce``, optionally applied at ``trg_profile`` terminals.
+
+    Coalescing renames the domain and leaves the index mapping alone, so a
+    swizzled composed layout coalesces underneath its swizzle. A tuple profile
+    transforms the corresponding top-level modes and retains any modes beyond
+    its length, while a non-tuple terminal applies flat coalescing.
+    """
+    if get_swizzle_portion(layout) is not None:
+        outer = (
+            coalesce(layout.outer)
+            if trg_profile is _NO_PROFILE
+            else coalesce(layout.outer, trg_profile)
+        )
+        return ComposedLayout(inner=layout.inner, offset=layout.offset, outer=outer)
+    if trg_profile is _NO_PROFILE:
+        return _coalesce_flat(layout)
+    return _coalesce_profile(layout, trg_profile, ())
 
 
 def frame_of(layout: Union[Layout, ComposedLayout]) -> tuple[int, Layout] | None:

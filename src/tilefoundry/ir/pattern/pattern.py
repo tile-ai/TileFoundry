@@ -18,7 +18,7 @@ from tilefoundry.ir.types.int_tuple import congruent
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.layout_algebra import (
     ASYNC_WIDTHS,
-    box_runs,
+    coalesce,
     is_inverse_projectable,
 )
 from tilefoundry.ir.types.mesh import separate
@@ -86,6 +86,20 @@ VECTOR_READING = (
 )
 
 
+def _reverse_group(group):
+    if isinstance(group, tuple):
+        return tuple(_reverse_group(mode) for mode in reversed(group))
+    return group
+
+
+def _row_major_groups_for_cute(layout: Layout) -> Layout:
+    """Reverse modes within each tile axis for CuTe's mode-0-fast algebra."""
+    return Layout(
+        shape=tuple(_reverse_group(group) for group in layout.shape),
+        strides=tuple(_reverse_group(group) for group in layout.strides),
+    )
+
+
 def vector_widths(layout, element_bits: int) -> tuple[int, ...]:
     """Every cp.async width that divides every run in an arrangement."""
     widest = ASYNC_WIDTHS[-1]
@@ -101,11 +115,20 @@ def vector_widths(layout, element_bits: int) -> tuple[int, ...]:
         for value in flatten(group)
     ):
         return ()
-    runs = box_runs(held, element_bits, None, limit=None)
-    unit = [run.extent for run in runs if run.step == 1]
+    grouped = coalesce(
+        _row_major_groups_for_cute(held),
+        (0,) * len(held.shape),
+    )
+    runs = tuple(
+        sorted(
+            zip(flatten(grouped.shape), flatten(grouped.strides)),
+            key=lambda run: run[1],
+        )
+    )
+    unit = [extent for extent, step in runs if step == 1]
     if len(unit) != 1:
         return ()
-    counted = (unit[0], *(run.step for run in runs if run.step != 1))
+    counted = (unit[0], *(step for _, step in runs if step != 1))
     return tuple(
         width
         for width in ASYNC_WIDTHS

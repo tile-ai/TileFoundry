@@ -875,6 +875,19 @@ def shard_layout_local_shape(
     ...
 
 
+def coalesce(layout: Layout | ComposedLayout, trg_profile=...):
+    """Merge contiguous modes, optionally within profile-selected groups.
+
+    Args:
+        layout: Layout to simplify under CuTe's mode-zero-fast convention.
+        trg_profile: Optional nesting whose terminals select groups to merge.
+
+    Returns:
+        The equivalent layout with contiguous modes merged.
+    """
+    ...
+
+
 def is_inverse_projectable(layout: Layout) -> bool:
     """Return whether a layout admits the supported inverse projection.
 
@@ -962,6 +975,13 @@ def contains(scope: ComposedLayout, t: int) -> bool:
     only when `require_static=False`; strict mode MUST reject it.
   - `try_c_order_strides` MUST return `None` unless every shape entry is a
     non-boolean integer.
+  - `coalesce(layout)` MUST flatten and merge contiguous modes under CuTe's
+    mode-zero-fast convention. With `trg_profile`, it MUST apply that rule at
+    each profile terminal, preserve unmatched trailing modes, and reject a
+    profile that asks for more modes at any nesting level with that level in
+    the diagnostic. A row-major consumer MUST reverse modes within each of its
+    groups before calling this CuTe operation; `coalesce` itself does not
+    reinterpret storage order.
   - Mesh-scope projection MUST accept only an identity inner mapping and an
     inverse-projectable primitive outer layout; other layouts MUST raise
     `NotProjectable` rather than guess a projection.
