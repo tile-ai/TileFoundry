@@ -64,13 +64,18 @@ class SameConstraint(Constraint):
         return f"{self.left}.{self.field} = {self.right}.{self.field}"
 
 
-def affine_part(layout):
-    """Return the strided affine part beneath shard frames and swizzles."""
+def affine_part(layout, *, plain: bool = False):
+    """Return the strided affine part beneath shard frames and swizzles.
+
+    When *plain* is true, refuse a composition with a transform or offset.
+    """
     if isinstance(layout, ShardLayout):
         if not all(isinstance(attr, Broadcast) for attr in layout.attrs):
             return None
         layout = layout.layout
     if isinstance(layout, ComposedLayout):
+        if plain and (layout.inner is not None or layout.offset != 0):
+            return None
         if layout.inner is not None and not isinstance(layout.inner, Swizzle):
             return None
         layout = layout.outer

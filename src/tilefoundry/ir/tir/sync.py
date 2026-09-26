@@ -12,7 +12,7 @@ from tilefoundry.ir.mesh_scope import device_layout
 from tilefoundry.ir.types import UnitType
 from tilefoundry.ir.types.int_tuple import flatten, product
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, get
-from tilefoundry.ir.types.layout_algebra import apply as _apply
+from tilefoundry.ir.types.layout import apply as _apply
 from tilefoundry.ir.types.layout_algebra import size as _size
 from tilefoundry.ir.types.mesh import Mesh
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt

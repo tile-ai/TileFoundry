@@ -22,9 +22,10 @@ from tilefoundry.ir.pattern import (
     resolved,
 )
 from tilefoundry.ir.pattern.match import written_binding, written_bindings, written_place
-from tilefoundry.ir.types import Layout, Mesh
+from tilefoundry.ir.types import ComposedLayout, Layout, Mesh
 from tilefoundry.ir.types.dim import DimVar
-from tilefoundry.ir.types.layout_algebra import coalesce, frame_of
+from tilefoundry.ir.types.layout_algebra import coalesce
+from tilefoundry.ir.types.mesh import levels, starts
 
 
 class MmaAtom:
@@ -261,13 +262,15 @@ def physical_frames_match(left: Mesh, right: Mesh) -> bool:
         return False
 
     def frame(mesh):
-        framed = frame_of(mesh.layout)
-        if framed is None:
+        if isinstance(mesh.layout, ComposedLayout) and mesh.layout.inner is not None:
             return None
-        offset, layout = framed
-        if layout.strides is None:
+        try:
+            arranged = levels(mesh)
+        except (IndexError, TypeError, ValueError):
             return None
-        return offset, coalesce(_reverse(layout))
+        if any(layout.strides is None for layout in arranged):
+            return None
+        return starts(mesh), tuple(coalesce(_reverse(layout)) for layout in arranged)
 
     a, b = frame(left), frame(right)
     return a is not None and b is not None and a == b

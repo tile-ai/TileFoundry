@@ -34,7 +34,6 @@ from tilefoundry.ir.pattern.match import written_place, written_tuple
 from tilefoundry.ir.tir.verify import verify_between, verify_operands
 from tilefoundry.ir.types import ComposedLayout, Layout, Mesh, ShardLayout, Swizzle, UnitType
 from tilefoundry.ir.types.int_tuple import flatten
-from tilefoundry.ir.types.layout_algebra import frame_of
 from tilefoundry.ir.types.storage import StorageKind as S
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
@@ -106,27 +105,6 @@ class TmaSwizzle(Enum):
         return None if self is TmaSwizzle.NONE else Swizzle(self.value.bit_length() - 5, 4, 3)
 
 
-def unframed(layout):
-    """Drop a shard frame only when every participant sees the whole tile."""
-    if isinstance(layout, ShardLayout) and affine_part(layout) is not None:
-        return layout.layout
-    return layout
-
-
-def _affine(subject):
-    framed = frame_of(unframed(subject))
-    layout = framed[1] if framed is not None and framed[0] == 0 else None
-    if not isinstance(layout, Layout) or layout.strides is None:
-        return None
-    if any(
-        type(value) is not int
-        for group in (layout.shape, layout.strides)
-        for value in flatten(group)
-    ):
-        return None
-    return layout
-
-
 def _missed_place(places, values, captures, first: int = 0) -> tuple | None:
     held = captures
     for index, (place, value) in enumerate(zip(places, values), first):
@@ -146,8 +124,12 @@ class BoxPattern(Pattern):
     span: int | None = None
 
     def reading(self, subject, captures) -> tuple[tuple | None, str | None]:
-        layout = _affine(subject)
-        if layout is None:
+        layout = affine_part(subject, plain=True)
+        if layout is None or any(
+            type(value) is not int
+            for group in (layout.shape, layout.strides)
+            for value in flatten(group)
+        ):
             return None, f"{subject!r} is no static strided arrangement"
         width = getattr(captures.get(self.dtype), "bit_width", None)
         if type(width) is not int:
@@ -216,10 +198,14 @@ class BoxFamily(SwitchPattern):
     """Every unswizzled or swizzled shared-memory box."""
 
     def match(self, subject, captures=None):
-        return super().match(unframed(subject), captures)
+        if isinstance(subject, ShardLayout) and affine_part(subject) is not None:
+            subject = subject.layout
+        return super().match(subject, captures)
 
     def refusal(self, subject, captures=None) -> str | None:
-        layout = unframed(subject)
+        layout = subject
+        if isinstance(layout, ShardLayout) and affine_part(layout) is not None:
+            layout = layout.layout
         transform = layout.inner if isinstance(layout, ComposedLayout) else None
         if transform is not None and layout.offset != 0:
             return f"it is reached through {transform!r} at offset {layout.offset}, not 0"
@@ -244,8 +230,12 @@ class TensorMapPattern(Pattern):
     dtype: str
 
     def reading(self, subject) -> tuple[tuple | None, str | None]:
-        layout = _affine(subject)
-        if layout is None:
+        layout = affine_part(subject, plain=True)
+        if layout is None or any(
+            type(value) is not int
+            for group in (layout.shape, layout.strides)
+            for value in flatten(group)
+        ):
             return None, f"{subject!r} is no static strided tensor a tensormap describes"
         modes = [
             (extent, step)
@@ -438,5 +428,4 @@ __all__ = [
     "TmaOperandPattern",
     "TmaSwizzle",
     "box_runs",
-    "unframed",
 ]

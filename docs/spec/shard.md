@@ -274,7 +274,7 @@ the ones they are XORed onto
     carries the same `Swizzle` through: a window's start is a constant shift of
     the index, which `offset` already states.
   - A swizzled `ComposedLayout` MUST NOT serve as a `Mesh` execution scope:
-    [§9](#9-layout-construction-and-mesh-scope-projection) admits an identity
+    [§9](#9-layout-construction-and-algebra) admits an identity
     `inner` only.
 
 ---
@@ -307,6 +307,16 @@ class Mesh:
     names: tuple[str, ...] = ()
 
     def __getitem__(self, key) -> Mesh: ...
+
+
+def levels(mesh: Mesh) -> tuple[Layout, ...]:
+    """Return each topology level's arrangement in its own numbering."""
+    ...
+
+
+def starts(mesh: Mesh) -> tuple[int, ...]:
+    """Decode each topology level's start from device numbering."""
+    ...
 ```
 
 - constraints:
@@ -406,10 +416,12 @@ value is consumed by a region.
     guessed level.
   - A reader that asks for an exact participant set at a selected topology level
     MUST take that level's projected layout as above, and MUST refuse a Mesh
-    that names no such level. For a plain `Layout`, the set is
-    `{apply(layout, c) | 0 <= c < size(layout)}`. For a sliced `ComposedLayout`,
-    it is `{image(layout, c) | 0 <= c < size(layout.outer)}`.
-  - That image MUST be static, positive, inverse-projectable, duplicate-free,
+    that names no such level. For both a plain `Layout` and a sliced
+    `ComposedLayout`, the set is
+    `{apply(layout, c) | 0 <= c < size(layout)}`; composition applies its
+    retained offset and inner mapping.
+  - That participant set MUST be static, positive, inverse-projectable,
+    duplicate-free,
     and contained in `[0, selected_topology.size)`. A plain Mesh MUST cover the
     complete selected domain. A strict subdomain MUST use a sliced Mesh so its
     offset is retained rather than collapsed to an extent.
@@ -796,7 +808,7 @@ copy that displacement to a materialized consumer.
 
 ---
 
-## 9. Layout construction and mesh-scope projection
+## 9. Layout construction and algebra
 
 Making the steps of a compact arrangement and reading an index back into the
 coordinate that reaches it are not operations on layouts, so they are filed
@@ -805,6 +817,11 @@ apart from the algebra, as CuTe files `stride.hpp` apart from `layout.hpp`.
 ```python
 class NotProjectable(ValueError):
     """Report that a layout cannot serve as a mesh execution scope."""
+
+
+def apply(layout: Layout | ComposedLayout, coord: int) -> int:
+    """Apply a layout to one linear domain coordinate."""
+    ...
 
 
 def prefix_product(shape: tuple[int, ...]) -> tuple[int, ...]:
@@ -889,7 +906,7 @@ def coalesce(layout: Layout | ComposedLayout, trg_profile=...):
 
 
 def is_inverse_projectable(layout: Layout) -> bool:
-    """Return whether a layout admits the supported inverse projection.
+    """Return whether a layout admits the supported inverse construction.
 
     Args:
         layout: Primitive layout to inspect.
@@ -924,43 +941,6 @@ def right_inverse(layout: Layout | ComposedLayout):
     ...
 
 
-def image(scope: ComposedLayout, coord: int) -> int:
-    """Map a domain coordinate into a mesh execution scope.
-
-    Args:
-        scope: Admissible composed mesh scope.
-        coord: Flat domain coordinate.
-
-    Returns:
-        Runtime thread index.
-    """
-    ...
-
-
-def project(scope: ComposedLayout, t: int) -> tuple[int, ...] | None:
-    """Project a runtime thread into a mesh execution scope.
-
-    Args:
-        scope: Admissible composed mesh scope.
-        t: Runtime thread index.
-
-    Returns:
-        The multidimensional coordinate, or None when outside the scope.
-    """
-    ...
-
-
-def contains(scope: ComposedLayout, t: int) -> bool:
-    """Return whether a runtime thread participates in a mesh scope.
-
-    Args:
-        scope: Admissible composed mesh scope.
-        t: Runtime thread index.
-
-    Returns:
-        Whether the thread participates.
-    """
-    ...
 ```
 
 - constraints:
@@ -982,9 +962,6 @@ def contains(scope: ComposedLayout, t: int) -> bool:
     the diagnostic. A row-major consumer MUST reverse modes within each of its
     groups before calling this CuTe operation; `coalesce` itself does not
     reinterpret storage order.
-  - Mesh-scope projection MUST accept only an identity inner mapping and an
-    inverse-projectable primitive outer layout; other layouts MUST raise
-    `NotProjectable` rather than guess a projection.
-  - `project` MUST return `None` for an index outside the scope or outside the
-    outer layout's round-tripping image; `contains` MUST report the same test as
-    a boolean.
+  - Inverting a composed mesh layout MUST accept only an identity inner mapping
+    and an inverse-projectable primitive outer layout; other layouts MUST raise
+    `NotProjectable` rather than guess an inverse.

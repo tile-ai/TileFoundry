@@ -12,7 +12,7 @@ from __future__ import annotations
 from tilefoundry.ir.types.int_tuple import flatten, product
 from tilefoundry.ir.types.layout import ComposedLayout, Layout, size
 from tilefoundry.ir.types.layout_algebra import is_inverse_projectable
-from tilefoundry.ir.types.mesh import Mesh, _levels, _starts, check_topology
+from tilefoundry.ir.types.mesh import Mesh, check_topology, levels, starts
 from tilefoundry.ir.types.storage import StorageKind, resolve_storage
 from tilefoundry.ir.types.stride import compact_major
 
@@ -31,7 +31,7 @@ def device_layout(mesh: Mesh) -> Layout:
     units = compact_major(sizes, major="row") if all(
         isinstance(one, int) for one in sizes
     ) else (1,) * len(sizes)
-    for arrangement, unit in zip(_levels(mesh), units):
+    for arrangement, unit in zip(levels(mesh), units):
         stated = arrangement.strides
         shape.extend(flatten(arrangement.shape))
         strides.extend(
@@ -85,7 +85,7 @@ def covered_by_scope(mesh: Mesh, current: Mesh) -> bool:
     scope = {
         getattr(topology, "name", topology): _selected(arrangement, start)
         for topology, arrangement, start in zip(
-            current.topologies, _levels(current), _starts(current)
+            current.topologies, levels(current), starts(current)
         )
     }
     return all(
@@ -93,7 +93,7 @@ def covered_by_scope(mesh: Mesh, current: Mesh) -> bool:
         and _selected(arrangement, start)
         == scope[getattr(topology, "name", topology)]
         for topology, arrangement, start in zip(
-            mesh.topologies, _levels(mesh), _starts(mesh)
+            mesh.topologies, levels(mesh), starts(mesh)
         )
     )
 

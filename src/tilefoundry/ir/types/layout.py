@@ -16,6 +16,10 @@ class LayoutBase:
         return len(flatten(self.shape))
 
 
+class NotProjectable(ValueError):
+    """A layout cannot serve as a mesh execution scope (not inverse-projectable)."""
+
+
 @dataclass(frozen=True)
 class Layout(LayoutBase):
     """Cute-style layout: shape + per-axis cute strides."""
@@ -147,6 +151,38 @@ def flat_stride(layout: Layout) -> tuple[int, ...]:
     return compact_col_major(flat_shape(layout))
 
 
+def apply(layout: Layout | ComposedLayout, coord: int) -> int:
+    """``crd2idx`` of a 1-D domain coord: decompose by shape, dot with strides.
+
+    A ``ComposedLayout`` applies its components in order, so this is
+    ``inner(offset + outer(coord))`` — the swizzle case included, since a
+    ``Swizzle`` is exactly a mapping on that index.
+    """
+    if isinstance(layout, ComposedLayout):
+        return _apply_any(layout, coord)
+    shape = flat_shape(layout)
+    stride = flat_stride(layout)
+    idx = 0
+    rem = coord
+    for extent, step in zip(shape, stride):
+        idx += (rem % extent) * step
+        rem //= extent
+    return idx
+
+
+def _apply_any(layout, x: int) -> int:
+    """Apply a ``Layout`` / ``ComposedLayout`` (``None`` ≡ identity) to ``x``."""
+    if layout is None:
+        return x
+    if isinstance(layout, Swizzle):
+        return layout(x)
+    if isinstance(layout, Layout):
+        return apply(layout, x)
+    if isinstance(layout, ComposedLayout):
+        return _apply_any(layout.inner, layout.offset + _apply_any(layout.outer, x))
+    raise NotProjectable(f"cannot apply layout of type {type(layout).__name__}")
+
+
 def size(layout: Layout) -> int:
     return product(layout.shape)
 
@@ -206,6 +242,8 @@ def take(layout: LayoutBase, begin: int, end: int) -> "Layout":
 
 __all__ = [
     "LayoutBase",
+    "NotProjectable",
+    "apply",
     "flatten",
     "size",
     "unflatten",

@@ -102,6 +102,15 @@ physical directory layout reflects that boundary directly.
   contracts are distinct even though both are consumed across the codegen
   boundary.
 
+`ir/types/layout_algebra.py` has a mechanically checkable public surface:
+every name in its `__all__` MUST have the same name in CuTe, with
+`is_inverse_projectable` as its sole exception. Python's missing overload
+dispatch requires the separately named `supports_composition`,
+`supports_inverse`, and `inverse` adapters in `swizzle_layout.py`;
+`NotProjectable` in `layout.py` is the named Python diagnostic needed by
+composed application and inversion. These are explicit exceptions, not a
+license for unrelated helpers in the algebra modules.
+
 `ir/pattern/`, `ir/clause/`, `visitor_registry/`, and `dump/` are cross-cutting packages;
 their stable responsibilities are owned by [core-ir](./core-ir.md),
 [parser](./parser.md), [visitor-registry](./visitor-registry.md), and [inspection](./inspection.md),

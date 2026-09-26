@@ -12,6 +12,7 @@ from __future__ import annotations
 from tilefoundry.dsl import T
 from tilefoundry.ir.core import Call, Var
 from tilefoundry.ir.hir.sharding.reshard import Reshard
+from tilefoundry.ir.tir.cuda.nn.sm80_mma import WARP
 from tilefoundry.ir.types import DType, ShardLayout, Split, TensorType
 from tilefoundry.ir.types.int_tuple import flatten, product
 from tilefoundry.ir.types.storage import StorageKind
@@ -23,9 +24,9 @@ _ATOM = T.cuda.sm80.Mma()
 def _realized_fragment(role: str) -> ShardLayout:
     declared = _ATOM.role(role).layout
     return ShardLayout(
-        layout=declared.arrangement.fixed(),
+        layout=declared.layout.fixed(),
         attrs=declared.attrs,
-        mesh=declared.mesh,
+        mesh=WARP,
     )
 
 

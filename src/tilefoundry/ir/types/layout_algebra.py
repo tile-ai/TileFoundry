@@ -1,44 +1,29 @@
-"""Provide flat CuTe layout algebra for mesh execution scopes.
+"""Provide the supported CuTe algebra for ``Layout`` and ``ComposedLayout``.
 
-The restricted port supports coordinate application, inverses, containment,
-and projection for ``Layout`` and ``ComposedLayout``, and the CuTe
-``swizzle_layout.hpp`` specializations for a ``Swizzle`` in ``inner``.
-Execution scopes must be injective and inverse-projectable.
+The restricted port covers coalescing, composition, complements, and inverses,
+including the CuTe ``swizzle_layout.hpp`` specializations for a ``Swizzle`` in
+``inner``. Layout application lives with the layout types themselves.
 
-See [shard §9](docs/spec/shard.md#9-layout-construction-and-mesh-scope-projection).
+See [shard §9](docs/spec/shard.md#9-layout-construction-and-algebra).
 """
 
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import Union
 
 from . import swizzle_layout
-from .layout import ComposedLayout, Layout, Swizzle, flat_shape, flat_stride, size
-from .stride import compact_col_major, idx2crd
+from .layout import (
+    ComposedLayout,
+    Layout,
+    NotProjectable,
+    Swizzle,
+    apply,
+    flat_shape,
+    flat_stride,
+    size,
+)
+from .stride import compact_col_major
 from .swizzle_layout import get_swizzle_portion
-
-
-class NotProjectable(ValueError):
-    """A layout cannot serve as a mesh execution scope (not inverse-projectable)."""
-
-
-def apply(layout: Union[Layout, ComposedLayout], coord: int) -> int:
-    """``crd2idx`` of a 1-D domain coord: decompose by shape, dot with strides.
-
-    A ``ComposedLayout`` applies its components in order, so this is
-    ``inner(offset + outer(coord))`` — the swizzle case included, since a
-    ``Swizzle`` is exactly a mapping on that index.
-    """
-    if isinstance(layout, ComposedLayout):
-        return _apply_any(layout, coord)
-    shape = flat_shape(layout)
-    stride = flat_stride(layout)
-    idx = 0
-    rem = coord
-    for s, d in zip(shape, stride):
-        idx += (rem % s) * d
-        rem //= s
-    return idx
 
 
 def cosize(layout: Union[Layout, ComposedLayout]) -> int:
@@ -139,15 +124,6 @@ def coalesce(layout: Union[Layout, ComposedLayout], trg_profile=_NO_PROFILE):
     if trg_profile is _NO_PROFILE:
         return _coalesce_flat(layout)
     return _coalesce_profile(layout, trg_profile, ())
-
-
-def frame_of(layout: Union[Layout, ComposedLayout]) -> tuple[int, Layout] | None:
-    """Read a bare layout or an affine composition as offset + outer layout."""
-    if isinstance(layout, Layout):
-        return 0, layout
-    if layout.inner is not None or not isinstance(layout.outer, Layout):
-        return None
-    return layout.offset, layout.outer
 
 
 def complement(layout: Layout, max_idx: int = 1) -> Layout:
@@ -299,69 +275,12 @@ def right_inverse(layout: Union[Layout, ComposedLayout, Swizzle]):
     return _right_inverse_layout(layout)
 
 
-def _apply_any(layout, x: int) -> int:
-    """Apply a ``Layout`` / ``ComposedLayout`` (``None`` ≡ identity) to ``x``."""
-    if layout is None:
-        return x
-    if isinstance(layout, Swizzle):
-        return layout(x)
-    if isinstance(layout, Layout):
-        return apply(layout, x)
-    if isinstance(layout, ComposedLayout):
-        return _apply_any(layout.inner, layout.offset + _apply_any(layout.outer, x))
-    raise NotProjectable(f"cannot apply layout of type {type(layout).__name__}")
-
-
-def image(scope: ComposedLayout, coord: int) -> int:
-    """``inner(offset + outer(coord))`` for a 1-D domain coord."""
-    _check_admissible(scope)
-    return scope.offset + apply(scope.outer, coord)
-
-
-def project(scope: ComposedLayout, t: int) -> Optional[tuple[int, ...]]:
-    """Project.
-
-    Recover the multi-dim domain coord ``(warp, lane, …)`` of thread ``t``,
-    or ``None`` if ``t`` is not in this scope. Raises ``NotProjectable`` if the
-    scope itself is inadmissible (non-identity inner / non-injective outer).
-
-    Built on the composed ``left_inverse``: ``coord_1d = left_inverse(scope)(t)``
-    (``= left_inverse(outer)(t − offset)``); the multi-dim coord is ``idx2crd``
-    of that over ``outer``'s shape. Returns ``None`` unless the coord is
-    in-domain *and* round-trips (``image(coord) == t``).
-    """
-    _check_admissible(scope)
-    outer = scope.outer
-    if t - scope.offset < 0:
-        return None
-    coord_1d = _apply_any(left_inverse(scope), t)
-    if not (0 <= coord_1d < size(outer)):
-        return None
-
-    if image(scope, coord_1d) != t:
-        return None
-
-    shape = flat_shape(outer)
-    return idx2crd(coord_1d, shape, compact_col_major(shape))
-
-
-def contains(scope: ComposedLayout, t: int) -> bool:
-    """Does thread ``t`` execute this mesh scope's body."""
-    return project(scope, t) is not None
-
-
 __all__ = [
-    "NotProjectable",
     "composition",
     "cosize",
-    "apply",
     "coalesce",
-    "frame_of",
     "complement",
     "is_inverse_projectable",
     "right_inverse",
     "left_inverse",
-    "image",
-    "project",
-    "contains",
 ]
