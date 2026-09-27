@@ -503,7 +503,10 @@ class PatternPrinter:
         return name
 
     def rules_PlainArrangement(self, pattern, name) -> tuple[str, ...]:
-        return ("every plain arrangement has no transform or nonzero offset",)
+        return (
+            "every plain arrangement is a static strided layout with no swizzle and zero "
+            "offset, and, where it is sharded, one every participant holds whole",
+        )
 
     def visit_BoxDims(self, pattern, name) -> str:
         return name
