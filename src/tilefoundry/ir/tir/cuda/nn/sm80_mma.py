@@ -3,20 +3,14 @@
 from __future__ import annotations
 
 from tilefoundry.ir.pattern import (
-    ComposedLayoutPattern,
     LayoutPattern,
-    MeshPattern,
     ShardLayoutPattern,
     TensorPattern,
-    WildcardPattern,
-)
-from tilefoundry.ir.pattern import (
-    predicates as P,
 )
 from tilefoundry.ir.types import DType, Layout, Mesh, ShardLayout, Split, Topology
 from tilefoundry.ir.types.storage import StorageKind as S
 
-from .mma_atom import MmaAtom
+from .mma_atom import MmaAtom, scope_pattern
 
 WARP = Mesh(
     topologies=(Topology("thread", 32),),
@@ -40,19 +34,7 @@ _C_FRAGMENT = ShardLayout(
     mesh=WARP,
 )
 
-_WARP_LAYOUT = LayoutPattern.from_layout(
-    WARP.layout,
-    predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
-)
-_WARP_PATTERN = MeshPattern(
-    ("thread",),
-    ComposedLayoutPattern(
-        inner=None,
-        offset=WildcardPattern("p0"),
-        outer=_WARP_LAYOUT,
-        predicates=(WildcardPattern("p0") % 32 == 0,),
-    ),
-)
+_WARP_SCOPE = scope_pattern(WARP)
 
 
 def _fragment(shape: tuple, dtype, held: ShardLayout) -> TensorPattern:
@@ -63,7 +45,7 @@ def _fragment(shape: tuple, dtype, held: ShardLayout) -> TensorPattern:
         layout=ShardLayoutPattern(
             layout=LayoutPattern.from_layout(held.layout),
             attrs=held.attrs,
-            mesh=_WARP_PATTERN,
+            mesh=_WARP_SCOPE,
         ),
     )
 

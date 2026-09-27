@@ -24,6 +24,19 @@ from tilefoundry.ir.types.mesh import levels, starts
 _MISS = object()
 
 
+def scope_pattern(scope: Mesh) -> MeshPattern:
+    """Any run of *scope*'s threads that starts on a whole multiple of its size."""
+    (topology,) = scope.topologies
+    per_mode = (P.Forward(per_mode=True), P.Injective(per_mode=True))
+    layout = ComposedLayoutPattern(
+        inner=None,
+        offset=WildcardPattern("p0"),
+        outer=LayoutPattern.from_layout(scope.layout, predicates=per_mode),
+        predicates=(WildcardPattern("p0") % topology.size == 0,),
+    )
+    return MeshPattern((topology.name,), layout)
+
+
 class MmaAtom:
     """One instruction declaration; an instance binds its authored parameters."""
 
@@ -88,16 +101,7 @@ class MmaAtom:
 
     @classmethod
     def scope_pattern(cls) -> MeshPattern:
-        (topology,) = cls.scope.topologies
-        size = topology.size
-        per_mode = (P.Forward(per_mode=True), P.Injective(per_mode=True))
-        layout = ComposedLayoutPattern(
-            inner=None,
-            offset=WildcardPattern("p0"),
-            outer=LayoutPattern.from_layout(cls.scope.layout, predicates=per_mode),
-            predicates=(WildcardPattern("p0") % size == 0,),
-        )
-        return MeshPattern((topology.name,), layout)
+        return scope_pattern(cls.scope)
 
     def on(self, mesh: Mesh) -> MmaAtom:
         return type(self)(mesh=mesh, **self.bindings)

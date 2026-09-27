@@ -9,7 +9,6 @@ from tilefoundry.ir.pattern import (
     AndPattern,
     ComposedLayoutPattern,
     LayoutPattern,
-    MeshPattern,
     OrPattern,
     RangePattern,
     ShardLayoutPattern,
@@ -25,7 +24,7 @@ from tilefoundry.ir.types import Broadcast, DType, Layout, Mesh, Split, Topology
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.storage import StorageKind as S
 
-from .mma_atom import MmaAtom
+from .mma_atom import MmaAtom, scope_pattern
 
 WARPGROUP = Mesh(
     (Topology("thread", 128),),
@@ -55,18 +54,7 @@ n, b, W, p, r, l, s, c = (
 n_extent = n
 bb, Wb, rb, lb, sb = (WildcardPattern(name) for name in ("b_swizzle", "Wb", "rb", "lb", "sb"))
 RUN = P.Table((8, 16, 32, 64))[b]
-WARPGROUP_SCOPE = MeshPattern(
-    ("thread",),
-    ComposedLayoutPattern(
-        inner=None,
-        offset=WildcardPattern("p0"),
-        outer=LayoutPattern.from_layout(
-            WARPGROUP.layout,
-            predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
-        ),
-        predicates=(WildcardPattern("p0") % 128 == 0,),
-    ),
-)
+WARPGROUP_SCOPE = scope_pattern(WARPGROUP)
 BROADCAST = (Broadcast(), Broadcast(), Broadcast())
 PER_THREAD = (Split(2), Split(0), Split(4))
 
