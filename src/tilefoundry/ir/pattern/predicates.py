@@ -11,7 +11,6 @@ from tilefoundry.ir.types.layout_algebra import coalesce, is_inverse_projectable
 from .match import (
     ARRANGEMENT,
     UNNAMED_PLACE,
-    Match,
     matched,
     relations_of,
     written_place,
@@ -41,7 +40,10 @@ class Forward(Predicate):
 
     per_mode: bool = False
 
-    def holds(self, arrangement: Layout, captures: dict) -> bool:
+    def holds(self, subject, bindings: dict) -> bool:
+        arrangement = self.arrangement(subject)
+        if arrangement is None:
+            return False
         return all(
             all(step >= 0 for step in flatten(part.strides))
             for part in _arrangements(arrangement, self.per_mode)
@@ -62,7 +64,10 @@ class Injective(Predicate):
 
     per_mode: bool = False
 
-    def holds(self, arrangement: Layout, captures: dict) -> bool:
+    def holds(self, subject, bindings: dict) -> bool:
+        arrangement = self.arrangement(subject)
+        if arrangement is None:
+            return False
         return all(
             is_inverse_projectable(part) for part in _arrangements(arrangement, self.per_mode)
         )
@@ -136,26 +141,13 @@ class WholeVectors(Predicate):
         layout = subject.layout if isinstance(subject, ShardLayout) else subject
         return () if type(bits) is not int else _vector_widths(layout, bits, self.widths)
 
-    def match(self, subject, captures=None):
-        held = dict(captures or {})
-        widths = self.available_widths(subject, held)
+    def holds(self, subject, bindings: dict) -> bool:
+        widths = self.available_widths(subject, bindings)
         if not widths:
-            return None
-        if self.width.name in held:
-            return Match(held) if held[self.width.name] in widths else None
-        return matched(self.width, widths[-1], held)
-
-    def refusal(self, subject, captures=None) -> str | None:
-        if self.match(subject, captures) is not None:
-            return None
-        sizes = " or ".join(map(str, self.widths))
-        if len(self.widths) > 2:
-            sizes = ", ".join(map(str, self.widths[:-1])) + f" or {self.widths[-1]}"
-        return (
-            f"{subject!r} moves no whole vector of {sizes} bytes -- its run at step 1 "
-            "and every other step are no whole number of one -- so the two ends share "
-            "no run wide enough for the requested vector widths"
-        )
+            return False
+        if self.width.name in bindings:
+            return bindings[self.width.name] in widths
+        return matched(self.width, widths[-1], bindings) is not None
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return f"vectors of {self.width.name} bytes"
@@ -172,28 +164,13 @@ class PlainArrangement(Predicate):
     def _stated(subject):
         return subject.layout if isinstance(subject, ShardLayout) else subject
 
-    def holds(self, arrangement: Layout, captures: dict) -> bool:
-        return True
-
-    def match(self, subject, captures=None):
+    def holds(self, subject, bindings: dict) -> bool:
         stated = self._stated(subject)
-        if isinstance(stated, ComposedLayout) and (stated.inner is not None or stated.offset != 0):
-            return None
-        return super().match(subject, captures)
-
-    def refusal(self, subject, captures=None) -> str | None:
-        if self.match(subject, captures) is not None:
-            return None
-        stated = self._stated(subject)
-        if isinstance(stated, ComposedLayout):
-            reached = []
-            if stated.inner is not None:
-                reached.append(f"through {stated.inner!r}")
-            if stated.offset != 0:
-                reached.append(f"at offset {stated.offset}")
-            if reached:
-                return f"it is reached {' '.join(reached)}, not as a plain arrangement"
-        return f"{subject!r} is no static strided arrangement"
+        if isinstance(stated, ComposedLayout) and (
+            stated.inner is not None or stated.offset != 0
+        ):
+            return False
+        return self.arrangement(subject) is not None
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return "a plain arrangement with no transform or offset"
@@ -237,16 +214,6 @@ def box_runs(
             else:
                 runs.append(Run(extent, step, axis, mode))
     return tuple(sorted(runs, key=lambda run: run.step))
-
-
-def _missed_place(places, values, captures, first: int = 0) -> tuple | None:
-    held = captures
-    for index, (place, value) in enumerate(zip(places, values), first):
-        found = matched(place, value, held)
-        if found is None:
-            return index, place, value
-        held = found.captures
-    return None
 
 
 @dataclass(frozen=True)
@@ -294,26 +261,13 @@ class BoxDims(Predicate):
         rows = "" if self.span is None else f", rows {self.span} B apart"
         return f"dim 0 fastest{rows}"
 
-    def match(self, subject, captures=None):
-        held = dict(captures or {})
-        extents, unlaid = self.reading(subject, held)
-        if extents is None or unlaid is not None:
-            return None
-        return matched(SequencePattern(*self.dims), extents, held)
-
-    def refusal(self, subject, captures=None) -> str | None:
-        held = dict(captures or {})
-        extents, why = self.reading(subject, held)
-        if extents is None:
-            return why
-        missed = _missed_place(self.dims, extents, held)
-        if missed is not None:
-            index, place, extent = missed
-            return (
-                f"its box dim {index} holds {extent} elements, and a box reads "
-                f"{written_place(place.pattern, place.name)}"
-            )
-        return why
+    def holds(self, subject, bindings: dict) -> bool:
+        extents, unlaid = self.reading(subject, bindings)
+        return (
+            extents is not None
+            and unlaid is None
+            and matched(SequencePattern(*self.dims), extents, bindings) is not None
+        )
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         dims = written_tuple(tuple(written_place(place) for place in self.dims))
@@ -357,23 +311,12 @@ class TensorMap(Predicate):
         others = tuple(step for _, step in modes if step != 1)
         return others + (0,) * (len(self.steps) - len(others)), None
 
-    def match(self, subject, captures=None):
+    def holds(self, subject, bindings: dict) -> bool:
         steps, _ = self.reading(subject)
-        return None if steps is None else matched(SequencePattern(*self.steps), steps, captures)
-
-    def refusal(self, subject, captures=None) -> str | None:
-        held = dict(captures or {})
-        steps, why = self.reading(subject)
-        if steps is None:
-            return why
-        missed = _missed_place(self.steps, steps, held, first=1)
-        if missed is not None:
-            index, place, step = missed
-            return (
-                f"its dim {index} steps {step} elements, and a tensormap reads "
-                f"{written_place(place.pattern, place.name)}"
-            )
-        return None
+        return (
+            steps is not None
+            and matched(SequencePattern(*self.steps), steps, bindings) is not None
+        )
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         steps = written_tuple(("1", *(written_place(place) for place in self.steps)))

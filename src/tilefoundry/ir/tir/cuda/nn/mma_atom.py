@@ -11,7 +11,6 @@ from tilefoundry.ir.pattern import (
     CapturePattern,
     ComposedLayoutPattern,
     LayoutPattern,
-    Match,
     MeshPattern,
     MultipleOfPattern,
     OneOfPattern,
@@ -210,11 +209,6 @@ class AtomPattern(Pattern):
     def __init__(self, *declarations):
         object.__setattr__(self, "declarations", tuple(declarations))
 
-    def match(self, subject, captures=None):
-        if not isinstance(subject, self.declarations):
-            return None
-        return Match({**dict(captures or {}), **subject.bindings})
-
     def describe(self, name: str = "_") -> str:
         return "one of " + ", ".join(held.reference_name for held in self.declarations)
 
@@ -234,9 +228,6 @@ class FromAtom(Pattern):
 
     def read_on(self, op):
         return op.atom.role_of(self.role, getattr(op.atom, "bindings", ()))
-
-    def match(self, subject, captures=None):
-        raise TypeError(f"the {self.role} operand is read against a call's atom; ask read_on(op)")
 
     def describe(self, name: str = "_") -> str:
         return f"the {self.role} operand of its atom"

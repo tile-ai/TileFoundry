@@ -623,11 +623,25 @@ The implementation is split by responsibility under `ir/pattern/`:
   `WildcardPattern`. It also owns the `Scalar` and `Tensor` singletons.
 - `predicates.py` defines named arrangement predicates: `Forward`,
   `Injective`, `WholeVectors`, `PlainArrangement`, `BoxDims`, and `TensorMap`.
-- `match.py` owns matches, captures, symbolic resolution, and the shared
-  description helpers. An unstated (`None`) pattern field admits any value.
+- `match.py` owns `PatternMatcher`, matches, captures, symbolic resolution, and
+  the shared description helpers. An unstated (`None`) pattern field admits any
+  value.
 - `constraint.py` owns cross-operand `Constraint`, `DistinctConstraint`,
   `SameConstraint`, and `SameModesConstraint` values.
 - `utils.py` owns specialization naming and dimension lookup.
+
+`Pattern.match(subject, captures=None)` is the public facade: it creates one
+`PatternMatcher`, which dispatches along the pattern class's MRO and owns the
+bindings, matched-node memo, deferred predicates, and branch rollback for that
+match. Nested patterns stay in that matcher instead of creating their own
+capture dictionaries. Effect-Op verification reuses one matcher across all
+operands of a call, so later operands see bindings established by earlier ones.
+
+`Predicate.holds(subject, bindings)` returns true, false, or `None` when names
+needed by the predicate remain unbound. The hand-written predicates in
+`predicates.py` read the layout itself, including its coalesced runs and
+algebraic properties. Arithmetic `Formula` predicates in `arith.py` instead
+read names bound by structural patterns.
 
 `LayoutPattern` optionally matches a bare `Layout`'s nested `shape` and
 `strides`, then applies its table of named predicates. Omitting both structural

@@ -16,7 +16,7 @@ from tilefoundry.ir.hir.function import (
 )
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.verify import verify_function
-from tilefoundry.ir.pattern import RangePattern, between_rules, locate_dim_var
+from tilefoundry.ir.pattern import PatternMatcher, RangePattern, between_rules, locate_dim_var
 from tilefoundry.ir.types import DType, TensorType, UnitType
 from tilefoundry.ir.types.callable_type import callable_type_for_prim_function
 from tilefoundry.ir.types.dim import DimAdd, DimFloorDiv, DimMax, DimMin, DimMod, DimMul, DimSub
@@ -70,7 +70,7 @@ def verify_between(call, ctx) -> None:
 def verify_operands(call, ctx) -> None:
     """Hold each operand to the pattern declared for its parameter."""
     label = type(call.target)._op_schema.name
-    held = {}
+    matcher = PatternMatcher()
     for param, arg in zip(input_params(type(call.target)), call.args):
         if param.pattern is None:
             continue
@@ -80,16 +80,15 @@ def verify_operands(call, ctx) -> None:
             if hasattr(param.pattern, "read_on")
             else param.pattern
         )
-        found = pattern.match(value, held)
-        if found is None:
+        if not matcher.match(pattern, value):
             ctx.error(
                 call,
                 f"{label} {param.name} is {tuple(value.shape)} "
                 f"{value.dtype.name} storage={value.storage}: "
-                f"{pattern.refusal(value, held)}",
+                f"{matcher.refusal()}",
             )
-            continue
-        held = found.captures
+    if not matcher.solve():
+        ctx.error(call, f"{label}: {matcher.refusal()}")
 
 
 def verify_prim_function(

@@ -26,7 +26,7 @@ from tilefoundry.ir.pattern import (
 from tilefoundry.ir.pattern import (
     predicates as P,
 )
-from tilefoundry.ir.types import ComposedLayout, Layout, Mesh, Swizzle, UnitType
+from tilefoundry.ir.types import Layout, Mesh, Swizzle, UnitType
 from tilefoundry.ir.types.storage import StorageKind as S
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
@@ -52,23 +52,6 @@ class TmaSwizzle(Enum):
 
 class BoxFamily(SwitchPattern):
     """Every unswizzled or swizzled shared-memory box."""
-
-    def refusal(self, subject, captures=None) -> str | None:
-        layout = subject
-        transform = layout.inner if isinstance(layout, ComposedLayout) else None
-        if transform is not None and layout.offset != 0:
-            return f"it is reached through {transform!r} at offset {layout.offset}, not 0"
-        for mode, pattern in self.branches:
-            if mode.swizzle == transform:
-                inner = pattern if transform is None else pattern.outer
-                return inner.refusal(
-                    layout if transform is None else layout.outer,
-                    captures,
-                )
-        written = ", ".join(
-            repr(mode.swizzle) for mode, _ in self.branches if mode.swizzle is not None
-        )
-        return f"it is reached through {transform!r}, and a tensormap swizzles by {written} or not at all"
 
 
 def _dim(name: str, dtype: str, *, span: int | None = None) -> CapturePattern:

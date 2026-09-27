@@ -9,20 +9,16 @@ from tilefoundry.ir.types import (
     Broadcast,
     ComposedLayout,
     Layout,
-    Mesh,
     ShardLayout,
     Swizzle,
-    TensorType,
-    make_mesh,
 )
-from tilefoundry.ir.types.int_tuple import congruent
 from tilefoundry.ir.types.layout import flatten
-from tilefoundry.ir.types.mesh import separate
 
 from .match import (
     ABSENT,
     UNNAMED_PLACE,
     Match,
+    PatternMatcher,
     _named,
     alternatives_of,
     evaluated,
@@ -30,7 +26,6 @@ from .match import (
     relations_of,
     resolved,
     written_alternatives,
-    written_binding,
     written_grouped,
     written_place,
     written_tuple,
@@ -42,7 +37,8 @@ class Pattern:
     """Base class for a predicate that returns bindings or ``None``."""
 
     def match(self, subject, captures=None) -> Match | None:
-        raise NotImplementedError
+        held = PatternMatcher(dict(captures or {}))
+        return Match(held.bindings) if held.match(self, subject) and held.solve() else None
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return type(self).__name__
@@ -65,7 +61,7 @@ class Pattern:
 
 @dataclass(frozen=True)
 class Predicate(Pattern):
-    """A named computed condition over one authored arrangement."""
+    """A computed condition over a subject and the matcher's bindings."""
 
     @staticmethod
     def arrangement(subject) -> Layout | None:
@@ -88,20 +84,9 @@ class Predicate(Pattern):
             return None
         return subject
 
-    def holds(self, arrangement: Layout, captures: dict) -> bool:
+    def holds(self, subject, bindings: dict) -> bool | None:
+        """Return true, false, or None while required bindings are unknown."""
         raise NotImplementedError
-
-    def match(self, subject, captures=None) -> Match | None:
-        held = dict(captures or {})
-        arrangement = self.arrangement(subject)
-        return Match(held) if arrangement is not None and self.holds(arrangement, held) else None
-
-    def refusal(self, subject, captures=None) -> str | None:
-        return (
-            None
-            if self.match(subject, captures) is not None
-            else f"{subject!r} does not satisfy {self.describe()}"
-        )
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         raise NotImplementedError
@@ -114,9 +99,6 @@ class Predicate(Pattern):
 class WildcardPattern(Pattern):
     """Match any value without binding it."""
 
-    def match(self, subject, captures=None) -> Match:
-        return Match(dict(captures or {}))
-
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return name
 
@@ -127,13 +109,6 @@ class OrPattern(Pattern):
 
     def __init__(self, *patterns):
         object.__setattr__(self, "patterns", tuple(patterns))
-
-    def match(self, subject, captures=None):
-        for pattern in self.patterns:
-            held = matched(pattern, subject, captures)
-            if held is not None:
-                return held
-        return None
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         if not any(isinstance(pattern, Pattern) for pattern in self.patterns):
@@ -162,14 +137,6 @@ class OrPattern(Pattern):
 class AndPattern(Pattern):
     parts: tuple = field(default_factory=tuple)
 
-    def match(self, subject, captures=None):
-        held = Match(dict(captures or {}))
-        for pattern in self.parts:
-            held = matched(pattern, subject, held.captures)
-            if held is None:
-                return None
-        return held
-
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return " and ".join(written_place(pattern, name) for pattern in self.parts)
 
@@ -183,16 +150,6 @@ class SequencePattern(Pattern):
 
     def __init__(self, *patterns):
         object.__setattr__(self, "patterns", tuple(patterns))
-
-    def match(self, subject, captures=None):
-        if not isinstance(subject, (tuple, list)) or len(subject) != len(self.patterns):
-            return None
-        held = Match(dict(captures or {}))
-        for pattern, value in zip(self.patterns, subject):
-            held = matched(pattern, value, held.captures)
-            if held is None:
-                return None
-        return held
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return written_tuple(tuple(written_place(p, name) for p in self.patterns))
@@ -208,15 +165,6 @@ class SequencePattern(Pattern):
 class CapturePattern(Pattern):
     name: str
     pattern: object = None
-
-    def match(self, subject, captures=None):
-        held = dict(captures or {})
-        if self.name in held:
-            return Match(held) if held[self.name] == subject else None
-        found = matched(self.pattern, subject, held)
-        if found is None:
-            return None
-        return Match({**found.captures, self.name: subject})
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return self.name
@@ -236,14 +184,6 @@ class ConstraintPattern(Pattern):
             raise ValueError("a constraint pattern must state at least one constraint")
         object.__setattr__(self, "patterns", tuple(patterns))
 
-    def match(self, subject, captures=None):
-        held = Match(dict(captures or {}))
-        for pattern in self.patterns:
-            held = matched(pattern, subject, held.captures)
-            if held is None:
-                return None
-        return held
-
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return " and ".join(written_place(pattern, name) for pattern in self.patterns)
 
@@ -258,13 +198,6 @@ class MultipleOfPattern(Pattern):
     def __post_init__(self):
         if type(self.unit) is not int or self.unit <= 0:
             raise ValueError("MultipleOfPattern unit must be a positive int")
-
-    def match(self, subject, captures=None):
-        return (
-            Match(dict(captures or {}))
-            if type(subject) is int and subject % self.unit == 0
-            else None
-        )
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return f"{name} % {self.unit} = 0"
@@ -294,15 +227,6 @@ class RangePattern(Pattern):
         if self.dim_var and (self.lo is None or self.hi is None):
             raise ValueError("a named RangePattern must state both lo and hi")
 
-    def match(self, subject, captures=None):
-        if isinstance(subject, bool) or not isinstance(subject, int):
-            return None
-        if self.lo is not None and subject < self.lo:
-            return None
-        if self.hi is not None and subject > self.hi:
-            return None
-        return Match(dict(captures or {}))
-
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         if self.lo is None:
             return f"{name} <= {self.hi}"
@@ -319,11 +243,6 @@ class OneOfPattern(Pattern):
         if len(self.values) < 2:
             raise ValueError("OneOfPattern requires at least two values")
 
-    def match(self, subject, captures=None):
-        return (
-            Match(dict(captures or {})) if any(subject == value for value in self.values) else None
-        )
-
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return f"{name} in {{{', '.join(_named(value) for value in self.values)}}}"
 
@@ -333,11 +252,6 @@ class AttrPattern(Pattern):
     attr: str
     pattern: object
 
-    def match(self, subject, captures=None):
-        if not hasattr(subject, self.attr):
-            return None
-        return matched(self.pattern, getattr(subject, self.attr), captures)
-
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return written_place(self.pattern, f"{name}.{self.attr}")
 
@@ -346,12 +260,6 @@ class AttrPattern(Pattern):
 class BitsPattern(Pattern):
     dtype: str
     pattern: object
-
-    def match(self, subject, captures=None):
-        width = getattr(dict(captures or {}).get(self.dtype), "bit_width", None)
-        if type(subject) is not int or type(width) is not int:
-            return None
-        return matched(self.pattern, subject * width, captures)
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return written_place(self.pattern, f"{name} * {self.dtype}.bit_width")
@@ -366,43 +274,11 @@ class SwitchPattern(Pattern):
         object.__setattr__(self, "param", param)
         object.__setattr__(self, "branches", tuple(dict(branches).items()))
 
-    def match(self, subject, captures=None):
-        held = dict(captures or {})
-        if self.param in held:
-            wanted = held[self.param]
-            pattern = next((p for value, p in self.branches if value == wanted), None)
-            return None if pattern is None else matched(pattern, subject, held)
-        for value, pattern in self.branches:
-            found = matched(pattern, subject, {**held, self.param: value})
-            if found is not None:
-                return found
-        return None
-
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return written_alternatives(self.alternatives(), name)
 
     def relations(self) -> tuple[str, ...]:
         return relations_of(tuple(pattern for _, pattern in self.branches))
-
-    def refusal(self, subject, captures=None) -> str | None:
-        held = dict(captures or {})
-        if self.param not in held:
-            return (
-                None
-                if self.match(subject, held) is not None
-                else f"{subject!r} is none of {len(self.branches)} branches"
-            )
-        pattern = next((p for value, p in self.branches if value == held[self.param]), None)
-        if pattern is None:
-            return f"{self.param}={written_binding(held[self.param])} selects no branch"
-        explained = getattr(pattern, "refusal", None)
-        if explained is not None:
-            return explained(subject, held)
-        return (
-            None
-            if matched(pattern, subject, held) is not None
-            else f"{subject!r} is not {written_place(pattern)}"
-        )
 
     def alternatives(self, bindings=()) -> tuple:
         return tuple(
@@ -426,12 +302,6 @@ class GuardPattern(Pattern):
     symbol: object
     condition: Pattern
     pattern: object
-
-    def match(self, subject, captures=None):
-        value = evaluated(self.symbol, captures)
-        if value is None or matched(self.condition, value, captures) is None:
-            return None
-        return matched(self.pattern, subject, captures)
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return written_place(self.pattern, name)
@@ -497,55 +367,6 @@ class LayoutPattern(Pattern):
             *(flatten(self.strides) if self.strides is not None else ()),
         )
 
-    def _match_structure(self, subject, captures=None) -> Match | None:
-        held = Match(dict(captures or {}))
-        if self.shape is None and self.strides is None:
-            return held
-        if not isinstance(subject, Layout) or subject.strides is None:
-            return None
-        if self.shape is not None and not congruent(subject.shape, self.shape):
-            return None
-        if self.strides is not None and not congruent(subject.strides, self.strides):
-            return None
-        extents = tuple(flatten(subject.shape))
-        strides = tuple(flatten(subject.strides))
-        if any(type(number) is not int for number in (*extents, *strides)):
-            return None
-        if any(number <= 0 for number in extents):
-            return None
-        values = (
-            *(extents if self.shape is not None else ()),
-            *(strides if self.strides is not None else ()),
-        )
-        return matched(SequencePattern(*self.positions()), values, held.captures)
-
-    def match(self, subject, captures=None):
-        held = self._match_structure(subject, captures)
-        if held is None:
-            return None
-        for predicate in self.predicates:
-            held = matched(predicate, subject, held.captures)
-            if held is None:
-                return None
-        return held
-
-    def refusal(self, subject, captures=None) -> str | None:
-        held = self._match_structure(subject, captures)
-        if held is None:
-            return f"{subject!r} is not {self.describe()}"
-        for predicate in self.predicates:
-            found = matched(predicate, subject, held.captures)
-            if found is not None:
-                held = found
-                continue
-            explained = getattr(predicate, "refusal", None)
-            return (
-                explained(subject, held.captures)
-                if explained is not None
-                else f"{subject!r} does not satisfy {predicate.describe()}"
-            )
-        return None
-
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         if self.shape is None and self.strides is None:
             return "layout"
@@ -570,13 +391,6 @@ class SwizzlePattern(Pattern):
     base: int
     shift: int
 
-    def match(self, subject, captures=None):
-        return (
-            Match(dict(captures or {}))
-            if subject == Swizzle(self.bits, self.base, self.shift)
-            else None
-        )
-
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return f"Swizzle({self.bits}, {self.base}, {self.shift})"
 
@@ -591,20 +405,6 @@ class ComposedLayoutPattern(Pattern):
     inner: object = None
     offset: object = None
     outer: object = None
-
-    def match(self, subject, captures=None):
-        if not isinstance(subject, ComposedLayout):
-            return None
-        held = Match(dict(captures or {}))
-        for pattern, value in (
-            (self.inner, subject.inner),
-            (self.offset, subject.offset),
-            (self.outer, subject.outer),
-        ):
-            held = matched(pattern, value, held.captures)
-            if held is None:
-                return None
-        return held
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return (
@@ -660,19 +460,6 @@ class MeshPattern(Pattern):
 
         require_per_mode(self.layout)
 
-    def match(self, subject, captures=None):
-        if not isinstance(subject, Mesh):
-            return None
-        picked = tuple(
-            level
-            for level in separate(subject)
-            if getattr(level.topologies[0], "name", level.topologies[0]) in self.topologies
-        )
-        found = tuple(getattr(level.topologies[0], "name", level.topologies[0]) for level in picked)
-        if len(picked) != len(self.topologies) or set(found) != set(self.topologies):
-            return None
-        return matched(self.layout, make_mesh(*picked).layout, captures)
-
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return f"Mesh({self.topologies!r}, {written_place(self.layout)})"
 
@@ -682,13 +469,6 @@ class MeshPattern(Pattern):
 
 @dataclass(frozen=True)
 class ScalarPattern(Pattern):
-    def match(self, subject, captures=None):
-        return (
-            Match(dict(captures or {}))
-            if isinstance(subject, TensorType) and subject.shape == ()
-            else None
-        )
-
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return "scalar"
 
@@ -701,51 +481,6 @@ class TensorPattern(Pattern):
     shape: tuple | None = None
     storage: Any = None
     layout: Pattern | None = None
-
-    def match(self, subject, captures=None):
-        if not isinstance(subject, TensorType) or subject.shape == ():
-            return None
-        wanted = (
-            (self.dtype, subject.dtype),
-            (self.storage, subject.storage),
-        )
-        if self.shape is not None:
-            wanted = ((SequencePattern(*self.shape), tuple(subject.shape)), *wanted)
-        if self.layout is not None:
-            wanted = (*wanted, (self.layout, subject.layout))
-        held = Match(dict(captures or {}))
-        for pattern, value in wanted:
-            held = matched(pattern, value, held.captures)
-            if held is None:
-                return None
-        return held
-
-    def refusal(self, subject, captures=None) -> str | None:
-        if not isinstance(subject, TensorType) or subject.shape == ():
-            return f"{subject!r} is no tensor"
-        wanted = (
-            (
-                "shape",
-                None if self.shape is None else SequencePattern(*self.shape),
-                tuple(subject.shape),
-            ),
-            ("dtype", self.dtype, subject.dtype),
-            ("storage", self.storage, subject.storage),
-            ("layout", self.layout, subject.layout),
-        )
-        held = Match(dict(captures or {}))
-        for name, pattern, value in wanted:
-            if pattern is None:
-                continue
-            found = matched(pattern, value, held.captures)
-            if found is not None:
-                held = found
-                continue
-            explained = getattr(pattern, "refusal", None)
-            if name == "layout" and explained is not None:
-                return explained(value, held.captures)
-            return f"its {name} is {_named(value) if name != 'shape' else value}"
-        return None
 
     def describe(self, name: str = UNNAMED_PLACE, arrangements=None) -> str:
         stated = []
@@ -780,25 +515,6 @@ class ShardLayoutPattern(Pattern):
     layout: object
     attrs: tuple
     mesh: MeshPattern
-
-    def match(self, subject, captures=None):
-        if not isinstance(subject, ShardLayout):
-            return None
-        subject_names = tuple(
-            getattr(topology, "name", topology) for topology in subject.mesh.topologies
-        )
-        if subject_names != self.mesh.topologies:
-            return None
-        held = Match(dict(captures or {}))
-        for pattern, value in (
-            (self.layout, subject.layout),
-            (self.attrs, subject.attrs),
-            (self.mesh, subject.mesh),
-        ):
-            held = matched(pattern, value, held.captures)
-            if held is None:
-                return None
-        return held
 
     def reads(self, layout, captures=None):
         return matched(self.layout, layout, captures)
