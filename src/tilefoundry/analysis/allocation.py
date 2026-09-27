@@ -19,8 +19,6 @@ from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import index_set
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.mesh import levels, selected_run, starts, within_scope
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import local_type_of, tensor_types
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.isl_utils import equates
@@ -75,7 +73,6 @@ class AliasConstraint:
 class AllocationModel:
     """One memory-level model while the HIR visitor applies logical relations."""
 
-    memory_level: str
     current: IterationScope
     liveness: Liveness
     values: tuple[AllocationValue, ...]
@@ -83,7 +80,6 @@ class AllocationModel:
     model: cp_model.CpModel
     addresses: tuple[cp_model.IntVar, ...]
     bindings: dict[int, Expr] = field(default_factory=dict)
-    owners: dict[int, IterationScope] = field(default_factory=dict)
     aliased: set[tuple[int, int]] = field(default_factory=set)
 
 
@@ -233,9 +229,7 @@ def operand_to_result_relation(
             )
             operand_with_loops = loop_prefix.flat_range_product(inputs)
             result_with_loops = loop_prefix.flat_range_product(outputs)
-            per_iteration = (
-                operand_with_loops.reverse().apply_range(result_with_loops).coalesce()
-            )
+            per_iteration = operand_with_loops.reverse().apply_range(result_with_loops).coalesce()
             result = operand_with_loops.reverse().apply_range(outputs).coalesce()
             return (
                 result
@@ -247,9 +241,7 @@ def operand_to_result_relation(
         except isl.Error:
             return None
 
-    def complete(
-        operand: Expr, inputs: isl.map | None, outputs: isl.map | None
-    ) -> isl.map | None:
+    def complete(operand: Expr, inputs: isl.map | None, outputs: isl.map | None) -> isl.map | None:
         if inputs is None or outputs is None:
             return None
         relation = composed(inputs, outputs)
@@ -294,7 +286,7 @@ def operand_to_result_relation(
     by_buffer: dict[int, list[Access]] = defaultdict(list)
     operands: dict[int, Expr] = {}
     for access in inputs:
-        operand = view_root(access.buffer, bindings)
+        operand = access.buffer
         key = id(operand)
         by_buffer[key].append(access)
         operands[key] = operand
@@ -309,14 +301,10 @@ def operand_to_result_relation(
         for key, operand in operands.items():
             input_relation = access_relation(tuple(by_buffer[key]))
             try:
-                pointwise = input_relation is not None and input_relation.is_equal(
-                    output_relation
-                )
+                pointwise = input_relation is not None and input_relation.is_equal(output_relation)
             except isl.Error:
                 pointwise = False
-            relation = (
-                complete(operand, input_relation, output_relation) if pointwise else None
-            )
+            relation = complete(operand, input_relation, output_relation) if pointwise else None
             if relation is not None and is_non_conflicting(
                 node, operand, scope, liveness, bindings
             ):
@@ -357,9 +345,7 @@ def operand_to_result_relation(
             seen.add(id(destination))
 
     try:
-        update_matches_write = update_coverage is not None and update_coverage.is_equal(
-            written
-        )
+        update_matches_write = update_coverage is not None and update_coverage.is_equal(written)
     except isl.Error:
         update_matches_write = False
     update_relation = (
@@ -391,16 +377,6 @@ def is_zero_offset(relation: isl.map) -> bool:
         return False
 
 
-def nearest_mesh_scope(scope: IterationScope) -> IterationScope | None:
-    """Return the innermost mesh region containing one material definition."""
-    cursor: IterationScope | None = scope
-    while cursor is not None:
-        if isinstance(cursor.owner, MeshRegion):
-            return cursor
-        cursor = cursor.parent
-    return None
-
-
 class AllocationConstraintVisitor(ExprVisitor[None]):
     """Visit the HIR DAG once and apply each node/operand placement relation."""
 
@@ -420,6 +396,30 @@ class AllocationConstraintVisitor(ExprVisitor[None]):
         self.visit(node.body, inner)
         for operand in node.yield_values:
             self.visit(operand, inner)
+        for initial, carried, yielded in zip(
+            node.init_args, node.carried_args, node.yield_values, strict=True
+        ):
+            self.tie(carried, initial, ctx)
+            self.tie(yielded, carried, inner)
+        if len(node.yield_values) == 1:
+            self.tie(node, node.yield_values[0], inner)
+
+    def tie(self, result_value: Expr, operand_value: Expr, ctx: AllocationModel) -> None:
+        """Require the single backing buffer stated by one loop-carried slot."""
+        result_value = view_root(result_value, ctx.bindings)
+        operand_value = view_root(operand_value, ctx.bindings)
+        result_index = ctx.boxes_by_expr.get(id(result_value))
+        operand_index = ctx.boxes_by_expr.get(id(operand_value))
+        if result_index is None or operand_index is None or result_index == operand_index:
+            return
+        result = ctx.values[result_index]
+        operand = ctx.values[operand_index]
+        if operand.lifetime.persistent or result.lifetime.bytes != operand.lifetime.bytes:
+            return
+        ctx.model.add(ctx.addresses[result_index] == ctx.addresses[operand_index]).with_name(
+            f"carry_{result_index}_{operand_index}"
+        )
+        ctx.aliased.add(tuple(sorted((result_index, operand_index))))
 
     def alias(
         self,
@@ -437,20 +437,20 @@ class AllocationConstraintVisitor(ExprVisitor[None]):
             return
         result = ctx.values[result_index]
         operand = ctx.values[operand_index]
-        if operand.lifetime.persistent or not result.intersects(operand):
+        if operand.lifetime.persistent:
             return
         if is_zero_offset(relation):
             if result.lifetime.bytes > operand.lifetime.bytes:
                 return
-            ctx.model.add(
-                ctx.addresses[result_index] == ctx.addresses[operand_index]
-            ).with_name(f"alias_{result_index}_{operand_index}")
+            ctx.model.add(ctx.addresses[result_index] == ctx.addresses[operand_index]).with_name(
+                f"alias_{result_index}_{operand_index}"
+            )
         else:
             if operand.lifetime.bytes > result.lifetime.bytes:
                 return
-            ctx.model.add(
-                ctx.addresses[operand_index] >= ctx.addresses[result_index]
-            ).with_name(f"alias_start_{result_index}_{operand_index}")
+            ctx.model.add(ctx.addresses[operand_index] >= ctx.addresses[result_index]).with_name(
+                f"alias_start_{result_index}_{operand_index}"
+            )
             ctx.model.add(
                 ctx.addresses[operand_index] + operand.lifetime.bytes
                 <= ctx.addresses[result_index] + result.lifetime.bytes
@@ -463,119 +463,14 @@ class AllocationConstraintVisitor(ExprVisitor[None]):
         del operands
         root = view_root(node, ctx.bindings)
         result_index = ctx.boxes_by_expr.get(id(root))
-        if result_index is not None and result_index not in ctx.owners:
-            owner = nearest_mesh_scope(ctx.current)
-            if owner is not None:
-                ctx.owners[result_index] = owner
         if (
             not isinstance(node, Call)
             or id(node) not in ctx.current.accesses.get("narrow", {})
             or result_index is None
         ):
             return
-        for constraint in operand_to_result_relation(
-            node, ctx.current, ctx.liveness, ctx.bindings
-        ):
+        for constraint in operand_to_result_relation(node, ctx.current, ctx.liveness, ctx.bindings):
             self.alias(node, constraint.operand, constraint.relation, ctx)
-
-
-def mesh_selection_key(region: MeshRegion) -> tuple:
-    """Canonical per-topology runs selected by a mesh region."""
-    return tuple(
-        (getattr(topology, "name", topology), selected_run(arrangement, start))
-        for topology, arrangement, start in zip(
-            region.mesh.topologies, levels(region.mesh), starts(region.mesh), strict=True
-        )
-    )
-
-
-def continuous_selection(run: tuple[tuple, tuple, int]) -> tuple[int, int] | None:
-    """Return the half-open interval for a continuous topology selection."""
-    extents, strides, start = run
-    if not isinstance(start, int):
-        return None
-    if not extents:
-        return start, start + 1
-    if len(extents) != 1 or strides != (1,) or not isinstance(extents[0], int):
-        return None
-    return start, start + extents[0]
-
-
-def selections_are_disjoint(left: MeshRegion, right: MeshRegion) -> bool:
-    """Whether two region meshes prove disjoint hardware participants."""
-    left_runs = {
-        getattr(topology, "name", topology): continuous_selection(
-            selected_run(arrangement, start)
-        )
-        for topology, arrangement, start in zip(
-            left.mesh.topologies, levels(left.mesh), starts(left.mesh), strict=True
-        )
-    }
-    right_runs = {
-        getattr(topology, "name", topology): continuous_selection(
-            selected_run(arrangement, start)
-        )
-        for topology, arrangement, start in zip(
-            right.mesh.topologies, levels(right.mesh), starts(right.mesh), strict=True
-        )
-    }
-    for name in left_runs.keys() & right_runs.keys():
-        left_run = left_runs[name]
-        right_run = right_runs[name]
-        if left_run is None or right_run is None:
-            continue
-        if left_run[1] <= right_run[0] or right_run[1] <= left_run[0]:
-            return True
-    return False
-
-
-def common_async_group(
-    left: IterationScope, right: IterationScope
-) -> IterationScope | None:
-    """Nearest common outer MeshRegion that truly partitions both owners."""
-    right_ancestors: set[int] = set()
-    cursor = right.parent
-    while cursor is not None:
-        if isinstance(cursor.owner, MeshRegion):
-            right_ancestors.add(id(cursor))
-        cursor = cursor.parent
-    cursor = left.parent
-    while cursor is not None:
-        if isinstance(cursor.owner, MeshRegion) and id(cursor) in right_ancestors:
-            group = cursor.owner
-            left_region = left.owner
-            right_region = right.owner
-            if not isinstance(left_region, MeshRegion) or not isinstance(
-                right_region, MeshRegion
-            ):
-                return None
-            group_key = mesh_selection_key(group)
-            if (
-                within_scope(left_region.mesh, group.mesh)
-                and within_scope(right_region.mesh, group.mesh)
-                and mesh_selection_key(left_region) != group_key
-                and mesh_selection_key(right_region) != group_key
-            ):
-                return cursor
-        cursor = cursor.parent
-    return None
-
-
-def are_concurrent_partitions(
-    left: IterationScope | None, right: IterationScope | None
-) -> bool:
-    """Whether two allocation owners belong to disjoint async partitions."""
-    if left is None or right is None or left is right:
-        return False
-    left_region = left.owner
-    right_region = right.owner
-    if not isinstance(left_region, MeshRegion) or not isinstance(right_region, MeshRegion):
-        return False
-    if mesh_selection_key(left_region) == mesh_selection_key(right_region):
-        return False
-    return common_async_group(left, right) is not None and selections_are_disjoint(
-        left_region, right_region
-    )
 
 
 def alias_components(count: int, aliased: set[tuple[int, int]]) -> tuple[int, ...]:
@@ -605,11 +500,7 @@ def build_interference_graph(
         pair = (left, right)
         if components[left] == components[right]:
             continue
-        ordinary = values[left].intersects(values[right])
-        asynchronous = ctx.memory_level == str(StorageKind.SMEM) and are_concurrent_partitions(
-            ctx.owners.get(left), ctx.owners.get(right)
-        )
-        if ordinary or asynchronous:
+        if values[left].intersects(values[right]):
             result.add(pair)
     return result
 
@@ -675,8 +566,7 @@ def calculate_starts(
             candidate
             for candidate in candidates
             if all(
-                candidate + size <= other_address
-                or other_address + other_size <= candidate
+                candidate + size <= other_address or other_address + other_size <= candidate
                 for other, other_address, other_size in blocked
                 if other
             )
@@ -688,6 +578,28 @@ def calculate_starts(
         placed.append((component, address, size))
         peak = max(peak, address + size)
     return tuple(addresses), peak
+
+
+def find_aliases(
+    values: tuple[AllocationValue, ...],
+    liveness: Liveness,
+    root: IterationScope,
+) -> set[tuple[int, int]]:
+    """Required physical aliases, without asking the address solver to place them."""
+    limit = max(1, sum(item.lifetime.bytes for item in values))
+    model = cp_model.CpModel()
+    context = AllocationModel(
+        current=root,
+        liveness=liveness,
+        values=values,
+        boxes_by_expr={id(item.value): index for index, item in enumerate(values)},
+        model=model,
+        addresses=tuple(
+            model.new_int_var(0, limit, f"alias_address_{index}") for index in range(len(values))
+        ),
+    )
+    AllocationConstraintVisitor(root_function=root.owner).visit_function_body(root.owner, context)
+    return context.aliased
 
 
 def solve_allocation(
@@ -734,7 +646,6 @@ def solve_allocation(
             model.add(address >= persistent_end)
 
     context = AllocationModel(
-        memory_level=memory_level,
         current=root,
         liveness=liveness,
         values=values,
@@ -742,9 +653,7 @@ def solve_allocation(
         model=model,
         addresses=addresses,
     )
-    AllocationConstraintVisitor(root_function=root.owner).visit_function_body(
-        root.owner, context
-    )
+    AllocationConstraintVisitor(root_function=root.owner).visit_function_body(root.owner, context)
     interference = build_interference_graph(values, context)
     order_choices: dict[tuple[int, int], tuple[cp_model.IntVar, cp_model.IntVar]] = {}
     for left, right in sorted(interference):

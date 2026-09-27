@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 import torch
 
+from tilefoundry.analysis.allocation import alignment_of, view_root
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.liveness import analyze_liveness, result_copies
@@ -45,6 +46,7 @@ from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
 from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
 from tilefoundry.ir.tir.cuda.nn.wgmma import Wgmma
 from tilefoundry.ir.types import DType, Layout, StorageKind, TensorType, UnitType
+from tilefoundry.ir.types.utils import bytes_by_storage
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -174,10 +176,30 @@ def test_scheduled_hir_program_has_analysis_metadata(
 
     if analysis == "memory":
         placement = get_metadata(result.function, RegionMemoryMetadata)
+        assert placement is not None
         smem_peak = next(
             item.peak_bytes for item in placement.peaks if item.memory_level == "smem"
         )
         assert smem_peak == SMEM_GOLDEN[path.stem]
+        for expr in collect_exprs(result.function.body):
+            if not isinstance(expr, Call):
+                continue
+            moved = get_metadata(expr, MemoryMetadata)
+            assert moved is not None
+            levels = bytes_by_storage(expr.type)
+            if set(levels) == {"rmem"}:
+                assert moved.offsets == ()
+            addressable = set(levels) & {"gmem", "smem"}
+            if not addressable or view_root(expr, {}) is not expr:
+                continue
+            assert len(addressable) == 1
+            assert moved.buffer_bytes is not None
+            assert len(moved.offsets) == result_copies(expr)
+            peak = placement.peak_for(addressable.pop())
+            assert peak is not None
+            for offset in moved.offsets:
+                assert offset % alignment_of(expr) == 0
+                assert offset + moved.buffer_bytes <= peak.peak_bytes
 
         regions = tuple(
             expr

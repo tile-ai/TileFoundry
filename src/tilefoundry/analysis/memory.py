@@ -40,7 +40,7 @@ from tilefoundry.visitor_registry.access_relation import (
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
-from .allocation import AllocationValue, solve_allocation
+from .allocation import AllocationValue, alias_components, find_aliases, solve_allocation
 from .errors import AnalysisError
 from .facts import MemoryHierarchyFacts
 from .footprint import (
@@ -459,6 +459,25 @@ def peak_in_window(rows: list[ValueLifetime], entered_at: int, exited_at: int) -
     return peak
 
 
+def coalesced_peak_in_window(
+    values: tuple[AllocationValue, ...],
+    components: dict[int, int],
+    entered_at: int,
+    exited_at: int,
+) -> int:
+    """Sum one physical buffer per required-alias group at each event."""
+    peak = 0
+    for point in range(entered_at, exited_at + 1):
+        live: dict[int, int] = {}
+        for item in values:
+            lifetime = item.lifetime
+            if lifetime.defined_at <= point <= lifetime.last_used_at:
+                group = components[id(item.value)]
+                live[group] = max(live.get(group, 0), lifetime.bytes)
+        peak = max(peak, sum(live.values()))
+    return peak
+
+
 def held_in_region(value_mesh: Mesh, region_mesh: Mesh) -> bool:
     """Whether the region selects holders of *value_mesh* at every level it names.
 
@@ -741,6 +760,16 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         placement,
     )
     lifetimes = tuple(item.lifetime for item in allocation_values)
+    rmem_values = tuple(
+        item for item in allocation_values if item.lifetime.memory_level == str(StorageKind.RMEM)
+    )
+    rmem_groups = alias_components(
+        len(rmem_values),
+        find_aliases(rmem_values, liveness, context.root),
+    )
+    rmem_components = {
+        id(item.value): group for item, group in zip(rmem_values, rmem_groups, strict=True)
+    }
     solver_options = (
         context.options if isinstance(context.options, MemoryOptions) else MemoryOptions()
     )
@@ -755,29 +784,30 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         )
         region_levels = []
         for name in sorted({item.lifetime.memory_level for item in region_values}):
-            rows = [
-                item.lifetime
-                for item in region_values
-                if item.lifetime.memory_level == name
-            ]
+            rows = [item.lifetime for item in region_values if item.lifetime.memory_level == name]
             declared = facts.explicit(name)
-            peak = peak_in_window(rows, window.entered_at, window.exited_at)
+            peak = (
+                coalesced_peak_in_window(
+                    tuple(item for item in region_values if item.lifetime.memory_level == name),
+                    rmem_components,
+                    window.entered_at,
+                    window.exited_at,
+                )
+                if name == str(StorageKind.RMEM)
+                else peak_in_window(rows, window.entered_at, window.exited_at)
+            )
             region_levels.append(
                 MemoryLevelPeak(
                     memory_level=name,
                     peak_bytes=peak,
                     persistent_bytes=sum(item.bytes for item in rows if item.persistent),
-                    capacity_bytes=(
-                        declared.capacity_bytes if declared is not None else None
-                    ),
+                    capacity_bytes=(declared.capacity_bytes if declared is not None else None),
                 )
             )
             if name == str(StorageKind.RMEM):
                 region_rmem_peaks.append(peak)
                 claimed_rmem.update(
-                    id(item.value)
-                    for item in region_values
-                    if item.lifetime.memory_level == name
+                    id(item.value) for item in region_values if item.lifetime.memory_level == name
                 )
         if region_levels:
             attach(
@@ -821,20 +851,15 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                         moved,
                         buffer_bytes=buffer_bytes,
                         offsets=tuple(
-                            offsets[id(item.value)] + copy * buffer_bytes
-                            for copy in range(copies)
+                            offsets[id(item.value)] + copy * buffer_bytes for copy in range(copies)
                         ),
                     ),
                 )
         elif name == str(StorageKind.RMEM):
-            unclaimed = [
-                item.lifetime
-                for item in values
-                if id(item.value) not in claimed_rmem
-            ]
+            unclaimed = tuple(item for item in values if id(item.value) not in claimed_rmem)
             peak = max(
                 max(region_rmem_peaks, default=0),
-                peak_in_window(unclaimed, 0, liveness.timeline_end),
+                coalesced_peak_in_window(unclaimed, rmem_components, 0, liveness.timeline_end),
             )
         else:
             end = max((item.last_used_at for item in rows), default=-1)

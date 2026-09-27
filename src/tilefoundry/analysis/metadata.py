@@ -119,6 +119,8 @@ class MemoryMetadata(IRMetadata):
 
     ``operands`` is positional against ``(*call.args, call)``. ``footprint`` is
     absent until a read-footprint analysis has actually produced a conclusion.
+    Address-placed results state one copy's size and the offset of every copy;
+    register-resident results retain the defaults because they are not placed.
     """
 
     topologies: tuple[str, ...] = ()

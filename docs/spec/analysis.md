@@ -237,6 +237,8 @@ class MemoryMetadata(IRMetadata):
     traffic: Traffic = Traffic()
     operands: tuple[TrafficBytes, ...] = ()
     footprint: Footprint | None = None
+    buffer_bytes: int | None = None
+    offsets: tuple[int, ...] = ()
 
 
 class ReuseWindow:
@@ -304,6 +306,8 @@ anything; it does not say how much, and an Op with no relation fails closed.
 | `MemoryMetadata.topologies` | The effective Module topology levels, coarsest first. | No |
 | `MemoryMetadata.traffic` | One occurrence's per-boundary movement, grouped by storage and communication boundary. | No; projection reads resolved Mesh and topology extents. |
 | `MemoryMetadata.operands` | One occurrence's movement in order `(*call.args, call)`. | No |
+| `MemoryMetadata.buffer_bytes` | The bytes in one physical copy of an address-placed `gmem` or `smem` Call result, or `None` when the result is not address-placed. | No |
+| `MemoryMetadata.offsets` | The byte offset of each physical result copy, in copy order. An `rmem` result has no reported offsets. | No |
 | `RegionMemoryMetadata.topologies` | The same effective Module topology levels. | No |
 | `RegionMemoryMetadata.traffic` | Every reachable occurrence. `logical` multiplies only loops the value varies in; `total` and `per_unit` multiply every enclosing loop. | No |
 
@@ -454,13 +458,14 @@ are monotonic across the whole Function, including nested and sibling regions.
 Capacity is settled against authored definition order, which fixes every
 buffer's lifetime before any is measured. Whole-Function `gmem` and `smem`
 peaks use exact polyhedral access relations to place addressable values; the
-concrete arrangement is not reported. A `MeshRegion` peak instead scans the
-live-byte total over its entry-to-exit window. Its `rmem` rows are additionally
-restricted to values whose authored `ShardLayout.mesh`, at every topology level
-named by the region, selects units within that region's mesh. Levels omitted by
-the region do not reject a value. `rmem` is not address-solved: the Function
-reports the maximum of all stage peaks and a whole-Function live-byte scan of
-values that no `MeshRegion` claims.
+Call results report their concrete offsets. A `MeshRegion` peak instead scans
+the live-byte total over its entry-to-exit window. Its `rmem` rows are
+additionally restricted to values whose authored `ShardLayout.mesh`, at every
+topology level named by the region, selects units within that region's mesh.
+Levels omitted by the region do not reject a value. `rmem` is not
+address-solved: required-alias groups count as one physical buffer, and the
+Function reports the maximum of all stage peaks and a whole-Function live-byte
+scan of values that no `MeshRegion` claims.
 
 ```python
 class MemoryLevelPeak:
@@ -499,6 +504,18 @@ class MemoryLevelPeak:
     MUST NOT make a program unplaceable, and a level owned per unit of a topology
     other than the one being analysed MUST fail rather than be assumed. Domains
     holding the same buffers are one question, decided once.
+  - A loop carry's initial value, parameter, yielded value, and result MUST use
+    one physical buffer when their sizes agree. An exact zero-offset operand
+    relation MUST likewise use one buffer when the result is no larger than the
+    operand, including a narrowing pointwise operation; an exact contained
+    relation MUST keep the operand range inside the result range. These alias
+    requirements are mandatory rather than optional placement choices.
+  - Every placed offset MUST be aligned to the greater of 16 bytes and the
+    result element width. A staged result's copies MUST be contiguous: copy
+    `k` starts at the solved block offset plus `k * buffer_bytes`.
+  - Mandatory aliases, alignment, and lifetime interference that have no
+    feasible joint placement MUST raise `AnalysisError`; analysis MUST NOT
+    silently discard a required alias.
   - A domain that cannot be expressed or does not settle in time MUST raise
     `AnalysisError` and leave no record. The solver MUST stop at its first
     feasible assignment rather than prove a minimum. Capacity MUST NOT restrict

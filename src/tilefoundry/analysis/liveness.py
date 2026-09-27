@@ -99,9 +99,7 @@ class LivenessVisitor(ExprVisitor[None]):
                 bound_ids.add(id(value.induction_var))
                 bound_ids.update(id(phi) for phi in value.carried_args)
         free_vars = tuple(
-            value
-            for value in values
-            if isinstance(value, Var) and id(value) not in bound_ids
+            value for value in values if isinstance(value, Var) and id(value) not in bound_ids
         )
         for free in free_vars:
             self.define(free, self.next_event())
@@ -124,7 +122,7 @@ class LivenessVisitor(ExprVisitor[None]):
         state = self.states.get(id(value))
         if state is None:
             raise ValueError(f"liveness: {type(value).__name__} is used before its definition")
-        for entry, outside, staged in self.loop_entries:
+        for entry, outside in (loop_entry[:2] for loop_entry in self.loop_entries):
             if state.defined_at < entry:
                 outside.add(id(value))
         self.states[id(value)] = replace(state, last_used_at=max(state.last_used_at, point))
@@ -140,10 +138,12 @@ class LivenessVisitor(ExprVisitor[None]):
             timeline_end=self.point,
         )
 
-    def visit_Var(self, value: Var, _ctx=None) -> None:
+    def visit_Var(self, value: Var, ctx=None) -> None:
         """A binding site defines a Var; encountering a use does not."""
+        del value, ctx
 
-    def default_visit_leaf(self, value: Expr, _operands: tuple[None, ...], _ctx=None) -> None:
+    def default_visit_leaf(self, value: Expr, operands: tuple[None, ...], ctx=None) -> None:
+        del operands, ctx
         point = self.next_event()
         for operand in expr_children(value):
             self.use(operand, point)
@@ -188,7 +188,7 @@ class LivenessVisitor(ExprVisitor[None]):
         backedge = self.next_event()
         for yielded in region.yield_values:
             self.use(yielded, backedge)
-        entry, outside, staged = self.loop_entries.pop()
+        outside, staged = self.loop_entries.pop()[1:]
         for key in outside:
             self.use(self.states[key].value, backedge, synthetic=True)
         for key in staged:
