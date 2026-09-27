@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import json
 from dataclasses import dataclass
 from math import prod
 from pathlib import Path
@@ -18,6 +19,7 @@ from pathlib import Path
 import pytest
 import torch
 
+import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
 from tilefoundry.analysis.allocation import alignment_of, view_root
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
@@ -30,16 +32,17 @@ from tilefoundry.analysis.metadata import (
     RegionMemoryMetadata,
     RooflineMetadata,
 )
+from tilefoundry.cli import main as cli_main
 from tilefoundry.evaluator import EvalError, evaluate
 from tilefoundry.inspection import PatternPrinter, as_script
-from tilefoundry.ir.core import Call, Op, Var, get_metadata
+from tilefoundry.ir.core import Call, Op, Var, detach_metadata, get_metadata
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.matmul import MatMul
-from tilefoundry.ir.hir.schedule import ScheduleOp
+from tilefoundry.ir.hir.schedule import ScheduleOp, issue_plan
 from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.tir import PrimFunction
 from tilefoundry.ir.tir.async_copy import CopyAsync
@@ -56,7 +59,7 @@ from tilefoundry.visitor_registry.access_relation import (
     boundary_maps,
     relations_of,
 )
-from tilefoundry.visitor_registry.contexts import TypeInferContext
+from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import inference_type
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
@@ -76,6 +79,22 @@ ANALYSES = (
     ("performance", PerformanceSummaryMetadata),
 )
 _TENSOR_CLOCK_HZ = 1_830_000_000
+
+M1_LOWERING = (
+    "sm80_mma_ldmatrix",
+    "wgmma_a_k_major",
+    "wgmma_a_mn_major",
+    "wgmma_cast_between_schedules",
+    "wgmma_cp_async_loads",
+    "wgmma_explicit_windows",
+    "wgmma_insert_tiles_into_output",
+    "wgmma_one_tile_of_larger_output",
+    "wgmma_rs_a_from_accumulator",
+    "wgmma_rs_a_from_smem",
+    "wgmma_swizzled_smem",
+    "wgmma_two_schedules",
+)
+M2_LOWERING = tuple(path.stem for path in HIR if path.stem not in M1_LOWERING)
 
 
 @dataclass(frozen=True)
@@ -341,9 +360,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
     if analysis == "memory":
         placement = get_metadata(result.function, RegionMemoryMetadata)
         assert placement is not None
-        smem_peak = next(
-            item.peak_bytes for item in placement.peaks if item.memory_level == "smem"
-        )
+        smem_peak = next(item.peak_bytes for item in placement.peaks if item.memory_level == "smem")
         assert smem_peak == SMEM_GOLDEN[path.stem]
         for expr in collect_exprs(result.function.body):
             if not isinstance(expr, Call):
@@ -398,12 +415,10 @@ def test_scheduled_hir_program_has_analysis_metadata(
             if peak is not None:
                 observed_rmem[key] = peak.peak_bytes
         expected_rmem = {
-            key: expectation.peak_bytes
-            for key, expectation in RMEM_EXPECTED[path.stem].items()
+            key: expectation.peak_bytes for key, expectation in RMEM_EXPECTED[path.stem].items()
         }
         assert observed_rmem == expected_rmem, {
-            key: expectation.derivation
-            for key, expectation in RMEM_EXPECTED[path.stem].items()
+            key: expectation.derivation for key, expectation in RMEM_EXPECTED[path.stem].items()
         }
         assert placement.peak_for("rmem").peak_bytes == max(region_rmem_peaks, default=0)
 
@@ -426,11 +441,7 @@ def test_scheduled_hir_program_has_analysis_metadata(
         for use in liveness.uses:
             interval = intervals[id(use.value)]
             for phi, backedge in loop_bounds:
-                if (
-                    not use.synthetic
-                    and phi < use.at < backedge
-                    and interval.defined_at < phi
-                ):
+                if not use.synthetic and phi < use.at < backedge and interval.defined_at < phi:
                     outside_uses += 1
                     assert interval.last_used_at >= backedge
         assert outside_uses
@@ -642,3 +653,150 @@ def test_tir_program_is_verified_and_canonical(path: Path) -> None:
 
 def test_wgmma_declaration_is_canonical() -> None:
     assert PatternPrinter().declaration(Wgmma) + "\n" == WGMMA_DECLARATION.read_text()
+
+
+@pytest.mark.parametrize("name", M1_LOWERING)
+def test_schedule_finalize_writes_verified_tir(
+    name: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / f"{name}.py"
+    out = tmp_path / f"{name}.py"
+
+    assert cli_main(["schedule", "finalize", str(source), str(out)]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+    verify_prim_function(_prim_in(out))
+
+    if name == "wgmma_a_k_major":
+        rendered = out.read_text()
+        assert "lhs_stages = (T.tensor_view(2048" in rendered
+        assert "rhs_stages = (T.tensor_view(0" in rendered
+        assert "lhs_stages[(k // 16) % 2]" in rendered
+        assert "acc = T.alloc_tensor" in rendered
+        assert "result = T.alloc_tensor" in rendered
+
+
+@pytest.mark.parametrize("name", M2_LOWERING)
+def test_schedule_finalize_marks_later_issue_shapes(
+    name: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / f"{name}.py"
+    out = tmp_path / f"{name}.py"
+
+    assert cli_main(["schedule", "finalize", str(source), str(out)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "tilefoundry: error:" in captured.err
+    assert "M2 not implemented" in captured.err
+    assert not out.exists()
+
+
+def test_schedule_finalize_json_carries_the_same_source(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_a_k_major.py"
+    out = tmp_path / "finalized.json"
+
+    assert cli_main(["schedule", "finalize", str(source), str(out), "--json"]) == 0
+    assert capsys.readouterr() == ("", "")
+    payload = json.loads(out.read_text())
+    assert set(payload) == {"source"}
+    python = tmp_path / "finalized.py"
+    python.write_text(payload["source"])
+    verify_prim_function(_prim_in(python))
+
+
+def test_issue_plan_exposes_group_loop_and_row_facts() -> None:
+    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_repeat_along_k.py"
+    module = _module_in(source)
+    result = analyze(module, module.entry_function(), analysis=("memory",))
+    mma = next(
+        expr
+        for expr in collect_exprs(result.function.body)
+        if isinstance(expr, Call)
+        and isinstance(expr.target, ScheduleOp)
+        and isinstance(expr.target.op, TiledMma)
+    )
+    plan = issue_plan(
+        mma,
+        TypeInferContext(scope=FunctionScope(module, result.function)),
+    )
+
+    assert tuple(
+        (axis.name, axis.extent, axis.atom, axis.repeat, axis.row_copies, axis.is_group)
+        for axis in plan.axes
+    ) == (
+        ("m", 128, 64, 2, 1, True),
+        ("n", 16, 16, 1, 1, False),
+        ("k", 64, 16, 4, 4, False),
+    )
+
+
+def _m1_analysis():
+    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_a_k_major.py"
+    module = _module_in(source)
+    return source, module, analyze(module, module.entry_function(), analysis=("memory",))
+
+
+def _assert_cli_lowering_error(
+    source: Path,
+    message: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    out = tmp_path / "failed.py"
+    assert cli_main(["schedule", "finalize", str(source), str(out)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert message in captured.err
+    assert not out.exists()
+
+
+def test_lowering_rejects_instruction_without_access_relation(
+    monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source, _module, result = _m1_analysis()
+    transfer = next(
+        expr
+        for expr in collect_exprs(result.function.body)
+        if isinstance(expr, Call)
+        and isinstance(expr.target, ScheduleOp)
+        and not isinstance(expr.target.op, TiledMma)
+    )
+    transfer.target.op = _UnstatedInstruction()
+    monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
+
+    _assert_cli_lowering_error(source, "no registered access relation", tmp_path, capsys)
+
+
+def test_lowering_rejects_addressable_result_without_offsets(
+    monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source, _module, result = _m1_analysis()
+    addressable = next(
+        expr
+        for expr in collect_exprs(result.function.body)
+        if isinstance(expr, Call)
+        and isinstance(expr.target, ScheduleOp)
+        and expr.type.storage is StorageKind.SMEM
+    )
+    detach_metadata(addressable, MemoryMetadata)
+    monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
+
+    _assert_cli_lowering_error(source, "addressable smem result but no offsets", tmp_path, capsys)
+
+
+def test_lowering_rejects_unknown_hir_call(
+    monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source, _module, result = _m1_analysis()
+    view = next(
+        expr
+        for expr in collect_exprs(result.function.body)
+        if isinstance(expr, Call) and type(expr.target).__name__ == "Slice"
+    )
+    view.target = _UnstatedInstruction()
+    monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
+
+    _assert_cli_lowering_error(source, "unknown HIR call _UnstatedInstruction", tmp_path, capsys)

@@ -437,6 +437,39 @@ explicit analysis; there is no ordinary `--target` option.
     On inference, verification, or analysis failure, stdout MUST be empty and
     stderr MUST report the source location, binding where available, and reason.
 
+## Schedule
+
+`schedule` owns the transition from checked scheduling HIR to executable TIR
+and the two reports used to choose an instruction. Its subcommands are:
+
+```text
+tilefoundry schedule finalize SOURCE PATH [--json]
+tilefoundry schedule facts [INSTRUCTION] --target TARGET PATH [--json]
+tilefoundry schedule candidates SOURCE PATH [--json]
+```
+
+`finalize` checks and inlines the selected entry, runs memory analysis, lowers
+every selected instruction, and writes the verified `PrimFunction` as canonical
+Python TIR. With `--json`, `PATH` instead contains an object whose `source`
+field is that same canonical TIR. `facts` describes the instructions admitted
+by one target, optionally narrowed to one fully-qualified instruction name.
+`candidates` reports the instructions whose access relation and operand
+patterns can implement each unscheduled matmul or reshard site.
+
+- constraints:
+  - `PATH` is required, is the only report destination, and MUST NOT be partly
+    written when the operation fails. A successful command writes a trailing
+    newline and writes nothing to stdout.
+  - `finalize` MUST run lowering through `PassManager`, so every changed
+    `PrimFunction` receives the manager's automatic TIR verification.
+  - `--json` changes only representation. It MUST carry the same TIR source or
+    report facts as the text form.
+  - A missing instruction access relation, an addressable result without an
+    analyzed offset, an unsupported HIR call, an unknown instruction, an
+    unknown target, or a source with no candidate site MUST print
+    `tilefoundry: error: REASON` to stderr and exit 1. No partial output is
+    permitted.
+
 ## Target
 
 `target list` prints every Target value constructible in the current

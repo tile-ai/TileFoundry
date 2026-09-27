@@ -84,6 +84,18 @@ class ScheduleOp(Op):
 
 
 @dataclass(frozen=True)
+class IssueAxis:
+    """One work axis of a scheduled instruction issue."""
+
+    name: str
+    extent: int
+    atom: int
+    repeat: int
+    row_copies: int
+    is_group: bool
+
+
+@dataclass(frozen=True)
 class IssuePlan:
     """The lowering facts derived for one scheduled instruction issue."""
 
@@ -91,6 +103,7 @@ class IssuePlan:
     order: tuple[int, ...]
     single_shape: tuple[int, ...]
     operand_types: tuple[TensorType, ...]
+    axes: tuple[IssueAxis, ...]
 
 
 @register_eval(ScheduleOp)
@@ -563,7 +576,87 @@ def _issue_plan(call: Call, ctx) -> tuple[IssuePlan, AccessRelations]:
     single = _single_issue_relations(op, single_types)
     whole = _single_issue_relations(op, whole_types)
     repeat, order, single_shape = _repeat_order(call.target, whole, single)
-    return IssuePlan(repeat, order, single_shape, single_types), single
+    whole_shape = _iteration_shape(whole)
+    axes = _issue_axes(op, whole_shape, single_shape, repeat, single, single_types)
+    return IssuePlan(repeat, order, single_shape, single_types, axes), single
+
+
+def _issue_axes(
+    op: Op,
+    whole_shape: tuple[int, ...],
+    single_shape: tuple[int, ...],
+    repeat: tuple[int, ...],
+    single: AccessRelations,
+    single_types: tuple[TensorType, ...],
+) -> tuple[IssueAxis, ...]:
+    """Derive grouping and row-wise issue facts from the same single issue."""
+    from tilefoundry.ir.tir.cuda.nn.mma import TiledMma  # noqa: PLC0415
+
+    tiled_mma = isinstance(op, TiledMma)
+    names = (
+        ("m", "n", "k")
+        if tiled_mma and len(single_shape) == 3
+        else tuple(f"d{index}" for index in range(len(single_shape)))
+    )
+    copies = {name: 1 for name in names}
+    if tiled_mma:
+        universe = iteration_universe(single)
+        domain_names = tuple(
+            universe.get_dim_name(isl.dim_type.SET, index) or f"d{index}"
+            for index in range(universe.dim(isl.dim_type.SET))
+        )
+        aliases = dict(zip(domain_names, names, strict=True))
+        for type_, boundary in zip(single_types, single.inputs, strict=True):
+            layout = type_.layout
+            if isinstance(layout, ShardLayout):
+                layout = layout.layout
+            if not (
+                isinstance(layout, ComposedLayout)
+                and isinstance(layout.inner, Swizzle)
+                and isinstance(layout.outer, Layout)
+                and layout.outer.strides is not None
+            ):
+                continue
+            room = _row_room(tuple(layout.outer.shape), tuple(layout.outer.strides))
+            if room is None:
+                continue
+            relation = relation_of(boundary.pattern)
+            operand_axis, available = room
+            mapped = next(
+                (
+                    index
+                    for index in range(relation.dim(isl.dim_type.IN))
+                    if _is_projection(relation, index, operand_axis)
+                ),
+                None,
+            )
+            reached = None if mapped is None else domain_names[mapped]
+            axis_name = aliases.get(reached)
+            if axis_name is not None:
+                copies[axis_name] = max(copies[axis_name], available)
+    return tuple(
+        IssueAxis(
+            name=name,
+            extent=extent,
+            atom=atom,
+            repeat=count,
+            row_copies=copies[name],
+            is_group=tiled_mma and index == 0 and count > 1,
+        )
+        for index, (name, extent, atom, count) in enumerate(
+            zip(names, whole_shape, single_shape, repeat, strict=True)
+        )
+    )
+
+
+def _is_projection(relation: isl.map, source_axis: int, target_axis: int) -> bool:
+    """Whether one operand coordinate is exactly one work coordinate."""
+    local = isl.local_space.from_space(relation.get_space())
+    equal = isl.constraint.alloc_equality(local)
+    equal = equal.set_coefficient_si(isl.dim_type.IN, source_axis, 1)
+    equal = equal.set_coefficient_si(isl.dim_type.OUT, target_axis, -1)
+    projected = isl.map.universe(relation.get_space()).add_constraint(equal)
+    return relation.is_subset(projected)
 
 
 def issue_plan(call: Call, ctx) -> IssuePlan:
@@ -786,4 +879,4 @@ def _infer_schedule(call: Call, ctx) -> TensorType:
     return results[writes[0].name]
 
 
-__all__ = ["IssuePlan", "ScheduleOp", "issue_plan"]
+__all__ = ["IssueAxis", "IssuePlan", "ScheduleOp", "issue_plan"]

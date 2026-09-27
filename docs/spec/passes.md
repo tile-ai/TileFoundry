@@ -223,6 +223,38 @@ unified retype / verify is scheduled by `PassManager`.
 
 ## 7. Implemented passes
 
+### 7.1 `ConvertHIRToTIR`
+
+```python
+class ConvertHIRToTIR(ModulePass):
+    """Replace one selected scheduled HIR entry with verified TIR."""
+
+    entry: str | None
+    name: str = "convert-hir-to-tir"
+    requires: tuple[str, ...] = ()
+
+    def run(self, module: Module) -> Module: ...
+```
+
+- constraints:
+  - The pass runs `analyze(..., analysis=("memory",))` over the authored entry
+    and lowers the returned checked, inlined function. The authored function is
+    retained separately so `BindingMetadata`, keyed by `SourceSpanMetadata`,
+    remains the source of user-facing names after analysis has assigned its own
+    internal bindings.
+  - Address placement comes only from `MemoryMetadata`: integer shared-memory
+    addresses are byte offsets, and every analyzed offset becomes one concrete
+    buffer view. Multiple offsets form a tuple selected by the enclosing loop.
+  - Instruction issue geometry comes only from the public `issue_plan` result.
+    Lowering does not call private HIR schedule helpers or reconstruct their
+    access relations.
+  - HIR mesh and loop regions become `MeshScope` and `For`; register allocations
+    become `AllocTensor`; scheduled and ordinary value operations become
+    effect-form TIR calls. Views follow their storage root, so a parameter view
+    is addressed through `PtrOf` rather than an analyzed arena offset.
+  - Any construct without a complete lowering MUST raise `LoweringError`; the
+    pass never emits a partial `PrimFunction` or silently preserves HIR.
+
 ### 7.3 `insert_default_host_entry`
 
 ```python
