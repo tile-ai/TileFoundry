@@ -81,10 +81,11 @@ def test_every_callable_op_states_its_coordinates_exactly_once() -> None:
 
     Where an Op reads and writes is stated once, so type inference, the loop
     footprint and the movement half read one answer.
-    The set is taken from the Op registry itself, so an Op added to the surface
-    joins this without anybody adding it here. The other dialect is not a Call
-    target of these analyses and an Op a test registers is not part of the
-    surface at all; both are left out by where they come from, not by name.
+    The tf set is taken from the Op registry itself, so an Op added to the
+    surface joins this without anybody adding it here. TIR instructions may
+    also state relations for an HIR schedule to consume; they must be
+    effect-declared instructions, but effect declaration alone does not require
+    registration until an HIR consumer needs that instruction.
     """
     callable_ops = {
         schema.op_class
@@ -99,7 +100,18 @@ def test_every_callable_op_states_its_coordinates_exactly_once() -> None:
     )
     assert not missing, f"callable ops with no access relation: {missing}"
     stated = set(access_relation_registry._map)
-    assert stated == callable_ops, sorted(op.__name__ for op in stated ^ callable_ops)
+    effect_declared_tir = {
+        schema.op_class
+        for schema in iter_schemas()
+        if schema.dialect == "T"
+        and schema.op_class is not None
+        and all(param.effect is not None for param in schema.signature if param.kind == "input")
+    }
+    tir_stated = stated - callable_ops
+    assert tir_stated, "no TIR instruction states access relations for an HIR consumer"
+    assert stated <= callable_ops | effect_declared_tir, sorted(
+        op.__name__ for op in stated - callable_ops - effect_declared_tir
+    )
 
 
 def test_an_op_with_no_registered_relation_has_no_fallback() -> None:

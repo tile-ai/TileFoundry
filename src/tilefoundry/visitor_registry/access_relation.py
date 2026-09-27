@@ -14,7 +14,6 @@ from typing import Callable
 
 import isl
 
-from tilefoundry.ir.hir._helpers import is_one
 from tilefoundry.ir.isl_interop import index_set, isl_to_dim, shape_to_isl_domain
 from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.shard_layout import layout_axis_to_tensor_axis
@@ -632,7 +631,7 @@ def normalised_rows(local: "Type", logical: "Type", first: int) -> tuple:
         if owner < first:
             names.append(f"d{len(extents)}")
             extents.append(extent)
-        elif is_one(extent):
+        elif static_dim_value(extent) == 1:
             names.append("0")
         else:
             names.append(f"j{position}")
@@ -646,7 +645,7 @@ def logical_term(names: "Sequence[str]", local: "Type", logical: "Type", axis: i
     belongs = logical_axes_of(local, logical)
     for position in reversed(range(len(belongs))):
         extent = local.shape[position]
-        if belongs[position] != axis or is_one(extent):
+        if belongs[position] != axis or static_dim_value(extent) == 1:
             continue
         term = names[position] if stride == 1 else f"{stride} * {names[position]}"
         linear = term if not linear else f"{linear} + {term}"

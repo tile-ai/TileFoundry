@@ -11,6 +11,10 @@ from tilefoundry.ir.tir.memory.copy import Copy
 from tilefoundry.ir.types import Mesh
 from tilefoundry.ir.types.storage import StorageKind as S
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+)
 from tilefoundry.visitor_registry.registries import typeinfer_registry, verify_stmt_registry
 
 
@@ -35,6 +39,7 @@ class LdMatrix(Op):
 
 register_typeinfer(LdMatrix)(typeinfer_registry.lookup(Copy))
 register_verify_stmt(LdMatrix)(verify_stmt_registry.lookup(Copy))
+register_access_relation(LdMatrix)(identity_relations(2))
 
 
 __all__ = ["LdMatrix"]

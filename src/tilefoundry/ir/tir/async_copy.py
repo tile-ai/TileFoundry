@@ -9,6 +9,10 @@ from tilefoundry.ir.pattern import DistinctConstraint, SameModesConstraint, util
 from tilefoundry.ir.types import Layout, UnitType
 from tilefoundry.ir.types.storage import StorageKind as S
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+)
 
 ASYNC_WIDTHS = (4, 8, 16)
 
@@ -43,6 +47,9 @@ class CopyAsync(Op):
 @register_typeinfer(CopyAsync)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
+
+
+register_access_relation(CopyAsync)(identity_relations(2))
 
 
 @register_verify_stmt(CopyAsync)

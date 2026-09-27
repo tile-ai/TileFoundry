@@ -107,8 +107,11 @@ def _operand_reads(
     return reads
 
 
-@register_access_relation(MatMul)
-def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
+def matmul_relations(
+    lhs_shape: tuple,
+    rhs_shape: tuple,
+    axes: tuple[int, int, int, int],
+) -> AccessRelations:
     """Every coordinate of each operand a contraction reaches, read once.
 
     A product walks the axis it sums, so that axis is a coordinate this Op is
@@ -118,24 +121,22 @@ def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
     extent. Which positions any of these coordinates are is the reader's
     question; the result's own extents follow from the operands.
     """
-    lhs = ctx.type_of(call.args[0])
-    rhs = ctx.type_of(call.args[1])
-    a_m, a_k, b_n, b_k = matmul_axes(call.target)
-    batch = _broadcast_batch(lhs.shape[:-2], rhs.shape[:-2])
+    a_m, a_k, b_n, b_k = axes
+    batch = _broadcast_batch(lhs_shape[:-2], rhs_shape[:-2])
     if batch is None:
         raise ValueError(
-            f"MatMul batches {tuple(lhs.shape[:-2])} against "
-            f"{tuple(rhs.shape[:-2])}, which do not broadcast"
+            f"MatMul batches {tuple(lhs_shape[:-2])} against "
+            f"{tuple(rhs_shape[:-2])}, which do not broadcast"
         )
-    out_shape = (*batch, lhs.shape[a_m], rhs.shape[b_n])
-    summed = lhs.shape[a_k]
+    out_shape = (*batch, lhs_shape[a_m], rhs_shape[b_n])
+    summed = lhs_shape[a_k]
     rank = len(out_shape)
     dims = ", ".join((*(f"d{index}" for index in range(rank)), "k"))
     inner = "0" if is_one(summed) else "k"
     inputs = []
     for shape, kept_axis, output_axis, contraction_axis in (
-        (tuple(lhs.shape), a_m, -2, a_k),
-        (tuple(rhs.shape), b_n, -1, b_k),
+        (tuple(lhs_shape), a_m, -2, a_k),
+        (tuple(rhs_shape), b_n, -1, b_k),
     ):
         reads = _operand_reads(
             shape,
@@ -158,6 +159,14 @@ def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
             ),
         ),
     )
+
+
+@register_access_relation(MatMul)
+def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
+    """Every coordinate of each operand a contraction reaches, read once."""
+    lhs = ctx.type_of(call.args[0])
+    rhs = ctx.type_of(call.args[1])
+    return matmul_relations(lhs.shape, rhs.shape, matmul_axes(call.target))
 
 
 def _elements(shape: tuple) -> int:

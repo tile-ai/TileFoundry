@@ -69,6 +69,20 @@ The rule reads only the access maps' affine structure (which domain dim each
 axis uses), never the domain bounds, so it is size-agnostic and identical for
 static and dynamic shapes.
 
+An effect-form TIR instruction uses the same carrier even though its call is
+unit-typed. Its boundary order is derived from its input `ParamDef`s:
+
+- `AccessRelations.inputs` contains every parameter whose `effect` includes
+  `READ`, in parameter order.
+- `AccessRelations.outputs` contains every parameter whose `effect` includes
+  `WRITE`, in parameter order.
+- A `READ | WRITE` parameter appears on both sides.
+
+These output boundaries describe written operands, not SSA results of the TIR
+call. An HIR consumer such as [`tf.schedule`](./schedule.md) may use them to
+derive its own value result. Instructions selected by such a consumer MUST
+register their relation explicitly; there is no fallback relation.
+
 ## 3. Shard propagation
 
 ### 3.1 Logical shape to layout domain

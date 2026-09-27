@@ -24,6 +24,10 @@ from tilefoundry.ir.pattern import (
 from tilefoundry.ir.types import Layout, Mesh, Swizzle, UnitType
 from tilefoundry.ir.types.storage import StorageKind as S
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+)
 
 TMA_RANK = 5
 BOX_EXTENT = 256
@@ -187,6 +191,9 @@ class CopyAsyncTensor(Op):
 @register_typeinfer(CopyAsyncTensor)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
+
+
+register_access_relation(CopyAsyncTensor)(identity_relations(2))
 
 
 @register_verify_stmt(CopyAsyncTensor)
