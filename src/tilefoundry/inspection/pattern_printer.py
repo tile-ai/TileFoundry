@@ -79,6 +79,7 @@ class PatternPrinter:
         )
         sections = []
         parameters = tuple(getattr(op_type, "parameters", ())) or collect_param_defs(op_type)
+        parameters_by_name = {param.name: param for param in parameters}
         if parameters:
             sections.append(("parameters", tuple((param.name, param.pattern) for param in parameters)))
         roles = tuple(
@@ -88,6 +89,9 @@ class PatternPrinter:
         )
         if roles:
             sections.append(("operands", roles))
+            scope_pattern = getattr(op_type, "scope_pattern", None)
+            if callable(scope_pattern):
+                sections.append(("attributes", (("scope", scope_pattern()),)))
         if not roles and parameters:
             operands = tuple(
                 (param.name, param.pattern)
@@ -111,6 +115,9 @@ class PatternPrinter:
             width = max((len(name) for name, _ in items), default=0)
             for name, pattern in items:
                 described = self._declared(pattern, name).splitlines()
+                parameter = parameters_by_name.get(name)
+                if parameter is not None and parameter.has_default:
+                    described[0] += f" (default {self._written_value(parameter.default)})"
                 prefix = f"    {name.ljust(width)}  "
                 lines.append(prefix + described[0])
                 lines.extend(" " * len(prefix) + line for line in described[1:])
@@ -235,24 +242,30 @@ class PatternPrinter:
         )
 
     def _alternative_rules(self, pattern, name: str = _UNNAMED) -> tuple[str, ...]:
-        alternatives = tuple(
-            (bindings, self.rules(alternative, name))
-            for bindings, alternative in self.alternatives(pattern)
-        )
+        alternatives, common = self._partitioned_alternatives(pattern, name)
         if not alternatives:
             return ()
-        common = tuple(
-            rule
-            for rule in alternatives[0][1]
-            if all(rule in rules for _, rules in alternatives[1:])
-        )
         specific = tuple(
             self._qualified_rule(rule, bindings)
-            for bindings, rules in alternatives
+            for bindings, _, rules in alternatives
             for rule in rules
             if rule not in common
         )
         return (*common, *specific)
+
+    def _partitioned_alternatives(self, pattern, name: str = _UNNAMED) -> tuple:
+        alternatives = tuple(
+            (bindings, alternative, self.rules(alternative, name))
+            for bindings, alternative in self.alternatives(pattern)
+        )
+        if not alternatives:
+            return (), ()
+        common = tuple(
+            rule
+            for rule in alternatives[0][2]
+            if all(rule in rules for _, _, rules in alternatives[1:])
+        )
+        return alternatives, common
 
     def _qualified_rule(self, rule: str, bindings) -> str:
         label = self._written_bindings(bindings)
@@ -316,18 +329,6 @@ class PatternPrinter:
     def rules_SequencePattern(self, pattern, name) -> tuple[str, ...]:
         return self._rules_of(pattern.patterns, name)
 
-    def visit_ConstraintPattern(self, pattern, name) -> str:
-        return name
-
-    def rules_ConstraintPattern(self, pattern, name) -> tuple[str, ...]:
-        return self._rules_of(pattern.patterns, name)
-
-    def visit_MultipleOfPattern(self, pattern, name) -> str:
-        return name
-
-    def rules_MultipleOfPattern(self, pattern, name) -> tuple[str, ...]:
-        return (f"{name} % {pattern.unit} = 0",)
-
     def visit_RangePattern(self, pattern, name) -> str:
         return name
 
@@ -338,39 +339,11 @@ class PatternPrinter:
             return (f"{pattern.lo} <= {name}",)
         return (f"{pattern.lo} <= {name} <= {pattern.hi}",)
 
-    def visit_OneOfPattern(self, pattern, name) -> str:
-        return name
-
-    def rules_OneOfPattern(self, pattern, name) -> tuple[str, ...]:
-        values = ", ".join(self._named(value) for value in pattern.values)
-        return (f"{name} in {{{values}}}",)
-
-    def visit_AttrPattern(self, pattern, name) -> str:
-        return self.written(pattern.pattern, f"{name}.{pattern.attr}")
-
-    def rules_AttrPattern(self, pattern, name) -> tuple[str, ...]:
-        return self.rules(pattern.pattern, f"{name}.{pattern.attr}")
-
-    def visit_BitsPattern(self, pattern, name) -> str:
-        return self.written(pattern.pattern, f"{name} * {pattern.dtype}.bit_width")
-
-    def rules_BitsPattern(self, pattern, name) -> tuple[str, ...]:
-        return self.rules(pattern.pattern, f"{name} * {pattern.dtype}.bit_width")
-
     def visit_SwitchPattern(self, pattern, name) -> str:
         return self._written_alternatives(self.alternatives(pattern), name)
 
     def rules_SwitchPattern(self, pattern, name) -> tuple[str, ...]:
         return self._alternative_rules(pattern, name)
-
-    def visit_GuardPattern(self, pattern, name) -> str:
-        return self.written(pattern.pattern, name)
-
-    def rules_GuardPattern(self, pattern, name) -> tuple[str, ...]:
-        return (
-            *self.rules(pattern.pattern, name),
-            *self.rules(pattern.condition, self._written_value(pattern.symbol)),
-        )
 
     def visit_LayoutPattern(self, pattern, name) -> str:
         if pattern.shape is None and pattern.strides is None:
@@ -433,9 +406,19 @@ class PatternPrinter:
         head = " ".join(stated) if stated else "any tensor"
         if pattern.layout is None:
             return f"{head}, in any arrangement"
-        items = self.alternatives(pattern.layout)
-        label = f"{len(items)} arrangement{'' if len(items) == 1 else 's'}:"
-        written = self._written_alternatives(items).splitlines()
+        alternatives, common = self._partitioned_alternatives(pattern.layout)
+        label = f"{len(alternatives)} arrangement{'' if len(alternatives) == 1 else 's'}:"
+        items = tuple(
+            (
+                self._written_bindings(bindings),
+                self._described(
+                    self.written(alternative),
+                    tuple(rule for rule in rules if rule not in common),
+                ),
+            )
+            for bindings, alternative, rules in alternatives
+        )
+        written = self._aligned_alternatives(items).splitlines()
         return "\n".join((f"{head}, held in {label}", *(f"  {line}" for line in written)))
 
     def rules_TensorPattern(self, pattern, name) -> tuple[str, ...]:
@@ -443,10 +426,15 @@ class PatternPrinter:
             pattern.dtype,
             pattern.storage,
             *(pattern.shape or ()),
-            *((pattern.layout,) if pattern.layout is not None else ()),
+        )
+        layout_rules = (
+            ()
+            if pattern.layout is None
+            else self._partitioned_alternatives(pattern.layout)[1]
         )
         return (
             *self._rules_of(values),
+            *layout_rules,
             *self._rules_of(self._ordered_predicates(pattern.predicates)),
         )
 
@@ -596,6 +584,8 @@ class PatternPrinter:
         return ((bindings, pattern),)
 
     def alternatives_OrPattern(self, pattern, bindings) -> tuple:
+        if not any(isinstance(item, Pattern) for item in pattern.patterns):
+            return ((bindings, pattern),)
         return tuple(
             held
             for alternative in pattern.patterns

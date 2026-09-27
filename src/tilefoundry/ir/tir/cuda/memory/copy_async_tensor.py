@@ -12,7 +12,6 @@ from tilefoundry.ir.pattern import (
     DistinctConstraint,
     LayoutPattern,
     MeshPattern,
-    OrPattern,
     SameModesConstraint,
     SwitchPattern,
     SwizzlePattern,
@@ -46,28 +45,27 @@ class TmaSwizzle(Enum):
         return None if self is TmaSwizzle.NONE else Swizzle(self.value.bit_length() - 5, 4, 3)
 
 
-class BoxFamily(SwitchPattern):
-    """Every unswizzled or swizzled shared-memory box."""
-
-
 def _dim(name: str) -> WildcardPattern:
     return WildcardPattern(name)
 
 
 def _dim_formulas(name: str, dtype: str, *, span: int | None = None) -> tuple:
     dim = WildcardPattern(name)
-    parts = [dim >= 1, dim <= BOX_EXTENT, P.Bits(dtype) * dim % TMA_UNIT_BITS == 0]
+    parts = [*_dim_range(name), P.Bits(dtype) * dim % TMA_UNIT_BITS == 0]
     if span is not None:
         parts.append(P.Bits(dtype) * dim <= span * 8)
     return tuple(parts)
 
 
-def TmaBoxPattern(dtype: str) -> BoxFamily:
+def _dim_range(name: str) -> tuple:
+    dim = WildcardPattern(name)
+    return dim >= 1, dim <= BOX_EXTENT
+
+
+def TmaBoxPattern(dtype: str) -> SwitchPattern:
     rest = tuple(_dim(f"dim{index}") for index in range(1, TMA_RANK))
     rest_formulas = tuple(
-        formula
-        for index in range(1, TMA_RANK)
-        for formula in _dim_formulas(f"dim{index}", dtype)[:2]
+        formula for index in range(1, TMA_RANK) for formula in _dim_range(f"dim{index}")
     )
     plain_dims = (_dim("dim0"), *rest)
     boxes = {
@@ -104,7 +102,7 @@ def TmaBoxPattern(dtype: str) -> BoxFamily:
                 )
             ),
         )
-    return BoxFamily(SWIZZLE_PLACE, boxes)
+    return SwitchPattern(SWIZZLE_PLACE, boxes)
 
 
 def TmaGlobalPattern(dtype: str) -> LayoutPattern:
@@ -135,11 +133,12 @@ def _warp_scope() -> MeshPattern:
         predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
     )
     sliced = ComposedLayoutPattern(
+        inner=None,
         offset=WildcardPattern("p0"),
         outer=layout,
         predicates=(WildcardPattern("p0") % 32 == 0,),
     )
-    return MeshPattern(("thread",), OrPattern(sliced, layout))
+    return MeshPattern(("thread",), sliced)
 
 
 @register_op(dialect="T", category="async", name="copy_async_tensor")
@@ -203,7 +202,6 @@ def verify_copy_async_tensor(call: "Call", ctx: "VerifyContext") -> None:
 
 __all__ = [
     "BOX_EXTENT",
-    "BoxFamily",
     "CopyAsyncTensor",
     "SWIZZLE_PLACE",
     "TMA_RANK",

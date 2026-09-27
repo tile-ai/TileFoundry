@@ -8,11 +8,8 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.pattern import (
     AndPattern,
     ComposedLayoutPattern,
-    GuardPattern,
     LayoutPattern,
     MeshPattern,
-    MultipleOfPattern,
-    OneOfPattern,
     OrPattern,
     RangePattern,
     ShardLayoutPattern,
@@ -24,7 +21,6 @@ from tilefoundry.ir.pattern import (
 from tilefoundry.ir.pattern import (
     predicates as P,
 )
-from tilefoundry.ir.pattern.match import is_symbolic
 from tilefoundry.ir.types import Broadcast, DType, Layout, Mesh, Split, Topology
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.storage import StorageKind as S
@@ -52,122 +48,50 @@ class Form(Enum):
     RS = "RS"
 
 
-class Swizzled(Enum):
-    """The SM90 descriptor's shared-memory swizzle width."""
-
-    INTERLEAVE = "INTERLEAVE"
-    SW32 = "SW32"
-    SW64 = "SW64"
-    SW128 = "SW128"
-
-    @property
-    def bits(self) -> int:
-        return ("INTERLEAVE", "SW32", "SW64", "SW128").index(self.value)
-
-    @property
-    def run(self) -> int:
-        return DESCRIPTOR_UNIT << self.bits
-
-
-DESCRIPTOR_UNIT_BYTES = 16
-DESCRIPTOR_UNIT = DESCRIPTOR_UNIT_BYTES * 8 // DType.bf16.bit_width
-START = "k0"
-
-
-def Descriptor(
-    rows,
-    cols: int,
-    major,
-    *,
-    selects: str,
-    k_first: bool = False,
-) -> SwitchPattern:
-    """Every shared BF16 descriptor arrangement for one logical tile."""
-    if isinstance(major, str):
-        return SwitchPattern(
-            major,
-            {
-                read: Descriptor(
-                    rows,
-                    cols,
-                    read,
-                    selects=selects,
-                    k_first=k_first,
-                )
-                for read in Major
-            },
-        )
-    unit = DESCRIPTOR_UNIT
-    branches = {}
-    for mode in Swizzled:
-        width = mode.run
-        along = rows if major is Major.MN else cols
-        leading, stride = cols * width, width * unit
-        guarded, sliced = False, False
-        if is_symbolic(along):
-            if major is not Major.MN:
-                raise ValueError("a K-major descriptor reads a K it states")
-            guarded = True
-        elif along % width:
-            if major is Major.MN or width % along:
-                continue
-            sliced = True
-        if sliced:
-            shape, strides = ((rows // unit, unit), cols), ((unit * width, width), 1)
-        elif major is Major.MN:
-            shape = ((rows // width, width), (cols // unit, unit))
-            strides = ((leading, 1), (stride, width))
-        else:
-            shape = ((rows // unit, unit), (cols // width, width))
-            strides = ((leading, width), (stride, 1))
-        if k_first:
-            shape, strides = shape[::-1], strides[::-1]
-        held = LayoutPattern(shape, strides)
-        if mode.bits:
-            start = WildcardPattern(START) if sliced else 0
-            held = ComposedLayoutPattern(
-                SwizzlePattern(mode.bits, 4, 3),
-                start,
-                held,
-                predicates=(
-                    (P.In(WildcardPattern(START), range(0, width, along)),) if sliced else ()
-                ),
-            )
-        branches[mode] = (
-            GuardPattern(along, MultipleOfPattern(width), held) if guarded else held
-        )
-    return SwitchPattern(selects, branches)
-
-
-def Fragment(rows: int, cols) -> LayoutPattern:
-    """CuTe ``CLayout_64xN``; at N=16, also the RS A fragment."""
-    if rows != 64:
-        raise ValueError("the only register fragment this back end reads is 64 rows deep")
-    return LayoutPattern((8, 2, 4, 2, 4, cols // 8), (1, 8, 16, 64, 128, 512))
-
-
-SHARED_BY_ALL = (Broadcast(), Broadcast(), Broadcast())
-HELD_PER_THREAD = (Split(2), Split(0), Split(4))
-
-_WARPGROUP_LAYOUT = LayoutPattern.from_layout(
-    WARPGROUP.layout,
-    predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
+_ = WildcardPattern()
+n, b, W, p, r, l, s, c = (
+    WildcardPattern(name)
+    for name in ("n", "a_swizzle", "W", "k0", "r", "l", "s", "c")
 )
-_WARPGROUP_PATTERN = MeshPattern(
+n_extent = n
+bb, Wb, rb, lb, sb = (
+    WildcardPattern(name) for name in ("b_swizzle", "Wb", "rb", "lb", "sb")
+)
+RUN = P.Table((8, 16, 32, 64))[b]
+WARPGROUP_SCOPE = MeshPattern(
     ("thread",),
-    OrPattern(
-        ComposedLayoutPattern(offset=WildcardPattern(), outer=_WARPGROUP_LAYOUT),
-        _WARPGROUP_LAYOUT,
+    ComposedLayoutPattern(
+        inner=None,
+        offset=WildcardPattern("p0"),
+        outer=LayoutPattern.from_layout(
+            WARPGROUP.layout,
+            predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
+        ),
+        predicates=(WildcardPattern("p0") % 128 == 0,),
     ),
 )
+BROADCAST = (Broadcast(), Broadcast(), Broadcast())
+PER_THREAD = (Split(2), Split(0), Split(4))
 
-
-def shared(arrangement) -> ShardLayoutPattern:
-    return ShardLayoutPattern(arrangement, SHARED_BY_ALL, _WARPGROUP_PATTERN)
-
-
-def held(arrangement) -> ShardLayoutPattern:
-    return ShardLayoutPattern(arrangement, HELD_PER_THREAD, _WARPGROUP_PATTERN)
+a_mn = ComposedLayoutPattern(
+    SwizzlePattern(b, 4, 3),
+    0,
+    LayoutPattern(((r, W), (2, 8)), ((l, 1), (s, W))),
+    predicates=(W == RUN, r * W == 64, l == 16 * W, s == 8 * W),
+)
+a_k_whole = ComposedLayoutPattern(
+    SwizzlePattern(b, 4, 3),
+    0,
+    LayoutPattern(((8, 8), (r, W)), ((l, W), (s, 1))),
+    predicates=(W == RUN, b <= 1, r * W == 16, l == 16 * W, s == 8 * W),
+)
+a_k_sliced = ComposedLayoutPattern(
+    SwizzlePattern(b, 4, 3),
+    p,
+    LayoutPattern(((8, 8), 16), ((l, W), 1)),
+    predicates=(W == RUN, b >= 2, l == 8 * W, p % 16 == 0, 0 <= p, p < W),
+)
+fragment = LayoutPattern((8, 2, 4, 2, 4, c), (1, 8, 16, 64, 128, 512))
 
 
 N = DimVar("n", 8, 257)
@@ -183,12 +107,18 @@ class Wgmma(MmaAtom):
     n = ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=AndPattern((MultipleOfPattern(8), RangePattern(lo=N.lo, hi=N.hi - 1))),
+        pattern=AndPattern(
+            (
+                WildcardPattern("n"),
+                RangePattern(lo=N.lo, hi=N.hi - 1),
+                WildcardPattern("n") % 8 == 0,
+            )
+        ),
     )
     form = ParamDef(
         kind="attribute",
         annotation=Form,
-        pattern=OneOfPattern(tuple(Form)),
+        pattern=OrPattern(*tuple(Form)),
     )
     a_major = ParamDef(
         kind="attribute",
@@ -196,7 +126,7 @@ class Wgmma(MmaAtom):
         pattern=SwitchPattern(
             "form",
             {
-                Form.SS: OneOfPattern(tuple(Major)),
+                Form.SS: OrPattern(*tuple(Major)),
                 Form.RS: Major.K,
             },
         ),
@@ -207,7 +137,8 @@ class Wgmma(MmaAtom):
         shape=(64, N),
         dtype=DType.f32,
         storage=S.RMEM,
-        layout=held(Fragment(64, N)),
+        layout=ShardLayoutPattern(fragment, PER_THREAD, WARPGROUP_SCOPE),
+        predicates=(8 * c == n_extent,),
     )
     A = SwitchPattern(
         "form",
@@ -216,13 +147,30 @@ class Wgmma(MmaAtom):
                 shape=(64, 16),
                 dtype=DType.bf16,
                 storage=S.SMEM,
-                layout=shared(Descriptor(64, 16, "a_major", selects="a_swizzle")),
+                layout=ShardLayoutPattern(
+                    SwitchPattern(
+                        "a_major",
+                        {
+                            Major.MN: a_mn,
+                            Major.K: OrPattern(a_k_whole, a_k_sliced),
+                        },
+                    ),
+                    BROADCAST,
+                    WARPGROUP_SCOPE,
+                ),
             ),
             Form.RS: TensorPattern(
                 shape=(64, 16),
                 dtype=DType.bf16,
                 storage=S.RMEM,
-                layout=held(Fragment(64, 16)),
+                layout=ShardLayoutPattern(
+                    LayoutPattern(
+                        (8, 2, 4, 2, 4, 2),
+                        (1, 8, 16, 64, 128, 512),
+                    ),
+                    PER_THREAD,
+                    WARPGROUP_SCOPE,
+                ),
             ),
         },
     )
@@ -230,32 +178,35 @@ class Wgmma(MmaAtom):
         shape=(16, N),
         dtype=DType.bf16,
         storage=S.SMEM,
-        layout=shared(
-            Descriptor(
-                N,
-                16,
-                Major.MN,
-                selects="b_swizzle",
-                k_first=True,
-            )
+        layout=ShardLayoutPattern(
+            ComposedLayoutPattern(
+                SwizzlePattern(bb, 4, 3),
+                0,
+                LayoutPattern(((2, 8), (rb, Wb)), ((sb, Wb), (lb, 1))),
+                predicates=(
+                    Wb == P.Table((8, 16, 32, 64))[bb],
+                    rb * Wb == n_extent,
+                    lb == 16 * Wb,
+                    sb == 8 * Wb,
+                ),
+            ),
+            BROADCAST,
+            WARPGROUP_SCOPE,
         ),
     )
 
 
 __all__ = [
-    "DESCRIPTOR_UNIT",
-    "DESCRIPTOR_UNIT_BYTES",
-    "Descriptor",
+    "BROADCAST",
     "Form",
-    "Fragment",
-    "HELD_PER_THREAD",
     "Major",
     "N",
-    "SHARED_BY_ALL",
-    "START",
-    "Swizzled",
+    "PER_THREAD",
     "WARPGROUP",
+    "WARPGROUP_SCOPE",
     "Wgmma",
-    "held",
-    "shared",
+    "a_k_sliced",
+    "a_k_whole",
+    "a_mn",
+    "fragment",
 ]

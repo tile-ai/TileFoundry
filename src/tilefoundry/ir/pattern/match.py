@@ -228,33 +228,11 @@ class PatternMatcher:
             return self._fail(pattern, subject)
         return all(self.match(place, value) for place, value in zip(pattern.patterns, subject))
 
-    def visit_ConstraintPattern(self, pattern, subject) -> bool:
-        return all(self.match(part, subject) for part in pattern.patterns)
-
-    def visit_MultipleOfPattern(self, pattern, subject) -> bool:
-        return (
-            type(subject) is int and subject % pattern.unit == 0
-        ) or self._fail(pattern, subject)
-
     def visit_RangePattern(self, pattern, subject) -> bool:
         found = not isinstance(subject, bool) and isinstance(subject, int)
         found = found and (pattern.lo is None or subject >= pattern.lo)
         found = found and (pattern.hi is None or subject <= pattern.hi)
         return found or self._fail(pattern, subject)
-
-    def visit_OneOfPattern(self, pattern, subject) -> bool:
-        return any(subject == value for value in pattern.values) or self._fail(pattern, subject)
-
-    def visit_AttrPattern(self, pattern, subject) -> bool:
-        if not hasattr(subject, pattern.attr):
-            return self._fail(pattern, subject)
-        return self.match(pattern.pattern, getattr(subject, pattern.attr))
-
-    def visit_BitsPattern(self, pattern, subject) -> bool:
-        width = getattr(self.bindings.get(pattern.dtype), "bit_width", None)
-        if type(subject) is not int or type(width) is not int:
-            return self._fail(pattern, subject)
-        return self.match(pattern.pattern, subject * width)
 
     def visit_SwitchPattern(self, pattern, subject) -> bool:
         if pattern.param in self.bindings:
@@ -272,12 +250,6 @@ class PatternMatcher:
         self.restore(saved)
         self.refusal = first_refusal
         return self._fail(pattern, subject)
-
-    def visit_GuardPattern(self, pattern, subject) -> bool:
-        value = evaluated(pattern.symbol, self.bindings)
-        if value is None or not self.match(pattern.condition, value):
-            return self._fail(pattern, subject)
-        return self.match(pattern.pattern, subject)
 
     def _match_mode_trees(
         self,

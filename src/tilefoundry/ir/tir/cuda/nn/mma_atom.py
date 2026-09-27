@@ -9,7 +9,6 @@ from tilefoundry.ir.pattern import (
     ComposedLayoutPattern,
     LayoutPattern,
     MeshPattern,
-    OrPattern,
     Pattern,
     SwitchPattern,
     WildcardPattern,
@@ -91,13 +90,13 @@ class MmaAtom:
         topology, = cls.scope.topologies
         size = topology.size
         per_mode = (P.Forward(per_mode=True), P.Injective(per_mode=True))
-        bare = LayoutPattern.from_layout(cls.scope.layout, predicates=per_mode)
-        sliced = ComposedLayoutPattern(
+        layout = ComposedLayoutPattern(
+            inner=None,
             offset=WildcardPattern("p0"),
             outer=LayoutPattern.from_layout(cls.scope.layout, predicates=per_mode),
             predicates=(WildcardPattern("p0") % size == 0,),
         )
-        return MeshPattern((topology.name,), OrPattern(sliced, bare))
+        return MeshPattern((topology.name,), layout)
 
     def on(self, mesh: Mesh) -> MmaAtom:
         return type(self)(mesh=mesh, **self.bindings)
@@ -150,6 +149,7 @@ class AtomPattern(Pattern):
     def __init__(self, *declarations):
         object.__setattr__(self, "declarations", tuple(declarations))
 
+
 @dataclass(frozen=True)
 class FromAtom(Pattern):
     """An operand pattern read from one role of the call's atom."""
@@ -162,10 +162,6 @@ class FromAtom(Pattern):
 
     def read_on(self, op):
         return getattr(type(op.atom), self.role)
-
-def read_on(pattern, op):
-    held = getattr(pattern, "read_on", None)
-    return pattern if held is None else held(op)
 
 
 def _reversed_modes(modes):
@@ -206,5 +202,4 @@ __all__ = [
     "FromAtom",
     "MmaAtom",
     "physical_frames_match",
-    "read_on",
 ]

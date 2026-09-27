@@ -6,7 +6,6 @@ from tilefoundry.ir.pattern import (
     ComposedLayoutPattern,
     LayoutPattern,
     MeshPattern,
-    OrPattern,
     ShardLayoutPattern,
     TensorPattern,
     WildcardPattern,
@@ -47,9 +46,11 @@ _WARP_LAYOUT = LayoutPattern.from_layout(
 )
 _WARP_PATTERN = MeshPattern(
     ("thread",),
-    OrPattern(
-        ComposedLayoutPattern(offset=WildcardPattern(), outer=_WARP_LAYOUT),
-        _WARP_LAYOUT,
+    ComposedLayoutPattern(
+        inner=None,
+        offset=WildcardPattern("p0"),
+        outer=_WARP_LAYOUT,
+        predicates=(WildcardPattern("p0") % 32 == 0,),
     ),
 )
 

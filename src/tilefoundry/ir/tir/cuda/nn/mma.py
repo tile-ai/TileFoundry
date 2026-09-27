@@ -9,7 +9,6 @@ from tilefoundry.ir.pattern import (
     ComposedLayoutPattern,
     LayoutPattern,
     MeshPattern,
-    OrPattern,
     WildcardPattern,
 )
 from tilefoundry.ir.pattern import (
@@ -31,8 +30,10 @@ _FP_ACC_WIDEN = {
 }
 
 
-def _warp_layout_pattern() -> LayoutPattern:
-    return LayoutPattern(
+_WARP_ALIGNED = ComposedLayoutPattern(
+    inner=None,
+    offset=WildcardPattern("p0"),
+    outer=LayoutPattern(
         ((WildcardPattern("n"),),),
         ((1,),),
         predicates=(
@@ -40,16 +41,8 @@ def _warp_layout_pattern() -> LayoutPattern:
             P.Forward(per_mode=True),
             P.Injective(per_mode=True),
         ),
-    )
-
-
-_WARP_ALIGNED = OrPattern(
-    ComposedLayoutPattern(
-        offset=WildcardPattern("p0"),
-        outer=_warp_layout_pattern(),
-        predicates=(WildcardPattern("p0") % 32 == 0,),
     ),
-    _warp_layout_pattern(),
+    predicates=(WildcardPattern("p0") % 32 == 0,),
 )
 
 

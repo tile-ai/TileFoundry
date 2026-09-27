@@ -17,8 +17,9 @@ import pytest
 
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
-from tilefoundry.inspection import as_script
+from tilefoundry.inspection import PatternPrinter, as_script
 from tilefoundry.ir.tir import PrimFunction
+from tilefoundry.ir.tir.cuda.nn.wgmma import Wgmma
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
 PLAIN = (
@@ -28,6 +29,7 @@ PLAIN = (
     "gemm_relu_gemm_untiled",
 )
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
+WGMMA_DECLARATION = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.described.txt"
 
 
 def _prim_in(path: Path) -> PrimFunction:
@@ -55,3 +57,7 @@ def test_tir_program_is_verified_and_canonical(path: Path) -> None:
     function = _prim_in(path)
     verify_prim_function(function)
     assert as_script(function) == path.read_text()
+
+
+def test_wgmma_declaration_is_canonical() -> None:
+    assert PatternPrinter().declaration(Wgmma) + "\n" == WGMMA_DECLARATION.read_text()

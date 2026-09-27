@@ -111,23 +111,6 @@ class SequencePattern(Pattern):
     def __init__(self, *patterns):
         object.__setattr__(self, "patterns", tuple(patterns))
 
-@dataclass(frozen=True, init=False)
-class ConstraintPattern(Pattern):
-    patterns: tuple
-
-    def __init__(self, *patterns):
-        if not patterns:
-            raise ValueError("a constraint pattern must state at least one constraint")
-        object.__setattr__(self, "patterns", tuple(patterns))
-
-@dataclass(frozen=True)
-class MultipleOfPattern(Pattern):
-    unit: int
-
-    def __post_init__(self):
-        if type(self.unit) is not int or self.unit <= 0:
-            raise ValueError("MultipleOfPattern unit must be a positive int")
-
 @dataclass(frozen=True)
 class RangePattern(Pattern):
     """A closed integer range, optionally naming a specialization dimension."""
@@ -152,26 +135,6 @@ class RangePattern(Pattern):
         if self.dim_var and (self.lo is None or self.hi is None):
             raise ValueError("a named RangePattern must state both lo and hi")
 
-@dataclass(frozen=True)
-class OneOfPattern(Pattern):
-    values: tuple
-
-    def __post_init__(self):
-        if len(self.values) < 2:
-            raise ValueError("OneOfPattern requires at least two values")
-
-@dataclass(frozen=True)
-class AttrPattern(Pattern):
-    attr: str
-    pattern: object
-
-
-@dataclass(frozen=True)
-class BitsPattern(Pattern):
-    dtype: str
-    pattern: object
-
-
 @dataclass(frozen=True, init=False)
 class SwitchPattern(Pattern):
     param: str
@@ -180,16 +143,6 @@ class SwitchPattern(Pattern):
     def __init__(self, param, branches):
         object.__setattr__(self, "param", param)
         object.__setattr__(self, "branches", tuple(dict(branches).items()))
-
-@dataclass(frozen=True)
-class GuardPattern(Pattern):
-    symbol: object
-    condition: Pattern
-    pattern: object
-
-    def fixed(self):
-        return None
-
 
 def _mode_path(path: tuple[int, ...]) -> str:
     return "root" + "".join(f"[{index}]" for index in path)
@@ -436,15 +389,9 @@ Tensor: TensorPattern = TensorPattern()
 
 __all__ = [
     "AndPattern",
-    "AttrPattern",
-    "BitsPattern",
     "ComposedLayoutPattern",
-    "ConstraintPattern",
-    "GuardPattern",
     "LayoutPattern",
     "MeshPattern",
-    "MultipleOfPattern",
-    "OneOfPattern",
     "OrPattern",
     "Pattern",
     "RangePattern",

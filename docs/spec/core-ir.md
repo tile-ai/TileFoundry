@@ -615,8 +615,7 @@ The implementation is split by responsibility under `ir/pattern/`:
 
 - `pattern.py` defines `Pattern` and the composable classes
   `OrPattern`, `AndPattern`, `SequencePattern`,
-  `ConstraintPattern`, `GuardPattern`, `SwitchPattern`, `RangePattern`,
-  `MultipleOfPattern`, `OneOfPattern`, `AttrPattern`, `BitsPattern`,
+  `SwitchPattern`, `RangePattern`,
   `LayoutPattern`, `SwizzlePattern`, `ComposedLayoutPattern`, `MeshPattern`,
   `ShardLayoutPattern`, `ScalarPattern`, `TensorPattern`, `WildcardPattern`, and
   `StarPattern`. It also owns the `Scalar` and `Tensor` singletons.

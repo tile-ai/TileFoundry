@@ -7,12 +7,9 @@ from tilefoundry.ir.types import Mesh, StorageKind
 
 from . import predicates as P
 from .pattern import (
-    AttrPattern,
     ComposedLayoutPattern,
     LayoutPattern,
     MeshPattern,
-    MultipleOfPattern,
-    OrPattern,
     Pattern,
     RangePattern,
     TensorPattern,
@@ -20,7 +17,6 @@ from .pattern import (
 )
 
 MOVED_STORAGES = (StorageKind.GMEM, StorageKind.SMEM, StorageKind.RMEM)
-WHOLE_BYTES = AttrPattern("bit_width", MultipleOfPattern(8))
 
 
 def operand_tile(index: int, storage=None, layout=None) -> TensorPattern:
@@ -62,20 +58,10 @@ def whole_vectors(index: int, widths: tuple[int, ...]) -> LayoutPattern:
     )
 
 
-_ANY_THREADS = OrPattern(
-    ComposedLayoutPattern(
-        offset=WildcardPattern(),
-        outer=LayoutPattern(
-            ((WildcardPattern("n"),),),
-            ((1,),),
-            predicates=(
-                WildcardPattern("n") >= 1,
-                P.Forward(per_mode=True),
-                P.Injective(per_mode=True),
-            ),
-        ),
-    ),
-    LayoutPattern(
+_ANY_THREADS = ComposedLayoutPattern(
+    inner=None,
+    offset=WildcardPattern(),
+    outer=LayoutPattern(
         ((WildcardPattern("n"),),),
         ((1,),),
         predicates=(
@@ -121,7 +107,6 @@ def _mangle_variant_name(name: str, specializations: tuple[Pattern, ...]) -> str
 
 __all__ = [
     "MOVED_STORAGES",
-    "WHOLE_BYTES",
     "_mangle_variant_name",
     "any_threads",
     "dtype_place",
