@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from math import prod
 from typing import Tuple
 
@@ -57,7 +58,7 @@ from tilefoundry.visitor_registry.access_relation import (
 from tilefoundry.visitor_registry.contexts import Cost, TrafficBytes
 
 
-@register_op(name="schedule")
+@register_op(dialect="tf", category="schedule", name="schedule")
 class ScheduleOp(Op):
     """Apply one TIR instruction repeatedly over a tuple of HIR operands."""
 
@@ -80,6 +81,16 @@ class ScheduleOp(Op):
             raise ValueError("schedule order must be a tuple of integer positions")
         if type(self.buffers) is not int or self.buffers < 1:
             raise ValueError("schedule buffers must be a positive integer")
+
+
+@dataclass(frozen=True)
+class IssuePlan:
+    """The lowering facts derived for one scheduled instruction issue."""
+
+    repeat: tuple[int, ...]
+    order: tuple[int, ...]
+    single_shape: tuple[int, ...]
+    operand_types: tuple[TensorType, ...]
 
 
 @register_eval(ScheduleOp)
@@ -546,6 +557,15 @@ def _repeat_order(
     return actual, order, single_shape
 
 
+def issue_plan(call: Call, ctx) -> IssuePlan:
+    """Derive the repeat nest and operand types for one instruction issue."""
+    op, _params, whole_types, single_types = _relation_types(call, ctx)
+    single = _single_issue_relations(op, single_types)
+    whole = _single_issue_relations(op, whole_types)
+    repeat, order, single_shape = _repeat_order(call.target, whole, single)
+    return IssuePlan(repeat, order, single_shape, single_types)
+
+
 def _outer_band(
     relations: AccessRelations,
     repeat: tuple[int, ...],
@@ -594,11 +614,10 @@ def _outer_band(
 
 @register_access_relation(ScheduleOp)
 def _schedule_access_relation(call: Call, ctx) -> AccessRelations:
-    op, params, whole_types, single_types = _relation_types(call, ctx)
-    single = _single_issue_relations(op, single_types)
-    whole = _single_issue_relations(op, whole_types)
-    repeat, order, single_shape = _repeat_order(call.target, whole, single)
-    scheduled = _outer_band(single, repeat, order, single_shape)
+    plan = issue_plan(call, ctx)
+    params, _reads, _writes = _instruction_schema(call.target.op)
+    single = _single_issue_relations(call.target.op, plan.operand_types)
+    scheduled = _outer_band(single, plan.repeat, plan.order, plan.single_shape)
     return AccessRelations(
         inputs=tuple(
             boundary
@@ -762,4 +781,4 @@ def _infer_schedule(call: Call, ctx) -> TensorType:
     return results[writes[0].name]
 
 
-__all__ = ["ScheduleOp"]
+__all__ = ["IssuePlan", "ScheduleOp", "issue_plan"]
