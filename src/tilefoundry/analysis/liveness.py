@@ -77,69 +77,67 @@ def result_copies(expr: Expr) -> int:
     return expr.target.buffers
 
 
-def _free_vars(function: Function) -> tuple[Var, ...]:
-    """Boundary Vars reached as uses but not owned by a structural binding site."""
-    if function.body is None:
-        return ()
-    values = collect_exprs(function.body)
-    bound_ids = {id(parameter) for parameter in function.params}
-    for value in values:
-        if isinstance(value, MeshRegion):
-            bound_ids.update(id(parameter) for parameter in value.params)
-        elif isinstance(value, LoopRegion):
-            bound_ids.add(id(value.induction_var))
-            bound_ids.update(id(phi) for phi in value.carried_args)
-    return tuple(value for value in values if isinstance(value, Var) and id(value) not in bound_ids)
-
-
 class LivenessVisitor(ExprVisitor[None]):
     """Build definition/use intervals while preserving structured SSA edges."""
 
     def __init__(self, function: Function) -> None:
         super().__init__(root_function=function)
-        self._point = -1
-        self._states: dict[int, LiveInterval] = {}
-        self._definition_order: list[int] = []
-        self._uses: list[UseEvent] = []
-        self._regions: list[RegionInterval] = []
-        self._loop_entries: list[tuple[int, set[int], set[int]]] = []
+        self.point = -1
+        self.states: dict[int, LiveInterval] = {}
+        self.definition_order: list[int] = []
+        self.uses: list[UseEvent] = []
+        self.regions: list[RegionInterval] = []
+        self.loop_entries: list[tuple[int, set[int], set[int]]] = []
         for parameter in function.params:
             self.define(parameter, self.next_event())
-        for free in _free_vars(function):
+        values = collect_exprs(function.body) if function.body is not None else ()
+        bound_ids = {id(parameter) for parameter in function.params}
+        for value in values:
+            if isinstance(value, MeshRegion):
+                bound_ids.update(id(parameter) for parameter in value.params)
+            elif isinstance(value, LoopRegion):
+                bound_ids.add(id(value.induction_var))
+                bound_ids.update(id(phi) for phi in value.carried_args)
+        free_vars = tuple(
+            value
+            for value in values
+            if isinstance(value, Var) and id(value) not in bound_ids
+        )
+        for free in free_vars:
             self.define(free, self.next_event())
 
     def next_event(self) -> int:
         """Advance and return the function-wide event position."""
-        self._point += 1
-        return self._point
+        self.point += 1
+        return self.point
 
     def define(self, value: Expr, point: int) -> None:
         """Record the one definition of *value*."""
         key = id(value)
-        if key in self._states:
+        if key in self.states:
             raise ValueError(f"liveness: {type(value).__name__} is defined more than once")
-        self._states[key] = LiveInterval(value, point, point)
-        self._definition_order.append(key)
+        self.states[key] = LiveInterval(value, point, point)
+        self.definition_order.append(key)
 
     def use(self, value: Expr, point: int, *, synthetic: bool = False) -> None:
         """Extend *value* through one consumer event."""
-        state = self._states.get(id(value))
+        state = self.states.get(id(value))
         if state is None:
             raise ValueError(f"liveness: {type(value).__name__} is used before its definition")
-        for entry, outside, _staged in self._loop_entries:
+        for entry, outside, staged in self.loop_entries:
             if state.defined_at < entry:
                 outside.add(id(value))
-        self._states[id(value)] = replace(state, last_used_at=max(state.last_used_at, point))
-        self._uses.append(UseEvent(value, point, synthetic))
+        self.states[id(value)] = replace(state, last_used_at=max(state.last_used_at, point))
+        self.uses.append(UseEvent(value, point, synthetic))
 
     def finish(self) -> Liveness:
         """Freeze the definition-ordered result."""
-        states = (self._states[key] for key in self._definition_order)
+        states = (self.states[key] for key in self.definition_order)
         return Liveness(
             intervals=tuple(states),
-            uses=tuple(self._uses),
-            regions=tuple(self._regions),
-            timeline_end=self._point,
+            uses=tuple(self.uses),
+            regions=tuple(self.regions),
+            timeline_end=self.point,
         )
 
     def visit_Var(self, value: Var, _ctx=None) -> None:
@@ -150,8 +148,8 @@ class LivenessVisitor(ExprVisitor[None]):
         for operand in expr_children(value):
             self.use(operand, point)
         self.define(value, point)
-        if result_copies(value) > 1 and self._loop_entries:
-            self._loop_entries[-1][2].add(id(value))
+        if result_copies(value) > 1 and self.loop_entries:
+            self.loop_entries[-1][2].add(id(value))
 
     def visit_MeshRegion(self, region: MeshRegion, ctx=None) -> None:
         """Make the argument/parameter and body/result binding edges explicit."""
@@ -167,7 +165,7 @@ class LivenessVisitor(ExprVisitor[None]):
         self.visit(region.body, ctx)
         body_use = self.next_event()
         self.use(region.body, body_use)
-        self._regions.append(RegionInterval(region, argument_use, body_use))
+        self.regions.append(RegionInterval(region, argument_use, body_use))
         self.define(region, self.next_event())
 
     def visit_LoopRegion(self, region: LoopRegion, ctx=None) -> None:
@@ -183,19 +181,19 @@ class LivenessVisitor(ExprVisitor[None]):
         for phi in region.carried_args:
             self.define(phi, phi_definition)
 
-        self._loop_entries.append((phi_definition, set(), set()))
+        self.loop_entries.append((phi_definition, set(), set()))
         self.visit(region.body, ctx)
         for yielded in region.yield_values:
             self.visit(yielded, ctx)
         backedge = self.next_event()
         for yielded in region.yield_values:
             self.use(yielded, backedge)
-        _, outside, staged = self._loop_entries.pop()
+        entry, outside, staged = self.loop_entries.pop()
         for key in outside:
-            self.use(self._states[key].value, backedge, synthetic=True)
+            self.use(self.states[key].value, backedge, synthetic=True)
         for key in staged:
-            self._states[key] = replace(
-                self._states[key], defined_at=phi_definition, last_used_at=backedge
+            self.states[key] = replace(
+                self.states[key], defined_at=phi_definition, last_used_at=backedge
             )
 
         exit_use = self.next_event()

@@ -806,6 +806,26 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 options=solver_options,
             )
             peak = solved.peak_bytes
+            offsets = dict(solved.offsets)
+            for item in values:
+                if not isinstance(item.value, Call):
+                    continue
+                copies = result_copies(item.value)
+                buffer_bytes = item.lifetime.bytes // copies
+                moved = get_metadata(item.value, MemoryMetadata)
+                if moved is None:
+                    raise AnalysisError("memory: placed Call has no movement record")
+                attach(
+                    item.value,
+                    replace(
+                        moved,
+                        buffer_bytes=buffer_bytes,
+                        offsets=tuple(
+                            offsets[id(item.value)] + copy * buffer_bytes
+                            for copy in range(copies)
+                        ),
+                    ),
+                )
         elif name == str(StorageKind.RMEM):
             unclaimed = [
                 item.lifetime

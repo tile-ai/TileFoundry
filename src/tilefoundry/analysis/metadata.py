@@ -125,6 +125,8 @@ class MemoryMetadata(IRMetadata):
     traffic: Traffic = Traffic()
     operands: tuple[TrafficBytes, ...] = ()
     footprint: Footprint | None = None
+    buffer_bytes: int | None = None
+    offsets: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)

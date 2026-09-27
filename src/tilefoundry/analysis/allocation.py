@@ -10,15 +10,18 @@ from typing import Protocol
 import isl
 from ortools.sat.python import cp_model
 
-from tilefoundry.ir.core import Call, Expr
+from tilefoundry.ir.core import Call, Constant, Expr, Tuple
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import index_set
 from tilefoundry.ir.types import TensorType
-from tilefoundry.ir.types.utils import local_type_of
+from tilefoundry.ir.types.mesh import levels, selected_run, starts, within_scope
+from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.ir.types.utils import local_type_of, tensor_types
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.isl_utils import equates
 
@@ -29,7 +32,9 @@ from .liveness import Liveness
 from .metadata import ValueLifetime
 
 
-class _MemoryOptions(Protocol):
+class SolverOptions(Protocol):
+    """Placement limits consumed without depending on the memory front end."""
+
     timeout_seconds: float
     workers: int
     random_seed: int
@@ -42,6 +47,12 @@ class AllocationValue:
     value: Expr
     lifetime: ValueLifetime
 
+    def intersects(self, other: AllocationValue) -> bool:
+        """Whether two closed structured-SSA intervals share an event."""
+        return max(self.lifetime.defined_at, other.lifetime.defined_at) <= min(
+            self.lifetime.last_used_at, other.lifetime.last_used_at
+        )
+
 
 @dataclass(frozen=True)
 class AllocationResult:
@@ -49,10 +60,11 @@ class AllocationResult:
 
     peak_bytes: int
     solver_status: str
+    offsets: tuple[tuple[int, int], ...] = ()
 
 
 @dataclass(frozen=True)
-class _OperandConstraint:
+class AliasConstraint:
     """An exact logical relation from one material operand into a result."""
 
     operand: Expr
@@ -60,191 +72,208 @@ class _OperandConstraint:
 
 
 @dataclass
-class _ConstraintContext:
+class AllocationModel:
     """One memory-level model while the HIR visitor applies logical relations."""
 
+    memory_level: str
     current: IterationScope
     liveness: Liveness
     values: tuple[AllocationValue, ...]
     boxes_by_expr: dict[int, int]
     model: cp_model.CpModel
     addresses: tuple[cp_model.IntVar, ...]
-    selected_by_pair: dict[tuple[int, int], list[cp_model.IntVar]] = field(
-        default_factory=lambda: defaultdict(list)
-    )
-    applied: list[tuple[cp_model.IntVar, int, int]] = field(default_factory=list)
+    bindings: dict[int, Expr] = field(default_factory=dict)
+    owners: dict[int, IterationScope] = field(default_factory=dict)
+    aliased: set[tuple[int, int]] = field(default_factory=set)
 
 
-def _base_value(value: Expr) -> Expr:
-    """Return the material allocation below non-material tensor views."""
-    while isinstance(value, Call) and isinstance(value.target, (Slice, Reshape)):
-        value = value.args[0]
-    return value
-
-
-def _is_view_of(value: Expr, source: Expr) -> bool:
-    """Whether ``value`` reaches ``source`` through only non-material views."""
+def projected_tuple_element(value: Call, bindings: dict[int, Expr]) -> Expr | None:
+    """Resolve one tuple projection after region and parameter bindings."""
+    source = value.args[0]
+    active = dict(bindings)
     while True:
-        if value is source:
-            return True
-        if not isinstance(value, Call) or not isinstance(value.target, (Slice, Reshape)):
-            return False
-        value = value.args[0]
-
-
-def _coverage(accesses: tuple[Access, ...]) -> isl.set | None:
-    """Union the call coordinates on which exact accesses reach one buffer."""
-    if not accesses or any(
-        access.precision is not AccessPrecision.EXACT for access in accesses
+        bound = active.get(id(source))
+        if bound is not None:
+            source = bound
+            continue
+        if isinstance(source, MeshRegion):
+            active.update(zip((id(param) for param in source.params), source.args, strict=True))
+            source = source.body
+            continue
+        break
+    index = value.args[1]
+    if (
+        isinstance(source, Tuple)
+        and isinstance(index, Constant)
+        and type(index.value) is int
+        and 0 <= index.value < len(source.elements)
     ):
-        return None
-    result = accesses[0].relation.domain()
-    for access in accesses[1:]:
-        result = result.union(access.relation.domain())
-    return result.coalesce()
+        return view_root(source.elements[index.value], active)
+    return None
 
 
-def _access_relation(accesses: tuple[Access, ...]) -> isl.map | None:
-    """Union exact accesses to one buffer without discarding their maps."""
-    if not accesses or any(
-        access.precision is not AccessPrecision.EXACT for access in accesses
-    ):
-        return None
-    result = accesses[0].relation
-    for access in accesses[1:]:
-        result = result.union(access.relation)
-    return result.coalesce()
+def view_root(value: Expr, bindings: dict[int, Expr]) -> Expr:
+    """Follow non-material views and mesh-region bindings to their allocation."""
+    active = dict(bindings)
+    while True:
+        bound = active.get(id(value))
+        if bound is not None:
+            value = bound
+            continue
+        if isinstance(value, Call) and isinstance(value.target, (Slice, Reshape)):
+            value = value.args[0]
+            continue
+        if isinstance(value, MeshRegion):
+            active.update(zip((id(param) for param in value.params), value.args, strict=True))
+            value = value.body
+            continue
+        if isinstance(value, Call) and isinstance(value.target, TupleGetItem):
+            projected = projected_tuple_element(value, active)
+            if projected is not None:
+                value = projected
+                continue
+        return value
 
 
-def _value_domain(value: Expr, scope: IterationScope) -> isl.set | None:
-    """The complete loop-aware coordinate domain of one material value."""
-    try:
-        held = local_type_of(value.type)
-    except (TypeError, ValueError, NotImplementedError):
-        return None
-    if not isinstance(held, TensorType):
-        return None
-    box = index_set(held.shape)
-    if box is None:
-        return None
-    return scope.domain.flat_product(box).coalesce()
+def is_view_of(value: Expr, source: Expr, bindings: dict[int, Expr]) -> bool:
+    """Whether two expressions name the same material allocation."""
+    return view_root(value, bindings) is view_root(source, bindings)
 
 
-def _operand_to_result_relation(
-    inputs: isl.map, outputs: isl.map, loop_depth: int
-) -> isl.map | None:
-    """Compose call accesses into ``[loops..., operand] -> [result]``."""
-    try:
-        common = inputs.domain().intersect(outputs.domain()).coalesce()
-        if common.is_empty():
-            return None
-        inputs = inputs.intersect_domain(common)
-        outputs = outputs.intersect_domain(common)
-        call_dims = inputs.dim(isl.dim_type.IN)
-        if call_dims != outputs.dim(isl.dim_type.IN) or loop_depth > call_dims:
-            return None
-        loop_prefix = isl.map.identity(common.get_space().map_from_set()).project_out(
-            isl.dim_type.OUT, loop_depth, call_dims - loop_depth
-        )
-        operand_with_loops = loop_prefix.flat_range_product(inputs)
-        result_with_loops = loop_prefix.flat_range_product(outputs)
-        per_iteration = operand_with_loops.reverse().apply_range(result_with_loops).coalesce()
-        result = operand_with_loops.reverse().apply_range(outputs).coalesce()
-        return (
-            result
-            if result.is_single_valued()
-            and per_iteration.is_single_valued()
-            and per_iteration.is_injective()
-            else None
-        )
-    except isl.Error:
-        return None
-
-
-def _complete_operand_relation(
+def is_non_conflicting(
+    source: Expr,
     operand: Expr,
-    inputs: isl.map | None,
-    outputs: isl.map | None,
     scope: IterationScope,
-) -> isl.map | None:
-    """Return a composed relation only when it covers the whole operand."""
-    if inputs is None or outputs is None:
-        return None
-    relation = _operand_to_result_relation(inputs, outputs, scope.depth)
-    expected = _value_domain(operand, scope)
-    if relation is None or expected is None:
-        return None
-    try:
-        return relation if relation.domain().is_equal(expected) else None
-    except isl.Error:
-        return None
+    liveness: Liveness,
+    bindings: dict[int, Expr],
+) -> bool:
+    """Prove that reusing *operand* cannot clobber a later ordinary use."""
+    source = view_root(source, bindings)
+    operand = view_root(operand, bindings)
+    source_interval = liveness.interval_of(source)
+    operand_interval = liveness.interval_of(operand)
+    if source_interval is None or operand_interval is None:
+        return False
+    if any(
+        not use.synthetic
+        and use.at > source_interval.defined_at
+        and view_root(use.value, bindings) is operand
+        and not is_view_of(use.value, source, bindings)
+        for use in liveness.uses
+    ):
+        return False
+    if operand_interval.last_used_at <= source_interval.defined_at:
+        return True
 
-
-def _identity_result_relation(node: Call, scope: IterationScope) -> isl.map | None:
-    """Map a same-shaped operand to the result while retaining loop axes."""
-    domain = _value_domain(node, scope)
-    if domain is None:
-        return None
-    try:
-        return (
-            isl.map.identity(domain.get_space().map_from_set())
-            .intersect_domain(domain)
-            .project_out(isl.dim_type.OUT, 0, scope.depth)
-        )
-    except isl.Error:
-        return None
-
-
-def _intervals_by_expr(liveness: Liveness) -> dict[int, tuple[int, int]]:
-    """Index the immutable liveness answer without traversing the HIR again."""
-    return {
-        id(interval.value): (interval.defined_at, interval.last_used_at)
-        for interval in liveness.intervals
-    }
-
-
-def _corresponding_carry(
-    source: Expr, operand: Expr, scope: IterationScope
-) -> LoopRegion | None:
-    """Find the carry whose own yield is ``source``, without walking its body."""
     cursor: IterationScope | None = scope
     while cursor is not None:
         loop = cursor.owner
         if isinstance(loop, LoopRegion):
             for slot, carried in enumerate(loop.carried_args):
-                if carried is operand and slot < len(loop.yield_values):
-                    return loop if _is_view_of(loop.yield_values[slot], source) else None
+                if (
+                    view_root(carried, bindings) is operand
+                    and slot < len(loop.yield_values)
+                    and is_view_of(loop.yield_values[slot], source, bindings)
+                ):
+                    return True
         cursor = cursor.parent
-    return None
+    return False
 
 
-def _tie_is_live(
-    source: Expr, operand: Expr, scope: IterationScope, liveness: Liveness
-) -> bool:
-    """Prove that reusing ``operand`` cannot clobber a later ordinary use."""
-    intervals = _intervals_by_expr(liveness)
-    source_interval = intervals.get(id(source))
-    operand_interval = intervals.get(id(operand))
-    if source_interval is None or operand_interval is None:
-        return False
-    if any(
-        not use.synthetic
-        and use.at > source_interval[0]
-        and _base_value(use.value) is operand
-        and not _is_view_of(use.value, source)
-        for use in liveness.uses
-    ):
-        return False
-    if operand_interval[1] <= source_interval[0]:
-        return True
-
-    return _corresponding_carry(source, operand, scope) is not None
-
-
-def _analyze_operand_constraints(
-    node: Call, scope: IterationScope, liveness: Liveness
-) -> tuple[_OperandConstraint, ...]:
+def operand_to_result_relation(
+    node: Call,
+    scope: IterationScope,
+    liveness: Liveness,
+    bindings: dict[int, Expr],
+) -> tuple[AliasConstraint, ...]:
     """Prove exact logical relations between one result and its operands."""
+
+    def coverage(accesses: tuple[Access, ...]) -> isl.set | None:
+        if not accesses or any(
+            access.precision is not AccessPrecision.EXACT for access in accesses
+        ):
+            return None
+        result = accesses[0].relation.domain()
+        for access in accesses[1:]:
+            result = result.union(access.relation.domain())
+        return result.coalesce()
+
+    def access_relation(accesses: tuple[Access, ...]) -> isl.map | None:
+        if not accesses or any(
+            access.precision is not AccessPrecision.EXACT for access in accesses
+        ):
+            return None
+        result = accesses[0].relation
+        for access in accesses[1:]:
+            result = result.union(access.relation)
+        return result.coalesce()
+
+    def value_domain(value: Expr) -> isl.set | None:
+        try:
+            held = local_type_of(value.type)
+        except (TypeError, ValueError, NotImplementedError):
+            return None
+        if not isinstance(held, TensorType):
+            return None
+        box = index_set(held.shape)
+        return None if box is None else scope.domain.flat_product(box).coalesce()
+
+    def composed(inputs: isl.map, outputs: isl.map) -> isl.map | None:
+        try:
+            common = inputs.domain().intersect(outputs.domain()).coalesce()
+            if common.is_empty():
+                return None
+            inputs = inputs.intersect_domain(common)
+            outputs = outputs.intersect_domain(common)
+            call_dims = inputs.dim(isl.dim_type.IN)
+            if call_dims != outputs.dim(isl.dim_type.IN) or scope.depth > call_dims:
+                return None
+            loop_prefix = isl.map.identity(common.get_space().map_from_set()).project_out(
+                isl.dim_type.OUT, scope.depth, call_dims - scope.depth
+            )
+            operand_with_loops = loop_prefix.flat_range_product(inputs)
+            result_with_loops = loop_prefix.flat_range_product(outputs)
+            per_iteration = (
+                operand_with_loops.reverse().apply_range(result_with_loops).coalesce()
+            )
+            result = operand_with_loops.reverse().apply_range(outputs).coalesce()
+            return (
+                result
+                if result.is_single_valued()
+                and per_iteration.is_single_valued()
+                and per_iteration.is_injective()
+                else None
+            )
+        except isl.Error:
+            return None
+
+    def complete(
+        operand: Expr, inputs: isl.map | None, outputs: isl.map | None
+    ) -> isl.map | None:
+        if inputs is None or outputs is None:
+            return None
+        relation = composed(inputs, outputs)
+        expected = value_domain(operand)
+        if relation is None or expected is None:
+            return None
+        try:
+            return relation if relation.domain().is_equal(expected) else None
+        except isl.Error:
+            return None
+
+    def identity() -> isl.map | None:
+        domain = value_domain(node)
+        if domain is None:
+            return None
+        try:
+            return (
+                isl.map.identity(domain.get_space().map_from_set())
+                .intersect_domain(domain)
+                .project_out(isl.dim_type.OUT, 0, scope.depth)
+            )
+        except isl.Error:
+            return None
+
     recorded_inputs = scope.accesses.get("narrow", {}).get(id(node))
     recorded_outputs = scope.outputs.get("narrow", {}).get(id(node))
     if (
@@ -256,99 +285,98 @@ def _analyze_operand_constraints(
         return ()
     inputs = recorded_inputs[1]
     outputs = recorded_outputs[1]
-    output_coverage = _coverage(outputs)
-    output_relation = _access_relation(outputs)
-    full_result = _value_domain(node, scope)
+    output_coverage = coverage(outputs)
+    output_relation = access_relation(outputs)
+    full_result = value_domain(node)
     if output_coverage is None or output_relation is None or full_result is None:
         return ()
 
     by_buffer: dict[int, list[Access]] = defaultdict(list)
     operands: dict[int, Expr] = {}
     for access in inputs:
-        key = id(access.buffer)
+        operand = view_root(access.buffer, bindings)
+        key = id(operand)
         by_buffer[key].append(access)
-        operands[key] = access.buffer
+        operands[key] = operand
 
-    result: list[_OperandConstraint] = []
+    result: list[AliasConstraint] = []
     seen: set[int] = set()
-
     try:
         covers_result = output_coverage.is_equal(full_result)
     except isl.Error:
         covers_result = False
     if covers_result:
         for key, operand in operands.items():
-            input_relation = _access_relation(tuple(by_buffer[key]))
+            input_relation = access_relation(tuple(by_buffer[key]))
             try:
-                pointwise = input_relation is not None and input_relation.is_equal(output_relation)
+                pointwise = input_relation is not None and input_relation.is_equal(
+                    output_relation
+                )
             except isl.Error:
                 pointwise = False
             relation = (
-                _complete_operand_relation(operand, input_relation, output_relation, scope)
-                if pointwise
-                else None
+                complete(operand, input_relation, output_relation) if pointwise else None
             )
-            if relation is not None and _tie_is_live(node, operand, scope, liveness):
-                result.append(_OperandConstraint(operand, relation))
+            if relation is not None and is_non_conflicting(
+                node, operand, scope, liveness, bindings
+            ):
+                result.append(AliasConstraint(operand, relation))
                 seen.add(key)
 
     if not isinstance(node.target, InsertSlice):
         return tuple(result)
 
-    dst = _base_value(node.args[0])
-    update = _base_value(node.args[1])
+    destination = view_root(node.args[0], bindings)
+    update = view_root(node.args[1], bindings)
     written = output_coverage
-    dst_coverage = _coverage(tuple(by_buffer.get(id(dst), ())))
+    destination_coverage = coverage(tuple(by_buffer.get(id(destination), ())))
     update_accesses = tuple(by_buffer.get(id(update), ()))
-    update_coverage = _coverage(update_accesses)
+    update_coverage = coverage(update_accesses)
 
-    if dst_coverage is not None:
-        relation = _identity_result_relation(node, scope)
-        expected_dst = _value_domain(dst, scope)
+    if destination_coverage is not None:
+        relation = identity()
+        expected_destination = value_domain(destination)
         try:
-            partitioned = dst_coverage.is_disjoint(written) and dst_coverage.union(
-                written
-            ).coalesce().is_equal(full_result)
+            partitioned = destination_coverage.is_disjoint(written) and (
+                destination_coverage.union(written).coalesce().is_equal(full_result)
+            )
             complete_identity = (
                 relation is not None
-                and expected_dst is not None
-                and relation.domain().is_equal(expected_dst)
+                and expected_destination is not None
+                and relation.domain().is_equal(expected_destination)
             )
         except isl.Error:
             partitioned = complete_identity = False
         if (
             partitioned
             and complete_identity
-            and id(dst) not in seen
-            and _tie_is_live(node, dst, scope, liveness)
+            and id(destination) not in seen
+            and is_non_conflicting(node, destination, scope, liveness, bindings)
         ):
-            result.append(_OperandConstraint(dst, relation))
-            seen.add(id(dst))
+            result.append(AliasConstraint(destination, relation))
+            seen.add(id(destination))
 
     try:
-        update_matches_write = update_coverage is not None and update_coverage.is_equal(written)
+        update_matches_write = update_coverage is not None and update_coverage.is_equal(
+            written
+        )
     except isl.Error:
         update_matches_write = False
     update_relation = (
-        _complete_operand_relation(
-            update,
-            _access_relation(update_accesses),
-            output_relation,
-            scope,
-        )
+        complete(update, access_relation(update_accesses), output_relation)
         if update_matches_write
         else None
     )
     if (
         update_relation is not None
         and id(update) not in seen
-        and _tie_is_live(node, update, scope, liveness)
+        and is_non_conflicting(node, update, scope, liveness, bindings)
     ):
-        result.append(_OperandConstraint(update, update_relation))
+        result.append(AliasConstraint(update, update_relation))
     return tuple(result)
 
 
-def _proves_zero_offset(relation: isl.map) -> bool:
+def is_zero_offset(relation: isl.map) -> bool:
     """Whether every result coordinate equals the operand coordinate."""
     output_dims = relation.dim(isl.dim_type.OUT)
     loop_dims = relation.dim(isl.dim_type.IN) - output_dims
@@ -363,56 +391,28 @@ def _proves_zero_offset(relation: isl.map) -> bool:
         return False
 
 
-def _apply_constraints(
-    node: Call,
-    constraints: tuple[_OperandConstraint, ...],
-    ctx: _ConstraintContext,
-) -> None:
-    """Compile logical relations into this memory level's CP model."""
-    result_index = ctx.boxes_by_expr.get(id(node))
-    if result_index is None:
-        return
-    result = ctx.values[result_index]
-    for constraint in constraints:
-        operand_index = ctx.boxes_by_expr.get(id(constraint.operand))
-        if operand_index is None or operand_index == result_index:
-            continue
-        operand = ctx.values[operand_index]
-        if operand.lifetime.persistent or not _lifetimes_overlap(result, operand):
-            continue
-        if _proves_zero_offset(constraint.relation):
-            if operand.lifetime.bytes != result.lifetime.bytes:
-                continue
-            selected = ctx.model.new_bool_var(f"embedded_{len(ctx.applied)}")
-            ctx.model.add(
-                ctx.addresses[operand_index] == ctx.addresses[result_index]
-            ).only_enforce_if(selected)
-        else:
-            if operand.lifetime.bytes > result.lifetime.bytes:
-                continue
-            selected = ctx.model.new_bool_var(f"embedded_{len(ctx.applied)}")
-            ctx.model.add(
-                ctx.addresses[operand_index] >= ctx.addresses[result_index]
-            ).only_enforce_if(selected)
-            ctx.model.add(
-                ctx.addresses[operand_index] + operand.lifetime.bytes
-                <= ctx.addresses[result_index] + result.lifetime.bytes
-            ).only_enforce_if(selected)
-        pair = tuple(sorted((result_index, operand_index)))
-        ctx.selected_by_pair[pair].append(selected)
-        ctx.applied.append((selected, result_index, operand_index))
+def nearest_mesh_scope(scope: IterationScope) -> IterationScope | None:
+    """Return the innermost mesh region containing one material definition."""
+    cursor: IterationScope | None = scope
+    while cursor is not None:
+        if isinstance(cursor.owner, MeshRegion):
+            return cursor
+        cursor = cursor.parent
+    return None
 
 
 class AllocationConstraintVisitor(ExprVisitor[None]):
     """Visit the HIR DAG once and apply each node/operand placement relation."""
 
-    def visit_MeshRegion(self, node: MeshRegion, ctx: _ConstraintContext) -> None:
+    def visit_MeshRegion(self, node: MeshRegion, ctx: AllocationModel) -> None:
         child = next(item for item in ctx.current.children if item.owner is node)
-        for arg in node.args:
-            self.visit(arg, ctx)
-        self.visit(node.body, replace(ctx, current=child))
+        for argument in node.args:
+            self.visit(argument, ctx)
+        bindings = dict(ctx.bindings)
+        bindings.update(zip((id(param) for param in node.params), node.args, strict=True))
+        self.visit(node.body, replace(ctx, current=child, bindings=bindings))
 
-    def visit_LoopRegion(self, node: LoopRegion, ctx: _ConstraintContext) -> None:
+    def visit_LoopRegion(self, node: LoopRegion, ctx: AllocationModel) -> None:
         child = next(item for item in ctx.current.children if item.owner is node)
         inner = replace(ctx, current=child)
         for operand in node.init_args:
@@ -421,38 +421,166 @@ class AllocationConstraintVisitor(ExprVisitor[None]):
         for operand in node.yield_values:
             self.visit(operand, inner)
 
-    def default_visit_leaf(
-        self, node: Expr, _operands: tuple[None, ...], ctx: _ConstraintContext
+    def alias(
+        self,
+        result_value: Expr,
+        operand_value: Expr,
+        relation: isl.map,
+        ctx: AllocationModel,
     ) -> None:
+        """Require one proven logical alias in the physical placement."""
+        result_value = view_root(result_value, ctx.bindings)
+        operand_value = view_root(operand_value, ctx.bindings)
+        result_index = ctx.boxes_by_expr.get(id(result_value))
+        operand_index = ctx.boxes_by_expr.get(id(operand_value))
+        if result_index is None or operand_index is None or operand_index == result_index:
+            return
+        result = ctx.values[result_index]
+        operand = ctx.values[operand_index]
+        if operand.lifetime.persistent or not result.intersects(operand):
+            return
+        if is_zero_offset(relation):
+            if result.lifetime.bytes > operand.lifetime.bytes:
+                return
+            ctx.model.add(
+                ctx.addresses[result_index] == ctx.addresses[operand_index]
+            ).with_name(f"alias_{result_index}_{operand_index}")
+        else:
+            if operand.lifetime.bytes > result.lifetime.bytes:
+                return
+            ctx.model.add(
+                ctx.addresses[operand_index] >= ctx.addresses[result_index]
+            ).with_name(f"alias_start_{result_index}_{operand_index}")
+            ctx.model.add(
+                ctx.addresses[operand_index] + operand.lifetime.bytes
+                <= ctx.addresses[result_index] + result.lifetime.bytes
+            ).with_name(f"alias_end_{result_index}_{operand_index}")
+        ctx.aliased.add(tuple(sorted((result_index, operand_index))))
+
+    def default_visit_leaf(
+        self, node: Expr, operands: tuple[None, ...], ctx: AllocationModel
+    ) -> None:
+        del operands
+        root = view_root(node, ctx.bindings)
+        result_index = ctx.boxes_by_expr.get(id(root))
+        if result_index is not None and result_index not in ctx.owners:
+            owner = nearest_mesh_scope(ctx.current)
+            if owner is not None:
+                ctx.owners[result_index] = owner
         if (
             not isinstance(node, Call)
             or id(node) not in ctx.current.accesses.get("narrow", {})
-            or id(node) not in ctx.boxes_by_expr
+            or result_index is None
         ):
             return
-        constraints = _analyze_operand_constraints(node, ctx.current, ctx.liveness)
-        _apply_constraints(node, constraints, ctx)
+        for constraint in operand_to_result_relation(
+            node, ctx.current, ctx.liveness, ctx.bindings
+        ):
+            self.alias(node, constraint.operand, constraint.relation, ctx)
 
 
-def _lifetimes_overlap(left: AllocationValue, right: AllocationValue) -> bool:
-    """Whether two closed structured-SSA intervals share an event."""
-    return max(left.lifetime.defined_at, right.lifetime.defined_at) <= min(
-        left.lifetime.last_used_at, right.lifetime.last_used_at
+def mesh_selection_key(region: MeshRegion) -> tuple:
+    """Canonical per-topology runs selected by a mesh region."""
+    return tuple(
+        (getattr(topology, "name", topology), selected_run(arrangement, start))
+        for topology, arrangement, start in zip(
+            region.mesh.topologies, levels(region.mesh), starts(region.mesh), strict=True
+        )
     )
 
 
-def _construct_feasible_seed(
-    values: tuple[AllocationValue, ...],
-    applied: list[tuple[cp_model.IntVar, int, int]],
-    limit: int,
-) -> tuple[tuple[bool, ...], tuple[int, ...], int]:
-    """Construct one complete feasible seed from already-applied CP edges.
+def continuous_selection(run: tuple[tuple, tuple, int]) -> tuple[int, int] | None:
+    """Return the half-open interval for a continuous topology selection."""
+    extents, strides, start = run
+    if not isinstance(start, int):
+        return None
+    if not extents:
+        return start, start + 1
+    if len(extents) != 1 or strides != (1,) or not isinstance(extents[0], int):
+        return None
+    return start, start + extents[0]
 
-    Components exist only while building the hint.  The CP model still contains
-    every logical box and independently validates or rejects every suggested
-    overlap.
-    """
-    parent = list(range(len(values)))
+
+def selections_are_disjoint(left: MeshRegion, right: MeshRegion) -> bool:
+    """Whether two region meshes prove disjoint hardware participants."""
+    left_runs = {
+        getattr(topology, "name", topology): continuous_selection(
+            selected_run(arrangement, start)
+        )
+        for topology, arrangement, start in zip(
+            left.mesh.topologies, levels(left.mesh), starts(left.mesh), strict=True
+        )
+    }
+    right_runs = {
+        getattr(topology, "name", topology): continuous_selection(
+            selected_run(arrangement, start)
+        )
+        for topology, arrangement, start in zip(
+            right.mesh.topologies, levels(right.mesh), starts(right.mesh), strict=True
+        )
+    }
+    for name in left_runs.keys() & right_runs.keys():
+        left_run = left_runs[name]
+        right_run = right_runs[name]
+        if left_run is None or right_run is None:
+            continue
+        if left_run[1] <= right_run[0] or right_run[1] <= left_run[0]:
+            return True
+    return False
+
+
+def common_async_group(
+    left: IterationScope, right: IterationScope
+) -> IterationScope | None:
+    """Nearest common outer MeshRegion that truly partitions both owners."""
+    right_ancestors: set[int] = set()
+    cursor = right.parent
+    while cursor is not None:
+        if isinstance(cursor.owner, MeshRegion):
+            right_ancestors.add(id(cursor))
+        cursor = cursor.parent
+    cursor = left.parent
+    while cursor is not None:
+        if isinstance(cursor.owner, MeshRegion) and id(cursor) in right_ancestors:
+            group = cursor.owner
+            left_region = left.owner
+            right_region = right.owner
+            if not isinstance(left_region, MeshRegion) or not isinstance(
+                right_region, MeshRegion
+            ):
+                return None
+            group_key = mesh_selection_key(group)
+            if (
+                within_scope(left_region.mesh, group.mesh)
+                and within_scope(right_region.mesh, group.mesh)
+                and mesh_selection_key(left_region) != group_key
+                and mesh_selection_key(right_region) != group_key
+            ):
+                return cursor
+        cursor = cursor.parent
+    return None
+
+
+def are_concurrent_partitions(
+    left: IterationScope | None, right: IterationScope | None
+) -> bool:
+    """Whether two allocation owners belong to disjoint async partitions."""
+    if left is None or right is None or left is right:
+        return False
+    left_region = left.owner
+    right_region = right.owner
+    if not isinstance(left_region, MeshRegion) or not isinstance(right_region, MeshRegion):
+        return False
+    if mesh_selection_key(left_region) == mesh_selection_key(right_region):
+        return False
+    return common_async_group(left, right) is not None and selections_are_disjoint(
+        left_region, right_region
+    )
+
+
+def alias_components(count: int, aliased: set[tuple[int, int]]) -> tuple[int, ...]:
+    """Transitive alias component for every allocation index."""
+    parent = list(range(count))
 
     def find(index: int) -> int:
         while parent[index] != index:
@@ -460,31 +588,61 @@ def _construct_feasible_seed(
             index = parent[index]
         return index
 
-    def members(root: int) -> set[int]:
-        return {index for index in range(len(values)) if find(index) == root}
+    for left, right in sorted(aliased):
+        left_root = find(left)
+        right_root = find(right)
+        parent[right_root] = left_root
+    return tuple(find(index) for index in range(count))
 
-    allowed_pairs: set[tuple[int, int]] = set()
-    selected: list[bool] = []
-    for _choice, left, right in applied:
-        pair = tuple(sorted((left, right)))
-        roots = {find(left), find(right)}
-        merged = set().union(*(members(root) for root in roots))
-        permitted = allowed_pairs | {pair}
-        compatible = all(
-            not _lifetimes_overlap(values[left], values[right]) or (left, right) in permitted
-            for left, right in combinations(sorted(merged), 2)
-        )
-        selected.append(compatible)
-        if not compatible:
+
+def build_interference_graph(
+    values: tuple[AllocationValue, ...], ctx: AllocationModel
+) -> set[tuple[int, int]]:
+    """Pairs whose address ranges must not overlap."""
+    result: set[tuple[int, int]] = set()
+    components = alias_components(len(values), ctx.aliased)
+    for left, right in combinations(range(len(values)), 2):
+        pair = (left, right)
+        if components[left] == components[right]:
             continue
-        root = min(roots)
-        for other in roots:
-            parent[find(other)] = root
-        allowed_pairs.add(pair)
+        ordinary = values[left].intersects(values[right])
+        asynchronous = ctx.memory_level == str(StorageKind.SMEM) and are_concurrent_partitions(
+            ctx.owners.get(left), ctx.owners.get(right)
+        )
+        if ordinary or asynchronous:
+            result.add(pair)
+    return result
 
+
+def alignment_of(value: Expr) -> int:
+    """Required byte alignment for one allocation."""
+    try:
+        widths = tuple(
+            -(-tensor.dtype.bit_width // 8) for tensor in tensor_types(local_type_of(value.type))
+        )
+    except (TypeError, ValueError, NotImplementedError):
+        widths = ()
+    return max((16, *widths))
+
+
+def aligned(value: int, alignment: int) -> int:
+    """Round a byte offset up to its required alignment."""
+    return -(-value // alignment) * alignment
+
+
+def calculate_starts(
+    values: tuple[AllocationValue, ...],
+    aliased: set[tuple[int, int]],
+    interference: set[tuple[int, int]],
+    alignments: tuple[int, ...],
+    limit: int,
+) -> tuple[tuple[int, ...], int]:
+    """Construct a complete aligned seed with every required alias merged."""
+    roots = alias_components(len(values), aliased)
     components: dict[int, set[int]] = defaultdict(set)
     for index in range(len(values)):
-        components[find(index)].add(index)
+        components[roots[index]].add(index)
+
     ordered = sorted(
         components.values(),
         key=lambda component: (
@@ -497,22 +655,30 @@ def _construct_feasible_seed(
     peak = 0
     for component in ordered:
         size = max(values[index].lifetime.bytes for index in component)
+        alignment = max(alignments[index] for index in component)
 
         def conflicts(other: set[int]) -> bool:
             return any(
-                _lifetimes_overlap(values[left], values[right])
+                tuple(sorted((left, right))) in interference
                 for left in component
                 for right in other
             )
 
         blocked = tuple(item for item in placed if conflicts(item[0]))
-        candidates = sorted({0, *(address + held for _other, address, held in blocked)})
+        candidates = sorted(
+            {
+                0,
+                *(aligned(address + held, alignment) for other, address, held in blocked if other),
+            }
+        )
         address = next(
             candidate
             for candidate in candidates
             if all(
-                candidate + size <= other_address or other_address + other_size <= candidate
-                for _other, other_address, other_size in blocked
+                candidate + size <= other_address
+                or other_address + other_size <= candidate
+                for other, other_address, other_size in blocked
+                if other
             )
         )
         if address + size > limit:
@@ -521,7 +687,7 @@ def _construct_feasible_seed(
             addresses[index] = address
         placed.append((component, address, size))
         peak = max(peak, address + size)
-    return tuple(selected), tuple(addresses), peak
+    return tuple(addresses), peak
 
 
 def solve_allocation(
@@ -530,7 +696,7 @@ def solve_allocation(
     liveness: Liveness,
     root: IterationScope,
     *,
-    options: _MemoryOptions,
+    options: SolverOptions,
 ) -> AllocationResult:
     """Return the first feasible whole-function placement for one level."""
     if any(item.lifetime.memory_level != memory_level for item in values):
@@ -538,30 +704,37 @@ def solve_allocation(
     if not values:
         return AllocationResult(0, "optimal")
 
+    alignments = tuple(alignment_of(item.value) for item in values)
     largest = max(item.lifetime.bytes for item in values)
-    total = sum(item.lifetime.bytes for item in values)
-    limit = total
-
+    limit = sum(
+        aligned(item.lifetime.bytes, alignment)
+        for item, alignment in zip(values, alignments, strict=True)
+    )
     model = cp_model.CpModel()
     peak = model.new_int_var(largest, limit, f"{memory_level}_peak")
     addresses = tuple(
         model.new_int_var(0, limit - item.lifetime.bytes, f"address_{index}")
         for index, item in enumerate(values)
     )
-    for address, item in zip(addresses, values, strict=True):
+    for index, (address, item, alignment) in enumerate(
+        zip(addresses, values, alignments, strict=True)
+    ):
         model.add(address + item.lifetime.bytes <= peak)
+        model.add_modulo_equality(0, address, alignment).with_name(f"align_{index}")
 
     persistent_end = 0
-    for address, item in zip(addresses, values, strict=True):
+    for address, item, alignment in zip(addresses, values, alignments, strict=True):
         if not item.lifetime.persistent:
             continue
+        persistent_end = aligned(persistent_end, alignment)
         model.add(address == persistent_end)
         persistent_end += item.lifetime.bytes
     for address, item in zip(addresses, values, strict=True):
         if not item.lifetime.persistent:
             model.add(address >= persistent_end)
 
-    context = _ConstraintContext(
+    context = AllocationModel(
+        memory_level=memory_level,
         current=root,
         liveness=liveness,
         values=values,
@@ -569,12 +742,12 @@ def solve_allocation(
         model=model,
         addresses=addresses,
     )
-    AllocationConstraintVisitor(root_function=root.owner).visit_function_body(root.owner, context)
-
+    AllocationConstraintVisitor(root_function=root.owner).visit_function_body(
+        root.owner, context
+    )
+    interference = build_interference_graph(values, context)
     order_choices: dict[tuple[int, int], tuple[cp_model.IntVar, cp_model.IntVar]] = {}
-    for left, right in combinations(range(len(values)), 2):
-        if not _lifetimes_overlap(values[left], values[right]):
-            continue
+    for left, right in sorted(interference):
         if values[left].lifetime.persistent or values[right].lifetime.persistent:
             continue
         left_before = model.new_bool_var(f"before_{left}_{right}")
@@ -586,20 +759,12 @@ def solve_allocation(
         model.add(
             addresses[right] + values[right].lifetime.bytes <= addresses[left]
         ).only_enforce_if(right_before)
-        model.add_bool_or(
-            left_before,
-            right_before,
-            *context.selected_by_pair.get((left, right), ()),
-        )
+        model.add_bool_or(left_before, right_before)
 
-    selected_hints, address_hints, peak_hint = _construct_feasible_seed(
-        values, context.applied, limit
+    address_hints, peak_hint = calculate_starts(
+        values, context.aliased, interference, alignments, limit
     )
     model.add(peak <= peak_hint)
-    for (selected, _result, _operand), suggested in zip(
-        context.applied, selected_hints, strict=True
-    ):
-        model.add_hint(selected, int(suggested))
     for address, suggested in zip(addresses, address_hints, strict=True):
         model.add_hint(address, suggested)
     for (left, right), (left_before, right_before) in order_choices.items():
@@ -618,14 +783,24 @@ def solve_allocation(
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         status_name = solver.status_name(status).lower()
-        raise AnalysisError(
-            f"allocation: no feasible {memory_level} placement was found ({status_name})"
+        aliases = ", ".join(
+            f"{values[left].lifetime.binding}={values[right].lifetime.binding}"
+            for left, right in sorted(context.aliased)
         )
+        raise AnalysisError(
+            f"allocation: no feasible {memory_level} placement was found "
+            f"({status_name}); required aliases [{aliases}] conflict with "
+            f"{len(interference)} interference constraints"
+        )
+    solved_offsets = tuple(
+        (id(item.value), solver.value(address))
+        for address, item in zip(addresses, values, strict=True)
+    )
     actual_peak = max(
         solver.value(address) + item.lifetime.bytes
         for address, item in zip(addresses, values, strict=True)
     )
-    return AllocationResult(actual_peak, "feasible")
+    return AllocationResult(actual_peak, "feasible", solved_offsets)
 
 
 __all__ = ["AllocationResult", "AllocationValue", "solve_allocation"]
