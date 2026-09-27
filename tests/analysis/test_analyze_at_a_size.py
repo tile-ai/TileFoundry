@@ -56,7 +56,7 @@ INVENTORY = [pytest.param(case, id=case.id) for case in CASES]
 
 _GQA_TRANSPOSE_VIEW_LEFTOVER_12_GMEM = 285_800
 _PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_VIEW_LEFTOVER_12_SMEM = 278_528
-_QWEN_MATERIAL_RMS_NORM_LEFTOVER_12_GMEM = 145_935_368
+_QWEN_LOOP_INVARIANT_VALUES_GMEM = 145_935_368
 
 
 @dataclass(frozen=True)
@@ -228,7 +228,7 @@ EXPECTED_MEMORY_PEAKS = {
         "smem": _PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_VIEW_LEFTOVER_12_SMEM,
     },
     "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]": {
-        "gmem": _QWEN_MATERIAL_RMS_NORM_LEFTOVER_12_GMEM,
+        "gmem": _QWEN_LOOP_INVARIANT_VALUES_GMEM,
         "rmem": 520,
         "smem": 65_792,
     },

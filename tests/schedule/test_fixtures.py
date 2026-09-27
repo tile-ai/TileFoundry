@@ -30,7 +30,7 @@ from tilefoundry.analysis.metadata import (
 )
 from tilefoundry.evaluator import EvalError, evaluate
 from tilefoundry.inspection import PatternPrinter, as_script
-from tilefoundry.ir.core import Call, Op, Var, get_metadata, value_label
+from tilefoundry.ir.core import Call, Op, Var, get_metadata
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.function import Function
@@ -183,15 +183,18 @@ def test_scheduled_hir_program_has_analysis_metadata(
         loop_bounds = tuple(
             (
                 intervals[id(loop.induction_var)].defined_at,
-                intervals[id(loop)].defined_at - 2,
+                max(
+                    use.at
+                    for use in liveness.uses
+                    if any(use.value is yielded for yielded in loop.yield_values)
+                    and use.at < intervals[id(loop)].defined_at
+                ),
             )
             for loop in collect_exprs(result.function.body)
             if isinstance(loop, LoopRegion)
         )
-        lifetimes_by_binding = {}
-        for lifetime in placement.lifetimes:
-            lifetimes_by_binding.setdefault(lifetime.binding, []).append(lifetime)
 
+        outside_uses = 0
         for use in liveness.uses:
             interval = intervals[id(use.value)]
             for phi, backedge in loop_bounds:
@@ -200,19 +203,14 @@ def test_scheduled_hir_program_has_analysis_metadata(
                     and phi < use.at < backedge
                     and interval.defined_at < phi
                 ):
-                    for lifetime in lifetimes_by_binding.get(value_label(use.value), ()):
-                        assert lifetime.last_used_at >= backedge
+                    outside_uses += 1
+                    assert interval.last_used_at >= backedge
+        assert outside_uses
 
         for interval in liveness.intervals:
             if result_copies(interval.value) == 1:
                 continue
             assert (interval.defined_at, interval.last_used_at) in loop_bounds
-            projected = lifetimes_by_binding[value_label(interval.value)]
-            assert all(
-                (lifetime.defined_at, lifetime.last_used_at)
-                == (interval.defined_at, interval.last_used_at)
-                for lifetime in projected
-            )
 
     if analysis == "performance" and path.stem == "gemm_8192x17408x5120_cta_grid":
         local_moves = []

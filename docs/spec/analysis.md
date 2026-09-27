@@ -438,12 +438,12 @@ are monotonic across the whole Function, including nested and sibling regions.
 
 - constraints:
   - `Reshape` and `Transpose` describe bytes their operand already holds and
-    MUST NOT receive independent lifetimes. A result reached only through region
-    binding edges and tuple projections likewise describes bytes already held by
-    the region body and MUST NOT receive an independent lifetime. Every other
-    result, including a window or a result that overwrites a destination, MUST
-    allocate its own. Analysis MUST use operation semantics for this distinction
-    rather than infer aliasing from layouts.
+    MUST NOT receive independent lifetimes. A result reached only through a
+    `MeshRegion` result binding edge and tuple projections likewise describes
+    bytes already held by the region body and MUST NOT receive an independent
+    lifetime. Every other result, including a window or a result that overwrites
+    a destination, MUST allocate its own. Analysis MUST use operation semantics
+    for this distinction rather than infer aliasing from layouts.
   - A caller-owned parameter MUST NOT be reused. Donation is a contract with
     the caller, not a conclusion this family may draw.
 
