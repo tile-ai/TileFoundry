@@ -623,9 +623,10 @@ The implementation is split by responsibility under `ir/pattern/`:
   `WildcardPattern`. It also owns the `Scalar` and `Tensor` singletons.
 - `predicates.py` defines named arrangement predicates: `Forward`,
   `Injective`, `WholeVectors`, `PlainArrangement`, `BoxDims`, and `TensorMap`.
-- `match.py` owns `PatternMatcher`, matches, captures, symbolic resolution, and
-  the shared description helpers. An unstated (`None`) pattern field admits any
-  value.
+- `match.py` owns the public `PatternMatcher`, two private stateless traversal
+  drivers for symbolic resolution and alternative expansion, and the shared
+  matching and description helpers. An unstated (`None`) pattern field admits
+  any value.
 - `constraint.py` owns cross-operand `Constraint`, `DistinctConstraint`,
   `SameConstraint`, and `SameModesConstraint` values.
 - `utils.py` owns specialization naming and dimension lookup.
@@ -636,6 +637,15 @@ bindings, matched-node memo, deferred predicates, and branch rollback for that
 match. Nested patterns stay in that matcher instead of creating their own
 capture dictionaries. Effect-Op verification reuses one matcher across all
 operands of a call, so later operands see bindings established by earlier ones.
+
+The private resolution driver partially evaluates a pattern tree under fixed
+bindings. It is pure: resolution does not mutate those bindings or share
+mutable state with `PatternMatcher`. Unavailable `SwitchPattern`,
+`GuardPattern`, and `OrPattern` branches resolve to `ABSENT` and are pruned.
+The separate private alternative-expansion driver flattens `OrPattern`,
+`SwitchPattern`, and the layout of a `ShardLayoutPattern` into
+`(bindings, leaf)` pairs. The public `resolved(value, bindings)` and
+`alternatives_of(pattern, bindings=())` facades retain their signatures.
 
 `Predicate.holds(subject, bindings)` returns true, false, or `None` when names
 needed by the predicate remain unbound. The hand-written predicates in

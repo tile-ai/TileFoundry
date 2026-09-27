@@ -212,9 +212,6 @@ class AtomPattern(Pattern):
     def describe(self, name: str = "_") -> str:
         return "one of " + ", ".join(held.reference_name for held in self.declarations)
 
-    def resolve(self, bindings):
-        return self
-
 
 @dataclass(frozen=True)
 class FromAtom(Pattern):

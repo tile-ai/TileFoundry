@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any
 
 from tilefoundry.ir.types import (
@@ -15,16 +15,13 @@ from tilefoundry.ir.types import (
 from tilefoundry.ir.types.layout import flatten
 
 from .match import (
-    ABSENT,
     UNNAMED_PLACE,
     Match,
     PatternMatcher,
     _named,
     alternatives_of,
-    evaluated,
     matched,
     relations_of,
-    resolved,
     written_alternatives,
     written_grouped,
     written_place,
@@ -46,17 +43,8 @@ class Pattern:
     def relations(self) -> tuple[str, ...]:
         return ()
 
-    def alternatives(self, bindings=()) -> tuple:
-        return ((tuple(bindings), self),)
-
     def rules(self, arrangements=None) -> tuple[str, ...]:
         return self.relations()
-
-    def resolve(self, bindings):
-        return replace(
-            self,
-            **{name: resolved(value, bindings) for name, value in vars(self).items()},
-        )
 
 
 @dataclass(frozen=True)
@@ -114,23 +102,10 @@ class OrPattern(Pattern):
         if not any(isinstance(pattern, Pattern) for pattern in self.patterns):
             values = "{" + ", ".join(written_place(p) for p in self.patterns) + "}"
             return values if name == UNNAMED_PLACE else f"{name} in {values}"
-        return written_alternatives(self.alternatives(), name)
+        return written_alternatives(alternatives_of(self), name)
 
     def relations(self) -> tuple[str, ...]:
         return relations_of(self.patterns)
-
-    def alternatives(self, bindings=()) -> tuple:
-        return tuple(
-            held for pattern in self.patterns for held in alternatives_of(pattern, bindings)
-        )
-
-    def resolve(self, bindings):
-        held = tuple(
-            pattern
-            for pattern in (resolved(one, bindings) for one in self.patterns)
-            if pattern is not ABSENT
-        )
-        return OrPattern(*held) if held else ABSENT
 
 
 @dataclass(frozen=True)
@@ -156,9 +131,6 @@ class SequencePattern(Pattern):
 
     def relations(self) -> tuple[str, ...]:
         return relations_of(self.patterns)
-
-    def resolve(self, bindings):
-        return SequencePattern(*(resolved(pattern, bindings) for pattern in self.patterns))
 
 
 @dataclass(frozen=True)
@@ -186,9 +158,6 @@ class ConstraintPattern(Pattern):
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return " and ".join(written_place(pattern, name) for pattern in self.patterns)
-
-    def resolve(self, bindings):
-        return self
 
 
 @dataclass(frozen=True)
@@ -275,26 +244,10 @@ class SwitchPattern(Pattern):
         object.__setattr__(self, "branches", tuple(dict(branches).items()))
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return written_alternatives(self.alternatives(), name)
+        return written_alternatives(alternatives_of(self), name)
 
     def relations(self) -> tuple[str, ...]:
         return relations_of(tuple(pattern for _, pattern in self.branches))
-
-    def alternatives(self, bindings=()) -> tuple:
-        return tuple(
-            held
-            for value, pattern in self.branches
-            for held in alternatives_of(pattern, (*bindings, (self.param, value)))
-        )
-
-    def resolve(self, bindings):
-        held = dict(bindings or {})
-        if self.param in held:
-            pattern = next((p for value, p in self.branches if value == held[self.param]), ABSENT)
-            return ABSENT if pattern is ABSENT else resolved(pattern, held)
-        branches = {value: resolved(pattern, held) for value, pattern in self.branches}
-        branches = {value: p for value, p in branches.items() if p is not ABSENT}
-        return SwitchPattern(self.param, branches) if branches else ABSENT
 
 
 @dataclass(frozen=True)
@@ -310,16 +263,6 @@ class GuardPattern(Pattern):
         return (
             *relations_of((self.pattern,)),
             self.condition.describe(str(self.symbol)),
-        )
-
-    def resolve(self, bindings):
-        value = evaluated(self.symbol, bindings)
-        if value is None:
-            return GuardPattern(self.symbol, self.condition, resolved(self.pattern, bindings))
-        return (
-            resolved(self.pattern, bindings)
-            if matched(self.condition, value) is not None
-            else ABSENT
         )
 
     def fixed(self):
@@ -522,18 +465,15 @@ class ShardLayoutPattern(Pattern):
     def accepts_layout(self, layout) -> bool:
         return self.reads(layout) is not None
 
-    def alternatives(self, bindings=()) -> tuple:
-        return alternatives_of(self.layout, bindings)
-
     def relations(self) -> tuple[str, ...]:
         return relations_of((self.layout,))
 
     def rules(self, arrangements=None) -> tuple[str, ...]:
-        items = self.alternatives() if arrangements is None else tuple(arrangements)
+        items = alternatives_of(self) if arrangements is None else tuple(arrangements)
         return relations_of(tuple(pattern for _, pattern in items))
 
     def describe(self, name: str = UNNAMED_PLACE, arrangements=None) -> str:
-        items = self.alternatives() if arrangements is None else tuple(arrangements)
+        items = alternatives_of(self) if arrangements is None else tuple(arrangements)
         head = f"{len(items)} arrangement{'' if len(items) == 1 else 's'}:"
         written = written_alternatives(items).splitlines()
         return "\n".join(
