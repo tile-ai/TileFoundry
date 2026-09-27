@@ -1195,7 +1195,6 @@ the one time it was written down as the rule it argued a dependency chain into
 | `reduce` | the axes the destination broadcasts that the source splits |
 | `dot` | the axes the operands' meshes contract |
 | `mma` | one atom's per-lane operand fragments |
-| `rmsnorm` | the row dependency chain and the destination's shard layout |
 | `sync` | the mesh's scope, base and count |
 | `copy_async_bulk` | both shard layouts, asserted: one contiguous run each, whole tiles, matching element types |
 | `ldmatrix` | the source tile's declared shared-memory layout and the destination atom fragment |
@@ -1451,31 +1450,7 @@ __device__ inline void reduce(Src const &src, Dst &dst, Ws &&ws = {});
     runtime.
   - A reduction whose reduced axis crosses CTA boundaries is not supported.
 
-#### 2.6.7 `ops/rmsnorm.cuh`
-
-<!-- generated: ops-rmsnorm -->
-```cpp
-// include/tilefoundry/runtime/cuda/ops/rmsnorm.cuh
-template <class TIn, class TOut, class TW>
-__device__ void rmsnorm(TIn const &src, TOut &dst, TW const &weight,
-                        float eps);
-```
-<!-- /generated -->
-
-**`rmsnorm`.**
-
-- constraints:
-  - An op, not a composition of `reduce` and `elementwise`. The row's sum of
-    squares feeds that same row's rescale, so the fused form carries the row's
-    whole state in one scalar; the decomposed form has to materialise it as an
-    `M * K` per-instance scratch.
-  - `M` and `K` come from the destination's shard layout. Neither is a
-    parameter, and neither is computed by codegen.
-  - Each instance must hold the whole source and destination tile; a mesh that
-    splits either operand needs per-instance `M` and `K`, which this entry does
-    not derive. The weight is a rank-1 vector of length `K`.
-
-#### 2.6.8 `ops/sync.cuh`
+#### 2.6.7 `ops/sync.cuh`
 
 <!-- generated: ops-sync -->
 ```cpp
@@ -1539,7 +1514,7 @@ __device__ inline void sync(Mesh<TMesh, Topos...> const &mesh,
     launch, so the caller passes it; with none, a cooperative launch's grid
     group is used instead.
 
-#### 2.6.9 `ops/copy_async_bulk.cuh`
+#### 2.6.8 `ops/copy_async_bulk.cuh`
 
 <!-- generated: ops-copy-async-bulk -->
 ```cpp
@@ -1600,7 +1575,7 @@ tile it did not fetch.
     property of the layout type, so an off-grain extent is a run-time hand-off
     to the element path inside the same entry — same barrier, same result.
 
-#### 2.6.10 `ops/ldmatrix.cuh`
+#### 2.6.9 `ops/ldmatrix.cuh`
 
 <!-- generated: ops-ldmatrix -->
 ```cpp

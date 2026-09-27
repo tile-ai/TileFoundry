@@ -205,7 +205,6 @@ namespace ops {
 #include "ops/reduce.cuh"
 /// dot after reduce: it reuses reduce's no-workspace tag.
 #include "ops/dot.cuh"
-#include "ops/rmsnorm.cuh"
 #include "ops/mma.cuh"
 
 }

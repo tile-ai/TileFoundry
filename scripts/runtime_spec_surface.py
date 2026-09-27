@@ -52,7 +52,6 @@ REGIONS: dict[str, str] = {
     "ops-elementwise": "cuda/ops/elementwise.cuh",
     "ops-mma": "cuda/ops/mma.cuh",
     "ops-reduce": "cuda/ops/reduce.cuh",
-    "ops-rmsnorm": "cuda/ops/rmsnorm.cuh",
     "ops-sync": "cuda/ops/sync.cuh",
     "ops-copy-async-bulk": "cuda/ops/copy_async_bulk.cuh",
     "ops-ldmatrix": "cuda/ops/ldmatrix.cuh",

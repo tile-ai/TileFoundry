@@ -266,7 +266,7 @@ directly to rebuild Stmts; they do not reuse `StmtExprMutator`.
 ## 7. Visitor entry forms for `Evaluate`
 
 The TIR effect-form Ops (e.g. `Copy` / `Fill` / `TiledMma` / `ReLU` /
-`RMSNorm` / `Reduce`) are `Op` subclasses, not `Stmt` subclasses; in
+`Reduce`) are `Op` subclasses, not `Stmt` subclasses; in
 Stmt position they appear as `Evaluate(callable=op, args)` so the
 invocation can sit in `Sequential` body position. Passes and visitors
 MUST match on `Evaluate` and dispatch on `type(callable)`:

@@ -8,7 +8,7 @@ the work, structural Stmts carry control flow.
   `body` is a `Sequential`; the function returns no value.
 - **Stmt tree**: function bodies are nested Stmts only. Exprs appear
   inside Stmt fields (e.g. `LetStmt.value`, `For.start`).
-- **Effect Ops** (`Copy`, `Fill`, `Cast`, `Mma`, `ReLU`, `RMSNorm`, `Reduce`)
+- **Effect Ops** (`Copy`, `Fill`, `Cast`, `Mma`, `ReLU`, `Reduce`)
   are value-class Ops registered with `@register_op`; in Stmt
   position they are invoked as `Evaluate(op, args)`
   ([§1.4](#14-evaluate)).
@@ -636,25 +636,6 @@ class ReLU(Op):
 
     src: Tensor
     dst: Tensor
-```
-- constraints: []
-
-##### RMSNorm
-```python
-class RMSNorm(Op):
-    """Effect form; fused RMS normalisation written into ``dst``.
-
-    Attributes:
-        src: input; input tensor, reduced over its last axis.
-        dst: input; normalised-output tensor.
-        weight: input; 1-D scale multiplied onto the normalised output.
-        eps: attribute; epsilon applied with rsqrt.
-    """
-
-    src: Tensor
-    dst: Tensor
-    weight: Tensor
-    eps: float
 ```
 - constraints: []
 
