@@ -3529,7 +3529,7 @@ def _mesh_scope_captures(node, context):
     """Capture outer expression bindings for one region boundary."""
 
     def free_names(statements, outer_bound=frozenset()):
-        local = _directly_bound_names(statements)
+        local = _directly_bound_names(statements) - _read_before_bound(statements)
         visible = outer_bound | local
         found = set()
 
@@ -3549,7 +3549,10 @@ def _mesh_scope_captures(node, context):
                 for item in statement.items:
                     if isinstance(item.optional_vars, ast.Name):
                         nested_bound.add(item.optional_vars.id)
-                nested_bound.update(_directly_bound_names(statement.body))
+                nested_bound.update(
+                    _directly_bound_names(statement.body)
+                    - _read_before_bound(statement.body)
+                )
                 for child in statement.body:
                     visit(child, frozenset(nested_bound))
                 return

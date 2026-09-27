@@ -38,7 +38,6 @@ PLAIN = (
 )
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
-M1_HIR = tuple(path for path in HIR if path.stem != "wgmma_two_schedules")
 WGMMA_DECLARATION = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.described.txt"
 
 
@@ -68,7 +67,7 @@ def test_plain_program_is_analyzable(name: str) -> None:
     assert result.metadata_types
 
 
-@pytest.mark.parametrize("path", M1_HIR, ids=lambda path: path.stem)
+@pytest.mark.parametrize("path", HIR, ids=lambda path: path.stem)
 def test_scheduled_hir_program_is_well_typed(path: Path) -> None:
     program = _module_in(path)
     entry = next(function for function in program.functions if function.name == "gemm")
