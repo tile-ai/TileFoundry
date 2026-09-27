@@ -612,7 +612,7 @@ for line in report.splitlines():
 
 ```text
 # compute-cost flops=bf16:328896@logical,2629376@total,328672@cta;f32:200448@logical,200448@total,25056@cta other-ops=special:1024@logical,1024@total,128@cta
-# memory traffic=gmem:r1.60MB/w258.62KB@logical,r1.60MB/w258.62KB@total,r1.49MB/w258.19KB@cta;smem:r668.56KB/w659.56KB@logical,r668.56KB/w659.56KB@total,r83.57KB/w82.45KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v11:221:128B;v12:222:16.12KB;v13:228:128.00KB;v14:227:128.00KB;v22:220:256B;v24:223:16.12KB;v25:231:128.00KB;v26:230:128.00KB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B peak=gmem:1.48MB;smem:40.19KB persistent=gmem:1.34MB
+# memory traffic=gmem:r1.60MB/w258.62KB@logical,r1.60MB/w258.62KB@total,r1.49MB/w258.19KB@cta;smem:r668.56KB/w659.56KB@logical,r668.56KB/w659.56KB@total,r83.57KB/w82.45KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v11:221:128B;v12:222:16.12KB;v13:228:128.00KB;v14:227:128.00KB;v22:220:256B;v24:223:16.12KB;v25:231:128.00KB;v26:230:128.00KB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B peak=gmem:1.49MB;smem:40.19KB persistent=gmem:1.34MB
 # roofline ideal-ns=405 bound-by=memory
 ```
 
@@ -758,7 +758,7 @@ print(next(line.rstrip() for line in annotated.splitlines() if "cache_update(k_c
 # analysis target=nvidia.h200_sxm module=Stage3_Fused function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,4392896@total,328672@cta;f32:3239808@logical,6418944@total,200592@cta other-ops=integer:9@logical,288@total,9@cta;special:33056@logical,33152@total,1036@cta
-# memory traffic=gmem:r3.32MB/w4.00MB@logical,r3.32MB/w4.00MB@total,r2.44MB/w4.00MB@cta;rmem:r656B/w72B@logical,r768B/w128B@total,r768B/w128B@cta;smem:r5.57MB/w5.40MB@logical,r5.60MB/w5.43MB@total,r670.41KB/w660.85KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;k_heads:64.00KB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:276:1.00KB;v11:282:512.12KB;v12:284:2.00MB;v2:278:256B;v4:280:640B;v5:280:128B;v63:356:1.00KB;v65:359:512B;v6:281:512.12KB;v7:283:2.00MB;v9:279:256B;v_heads:64.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B peak=gmem:6.81MB;rmem:8B;smem:41.32KB persistent=gmem:2.31MB
+# memory traffic=gmem:r3.32MB/w4.00MB@logical,r3.32MB/w4.00MB@total,r2.44MB/w4.00MB@cta;rmem:r656B/w72B@logical,r768B/w128B@total,r768B/w128B@cta;smem:r5.57MB/w5.40MB@logical,r5.60MB/w5.43MB@total,r670.41KB/w660.85KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;k_heads:64.00KB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:276:1.00KB;v11:282:512.12KB;v12:284:2.00MB;v2:278:256B;v4:280:640B;v5:280:128B;v63:356:1.00KB;v65:359:512B;v6:281:512.12KB;v7:283:2.00MB;v9:279:256B;v_heads:64.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B peak=gmem:6.81MB;rmem:8B;smem:41.34KB persistent=gmem:2.31MB
 #   buffer=w_o holds=6.44MB time=none space=cta.head,cta.worker reuse=3.88MB fits=yes
 #   buffer=k_heads holds=128.50KB time=start space=none reuse=448.00KB fits=yes
 #   buffer=v_heads holds=128.50KB time=start space=none reuse=448.00KB fits=yes
