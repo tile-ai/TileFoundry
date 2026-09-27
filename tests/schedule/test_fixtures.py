@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+from dataclasses import dataclass
 from math import prod
 from pathlib import Path
 
@@ -46,6 +47,8 @@ from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
 from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
 from tilefoundry.ir.tir.cuda.nn.wgmma import Wgmma
 from tilefoundry.ir.types import DType, Layout, StorageKind, TensorType, UnitType
+from tilefoundry.ir.types.layout import flatten
+from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.types.utils import bytes_by_storage
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.visitor_registry.access_relation import (
@@ -74,6 +77,13 @@ ANALYSES = (
 )
 _TENSOR_CLOCK_HZ = 1_830_000_000
 
+
+@dataclass(frozen=True)
+class _RmemExpectation:
+    peak_bytes: int
+    derivation: str
+
+
 SMEM_GOLDEN = {
     "gemm_8192x17408x5120_cta_grid": 196_608,
     "gemm_8192x17408x5120_persistent": 196_608,
@@ -97,6 +107,160 @@ SMEM_GOLDEN = {
     "wgmma_tma_3stage": 13_824,
     "wgmma_two_schedules": 12_288,
 }
+
+RMEM_EXPECTED = {
+    "gemm_8192x17408x5120_cta_grid": {
+        "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
+        "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
+        "thread@128:256#2": _RmemExpectation(131_072, "f32 loop result/bf16 cast alias"),
+        "thread@0:384#0": _RmemExpectation(131_072, "parent envelope of one alias chain"),
+    },
+    "gemm_8192x17408x5120_persistent": {
+        "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
+        "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
+        "thread@128:256#2": _RmemExpectation(131_072, "f32 loop result/bf16 cast alias"),
+        "thread@0:384#0": _RmemExpectation(131_072, "parent envelope of one alias chain"),
+    },
+    "gemm_8192x17408x5120_register_store": {
+        "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
+        "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
+        "thread@128:256#2": _RmemExpectation(131_072, "f32 loop result/bf16 cast alias"),
+        "thread@0:384#0": _RmemExpectation(131_072, "parent envelope of one alias chain"),
+    },
+    "gemm_8192x17408x5120_tma_store": {
+        "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
+        "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
+        "thread@128:256#2": _RmemExpectation(131_072, "f32 loop result/bf16 cast alias"),
+        "thread@0:384#0": _RmemExpectation(131_072, "parent envelope of one alias chain"),
+    },
+    "sm80_mma_ldmatrix": {
+        "thread@32:32#0": _RmemExpectation(512, "16x8 f32 zero accumulator"),
+        "thread@32:32#1": _RmemExpectation(
+            1_280,
+            "512-byte accumulator plus 512-byte lhs and 256-byte rhs fragments",
+        ),
+        "thread@32:32#2": _RmemExpectation(512, "f32 loop result/bf16 cast alias"),
+        "thread@0:64#0": _RmemExpectation(1_280, "parent envelope of accumulator/fragments"),
+    },
+    "wgmma_a_k_major": {
+        "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
+        "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
+        "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
+    },
+    "wgmma_a_mn_major": {
+        "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
+        "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
+        "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
+    },
+    "wgmma_cast_between_schedules": {
+        "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
+        "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
+        "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
+    },
+    "wgmma_cp_async_loads": {
+        "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
+        "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
+        "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
+    },
+    "wgmma_cta_grid_4x17": {
+        "thread@128:256#0": _RmemExpectation(8_192, "128x16 f32 zero accumulator"),
+        "thread@128:256#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
+        "thread@128:256#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@0:384#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
+    },
+    "wgmma_explicit_windows": {
+        "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
+        "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
+        "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
+    },
+    "wgmma_insert_tiles_into_output": {
+        "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
+        "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
+        "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
+    },
+    "wgmma_k_slices_of_wide_run": {
+        "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
+        "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
+        "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
+    },
+    "wgmma_one_tile_of_larger_output": {
+        "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
+        "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
+        "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
+    },
+    "wgmma_repeat_along_k": {
+        "thread@128:256#0": _RmemExpectation(8_192, "128x16 f32 zero accumulator"),
+        "thread@128:256#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
+        "thread@128:256#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@0:384#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
+    },
+    "wgmma_repeat_along_n": {
+        "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
+        "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
+        "thread@128:256#2": _RmemExpectation(131_072, "f32 loop result/bf16 cast alias"),
+        "thread@0:384#0": _RmemExpectation(131_072, "parent envelope of one alias chain"),
+    },
+    "wgmma_rs_a_from_accumulator": {
+        "thread@128:128#0": _RmemExpectation(4_096, "64x16 f32 p initializer"),
+        "thread@128:128#1": _RmemExpectation(4_096, "p phi/first mma alias chain"),
+        "thread@128:128#2": _RmemExpectation(
+            10_240,
+            "2048-byte narrowed p alias plus independent 8192-byte acc initializer",
+        ),
+        "thread@128:128#3": _RmemExpectation(8_192, "acc phi/second mma alias chain"),
+        "thread@128:128#4": _RmemExpectation(8_192, "acc loop result/bf16 cast alias"),
+        "thread@0:256#0": _RmemExpectation(10_240, "parent envelope of p/acc transition"),
+    },
+    "wgmma_rs_a_from_smem": {
+        "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
+        "thread@128:128#1": _RmemExpectation(
+            10_240,
+            "8192-byte accumulator alias chain plus independent 2048-byte A fragment",
+        ),
+        "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@0:256#0": _RmemExpectation(10_240, "parent envelope of accumulator/A fragment"),
+    },
+    "wgmma_swizzled_smem": {
+        "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
+        "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
+        "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
+    },
+    "wgmma_tma_3stage": {
+        "thread@128:256#0": _RmemExpectation(8_192, "128x16 f32 zero accumulator"),
+        "thread@128:256#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
+        "thread@128:256#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@0:384#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
+    },
+    "wgmma_two_schedules": {
+        "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
+        "thread@128:128#1": _RmemExpectation(8_192, "phi/first mma alias chain"),
+        "thread@128:128#2": _RmemExpectation(8_192, "first/second mma alias chain"),
+        "thread@128:128#3": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of both mma chains"),
+    },
+}
+
+
+def _region_key(region: MeshRegion, occurrences: dict[str, int]) -> str:
+    """Name one region by its selected topology run and lexical occurrence."""
+    mesh = region.mesh
+    assert len(mesh.topologies) == 1
+    topology = getattr(mesh.topologies[0], "name", mesh.topologies[0])
+    offset = starts(mesh)[0]
+    size = prod(flatten(levels(mesh)[0].shape))
+    selection = f"{topology}@{offset}:{size}"
+    occurrence = occurrences.get(selection, 0)
+    occurrences[selection] = occurrence + 1
+    return f"{selection}#{occurrence}"
 
 
 def _prim_in(path: Path) -> PrimFunction:
@@ -201,11 +365,8 @@ def test_scheduled_hir_program_has_analysis_metadata(
                 assert offset % alignment_of(expr) == 0
                 assert offset + moved.buffer_bytes <= peak.peak_bytes
 
-        regions = tuple(
-            expr
-            for expr in collect_exprs(result.function.body)
-            if isinstance(expr, MeshRegion)
-        )
+        liveness = analyze_liveness(result.function)
+        regions = tuple(window.region for window in liveness.regions)
         region_records = tuple(
             record
             for region in regions
@@ -228,9 +389,24 @@ def test_scheduled_hir_program_has_analysis_metadata(
             for record in region_records
             if (peak := record.peak_for("rmem")) is not None
         )
+        occurrences: dict[str, int] = {}
+        observed_rmem = {}
+        for window in liveness.regions:
+            key = _region_key(window.region, occurrences)
+            record = get_metadata(window.region, RegionMemoryMetadata)
+            peak = record.peak_for("rmem") if record is not None else None
+            if peak is not None:
+                observed_rmem[key] = peak.peak_bytes
+        expected_rmem = {
+            key: expectation.peak_bytes
+            for key, expectation in RMEM_EXPECTED[path.stem].items()
+        }
+        assert observed_rmem == expected_rmem, {
+            key: expectation.derivation
+            for key, expectation in RMEM_EXPECTED[path.stem].items()
+        }
         assert placement.peak_for("rmem").peak_bytes == max(region_rmem_peaks, default=0)
 
-        liveness = analyze_liveness(result.function)
         intervals = {id(item.value): item for item in liveness.intervals}
         loop_bounds = tuple(
             (
