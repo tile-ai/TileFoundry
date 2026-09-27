@@ -91,6 +91,23 @@ class WildcardPattern(Pattern):
         return name
 
 
+@dataclass(frozen=True)
+class StarPattern(Pattern):
+    """Match zero or more modes, applying one pattern to every mode."""
+
+    pattern: Pattern
+
+    def __post_init__(self):
+        if not isinstance(self.pattern, Pattern):
+            raise TypeError("StarPattern pattern must be a Pattern")
+
+    def describe(self, name: str = UNNAMED_PLACE) -> str:
+        return f"*{written_place(self.pattern, name)}"
+
+    def relations(self) -> tuple[str, ...]:
+        return relations_of((self.pattern,))
+
+
 @dataclass(frozen=True, init=False)
 class OrPattern(Pattern):
     patterns: tuple
@@ -269,6 +286,95 @@ class GuardPattern(Pattern):
         return None
 
 
+def _mode_path(path: tuple[int, ...]) -> str:
+    return "root" + "".join(f"[{index}]" for index in path)
+
+
+def _star_paths(value, path=()) -> tuple[tuple[int, ...], ...]:
+    if isinstance(value, StarPattern):
+        return (path,)
+    if isinstance(value, tuple):
+        return tuple(
+            found
+            for index, item in enumerate(value)
+            for found in _star_paths(item, (*path, index))
+        )
+    return ()
+
+
+def _validate_mode_frame(shape, strides, path=()) -> None:
+    if isinstance(shape, tuple) or isinstance(strides, tuple):
+        if not isinstance(shape, tuple) or not isinstance(strides, tuple):
+            raise ValueError(
+                "LayoutPattern shape and strides must nest alike at "
+                f"{_mode_path(path)}"
+            )
+        shape_stars = tuple(
+            index for index, item in enumerate(shape) if isinstance(item, StarPattern)
+        )
+        stride_stars = tuple(
+            index for index, item in enumerate(strides) if isinstance(item, StarPattern)
+        )
+        if len(shape_stars) > 1 or len(stride_stars) > 1:
+            positions = shape_stars if len(shape_stars) > 1 else stride_stars
+            raise ValueError(
+                "LayoutPattern allows at most one StarPattern per tuple at "
+                f"{_mode_path(path)}; found positions {positions}"
+            )
+        if len(shape) != len(strides):
+            raise ValueError(
+                "LayoutPattern shape and strides must have the same arity at "
+                f"{_mode_path(path)}"
+            )
+        for index, (extent, stride) in enumerate(zip(shape, strides)):
+            _validate_mode_frame(extent, stride, (*path, index))
+        return
+    if isinstance(shape, StarPattern) != isinstance(strides, StarPattern):
+        raise ValueError(
+            "LayoutPattern shape and strides must place StarPattern together at "
+            f"{_mode_path(path)}"
+        )
+
+
+def _binding_occurrences(value, depth=0, path=""):
+    if isinstance(value, StarPattern):
+        yield from _binding_occurrences(value.pattern, depth + 1, path)
+        return
+    if isinstance(value, CapturePattern):
+        yield value.name, depth, path
+        yield from _binding_occurrences(value.pattern, depth, path)
+        return
+    if isinstance(value, WildcardPattern):
+        name = getattr(value, "name", None)
+        if name:
+            yield name, depth, path
+        return
+    if isinstance(value, Pattern):
+        for field_name, field_value in vars(value).items():
+            yield from _binding_occurrences(
+                field_value,
+                depth,
+                f"{path}.{field_name}" if path else field_name,
+            )
+        return
+    if isinstance(value, tuple):
+        for index, item in enumerate(value):
+            yield from _binding_occurrences(item, depth, f"{path}[{index}]")
+
+
+def _validate_binding_depths(shape, strides) -> None:
+    occurrences: dict[str, list[tuple[int, str]]] = {}
+    for field_name, value in (("shape", shape), ("strides", strides)):
+        for name, depth, path in _binding_occurrences(value, path=field_name):
+            occurrences.setdefault(name, []).append((depth, path))
+    for name, places in occurrences.items():
+        if len({depth for depth, _ in places}) > 1:
+            written = ", ".join(f"{path} (star depth {depth})" for depth, path in places)
+            raise ValueError(
+                f"LayoutPattern binding {name!r} appears at different star depths: {written}"
+            )
+
+
 @dataclass(frozen=True)
 class LayoutPattern(Pattern):
     """An optional layout structure with named computed predicates."""
@@ -276,6 +382,21 @@ class LayoutPattern(Pattern):
     shape: tuple | None = None
     strides: tuple | None = None
     predicates: tuple[Predicate, ...] = field(default_factory=tuple)
+
+    def __post_init__(self):
+        if self.shape is None or self.strides is None:
+            field_name, field = (
+                ("shape", self.shape) if self.shape is not None else ("strides", self.strides)
+            )
+            stars = _star_paths(field)
+            if stars:
+                raise ValueError(
+                    f"LayoutPattern {field_name} has StarPattern at "
+                    f"{_mode_path(stars[0])}, but its paired field is absent"
+                )
+        else:
+            _validate_mode_frame(self.shape, self.strides)
+        _validate_binding_depths(self.shape, self.strides)
 
     @classmethod
     def from_layout(
@@ -330,20 +451,22 @@ class LayoutPattern(Pattern):
 
 @dataclass(frozen=True)
 class SwizzlePattern(Pattern):
-    bits: int
-    base: int
-    shift: int
+    bits: object
+    base: object
+    shift: object
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return f"Swizzle({self.bits}, {self.base}, {self.shift})"
 
     def fixed(self):
+        if any(isinstance(value, Pattern) for value in (self.bits, self.base, self.shift)):
+            return None
         return Swizzle(self.bits, self.base, self.shift)
 
 
 @dataclass(frozen=True)
 class ComposedLayoutPattern(Pattern):
-    """Match the three fields of a concrete ``ComposedLayout`` only."""
+    """Match composition fields, reading a bare layout as an identity composition."""
 
     inner: object = None
     offset: object = None
@@ -359,21 +482,18 @@ class ComposedLayoutPattern(Pattern):
         return relations_of((self.inner, self.offset, self.outer))
 
     def fixed(self):
-        held = tuple(
-            value.fixed() if isinstance(value, Pattern) and hasattr(value, "fixed") else value
-            for value in (self.inner, self.offset, self.outer)
-        )
+        held = []
+        for value in (self.inner, self.offset, self.outer):
+            if isinstance(value, Pattern):
+                if not hasattr(value, "fixed") or (value := value.fixed()) is None:
+                    return None
+            held.append(value)
         return None if any(value is None for value in held[1:]) else ComposedLayout(*held)
 
 
 @dataclass(frozen=True)
 class MeshPattern(Pattern):
-    """Match named mesh levels after separating and recomposing them.
-
-    A ``ComposedLayoutPattern`` here deliberately matches only a sliced mesh,
-    because an unsliced mesh carries a bare ``Layout``. To accept both forms,
-    use ``OrPattern(ComposedLayoutPattern(offset=..., outer=L), L)``.
-    """
+    """Match named mesh levels after separating and recomposing them."""
 
     topologies: tuple[str, ...]
     layout: object
@@ -390,6 +510,9 @@ class MeshPattern(Pattern):
             if isinstance(pattern, OrPattern):
                 for alternative in pattern.patterns:
                     require_per_mode(alternative)
+                return
+            if isinstance(pattern, StarPattern):
+                require_per_mode(pattern.pattern)
                 return
             if isinstance(pattern, ComposedLayoutPattern):
                 pattern = pattern.outer
@@ -509,6 +632,7 @@ __all__ = [
     "ScalarPattern",
     "SequencePattern",
     "ShardLayoutPattern",
+    "StarPattern",
     "SwizzlePattern",
     "SwitchPattern",
     "Tensor",

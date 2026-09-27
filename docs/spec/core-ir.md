@@ -619,8 +619,8 @@ The implementation is split by responsibility under `ir/pattern/`:
   `ConstraintPattern`, `GuardPattern`, `SwitchPattern`, `RangePattern`,
   `MultipleOfPattern`, `OneOfPattern`, `AttrPattern`, `BitsPattern`,
   `LayoutPattern`, `SwizzlePattern`, `ComposedLayoutPattern`, `MeshPattern`,
-  `ShardLayoutPattern`, `ScalarPattern`, `TensorPattern`, and
-  `WildcardPattern`. It also owns the `Scalar` and `Tensor` singletons.
+  `ShardLayoutPattern`, `ScalarPattern`, `TensorPattern`, `WildcardPattern`, and
+  `StarPattern`. It also owns the `Scalar` and `Tensor` singletons.
 - `predicates.py` defines named arrangement predicates: `Forward`,
   `Injective`, `WholeVectors`, `PlainArrangement`, `BoxDims`, and `TensorMap`.
 - `match.py` owns the public `PatternMatcher`, two private stateless traversal
@@ -658,18 +658,30 @@ read names bound by structural patterns.
 fields leaves the structure unconstrained and lets predicates read through
 supported composed or sharded forms. `Forward()` and `Injective()` express the
 corresponding computed properties; they are not implicit.
+When both structural fields are present, they are matched as paired CuTe modes
+while preserving their authored nesting. A `StarPattern(p)` in the same
+position of both fields consumes zero or more modes and applies `p` to every
+consumed mode; each tuple may contain at most one star. Captures below a star
+are tuples, and a name may not occur both below and outside a star.
 `LayoutPattern.from_layout(layout, ...)` constructs the exact bare or composed
 pattern for an authored arrangement, preserving its nested structure and the
 explicitly supplied predicate table. `Forward(per_mode=True)` and
 `Injective(per_mode=True)` check each top-level mode independently.
+`ComposedLayout(None, 0, L)` and `L` are equivalent for both `LayoutPattern`
+and `ComposedLayoutPattern`: a bare layout supplies an identity inner and zero
+offset to a composed pattern. An omitted `ComposedLayoutPattern.inner` remains
+unconstrained and therefore admits any inner, including a swizzle. To require
+no swizzle, state `SwizzlePattern(0, 4, 3)`; its zero-bit variant also matches
+an identity (`None`) inner. The three swizzle fields may themselves be
+patterns.
 `MeshPattern` rejects any supplied arrangement predicate that exposes
 `per_mode=False`, because each mesh level uses its own numbering space; an
 empty predicate table is allowed. It never changes the supplied pattern
 implicitly.
 `ShardLayoutPattern` names the same `layout`, `attrs`, and `mesh` fields as
 `ShardLayout`: `layout` and `mesh` are nested patterns, while `attrs` remains
-an exact structural value. Its mesh pattern may state bare and sliced forms
-explicitly; the matcher does not normalize one into the other.
+an exact structural value. Its mesh pattern may use the bare/composed identity
+equivalence above when stating sliced forms.
 
 Two consumer surfaces:
 
