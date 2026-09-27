@@ -5,6 +5,8 @@ from __future__ import annotations
 from math import prod
 from typing import Tuple
 
+import isl
+
 from tilefoundry.ir.core import Call, Op, Var
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
@@ -37,12 +39,20 @@ from tilefoundry.ir.types import (
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.mesh import separate, starts
 from tilefoundry.ir.types.stride import compact_row_major
-from tilefoundry.visitor_registry import register_typeinfer
+from tilefoundry.utils.isl_utils import cardinality
+from tilefoundry.visitor_registry import register_cost_evaluator, register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    AffineAccess,
+    BoundaryRelation,
     iteration_universe,
+    projected,
+    reached_elements,
+    register_access_relation,
+    relation_of,
     relations_of,
 )
+from tilefoundry.visitor_registry.contexts import Cost, TrafficBytes
 
 
 @register_op(name="schedule")
@@ -435,6 +445,195 @@ def _iteration_shape(relations: AccessRelations) -> tuple:
     return tuple(
         int(space.dim_max(axis).max_val().num_si()) + 1 for axis in range(space.tuple_dim())
     )
+
+
+def _instruction_schema(
+    op: Op,
+) -> tuple[tuple[ParamDef, ...], tuple[ParamDef, ...], tuple[ParamDef, ...]]:
+    schema = getattr(type(op), "_op_schema", None)
+    if schema is None:
+        raise ValueError(f"{type(op).__name__} is not a registered operation")
+    params = tuple(param for param in schema.signature if param.kind == "input")
+    if any(param.effect is None for param in params):
+        raise ValueError(f"{type(op).__name__} does not declare every operand's memory effect")
+    reads = tuple(param for param in params if param.effect & MemoryEffect.READ)
+    writes = tuple(param for param in params if param.effect & MemoryEffect.WRITE)
+    if not writes:
+        raise ValueError(f"{type(op).__name__} writes no result operand")
+    return params, reads, writes
+
+
+def _relation_types(
+    call: Call, ctx
+) -> tuple[Op, tuple[ParamDef, ...], tuple[TensorType, ...], tuple[TensorType, ...]]:
+    """Build whole and single-issue boundaries without reading the Call Type."""
+    schedule = call.target
+    op = schedule.op
+    params, reads, writes = _instruction_schema(op)
+    if len(call.args) != len(reads):
+        raise ValueError(f"{type(op).__name__} reads {len(reads)} operands, got {len(call.args)}")
+    bindings = dict(getattr(getattr(op, "atom", None), "bindings", {}))
+    patterns = {param.name: _operand_pattern(param, op, bindings) for param in params}
+    whole = {param.name: ctx.type_of(arg) for param, arg in zip(reads, call.args, strict=True)}
+    for param in writes:
+        if param.effect & MemoryEffect.READ:
+            continue
+        pattern = patterns[param.name]
+        if pattern is None:
+            raise ValueError(f"{type(op).__name__} {param.name} has no tensor pattern")
+        whole[param.name] = _result_type(
+            op,
+            param,
+            pattern,
+            whole,
+            bindings,
+            getattr(ctx, "current_mesh", None),
+        )
+    single = {
+        name: _single_type(
+            type_,
+            patterns[name],
+            bindings,
+            op,
+            _thread_mesh(getattr(ctx, "current_mesh", None)),
+        )
+        for name, type_ in whole.items()
+    }
+    return (
+        op,
+        params,
+        tuple(whole[param.name] for param in params),
+        tuple(single[param.name] for param in params),
+    )
+
+
+def _repeat_order(
+    schedule: ScheduleOp,
+    whole_relations: AccessRelations,
+    single_relations: AccessRelations,
+) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    whole_shape = _iteration_shape(whole_relations)
+    single_shape = _iteration_shape(single_relations)
+    if len(whole_shape) != len(single_shape):
+        raise ValueError("single-issue and scheduled iteration ranks differ")
+    repeat = []
+    for whole_extent, single_extent in zip(whole_shape, single_shape, strict=True):
+        if single_extent < 1 or whole_extent % single_extent:
+            raise ValueError(
+                f"iteration extent {whole_extent} is not divisible by "
+                f"single-issue extent {single_extent}"
+            )
+        repeat.append(whole_extent // single_extent)
+    inferred = tuple(repeat)
+    actual = inferred if schedule.repeat is None else schedule.repeat
+    if actual != inferred:
+        raise ValueError(f"repeat {actual} conflicts with inferred repeat {inferred}")
+    order = tuple(range(len(inferred))) if schedule.order is None else schedule.order
+    if sorted(order) != list(range(len(inferred))):
+        raise ValueError(f"order {order} is not a permutation of iteration dimensions")
+    return actual, order, single_shape
+
+
+def _outer_band(
+    relations: AccessRelations,
+    repeat: tuple[int, ...],
+    order: tuple[int, ...],
+    single_shape: tuple[int, ...],
+) -> AccessRelations:
+    """Compose repeat coordinates with one issue's affine coordinate equations."""
+    if all(count == 1 for count in repeat):
+        return relations
+    outer_axes = tuple(order)
+    outer = tuple(f"r{axis}" for axis in outer_axes)
+    inner = tuple(f"d{axis}" for axis in range(len(repeat)))
+    global_ = tuple(f"g{axis}" for axis in range(len(repeat)))
+    domain = (*outer, *inner)
+    constraints = [
+        *(f"0 <= r{axis} < {repeat[axis]}" for axis in outer_axes),
+        *(f"0 <= d{axis} < {single_shape[axis]}" for axis in range(len(repeat))),
+        *(f"g{axis} = {single_shape[axis]} * r{axis} + d{axis}" for axis in range(len(repeat))),
+    ]
+    band = isl.map(
+        f"{{ [{', '.join(domain)}] -> [{', '.join(global_)}] : {' and '.join(constraints)} }}"
+    )
+
+    def lifted(boundary: BoundaryRelation) -> BoundaryRelation:
+        pattern = boundary.pattern
+        relation = band.apply_range(relation_of(pattern).affine_hull())
+        parameters = dict(pattern.parameters)
+        return BoundaryRelation(
+            AffineAccess(
+                relation,
+                tuple(
+                    (name, parameters[name])
+                    for name in (
+                        relation.get_dim_name(isl.dim_type.PARAM, index)
+                        for index in range(relation.dim(isl.dim_type.PARAM))
+                    )
+                ),
+            )
+        )
+
+    return AccessRelations(
+        inputs=tuple(lifted(boundary) for boundary in relations.inputs),
+        outputs=tuple(lifted(boundary) for boundary in relations.outputs),
+    )
+
+
+@register_access_relation(ScheduleOp)
+def _schedule_access_relation(call: Call, ctx) -> AccessRelations:
+    op, params, whole_types, single_types = _relation_types(call, ctx)
+    single = _single_issue_relations(op, single_types)
+    whole = _single_issue_relations(op, whole_types)
+    repeat, order, single_shape = _repeat_order(call.target, whole, single)
+    scheduled = _outer_band(single, repeat, order, single_shape)
+    return AccessRelations(
+        inputs=tuple(
+            boundary
+            for param, boundary in zip(params, scheduled.inputs, strict=True)
+            if param.effect & MemoryEffect.READ
+        ),
+        outputs=scheduled.outputs,
+    )
+
+
+@register_cost_evaluator(ScheduleOp)
+def _schedule_cost(call: Call, ctx) -> Cost:
+    """Count reached bytes and contraction work in the selected local view."""
+    stated = relations_of(call, ctx)
+    local = projected(stated, call, ctx)
+    types = (*(ctx.local_type_of(arg) for arg in call.args), ctx.local_output_type(call))
+    boundaries = (*local.inputs, *local.outputs)
+    moved = []
+    for index, (type_, boundary) in enumerate(zip(types, boundaries, strict=True)):
+        if not isinstance(type_, TensorType):
+            raise ValueError("ScheduleOp cost requires tensor operands and output")
+        elements = reached_elements(boundary.pattern)
+        if elements is None:
+            raise ValueError(f"ScheduleOp boundary {index} has no finite traffic")
+        amount = -(-(elements * type_.dtype.bit_width) // 8)
+        moved.append(
+            TrafficBytes(write=amount) if index == len(call.args) else TrafficBytes(read=amount)
+        )
+
+    op = call.target.op
+    _params, reads, writes = _instruction_schema(op)
+    read_write = tuple(param for param in writes if param.effect & MemoryEffect.READ)
+    flops = {}
+    if read_write:
+        iterations = cardinality(iteration_universe(local))
+        if iterations is None:
+            raise ValueError("ScheduleOp has no finite floating-point iteration count")
+        dtype = next(
+            (
+                type_.dtype
+                for param, type_ in zip(reads, types, strict=False)
+                if not param.effect & MemoryEffect.WRITE and isinstance(type_, TensorType)
+            ),
+            types[-1].dtype,
+        )
+        flops = {dtype: 2 * iterations}
+    return Cost(flops, tuple(moved))
 
 
 def _check_pattern(

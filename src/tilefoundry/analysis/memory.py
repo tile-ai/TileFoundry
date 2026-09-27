@@ -15,9 +15,11 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.core.module import Module
+from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import bytes_by_storage
@@ -386,6 +388,29 @@ def _resident_value_ids(function: Function, liveness: Liveness) -> frozenset[int
     return frozenset(result)
 
 
+def _result_copies(expr: Expr) -> int:
+    """Physical result slots represented by one scheduled SSA value."""
+    if not isinstance(expr, Call) or not isinstance(expr.target, ScheduleOp):
+        return 1
+    op = expr.target.op
+    schema = getattr(type(op), "_op_schema", None)
+    if schema is None:
+        return 1
+    result = next(
+        (
+            param
+            for param in schema.signature
+            if param.kind == "input"
+            and param.effect is not None
+            and param.effect & MemoryEffect.WRITE
+        ),
+        None,
+    )
+    if result is None or result.effect & MemoryEffect.READ:
+        return 1
+    return expr.target.buffers
+
+
 def _project_allocation_values(
     liveness: Liveness,
     resident_ids: frozenset[int],
@@ -402,6 +427,7 @@ def _project_allocation_values(
     for label, interval in zip(labels, intervals, strict=True):
         expr = interval.value
         persistent = id(expr) in parameter_ids
+        copies = _result_copies(expr)
         for memory_level, amount in bytes_by_storage(local.local_type_of(expr)).items():
             if facts.explicit(memory_level) is None:
                 continue
@@ -411,7 +437,7 @@ def _project_allocation_values(
                     ValueLifetime(
                         binding=label,
                         memory_level=memory_level,
-                        bytes=amount,
+                        bytes=amount * copies,
                         defined_at=interval.defined_at,
                         last_used_at=(
                             liveness.timeline_end if persistent else interval.last_used_at

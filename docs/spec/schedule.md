@@ -84,14 +84,18 @@ The input/output convention for TIR instruction relations is defined in
 
 ## 5. Buffers and cost
 
-`buffers` defaults to one. It multiplies the live result-tile occupancy of
-memory-family schedules; it does not duplicate compute results.
+`buffers` defaults to one. It multiplies the live result-tile occupancy of a
+schedule whose selected instruction has a write-only result. A `READ | WRITE`
+accumulator occupies one result tile regardless of `buffers`.
 
-Schedule traffic is derived from the scheduled access relation. Ideal compute
-time is the number of issues (`product(repeat)`) multiplied by the selected
-instruction's ideal issue time from target facts. MMA issue time is derived
-from tensor throughput; copy issue time is constrained by the narrowest memory
-level crossed by the instruction.
+Schedule traffic is derived from the scheduled access relation. A transfer has
+no floating-point work. An MMA reports one multiply and one add per contraction
+point, `2 * M * N * K`, in the dtype of its multiplicative inputs.
+
+Ideal compute time is the number of issues (`product(repeat)`) multiplied by
+the selected instruction's ideal issue time from target facts. MMA issue time
+is derived from tensor throughput; copy issue time is constrained by the
+narrowest memory level crossed by the instruction.
 
 The concrete mapping of issues to participants, and the lowering loop nest
 selected by `order`, are lowering contracts rather than authored ScheduleOp
