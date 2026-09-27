@@ -8,7 +8,6 @@ from .constraint import (
     SameModesConstraint,
 )
 from .match import (
-    ABSENT,
     ARRANGEMENT,
     OPAQUE,
     UNNAMED_PLACE,
@@ -21,7 +20,6 @@ from .match import (
     matched,
     refusals_between,
     relations_of,
-    resolved,
 )
 from .pattern import (
     AndPattern,
@@ -63,7 +61,6 @@ from .utils import (
 )
 
 __all__ = [
-    "ABSENT",
     "ARRANGEMENT",
     "AndPattern",
     "AttrPattern",
@@ -112,7 +109,6 @@ __all__ = [
     "operand_tile",
     "refusals_between",
     "relations_of",
-    "resolved",
     "storage_place",
     "predicates",
     "whole_vectors",

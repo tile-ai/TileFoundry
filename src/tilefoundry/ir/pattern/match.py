@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 from tilefoundry.ir.clause.layout import is_layout_wildcard
 from tilefoundry.ir.types import (
@@ -22,7 +22,6 @@ from tilefoundry.ir.types.substitute import DimSubstitutionError, substitute_sha
 
 UNNAMED_PLACE = "_"
 ARRANGEMENT = "every arrangement"
-ABSENT = type("Absent", (), {"__repr__": lambda self: "ABSENT"})()
 OPAQUE = object()
 
 
@@ -491,108 +490,6 @@ class PatternMatcher:
         )
 
 
-class _PatternResolver:
-    """Pure partial evaluation of pattern trees under fixed bindings."""
-
-    def resolve(self, pattern, bindings):
-        held = dict(bindings or {})
-        if not isinstance(pattern, _pattern_type()):
-            return self._resolve_value(pattern, held)
-        for cls in type(pattern).__mro__:
-            visitor = getattr(self, f"visit_{cls.__name__}", None)
-            if visitor is not None:
-                return visitor(pattern, held)
-        raise NotImplementedError(f"{type(pattern).__name__} has no resolver visitor")
-
-    def _resolve_value(self, value, bindings):
-        if isinstance(value, _pattern_type()):
-            return self.resolve(value, bindings)
-        if isinstance(value, DimVar) or is_dim_op_call(value):
-            return substitute_shape_dim(value, _extents(bindings))
-        if isinstance(value, tuple):
-            return tuple(self._resolve_value(item, bindings) for item in value)
-        return value
-
-    def visit_Pattern(self, pattern, bindings):
-        if type(pattern) is not _pattern_type() and "__dataclass_fields__" not in vars(
-            type(pattern)
-        ):
-            raise NotImplementedError(f"{type(pattern).__name__} has no resolver visitor")
-        return replace(
-            pattern,
-            **{
-                name: self._resolve_value(value, bindings)
-                for name, value in vars(pattern).items()
-            },
-        )
-
-    def visit_OrPattern(self, pattern, bindings):
-        from .pattern import OrPattern  # noqa: PLC0415 - pattern protocol cycle
-
-        held = tuple(
-            resolved
-            for resolved in (
-                self._resolve_value(alternative, bindings) for alternative in pattern.patterns
-            )
-            if resolved is not ABSENT
-        )
-        return OrPattern(*held) if held else ABSENT
-
-    def visit_SequencePattern(self, pattern, bindings):
-        from .pattern import SequencePattern  # noqa: PLC0415 - pattern protocol cycle
-
-        return SequencePattern(
-            *(self._resolve_value(item, bindings) for item in pattern.patterns)
-        )
-
-    def visit_StarPattern(self, pattern, bindings):
-        from .pattern import StarPattern  # noqa: PLC0415 - pattern protocol cycle
-
-        return StarPattern(self._resolve_value(pattern.pattern, bindings))
-
-    def visit_ConstraintPattern(self, pattern, bindings):
-        return pattern
-
-    def visit_SwitchPattern(self, pattern, bindings):
-        from .pattern import SwitchPattern  # noqa: PLC0415 - pattern protocol cycle
-
-        if pattern.param in bindings:
-            branch = next(
-                (item for value, item in pattern.branches if value == bindings[pattern.param]),
-                ABSENT,
-            )
-            return (
-                ABSENT if branch is ABSENT else self._resolve_value(branch, bindings)
-            )
-        branches = {
-            value: self._resolve_value(branch, bindings) for value, branch in pattern.branches
-        }
-        branches = {value: branch for value, branch in branches.items() if branch is not ABSENT}
-        return SwitchPattern(pattern.param, branches) if branches else ABSENT
-
-    def visit_GuardPattern(self, pattern, bindings):
-        from .pattern import GuardPattern  # noqa: PLC0415 - pattern protocol cycle
-
-        value = evaluated(pattern.symbol, bindings)
-        if value is None:
-            return GuardPattern(
-                pattern.symbol,
-                pattern.condition,
-                self._resolve_value(pattern.pattern, bindings),
-            )
-        return (
-            self._resolve_value(pattern.pattern, bindings)
-            if matched(pattern.condition, value) is not None
-            else ABSENT
-        )
-
-    def visit_AtomPattern(self, pattern, bindings):
-        return pattern
-
-    def visit_FromAtom(self, pattern, bindings):
-        return pattern
-
-
 class _PatternAlternatives:
     """Flatten the declaration alternatives represented by a pattern tree."""
 
@@ -642,11 +539,6 @@ def _named(value):
 
 def _extents(bindings) -> dict:
     return {name: value for name, value in dict(bindings or {}).items() if type(value) is int}
-
-
-def resolved(value, bindings):
-    """Resolve symbols and nested patterns under *bindings*."""
-    return _PatternResolver().resolve(value, bindings)
 
 
 def evaluated(value, captures):
@@ -767,7 +659,6 @@ def refusals_between(op_type, operands: dict) -> tuple[str, ...]:
 
 
 __all__ = [
-    "ABSENT",
     "ARRANGEMENT",
     "Match",
     "PatternMatcher",
@@ -781,7 +672,6 @@ __all__ = [
     "matched",
     "refusals_between",
     "relations_of",
-    "resolved",
     "written_alternatives",
     "written_binding",
     "written_bindings",

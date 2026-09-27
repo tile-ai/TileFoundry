@@ -70,7 +70,8 @@ def verify_between(call, ctx) -> None:
 def verify_operands(call, ctx) -> None:
     """Hold each operand to the pattern declared for its parameter."""
     label = type(call.target)._op_schema.name
-    matcher = PatternMatcher()
+    atom = getattr(call.target, "atom", None)
+    matcher = PatternMatcher(dict(getattr(atom, "bindings", {})))
     for param, arg in zip(input_params(type(call.target)), call.args):
         if param.pattern is None:
             continue

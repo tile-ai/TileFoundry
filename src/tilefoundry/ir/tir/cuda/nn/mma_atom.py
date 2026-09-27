@@ -2,32 +2,29 @@
 
 from __future__ import annotations
 
-import itertools
 from dataclasses import dataclass
 
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.pattern import (
-    ABSENT,
     CapturePattern,
     ComposedLayoutPattern,
     LayoutPattern,
     MeshPattern,
     MultipleOfPattern,
-    OneOfPattern,
     OrPattern,
     Pattern,
-    alternatives_of,
+    SwitchPattern,
     matched,
-    resolved,
 )
 from tilefoundry.ir.pattern import (
     predicates as P,
 )
 from tilefoundry.ir.pattern.match import written_binding, written_bindings, written_place
 from tilefoundry.ir.types import ComposedLayout, Layout, Mesh
-from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.layout_algebra import coalesce
 from tilefoundry.ir.types.mesh import levels, starts
+
+_MISS = object()
 
 
 class MmaAtom:
@@ -61,18 +58,21 @@ class MmaAtom:
                 raise ValueError(
                     f"{self.reference_name}: {param.name}={written_binding(value)} is not one "
                     f"it takes{self._where(held)}; it takes {param.name} "
-                    f"{written_place(resolved(param.pattern, held), param.name)}"
+                    f"{written_place(param.pattern, param.name)}"
                 )
             held[param.name] = value
         self.bindings = held
         self.mesh = mesh
-        self._roles: dict[str, object] = {}
 
     @classmethod
     def _implied(cls, param: ParamDef, held: dict):
-        left = resolved(param.pattern, held)
-        if not isinstance(left, Pattern) and left is not ABSENT:
-            return left
+        pattern = param.pattern
+        while isinstance(pattern, SwitchPattern) and pattern.param in held:
+            pattern = dict(pattern.branches).get(held[pattern.param], _MISS)
+            if pattern is _MISS:
+                break
+        if pattern is not _MISS and not isinstance(pattern, Pattern):
+            return pattern
         if param.has_default:
             return param.default
         raise ValueError(f"{cls.reference_name} needs {param.name}")
@@ -81,63 +81,8 @@ class MmaAtom:
     def _where(held: dict) -> str:
         return "" if not held else f" where {written_bindings(held.items())}"
 
-    @classmethod
-    def bindings_for(cls, reads) -> tuple[dict, ...]:
-        """Every parameter binding the operand types leave possible."""
-        choices = []
-        for param in cls.parameters:
-            if isinstance(param.pattern, OneOfPattern):
-                choices.append([(param.name, value) for value in param.pattern.values])
-                continue
-            if param.has_default:
-                continue
-            extent = cls._extent_of(reads, param.name) or 0
-            choices.append(
-                [
-                    (param.name, value)
-                    for value in range(1, extent + 1)
-                    if extent % value == 0 and matched(param.pattern, value) is not None
-                ]
-            )
-        return tuple(dict(one) for one in itertools.product(*choices))
-
-    @staticmethod
-    def _extent_of(reads, name: str) -> int | None:
-        for pattern, held in reads:
-            for _, tensor in alternatives_of(pattern):
-                for extent, value in zip(
-                    getattr(tensor, "shape", None) or (), getattr(held, "shape", ())
-                ):
-                    if isinstance(extent, DimVar) and extent.name == name and type(value) is int:
-                        return value
-        return None
-
-    @classmethod
-    def role_of(cls, role: str, bindings=()):
-        return resolved(getattr(cls, role), dict(bindings))
-
     def role(self, role: str):
-        held = self._roles.get(role)
-        if held is None:
-            held = self._roles[role] = self.role_of(role, self.bindings)
-        return held
-
-    @property
-    def shape_mnk(self) -> tuple[int, int, int]:
-        (m, n), (_, k) = tuple(self.role("C").shape), tuple(self.role("A").shape)
-        return m, n, k
-
-    @property
-    def dtype_a(self):
-        return self.role("A").dtype
-
-    @property
-    def dtype_b(self):
-        return self.role("B").dtype
-
-    @property
-    def dtype_c(self):
-        return self.role("C").dtype
+        return getattr(type(self), role)
 
     @property
     def required_scope(self) -> Mesh:
@@ -224,7 +169,7 @@ class FromAtom(Pattern):
             raise ValueError("an MMA operand reads role A, B or C of its atom")
 
     def read_on(self, op):
-        return op.atom.role_of(self.role, getattr(op.atom, "bindings", ()))
+        return getattr(type(op.atom), self.role)
 
     def describe(self, name: str = "_") -> str:
         return f"the {self.role} operand of its atom"
