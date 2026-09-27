@@ -19,6 +19,7 @@ import torch
 
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
+from tilefoundry.analysis.liveness import analyze_liveness, result_copies
 from tilefoundry.analysis.metadata import (
     ComputeCostMetadata,
     MemoryMetadata,
@@ -29,10 +30,11 @@ from tilefoundry.analysis.metadata import (
 )
 from tilefoundry.evaluator import EvalError, evaluate
 from tilefoundry.inspection import PatternPrinter, as_script
-from tilefoundry.ir.core import Call, Op, Var, get_metadata
+from tilefoundry.ir.core import Call, Op, Var, get_metadata, value_label
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.pattern import Tensor
@@ -68,6 +70,30 @@ ANALYSES = (
     ("performance", PerformanceSummaryMetadata),
 )
 _TENSOR_CLOCK_HZ = 1_830_000_000
+
+SMEM_GOLDEN = {
+    "gemm_8192x17408x5120_cta_grid": 196_608,
+    "gemm_8192x17408x5120_persistent": 196_608,
+    "gemm_8192x17408x5120_register_store": 196_608,
+    "gemm_8192x17408x5120_tma_store": 196_608,
+    "sm80_mma_ldmatrix": 1_536,
+    "wgmma_a_k_major": 6_144,
+    "wgmma_a_mn_major": 6_144,
+    "wgmma_cast_between_schedules": 6_144,
+    "wgmma_cp_async_loads": 6_144,
+    "wgmma_cta_grid_4x17": 13_824,
+    "wgmma_explicit_windows": 6_144,
+    "wgmma_insert_tiles_into_output": 6_144,
+    "wgmma_k_slices_of_wide_run": 12_288,
+    "wgmma_one_tile_of_larger_output": 6_144,
+    "wgmma_repeat_along_k": 36_864,
+    "wgmma_repeat_along_n": 24_576,
+    "wgmma_rs_a_from_accumulator": 5_120,
+    "wgmma_rs_a_from_smem": 6_144,
+    "wgmma_swizzled_smem": 6_144,
+    "wgmma_tma_3stage": 13_824,
+    "wgmma_two_schedules": 12_288,
+}
 
 
 def _prim_in(path: Path) -> PrimFunction:
@@ -142,8 +168,51 @@ def test_scheduled_hir_program_has_analysis_metadata(
         lifetimes = get_metadata(result.function, RegionMemoryMetadata).lifetimes
         smem = sorted(item.bytes for item in lifetimes if item.memory_level == "smem")
         rmem = sorted(item.bytes for item in lifetimes if item.memory_level == "rmem")
-        assert smem == sorted((512, 512 * 3, 4096, 4096 * 3))
+        assert smem == sorted((512 * 3, 4096 * 3))
         assert rmem == [4096, 8192, 8192, 8192, 8192]
+
+    if analysis == "memory":
+        placement = get_metadata(result.function, RegionMemoryMetadata)
+        smem_peak = next(
+            item.peak_bytes for item in placement.peaks if item.memory_level == "smem"
+        )
+        assert smem_peak == SMEM_GOLDEN[path.stem]
+
+        liveness = analyze_liveness(result.function)
+        intervals = {id(item.value): item for item in liveness.intervals}
+        loop_bounds = tuple(
+            (
+                intervals[id(loop.induction_var)].defined_at,
+                intervals[id(loop)].defined_at - 2,
+            )
+            for loop in collect_exprs(result.function.body)
+            if isinstance(loop, LoopRegion)
+        )
+        lifetimes_by_binding = {}
+        for lifetime in placement.lifetimes:
+            lifetimes_by_binding.setdefault(lifetime.binding, []).append(lifetime)
+
+        for use in liveness.uses:
+            interval = intervals[id(use.value)]
+            for phi, backedge in loop_bounds:
+                if (
+                    not use.synthetic
+                    and phi < use.at < backedge
+                    and interval.defined_at < phi
+                ):
+                    for lifetime in lifetimes_by_binding.get(value_label(use.value), ()):
+                        assert lifetime.last_used_at >= backedge
+
+        for interval in liveness.intervals:
+            if result_copies(interval.value) == 1:
+                continue
+            assert (interval.defined_at, interval.last_used_at) in loop_bounds
+            projected = lifetimes_by_binding[value_label(interval.value)]
+            assert all(
+                (lifetime.defined_at, lifetime.last_used_at)
+                == (interval.defined_at, interval.last_used_at)
+                for lifetime in projected
+            )
 
     if analysis == "performance" and path.stem == "gemm_8192x17408x5120_cta_grid":
         local_moves = []

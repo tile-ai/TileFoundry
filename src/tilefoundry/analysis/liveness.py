@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from tilefoundry.ir.core import Expr, Var
+from tilefoundry.ir.core import Call, Expr, Var
+from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.visitor import ExprVisitor, collect_exprs, expr_children
 
 
@@ -38,6 +40,29 @@ class Liveness:
     timeline_end: int
 
 
+def result_copies(expr: Expr) -> int:
+    """Physical result slots represented by one scheduled SSA value."""
+    if not isinstance(expr, Call) or not isinstance(expr.target, ScheduleOp):
+        return 1
+    op = expr.target.op
+    schema = getattr(type(op), "_op_schema", None)
+    if schema is None:
+        return 1
+    result = next(
+        (
+            param
+            for param in schema.signature
+            if param.kind == "input"
+            and param.effect is not None
+            and param.effect & MemoryEffect.WRITE
+        ),
+        None,
+    )
+    if result is None or result.effect & MemoryEffect.READ:
+        return 1
+    return expr.target.buffers
+
+
 def _free_vars(function: Function) -> tuple[Var, ...]:
     """Boundary Vars reached as uses but not owned by a structural binding site."""
     if function.body is None:
@@ -62,6 +87,7 @@ class LivenessVisitor(ExprVisitor[None]):
         self._states: dict[int, LiveInterval] = {}
         self._definition_order: list[int] = []
         self._uses: list[UseEvent] = []
+        self._loop_entries: list[tuple[int, set[int], set[int]]] = []
         for parameter in function.params:
             self.define(parameter, self.next_event())
         for free in _free_vars(function):
@@ -85,6 +111,9 @@ class LivenessVisitor(ExprVisitor[None]):
         state = self._states.get(id(value))
         if state is None:
             raise ValueError(f"liveness: {type(value).__name__} is used before its definition")
+        for entry, outside, _staged in self._loop_entries:
+            if state.defined_at < entry:
+                outside.add(id(value))
         self._states[id(value)] = replace(state, last_used_at=max(state.last_used_at, point))
         self._uses.append(UseEvent(value, point, synthetic))
 
@@ -105,6 +134,8 @@ class LivenessVisitor(ExprVisitor[None]):
         for operand in expr_children(value):
             self.use(operand, point)
         self.define(value, point)
+        if result_copies(value) > 1 and self._loop_entries:
+            self._loop_entries[-1][2].add(id(value))
 
     def visit_MeshRegion(self, region: MeshRegion, ctx=None) -> None:
         """Make the argument/parameter and body/result binding edges explicit."""
@@ -135,12 +166,20 @@ class LivenessVisitor(ExprVisitor[None]):
         for phi in region.carried_args:
             self.define(phi, phi_definition)
 
+        self._loop_entries.append((phi_definition, set(), set()))
         self.visit(region.body, ctx)
         for yielded in region.yield_values:
             self.visit(yielded, ctx)
         backedge = self.next_event()
         for yielded in region.yield_values:
             self.use(yielded, backedge)
+        _, outside, staged = self._loop_entries.pop()
+        for key in outside:
+            self.use(self._states[key].value, backedge, synthetic=True)
+        for key in staged:
+            self._states[key] = replace(
+                self._states[key], defined_at=phi_definition, last_used_at=backedge
+            )
 
         exit_use = self.next_event()
         for source in region.carried_args or (region.body,):
@@ -157,4 +196,4 @@ def analyze_liveness(function: Function) -> Liveness:
     return visitor.finish()
 
 
-__all__ = ["LiveInterval", "Liveness", "UseEvent", "analyze_liveness"]
+__all__ = ["LiveInterval", "Liveness", "UseEvent", "analyze_liveness", "result_copies"]

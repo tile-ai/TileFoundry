@@ -8,6 +8,7 @@ from tilefoundry.ir.core import (
     Call,
     Constant,
     Expr,
+    Tuple,
     VerifyError,
     describe_expr,
     get_metadata,
@@ -15,11 +16,10 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core import attach_metadata as attach
 from tilefoundry.ir.core.module import Module
-from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.schedule import ScheduleOp
+from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import bytes_by_storage
@@ -51,7 +51,7 @@ from .footprint import (
     wave_of,
 )
 from .iteration_scope import IterationScope, walk_scopes
-from .liveness import Liveness, analyze_liveness
+from .liveness import Liveness, analyze_liveness, result_copies
 from .metadata import (
     Breakdown,
     MemoryLevelPeak,
@@ -376,39 +376,36 @@ def add_traffic(
                 _accumulate(into.per_unit.setdefault(name, {}), unit, moved, total_trips)
 
 
+def view_root(value: Expr) -> Expr:
+    """Follow region results and tuple projections to their material value."""
+    while True:
+        if isinstance(value, MeshRegion):
+            value = value.body
+            continue
+        if isinstance(value, Call) and isinstance(value.target, TupleGetItem):
+            source = view_root(value.args[0])
+            index = value.args[1]
+            if (
+                isinstance(source, Tuple)
+                and isinstance(index, Constant)
+                and type(index.value) is int
+                and 0 <= index.value < len(source.elements)
+            ):
+                value = source.elements[index.value]
+                continue
+        return value
+
+
 def _resident_value_ids(function: Function, liveness: Liveness) -> frozenset[int]:
     """Values whose SSA interval represents independently resident bytes."""
     result = {id(parameter) for parameter in function.params}
     for interval in liveness.intervals:
         value = interval.value
-        if isinstance(value, (Call, Constant, LoopRegion)):
+        if isinstance(value, (Call, Constant, LoopRegion)) and view_root(value) is value:
             result.add(id(value))
         if isinstance(value, LoopRegion):
             result.update(id(phi) for phi in value.carried_args)
     return frozenset(result)
-
-
-def _result_copies(expr: Expr) -> int:
-    """Physical result slots represented by one scheduled SSA value."""
-    if not isinstance(expr, Call) or not isinstance(expr.target, ScheduleOp):
-        return 1
-    op = expr.target.op
-    schema = getattr(type(op), "_op_schema", None)
-    if schema is None:
-        return 1
-    result = next(
-        (
-            param
-            for param in schema.signature
-            if param.kind == "input"
-            and param.effect is not None
-            and param.effect & MemoryEffect.WRITE
-        ),
-        None,
-    )
-    if result is None or result.effect & MemoryEffect.READ:
-        return 1
-    return expr.target.buffers
 
 
 def _project_allocation_values(
@@ -427,7 +424,7 @@ def _project_allocation_values(
     for label, interval in zip(labels, intervals, strict=True):
         expr = interval.value
         persistent = id(expr) in parameter_ids
-        copies = _result_copies(expr)
+        copies = result_copies(expr)
         for memory_level, amount in bytes_by_storage(local.local_type_of(expr)).items():
             if facts.explicit(memory_level) is None:
                 continue

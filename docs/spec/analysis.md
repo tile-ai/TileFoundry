@@ -431,17 +431,19 @@ are monotonic across the whole Function, including nested and sibling regions.
 | `ValueLifetime.binding` | Use the parameter or binding name, suffixed with `:` and the line of the value's source span when it has one. Repeated names differ by the printer's numeric suffix in definition order. A value with neither name nor span is `<value N>` in definition order. | No |
 | `ValueLifetime.memory_level` | Emit one lifetime per storage level occupied by the value's Type. | No |
 | `ValueLifetime.bytes` | Project the Type through every authored split at or coarser than the explicit level's `owner`, then take its logical bytes; a target-owned or undeclared level remains global. A `ScheduleOp` whose selected instruction has a write-only result occupies `buffers` copies of those bytes; a `READ \| WRITE` result occupies one. | `MemoryHierarchyFacts.explicit_levels[].owner` |
-| `ValueLifetime.defined_at` | Definition event on the Function-wide structured SSA timeline. | No |
+| `ValueLifetime.defined_at` | Definition event on the Function-wide structured SSA timeline. A staged (`buffers > 1`) result starts at its containing loop's phi event rather than its own definition event. | No |
 | `ValueLifetime.last_used_at` | Greatest ordinary-consumer, region-entry, loop-backedge, or region-exit use event; the final timeline event for a parameter. | No |
 | `ValueLifetime.persistent` | True for parameters and false for body allocations. | No |
 | `RegionMemoryMetadata.lifetimes` | Every value residency except a non-material view. | As above |
 
 - constraints:
   - `Reshape` and `Transpose` describe bytes their operand already holds and
-    MUST NOT receive independent lifetimes. Every other result, including a
-    window, tuple field, or result that overwrites a destination, MUST allocate
-    its own. Analysis MUST use operation semantics for this distinction rather
-    than infer aliasing from layouts.
+    MUST NOT receive independent lifetimes. A result reached only through region
+    binding edges and tuple projections likewise describes bytes already held by
+    the region body and MUST NOT receive an independent lifetime. Every other
+    result, including a window or a result that overwrites a destination, MUST
+    allocate its own. Analysis MUST use operation semantics for this distinction
+    rather than infer aliasing from layouts.
   - A caller-owned parameter MUST NOT be reused. Donation is a contract with
     the caller, not a conclusion this family may draw.
 

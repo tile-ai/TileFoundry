@@ -54,6 +54,10 @@ FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 CASES = placed_cases()
 INVENTORY = [pytest.param(case, id=case.id) for case in CASES]
 
+_GQA_TRANSPOSE_VIEW_LEFTOVER_12_GMEM = 285_800
+_PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_VIEW_LEFTOVER_12_SMEM = 278_528
+_QWEN_MATERIAL_RMS_NORM_LEFTOVER_12_GMEM = 145_935_368
+
 
 @dataclass(frozen=True)
 class _PersistentScheduleExpectation:
@@ -123,7 +127,7 @@ EXPECTED_MEMORY_PEAKS = {
     "gqa_decode.GqaOnline._ctx_combine[static]": {"gmem": 291_968},
     "gqa_decode.GqaOnline._ctx_partials[ctx_len=128]": {"gmem": 5_662_720},
     "gqa_decode.GqaOnline.gqa_online_attend[ctx_len=128]": {
-        "gmem": 283_752,
+        "gmem": _GQA_TRANSPOSE_VIEW_LEFTOVER_12_GMEM,
         "rmem": 0,
     },
     "hand_checked.InvariantReuse.reuse[static]": {
@@ -221,10 +225,10 @@ EXPECTED_MEMORY_PEAKS = {
     "prefill_decode_attention.PrefillDecodeAttention.attend[ctx=128,seq=128]": {
         "gmem": 1_310_720,
         "rmem": 0,
-        "smem": 229_376,
+        "smem": _PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_VIEW_LEFTOVER_12_SMEM,
     },
     "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]": {
-        "gmem": 145_933_316,
+        "gmem": _QWEN_MATERIAL_RMS_NORM_LEFTOVER_12_GMEM,
         "rmem": 520,
         "smem": 65_792,
     },
