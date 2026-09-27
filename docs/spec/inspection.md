@@ -3,8 +3,8 @@
 ## Scope
 
 Developer-facing inspection facilities for TileFoundry IR: DOT graph,
-Python DSL printer (round-trippable), interactive HTML viewer, and dump
-integration.
+Python DSL printer (round-trippable), pattern declaration reports, interactive
+HTML viewer, and dump integration.
 
 ## 1. HIR DOT
 
@@ -374,6 +374,35 @@ separates unless that value brackets itself:
   - Part zero of a line is the value's own type, which carries no key: it is not
     a measurement of the value, it is the value, and it is DSL text
     ([§2.3](#23-dsl-text-forms)) that pastes back. Every later part is a record.
+
+### 2.9 Pattern declaration reports
+
+`PatternPrinter` renders operation-declaration patterns as reports rather than
+as executable Python source. It is a pure MRO-dispatched visitor and does not
+take a print context:
+
+```python
+printer = PatternPrinter()
+printer.written(pattern)       # value shape, with named holes
+printer.rules(pattern)         # ordered, de-duplicated condition lines
+printer.described(pattern)     # value shape plus an indented predicates line
+printer.alternatives(pattern)  # flattened Or/Switch declaration branches
+printer.declaration(op_type)   # one complete operation declaration
+printer.refusal(refusal)       # consumer-facing match failure
+```
+
+Layout values use single-line positional forms such as `Layout((r, W), (l,
+1))`, `ComposedLayout(Swizzle(b, 4, 3), p, Layout(...))`, and
+`ShardLayout(Layout(...), (B(), B(), B()), Mesh(...))`. Named wildcards print
+their names, unnamed wildcards print `_`, and star captures print `*name`.
+Formula conditions precede hand-written layout predicates. Alternative
+bindings retain declaration order.
+
+This report printer is separate from `PythonPrinter`: it does not inherit the
+round-trip source printer, request import or mesh-name registration, or accept
+a `PrintContext`. Pattern IR produces no text; verification may import this
+printer lazily to render structural `Refusal` evidence without creating an
+`ir` to `inspection` dependency.
 
 ## 3. Viewer
 

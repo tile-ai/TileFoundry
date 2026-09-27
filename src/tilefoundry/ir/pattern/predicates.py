@@ -10,15 +10,7 @@ from tilefoundry.ir.types import Broadcast, ComposedLayout, Layout, ShardLayout,
 from tilefoundry.ir.types.int_tuple import flatten
 from tilefoundry.ir.types.layout_algebra import coalesce, is_inverse_projectable
 
-from .match import (
-    ARRANGEMENT,
-    UNNAMED_PLACE,
-    Unknown,
-    matched,
-    relations_of,
-    written_place,
-    written_tuple,
-)
+from .match import Unknown, matched
 from .pattern import Pattern, SequencePattern, WildcardPattern
 
 UNKNOWN = Unknown()
@@ -145,13 +137,6 @@ class Predicate(Pattern):
         """Return true, false, or None while required bindings are unknown."""
         raise NotImplementedError
 
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        raise NotImplementedError
-
-    def relations(self) -> tuple[str, ...]:
-        raise NotImplementedError
-
-
 @dataclass(frozen=True, eq=False)
 class Formula(Predicate):
     """A Boolean expression evaluated against pattern bindings."""
@@ -196,13 +181,6 @@ class Formula(Predicate):
 
     def holds(self, subject, bindings: dict) -> bool | None:
         return evaluate(self, bindings)
-
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return _written(self)
-
-    def relations(self) -> tuple[str, ...]:
-        return (self.describe(),)
-
 
 def Bits(name: str) -> Term:
     """Read the bit width of the dtype bound to *name*."""
@@ -481,49 +459,6 @@ def failing(formulas, env) -> Formula | None:
     return None
 
 
-def _written(value) -> str:
-    if isinstance(value, Formula):
-        if value.op == "not":
-            return f"~({_written(value.args[0])})"
-        if value.op == "forall":
-            term, token, body = value.args
-            return f"all({_written(body)} for x{token} in {_written(term)})"
-        if value.op == "in":
-            return f"{_written(value.args[0])} in {value.args[1]!r}"
-        symbol = {
-            "eq": "==",
-            "ne": "!=",
-            "lt": "<",
-            "le": "<=",
-            "gt": ">",
-            "ge": ">=",
-            "and": "&",
-            "or": "|",
-        }[value.op]
-        return f"{_written(value.args[0])} {symbol} {_written(value.args[1])}"
-    if isinstance(value, Term):
-        if value.op == "constant":
-            return repr(value.args[0])
-        if value.op in {"variable", "bits"}:
-            return value.args[0] if value.op == "variable" else f"Bits({value.args[0]!r})"
-        if value.op == "bound":
-            return f"x{value.args[0]}"
-        if value.op == "element":
-            return f"{value.args[0]!r}[{_written(value.args[1])}]"
-        if value.op in {"sum", "count"}:
-            return f"{value.op.title()}({_written(value.args[0])})"
-        symbol = {"add": "+", "sub": "-", "mul": "*", "floordiv": "//", "mod": "%"}[value.op]
-        return f"{_written(value.args[0])} {symbol} {_written(value.args[1])}"
-    return repr(value)
-
-
-VECTOR_READING = (
-    "every run: each tile axis's modes walked fastest first, contiguous ones joined; "
-    "the run at step 1 and every other step a whole number of vectors"
-)
-TENSORMAP_READING = "every tensormap: one dim per mode of the tile, the mode at step 1 first"
-
-
 def _arrangements(layout: Layout, per_mode: bool) -> tuple[Layout, ...]:
     if per_mode:
         return tuple(
@@ -548,15 +483,6 @@ class Forward(Predicate):
             for part in _arrangements(arrangement, self.per_mode)
         )
 
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        subject = "each top-level mode" if self.per_mode else ARRANGEMENT
-        return f"{subject} with no backward step"
-
-    def relations(self) -> tuple[str, ...]:
-        subject = "each top-level mode" if self.per_mode else ARRANGEMENT
-        return (f"{subject} has no backward step",)
-
-
 @dataclass(frozen=True)
 class Injective(Predicate):
     """Require every slot to be reached once, across the layout or per mode."""
@@ -570,15 +496,6 @@ class Injective(Predicate):
         return all(
             is_inverse_projectable(part) for part in _arrangements(arrangement, self.per_mode)
         )
-
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        subject = "each top-level mode" if self.per_mode else ARRANGEMENT
-        return f"{subject} reaching each of its own slots exactly once"
-
-    def relations(self) -> tuple[str, ...]:
-        subject = "each top-level mode" if self.per_mode else ARRANGEMENT
-        return (f"{subject} reaches each of its own slots exactly once",)
-
 
 def _reverse_group(group):
     if isinstance(group, tuple):
@@ -648,13 +565,6 @@ class WholeVectors(Predicate):
             return bindings[self.width.name] in widths
         return matched(self.width, widths[-1], bindings) is not None
 
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return f"vectors of {self.width.name} bytes"
-
-    def relations(self) -> tuple[str, ...]:
-        return (VECTOR_READING, *relations_of((self.width,)))
-
-
 @dataclass(frozen=True)
 class PlainArrangement(Predicate):
     """Require an arrangement with no transform and no nonzero offset."""
@@ -668,13 +578,6 @@ class PlainArrangement(Predicate):
         if isinstance(stated, ComposedLayout) and (stated.inner is not None or stated.offset != 0):
             return False
         return self.arrangement(subject) is not None
-
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return "a plain arrangement with no transform or offset"
-
-    def relations(self) -> tuple[str, ...]:
-        return ("every plain arrangement has no transform or nonzero offset",)
-
 
 @dataclass(frozen=True)
 class Run:
@@ -766,18 +669,6 @@ class BoxDims(Predicate):
             and matched(SequencePattern(*self.dims), extents, bindings) is not None
         )
 
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        dims = written_tuple(tuple(written_place(place) for place in self.dims))
-        return f"box {dims}, {self.laid()}"
-
-    def relations(self) -> tuple[str, ...]:
-        reading = (
-            "every box: each tile axis's modes, contiguous ones joined up to "
-            f"{self.limit} elements, one dim each, in increasing step"
-        )
-        return (reading, *relations_of(self.dims))
-
-
 @dataclass(frozen=True)
 class TensorMap(Predicate):
     """Require one tensor-map dimension per nontrivial tile mode."""
@@ -813,14 +704,6 @@ class TensorMap(Predicate):
         return (
             steps is not None and matched(SequencePattern(*self.steps), steps, bindings) is not None
         )
-
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        steps = written_tuple(("1", *(written_place(place) for place in self.steps)))
-        return f"tensormap at {steps}"
-
-    def relations(self) -> tuple[str, ...]:
-        return (TENSORMAP_READING, *relations_of(self.steps))
-
 
 __all__ = [
     "Bits",

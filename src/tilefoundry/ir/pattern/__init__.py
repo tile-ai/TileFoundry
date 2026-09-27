@@ -8,18 +8,15 @@ from .constraint import (
     SameModesConstraint,
 )
 from .match import (
-    ARRANGEMENT,
     OPAQUE,
-    UNNAMED_PLACE,
     Match,
     PatternMatcher,
-    alternatives_of,
+    Refusal,
     between_rules,
     evaluated,
     is_symbolic,
     matched,
     refusals_between,
-    relations_of,
 )
 from .pattern import (
     AndPattern,
@@ -74,7 +71,6 @@ from .utils import (
 )
 
 __all__ = [
-    "ARRANGEMENT",
     "AndPattern",
     "AttrPattern",
     "Bits",
@@ -98,6 +94,7 @@ __all__ = [
     "OrPattern",
     "Pattern",
     "PatternMatcher",
+    "Refusal",
     "Predicate",
     "RangePattern",
     "SameConstraint",
@@ -114,12 +111,10 @@ __all__ = [
     "TensorPattern",
     "Table",
     "Term",
-    "UNNAMED_PLACE",
     "Unknown",
     "WildcardPattern",
     "WHOLE_BYTES",
     "_mangle_variant_name",
-    "alternatives_of",
     "any_threads",
     "between_rules",
     "evaluate",
@@ -130,7 +125,6 @@ __all__ = [
     "matched",
     "operand_tile",
     "refusals_between",
-    "relations_of",
     "storage_place",
     "failing",
     "predicates",

@@ -624,9 +624,10 @@ The implementation is split by responsibility under `ir/pattern/`:
   `Term` expressions and Boolean `Formula` predicates; and the named
   arrangement predicates `Forward`, `Injective`, `WholeVectors`,
   `PlainArrangement`, `BoxDims`, and `TensorMap`.
-- `match.py` owns the public `PatternMatcher`, private alternative expansion,
-  and the shared matching and description helpers. An unstated (`None`)
-  pattern field admits any value.
+- `match.py` owns the public `PatternMatcher` and structural `Refusal` evidence.
+  An unstated (`None`) pattern field admits any value. Pattern nodes carry data
+  only; declaration text and refusal text belong to inspection
+  ([inspection §2.9](./inspection.md#29-pattern-declaration-reports)).
 - `constraint.py` owns cross-operand `Constraint`, `DistinctConstraint`,
   `SameConstraint`, and `SameModesConstraint` values.
 - `utils.py` owns specialization naming and dimension lookup.
@@ -653,8 +654,9 @@ pattern node that owns them, so a failed formula can reject an alternative.
 Only unresolved formulas are deferred; after structural matching they are
 compiled into one OR-Tools CP-SAT model. An infeasible model is a mismatch,
 while an `UNKNOWN` solver result remains explicitly unknown rather than being
-reported as false. Refusals identify the first failed formula and show the
-bindings used to evaluate it. The hand-written predicates in
+reported as false. A refusal records the first failed pattern, its subject,
+and a snapshot of the bindings; inspection decides how to render that
+evidence. The hand-written predicates in
 `predicates.py` read the layout itself, including its coalesced runs and
 algebraic properties; `Formula` predicates instead read names bound by
 structural patterns.

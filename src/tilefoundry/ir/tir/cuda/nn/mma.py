@@ -104,7 +104,7 @@ def verify_mma(call: "Call", ctx: "VerifyContext") -> None:
         ctx.error(
             call,
             "MMA enclosing mesh violates declared instruction participation, "
-            f"which is {participation.describe()}",
+            f"which is {participation!r}",
         )
     if atom.mesh is not None and not physical_frames_match(atom.mesh, current):
         ctx.error(call, "MMA atom frame differs from active mesh scope")

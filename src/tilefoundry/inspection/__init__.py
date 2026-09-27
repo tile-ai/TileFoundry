@@ -1,4 +1,5 @@
 from .dot import hir_function_to_dot, module_entry_to_dot
+from .pattern_printer import PatternPrinter
 from .print_context import HirPrintContext, PrintContext, TirPrintContext
 from .printer_base import PythonPrinter
 from .python_printer import PythonPrintOptions, as_script, hir_function_to_python, module_to_python
@@ -21,4 +22,5 @@ __all__ = [
     "TirPrinter", "register_tir_printer",
     "Viewer",
     "PrintContext", "HirPrintContext", "TirPrintContext", "PythonPrinter",
+    "PatternPrinter",
 ]

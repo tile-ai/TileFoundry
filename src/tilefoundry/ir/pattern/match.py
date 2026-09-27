@@ -1,10 +1,9 @@
-"""Shared matching, resolution, and rendering helpers for IR patterns."""
+"""Shared matching helpers for IR patterns."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from tilefoundry.ir.clause.layout import is_layout_wildcard
 from tilefoundry.ir.types import (
     ComposedLayout,
     Layout,
@@ -14,14 +13,12 @@ from tilefoundry.ir.types import (
     TensorType,
     make_mesh,
 )
-from tilefoundry.ir.types.dim import DimFloorDiv, DimMul, DimVar, is_dim_op_call
+from tilefoundry.ir.types.dim import DimVar, is_dim_op_call
 from tilefoundry.ir.types.int_tuple import congruent
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.mesh import separate
 from tilefoundry.ir.types.substitute import DimSubstitutionError, substitute_shape_dim
 
-UNNAMED_PLACE = "_"
-ARRANGEMENT = "every arrangement"
 OPAQUE = object()
 
 
@@ -39,6 +36,15 @@ class Match:
     captures: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class Refusal:
+    """The first pattern node rejected during one match attempt."""
+
+    pattern: object
+    subject: object
+    bindings: dict
+
+
 class _Bindings(dict):
     """A binding dict that keeps nested ``matched`` calls on its owner."""
 
@@ -53,7 +59,7 @@ class PatternMatcher:
         self.bindings.matcher = self
         self.memo: dict[int, object] = {}
         self.pending: list[object] = []
-        self._refusal: str | None = None
+        self.refusal: Refusal | None = None
         self._depth = 0
 
     def snapshot(self):
@@ -62,7 +68,7 @@ class PatternMatcher:
             dict(self.bindings),
             dict(self.memo),
             list(self.pending),
-            self._refusal,
+            self.refusal,
         )
 
     def restore(self, saved) -> None:
@@ -73,13 +79,13 @@ class PatternMatcher:
         self.memo.clear()
         self.memo.update(memo)
         self.pending[:] = pending
-        self._refusal = refusal
+        self.refusal = refusal
 
     def match(self, pattern, subject) -> bool:
         """Match *pattern* against *subject* transactionally."""
         root = self._depth == 0
         if root:
-            self._refusal = None
+            self.refusal = None
         saved = self.snapshot()
         self._depth += 1
         try:
@@ -93,9 +99,9 @@ class PatternMatcher:
             if isinstance(pattern, _pattern_type()):
                 self.memo.setdefault(id(pattern), subject)
             return True
-        refusal = self._refusal or f"{subject!r} does not match {pattern!r}"
+        refusal = self.refusal or Refusal(pattern, subject, dict(self.bindings))
         self.restore(saved)
-        self._refusal = refusal
+        self.refusal = refusal
         return False
 
     def solve(self) -> bool | Unknown:
@@ -109,28 +115,20 @@ class PatternMatcher:
         predicate = failing(formulas, self.bindings)
         if predicate is None:
             predicate = formulas[0]
-        bindings = written_bindings(self.bindings.items())
+        subject = self.memo.get(id(predicate), self.memo.get(id(formulas[0])))
         if solved is UNKNOWN:
-            reason = f"CP-SAT returned unknown for {written_place(predicate)}"
-            self._refusal = reason if not bindings else f"{reason} ({bindings})"
+            self.refusal = Refusal(predicate, subject, dict(self.bindings))
             return UNKNOWN
         if solved is not None:
             self.bindings.update(solved)
             self.pending.clear()
             return True
-        reason = f"could not satisfy {written_place(predicate)}"
-        self._refusal = reason if not bindings else f"{reason} ({bindings})"
+        self.refusal = Refusal(predicate, subject, dict(self.bindings))
         return False
 
-    def refusal(self) -> str:
-        """Explain the first failed node in the most recent match."""
-        return self._refusal or "the pattern did not match"
-
-    def _fail(self, pattern, subject, detail: str | None = None) -> bool:
-        if self._refusal is None:
-            reason = detail or f"{subject!r} does not match {written_place(pattern)}"
-            bindings = written_bindings(self.bindings.items())
-            self._refusal = reason if not bindings else f"{reason} ({bindings})"
+    def _fail(self, pattern, subject) -> bool:
+        if self.refusal is None:
+            self.refusal = Refusal(pattern, subject, dict(self.bindings))
         return False
 
     def _match(self, pattern, subject) -> bool:
@@ -191,11 +189,7 @@ class PatternMatcher:
                 return False
             for name in names:
                 if name not in self.bindings:
-                    return self._fail(
-                        owner,
-                        subjects,
-                        f"StarPattern did not bind {name!r} in every matched mode",
-                    )
+                    return self._fail(owner, subjects)
                 captured[name].append(self.bindings.pop(name))
         for name, values in captured.items():
             held = tuple(values)
@@ -221,9 +215,9 @@ class PatternMatcher:
             if self.match(alternative, subject):
                 self.memo[id(pattern)] = alternative
                 return True
-            first_refusal = first_refusal or self._refusal
+            first_refusal = first_refusal or self.refusal
         self.restore(saved)
-        self._refusal = first_refusal
+        self.refusal = first_refusal
         return self._fail(pattern, subject)
 
     def visit_AndPattern(self, pattern, subject) -> bool:
@@ -274,9 +268,9 @@ class PatternMatcher:
             self.bindings[pattern.param] = value
             if self.match(branch, subject):
                 return True
-            first_refusal = first_refusal or self._refusal
+            first_refusal = first_refusal or self.refusal
         self.restore(saved)
-        self._refusal = first_refusal
+        self.refusal = first_refusal
         return self._fail(pattern, subject)
 
     def visit_GuardPattern(self, pattern, subject) -> bool:
@@ -452,7 +446,7 @@ class PatternMatcher:
 
     def visit_TensorPattern(self, pattern, subject) -> bool:
         if not isinstance(subject, TensorType) or subject.shape == ():
-            return self._fail(pattern, subject, f"{subject!r} is no tensor")
+            return self._fail(pattern, subject)
         if pattern.shape is not None and (
             len(pattern.shape) != len(subject.shape)
             or not all(self.match(place, value) for place, value in zip(pattern.shape, subject.shape))
@@ -505,42 +499,6 @@ class PatternMatcher:
         )
 
 
-class _PatternAlternatives:
-    """Flatten the declaration alternatives represented by a pattern tree."""
-
-    def alternatives(self, pattern, bindings=()) -> tuple:
-        if not isinstance(pattern, _pattern_type()):
-            return ((tuple(bindings), pattern),)
-        for cls in type(pattern).__mro__:
-            visitor = getattr(self, f"visit_{cls.__name__}", None)
-            if visitor is not None:
-                return visitor(pattern, bindings)
-        raise NotImplementedError(f"{type(pattern).__name__} has no alternatives visitor")
-
-    def visit_Pattern(self, pattern, bindings) -> tuple:
-        return ((tuple(bindings), pattern),)
-
-    def visit_OrPattern(self, pattern, bindings) -> tuple:
-        return tuple(
-            held
-            for alternative in pattern.patterns
-            for held in self.alternatives(alternative, bindings)
-        )
-
-    def visit_StarPattern(self, pattern, bindings) -> tuple:
-        return ((tuple(bindings), pattern),)
-
-    def visit_SwitchPattern(self, pattern, bindings) -> tuple:
-        return tuple(
-            held
-            for value, branch in pattern.branches
-            for held in self.alternatives(branch, (*bindings, (pattern.param, value)))
-        )
-
-    def visit_ShardLayoutPattern(self, pattern, bindings) -> tuple:
-        return self.alternatives(pattern.layout, bindings)
-
-
 def _pattern_type():
     from .pattern import Pattern  # noqa: PLC0415 - pattern protocol cycle
 
@@ -569,70 +527,6 @@ def is_symbolic(value) -> bool:
     return isinstance(value, DimVar) or is_dim_op_call(value)
 
 
-def written_dim(value) -> str:
-    if isinstance(value, DimVar):
-        return value.name
-    if is_dim_op_call(value):
-        left, right = (written_dim(arg) for arg in value.args)
-        if isinstance(value.target, DimFloorDiv):
-            return f"{left}/{right}"
-        if isinstance(value.target, DimMul):
-            return f"{left}*{right}"
-        return f"({left} {type(value.target).__name__} {right})"
-    return str(getattr(value, "value", value))
-
-
-def written_binding(value) -> str:
-    return getattr(value, "name", str(value))
-
-
-def written_bindings(bindings) -> str:
-    return ", ".join(f"{name}={written_binding(value)}" for name, value in bindings)
-
-
-def written_tuple(items) -> str:
-    written = ", ".join(items)
-    return f"({written},)" if len(items) == 1 else f"({written})"
-
-
-def written_grouped(modes) -> str:
-    if isinstance(modes, tuple):
-        return written_tuple(tuple(written_grouped(mode) for mode in modes))
-    return written_place(modes)
-
-
-def written_place(value, name: str = UNNAMED_PLACE) -> str:
-    if isinstance(value, _pattern_type()):
-        return value.describe(name)
-    if is_symbolic(value):
-        return written_dim(value)
-    return UNNAMED_PLACE if is_layout_wildcard(value) else str(value)
-
-
-def written_field(value) -> str | None:
-    if isinstance(value, _pattern_type()):
-        return value.describe()
-    return _named(value)
-
-
-def written_alternatives(items, name: str = UNNAMED_PLACE) -> str:
-    held = tuple(
-        (written_bindings(bindings), written_place(alternative, name))
-        for bindings, alternative in items
-    )
-    width = max((len(label) for label, _ in held), default=0)
-    lines = []
-    for label, written in held:
-        first, *rest = written.splitlines() or ("",)
-        lines.append(first if not width else f"{label.ljust(width)}  {first}")
-        lines.extend(line if not width else f"{' ' * (width + 2)}{line}" for line in rest)
-    return "\n".join(lines)
-
-
-def alternatives_of(pattern, bindings=()) -> tuple:
-    return _PatternAlternatives().alternatives(pattern, bindings)
-
-
 def matched(pattern, subject, captures=None) -> Match | None:
     """Match a nested pattern, symbolic dimension, wildcard, or fixed value."""
     owner = getattr(captures, "matcher", None)
@@ -655,14 +549,6 @@ def matched(pattern, subject, captures=None) -> Match | None:
     return held if pattern == subject else None
 
 
-def relations_of(values) -> tuple[str, ...]:
-    lines: dict[str, None] = {}
-    for value in values:
-        if isinstance(value, _pattern_type()):
-            lines.update(dict.fromkeys(value.relations()))
-    return tuple(lines)
-
-
 def between_rules(op_type) -> tuple:
     return tuple(getattr(op_type, "between", ()))
 
@@ -674,25 +560,13 @@ def refusals_between(op_type, operands: dict) -> tuple[str, ...]:
 
 
 __all__ = [
-    "ARRANGEMENT",
     "Match",
     "PatternMatcher",
+    "Refusal",
     "OPAQUE",
-    "UNNAMED_PLACE",
-    "_named",
-    "alternatives_of",
     "between_rules",
     "evaluated",
     "is_symbolic",
     "matched",
     "refusals_between",
-    "relations_of",
-    "written_alternatives",
-    "written_binding",
-    "written_bindings",
-    "written_dim",
-    "written_field",
-    "written_grouped",
-    "written_place",
-    "written_tuple",
 ]

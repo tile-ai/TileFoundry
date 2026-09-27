@@ -18,7 +18,6 @@ from tilefoundry.ir.pattern import (
 from tilefoundry.ir.pattern import (
     predicates as P,
 )
-from tilefoundry.ir.pattern.match import written_binding, written_bindings, written_place
 from tilefoundry.ir.types import ComposedLayout, Layout, Mesh
 from tilefoundry.ir.types.layout_algebra import coalesce
 from tilefoundry.ir.types.mesh import levels, starts
@@ -55,9 +54,9 @@ class MmaAtom:
             value = bindings[param.name] if param.name in bindings else self._implied(param, held)
             if matched(param.pattern, value, held) is None:
                 raise ValueError(
-                    f"{self.reference_name}: {param.name}={written_binding(value)} is not one "
+                    f"{self.reference_name}: {param.name}={value!r} is not one "
                     f"it takes{self._where(held)}; it takes {param.name} "
-                    f"{written_place(param.pattern, param.name)}"
+                    f"{param.pattern!r}"
                 )
             held[param.name] = value
         self.bindings = held
@@ -78,7 +77,7 @@ class MmaAtom:
 
     @staticmethod
     def _where(held: dict) -> str:
-        return "" if not held else f" where {written_bindings(held.items())}"
+        return "" if not held else f" where {held!r}"
 
     def role(self, role: str):
         return getattr(type(self), role)
@@ -128,9 +127,6 @@ class MmaAtom:
     def reference(self) -> str:
         return self.written()
 
-    def describe(self) -> str:
-        return self.reference
-
     def __eq__(self, other):
         return (
             type(other) is type(self)
@@ -154,10 +150,6 @@ class AtomPattern(Pattern):
     def __init__(self, *declarations):
         object.__setattr__(self, "declarations", tuple(declarations))
 
-    def describe(self, name: str = "_") -> str:
-        return "one of " + ", ".join(held.reference_name for held in self.declarations)
-
-
 @dataclass(frozen=True)
 class FromAtom(Pattern):
     """An operand pattern read from one role of the call's atom."""
@@ -170,10 +162,6 @@ class FromAtom(Pattern):
 
     def read_on(self, op):
         return getattr(type(op.atom), self.role)
-
-    def describe(self, name: str = "_") -> str:
-        return f"the {self.role} operand of its atom"
-
 
 def read_on(pattern, op):
     held = getattr(pattern, "read_on", None)

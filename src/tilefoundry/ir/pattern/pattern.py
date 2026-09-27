@@ -8,19 +8,7 @@ from typing import Any
 from tilefoundry.ir.types import ComposedLayout, Layout, Swizzle
 from tilefoundry.ir.types.layout import flatten
 
-from .match import (
-    UNNAMED_PLACE,
-    Match,
-    PatternMatcher,
-    _named,
-    alternatives_of,
-    matched,
-    relations_of,
-    written_alternatives,
-    written_grouped,
-    written_place,
-    written_tuple,
-)
+from .match import Match, PatternMatcher
 
 
 @dataclass(frozen=True)
@@ -30,16 +18,6 @@ class Pattern:
     def match(self, subject, captures=None) -> Match | None:
         held = PatternMatcher(dict(captures or {}))
         return Match(dict(held.bindings)) if held.match(self, subject) and held.solve() else None
-
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return type(self).__name__
-
-    def relations(self) -> tuple[str, ...]:
-        return ()
-
-    def rules(self, arrangements=None) -> tuple[str, ...]:
-        return self.relations()
-
 
 @dataclass(frozen=True)
 class WildcardPattern(Pattern):
@@ -104,10 +82,6 @@ class WildcardPattern(Pattern):
     def __ge__(self, other):
         return self._term() >= other
 
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return name
-
-
 @dataclass(frozen=True)
 class StarPattern(Pattern):
     """Match zero or more modes, applying one pattern to every mode."""
@@ -118,13 +92,6 @@ class StarPattern(Pattern):
         if not isinstance(self.pattern, Pattern):
             raise TypeError("StarPattern pattern must be a Pattern")
 
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return f"*{written_place(self.pattern, name)}"
-
-    def relations(self) -> tuple[str, ...]:
-        return relations_of((self.pattern,))
-
-
 @dataclass(frozen=True, init=False)
 class OrPattern(Pattern):
     patterns: tuple
@@ -132,25 +99,9 @@ class OrPattern(Pattern):
     def __init__(self, *patterns):
         object.__setattr__(self, "patterns", tuple(patterns))
 
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        if not any(isinstance(pattern, Pattern) for pattern in self.patterns):
-            values = "{" + ", ".join(written_place(p) for p in self.patterns) + "}"
-            return values if name == UNNAMED_PLACE else f"{name} in {values}"
-        return written_alternatives(alternatives_of(self), name)
-
-    def relations(self) -> tuple[str, ...]:
-        return relations_of(self.patterns)
-
-
 @dataclass(frozen=True)
 class AndPattern(Pattern):
     parts: tuple = field(default_factory=tuple)
-
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return " and ".join(written_place(pattern, name) for pattern in self.parts)
-
-    def relations(self) -> tuple[str, ...]:
-        return relations_of(self.parts)
 
 
 @dataclass(frozen=True, init=False)
@@ -159,13 +110,6 @@ class SequencePattern(Pattern):
 
     def __init__(self, *patterns):
         object.__setattr__(self, "patterns", tuple(patterns))
-
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return written_tuple(tuple(written_place(p, name) for p in self.patterns))
-
-    def relations(self) -> tuple[str, ...]:
-        return relations_of(self.patterns)
-
 
 @dataclass(frozen=True, init=False)
 class ConstraintPattern(Pattern):
@@ -176,10 +120,6 @@ class ConstraintPattern(Pattern):
             raise ValueError("a constraint pattern must state at least one constraint")
         object.__setattr__(self, "patterns", tuple(patterns))
 
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return " and ".join(written_place(pattern, name) for pattern in self.patterns)
-
-
 @dataclass(frozen=True)
 class MultipleOfPattern(Pattern):
     unit: int
@@ -187,10 +127,6 @@ class MultipleOfPattern(Pattern):
     def __post_init__(self):
         if type(self.unit) is not int or self.unit <= 0:
             raise ValueError("MultipleOfPattern unit must be a positive int")
-
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return f"{name} % {self.unit} = 0"
-
 
 @dataclass(frozen=True)
 class RangePattern(Pattern):
@@ -216,14 +152,6 @@ class RangePattern(Pattern):
         if self.dim_var and (self.lo is None or self.hi is None):
             raise ValueError("a named RangePattern must state both lo and hi")
 
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        if self.lo is None:
-            return f"{name} <= {self.hi}"
-        if self.hi is None:
-            return f"{self.lo} <= {name}"
-        return f"{self.lo} <= {name} <= {self.hi}"
-
-
 @dataclass(frozen=True)
 class OneOfPattern(Pattern):
     values: tuple
@@ -232,26 +160,16 @@ class OneOfPattern(Pattern):
         if len(self.values) < 2:
             raise ValueError("OneOfPattern requires at least two values")
 
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return f"{name} in {{{', '.join(_named(value) for value in self.values)}}}"
-
-
 @dataclass(frozen=True)
 class AttrPattern(Pattern):
     attr: str
     pattern: object
-
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return written_place(self.pattern, f"{name}.{self.attr}")
 
 
 @dataclass(frozen=True)
 class BitsPattern(Pattern):
     dtype: str
     pattern: object
-
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return written_place(self.pattern, f"{name} * {self.dtype}.bit_width")
 
 
 @dataclass(frozen=True, init=False)
@@ -263,27 +181,11 @@ class SwitchPattern(Pattern):
         object.__setattr__(self, "param", param)
         object.__setattr__(self, "branches", tuple(dict(branches).items()))
 
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return written_alternatives(alternatives_of(self), name)
-
-    def relations(self) -> tuple[str, ...]:
-        return relations_of(tuple(pattern for _, pattern in self.branches))
-
-
 @dataclass(frozen=True)
 class GuardPattern(Pattern):
     symbol: object
     condition: Pattern
     pattern: object
-
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return written_place(self.pattern, name)
-
-    def relations(self) -> tuple[str, ...]:
-        return (
-            *relations_of((self.pattern,)),
-            self.condition.describe(str(self.symbol)),
-        )
 
     def fixed(self):
         return None
@@ -430,16 +332,6 @@ class LayoutPattern(Pattern):
             *(flatten(self.strides) if self.strides is not None else ()),
         )
 
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        if self.shape is None and self.strides is None:
-            return "layout"
-        shape = name if self.shape is None else written_grouped(tuple(self.shape))
-        strides = name if self.strides is None else written_grouped(tuple(self.strides))
-        return f"Layout({shape}, {strides})"
-
-    def relations(self) -> tuple[str, ...]:
-        return (*relations_of(self.positions()), *relations_of(self.predicates))
-
     def fixed(self):
         if self.shape is None or self.strides is None:
             return None
@@ -453,9 +345,6 @@ class SwizzlePattern(Pattern):
     bits: object
     base: object
     shift: object
-
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return f"Swizzle({self.bits}, {self.base}, {self.shift})"
 
     def fixed(self):
         if any(isinstance(value, Pattern) for value in (self.bits, self.base, self.shift)):
@@ -471,15 +360,6 @@ class ComposedLayoutPattern(Pattern):
     offset: object = None
     outer: object = None
     predicates: tuple[Predicate, ...] = field(default_factory=tuple)
-
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return (
-            f"ComposedLayout({written_place(self.inner)}, "
-            f"{written_place(self.offset)}, {written_place(self.outer)})"
-        )
-
-    def relations(self) -> tuple[str, ...]:
-        return relations_of((self.inner, self.offset, self.outer, *self.predicates))
 
     def fixed(self):
         held = []
@@ -526,17 +406,9 @@ class MeshPattern(Pattern):
 
         require_per_mode(self.layout)
 
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return f"Mesh({self.topologies!r}, {written_place(self.layout)})"
-
-    def relations(self) -> tuple[str, ...]:
-        return relations_of((self.layout,))
-
-
 @dataclass(frozen=True)
 class ScalarPattern(Pattern):
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return "scalar"
+    pass
 
 
 @dataclass(frozen=True)
@@ -549,33 +421,6 @@ class TensorPattern(Pattern):
     layout: Pattern | None = None
     predicates: tuple[Predicate, ...] = field(default_factory=tuple)
 
-    def describe(self, name: str = UNNAMED_PLACE, arrangements=None) -> str:
-        stated = []
-        if self.shape is not None:
-            stated.append("shape=" + written_tuple(tuple(written_place(x) for x in self.shape)))
-        if self.dtype is not None:
-            stated.append(f"dtype={_named(self.dtype)}")
-        if self.storage is not None:
-            stated.append(f"storage={_named(self.storage)}")
-        head = " ".join(stated) if stated else "any tensor"
-        return (
-            f"{head}, in any arrangement"
-            if self.layout is None
-            else (f"{head}, held in {self.layout.describe()}")
-        )
-
-    def relations(self) -> tuple[str, ...]:
-        return relations_of(
-            (
-                self.dtype,
-                self.storage,
-                *(self.shape or ()),
-                *((self.layout,) if self.layout is not None else ()),
-                *self.predicates,
-            )
-        )
-
-
 @dataclass(frozen=True)
 class ShardLayoutPattern(Pattern):
     """Match a sharded layout's layout, shard attrs, and mesh frame."""
@@ -584,32 +429,6 @@ class ShardLayoutPattern(Pattern):
     attrs: tuple
     mesh: MeshPattern
     predicates: tuple[Predicate, ...] = field(default_factory=tuple)
-
-    def reads(self, layout, captures=None):
-        return matched(self.layout, layout, captures)
-
-    def accepts_layout(self, layout) -> bool:
-        return self.reads(layout) is not None
-
-    def relations(self) -> tuple[str, ...]:
-        return relations_of((self.layout, *self.predicates))
-
-    def rules(self, arrangements=None) -> tuple[str, ...]:
-        items = alternatives_of(self) if arrangements is None else tuple(arrangements)
-        return relations_of(tuple(pattern for _, pattern in items))
-
-    def describe(self, name: str = UNNAMED_PLACE, arrangements=None) -> str:
-        items = alternatives_of(self) if arrangements is None else tuple(arrangements)
-        head = f"{len(items)} arrangement{'' if len(items) == 1 else 's'}:"
-        written = written_alternatives(items).splitlines()
-        return "\n".join(
-            (
-                head,
-                *(f"  {line}" for line in written),
-                *(f"  {rule}" for rule in self.rules(items)),
-            )
-        )
-
 
 Scalar: ScalarPattern = ScalarPattern()
 Tensor: TensorPattern = TensorPattern()

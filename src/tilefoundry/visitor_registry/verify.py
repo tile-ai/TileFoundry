@@ -322,9 +322,12 @@ def verify_between(call, ctx) -> None:
 
 def verify_operands(call, ctx) -> None:
     """Hold each operand to its pattern; solver UNKNOWN passes for phase-4 reporting."""
+    from tilefoundry.inspection.pattern_printer import PatternPrinter  # noqa: PLC0415
+
     label = type(call.target)._op_schema.name
     atom = getattr(call.target, "atom", None)
     matcher = PatternMatcher(dict(getattr(atom, "bindings", {})))
+    printer = PatternPrinter()
     for param, arg in zip(input_params(type(call.target)), call.args):
         if param.pattern is None:
             continue
@@ -339,10 +342,10 @@ def verify_operands(call, ctx) -> None:
                 call,
                 f"{label} {param.name} is {tuple(value.shape)} "
                 f"{value.dtype.name} storage={value.storage}: "
-                f"{matcher.refusal()}",
+                f"{printer.refusal(matcher.refusal)}",
             )
     if not matcher.solve():
-        ctx.error(call, f"{label}: {matcher.refusal()}")
+        ctx.error(call, f"{label}: {printer.refusal(matcher.refusal)}")
 
 
 def verify_prim_function(
