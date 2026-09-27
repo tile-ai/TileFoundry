@@ -456,9 +456,11 @@ buffer's lifetime before any is measured. Whole-Function `gmem` and `smem`
 peaks use exact polyhedral access relations to place addressable values; the
 concrete arrangement is not reported. A `MeshRegion` peak instead scans the
 live-byte total over its entry-to-exit window. Its `rmem` rows are additionally
-restricted to values whose authored `ShardLayout.mesh` is within the region's
-mesh. `rmem` is not address-solved: the Function reports the maximum stage
-peak, or a whole-Function live-byte scan when the Function has no `MeshRegion`.
+restricted to values whose authored `ShardLayout.mesh`, at every topology level
+named by the region, selects units within that region's mesh. Levels omitted by
+the region do not reject a value. `rmem` is not address-solved: the Function
+reports the maximum of all stage peaks and a whole-Function live-byte scan of
+values that no `MeshRegion` claims.
 
 ```python
 class MemoryLevelPeak:
@@ -473,7 +475,7 @@ class MemoryLevelPeak:
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `MemoryLevelPeak.memory_level` | Each storage level with at least one lifetime or traffic entry, sorted by name. | No |
-| `MemoryLevelPeak.peak_bytes` | On a Function, the address high-water mark of the first feasible `gmem` or `smem` placement; its `rmem` peak is the maximum `MeshRegion` stage peak, or a whole-Function live-byte scan when there is no mesh region. On a `MeshRegion`, the greatest live-byte total in its inclusive entry-to-exit event window; `rmem` includes only values held within that region's mesh. | No |
+| `MemoryLevelPeak.peak_bytes` | On a Function, the address high-water mark of the first feasible `gmem` or `smem` placement; its `rmem` peak is the maximum of every `MeshRegion` stage peak and the whole-Function live-byte peak of values no mesh region claims. On a `MeshRegion`, the greatest live-byte total in its inclusive entry-to-exit event window; `rmem` compares only topology levels named by the region and includes a value when its selection at each such level is within the region's mesh. | No |
 | `MemoryLevelPeak.persistent_bytes` | Sum of persistent lifetimes at that level. | No |
 | `MemoryLevelPeak.capacity_bytes` | Capacity of the matching explicit level, or `None` when unknown. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
 | `RegionMemoryMetadata.peaks` | One peak per occupied or moved storage level. | As above |

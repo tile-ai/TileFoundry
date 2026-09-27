@@ -21,7 +21,7 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import TensorType, TupleType, Type
-from tilefoundry.ir.types.mesh import within_scope
+from tilefoundry.ir.types.mesh import Mesh, separate, within_scope
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import bytes_by_storage
@@ -459,6 +459,25 @@ def peak_in_window(rows: list[ValueLifetime], entered_at: int, exited_at: int) -
     return peak
 
 
+def held_in_region(value_mesh: Mesh, region_mesh: Mesh) -> bool:
+    """Whether the region selects holders of *value_mesh* at every level it names.
+
+    A value mesh may also name enclosing levels. Those do not reject a region
+    that states only an inner level; each region level is compared independently
+    so sliced offsets remain in that topology's own numbering.
+    """
+    value_levels = {
+        getattr(level.topologies[0], "name", level.topologies[0]): level
+        for level in separate(value_mesh)
+    }
+    for region_level in separate(region_mesh):
+        name = getattr(region_level.topologies[0], "name", region_level.topologies[0])
+        value_level = value_levels.get(name)
+        if value_level is None or not within_scope(value_level, region_level):
+            return False
+    return True
+
+
 def values_in_region(
     values: tuple[AllocationValue, ...],
     region: MeshRegion,
@@ -473,7 +492,7 @@ def values_in_region(
             continue
         if lifetime.memory_level == str(StorageKind.RMEM):
             layout = shard_layout_of(getattr(item.value.type, "layout", None))
-            if layout is None or not within_scope(layout.mesh, region.mesh):
+            if layout is None or not held_in_region(layout.mesh, region.mesh):
                 continue
         result.append(item)
     return tuple(result)
@@ -726,6 +745,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         context.options if isinstance(context.options, MemoryOptions) else MemoryOptions()
     )
     region_rmem_peaks: list[int] = []
+    claimed_rmem: set[int] = set()
     for window in liveness.regions:
         region_values = values_in_region(
             allocation_values,
@@ -754,6 +774,11 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             )
             if name == str(StorageKind.RMEM):
                 region_rmem_peaks.append(peak)
+                claimed_rmem.update(
+                    id(item.value)
+                    for item in region_values
+                    if item.lifetime.memory_level == name
+                )
         if region_levels:
             attach(
                 window.region,
@@ -782,10 +807,14 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             )
             peak = solved.peak_bytes
         elif name == str(StorageKind.RMEM):
-            peak = (
-                max(region_rmem_peaks, default=0)
-                if liveness.regions
-                else peak_in_window(rows, 0, liveness.timeline_end)
+            unclaimed = [
+                item.lifetime
+                for item in values
+                if id(item.value) not in claimed_rmem
+            ]
+            peak = max(
+                max(region_rmem_peaks, default=0),
+                peak_in_window(unclaimed, 0, liveness.timeline_end),
             )
         else:
             end = max((item.last_used_at for item in rows), default=-1)

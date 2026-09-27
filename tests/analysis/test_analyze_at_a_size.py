@@ -73,14 +73,14 @@ EXPECTED_MEMORY_PEAKS = {
     },
     "flash_split_k_decode.FlashSplitKDecode.flash_split_k_decode[ctx=128]": {
         "gmem": 788_480,
-        "rmem": 0,
+        "rmem": 16,
         "smem": 83_592,
     },
-    "fused_boundary.FusedBoundary.inner.run[static]": {"rmem": 16},
-    "fused_boundary.FusedBoundary.inner.scale[static]": {"rmem": 0},
+    "fused_boundary.FusedBoundary.inner.run[static]": {"rmem": 128},
+    "fused_boundary.FusedBoundary.inner.scale[static]": {"rmem": 256},
     "fused_boundary.FusedBoundary.root[static]": {
         "gmem": 512,
-        "rmem": 32,
+        "rmem": 128,
         "smem": 32,
     },
     "fused_boundary.FusedBoundary.stage[static]": {"smem": 64},
@@ -170,7 +170,7 @@ EXPECTED_MEMORY_PEAKS = {
     "mesh_slice_start.OutOfWindow.oob[static]": {"gmem": 6_144, "rmem": 0},
     "mesh_slice_start.Strided.scan[static]": {
         "gmem": 5_120,
-        "rmem": 0,
+        "rmem": 16,
         "smem": 1_408,
     },
     "mha_decode_paged.Batch2Page256.mha_decode_paged[static]": {
@@ -205,7 +205,7 @@ EXPECTED_MEMORY_PEAKS = {
     },
     "performance_findings.LevelsNested.kernel[static]": {
         "gmem": 2_113_536,
-        "rmem": 0,
+        "rmem": 32_768,
     },
     "performance_findings.LevelsOnOneMesh.kernel[static]": {
         "gmem": 2_113_536,
@@ -536,6 +536,16 @@ def test_every_concrete_program_predicts_coherently(case: ConcreteCase) -> None:
     assert_performance_contract(result)
     placement = get_metadata(result.function, RegionMemoryMetadata)
     assert placement is not None
+    for peak in placement.peaks:
+        largest_value = max(
+            (
+                lifetime.bytes
+                for lifetime in placement.lifetimes
+                if lifetime.memory_level == peak.memory_level
+            ),
+            default=0,
+        )
+        assert peak.peak_bytes >= largest_value
     observed = {item.memory_level: item.peak_bytes for item in placement.peaks}
     assert observed == EXPECTED_MEMORY_PEAKS[case.id]
     expected_schedule = EXPECTED_PERSISTENT_SCHEDULES.get(case.id)
