@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-import isl
 import torch
 
 from tilefoundry.evaluator.registry import register_eval
@@ -10,7 +9,7 @@ from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._helpers import broadcast_shapes, is_one, resolve_anchor_storage
+from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import TensorType
@@ -18,9 +17,8 @@ from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
-    AffineAccess,
-    BoundaryRelation,
-    iterating,
+    broadcast_shapes,
+    matmul_relations,
     register_access_relation,
     relations_of,
     shape_from_relation,
@@ -64,103 +62,6 @@ def _k_split_axes(t, k_tensor_axis: int) -> "frozenset[int]":
     return frozenset(p for p, ax in enumerate(targets) if ax == k_tensor_axis)
 
 
-def _broadcast_batch(lhs_batch, rhs_batch):
-    """Right-aligned per-dim broadcast of two batch shapes (ranks may differ.
-
-    Right-aligned per-dim broadcast of two batch shapes (ranks may differ —
-    the shorter is padded on the left with 1s), or ``None`` when a dim pair is
-    neither equal nor broadcastable.
-    """
-    return broadcast_shapes(tuple(lhs_batch), tuple(rhs_batch), raising=False)
-
-
-def _operand_reads(
-    shape: tuple,
-    out_shape: tuple,
-    inner: str,
-    *,
-    kept_axis: int,
-    output_axis: int,
-    contraction_axis: int,
-) -> list[str]:
-    """One coordinate per axis of an operand of the contraction.
-
-    The two matrix axes are the contraction and the one the result keeps; which
-    is which is the only difference between the two operands. Batch axes are
-    right-aligned against the result's, and one the operand broadcasts reads its
-    only coordinate rather than the result's.
-    """
-    rank = len(shape)
-    kept_axis %= rank
-    contraction_axis %= rank
-    shift = len(out_shape) - rank
-    reads: list[str] = []
-    for axis in range(rank):
-        if axis == contraction_axis:
-            reads.append(inner)
-        elif axis == kept_axis:
-            reads.append(f"d{len(out_shape) + output_axis}")
-        elif is_one(shape[axis]) and not is_one(out_shape[axis + shift]):
-            reads.append("0")
-        else:
-            reads.append(f"d{axis + shift}")
-    return reads
-
-
-def matmul_relations(
-    lhs_shape: tuple,
-    rhs_shape: tuple,
-    axes: tuple[int, int, int, int],
-) -> AccessRelations:
-    """Every coordinate of each operand a contraction reaches, read once.
-
-    A product walks the axis it sums, so that axis is a coordinate this Op is
-    asked by rather than something existential inside an image, and the result is
-    accumulated over it. Reading an operand at the result's own coordinates would
-    claim a shape it does not have the moment the summed and kept axes differ in
-    extent. Which positions any of these coordinates are is the reader's
-    question; the result's own extents follow from the operands.
-    """
-    a_m, a_k, b_n, b_k = axes
-    batch = _broadcast_batch(lhs_shape[:-2], rhs_shape[:-2])
-    if batch is None:
-        raise ValueError(
-            f"MatMul batches {tuple(lhs_shape[:-2])} against "
-            f"{tuple(rhs_shape[:-2])}, which do not broadcast"
-        )
-    out_shape = (*batch, lhs_shape[a_m], rhs_shape[b_n])
-    summed = lhs_shape[a_k]
-    rank = len(out_shape)
-    dims = ", ".join((*(f"d{index}" for index in range(rank)), "k"))
-    inner = "0" if is_one(summed) else "k"
-    inputs = []
-    for shape, kept_axis, output_axis, contraction_axis in (
-        (tuple(lhs_shape), a_m, -2, a_k),
-        (tuple(rhs_shape), b_n, -1, b_k),
-    ):
-        reads = _operand_reads(
-            shape,
-            out_shape,
-            inner,
-            kept_axis=kept_axis,
-            output_axis=output_axis,
-            contraction_axis=contraction_axis,
-        )
-        inputs.append(
-            BoundaryRelation(AffineAccess(isl.map(f"{{ [{dims}] -> [{', '.join(reads)}] }}")))
-        )
-    accumulates = ", ".join(f"d{index}" for index in range(rank))
-    return iterating(
-        (*out_shape, summed),
-        AccessRelations(
-            inputs=tuple(inputs),
-            outputs=(
-                BoundaryRelation(AffineAccess(isl.map(f"{{ [{dims}] -> [{accumulates}] }}"))),
-            ),
-        ),
-    )
-
-
 @register_access_relation(MatMul)
 def _matmul_access_relation(call: "Call", ctx) -> AccessRelations:
     """Every coordinate of each operand a contraction reaches, read once."""
@@ -189,7 +90,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         ctx.error(call, f"MatMul dtype mismatch: {lhs.dtype} vs {rhs.dtype}")
     if len(lhs.shape) < 2 or len(rhs.shape) < 2:
         ctx.error(call, "MatMul requires rank >= 2 on both operands")
-    if _broadcast_batch(lhs.shape[:-2], rhs.shape[:-2]) is None:
+    if broadcast_shapes(lhs.shape[:-2], rhs.shape[:-2], raising=False) is None:
         ctx.error(call, f"MatMul batch-dim mismatch {lhs.shape[:-2]} vs {rhs.shape[:-2]}")
     if lhs.shape[a_k] != rhs.shape[b_k]:
         ctx.error(
@@ -207,7 +108,7 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
     relation = relations_of(call, ctx)
 
-    out_batch = _broadcast_batch(lhs.shape[:-2], rhs.shape[:-2])
+    out_batch = broadcast_shapes(lhs.shape[:-2], rhs.shape[:-2], raising=False)
     out_shape = shape_from_relation(
         relation, (*out_batch, lhs.shape[a_m], rhs.shape[b_n], lhs.shape[a_k])
     )

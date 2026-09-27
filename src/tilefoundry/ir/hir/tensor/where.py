@@ -10,7 +10,7 @@ from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._helpers import broadcast_shapes, is_one, resolve_anchor_storage
+from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import reject_partials
 from tilefoundry.ir.hir.math.binary import _merge_layout
 from tilefoundry.ir.types import DType, Layout, TensorType
@@ -22,6 +22,8 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     AffineAccess,
     BoundaryRelation,
+    broadcast_shapes,
+    is_one,
     iterating,
     register_access_relation,
     relations_of,

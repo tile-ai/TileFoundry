@@ -14,6 +14,7 @@ from typing import Callable
 
 import isl
 
+from tilefoundry.ir.core.expr import Constant
 from tilefoundry.ir.isl_interop import index_set, isl_to_dim, shape_to_isl_domain
 from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.shard_layout import layout_axis_to_tensor_axis
@@ -1020,6 +1021,50 @@ def identity_access(rank: int) -> "AffineAccess":
     return AffineAccess(isl.map(f"{{ [{dims}] -> [{dims}] }}" if rank else "{ [] -> [] }"))
 
 
+def is_one(expr) -> bool:
+    """Return True for any shape entry that represents the literal 1.
+
+    Shape entries can be either ``Constant(value=1)`` (the canonical IR
+    form, produced by the parser / annotation lift) or a Python ``int``
+    (produced ad-hoc by some typeinfer rules — Reduce, Slice, etc.). Both
+    forms must broadcast against larger dims; restricting to ``Constant``
+    only breaks the ``(1, N) ⊕ (1, 1)`` pattern that falls out of
+    ``Reduce(..., keepdim=True)``.
+    """
+    if isinstance(expr, Constant) and expr.value == 1:
+        return True
+    if isinstance(expr, int) and not isinstance(expr, bool) and expr == 1:
+        return True
+    return False
+
+
+def broadcast_shapes(a: tuple, b: tuple, *, raising: bool = True):
+    """NumPy-style right-aligned broadcast on ``tuple[Expr, ...]``.
+
+    The shorter shape is padded on the left with 1s, then dims combine
+    pairwise (equal, or one is 1). For an incompatible pair: raises
+    ``ValueError`` when *raising* (the default), else returns ``None``.
+    """
+    if a == b:
+        return a
+    n = max(len(a), len(b))
+    ap = (1,) * (n - len(a)) + tuple(a)
+    bp = (1,) * (n - len(b)) + tuple(b)
+    out = []
+    for x, y in zip(ap, bp):
+        if x == y:
+            out.append(x)
+        elif is_one(x):
+            out.append(y)
+        elif is_one(y):
+            out.append(x)
+        elif raising:
+            raise ValueError(f"cannot broadcast shapes {a} and {b}")
+        else:
+            return None
+    return tuple(out)
+
+
 def broadcast_access(result_shape: tuple, operand_shape: tuple) -> "AffineAccess":
     """Which coordinate of an operand a result coordinate reads.
 
@@ -1039,6 +1084,93 @@ def broadcast_access(result_shape: tuple, operand_shape: tuple) -> "AffineAccess
     if not reads:
         return AffineAccess(isl.map(f"{{ [{domain}] -> [] }}" if rank else "{ [] -> [] }"))
     return AffineAccess(isl.map(f"{{ [{domain}] -> [{', '.join(reads)}] }}"))
+
+
+def _operand_reads(
+    shape: tuple,
+    out_shape: tuple,
+    inner: str,
+    *,
+    kept_axis: int,
+    output_axis: int,
+    contraction_axis: int,
+) -> list[str]:
+    """One coordinate per axis of an operand of the contraction.
+
+    The two matrix axes are the contraction and the one the result keeps; which
+    is which is the only difference between the two operands. Batch axes are
+    right-aligned against the result's, and one the operand broadcasts reads its
+    only coordinate rather than the result's.
+    """
+    rank = len(shape)
+    kept_axis %= rank
+    contraction_axis %= rank
+    shift = len(out_shape) - rank
+    reads: list[str] = []
+    for axis in range(rank):
+        if axis == contraction_axis:
+            reads.append(inner)
+        elif axis == kept_axis:
+            reads.append(f"d{len(out_shape) + output_axis}")
+        elif is_one(shape[axis]) and not is_one(out_shape[axis + shift]):
+            reads.append("0")
+        else:
+            reads.append(f"d{axis + shift}")
+    return reads
+
+
+def matmul_relations(
+    lhs_shape: tuple,
+    rhs_shape: tuple,
+    axes: tuple[int, int, int, int],
+) -> AccessRelations:
+    """Every coordinate of each operand a contraction reaches, read once.
+
+    A product walks the axis it sums, so that axis is a coordinate this Op is
+    asked by rather than something existential inside an image, and the result is
+    accumulated over it. Reading an operand at the result's own coordinates would
+    claim a shape it does not have the moment the summed and kept axes differ in
+    extent. Which positions any of these coordinates are is the reader's
+    question; the result's own extents follow from the operands.
+    """
+    a_m, a_k, b_n, b_k = axes
+    batch = broadcast_shapes(tuple(lhs_shape[:-2]), tuple(rhs_shape[:-2]), raising=False)
+    if batch is None:
+        raise ValueError(
+            f"MatMul batches {tuple(lhs_shape[:-2])} against "
+            f"{tuple(rhs_shape[:-2])}, which do not broadcast"
+        )
+    out_shape = (*batch, lhs_shape[a_m], rhs_shape[b_n])
+    summed = lhs_shape[a_k]
+    rank = len(out_shape)
+    dims = ", ".join((*(f"d{index}" for index in range(rank)), "k"))
+    inner = "0" if is_one(summed) else "k"
+    inputs = []
+    for shape, kept_axis, output_axis, contraction_axis in (
+        (tuple(lhs_shape), a_m, -2, a_k),
+        (tuple(rhs_shape), b_n, -1, b_k),
+    ):
+        reads = _operand_reads(
+            shape,
+            out_shape,
+            inner,
+            kept_axis=kept_axis,
+            output_axis=output_axis,
+            contraction_axis=contraction_axis,
+        )
+        inputs.append(
+            BoundaryRelation(AffineAccess(isl.map(f"{{ [{dims}] -> [{', '.join(reads)}] }}")))
+        )
+    accumulates = ", ".join(f"d{index}" for index in range(rank))
+    return iterating(
+        (*out_shape, summed),
+        AccessRelations(
+            inputs=tuple(inputs),
+            outputs=(
+                BoundaryRelation(AffineAccess(isl.map(f"{{ [{dims}] -> [{accumulates}] }}"))),
+            ),
+        ),
+    )
 
 
 def measures_without_reading(call, ctx) -> AccessRelations:

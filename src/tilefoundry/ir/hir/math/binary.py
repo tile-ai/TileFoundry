@@ -17,7 +17,7 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.kinds import BinaryKind
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir._helpers import broadcast_shapes, resolve_anchor_storage
+from tilefoundry.ir.hir._helpers import resolve_anchor_storage
 from tilefoundry.ir.hir._shard_checks import check_multilinear_partials
 from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import DType, Layout, TensorType
@@ -34,6 +34,7 @@ from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     BoundaryRelation,
     broadcast_access,
+    broadcast_shapes,
     identity_access,
     iterating,
     register_access_relation,

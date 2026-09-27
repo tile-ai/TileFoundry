@@ -9,7 +9,6 @@ from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir.nn.matmul import matmul_relations
 from tilefoundry.ir.pattern import (
     ComposedLayoutPattern,
     LayoutPattern,
@@ -23,6 +22,7 @@ from tilefoundry.ir.types import DType, Mesh, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    matmul_relations,
     register_access_relation,
 )
 

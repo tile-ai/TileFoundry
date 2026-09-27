@@ -11,7 +11,6 @@ import tilefoundry.ir.types.substitute as dim_substitute
 from tilefoundry.ir.core import Tuple, TypeInferContext
 from tilefoundry.ir.core.expr import Call, Constant, Var
 from tilefoundry.ir.core.kinds import UnaryKind
-from tilefoundry.ir.hir._helpers import broadcast_shapes
 from tilefoundry.ir.hir.math.unary import Unary
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
@@ -37,6 +36,7 @@ from tilefoundry.ir.types.dim import (
     simplify_dim,
 )
 from tilefoundry.ir.types.shard_layout import Broadcast
+from tilefoundry.visitor_registry.access_relation import broadcast_shapes
 from tilefoundry.visitor_registry.typeinfer import TypeInferVisitor
 
 
