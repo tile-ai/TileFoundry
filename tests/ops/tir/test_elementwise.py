@@ -17,9 +17,14 @@ import tilefoundry.codegen.cuda  # noqa: F401 -- trigger emitter autodiscovery
 from tests.fixtures.tir.layouts import bcast
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
+from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.core.kinds import BinaryKind
-from tilefoundry.ir.types import Layout, Mesh, ShardLayout, Split, Topology
+from tilefoundry.ir.tir.arith import Binary
+from tilefoundry.ir.tir.prim_function import PrimFunction
+from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
+from tilefoundry.ir.types import Layout, Mesh, ShardLayout, Split, Topology, make_tensor_type
 from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.visitor_registry.verify import verify_prim_function
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
 
@@ -39,12 +44,11 @@ class ColumnBroadcast:
             a_view = T.tensor_view(T.ptr_of(a), layout=bcast((32,), (1,), m))
             r_view = T.tensor_view(T.ptr_of(r), layout=bcast((4,), (1,), m))
             out_view = T.tensor_view(T.ptr_of(out), layout=bcast((32,), (1,), m))
-            lhs = T.alloc_tensor(Tensor[(4, 8), "f32", bcast((4, 8), (8, 1), m), "smem"])
-            col = T.alloc_tensor(Tensor[(4, 1), "f32", bcast((4, 1), (1, 1), m), "smem"])
-            dst = T.alloc_tensor(Tensor[(4, 8), "f32", bcast((4, 8), (8, 1), m), "smem"])
+            lhs = T.alloc_tensor(Tensor[(4, 8), "f32", bcast((4, 8), (8, 1), m), "rmem"])
+            col = T.alloc_tensor(Tensor[(4, 1), "f32", bcast((4, 1), (1, 1), m), "rmem"])
+            dst = T.alloc_tensor(Tensor[(4, 8), "f32", bcast((4, 8), (8, 1), m), "rmem"])
             T.copy(a_view, lhs)
             T.copy(r_view, col)
-            T.sync(m)
             T.binary(lhs, col, dst, kind=BinaryKind.MUL)
             T.copy(dst, out_view)
 
@@ -129,6 +133,27 @@ class Elementwise:
             grid=(1, 1, 1),
             block=(_ROWS, 1, 1),
         )
+
+
+def test_binary_refuses_an_operand_outside_register_memory() -> None:
+    types = (
+        make_tensor_type((8,), storage="smem"),
+        make_tensor_type((8,), storage="rmem"),
+        make_tensor_type((8,), storage="rmem"),
+    )
+    args = tuple(Var(type=type_, name=f"a{index}") for index, type_ in enumerate(types))
+    fn = PrimFunction(
+        name="fn",
+        params=args,
+        body=Sequential(
+            body=(
+                Evaluate(callable=Binary(kind=BinaryKind.ADD), args=args),
+                Return(),
+            )
+        ),
+    )
+    with pytest.raises(VerifyError, match=r"lhs .* does not match StorageKind.RMEM"):
+        verify_prim_function(fn)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")

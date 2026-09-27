@@ -12,12 +12,89 @@ import tilefoundry
 import tilefoundry.codegen.cuda  # noqa: F401 -- trigger emitter autodiscovery
 from tilefoundry import module, prim_func
 from tilefoundry.dsl import T, Tensor
+from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.core.kinds import ReduceKind
-from tilefoundry.ir.types import Layout, Mesh, ShardLayout, Split, Topology
+from tilefoundry.ir.tir.prim_function import PrimFunction
+from tilefoundry.ir.tir.reduce import Reduce
+from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
+from tilefoundry.ir.types import (
+    ComposedLayout,
+    DType,
+    Layout,
+    Mesh,
+    ShardLayout,
+    Split,
+    Swizzle,
+    Topology,
+    make_tensor_type,
+)
 from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.visitor_registry.verify import verify_prim_function
 
 _CUDA = CudaTarget("nvidia.h200_sxm")
+_MESH = Mesh((Topology("thread", 32),), Layout((32,), (1,)), ("t",))
+_OTHER_MESH = Mesh((Topology("thread", 32),), Layout((4, 8), (8, 1)), ("w", "t"))
+
+
+def _sharded(
+    n: int,
+    *,
+    dtype=DType.f32,
+    storage="rmem",
+    mesh: Mesh = _MESH,
+    layout=None,
+):
+    return make_tensor_type(
+        (n,),
+        dtype,
+        storage=storage,
+        layout=ShardLayout(layout or Layout((n,), (1,)), (Broadcast(),), mesh),
+    )
+
+
+def _pf(*types) -> PrimFunction:
+    args = tuple(Var(type=type_, name=f"a{index}") for index, type_ in enumerate(types))
+    return PrimFunction(
+        name="fn",
+        params=args,
+        body=Sequential(
+            body=(
+                Evaluate(
+                    callable=Reduce(axes=(0,), kind=ReduceKind.MEAN),
+                    args=args,
+                ),
+                Return(),
+            )
+        ),
+    )
+
+
+def test_refuses_a_workspace_outside_shared_memory() -> None:
+    with pytest.raises(VerifyError, match=r"workspace .* does not match StorageKind.SMEM"):
+        verify_prim_function(_pf(_sharded(8), _sharded(1), _sharded(4, storage="rmem")))
+
+
+def test_refuses_a_dtype_that_does_not_fold_in_float() -> None:
+    with pytest.raises(
+        VerifyError,
+        match=r"could not satisfy src_dtype in \{f32, f16, bf16\}",
+    ):
+        verify_prim_function(_pf(_sharded(8, dtype=DType.fp8e4m3), _sharded(1)))
+
+
+def test_refuses_a_swizzled_source_layout() -> None:
+    swizzled = ComposedLayout(Swizzle(2, 2, 2), 0, Layout((8,), (1,)))
+    with pytest.raises(
+        VerifyError,
+        match=r"does not match Layout\(\(\*_\,\), \(\*_\,\)\)",
+    ):
+        verify_prim_function(_pf(_sharded(8, layout=swizzled), _sharded(1)))
+
+
+def test_refuses_operands_on_different_meshes() -> None:
+    with pytest.raises(VerifyError, match=r"does not match \*mesh_shape"):
+        verify_prim_function(_pf(_sharded(8), _sharded(1, mesh=_OTHER_MESH)))
 
 
 @module(topologies=(Topology("thread", 128),))

@@ -35,6 +35,19 @@ def _ty(n, dtype=DType.from_name("f32"), storage="rmem"):
     return make_tensor_type((n,), dtype, storage=storage)
 
 
+_MESH = Mesh((Topology("thread", 32),), Layout(shape=(32,), strides=(1,)), ("t",))
+
+
+def _sharded(n, storage="rmem"):
+    """An operand the block-contraction check accepts, so the workspace is what is tested."""
+    return make_tensor_type(
+        (n,),
+        DType.from_name("f32"),
+        storage=storage,
+        layout=ShardLayout(Layout((n,), (1,)), (Broadcast(),), _MESH),
+    )
+
+
 def test_accepts_two_equal_runs_folded_into_one_cell() -> None:
     verify_prim_function(_pf(_ty(8), _ty(8), _ty(1)))
 
@@ -58,8 +71,10 @@ def test_refuses_a_destination_wider_than_one_cell() -> None:
 
 def test_refuses_a_workspace_outside_shared_memory() -> None:
     """One warp posts its partial and every thread reads the posted ones."""
-    with pytest.raises(VerifyError, match="workspace must be smem"):
-        verify_prim_function(_pf(_ty(8), _ty(8), _ty(1), _ty(4, storage="gmem")))
+    with pytest.raises(VerifyError, match=r"workspace .* does not match StorageKind.SMEM"):
+        verify_prim_function(
+            _pf(_sharded(8), _sharded(8), _sharded(1), _sharded(4, storage="gmem"))
+        )
 
 
 def test_refuses_a_block_contraction_over_an_unsharded_left_operand() -> None:
