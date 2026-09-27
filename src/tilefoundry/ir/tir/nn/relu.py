@@ -8,19 +8,21 @@ into ``dst`` (in-place memory write). Wrapped by
 from __future__ import annotations
 
 from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
+from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Tensor
-from tilefoundry.ir.types import UnitType
+from tilefoundry.ir.pattern import utils
+from tilefoundry.ir.types import StorageKind, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+
+_IN_RMEM = utils.tensor_in(StorageKind.RMEM)
 
 
 @register_op
 class ReLU(Op):
     """Tensor-level pointwise ReLU writing into ``dst``."""
 
-    src = ParamDef(kind="input", pattern=Tensor)
-    dst = ParamDef(kind="input", pattern=Tensor)
+    src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_IN_RMEM)
+    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=_IN_RMEM)
 
 
 @register_typeinfer(ReLU)

@@ -19,6 +19,11 @@ from .pattern import (
 MOVED_STORAGES = (StorageKind.GMEM, StorageKind.SMEM, StorageKind.RMEM)
 
 
+def tensor_in(storage: StorageKind) -> TensorPattern:
+    """A tensor of any shape and dtype held in *storage*."""
+    return TensorPattern(storage=storage)
+
+
 def operand_tile(index: int, storage=None, layout=None) -> TensorPattern:
     """A tensor tile whose dtype and storage captures are named by operand slot."""
     storages = MOVED_STORAGES if storage is None else storage
@@ -113,5 +118,6 @@ __all__ = [
     "locate_dim_var",
     "operand_tile",
     "storage_place",
+    "tensor_in",
     "whole_vectors",
 ]

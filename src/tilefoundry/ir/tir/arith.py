@@ -14,22 +14,24 @@ from __future__ import annotations
 
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
-from tilefoundry.ir.core.param_def import ParamDef
+from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Tensor
-from tilefoundry.ir.types import UnitType
+from tilefoundry.ir.pattern import utils
+from tilefoundry.ir.types import StorageKind, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
 __all__ = ["BinaryKind", "Binary", "UnaryKind", "Unary"]
+
+_IN_RMEM = utils.tensor_in(StorageKind.RMEM)
 
 
 @register_op(dialect="T", category="arith")
 class Binary(Op):
     """Effect-form pointwise binary operation: ``dst = lhs <kind> rhs``."""
 
-    lhs = ParamDef(kind="input", pattern=Tensor)
-    rhs = ParamDef(kind="input", pattern=Tensor)
-    dst = ParamDef(kind="input", pattern=Tensor)
+    lhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_IN_RMEM)
+    rhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_IN_RMEM)
+    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=_IN_RMEM)
     kind = ParamDef(kind="attribute", annotation=BinaryKind)
 
 
@@ -53,8 +55,8 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
 class Unary(Op):
     """Effect-form pointwise unary operation: ``dst = <kind>(src)``."""
 
-    src = ParamDef(kind="input", pattern=Tensor)
-    dst = ParamDef(kind="input", pattern=Tensor)
+    src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_IN_RMEM)
+    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=_IN_RMEM)
     kind = ParamDef(kind="attribute", annotation=UnaryKind)
 
 

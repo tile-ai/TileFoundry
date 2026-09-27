@@ -6,12 +6,11 @@ See [tir §2.3](docs/spec/tir.md#23-tir-ops).
 from __future__ import annotations
 
 from tilefoundry.ir.core import Op
-from tilefoundry.ir.core.param_def import ParamDef
+from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.pattern import Tensor
-from tilefoundry.ir.types import UnitType
+from tilefoundry.ir.pattern import Tensor, utils
+from tilefoundry.ir.types import StorageKind, UnitType
 from tilefoundry.ir.types.shard_layout import ShardLayout, shard_layout_local_shape
-from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 
 __all__ = ["Dot"]
@@ -21,10 +20,16 @@ __all__ = ["Dot"]
 class Dot(Op):
     """Fused multiply-contract; every participant leaves holding the total."""
 
-    lhs = ParamDef(kind="input", pattern=Tensor)
-    rhs = ParamDef(kind="input", pattern=Tensor)
-    dst = ParamDef(kind="input", pattern=Tensor)
-    workspace = ParamDef(kind="input", pattern=Tensor, optional=True, default=None)
+    lhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=Tensor)
+    rhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=Tensor)
+    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=Tensor)
+    workspace = ParamDef(
+        kind="input",
+        effect=MemoryEffect.READ | MemoryEffect.WRITE,
+        pattern=utils.tensor_in(StorageKind.SMEM),
+        optional=True,
+        default=None,
+    )
 
 
 @register_typeinfer(Dot)
@@ -69,9 +74,6 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
 
     if len(call.args) < 4:
         return
-    ws = ctx.type_of(call.args[3])
-    if ws.storage != StorageKind.SMEM:
-        ctx.error(call, f"Dot workspace must be smem, got {ws.storage}")
     if not isinstance(getattr(lhs, "layout", None), ShardLayout):
         ctx.error(
             call,

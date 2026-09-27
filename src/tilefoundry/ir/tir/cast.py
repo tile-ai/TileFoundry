@@ -8,21 +8,21 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import (
     DistinctConstraint,
     SameConstraint,
-    TensorPattern,
     any_threads,
+    utils,
 )
 from tilefoundry.ir.types import StorageKind, UnitType
 from tilefoundry.visitor_registry import register_typeinfer
 
-_REGISTER = TensorPattern(storage=StorageKind.RMEM)
+_IN_RMEM = utils.tensor_in(StorageKind.RMEM)
 
 
 @register_op(dialect="T", category="arith", name="cast")
 class Cast(Op):
     """Convert a register tile to another dtype without changing its shape."""
 
-    src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_REGISTER)
-    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=_REGISTER)
+    src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_IN_RMEM)
+    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=_IN_RMEM)
     between = (
         SameConstraint("shape", "src", "dst"),
         DistinctConstraint("dtype", "src", "dst"),

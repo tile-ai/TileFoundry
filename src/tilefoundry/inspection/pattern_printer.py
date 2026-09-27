@@ -7,7 +7,7 @@ from enum import Enum
 from tilefoundry.ir.clause.layout import is_layout_wildcard
 from tilefoundry.ir.core.param_def import collect_param_defs
 from tilefoundry.ir.pattern.pattern import Pattern
-from tilefoundry.ir.types import Broadcast, Split
+from tilefoundry.ir.types import Broadcast, DType, Split
 from tilefoundry.ir.types.dim import DimFloorDiv, DimMul, DimVar, is_dim_op_call
 
 _UNNAMED = "_"
@@ -187,6 +187,8 @@ class PatternPrinter:
     def _written_value(self, value) -> str:
         if isinstance(value, Broadcast):
             return "B()"
+        if isinstance(value, DType):
+            return value.name
         if isinstance(value, Split):
             return f"S({value.axis})"
         if isinstance(value, Enum):
