@@ -557,13 +557,19 @@ def _repeat_order(
     return actual, order, single_shape
 
 
-def issue_plan(call: Call, ctx) -> IssuePlan:
-    """Derive the repeat nest and operand types for one instruction issue."""
+def _issue_plan(call: Call, ctx) -> tuple[IssuePlan, AccessRelations]:
+    """Derive one plan together with the relations used to build it."""
     op, _params, whole_types, single_types = _relation_types(call, ctx)
     single = _single_issue_relations(op, single_types)
     whole = _single_issue_relations(op, whole_types)
     repeat, order, single_shape = _repeat_order(call.target, whole, single)
-    return IssuePlan(repeat, order, single_shape, single_types)
+    return IssuePlan(repeat, order, single_shape, single_types), single
+
+
+def issue_plan(call: Call, ctx) -> IssuePlan:
+    """Derive the repeat nest and operand types for one instruction issue."""
+    plan, _single = _issue_plan(call, ctx)
+    return plan
 
 
 def _outer_band(
@@ -614,9 +620,8 @@ def _outer_band(
 
 @register_access_relation(ScheduleOp)
 def _schedule_access_relation(call: Call, ctx) -> AccessRelations:
-    plan = issue_plan(call, ctx)
+    plan, single = _issue_plan(call, ctx)
     params, _reads, _writes = _instruction_schema(call.target.op)
-    single = _single_issue_relations(call.target.op, plan.operand_types)
     scheduled = _outer_band(single, plan.repeat, plan.order, plan.single_shape)
     return AccessRelations(
         inputs=tuple(

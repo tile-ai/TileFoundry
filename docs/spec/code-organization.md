@@ -155,6 +155,13 @@ targets require different HIR references. (`codegen/` and `runtime/` are
 **target-first** instead — their primary axis is the target — so each tree is
 organized by its own primary axis.)
 
+**Rule 1d — a single carrier may be its category.** When an IR category consists
+of one carrier operation named for that category, it may live directly at
+`ir/<hir|tir>/<category>.py` instead of the redundant
+`ir/<hir|tir>/<category>/<category>.py`. It MUST declare its dialect and category
+explicitly. `ScheduleOp` is this exception: it lives in `ir/hir/schedule.py` and
+registers as dialect `tf`, category `schedule`.
+
 **Rule 2 — one (node, target) codegen = one file.** Each handler
 lives at `codegen/<target>/tir/<category>/<name>.py`. Stmt emitters,
 Expr-Op emitters, and tag-dispatched (`arith`, `reduce`) emitters

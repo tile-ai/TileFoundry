@@ -71,6 +71,10 @@ tuple. `order` is a permutation of these dimension positions and defaults to
 the identity permutation. `order` controls lowering loop nesting; it does not
 change operand or result types.
 
+`tilefoundry.ir.hir.schedule.issue_plan` exposes the derived `repeat`, `order`,
+single-issue iteration shape, and operand types. Access-relation construction
+and lowering consume this same derivation rather than reconstructing it.
+
 ## 4. Access relation
 
 The schedule relation is the selected instruction's single-issue relation with
