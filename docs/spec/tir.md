@@ -164,7 +164,7 @@ class PrimFunction(Stmt):
   - itself a `Stmt`, not a separate top-level node; returns no value.
     `verify_prim_function` enforces the rules below.
 
-`tir.verify.verify_prim_function(fn, *, module_fns=())` enforces:
+`visitor_registry.verify.verify_prim_function(fn, *, module_fns=())` enforces:
 
 - **Param homogeneity**. All parameters' layouts MUST be uniformly
   `ShardLayout` or uniformly non-`ShardLayout`; mixing is rejected.

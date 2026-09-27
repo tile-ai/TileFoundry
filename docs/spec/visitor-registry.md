@@ -252,8 +252,11 @@ def _(call: Call, ctx: TypeInferContext) -> TensorType: ...
 Visitor:
 
 `TypeInferVisitor` and `inference_type` live in
-`tilefoundry.visitor_registry.typeinfer`. Verification, code-generation, and
-cost-evaluation visitors remain in `tilefoundry.visitor_registry.visitors`.
+`tilefoundry.visitor_registry.typeinfer`. The HIR/TIR verification entry points
+and their whole-function walkers live together in
+`tilefoundry.visitor_registry.verify`; the per-node `VerifyVisitor`,
+code-generation visitor, and cost-evaluation visitor remain in
+`tilefoundry.visitor_registry.visitors`.
 
 ```python
 class TypeInferVisitor(ExprVisitor[Type]):
@@ -429,7 +432,7 @@ def register_verify_stmt(cls: type): ...        # decorator: register a verify h
 Stmt position as `Evaluate(callable=op, args)`. The verify path keys
 on the Op class, not on `Evaluate` itself: `register_verify_stmt`
 takes the **Op class**, and `VerifyVisitor.generic_visit` —
-together with `tir.verify._walk_stmt` — detects `Evaluate` and
+together with `visitor_registry.verify._walk_stmt` — detects `Evaluate` and
 dispatches `verify_stmt_registry.lookup(type(stmt.callable))`. The
 registry key is the Op class; the handler input shape is owned by the
 registry implementation. The stable IR shape is `Evaluate(op, args)`;
@@ -449,6 +452,11 @@ Per-stmt rules (shape / dtype / layout constraints) belong in
 [tir](./tir.md).
 
 Visitor:
+
+`verify_function`, `verify_prim_function`, and `verify_module` are the public
+whole-function entry points in `tilefoundry.visitor_registry.verify`. This
+keeps HIR and TIR verification orchestration beside the registry-derived
+type-inference driver rather than making either IR layer own the driver.
 
 ```python
 class VerifyVisitor(StmtVisitor[None]):

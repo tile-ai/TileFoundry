@@ -19,7 +19,7 @@ from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
 from tilefoundry.inspection import as_script
 from tilefoundry.ir.tir import PrimFunction
-from tilefoundry.ir.tir.verify import verify_prim_function
+from tilefoundry.visitor_registry.verify import verify_prim_function
 
 PLAIN = (
     "gemm_8192x17408x5120_cta_grid",

@@ -25,6 +25,13 @@ ARRANGEMENT = "every arrangement"
 OPAQUE = object()
 
 
+class Unknown:
+    """A truthy result when the solver cannot prove success or failure."""
+
+    def __bool__(self) -> bool:
+        return True
+
+
 @dataclass(frozen=True)
 class Match:
     """The bindings produced by a successful match."""
@@ -91,7 +98,7 @@ class PatternMatcher:
         self._refusal = refusal
         return False
 
-    def solve(self) -> bool:
+    def solve(self) -> bool | Unknown:
         """Finish formulas that still had unbound names during structural matching."""
         if not self.pending:
             return True

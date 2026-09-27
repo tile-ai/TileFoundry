@@ -20,9 +20,9 @@ from tilefoundry.ir.tir.cuda.sync.mbarrier import (
 )
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
-from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.ir.types import DType, Layout, Mesh, Topology, make_tensor_type
 from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.visitor_registry.verify import verify_prim_function
 
 _SMEM_BAR = make_tensor_type((1,), DType.from_name("i64"), storage="smem")
 _GMEM_BAR = make_tensor_type((1,), DType.from_name("i64"), storage="gmem")
@@ -99,4 +99,3 @@ class MBarrierRing:
     @prim_func(target=CpuTarget())
     def mbarrier_ring_host(a: Tensor[(4,), "f32"]):
         launch(mbarrier_ring_device, a, grid=(1, 1, 1), block=(128, 1, 1))  # noqa: F821
-

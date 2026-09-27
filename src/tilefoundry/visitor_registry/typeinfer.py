@@ -218,7 +218,7 @@ class TypeInferVisitor(ExprVisitor[Type]):
                 for param, arg_type in zip(expr.params, arg_types, strict=True)
             },
         }
-        from tilefoundry.ir.hir.verify import _verify_isolated  # noqa: PLC0415
+        from .verify import _verify_isolated  # noqa: PLC0415
 
         _verify_isolated(expr, ctx)
         mesh = make_mesh(ctx.current_mesh, expr.mesh) if ctx.current_mesh else expr.mesh

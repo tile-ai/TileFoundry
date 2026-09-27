@@ -13,11 +13,11 @@ import pytest
 
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.pattern import RangePattern
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.tensor_type import TupleType
+from tilefoundry.visitor_registry.verify import verify_function
 
 
 def _tensor(shape) -> TensorType:

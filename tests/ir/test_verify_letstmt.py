@@ -15,9 +15,9 @@ from tilefoundry.ir.tir.memory import AllocTensor
 from tilefoundry.ir.tir.memory.ptr_of import PtrOf
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import LetStmt, Return, Sequential
-from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.ir.types import DType, TensorType, make_tensor_type
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.visitor_registry.verify import verify_prim_function
 
 
 def _alloc_call(t: TensorType) -> Call:

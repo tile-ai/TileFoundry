@@ -13,11 +13,15 @@ from dataclasses import dataclass, field
 from tilefoundry.dump import DumpFlags, DumpScope, dump
 from tilefoundry.ir.core.module import Module, module_functions
 from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.hir.verify import verify_function as verify_hir_function
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import inference_type
+from tilefoundry.visitor_registry.verify import (
+    verify_function as verify_hir_function,
+)
+from tilefoundry.visitor_registry.verify import (
+    verify_prim_function,
+)
 
 from .pass_base import Pass
 

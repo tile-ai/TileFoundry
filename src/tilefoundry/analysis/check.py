@@ -441,7 +441,7 @@ class _AnalysisViewCloner(BindingSubstitutionCloner):
             body=self.visit(expr.body, body_ctx),
             metadata=_view_metadata(expr),
         )
-        from tilefoundry.ir.hir.verify import _verify_isolated  # noqa: PLC0415
+        from tilefoundry.visitor_registry.verify import _verify_isolated  # noqa: PLC0415
 
         _verify_isolated(rebuilt)
         return rebuilt

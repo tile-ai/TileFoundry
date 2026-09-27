@@ -14,11 +14,9 @@ from typing import Any, Callable, ClassVar, Literal, Mapping
 
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function as HirFunction
-from tilefoundry.ir.hir.verify import verify_function
 from tilefoundry.ir.pattern import Pattern, RangePattern, _mangle_variant_name
 from tilefoundry.ir.tir.intrinsic import intrinsic as _intrinsic
 from tilefoundry.ir.tir.prim_function import PrimFunction
-from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.ir.types import Mesh
 from tilefoundry.module import UNDECLARED, _Entry
 from tilefoundry.parser import FuncParserContext, FunctionRole, parse_function
@@ -28,6 +26,7 @@ from tilefoundry.parser.ast_pattern import (
     module_context_for_frame,
 )
 from tilefoundry.target.base import target_instance
+from tilefoundry.visitor_registry.verify import verify_function, verify_prim_function
 
 
 class ParsedFuncKind(StrEnum):

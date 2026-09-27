@@ -1193,8 +1193,10 @@ class ModuleBuildContext:
             topologies=self.topologies,
             methods=methods,
         )
-        from tilefoundry.ir.hir.verify import verify_function  # noqa: PLC0415
-        from tilefoundry.ir.tir.verify import verify_prim_function  # noqa: PLC0415
+        from tilefoundry.visitor_registry.verify import (  # noqa: PLC0415
+            verify_function,
+            verify_prim_function,
+        )
 
         for function in functions:
             if isinstance(function, runtime.Function):

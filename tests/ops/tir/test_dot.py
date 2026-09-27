@@ -16,10 +16,10 @@ from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.tir.dot import Dot
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
-from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.ir.types import DType, Layout, Mesh, ShardLayout, Split, Topology, make_tensor_type
 from tilefoundry.ir.types.shard_layout import Broadcast
 from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.visitor_registry.verify import verify_prim_function
 
 
 def _pf(*types) -> PrimFunction:

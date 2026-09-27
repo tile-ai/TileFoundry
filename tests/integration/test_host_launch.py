@@ -21,7 +21,6 @@ from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
-from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.ir.types import (
     CallableType,
     DType,
@@ -35,6 +34,7 @@ from tilefoundry.ir.types import (
 )
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.visitor_registry.verify import verify_prim_function
 
 _ROWS = 128
 _COLS = 12

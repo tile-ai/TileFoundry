@@ -10,10 +10,10 @@ from tilefoundry.ir.tir.launch import Launch
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Sequential
 from tilefoundry.ir.tir.symbol_ref import SymbolRef
-from tilefoundry.ir.tir.verify import verify_module
 from tilefoundry.ir.types import Layout
 from tilefoundry.ir.types.callable_type import callable_type_for_prim_function
 from tilefoundry.target import CpuTarget, CudaTarget
+from tilefoundry.visitor_registry.verify import verify_module
 
 
 def test_launch_rejects_forwarded_type_that_differs_from_device_param() -> None:

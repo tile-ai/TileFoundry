@@ -13,18 +13,13 @@ from tilefoundry.ir.types.layout_algebra import coalesce, is_inverse_projectable
 from .match import (
     ARRANGEMENT,
     UNNAMED_PLACE,
+    Unknown,
     matched,
     relations_of,
     written_place,
     written_tuple,
 )
 from .pattern import Pattern, SequencePattern, WildcardPattern
-
-
-class Unknown:
-    def __bool__(self) -> bool:
-        return True
-
 
 UNKNOWN = Unknown()
 _MISSING = object()

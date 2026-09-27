@@ -21,9 +21,9 @@ from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.tir.async_copy import CopyAsync, CpAsyncWait
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, Return, Sequential
-from tilefoundry.ir.tir.verify import verify_prim_function
 from tilefoundry.ir.types import DType, TensorType, make_tensor_type
 from tilefoundry.target import CudaTarget
+from tilefoundry.visitor_registry.verify import verify_prim_function
 
 
 def _copy_async_pf(src_ty: TensorType, dst_ty: TensorType) -> PrimFunction:

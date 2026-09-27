@@ -6,9 +6,9 @@ import pytest
 
 from tilefoundry.ir.core import Var, VerifyError
 from tilefoundry.ir.tir.shape import ShapeOf
-from tilefoundry.ir.tir.verify import _verify_shape_of
 from tilefoundry.ir.types import DType, TensorType
 from tilefoundry.ir.types.storage import StorageKind
+from tilefoundry.visitor_registry.verify import _verify_shape_of
 
 
 def _x_param() -> Var:
