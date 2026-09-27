@@ -190,9 +190,9 @@ class ReuseWindow:
 class RegionMemoryMetadata(IRMetadata):
     """Record one region's memory behavior against a target hierarchy.
 
-    Today this is attached to a Function, because traffic totals and placement
-    span the whole function. A footprint is absent until one has been computed;
-    no empty record is attached to a LoopRegion merely to reserve the type.
+    A Function carries whole-function traffic, placement, and lifetimes. A
+    MeshRegion carries only the peaks reached while that region executes, and no
+    empty record is attached merely to reserve the type.
     """
 
     solver_status: str

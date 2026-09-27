@@ -21,6 +21,8 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import TensorType, TupleType, Type
+from tilefoundry.ir.types.mesh import within_scope
+from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import bytes_by_storage
 from tilefoundry.ir.visitor import ExprVisitor
@@ -446,6 +448,37 @@ def _project_allocation_values(
     return tuple(result)
 
 
+def peak_in_window(rows: list[ValueLifetime], entered_at: int, exited_at: int) -> int:
+    """Sum the live bytes at each event in one inclusive timeline window."""
+    peak = 0
+    for point in range(entered_at, exited_at + 1):
+        peak = max(
+            peak,
+            sum(item.bytes for item in rows if item.defined_at <= point <= item.last_used_at),
+        )
+    return peak
+
+
+def values_in_region(
+    values: tuple[AllocationValue, ...],
+    region: MeshRegion,
+    entered_at: int,
+    exited_at: int,
+) -> tuple[AllocationValue, ...]:
+    """Resident values whose lifetimes and ownership intersect one mesh region."""
+    result = []
+    for item in values:
+        lifetime = item.lifetime
+        if lifetime.last_used_at < entered_at or lifetime.defined_at > exited_at:
+            continue
+        if lifetime.memory_level == str(StorageKind.RMEM):
+            layout = shard_layout_of(getattr(item.value.type, "layout", None))
+            if layout is None or not within_scope(layout.mesh, region.mesh):
+                continue
+        result.append(item)
+    return tuple(result)
+
+
 def analyze_value_lifetimes(
     module: Module,
     function: Function,
@@ -692,6 +725,45 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     solver_options = (
         context.options if isinstance(context.options, MemoryOptions) else MemoryOptions()
     )
+    region_rmem_peaks: list[int] = []
+    for window in liveness.regions:
+        region_values = values_in_region(
+            allocation_values,
+            window.region,
+            window.entered_at,
+            window.exited_at,
+        )
+        region_levels = []
+        for name in sorted({item.lifetime.memory_level for item in region_values}):
+            rows = [
+                item.lifetime
+                for item in region_values
+                if item.lifetime.memory_level == name
+            ]
+            declared = facts.explicit(name)
+            peak = peak_in_window(rows, window.entered_at, window.exited_at)
+            region_levels.append(
+                MemoryLevelPeak(
+                    memory_level=name,
+                    peak_bytes=peak,
+                    persistent_bytes=sum(item.bytes for item in rows if item.persistent),
+                    capacity_bytes=(
+                        declared.capacity_bytes if declared is not None else None
+                    ),
+                )
+            )
+            if name == str(StorageKind.RMEM):
+                region_rmem_peaks.append(peak)
+        if region_levels:
+            attach(
+                window.region,
+                RegionMemoryMetadata(
+                    solver_status="feasible",
+                    topologies=tuple(locals_by_unit),
+                    peaks=tuple(region_levels),
+                ),
+            )
+
     levels_list: list[MemoryLevelPeak] = []
     for name in sorted(
         {item.memory_level for item in lifetimes} | set(memory_context.storage.total)
@@ -710,17 +782,14 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             )
             peak = solved.peak_bytes
         elif name == str(StorageKind.RMEM):
-            peak = max((item.bytes for item in rows), default=0)
+            peak = (
+                max(region_rmem_peaks, default=0)
+                if liveness.regions
+                else peak_in_window(rows, 0, liveness.timeline_end)
+            )
         else:
-            peak = 0
             end = max((item.last_used_at for item in rows), default=-1)
-            for point in range(end + 1):
-                peak = max(
-                    peak,
-                    sum(
-                        item.bytes for item in rows if item.defined_at <= point <= item.last_used_at
-                    ),
-                )
+            peak = peak_in_window(rows, 0, end)
         levels_list.append(
             MemoryLevelPeak(
                 memory_level=name,

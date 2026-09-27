@@ -35,6 +35,7 @@ from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.pattern import Tensor
@@ -177,6 +178,35 @@ def test_scheduled_hir_program_has_analysis_metadata(
             item.peak_bytes for item in placement.peaks if item.memory_level == "smem"
         )
         assert smem_peak == SMEM_GOLDEN[path.stem]
+
+        regions = tuple(
+            expr
+            for expr in collect_exprs(result.function.body)
+            if isinstance(expr, MeshRegion)
+        )
+        region_records = tuple(
+            record
+            for region in regions
+            if (record := get_metadata(region, RegionMemoryMetadata)) is not None
+        )
+        assert len(region_records) == len(regions)
+        for record in region_records:
+            assert record.solver_status == "feasible"
+            assert record.topologies == placement.topologies
+            assert record.peaks
+            assert not record.traffic.storage.kinds
+            assert not record.traffic.communication.kinds
+            assert record.footprint is None
+            assert not record.reuse_windows
+            assert not record.lifetimes
+            assert not record.errors
+            assert not record.advisories
+        region_rmem_peaks = tuple(
+            peak.peak_bytes
+            for record in region_records
+            if (peak := record.peak_for("rmem")) is not None
+        )
+        assert placement.peak_for("rmem").peak_bytes == max(region_rmem_peaks, default=0)
 
         liveness = analyze_liveness(result.function)
         intervals = {id(item.value): item for item in liveness.intervals}

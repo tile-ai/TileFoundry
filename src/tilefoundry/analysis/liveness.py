@@ -32,12 +32,26 @@ class UseEvent:
 
 
 @dataclass(frozen=True)
+class RegionInterval:
+    """One mesh region's entry and exit events on the structured timeline."""
+
+    region: MeshRegion
+    entered_at: int
+    exited_at: int
+
+
+@dataclass(frozen=True)
 class Liveness:
     """Definition-ordered intervals on one function-wide event timeline."""
 
     intervals: tuple[LiveInterval, ...]
     uses: tuple[UseEvent, ...]
+    regions: tuple[RegionInterval, ...]
     timeline_end: int
+
+    def interval_of(self, value: Expr) -> LiveInterval | None:
+        """Return *value*'s interval when it belongs to this timeline."""
+        return next((item for item in self.intervals if item.value is value), None)
 
 
 def result_copies(expr: Expr) -> int:
@@ -87,6 +101,7 @@ class LivenessVisitor(ExprVisitor[None]):
         self._states: dict[int, LiveInterval] = {}
         self._definition_order: list[int] = []
         self._uses: list[UseEvent] = []
+        self._regions: list[RegionInterval] = []
         self._loop_entries: list[tuple[int, set[int], set[int]]] = []
         for parameter in function.params:
             self.define(parameter, self.next_event())
@@ -123,6 +138,7 @@ class LivenessVisitor(ExprVisitor[None]):
         return Liveness(
             intervals=tuple(states),
             uses=tuple(self._uses),
+            regions=tuple(self._regions),
             timeline_end=self._point,
         )
 
@@ -151,6 +167,7 @@ class LivenessVisitor(ExprVisitor[None]):
         self.visit(region.body, ctx)
         body_use = self.next_event()
         self.use(region.body, body_use)
+        self._regions.append(RegionInterval(region, argument_use, body_use))
         self.define(region, self.next_event())
 
     def visit_LoopRegion(self, region: LoopRegion, ctx=None) -> None:
@@ -196,4 +213,11 @@ def analyze_liveness(function: Function) -> Liveness:
     return visitor.finish()
 
 
-__all__ = ["LiveInterval", "Liveness", "UseEvent", "analyze_liveness", "result_copies"]
+__all__ = [
+    "LiveInterval",
+    "Liveness",
+    "RegionInterval",
+    "UseEvent",
+    "analyze_liveness",
+    "result_copies",
+]
