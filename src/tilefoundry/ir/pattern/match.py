@@ -92,12 +92,26 @@ class PatternMatcher:
         return False
 
     def solve(self) -> bool:
-        """Finish deferred formulas; formulas arrive with the arithmetic milestone."""
+        """Finish formulas that still had unbound names during structural matching."""
         if not self.pending:
             return True
-        predicate = self.pending[0]
+        from .predicates import UNKNOWN, failing, solve  # noqa: PLC0415 - protocol cycle
+
+        formulas = tuple(self.pending)
+        solved = solve(formulas, self.bindings)
+        predicate = failing(formulas, self.bindings)
+        if predicate is None:
+            predicate = formulas[0]
         bindings = written_bindings(self.bindings.items())
-        reason = f"could not solve {written_place(predicate)}"
+        if solved is UNKNOWN:
+            reason = f"CP-SAT returned unknown for {written_place(predicate)}"
+            self._refusal = reason if not bindings else f"{reason} ({bindings})"
+            return UNKNOWN
+        if solved is not None:
+            self.bindings.update(solved)
+            self.pending.clear()
+            return True
+        reason = f"could not satisfy {written_place(predicate)}"
         self._refusal = reason if not bindings else f"{reason} ({bindings})"
         return False
 
@@ -137,17 +151,15 @@ class PatternMatcher:
         raise NotImplementedError(f"{type(pattern).__name__} has no visitor")
 
     def visit_WildcardPattern(self, pattern, subject) -> bool:
+        if pattern.name:
+            if pattern.name in self.bindings:
+                return self.bindings[pattern.name] == subject or self._fail(pattern, subject)
+            self.bindings[pattern.name] = subject
         return True
 
     def _captured_names(self, value) -> tuple[str, ...]:
-        from .pattern import (  # noqa: PLC0415 - pattern protocol cycle
-            CapturePattern,
-            Pattern,
-            WildcardPattern,
-        )
+        from .pattern import Pattern, WildcardPattern  # noqa: PLC0415 - pattern protocol cycle
 
-        if isinstance(value, CapturePattern):
-            return (value.name, *self._captured_names(value.pattern))
         if isinstance(value, WildcardPattern):
             name = getattr(value, "name", None)
             return () if not name else (name,)
@@ -214,14 +226,6 @@ class PatternMatcher:
         if not isinstance(subject, (tuple, list)) or len(subject) != len(pattern.patterns):
             return self._fail(pattern, subject)
         return all(self.match(place, value) for place, value in zip(pattern.patterns, subject))
-
-    def visit_CapturePattern(self, pattern, subject) -> bool:
-        if pattern.name in self.bindings:
-            return self.bindings[pattern.name] == subject or self._fail(pattern, subject)
-        if not self.match(pattern.pattern, subject):
-            return False
-        self.bindings[pattern.name] = subject
-        return True
 
     def visit_ConstraintPattern(self, pattern, subject) -> bool:
         return all(self.match(part, subject) for part in pattern.patterns)
@@ -407,6 +411,7 @@ class PatternMatcher:
         )
 
     def visit_ComposedLayoutPattern(self, pattern, subject) -> bool:
+        stated = subject
         if isinstance(subject, Layout):
             subject = ComposedLayout(None, 0, subject)
         if not isinstance(subject, ComposedLayout):
@@ -418,7 +423,7 @@ class PatternMatcher:
                 (pattern.offset, subject.offset),
                 (pattern.outer, subject.outer),
             )
-        )
+        ) and all(self.match(predicate, stated) for predicate in pattern.predicates)
 
     def visit_MeshPattern(self, pattern, subject) -> bool:
         if not isinstance(subject, Mesh):
@@ -449,7 +454,10 @@ class PatternMatcher:
         for place, value in ((pattern.dtype, subject.dtype), (pattern.storage, subject.storage)):
             if not self.match(place, value):
                 return False
-        return pattern.layout is None or self.match(pattern.layout, subject.layout)
+        return (
+            (pattern.layout is None or self.match(pattern.layout, subject.layout))
+            and all(self.match(predicate, subject) for predicate in pattern.predicates)
+        )
 
     def visit_ShardLayoutPattern(self, pattern, subject) -> bool:
         if not isinstance(subject, ShardLayout):
@@ -466,7 +474,7 @@ class PatternMatcher:
                 (pattern.attrs, subject.attrs),
                 (pattern.mesh, subject.mesh),
             )
-        )
+        ) and all(self.match(predicate, subject) for predicate in pattern.predicates)
 
     def visit_Predicate(self, pattern, subject) -> bool:
         held = pattern.holds(subject, self.bindings)

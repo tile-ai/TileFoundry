@@ -6,14 +6,13 @@ from dataclasses import dataclass
 
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.pattern import (
-    CapturePattern,
     ComposedLayoutPattern,
     LayoutPattern,
     MeshPattern,
-    MultipleOfPattern,
     OrPattern,
     Pattern,
     SwitchPattern,
+    WildcardPattern,
     matched,
 )
 from tilefoundry.ir.pattern import (
@@ -95,8 +94,9 @@ class MmaAtom:
         per_mode = (P.Forward(per_mode=True), P.Injective(per_mode=True))
         bare = LayoutPattern.from_layout(cls.scope.layout, predicates=per_mode)
         sliced = ComposedLayoutPattern(
-            offset=CapturePattern("p0", MultipleOfPattern(size)),
+            offset=WildcardPattern("p0"),
             outer=LayoutPattern.from_layout(cls.scope.layout, predicates=per_mode),
+            predicates=(WildcardPattern("p0") % size == 0,),
         )
         return MeshPattern((topology.name,), OrPattern(sliced, bare))
 

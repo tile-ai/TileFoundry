@@ -613,16 +613,17 @@ class Pattern:
 
 The implementation is split by responsibility under `ir/pattern/`:
 
-- `pattern.py` defines `Pattern`, the computed-condition base `Predicate`, and
-  the composable classes
-  `OrPattern`, `AndPattern`, `SequencePattern`, `CapturePattern`,
+- `pattern.py` defines `Pattern` and the composable classes
+  `OrPattern`, `AndPattern`, `SequencePattern`,
   `ConstraintPattern`, `GuardPattern`, `SwitchPattern`, `RangePattern`,
   `MultipleOfPattern`, `OneOfPattern`, `AttrPattern`, `BitsPattern`,
   `LayoutPattern`, `SwizzlePattern`, `ComposedLayoutPattern`, `MeshPattern`,
   `ShardLayoutPattern`, `ScalarPattern`, `TensorPattern`, `WildcardPattern`, and
   `StarPattern`. It also owns the `Scalar` and `Tensor` singletons.
-- `predicates.py` defines named arrangement predicates: `Forward`,
-  `Injective`, `WholeVectors`, `PlainArrangement`, `BoxDims`, and `TensorMap`.
+- `predicates.py` defines the computed-condition base `Predicate`; integer
+  `Term` expressions and Boolean `Formula` predicates; and the named
+  arrangement predicates `Forward`, `Injective`, `WholeVectors`,
+  `PlainArrangement`, `BoxDims`, and `TensorMap`.
 - `match.py` owns the public `PatternMatcher`, private alternative expansion,
   and the shared matching and description helpers. An unstated (`None`)
   pattern field admits any value.
@@ -637,21 +638,38 @@ match. Nested patterns stay in that matcher instead of creating their own
 capture dictionaries. Effect-Op verification reuses one matcher across all
 operands of a call, so later operands see bindings established by earlier ones.
 
+An unnamed `WildcardPattern()` admits any value. A named
+`WildcardPattern(name)` also binds that value; every occurrence of the same
+name must match the same value. Named wildcards form integer `Term`
+expressions with `+`, `-`, `*`, `//`, and `%`; comparisons form a `Formula`,
+and `&`, `|`, and `~` combine formulas. `In`, `Table`, `Bits`, `ForAll`,
+`Sum`, and `Count` cover membership, lookup, dtype width, and tuple captures.
+Python truth testing and chained comparisons are rejected; callers must use
+the formula operators rather than `and`, `or`, or Python `in`.
+
 `Predicate.holds(subject, bindings)` returns true, false, or `None` when names
-needed by the predicate remain unbound. The hand-written predicates in
+needed by the predicate remain unbound. Ground formulas are evaluated at the
+pattern node that owns them, so a failed formula can reject an alternative.
+Only unresolved formulas are deferred; after structural matching they are
+compiled into one OR-Tools CP-SAT model. An infeasible model is a mismatch,
+while an `UNKNOWN` solver result remains explicitly unknown rather than being
+reported as false. Refusals identify the first failed formula and show the
+bindings used to evaluate it. The hand-written predicates in
 `predicates.py` read the layout itself, including its coalesced runs and
-algebraic properties. Arithmetic `Formula` predicates in `arith.py` instead
-read names bound by structural patterns.
+algebraic properties; `Formula` predicates instead read names bound by
+structural patterns.
 
 `LayoutPattern` optionally matches a bare `Layout`'s nested `shape` and
-`strides`, then applies its table of named predicates. Omitting both structural
+`strides`, then applies its tuple of predicates. `ComposedLayoutPattern`,
+`ShardLayoutPattern`, and `TensorPattern` likewise apply their own predicate
+tuples after their structural fields match. Omitting both layout structural
 fields leaves the structure unconstrained and lets predicates read through
 supported composed or sharded forms. `Forward()` and `Injective()` express the
 corresponding computed properties; they are not implicit.
 When both structural fields are present, they are matched as paired CuTe modes
 while preserving their authored nesting. A `StarPattern(p)` in the same
 position of both fields consumes zero or more modes and applies `p` to every
-consumed mode; each tuple may contain at most one star. Captures below a star
+consumed mode; each tuple may contain at most one star. Bindings below a star
 are tuples, and a name may not occur both below and outside a star.
 `LayoutPattern.from_layout(layout, ...)` constructs the exact bare or composed
 pattern for an authored arrangement, preserving its nested structure and the

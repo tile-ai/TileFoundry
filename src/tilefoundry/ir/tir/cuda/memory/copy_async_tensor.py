@@ -8,19 +8,15 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import (
-    AndPattern,
-    BitsPattern,
-    CapturePattern,
     ComposedLayoutPattern,
     DistinctConstraint,
     LayoutPattern,
     MeshPattern,
-    MultipleOfPattern,
     OrPattern,
-    RangePattern,
     SameModesConstraint,
     SwitchPattern,
     SwizzlePattern,
+    WildcardPattern,
     utils,
 )
 from tilefoundry.ir.pattern import (
@@ -54,26 +50,33 @@ class BoxFamily(SwitchPattern):
     """Every unswizzled or swizzled shared-memory box."""
 
 
-def _dim(name: str, dtype: str, *, span: int | None = None) -> CapturePattern:
-    parts = [
-        RangePattern(lo=1, hi=BOX_EXTENT),
-        BitsPattern(dtype, MultipleOfPattern(TMA_UNIT_BITS)),
-    ]
+def _dim(name: str) -> WildcardPattern:
+    return WildcardPattern(name)
+
+
+def _dim_formulas(name: str, dtype: str, *, span: int | None = None) -> tuple:
+    dim = WildcardPattern(name)
+    parts = [dim >= 1, dim <= BOX_EXTENT, P.Bits(dtype) * dim % TMA_UNIT_BITS == 0]
     if span is not None:
-        parts.append(BitsPattern(dtype, RangePattern(hi=span * 8)))
-    return CapturePattern(name, AndPattern(tuple(parts)))
+        parts.append(P.Bits(dtype) * dim <= span * 8)
+    return tuple(parts)
 
 
 def TmaBoxPattern(dtype: str) -> BoxFamily:
-    rest = tuple(
-        CapturePattern(f"dim{index}", RangePattern(lo=1, hi=BOX_EXTENT))
+    rest = tuple(_dim(f"dim{index}") for index in range(1, TMA_RANK))
+    rest_formulas = tuple(
+        formula
         for index in range(1, TMA_RANK)
+        for formula in _dim_formulas(f"dim{index}", dtype)[:2]
     )
+    plain_dims = (_dim("dim0"), *rest)
     boxes = {
         TmaSwizzle.NONE: LayoutPattern(
             predicates=(
                 P.PlainArrangement(),
-                P.BoxDims((_dim("dim0", dtype), *rest), dtype, BOX_EXTENT),
+                P.BoxDims(plain_dims, dtype, BOX_EXTENT),
+                *_dim_formulas("dim0", dtype),
+                *rest_formulas,
             )
         )
     }
@@ -82,6 +85,8 @@ def TmaBoxPattern(dtype: str) -> BoxFamily:
         TMA_RANK,
     ):
         swizzle = mode.swizzle
+        leading = f"dim{index}"
+        dims = (_dim(leading), *rest)
         boxes[mode] = ComposedLayoutPattern(
             SwizzlePattern(swizzle.bits, swizzle.base, swizzle.shift),
             0,
@@ -89,11 +94,13 @@ def TmaBoxPattern(dtype: str) -> BoxFamily:
                 predicates=(
                     P.PlainArrangement(),
                     P.BoxDims(
-                        (_dim(f"dim{index}", dtype, span=mode.value), *rest),
+                        dims,
                         dtype,
                         BOX_EXTENT,
                         span=mode.value,
                     ),
+                    *_dim_formulas(leading, dtype, span=mode.value),
+                    *rest_formulas,
                 )
             ),
         )
@@ -101,14 +108,14 @@ def TmaBoxPattern(dtype: str) -> BoxFamily:
 
 
 def TmaGlobalPattern(dtype: str) -> LayoutPattern:
-    steps = tuple(
-        CapturePattern(
-            f"step{index}",
-            BitsPattern(dtype, MultipleOfPattern(TMA_UNIT_BITS)),
+    steps = tuple(WildcardPattern(f"step{index}") for index in range(1, TMA_RANK))
+    return LayoutPattern(
+        predicates=(
+            P.PlainArrangement(),
+            P.TensorMap(steps, dtype),
+            *(P.Bits(dtype) * step % TMA_UNIT_BITS == 0 for step in steps),
         )
-        for index in range(1, TMA_RANK)
     )
-    return LayoutPattern(predicates=(P.PlainArrangement(), P.TensorMap(steps, dtype)))
 
 
 def TmaOperandPattern(storage: str, dtype: str) -> SwitchPattern:
@@ -128,8 +135,9 @@ def _warp_scope() -> MeshPattern:
         predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
     )
     sliced = ComposedLayoutPattern(
-        offset=CapturePattern("p0", MultipleOfPattern(32)),
+        offset=WildcardPattern("p0"),
         outer=layout,
+        predicates=(WildcardPattern("p0") % 32 == 0,),
     )
     return MeshPattern(("thread",), OrPattern(sliced, layout))
 

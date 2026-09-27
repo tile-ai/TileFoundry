@@ -8,12 +8,10 @@ from tilefoundry.ir.types import Mesh, StorageKind
 from . import predicates as P
 from .pattern import (
     AttrPattern,
-    CapturePattern,
     ComposedLayoutPattern,
     LayoutPattern,
     MeshPattern,
     MultipleOfPattern,
-    OneOfPattern,
     OrPattern,
     Pattern,
     RangePattern,
@@ -28,14 +26,16 @@ WHOLE_BYTES = AttrPattern("bit_width", MultipleOfPattern(8))
 def operand_tile(index: int, storage=None, layout=None) -> TensorPattern:
     """A tensor tile whose dtype and storage captures are named by operand slot."""
     storages = MOVED_STORAGES if storage is None else storage
+    dtype_name = dtype_place(index)
+    storage_name = storage_place(index)
+    predicates = [P.Bits(dtype_name) % 8 == 0]
+    if isinstance(storages, tuple):
+        predicates.append(P.In(WildcardPattern(storage_name), storages))
     return TensorPattern(
-        dtype=CapturePattern(dtype_place(index), WHOLE_BYTES),
-        storage=(
-            CapturePattern(storage_place(index), OneOfPattern(tuple(storages)))
-            if isinstance(storages, tuple)
-            else storages
-        ),
+        dtype=WildcardPattern(dtype_name),
+        storage=(WildcardPattern(storage_name) if isinstance(storages, tuple) else storages),
         layout=layout,
+        predicates=tuple(predicates),
     )
 
 
@@ -54,7 +54,7 @@ def whole_vectors(index: int, widths: tuple[int, ...]) -> LayoutPattern:
     return LayoutPattern(
         predicates=(
             P.WholeVectors(
-                CapturePattern("width", OneOfPattern(widths)),
+                WildcardPattern("width"),
                 dtype_place(index),
                 widths,
             ),
@@ -66,15 +66,23 @@ _ANY_THREADS = OrPattern(
     ComposedLayoutPattern(
         offset=WildcardPattern(),
         outer=LayoutPattern(
-            ((CapturePattern("n", RangePattern(lo=1)),),),
+            ((WildcardPattern("n"),),),
             ((1,),),
-            predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
+            predicates=(
+                WildcardPattern("n") >= 1,
+                P.Forward(per_mode=True),
+                P.Injective(per_mode=True),
+            ),
         ),
     ),
     LayoutPattern(
-        ((CapturePattern("n", RangePattern(lo=1)),),),
+        ((WildcardPattern("n"),),),
         ((1,),),
-        predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
+        predicates=(
+            WildcardPattern("n") >= 1,
+            P.Forward(per_mode=True),
+            P.Injective(per_mode=True),
+        ),
     ),
 )
 

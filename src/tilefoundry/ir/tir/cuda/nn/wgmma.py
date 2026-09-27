@@ -7,7 +7,6 @@ from enum import Enum
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.pattern import (
     AndPattern,
-    CapturePattern,
     ComposedLayoutPattern,
     GuardPattern,
     LayoutPattern,
@@ -125,15 +124,14 @@ def Descriptor(
             shape, strides = shape[::-1], strides[::-1]
         held = LayoutPattern(shape, strides)
         if mode.bits:
-            start = (
-                CapturePattern(START, OneOfPattern(tuple(range(0, width, along))))
-                if sliced
-                else 0
-            )
+            start = WildcardPattern(START) if sliced else 0
             held = ComposedLayoutPattern(
                 SwizzlePattern(mode.bits, 4, 3),
                 start,
                 held,
+                predicates=(
+                    (P.In(WildcardPattern(START), range(0, width, along)),) if sliced else ()
+                ),
             )
         branches[mode] = (
             GuardPattern(along, MultipleOfPattern(width), held) if guarded else held

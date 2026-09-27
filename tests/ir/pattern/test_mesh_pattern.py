@@ -2,12 +2,9 @@ import pytest
 
 from tests.fixtures.meshes import CT, CTA
 from tilefoundry.ir.pattern import (
-    CapturePattern,
     ComposedLayoutPattern,
     LayoutPattern,
     MeshPattern,
-    MultipleOfPattern,
-    OneOfPattern,
     WildcardPattern,
 )
 from tilefoundry.ir.pattern import (
@@ -32,12 +29,13 @@ def test_mesh_pattern_matches_the_levels_it_names():
     warpgroup = MeshPattern(
         ("thread",),
         ComposedLayoutPattern(
-            offset=CapturePattern("p0", MultipleOfPattern(128)),
+            offset=WildcardPattern("p0"),
             outer=LayoutPattern(
                 ((128,),),
                 ((1,),),
                 predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
             ),
+            predicates=(WildcardPattern("p0") % 128 == 0,),
         ),
     )
     assert warpgroup.match(CT[1:3, 128:256]).captures["p0"] == 128
@@ -62,7 +60,7 @@ def test_layout_predicates_read_through_composition():
     pattern = LayoutPattern(
         predicates=(
             P.WholeVectors(
-                CapturePattern("width", OneOfPattern((4, 8, 16))),
+                WildcardPattern("width"),
                 "dtype0",
                 (4, 8, 16),
             ),

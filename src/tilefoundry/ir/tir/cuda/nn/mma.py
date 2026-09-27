@@ -6,12 +6,11 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import (
-    CapturePattern,
     ComposedLayoutPattern,
     LayoutPattern,
     MeshPattern,
-    MultipleOfPattern,
     OrPattern,
+    WildcardPattern,
 )
 from tilefoundry.ir.pattern import (
     predicates as P,
@@ -34,16 +33,21 @@ _FP_ACC_WIDEN = {
 
 def _warp_layout_pattern() -> LayoutPattern:
     return LayoutPattern(
-        ((CapturePattern("n", MultipleOfPattern(32)),),),
+        ((WildcardPattern("n"),),),
         ((1,),),
-        predicates=(P.Forward(per_mode=True), P.Injective(per_mode=True)),
+        predicates=(
+            WildcardPattern("n") % 32 == 0,
+            P.Forward(per_mode=True),
+            P.Injective(per_mode=True),
+        ),
     )
 
 
 _WARP_ALIGNED = OrPattern(
     ComposedLayoutPattern(
-        offset=CapturePattern("p0", MultipleOfPattern(32)),
+        offset=WildcardPattern("p0"),
         outer=_warp_layout_pattern(),
+        predicates=(WildcardPattern("p0") % 32 == 0,),
     ),
     _warp_layout_pattern(),
 )

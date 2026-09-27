@@ -5,13 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from tilefoundry.ir.types import (
-    Broadcast,
-    ComposedLayout,
-    Layout,
-    ShardLayout,
-    Swizzle,
-)
+from tilefoundry.ir.types import ComposedLayout, Layout, Swizzle
 from tilefoundry.ir.types.layout import flatten
 
 from .match import (
@@ -35,7 +29,7 @@ class Pattern:
 
     def match(self, subject, captures=None) -> Match | None:
         held = PatternMatcher(dict(captures or {}))
-        return Match(held.bindings) if held.match(self, subject) and held.solve() else None
+        return Match(dict(held.bindings)) if held.match(self, subject) and held.solve() else None
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return type(self).__name__
@@ -48,44 +42,67 @@ class Pattern:
 
 
 @dataclass(frozen=True)
-class Predicate(Pattern):
-    """A computed condition over a subject and the matcher's bindings."""
-
-    @staticmethod
-    def arrangement(subject) -> Layout | None:
-        """Read the static strided layout beneath shard and composition wrappers."""
-        if isinstance(subject, ShardLayout):
-            if not all(isinstance(attr, Broadcast) for attr in subject.attrs):
-                return None
-            subject = subject.layout
-        if isinstance(subject, ComposedLayout):
-            if subject.inner is not None and not isinstance(subject.inner, Swizzle):
-                return None
-            subject = subject.outer
-        if not isinstance(subject, Layout) or subject.strides is None:
-            return None
-        extents = tuple(flatten(subject.shape))
-        strides = tuple(flatten(subject.strides))
-        if any(type(number) is not int for number in (*extents, *strides)):
-            return None
-        if any(extent <= 0 for extent in extents):
-            return None
-        return subject
-
-    def holds(self, subject, bindings: dict) -> bool | None:
-        """Return true, false, or None while required bindings are unknown."""
-        raise NotImplementedError
-
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        raise NotImplementedError
-
-    def relations(self) -> tuple[str, ...]:
-        raise NotImplementedError
-
-
-@dataclass(frozen=True)
 class WildcardPattern(Pattern):
-    """Match any value without binding it."""
+    """Match any value, optionally binding it as an arithmetic variable."""
+
+    name: str | None = None
+
+    def _term(self):
+        from .predicates import variable  # noqa: PLC0415 - expression protocol cycle
+
+        return variable(self.name)
+
+    def __add__(self, other):
+        return self._term() + other
+
+    def __radd__(self, other):
+        return other + self._term()
+
+    def __sub__(self, other):
+        return self._term() - other
+
+    def __rsub__(self, other):
+        return other - self._term()
+
+    def __mul__(self, other):
+        return self._term() * other
+
+    def __rmul__(self, other):
+        return other * self._term()
+
+    def __floordiv__(self, other):
+        return self._term() // other
+
+    def __rfloordiv__(self, other):
+        return other // self._term()
+
+    def __mod__(self, other):
+        return self._term() % other
+
+    def __rmod__(self, other):
+        return other % self._term()
+
+    def __eq__(self, other):
+        if isinstance(other, WildcardPattern) and (not self.name or not other.name):
+            return self.name == other.name
+        return self._term() == other
+
+    def __ne__(self, other):
+        if isinstance(other, WildcardPattern) and (not self.name or not other.name):
+            return self.name != other.name
+        return self._term() != other
+
+    def __lt__(self, other):
+        return self._term() < other
+
+    def __le__(self, other):
+        return self._term() <= other
+
+    def __gt__(self, other):
+        return self._term() > other
+
+    def __ge__(self, other):
+        return self._term() >= other
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return name
@@ -148,20 +165,6 @@ class SequencePattern(Pattern):
 
     def relations(self) -> tuple[str, ...]:
         return relations_of(self.patterns)
-
-
-@dataclass(frozen=True)
-class CapturePattern(Pattern):
-    name: str
-    pattern: object = None
-
-    def describe(self, name: str = UNNAMED_PLACE) -> str:
-        return self.name
-
-    def relations(self) -> tuple[str, ...]:
-        if self.pattern is None:
-            return ()
-        return (written_place(self.pattern, self.name), *relations_of((self.pattern,)))
 
 
 @dataclass(frozen=True, init=False)
@@ -340,10 +343,6 @@ def _binding_occurrences(value, depth=0, path=""):
     if isinstance(value, StarPattern):
         yield from _binding_occurrences(value.pattern, depth + 1, path)
         return
-    if isinstance(value, CapturePattern):
-        yield value.name, depth, path
-        yield from _binding_occurrences(value.pattern, depth, path)
-        return
     if isinstance(value, WildcardPattern):
         name = getattr(value, "name", None)
         if name:
@@ -385,10 +384,10 @@ class LayoutPattern(Pattern):
 
     def __post_init__(self):
         if self.shape is None or self.strides is None:
-            field_name, field = (
+            field_name, paired = (
                 ("shape", self.shape) if self.shape is not None else ("strides", self.strides)
             )
-            stars = _star_paths(field)
+            stars = _star_paths(paired)
             if stars:
                 raise ValueError(
                     f"LayoutPattern {field_name} has StarPattern at "
@@ -471,6 +470,7 @@ class ComposedLayoutPattern(Pattern):
     inner: object = None
     offset: object = None
     outer: object = None
+    predicates: tuple[Predicate, ...] = field(default_factory=tuple)
 
     def describe(self, name: str = UNNAMED_PLACE) -> str:
         return (
@@ -479,7 +479,7 @@ class ComposedLayoutPattern(Pattern):
         )
 
     def relations(self) -> tuple[str, ...]:
-        return relations_of((self.inner, self.offset, self.outer))
+        return relations_of((self.inner, self.offset, self.outer, *self.predicates))
 
     def fixed(self):
         held = []
@@ -547,6 +547,7 @@ class TensorPattern(Pattern):
     shape: tuple | None = None
     storage: Any = None
     layout: Pattern | None = None
+    predicates: tuple[Predicate, ...] = field(default_factory=tuple)
 
     def describe(self, name: str = UNNAMED_PLACE, arrangements=None) -> str:
         stated = []
@@ -570,6 +571,7 @@ class TensorPattern(Pattern):
                 self.storage,
                 *(self.shape or ()),
                 *((self.layout,) if self.layout is not None else ()),
+                *self.predicates,
             )
         )
 
@@ -581,6 +583,7 @@ class ShardLayoutPattern(Pattern):
     layout: object
     attrs: tuple
     mesh: MeshPattern
+    predicates: tuple[Predicate, ...] = field(default_factory=tuple)
 
     def reads(self, layout, captures=None):
         return matched(self.layout, layout, captures)
@@ -589,7 +592,7 @@ class ShardLayoutPattern(Pattern):
         return self.reads(layout) is not None
 
     def relations(self) -> tuple[str, ...]:
-        return relations_of((self.layout,))
+        return relations_of((self.layout, *self.predicates))
 
     def rules(self, arrangements=None) -> tuple[str, ...]:
         items = alternatives_of(self) if arrangements is None else tuple(arrangements)
@@ -616,7 +619,6 @@ __all__ = [
     "AndPattern",
     "AttrPattern",
     "BitsPattern",
-    "CapturePattern",
     "ComposedLayoutPattern",
     "ConstraintPattern",
     "GuardPattern",
@@ -626,7 +628,6 @@ __all__ = [
     "OneOfPattern",
     "OrPattern",
     "Pattern",
-    "Predicate",
     "RangePattern",
     "Scalar",
     "ScalarPattern",
