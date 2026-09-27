@@ -8,6 +8,8 @@ Load / Store too. The Op is placed in Stmt position as
 
 from __future__ import annotations
 
+from tilefoundry.evaluator.registry import register_schedule_eval
+from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
@@ -39,6 +41,11 @@ def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
 
 
 register_access_relation(Copy)(identity_relations(2))
+
+
+@register_schedule_eval(Copy)
+def _eval_scheduled_copy(ctx):
+    return TensorValue(data=ctx.args[0].data, type=ctx.result_type)
 
 
 @register_verify_stmt(Copy)

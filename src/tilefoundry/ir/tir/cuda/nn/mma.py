@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import torch
+
+from tilefoundry.evaluator.registry import register_schedule_eval
+from tilefoundry.evaluator.value import TensorValue
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
@@ -97,6 +101,12 @@ def _tiled_mma_access_relation(call: "Call", ctx) -> AccessRelations:
         inputs=(contraction.outputs[0], *contraction.inputs),
         outputs=(contraction.outputs[0],),
     )
+
+
+@register_schedule_eval(TiledMma)
+def _eval_scheduled_mma(ctx):
+    acc, lhs, rhs = (arg.data for arg in ctx.args)
+    return TensorValue(data=acc + torch.matmul(lhs, rhs), type=ctx.result_type)
 
 
 @register_verify_stmt(TiledMma)

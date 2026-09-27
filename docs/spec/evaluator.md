@@ -141,6 +141,21 @@ def register_eval(op_cls: type[Op]):
     ...
 ```
 
+Instruction-backed HIR scheduling uses a parallel registry:
+
+```python
+schedule_eval_registry: DispatchRegistry[type[Op]]
+
+def register_schedule_eval(op_cls: type[Op]): ...
+```
+
+`eval_registry` answers how to execute an HIR `Op`. The schedule registry
+instead answers which SSA value `tf.schedule` produces when it selects a TIR
+instruction class. Those are distinct from the in-place effects of executing
+the TIR instruction itself, so TIR schedule-value handlers MUST NOT be
+registered in `eval_registry`. The `ScheduleOp` evaluator performs the second
+dispatch and refuses an instruction with no schedule-value handler.
+
 A handler receives an `EvaluateContext` and returns a `Value`:
 
 ```python

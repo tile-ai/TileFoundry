@@ -105,3 +105,20 @@ contributes no bound; it is neither treated as zero bandwidth nor rejected.
 The concrete mapping of issues to participants, and the lowering loop nest
 selected by `order`, are lowering contracts rather than authored ScheduleOp
 state.
+
+## 6. Reference value semantics
+
+Reference evaluation dispatches on the selected TIR instruction through the
+schedule-evaluation registry. This registry describes the SSA value produced by
+`tf.schedule`; it does not execute the effect-form TIR instruction or write an
+explicit destination.
+
+The copy, asynchronous-copy, tensor-map-copy, and matrix-load instructions
+produce the source tensor's logical data with the schedule result type. A tiled
+MMA produces `acc + torch.matmul(lhs, rhs)`. It performs no explicit dtype
+conversion, so promotion follows torch just as it does for HIR `MatMul`.
+`repeat`, `order`, and `buffers` describe execution and storage rather than a
+second logical computation over the whole scheduled operands.
+
+A selected instruction with no schedule-evaluation handler MUST fail reference
+evaluation. It MUST NOT fall back to identity based on its memory effects.

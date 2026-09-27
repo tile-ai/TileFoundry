@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tilefoundry.evaluator.registry import register_schedule_eval, schedule_eval_registry
 from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
@@ -39,6 +40,7 @@ class LdMatrix(Op):
 register_typeinfer(LdMatrix)(typeinfer_registry.lookup(Copy))
 register_verify_stmt(LdMatrix)(verify_stmt_registry.lookup(Copy))
 register_access_relation(LdMatrix)(identity_relations(2))
+register_schedule_eval(LdMatrix)(schedule_eval_registry.lookup(Copy))
 
 
 __all__ = ["LdMatrix"]

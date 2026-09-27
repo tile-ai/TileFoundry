@@ -15,6 +15,7 @@ from math import prod
 from pathlib import Path
 
 import pytest
+import torch
 
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
@@ -26,14 +27,19 @@ from tilefoundry.analysis.metadata import (
     RegionMemoryMetadata,
     RooflineMetadata,
 )
+from tilefoundry.evaluator import EvalError, evaluate
 from tilefoundry.inspection import PatternPrinter, as_script
 from tilefoundry.ir.core import Call, Op, Var, get_metadata
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
+from tilefoundry.ir.hir.function import Function
+from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.tir import PrimFunction
 from tilefoundry.ir.tir.async_copy import CopyAsync
+from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
+from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
 from tilefoundry.ir.tir.cuda.nn.wgmma import Wgmma
 from tilefoundry.ir.types import DType, Layout, StorageKind, TensorType, UnitType
 from tilefoundry.ir.visitor import collect_exprs
@@ -209,6 +215,62 @@ def _copy_schedule_call(
     )
 
 
+def _evaluate_call(
+    op: Op,
+    typed_inputs: tuple[tuple[TensorType, torch.Tensor], ...],
+    result_type: TensorType,
+) -> torch.Tensor:
+    params = tuple(
+        Var(name=f"arg{index}", type=type_) for index, (type_, _data) in enumerate(typed_inputs)
+    )
+    call = Call(target=op, args=params, type=result_type)
+    function = Function.build(
+        name="schedule_value",
+        params=params,
+        body=call,
+        return_type=result_type,
+    )
+    return evaluate(function, *(data for _type, data in typed_inputs))
+
+
+def test_schedule_copy_evaluates_to_the_source_value() -> None:
+    layout = Layout((4,), (1,))
+    source_type = TensorType((4,), DType.bf16, layout, StorageKind.GMEM)
+    result_type = TensorType((4,), DType.bf16, layout, StorageKind.SMEM)
+    source = torch.arange(4, dtype=torch.bfloat16)
+
+    result = _evaluate_call(
+        ScheduleOp(op=CopyAsync(smem_layout=layout)),
+        ((source_type, source),),
+        result_type,
+    )
+
+    assert torch.equal(result, source)
+
+
+def test_schedule_mma_evaluates_like_matmul_plus_accumulator() -> None:
+    acc_type = TensorType((16, 8), DType.f32, None, StorageKind.RMEM)
+    lhs_type = TensorType((16, 16), DType.bf16, None, StorageKind.RMEM)
+    rhs_type = TensorType((16, 8), DType.bf16, None, StorageKind.RMEM)
+    product_type = TensorType((16, 8), DType.bf16, None, StorageKind.RMEM)
+    acc = torch.arange(16 * 8, dtype=torch.float32).reshape(16, 8)
+    lhs = (torch.arange(16 * 16).reshape(16, 16) % 5).to(torch.bfloat16)
+    rhs = (torch.arange(16 * 8).reshape(16, 8) % 3).to(torch.bfloat16)
+
+    product = _evaluate_call(
+        MatMul(),
+        ((lhs_type, lhs), (rhs_type, rhs)),
+        product_type,
+    )
+    scheduled = _evaluate_call(
+        ScheduleOp(op=TiledMma(atom=Mma())),
+        ((acc_type, acc), (lhs_type, lhs), (rhs_type, rhs)),
+        acc_type,
+    )
+
+    assert torch.equal(scheduled, acc + product)
+
+
 def test_single_issue_schedule_preserves_instruction_relations() -> None:
     schedule = _copy_schedule_call(repeat=(1,), order=(0,))
     source = schedule.args[0]
@@ -266,6 +328,14 @@ def test_schedule_typeinfer_requires_instruction_access_relations() -> None:
     )
     with pytest.raises(ValueError, match="states no access relations"):
         inference_type(call)
+
+
+def test_schedule_evaluation_rejects_an_unregistered_instruction() -> None:
+    type_ = TensorType((4,), DType.bf16, Layout((4,), (1,)), StorageKind.RMEM)
+    value = torch.arange(4, dtype=torch.bfloat16)
+
+    with pytest.raises(EvalError, match="no schedule evaluator registered"):
+        _evaluate_call(ScheduleOp(op=_UnstatedInstruction()), ((type_, value),), type_)
 
 
 @pytest.mark.parametrize("path", TIR, ids=lambda path: path.stem)

@@ -7,6 +7,8 @@ from typing import Tuple
 
 import isl
 
+from tilefoundry.evaluator.registry import register_eval, schedule_eval_registry
+from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core import Call, Op, Var
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
@@ -78,6 +80,16 @@ class ScheduleOp(Op):
             raise ValueError("schedule order must be a tuple of integer positions")
         if type(self.buffers) is not int or self.buffers < 1:
             raise ValueError("schedule buffers must be a positive integer")
+
+
+@register_eval(ScheduleOp)
+def _eval_schedule(ctx):
+    """Evaluate the SSA value produced by the selected TIR instruction."""
+    selected = ctx.op.op
+    handler = schedule_eval_registry.lookup(type(selected))
+    if handler is None:
+        raise EvalError(f"no schedule evaluator registered for {type(selected).__name__}")
+    return handler(ctx.for_op(selected, ctx.args, ctx.result_type))
 
 
 class _RelationContext:
