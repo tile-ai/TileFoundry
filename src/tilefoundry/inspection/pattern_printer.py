@@ -441,7 +441,11 @@ class PatternPrinter:
         )
 
     def visit_ShardLayoutPattern(self, pattern, name) -> str:
-        attrs = self._written_tuple(tuple(self._written_value(attr) for attr in pattern.attrs))
+        attrs = (
+            self._written_tuple(tuple(self._written_value(attr) for attr in pattern.attrs))
+            if isinstance(pattern.attrs, tuple)
+            else self.written(pattern.attrs)
+        )
         return (
             f"ShardLayout({self.written(pattern.layout)}, {attrs}, "
             f"{self.written(pattern.mesh)})"
