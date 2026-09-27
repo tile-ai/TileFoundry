@@ -133,7 +133,7 @@ def view_root(value: Expr, bindings: dict[int, Expr]) -> Expr:
 
 def is_view_of(value: Expr, source: Expr, bindings: dict[int, Expr]) -> bool:
     """Whether two expressions name the same material allocation."""
-    return view_root(value, bindings) is view_root(source, bindings)
+    return value is source or view_root(value, bindings) is source
 
 
 def is_non_conflicting(
@@ -144,8 +144,6 @@ def is_non_conflicting(
     bindings: dict[int, Expr],
 ) -> bool:
     """Prove that reusing *operand* cannot clobber a later ordinary use."""
-    source = view_root(source, bindings)
-    operand = view_root(operand, bindings)
     source_interval = liveness.interval_of(source)
     operand_interval = liveness.interval_of(operand)
     if source_interval is None or operand_interval is None:
@@ -153,7 +151,7 @@ def is_non_conflicting(
     if any(
         not use.synthetic
         and use.at > source_interval.defined_at
-        and view_root(use.value, bindings) is operand
+        and view_root(use.value, bindings) is view_root(operand, bindings)
         and not is_view_of(use.value, source, bindings)
         for use in liveness.uses
     ):
@@ -167,13 +165,60 @@ def is_non_conflicting(
         if isinstance(loop, LoopRegion):
             for slot, carried in enumerate(loop.carried_args):
                 if (
-                    view_root(carried, bindings) is operand
+                    view_root(carried, bindings) is view_root(operand, bindings)
                     and slot < len(loop.yield_values)
-                    and is_view_of(loop.yield_values[slot], source, bindings)
+                    and view_root(loop.yield_values[slot], bindings) is view_root(source, bindings)
                 ):
                     return True
         cursor = cursor.parent
     return False
+
+
+def covers_result_each_iteration(
+    outputs: isl.map,
+    iteration_domain: isl.set,
+    result_box: isl.set,
+) -> bool:
+    """Whether every enclosing-loop point writes the complete result box."""
+    try:
+        domain = outputs.domain()
+        call_dims = outputs.dim(isl.dim_type.IN)
+        iteration_depth = iteration_domain.dim(isl.dim_type.SET)
+        if iteration_depth > call_dims:
+            return False
+        loop_prefix = (
+            isl.map.identity(domain.get_space().map_from_set())
+            .intersect_domain(domain)
+            .project_out(isl.dim_type.OUT, iteration_depth, call_dims - iteration_depth)
+        )
+        per_iteration = loop_prefix.reverse().apply_range(outputs).coalesce()
+        expected = (
+            isl.map.universe(per_iteration.get_space())
+            .intersect_domain(iteration_domain)
+            .intersect_range(result_box)
+            .coalesce()
+        )
+        return per_iteration.is_equal(expected)
+    except isl.Error:
+        return False
+
+
+def covers_result(
+    output_coverage: isl.set,
+    full_result: isl.set,
+    outputs: isl.map,
+    iteration_domain: isl.set,
+    result_box: isl.set,
+) -> bool:
+    """Whether a write covers the entire result at every loop point."""
+    try:
+        return output_coverage.is_equal(full_result) or covers_result_each_iteration(
+            outputs,
+            iteration_domain,
+            result_box,
+        )
+    except isl.Error:
+        return False
 
 
 def operand_to_result_relation(
@@ -213,6 +258,13 @@ def operand_to_result_relation(
             return None
         box = index_set(held.shape)
         return None if box is None else scope.domain.flat_product(box).coalesce()
+
+    def value_box(value: Expr) -> isl.set | None:
+        try:
+            held = local_type_of(value.type)
+        except (TypeError, ValueError, NotImplementedError):
+            return None
+        return index_set(held.shape) if isinstance(held, TensorType) else None
 
     def composed(inputs: isl.map, outputs: isl.map) -> isl.map | None:
         try:
@@ -280,7 +332,13 @@ def operand_to_result_relation(
     output_coverage = coverage(outputs)
     output_relation = access_relation(outputs)
     full_result = value_domain(node)
-    if output_coverage is None or output_relation is None or full_result is None:
+    result_box = value_box(node)
+    if (
+        output_coverage is None
+        or output_relation is None
+        or full_result is None
+        or result_box is None
+    ):
         return ()
 
     by_buffer: dict[int, list[Access]] = defaultdict(list)
@@ -293,11 +351,13 @@ def operand_to_result_relation(
 
     result: list[AliasConstraint] = []
     seen: set[int] = set()
-    try:
-        covers_result = output_coverage.is_equal(full_result)
-    except isl.Error:
-        covers_result = False
-    if covers_result:
+    if covers_result(
+        output_coverage,
+        full_result,
+        output_relation,
+        scope.domain,
+        result_box,
+    ):
         for key, operand in operands.items():
             input_relation = access_relation(tuple(by_buffer[key]))
             try:
@@ -406,10 +466,8 @@ class AllocationConstraintVisitor(ExprVisitor[None]):
 
     def tie(self, result_value: Expr, operand_value: Expr, ctx: AllocationModel) -> None:
         """Require the single backing buffer stated by one loop-carried slot."""
-        result_value = view_root(result_value, ctx.bindings)
-        operand_value = view_root(operand_value, ctx.bindings)
-        result_index = ctx.boxes_by_expr.get(id(result_value))
-        operand_index = ctx.boxes_by_expr.get(id(operand_value))
+        result_index = allocation_index(result_value, ctx)
+        operand_index = allocation_index(operand_value, ctx)
         if result_index is None or operand_index is None or result_index == operand_index:
             return
         result = ctx.values[result_index]
@@ -429,10 +487,8 @@ class AllocationConstraintVisitor(ExprVisitor[None]):
         ctx: AllocationModel,
     ) -> None:
         """Require one proven logical alias in the physical placement."""
-        result_value = view_root(result_value, ctx.bindings)
-        operand_value = view_root(operand_value, ctx.bindings)
-        result_index = ctx.boxes_by_expr.get(id(result_value))
-        operand_index = ctx.boxes_by_expr.get(id(operand_value))
+        result_index = allocation_index(result_value, ctx)
+        operand_index = allocation_index(operand_value, ctx)
         if result_index is None or operand_index is None or operand_index == result_index:
             return
         result = ctx.values[result_index]
@@ -461,8 +517,7 @@ class AllocationConstraintVisitor(ExprVisitor[None]):
         self, node: Expr, operands: tuple[None, ...], ctx: AllocationModel
     ) -> None:
         del operands
-        root = view_root(node, ctx.bindings)
-        result_index = ctx.boxes_by_expr.get(id(root))
+        result_index = allocation_index(node, ctx)
         if (
             not isinstance(node, Call)
             or id(node) not in ctx.current.accesses.get("narrow", {})
@@ -471,6 +526,14 @@ class AllocationConstraintVisitor(ExprVisitor[None]):
             return
         for constraint in operand_to_result_relation(node, ctx.current, ctx.liveness, ctx.bindings):
             self.alias(node, constraint.operand, constraint.relation, ctx)
+
+
+def allocation_index(value: Expr, ctx: AllocationModel) -> int | None:
+    """Prefer a real box, resolving bindings and views only when none exists."""
+    direct = ctx.boxes_by_expr.get(id(value))
+    return (
+        direct if direct is not None else ctx.boxes_by_expr.get(id(view_root(value, ctx.bindings)))
+    )
 
 
 def alias_components(count: int, aliased: set[tuple[int, int]]) -> tuple[int, ...]:

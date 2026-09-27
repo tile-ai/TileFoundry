@@ -32,10 +32,13 @@ from tilefoundry.analysis import (
     analyze,
 )
 from tilefoundry.analysis.access import Access, AccessPrecision
+from tilefoundry.analysis.allocation import aligned, alignment_of
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import IterationScope, build_scopes, walk_scopes
-from tilefoundry.ir.core import Call, describe_expr, get_metadata
+from tilefoundry.analysis.liveness import analyze_liveness
+from tilefoundry.analysis.memory import view_root as resident_view_root
+from tilefoundry.ir.core import Call, Constant, describe_expr, get_metadata, value_labels
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.specialize import (
@@ -57,6 +60,41 @@ INVENTORY = [pytest.param(case, id=case.id) for case in CASES]
 _GQA_TRANSPOSE_VIEW_LEFTOVER_12_GMEM = 283_696
 _PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_VIEW_LEFTOVER_12_SMEM = 278_528
 _QWEN_LOOP_INVARIANT_VALUES_GMEM = 145_409_040
+_MHA_BATCH_GMEM_WITH_8_BYTES_ALIGNMENT_PADDING = 5_245_008
+_MHA_LONGER_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 4_195_376
+_MHA_SHORTER_GMEM_WITH_28_BYTES_ALIGNMENT_PADDING = 2_098_224
+_MHA_SINGLE_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 8_392_752
+
+KNOWN_OVER_BOUND = {
+    (
+        "flash_split_k_decode.FlashSplitKDecode.flash_split_k_decode[ctx=128]",
+        "smem",
+    ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
+    (
+        "gqa_decode.GqaOnline._ctx_partials[ctx_len=128]",
+        "gmem",
+    ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
+    (
+        "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]",
+        "smem",
+    ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
+    (
+        "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=0,seq=512]",
+        "smem",
+    ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
+    (
+        "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=512]",
+        "smem",
+    ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
+    (
+        "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=1]",
+        "gmem",
+    ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
+    (
+        "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=4608,seq=1]",
+        "gmem",
+    ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
+}
 
 
 @dataclass(frozen=True)
@@ -125,7 +163,7 @@ EXPECTED_MEMORY_PEAKS = {
         "smem": 24_576,
     },
     "gqa_decode.GqaOnline._ctx_combine[static]": {"gmem": 291_968},
-    "gqa_decode.GqaOnline._ctx_partials[ctx_len=128]": {"gmem": 5_677_056},
+    "gqa_decode.GqaOnline._ctx_partials[ctx_len=128]": {"gmem": 5_662_720},
     "gqa_decode.GqaOnline.gqa_online_attend[ctx_len=128]": {
         "gmem": _GQA_TRANSPOSE_VIEW_LEFTOVER_12_GMEM,
         "rmem": 0,
@@ -141,8 +179,8 @@ EXPECTED_MEMORY_PEAKS = {
     },
     "hand_checked.WaveTruncation.read[static]": {"gmem": 2_056, "rmem": 8},
     "hand_checked.SiblingLoopReuse.read[static]": {"gmem": 32, "rmem": 16},
-    "hand_checked.TruncatedWaveReuse.read[static]": {"gmem": 128, "rmem": 32},
-    "hand_checked.TruncatedWaveReuse.view[static]": {"gmem": 128, "rmem": 0},
+    "hand_checked.TruncatedWaveReuse.read[static]": {"gmem": 96, "rmem": 32},
+    "hand_checked.TruncatedWaveReuse.view[static]": {"gmem": 96, "rmem": 0},
     "hand_checked.OverlappingReads.read[static]": {"gmem": 48, "rmem": 16},
     "hand_checked.PackedDtype.read[static]": {"gmem": 5, "rmem": 5},
     "hand_checked.SlicedView.read[static]": {
@@ -174,22 +212,22 @@ EXPECTED_MEMORY_PEAKS = {
         "smem": 1_408,
     },
     "mha_decode_paged.Batch2Page256.mha_decode_paged[static]": {
-        "gmem": 8_390_704,
+        "gmem": _MHA_BATCH_GMEM_WITH_8_BYTES_ALIGNMENT_PADDING,
         "rmem": 49_664,
         "smem": 16_384,
     },
     "mha_decode_paged.LongerCache.mha_decode_paged[static]": {
-        "gmem": 5_243_936,
+        "gmem": _MHA_LONGER_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING,
         "rmem": 24_840,
         "smem": 8_192,
     },
     "mha_decode_paged.ShorterCache.mha_decode_paged[static]": {
-        "gmem": 2_622_496,
+        "gmem": _MHA_SHORTER_GMEM_WITH_28_BYTES_ALIGNMENT_PADDING,
         "rmem": 12_548,
         "smem": 4_096,
     },
     "mha_decode_paged.SingleTokenPage128.mha_decode_paged[static]": {
-        "gmem": 10_489_888,
+        "gmem": _MHA_SINGLE_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING,
         "rmem": 49_672,
         "smem": 16_384,
     },
@@ -518,6 +556,29 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
                 assert 0 <= held.timeline.start_ns <= held.timeline.end_ns
 
 
+def _allocation_alignments(function: Function) -> dict[str, int]:
+    """Rebuild the allocator's binding-to-alignment map for bound checks."""
+    liveness = analyze_liveness(function)
+    resident_ids = {id(parameter) for parameter in function.params}
+    for interval in liveness.intervals:
+        value = interval.value
+        if isinstance(value, (Call, Constant, LoopRegion)) and resident_view_root(value) is value:
+            resident_ids.add(id(value))
+        if isinstance(value, LoopRegion):
+            resident_ids.update(id(phi) for phi in value.carried_args)
+    intervals = tuple(
+        interval for interval in liveness.intervals if id(interval.value) in resident_ids
+    )
+    return {
+        label: alignment_of(interval.value)
+        for label, interval in zip(
+            value_labels(interval.value for interval in intervals),
+            intervals,
+            strict=True,
+        )
+    }
+
+
 @pytest.mark.parametrize("case", INVENTORY)
 def test_every_concrete_program_predicts_coherently(case: ConcreteCase) -> None:
     """Every placed program, at every size and selector it exposes.
@@ -536,16 +597,45 @@ def test_every_concrete_program_predicts_coherently(case: ConcreteCase) -> None:
     assert_performance_contract(result)
     placement = get_metadata(result.function, RegionMemoryMetadata)
     assert placement is not None
+    alignments = _allocation_alignments(result.function)
+    over_bound: set[tuple[str, str]] = set()
     for peak in placement.peaks:
+        level_lifetimes = tuple(
+            lifetime
+            for lifetime in placement.lifetimes
+            if lifetime.memory_level == peak.memory_level
+        )
         largest_value = max(
-            (
-                lifetime.bytes
-                for lifetime in placement.lifetimes
-                if lifetime.memory_level == peak.memory_level
-            ),
+            (lifetime.bytes for lifetime in level_lifetimes),
             default=0,
         )
         assert peak.peak_bytes >= largest_value
+        aligned_live_upper = max(
+            (
+                sum(
+                    aligned(lifetime.bytes, alignments[lifetime.binding])
+                    for lifetime in level_lifetimes
+                    if lifetime.defined_at <= point <= lifetime.last_used_at
+                )
+                for point in range(
+                    max(
+                        (lifetime.last_used_at for lifetime in level_lifetimes),
+                        default=-1,
+                    )
+                    + 1
+                )
+            ),
+            default=0,
+        )
+        if peak.peak_bytes > aligned_live_upper:
+            over_bound.add((case.id, peak.memory_level))
+    assert over_bound == {
+        key for key in KNOWN_OVER_BOUND if key[0] == case.id
+    }, {
+        key: KNOWN_OVER_BOUND[key]
+        for key in KNOWN_OVER_BOUND
+        if key[0] == case.id
+    }
     observed = {item.memory_level: item.peak_bytes for item in placement.peaks}
     assert observed == EXPECTED_MEMORY_PEAKS[case.id]
     expected_schedule = EXPECTED_PERSISTENT_SCHEDULES.get(case.id)
