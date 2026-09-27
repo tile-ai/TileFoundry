@@ -207,4 +207,5 @@ __all__ = [
     "FromAtom",
     "MmaAtom",
     "physical_frames_match",
+    "scope_pattern",
 ]
