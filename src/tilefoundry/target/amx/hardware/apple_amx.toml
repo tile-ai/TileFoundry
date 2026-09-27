@@ -10,7 +10,7 @@ origin = "reference"
 source = "https://github.com/corsix/amx"
 conditions = "Apple publishes no AMX documentation, so the architecture is described from a reverse-engineered reference"
 
-[facts.instruction.capabilities]
+[facts.capabilities]
 value = ["amx_outer_product", "amx_resident_accumulator"]
 unit = "name"
 origin = "reference"

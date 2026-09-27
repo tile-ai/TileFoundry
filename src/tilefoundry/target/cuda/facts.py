@@ -101,11 +101,7 @@ def parallel_units(target: CudaTarget, unit: str) -> int:
         return {
             "gpu": cards,
             "cta": cards * target.device.sm_count,
-            "thread": (
-                cards
-                * target.device.sm_count
-                * target.architecture.max_threads_per_cta
-            ),
+            "thread": (cards * target.device.sm_count * target.architecture.max_threads_per_cta),
         }[unit]
     except KeyError:
         raise UnsupportedCapabilityError(
@@ -117,10 +113,9 @@ def parallel_units(target: CudaTarget, unit: str) -> int:
 def throughput(target: CudaTarget, query: object = None) -> ThroughputFacts:
     """The deployment rates a roofline divides work by.
 
-    The bandwidth is HBM's, so the memory side of the bound is computed from
-    global traffic alone. Shared memory and the register file publish no static
-    bandwidth, and inventing one would put a number on the bound that no
-    document supports.
+    The whole-device bandwidth is HBM's, so the roofline memory bound is
+    computed from global traffic alone. Per-SM shared-memory throughput belongs
+    to the one-unit performance service instead.
     """
     device = target.device
     cards = _cards(target)
@@ -140,15 +135,28 @@ def throughput(target: CudaTarget, query: object = None) -> ThroughputFacts:
 def performance_service(target: CudaTarget, query: object = None) -> PerformanceServiceFacts:
     """What one unit of the level asked about gets through, by kind of work.
 
-    The float rates are the deployment's peaks divided among however many of
-    that unit run at once, the same division the roofline's bound starts from.
-    The services are what the device's own document states, and a device that
-    states none prices no work of that kind rather than pricing it at nothing.
+    The float and global-memory rates are deployment peaks divided among the
+    requested units. Shared-memory bytes/second combine the architecture's
+    per-clock rate with the device clock first. Other services are what the
+    device document states; an unstated kind or level contributes no price.
     """
+    architecture = target.architecture
     device = target.device
     cards = _cards(target)
     unit = "cta" if query is None else str(query)
     share = parallel_units(target, unit)
+    bandwidth = [("gmem", device.hbm_bandwidth_bytes_per_second * cards // share)]
+    if (
+        architecture.shared_memory_bandwidth_bytes_per_clock_per_sm is not None
+        and device.sm_clock_hz is not None
+    ):
+        deployment_smem = (
+            architecture.shared_memory_bandwidth_bytes_per_clock_per_sm
+            * device.sm_clock_hz
+            * device.sm_count
+            * cards
+        )
+        bandwidth.append(("smem", deployment_smem // share))
     return PerformanceServiceFacts(
         unit_flops=tuple(
             (dtype, peak * cards // share)
@@ -160,7 +168,7 @@ def performance_service(target: CudaTarget, query: object = None) -> Performance
             (kind, rate * device.sm_count * cards // share)
             for kind, rate in sorted(device.service_ops_per_second.items())
         ),
-        unit_bandwidth=(("gmem", device.hbm_bandwidth_bytes_per_second * cards // share),),
+        unit_bandwidth=tuple(bandwidth),
         unit=unit,
     )
 

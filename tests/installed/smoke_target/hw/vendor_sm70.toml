@@ -10,7 +10,7 @@ origin = "vendor"
 source = "https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf"
 conditions = "Volta compute capability 7.0 compilation identity"
 
-[facts.instruction.capabilities]
+[facts.capabilities]
 value = ["tensor_core"]
 unit = "name"
 origin = "vendor"

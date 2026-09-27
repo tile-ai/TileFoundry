@@ -15,6 +15,8 @@ from pathlib import Path
 import pytest
 
 from tilefoundry.analysis.facts import MemoryHierarchyFacts, ThroughputFacts
+from tilefoundry.ir.core.op_registry import iter_schemas
+from tilefoundry.ir.tir.cuda.nn.mma_atom import AtomPattern
 from tilefoundry.ir.types import DType
 from tilefoundry.target.amx import AmxTarget
 from tilefoundry.target.amx import spec as amx_spec
@@ -384,11 +386,17 @@ def test_no_installed_number_is_repeated_as_a_python_default() -> None:
     assert CudaTarget.hardware.documents()[_H200].fact("throughput.f32").origin == "vendor"
 
 
-def test_an_unavailable_fact_omits_its_value_and_says_why() -> None:
-    """Record unavailable facts without placeholders or compiler policy."""
-    architecture = CudaTarget.hardware.documents()[_SM90]
-    unavailable = architecture.fact("memory.shared.bandwidth")
+def test_architecture_bandwidth_evidence_distinguishes_known_from_unavailable() -> None:
+    """A measured architecture rate and an unknown one remain distinguishable."""
+    hopper = CudaTarget.hardware.documents()[_SM90].fact("memory.shared.bandwidth")
+    unavailable = CudaTarget.hardware.documents()[_SM100].fact("memory.shared.bandwidth")
 
+    assert (hopper.value, hopper.unit, hopper.origin) == (
+        128,
+        "byte/clock/sm",
+        "reference",
+    )
+    assert hopper.source and "microbenchmark" in hopper.conditions
     assert not unavailable.available
     assert unavailable.value is None
     assert unavailable.status == "unavailable"
@@ -418,3 +426,52 @@ def test_an_unavailable_fact_omits_its_value_and_says_why() -> None:
         assert {path: document.fact(path).value for path in expected_owners} == expected_owners
         for fact in document.facts.values():
             assert (fact.value is None) == (not fact.available)
+
+
+def test_cuda_sm_clocks_are_the_typed_floor_of_existing_device_facts() -> None:
+    """The clock fact extracts an existing derivation instead of repeating it."""
+    for device_id in (_H200, _B200):
+        target = CudaTarget(device_id)
+        document = CudaTarget.hardware.documents()[device_id]
+        peak = document.fact("throughput.f32").value
+        divisor = target.device.sm_count * 128 * 2
+        clock = target.device.sm_clock_hz
+
+        assert clock == peak // divisor
+        assert clock * divisor <= peak < (clock + 1) * divisor
+        stated = document.fact("compute.sm_clock_hz")
+        assert (stated.value, stated.unit, stated.origin) == (clock, "Hz", "derived")
+        assert stated.source
+        assert f"{peak // 1_000_000_000_000}e12 FLOP/s" in stated.conditions
+        assert f"{target.device.sm_count} SM * 128 FP32 results/clock/SM" in stated.conditions
+        assert "* 2 FLOP/result" in stated.conditions
+
+    integer = CudaTarget.hardware.documents()[_H200].fact("service.integer")
+    assert "facts.compute.sm_clock_hz" in integer.conditions
+    assert "67e12 /" not in integer.conditions
+
+
+def test_instruction_capabilities_and_execution_resources_are_separate_axes() -> None:
+    """Enumerate instruction declarations and reconcile only their capability side."""
+    declarations = set()
+    for schema in iter_schemas():
+        if schema.op_class is None:
+            continue
+        if isinstance(getattr(schema.op_class, "capability", None), str):
+            declarations.add(schema.op_class)
+        for param in schema.signature:
+            if isinstance(param.pattern, AtomPattern):
+                declarations.update(param.pattern.declarations)
+
+    capabilities = {declaration.capability for declaration in declarations}
+    resources = {declaration.resource for declaration in declarations}
+    architecture_capabilities = {
+        capability
+        for target in (*CudaTarget.available(), *AmxTarget.available())
+        for capability in target.architecture.capabilities
+    }
+
+    assert declarations
+    assert capabilities <= architecture_capabilities
+    assert capabilities.isdisjoint(resources)
+    assert all(resource.endswith("_engine") for resource in resources)

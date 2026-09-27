@@ -215,13 +215,15 @@ class CudaTarget(Target):
   - CUDA's `ThroughputFacts` MUST publish the whole-device compute and
     HBM-bandwidth rates and nothing per unit; what one CTA gets through is
     `PerformanceServiceFacts`.
-  - CUDA's `PerformanceServiceFacts` MUST derive `unit_flops` and
-    `unit_bandwidth` by dividing each whole-device rate by `device.sm_count`,
-    MUST take `unit_ops` from the device document unchanged, and MUST name its
-    unit `cta`; `TopologyLevelFacts.max_physical_units` MUST NOT enter this
-    derivation. `unit_ops` is not a division of a device peak, because no
-    vendor publishes a device-wide integer, predicate, select, special or
-    local-move rate to divide.
+  - CUDA's `PerformanceServiceFacts` MUST derive `unit_flops` and global-memory
+    `unit_bandwidth` by dividing each whole-device rate by `device.sm_count`.
+    Shared-memory bandwidth MUST multiply the architecture's byte/clock/SM rate
+    by the device's typed SM clock before projection to the requested unit.
+    CUDA MUST take `unit_ops` from the device document unchanged and MUST name
+    its default unit `cta`; `TopologyLevelFacts.max_physical_units` MUST NOT
+    enter this derivation. `unit_ops` is not a division of a device peak,
+    because no vendor publishes a device-wide integer, predicate, select,
+    special or local-move rate to divide.
   - `topology_limit("cta")` MUST equal `device.sm_count`, and
     `topology_limit("thread")` MUST equal the architecture's corresponding
     structural limit. An unsupported name MUST be refused.
@@ -264,6 +266,24 @@ thread mesh layouts.
     target resource limits.
   - Unsupported topology levels MUST fail at the generic lowering boundary.
 
+#### Instruction support and execution resources
+
+An instruction declaration keeps two independent names:
+
+| Axis | Question | Vocabulary |
+|---|---|---|
+| `capability` | May this architecture select the instruction family? | Emitted ISA name |
+| `resource` | Which execution engine performs it? | An `_engine` name |
+
+CUDA declarations use `mma.sync`, `wgmma.mma_async`, `ldmatrix`, and
+`cp.async.bulk.tensor` as capabilities. Their resources are respectively
+`tensor_core_engine`, `wgmma_engine`, `tensor_core_engine`, and `tma_engine`.
+The two vocabularies MUST be disjoint. Architecture documents list only
+capabilities under `[facts.capabilities]`; the instruction declaration is the
+single source of its resource mapping. A resource declaration does not imply a
+throughput fact, and MUST NOT be priced as a service unless a consumer defines
+a quantity with matching units.
+
 ### 4.1 `CudaArchitecture`
 
 ```python
@@ -272,7 +292,7 @@ class CudaArchitecture(Architecture):
 
     name: str
     supported_compute_dtypes: tuple[DType, ...]
-    instruction_capabilities: tuple[str, ...]
+    capabilities: tuple[str, ...]
     max_threads_per_cta: int
     max_threads_per_warp: int
     max_warps_per_cta: int
@@ -280,6 +300,7 @@ class CudaArchitecture(Architecture):
     shared_memory_per_sm_bytes: int
     shared_memory_per_cta_bytes: int
     smem_owner: str
+    shared_memory_bandwidth_bytes_per_clock_per_sm: int | None
     unified_l1_shared_per_sm_bytes: int
     registers_per_sm_32bit: int
     rmem_owner: str
@@ -300,11 +321,16 @@ class CudaArchitecture(Architecture):
     carries.
   - `name` MUST be the architecture identity CUDA compilation uses.
   - A CUDA architecture MUST own supported compute DTypes, instruction
-    capabilities, and the thread/CTA structural limits.
+    capabilities, and the thread/CTA structural limits. `capabilities` MUST use
+    instruction-family names from the emitted ISA, such as `mma.sync`,
+    `wgmma.mma_async`, `ldmatrix`, and `cp.async.bulk.tensor`.
   - It MUST own the per-SM resource limits: resident CTAs, shared-memory
     capacity per SM and per CTA, and register-file capacity per SM. These are
     properties of the microarchitecture, so every product built on it shares
     them, and a device MUST NOT restate them.
+  - A shared-memory bandwidth stated in byte/clock/SM MUST remain an
+    architecture fact. Turning it into byte/s requires the paired device's SM
+    clock and happens only in the `PerformanceServiceFacts` projection.
   - It MUST NOT carry a compute-throughput rate. A FLOP/s figure depends on the
     clock of one product, so it is a device fact ([§4.2](#42-cudadevice)) even
     though the instruction it rates is the architecture's.
@@ -361,6 +387,7 @@ class CudaDevice(Device):
 
     name: str
     sm_count: int
+    sm_clock_hz: int | None
     hbm_capacity_bytes: int
     gmem_owner: str
     hbm_bandwidth_bytes_per_second: int
@@ -383,6 +410,10 @@ class CudaDevice(Device):
   - It MUST describe how many SMs the product has and how its memory system and
     compute units perform. Per-SM structural limits belong to the architecture
     ([§4.1](#41-cudaarchitecture)).
+  - `sm_clock_hz` MUST be a typed device fact when a per-clock architecture
+    rate needs conversion to a per-second service rate. A clock derived from an
+    existing peak MUST record that derivation once; other service evidence MUST
+    refer to this fact rather than repeat the arithmetic in prose.
   - `peak_for` MUST answer from the installed document for every compute DType
     the product's tensor cores have a mode for, and MUST raise an actionable
     error for any other DType. A product with no such mode records that leaf
@@ -423,8 +454,9 @@ The installed `nvidia.h200_sxm` device document.
     `select`, and `special`, because a program that compares, selects or
     indexes asks for work no FLOP/s figure prices. Each MUST state its derivation in `conditions`: the instruction
     throughput in results/clock/SM from the vendor's arithmetic-instruction
-    table, times the clock the published `f32` peak implies
-    (`67e12 / (132 SM * 128 results/clock * 2 FLOP/result)`), stated per CTA.
+    table, times `compute.sm_clock_hz`, stated per CTA. That clock MUST be the
+    floor of the value the published `f32` peak implies
+    (`67e12 / (132 SM * 128 results/clock * 2 FLOP/result)`).
     These are peak-style analytical envelopes rather than measured
     calibrations, and `conditions` MUST say so, along with the proxy each one
     stands for. A service rate MUST NOT stand in for a bandwidth: movement at a
@@ -443,6 +475,9 @@ The installed `nvidia.b200_sxm` device document.
     and its L2 capacity among them, MUST be recorded as measured on the
     described host rather than estimated or borrowed from a related part
     ([§10.1](#101-document-envelope)).
+  - `compute.sm_clock_hz` MUST be the floor of
+    `75e12 / (148 SM * 128 results/clock * 2 FLOP/result)`, using the dense
+    `throughput.f32` and `compute.sm_count` already recorded by the document.
 
 ## 5. `CpuTarget`
 
@@ -499,7 +534,7 @@ class AppleAmx:
 
     name: str
     supported_compute_dtypes: tuple[DType, ...]
-    instruction_capabilities: tuple[str, ...]
+    capabilities: tuple[str, ...]
     amx_units_per_core: int
     staging_bytes: int
     accumulator_bytes: int

@@ -10,12 +10,12 @@ origin = "vendor"
 source = "https://docs.nvidia.com/cuda/blackwell-tuning-guide/index.html"
 conditions = "compilation architecture identity of compute capability 10.0"
 
-[facts.instruction.capabilities]
-value = ["tensor_core", "tcgen05", "tma"]
+[facts.capabilities]
+value = ["mma.sync", "ldmatrix", "tcgen05", "cp.async.bulk.tensor"]
 unit = "name"
 origin = "vendor"
 source = "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html"
-conditions = "instruction families the SM100 code path may select; the fifth-generation tensor-core family is tcgen05, and the SM90 wgmma family is not available here"
+conditions = "PTX instruction families the SM100 code path may select; the fifth-generation tensor-core family is tcgen05, and the SM90 wgmma family is not available here"
 
 [facts.instruction.compute_dtypes]
 value = ["f32", "f16", "bf16", "fp8e4m3", "f4e2m1"]

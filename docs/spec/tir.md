@@ -917,8 +917,10 @@ class MmaAtom:
   - `scope_pattern()` MUST require the declaration's exact participant count
     at an aligned offset. `mesh`, when present, binds the atom to one concrete
     frame and MUST match the active frame at verify.
-  - `capability` MUST be present in the active CUDA architecture's
-    `instruction_capabilities`.
+  - `capability` MUST use the emitted instruction-family name and be present in
+    the active CUDA architecture's `capabilities`. `resource` MUST name the
+    execution engine with an `_engine` suffix. These are separate axes: support
+    for an instruction family does not itself state an engine rate.
 
 The public declarations are `T.cuda.sm80.Mma()` (BF16 `16x8x16`, F32
 accumulator, register A/B/C over one warp) and

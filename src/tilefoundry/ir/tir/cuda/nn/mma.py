@@ -59,6 +59,10 @@ class TiledMma(Op):
     def capability(self):
         return self.atom.capability
 
+    @property
+    def resource(self):
+        return self.atom.resource
+
     acc = ParamDef(
         kind="input",
         effect=MemoryEffect.READ | MemoryEffect.WRITE,
@@ -101,7 +105,7 @@ def verify_mma(call: "Call", ctx: "VerifyContext") -> None:
     op = call.target
     atom = op.atom
     if ctx.scope is not None and ctx.scope.module is not None:
-        capabilities = ctx.scope.module.target.architecture.instruction_capabilities
+        capabilities = ctx.scope.module.target.architecture.capabilities
         if op.capability not in capabilities:
             ctx.error(call, f"target does not support {op.capability}")
     if not ctx.mesh_scope:

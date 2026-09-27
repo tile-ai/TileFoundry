@@ -20,6 +20,13 @@ origin = "measured"
 source = "CUDA runtime device query on an NVIDIA B200 SXM, driver 590.48.01, CUDA 13.1"
 conditions = "cudaDevAttrMultiProcessorCount; NVIDIA publishes no SM count for this product, and the two dies it is built from present as one device"
 
+[facts.compute.sm_clock_hz]
+value = 1979518581
+unit = "Hz"
+origin = "derived"
+source = "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#throughput-of-native-arithmetic-instructions"
+conditions = "effective SM clock implied by the existing dense FP32 peak and SM count: 75e12 FLOP/s / (148 SM * 128 FP32 results/clock/SM * 2 FLOP/result)"
+
 [facts.memory.hbm.capacity]
 value = 180000000000
 unit = "byte"

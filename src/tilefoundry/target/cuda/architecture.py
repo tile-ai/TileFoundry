@@ -24,7 +24,7 @@ class CudaArchitecture(Architecture):
 
     name: str
     supported_compute_dtypes: tuple[DType, ...]
-    instruction_capabilities: tuple[str, ...]
+    capabilities: tuple[str, ...]
     max_threads_per_cta: int
     max_threads_per_warp: int
     max_warps_per_cta: int
@@ -32,20 +32,16 @@ class CudaArchitecture(Architecture):
     shared_memory_per_sm_bytes: int
     shared_memory_per_cta_bytes: int
     smem_owner: str
-
-
+    shared_memory_bandwidth_bytes_per_clock_per_sm: int | None
 
     unified_l1_shared_per_sm_bytes: int
     registers_per_sm_32bit: int
     rmem_owner: str
 
-
     tensor_memory_per_cta_bytes: int | None
     tmem_owner: str
 
     def _python_import_module(self) -> str:
-
-
 
         if type(self) is CudaArchitecture:
             return "tilefoundry.target.cuda"
@@ -59,9 +55,7 @@ class CudaArchitecture(Architecture):
         """Return the structural limit for a CUDA topology level."""
         if name == "thread":
             return self.max_threads_per_cta
-        raise ValueError(
-            f"{self.name}: no architecture limit for topology level {name!r}"
-        )
+        raise ValueError(f"{self.name}: no architecture limit for topology level {name!r}")
 
 
 __all__ = ["CudaArchitecture"]

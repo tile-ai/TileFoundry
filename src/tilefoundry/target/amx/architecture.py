@@ -22,7 +22,7 @@ class AppleAmx(Architecture):
 
     name: str
     supported_compute_dtypes: tuple[DType, ...]
-    instruction_capabilities: tuple[str, ...]
+    capabilities: tuple[str, ...]
     amx_units_per_core: int
     staging_bytes: int
     accumulator_bytes: int
@@ -41,9 +41,7 @@ class AppleAmx(Architecture):
         """Return the structural limit for an AMX topology level."""
         if name == "amx":
             return self.amx_units_per_core
-        raise ValueError(
-            f"{self.name}: no architecture limit for topology level {name!r}"
-        )
+        raise ValueError(f"{self.name}: no architecture limit for topology level {name!r}")
 
 
 __all__ = ["AppleAmx"]

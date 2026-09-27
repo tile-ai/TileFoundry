@@ -59,16 +59,6 @@ class _NoComputeUnitRateCudaTarget(CudaTarget):
         return facts
 
 
-class _NoBandwidthUnitRateCudaTarget(CudaTarget):
-    name = "tests.target.no_bandwidth_unit_rate_cuda"
-
-    def get_facts(self, facts_type: type, query: object | None = None):
-        facts = super().get_facts(facts_type, query)
-        if facts_type is PerformanceServiceFacts:
-            return replace(facts, unit_bandwidth=())
-        return facts
-
-
 class ExtraTopologyCudaTarget(CudaTarget):
     name = "tests.target.extra_topology_cuda"
     extra_levels = (
@@ -130,15 +120,11 @@ def test_document_free_target_projects_facts_and_inherits_standard_analysis() ->
     target = VendorNpuTarget()
 
     assert target.get_analyzer("roofline").selector == "roofline"
-    assert target.get_facts(TopologyLevelFacts, "core") == TopologyLevelFacts(
-        "core", 256, 16
-    )
+    assert target.get_facts(TopologyLevelFacts, "core") == TopologyLevelFacts("core", 256, 16)
     memory = target.get_facts(MemoryHierarchyFacts)
     assert memory.explicit("gmem").capacity_bytes == 64_000_000_000
     assert target.get_facts(ThroughputFacts).peak_for(DType.f32) == 2_000_000_000_000_000
-    assert target.get_facts(TopologyFacts).parallel() == TopologyLevelFacts(
-        "core", 256, 16
-    )
+    assert target.get_facts(TopologyFacts).parallel() == TopologyLevelFacts("core", 256, 16)
     target.validate_program_topology(Topology("core", 256))
     with pytest.raises(ValueError, match="1 <= extent <= 256"):
         target.validate_program_topology(Topology("core", 257))
@@ -163,27 +149,22 @@ def test_cuda_projects_one_ctas_share_from_device_rates() -> None:
     assert dict(services.unit_bandwidth) == {
         device.bandwidth_level: (
             target.device.hbm_bandwidth_bytes_per_second // target.device.sm_count
-        )
+        ),
+        "smem": (
+            target.architecture.shared_memory_bandwidth_bytes_per_clock_per_sm
+            * target.device.sm_clock_hz
+        ),
     }
     assert dict(services.unit_ops) == dict(target.device.service_ops_per_second)
     assert all(rate > 0 for _kind, rate in services.unit_ops)
 
 
-@pytest.mark.parametrize(
-    ("target_type", "missing"),
-    (
-        (_NoComputeUnitRateCudaTarget, r"dtype 'f32'.*'cta'"),
-        (_NoBandwidthUnitRateCudaTarget, r"level 'gmem'.*'cta'"),
-    ),
-)
-def test_performance_refuses_a_target_without_its_required_one_unit_rate(
-    target_type: type[CudaTarget], missing: str
-) -> None:
-    target = target_type("nvidia.h200_sxm")
+def test_performance_refuses_a_target_without_its_required_compute_rate() -> None:
+    target = _NoComputeUnitRateCudaTarget("nvidia.h200_sxm")
     subject = replace(MoEMegaKernel, target=target)
     function = subject.entry_function()
 
-    with pytest.raises(AnalysisError, match=missing):
+    with pytest.raises(AnalysisError, match=r"dtype 'f32'.*'cta'"):
         analyze(subject, function, analysis="performance")
 
 

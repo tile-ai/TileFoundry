@@ -10,12 +10,12 @@ origin = "vendor"
 source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
 conditions = "compilation architecture identity"
 
-[facts.instruction.capabilities]
-value = ["tensor_core", "wgmma", "tma"]
+[facts.capabilities]
+value = ["mma.sync", "wgmma.mma_async", "ldmatrix", "cp.async.bulk.tensor"]
 unit = "name"
 origin = "vendor"
 source = "https://docs.nvidia.com/cuda/hopper-compatibility-guide/index.html"
-conditions = "instruction families the SM90 code path may select"
+conditions = "PTX instruction families the SM90 code path may select"
 
 [facts.instruction.compute_dtypes]
 value = ["f32", "f16", "bf16", "fp8e4m3"]
@@ -81,8 +81,11 @@ source = "https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#compu
 conditions = "256 KiB of unified data cache per SM on compute capability 9.0; the shared-memory carveout and the L1 data cache divide this one block between them"
 
 [facts.memory.shared.bandwidth]
-status = "unavailable"
-conditions = "NVIDIA publishes no static shared-memory bandwidth to use for a roofline."
+value = 128
+unit = "byte/clock/sm"
+origin = "reference"
+source = "https://arxiv.org/abs/2402.13499"
+conditions = "SM90 shared-memory ld/st microbenchmarks measured 127.9 B/clock/SM on H800, independently reproduced as 127.4 B/clock/SM; 128 is the corresponding 32-bank by 4-byte structural rate, not a vendor peak and not a rate for WGMMA or TMA ports"
 
 [facts.memory.register.per_sm]
 value = 65536

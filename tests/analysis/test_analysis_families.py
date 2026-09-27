@@ -371,9 +371,7 @@ def test_a_program_whose_peak_exceeds_capacity_reports_an_error() -> None:
 
     tight_memory = analyze(tight, split, analysis="memory")
     tight_record = get_metadata(tight_memory.function, RegionMemoryMetadata)
-    assert tight_record.errors == (
-        "smem placement peak 206.25KB exceeds capacity 103.12KB",
-    )
+    assert tight_record.errors == ("smem placement peak 206.25KB exceeds capacity 103.12KB",)
     assert '#   error="smem placement peak 206.25KB exceeds capacity 103.12KB"' in render_text(
         render_analysis(tight_memory)
     )
@@ -425,14 +423,12 @@ def test_a_program_whose_peak_exceeds_capacity_reports_an_error() -> None:
     ]
 
 
-def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> None:
-    """A hole inside a number reads as a program that does less than it does.
+def test_local_pricing_requires_compute_rates_and_uses_available_memory_rates() -> None:
+    """Compute holes fail while unstated memory levels remain unpriced.
 
-    Three ways the target can fail to price what a program asks for, and none of
-    them may be answered with nothing: rates stated for the wrong unit, a dtype
-    with no throughput, and the one level a bandwidth was meant for having none.
-    Each says which quantity and which level, because that is what a reader has
-    to go and publish.
+    A compute kind promises work the machine must price, so a missing rate is an
+    error. Memory traffic is timed only at levels with a stated bandwidth; the
+    independently overlappable levels set a maximum rather than a sum.
     """
     target = _PricingBoundary.resolve_target()
     throughput = target.get_facts(ThroughputFacts)
@@ -478,14 +474,19 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
                             (TrafficBytes(read=4096),),
                         ),
                     ),
+                    (
+                        "smem",
+                        Spread(
+                            TrafficBytes(read=8192),
+                            TrafficBytes(read=8192),
+                            (TrafficBytes(read=8192),),
+                        ),
+                    ),
                 )
             ),
         ),
     )
-    with pytest.raises(
-        AnalysisError,
-        match=rf"no one-unit throughput for level '{throughput.bandwidth_level}' at 'cta'",
-    ):
+    assert (
         local_duration_ns(
             ComputeCostMetadata(),
             throughput,
@@ -493,3 +494,13 @@ def test_a_price_is_refused_where_the_machine_states_no_rate_to_pay_it_at() -> N
             moved=crossed,
             level="cta",
         )
+        == 0
+    )
+    priced = replace(
+        services,
+        unit_bandwidth=((throughput.bandwidth_level, 1024_000_000_000), ("smem", 1024_000_000_000)),
+    )
+    assert (
+        local_duration_ns(ComputeCostMetadata(), throughput, priced, moved=crossed, level="cta")
+        == 8
+    )

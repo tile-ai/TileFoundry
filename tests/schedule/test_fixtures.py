@@ -11,13 +11,21 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+from math import prod
 from pathlib import Path
 
 import pytest
 
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
-from tilefoundry.analysis.metadata import MemoryMetadata, RegionMemoryMetadata
+from tilefoundry.analysis.metadata import (
+    ComputeCostMetadata,
+    MemoryMetadata,
+    PerformanceMetadata,
+    PerformanceSummaryMetadata,
+    RegionMemoryMetadata,
+    RooflineMetadata,
+)
 from tilefoundry.inspection import PatternPrinter, as_script
 from tilefoundry.ir.core import Call, Op, Var, get_metadata
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
@@ -47,6 +55,13 @@ PLAIN = (
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
 WGMMA_DECLARATION = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.described.txt"
+ANALYSES = (
+    ("compute-cost", ComputeCostMetadata),
+    ("memory", MemoryMetadata),
+    ("roofline", RooflineMetadata),
+    ("performance", PerformanceSummaryMetadata),
+)
+_TENSOR_CLOCK_HZ = 1_830_000_000
 
 
 def _prim_in(path: Path) -> PrimFunction:
@@ -82,8 +97,11 @@ def test_scheduled_hir_program_is_well_typed(path: Path) -> None:
     check_program(program, entry)
 
 
+@pytest.mark.parametrize(("analysis", "metadata_type"), ANALYSES)
 @pytest.mark.parametrize("path", HIR, ids=lambda path: path.stem)
-def test_scheduled_hir_program_has_memory_metadata(path: Path) -> None:
+def test_scheduled_hir_program_has_analysis_metadata(
+    path: Path, analysis: str, metadata_type: type
+) -> None:
     program = _module_in(path)
     entry = next(function for function in program.functions if function.name == "gemm")
     if path.stem == "wgmma_tma_3stage":
@@ -100,15 +118,79 @@ def test_scheduled_hir_program_has_memory_metadata(path: Path) -> None:
                     read_write.append(expr)
         assert len(read_write) == 1
         read_write[0].target.buffers = 3
-    result = analyze(program, entry, analysis="memory")
-    assert set(result.metadata_types) >= {MemoryMetadata, RegionMemoryMetadata}
+    result = analyze(program, entry, analysis=analysis)
+    assert metadata_type in result.metadata_types
 
-    if path.stem == "wgmma_tma_3stage":
+    if analysis == "compute-cost":
+        schedules = (
+            expr
+            for expr in collect_exprs(result.function.body)
+            if isinstance(expr, Call) and isinstance(expr.target, ScheduleOp)
+        )
+        assert all(
+            not get_metadata(expr, ComputeCostMetadata).other_ops.kinds for expr in schedules
+        )
+
+    if analysis == "memory" and path.stem == "wgmma_tma_3stage":
+        assert RegionMemoryMetadata in result.metadata_types
         lifetimes = get_metadata(result.function, RegionMemoryMetadata).lifetimes
         smem = sorted(item.bytes for item in lifetimes if item.memory_level == "smem")
         rmem = sorted(item.bytes for item in lifetimes if item.memory_level == "rmem")
         assert smem == sorted((512, 512 * 3, 4096, 4096 * 3))
         assert rmem == [4096, 8192, 8192, 8192, 8192]
+
+    if analysis == "performance" and path.stem == "gemm_8192x17408x5120_cta_grid":
+        local_moves = []
+        for expr in collect_exprs(result.function.body):
+            if not isinstance(expr, Call) or not isinstance(expr.target, ScheduleOp):
+                continue
+            moved = get_metadata(expr, MemoryMetadata)
+            levels = moved.traffic.storage.names()
+            if "smem" in levels and "gmem" not in levels:
+                local_moves.append(get_metadata(expr, PerformanceMetadata))
+        assert local_moves and all(
+            item is not None and item.timeline.end_ns > item.timeline.start_ns
+            for item in local_moves
+        )
+
+
+@pytest.mark.parametrize(
+    ("fixture", "n"),
+    (
+        ("wgmma_rs_a_from_accumulator", 16),
+        ("wgmma_repeat_along_n", 64),
+        ("gemm_8192x17408x5120_register_store", 256),
+    ),
+)
+def test_wgmma_performance_prices_n_over_two_tensor_clocks(fixture: str, n: int) -> None:
+    """Price real timeline output against an independent tensor-clock reference.
+
+    The 1.83 GHz value comes from the stage2c instruction-throughput research
+    section 2, not from the peak under test. Its 0.0071% difference from the
+    peak-implied 1,830,129,912 Hz leaves 0.63, 0.11, and 0.44 ns before the three
+    ceil boundaries. A future case crossing one boundary needs its expected
+    integer time checked before treating the one-ns change as a bug.
+    """
+    path = next(path for path in HIR if path.stem == fixture)
+    program = _module_in(path)
+    entry = next(function for function in program.functions if function.name == "gemm")
+    result = analyze(program, entry, analysis="performance")
+    schedule = next(
+        expr
+        for expr in collect_exprs(result.function.body)
+        if isinstance(expr, Call)
+        and isinstance(expr.target, ScheduleOp)
+        and getattr(getattr(expr.target.op, "atom", None), "bindings", {}).get("n") == n
+    )
+    spread = get_metadata(schedule, ComputeCostMetadata).flops.of("bf16")
+    issues = prod(schedule.target.repeat or (1,))
+    flops_per_issue = spread.logical // issues
+    timeline = get_metadata(schedule, PerformanceMetadata).timeline
+    duration_ns = timeline.end_ns - timeline.start_ns
+    expected_ns = -(-(n * issues * 1_000_000_000) // (2 * _TENSOR_CLOCK_HZ))
+
+    assert flops_per_issue == 2 * 64 * n * 16
+    assert duration_ns == expected_ns
 
 
 def _copy_schedule_call(

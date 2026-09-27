@@ -9,6 +9,7 @@ import pytest
 
 from tilefoundry.analysis.facts import (
     MemoryHierarchyFacts,
+    PerformanceServiceFacts,
     ThroughputFacts,
 )
 from tilefoundry.ir.types import DType, Topology
@@ -27,9 +28,14 @@ def test_builtin_targets_own_their_facts_projections() -> None:
     cuda = CudaTarget("nvidia.h200_sxm")
 
     throughput = cuda.get_facts(ThroughputFacts)
+    services = cuda.get_facts(PerformanceServiceFacts)
     memory = cuda.get_facts(MemoryHierarchyFacts)
 
     assert throughput.memory_bandwidth_bytes_per_second == 4_800_000_000_000
+    assert dict(services.unit_bandwidth) == {
+        "gmem": 4_800_000_000_000 // cuda.device.sm_count,
+        "smem": 128 * cuda.device.sm_clock_hz,
+    }
     assert memory.explicit("gmem").capacity_bytes == cuda.device.hbm_capacity_bytes
     assert {level.name: level.owner for level in memory.explicit_levels} == {
         "gmem": "target",

@@ -22,11 +22,10 @@ from tilefoundry.visitor_registry.registries import typeinfer_registry, verify_s
 class LdMatrix(Op):
     """Load one warp's shared-memory tile into the SM80 MMA A fragment."""
 
-    capability = "tensor_core"
+    capability = "ldmatrix"
+    resource = "tensor_core_engine"
 
-    src = ParamDef(
-        kind="input", effect=MemoryEffect.READ, pattern=utils.operand_tile(0, S.SMEM)
-    )
+    src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=utils.operand_tile(0, S.SMEM))
     dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=Mma.A)
     scope = ParamDef(
         kind="attribute",

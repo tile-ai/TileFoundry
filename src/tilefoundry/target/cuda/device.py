@@ -20,18 +20,16 @@ class CudaDevice(Device):
 
     name: str
     sm_count: int
+    sm_clock_hz: int | None
     hbm_capacity_bytes: int
     gmem_owner: str
     hbm_bandwidth_bytes_per_second: int
-
 
     l2_capacity_bytes: int | None
     _dense_flops: tuple[tuple[DType, int], ...]
     _service_ops: tuple[tuple[str, int], ...]
 
     def _python_import_module(self) -> str:
-
-
 
         if type(self) is CudaDevice:
             return "tilefoundry.target.cuda"

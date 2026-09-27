@@ -30,6 +30,7 @@ class MmaAtom:
     namespace: str
     scope: Mesh
     capability: str
+    resource: str
     C: object
     A: object
     B: object
@@ -87,7 +88,7 @@ class MmaAtom:
 
     @classmethod
     def scope_pattern(cls) -> MeshPattern:
-        topology, = cls.scope.topologies
+        (topology,) = cls.scope.topologies
         size = topology.size
         per_mode = (P.Forward(per_mode=True), P.Injective(per_mode=True))
         layout = ComposedLayoutPattern(

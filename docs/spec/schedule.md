@@ -92,10 +92,15 @@ Schedule traffic is derived from the scheduled access relation. A transfer has
 no floating-point work. An MMA reports one multiply and one add per contraction
 point, `2 * M * N * K`, in the dtype of its multiplicative inputs.
 
-Ideal compute time is the number of issues (`product(repeat)`) multiplied by
-the selected instruction's ideal issue time from target facts. MMA issue time
-is derived from tensor throughput; copy issue time is constrained by the
-narrowest memory level crossed by the instruction.
+Ideal MMA time is its `2 * M * N * K` work divided by the target's dense
+throughput for the multiplicative dtype. An instruction's `resource`
+declaration is not a second service count: adding it to the FLOP time would
+price the same tensor work twice.
+
+Movement is priced independently at every crossed memory level for which the
+target states a bandwidth, and the longest such time is the memory time. These
+levels may overlap, so their times are not summed. A level with no stated rate
+contributes no bound; it is neither treated as zero bandwidth nor rejected.
 
 The concrete mapping of issues to participants, and the lowering loop nest
 selected by `order`, are lowering contracts rather than authored ScheduleOp

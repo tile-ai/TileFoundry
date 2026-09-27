@@ -73,7 +73,8 @@ class Mma(MmaAtom):
 
     namespace = "T.cuda.sm80"
     scope = WARP
-    capability = "tensor_core"
+    capability = "mma.sync"
+    resource = "tensor_core_engine"
 
     C = _fragment((16, 8), DType.f32, _C_FRAGMENT)
     A = _fragment((16, 16), DType.bf16, _A_FRAGMENT)

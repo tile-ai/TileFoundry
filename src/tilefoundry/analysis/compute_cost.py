@@ -37,16 +37,18 @@ def _is_structural_occurrence(
     moved: MemoryMetadata | None = None,
     *,
     unit: str,
-    bandwidth_level: str | None = None,
 ) -> bool:
     """Whether an occurrence asks for nothing this model puts on a clock."""
     return (
         all(not value for _name, value in _at(cost.flops, cost.topologies, unit))
         and all(not value for _kind, value in _at(cost.other_ops, cost.topologies, unit))
-        and not (
-            _bytes(moved.traffic.storage, moved.topologies, bandwidth_level, unit)
-            if moved is not None and bandwidth_level is not None
-            else 0
+        and not any(
+            traffic.total_bytes
+            for traffic in (
+                shares(moved.traffic.storage, moved.topologies, unit).values()
+                if moved is not None
+                else ()
+            )
         )
     )
 
@@ -70,9 +72,7 @@ def local_duration_ns(
             f"performance: selected topology level {topology_level!r}, but the "
             f"target's one-unit throughputs are stated for {services.unit!r}"
         )
-    if _is_structural_occurrence(
-        cost, moved, unit=topology_level, bandwidth_level=facts.bandwidth_level
-    ):
+    if _is_structural_occurrence(cost, moved, unit=topology_level):
         return 0
 
     compute_ns = 0
@@ -101,21 +101,22 @@ def local_duration_ns(
             )
         compute_ns += -(-(value * scale * 1_000_000_000) // throughput)
 
-    crossed = (
-        _bytes(moved.traffic.storage, moved.topologies, facts.bandwidth_level, topology_level)
-        * scale
-        if moved is not None
-        else 0
-    )
     memory_ns = 0
-    if crossed:
-        throughput = services.bandwidth(facts.bandwidth_level)
-        if throughput is None or throughput <= 0:
+    storage_traffic = (
+        shares(moved.traffic.storage, moved.topologies, topology_level) if moved is not None else {}
+    )
+    for memory_level, traffic in storage_traffic.items():
+        crossed = traffic.total_bytes * scale
+        throughput = services.bandwidth(memory_level)
+        if not crossed or throughput is None:
+            continue
+        if throughput <= 0:
             raise AnalysisError(
                 f"performance: target states no one-unit throughput for level "
-                f"{facts.bandwidth_level!r} at {topology_level!r}"
+                f"{memory_level!r} at {topology_level!r}"
             )
-        memory_ns = -(-(crossed * 1_000_000_000) // throughput)
+        duration = -(-(crossed * 1_000_000_000) // throughput)
+        memory_ns = max(memory_ns, duration)
 
     sent = (
         _bytes(
@@ -228,7 +229,9 @@ def _accumulate(ctx: "ComputeCostContext", record: ComputeCostMetadata, trips: i
     _add(ctx.other_ops, _domain_values(record.other_ops, "total"), trips)
     for index, unit in enumerate(record.topologies):
         held = ctx.by_unit.setdefault(unit, {"flops": {}, "other_ops": {}})
-        _add(held["flops"], ((name, spread.at(index)) for name, spread in record.flops.kinds), trips)
+        _add(
+            held["flops"], ((name, spread.at(index)) for name, spread in record.flops.kinds), trips
+        )
         _add(
             held["other_ops"],
             ((name, spread.at(index)) for name, spread in record.other_ops.kinds),

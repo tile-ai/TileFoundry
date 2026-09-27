@@ -50,13 +50,10 @@ class Form(Enum):
 
 _ = WildcardPattern()
 n, b, W, p, r, l, s, c = (
-    WildcardPattern(name)
-    for name in ("n", "a_swizzle", "W", "k0", "r", "l", "s", "c")
+    WildcardPattern(name) for name in ("n", "a_swizzle", "W", "k0", "r", "l", "s", "c")
 )
 n_extent = n
-bb, Wb, rb, lb, sb = (
-    WildcardPattern(name) for name in ("b_swizzle", "Wb", "rb", "lb", "sb")
-)
+bb, Wb, rb, lb, sb = (WildcardPattern(name) for name in ("b_swizzle", "Wb", "rb", "lb", "sb"))
 RUN = P.Table((8, 16, 32, 64))[b]
 WARPGROUP_SCOPE = MeshPattern(
     ("thread",),
@@ -102,7 +99,8 @@ class Wgmma(MmaAtom):
 
     namespace = "T.cuda.sm90"
     scope = WARPGROUP
-    capability = "wgmma"
+    capability = "wgmma.mma_async"
+    resource = "wgmma_engine"
 
     n = ParamDef(
         kind="attribute",

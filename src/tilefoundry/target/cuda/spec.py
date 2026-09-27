@@ -41,9 +41,7 @@ def _dtypes(names: tuple[str, ...], document: HardwareDocument) -> tuple[DType, 
     for name in names:
         dtype = getattr(DType, name, None)
         if dtype is None:
-            raise SchemaValidationError(
-                f"{document.id}: unknown compute dtype {name!r}"
-            )
+            raise SchemaValidationError(f"{document.id}: unknown compute dtype {name!r}")
         resolved.append(dtype)
     return tuple(resolved)
 
@@ -51,43 +49,31 @@ def _dtypes(names: tuple[str, ...], document: HardwareDocument) -> tuple[DType, 
 def build_cuda_architecture(document: HardwareDocument) -> CudaArchitecture:
     """Build the immutable CUDA architecture value from its installed document."""
     reader = SchemaReader(document)
-    max_threads_per_cta = reader.integer(
-        "compute.max_threads_per_cta", unit="thread"
-    )
-    max_threads_per_warp = reader.integer(
-        "compute.max_threads_per_warp", unit="thread"
-    )
+    max_threads_per_cta = reader.integer("compute.max_threads_per_cta", unit="thread")
+    max_threads_per_warp = reader.integer("compute.max_threads_per_warp", unit="thread")
     max_warps_per_cta = reader.integer("compute.max_warps_per_cta", unit="count")
     architecture = CudaArchitecture(
         name=reader.text("identity.name"),
-        supported_compute_dtypes=_dtypes(
-            reader.names("instruction.compute_dtypes"), document
-        ),
-        instruction_capabilities=reader.names("instruction.capabilities"),
+        supported_compute_dtypes=_dtypes(reader.names("instruction.compute_dtypes"), document),
+        capabilities=reader.names("capabilities"),
         max_threads_per_cta=max_threads_per_cta,
         max_threads_per_warp=max_threads_per_warp,
         max_warps_per_cta=max_warps_per_cta,
-        max_resident_ctas_per_sm=reader.integer(
-            "compute.max_resident_ctas_per_sm", unit="count"
-        ),
-        shared_memory_per_sm_bytes=reader.integer(
-            "memory.shared.per_sm", unit="byte"
-        ),
-        shared_memory_per_cta_bytes=reader.integer(
-            "memory.shared.per_cta", unit="byte"
-        ),
+        max_resident_ctas_per_sm=reader.integer("compute.max_resident_ctas_per_sm", unit="count"),
+        shared_memory_per_sm_bytes=reader.integer("memory.shared.per_sm", unit="byte"),
+        shared_memory_per_cta_bytes=reader.integer("memory.shared.per_cta", unit="byte"),
         smem_owner=_memory_owner(reader, "memory.shared.owner"),
+        shared_memory_bandwidth_bytes_per_clock_per_sm=reader.optional_integer(
+            "memory.shared.bandwidth", unit="byte/clock/sm"
+        ),
         unified_l1_shared_per_sm_bytes=reader.integer(
             "memory.unified_l1_shared.per_sm", unit="byte"
         ),
         registers_per_sm_32bit=reader.integer("memory.register.per_sm", unit="register"),
         rmem_owner=_memory_owner(reader, "memory.register.owner"),
-        tensor_memory_per_cta_bytes=reader.optional_integer(
-            "memory.tensor.per_cta", unit="byte"
-        ),
+        tensor_memory_per_cta_bytes=reader.optional_integer("memory.tensor.per_cta", unit="byte"),
         tmem_owner=_memory_owner(reader, "memory.tensor.owner"),
     )
-    reader.declared_unavailable("memory.shared.bandwidth")
     reader.declared_unavailable("memory.register.bandwidth")
     reader.close()
 
@@ -103,10 +89,7 @@ def build_cuda_architecture(document: HardwareDocument) -> CudaArchitecture:
             f"({architecture.shared_memory_per_cta_bytes} B) exceeds the per-SM "
             f"capacity ({architecture.shared_memory_per_sm_bytes} B)"
         )
-    if (
-        architecture.shared_memory_per_sm_bytes
-        > architecture.unified_l1_shared_per_sm_bytes
-    ):
+    if architecture.shared_memory_per_sm_bytes > architecture.unified_l1_shared_per_sm_bytes:
         raise SchemaValidationError(
             f"{document.id}: the shared-memory carveout "
             f"({architecture.shared_memory_per_sm_bytes} B) exceeds the unified "
@@ -142,11 +125,14 @@ def build_cuda_device(document: HardwareDocument) -> CudaDevice:
     device = CudaDevice(
         name=reader.text("identity.name"),
         sm_count=reader.integer("compute.sm_count", unit="count"),
+        sm_clock_hz=(
+            reader.optional_integer("compute.sm_clock_hz", unit="Hz")
+            if "compute.sm_clock_hz" in document.facts
+            else None
+        ),
         hbm_capacity_bytes=reader.integer("memory.hbm.capacity", unit="byte"),
         gmem_owner=_memory_owner(reader, "memory.hbm.owner"),
-        hbm_bandwidth_bytes_per_second=reader.integer(
-            "memory.hbm.bandwidth", unit="byte/s"
-        ),
+        hbm_bandwidth_bytes_per_second=reader.integer("memory.hbm.bandwidth", unit="byte/s"),
         l2_capacity_bytes=reader.optional_integer("memory.l2.capacity", unit="byte"),
         _dense_flops=tuple(dense_flops),
         _service_ops=tuple(services),
