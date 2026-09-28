@@ -1,8 +1,8 @@
 """Lower scheduled HIR to effect-form TIR.
 
 The pass consumes the checked, inlined view produced by ``analyze(memory)``.
-Memory metadata owns storage addresses; ``IssuePlan`` owns instruction issue
-geometry.  This file only turns those two public facts into statements.
+Memory metadata owns storage addresses; registered access relations own
+instruction issue geometry. This file only turns those two facts into statements.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.schedule import IssuePlan, ScheduleOp, issue_plan
+from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor.cast import Cast as HirCast
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
@@ -40,8 +40,9 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
+from tilefoundry.ir.hir.tensor.view import presented_layout_of
 from tilefoundry.ir.hir.tensor.zeros import Zeros
-from tilefoundry.ir.pattern import MeshPattern, PatternMatcher
+from tilefoundry.ir.pattern import MeshPattern, PatternMatcher, SwitchPattern
 from tilefoundry.ir.tir.cast import Cast as TirCast
 from tilefoundry.ir.tir.memory import AllocTensor, Copy, Fill, PtrOf, TensorView
 from tilefoundry.ir.tir.prim_function import PrimFunction
@@ -72,10 +73,15 @@ from tilefoundry.ir.types.dim import (
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.mesh import separate, starts
 from tilefoundry.ir.types.stride import compact_row_major
-from tilefoundry.ir.types.utils import i64_const, static_dim_value
+from tilefoundry.ir.types.utils import i64_const, static_dim_value, tile_inner_type
 from tilefoundry.ir.visitor import ExprVisitor, StmtMutator, collect_exprs
 from tilefoundry.passes.pass_base import ModulePass
-from tilefoundry.visitor_registry.access_relation import access_relation_registry
+from tilefoundry.visitor_registry.access_relation import (
+    AccessRelations,
+    access_relation_registry,
+    iteration_universe,
+    relation_of,
+)
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.registries import typeinfer_registry
 
@@ -224,6 +230,148 @@ def _label(call: Call) -> str:
     return binding.name if binding is not None else type(call.target).__name__
 
 
+def _read_pattern(param, op):
+    pattern = param.pattern.read_on(op) if hasattr(param.pattern, "read_on") else param.pattern
+    bindings = dict(getattr(getattr(op, "atom", None), "bindings", {}))
+    while isinstance(pattern, SwitchPattern) and pattern.param in bindings:
+        pattern = dict(pattern.branches).get(bindings[pattern.param])
+    return pattern
+
+
+def _inner_map(boundary) -> isl.map:
+    """One scheduled boundary with repeat coordinates fixed at the first tile."""
+    relation = relation_of(boundary.pattern)
+    repeated = [
+        axis
+        for axis in range(relation.dim(isl.dim_type.IN))
+        if (relation.get_dim_name(isl.dim_type.IN, axis) or "").startswith("r")
+    ]
+    for axis in reversed(repeated):
+        relation = relation.fix_input_si(axis, 0)
+        relation = relation.project_out(isl.dim_type.IN, axis, 1)
+    return relation
+
+
+def _set_extents(space: isl.set) -> tuple[int, ...]:
+    return tuple(
+        int(space.dim_max(axis).max_val().num_si())
+        - int(space.dim_min(axis).min_val().num_si())
+        + 1
+        for axis in range(space.dim(isl.dim_type.SET))
+    )
+
+
+def _projects(relation: isl.map, source: int, target: int) -> bool:
+    local = isl.local_space.from_space(relation.get_space())
+    equal = isl.constraint.alloc_equality(local)
+    equal = equal.set_coefficient_si(isl.dim_type.IN, source, 1)
+    equal = equal.set_coefficient_si(isl.dim_type.OUT, target, -1)
+    return relation.is_subset(isl.map.universe(relation.get_space()).add_constraint(equal))
+
+
+def _operand_work_axes(relations: AccessRelations) -> tuple[tuple[int | None, ...], ...]:
+    mapped = []
+    for boundary in relations.inputs:
+        relation = _inner_map(boundary)
+        mapped.append(
+            tuple(
+                next(
+                    (
+                        source
+                        for source in range(relation.dim(isl.dim_type.IN))
+                        if _projects(relation, source, target)
+                    ),
+                    None,
+                )
+                for target in range(relation.dim(isl.dim_type.OUT))
+            )
+        )
+    return tuple(mapped)
+
+
+def _work_geometry(relations: AccessRelations, authored_order: tuple | None):
+    universe = iteration_universe(relations)
+    if universe is None:
+        raise ValueError("instruction access relations state no iteration space")
+    names = tuple(
+        universe.get_dim_name(isl.dim_type.SET, axis) or f"d{axis}"
+        for axis in range(universe.dim(isl.dim_type.SET))
+    )
+    repeat_positions = tuple(
+        position for position, name in enumerate(names) if name.startswith("r")
+    )
+    if repeat_positions:
+        rank = len(names) - len(repeat_positions)
+        repeats = [1] * rank
+        order = []
+        for position in repeat_positions:
+            axis = int(names[position][1:])
+            repeats[axis] = _set_extents(universe)[position]
+            order.append(axis)
+        inner_universe = _inner_map(relations.outputs[0]).domain()
+        atoms = _set_extents(inner_universe)
+    else:
+        rank = len(names)
+        repeats = [1] * rank
+        order = list(range(rank)) if authored_order is None else list(authored_order)
+        atoms = _set_extents(universe)
+    output = _inner_map(relations.outputs[0])
+    axis_names = [f"d{axis}" for axis in range(rank)]
+    if rank == 3 and output.dim(isl.dim_type.OUT) == 2:
+        projected = {
+            source: target
+            for source in range(rank)
+            for target in range(2)
+            if _projects(output, source, target)
+        }
+        if len(projected) == 2:
+            axis_names = [
+                "k" if axis not in projected else ("m", "n")[projected[axis]]
+                for axis in range(rank)
+            ]
+    repeats = tuple(repeats)
+    atoms = tuple(atoms)
+    return (
+        tuple(axis_names),
+        tuple(atom * repeat for atom, repeat in zip(atoms, repeats, strict=True)),
+        atoms,
+        repeats,
+        tuple(order),
+    )
+
+
+def _swizzle_row(type_: TensorType) -> tuple[int, int] | None:
+    layout = type_.layout
+    if isinstance(layout, ShardLayout):
+        layout = layout.layout
+    if not (
+        isinstance(layout, ComposedLayout)
+        and isinstance(layout.inner, Swizzle)
+        and isinstance(layout.outer, Layout)
+        and layout.outer.strides is not None
+    ):
+        return None
+    modes = [
+        (axis, extent, step)
+        for axis, (group, steps) in enumerate(
+            zip(layout.outer.shape, layout.outer.strides, strict=True)
+        )
+        for extent, step in zip(flatten(group), flatten(steps), strict=True)
+        if extent != 1
+    ]
+    if any(type(value) is not int for _, extent, step in modes for value in (extent, step)):
+        return None
+    units = [(axis, extent) for axis, extent, step in modes if step == 1]
+    above = [step for _, _, step in modes if step > 1]
+    if len(units) != 1 or not above:
+        return None
+    (axis, extent), next_step = units[0], min(above)
+    fastest = [mode for mode in modes if mode[0] == axis][-1]
+    if fastest[2] != 1 or next_step <= extent or next_step % extent:
+        return None
+    return axis, next_step // extent
+
+
 def _scope_pattern(op) -> MeshPattern | None:
     schema = getattr(type(op), "_op_schema", None)
     if schema is None:
@@ -296,7 +444,7 @@ class Lowering(ExprVisitor[Expr]):
         self.scope_for_call = {
             expr_id: scope
             for scope in walk_scopes(self.scopes)
-            for expr_id, (call, _accesses) in scope.accesses["narrow"].items()
+            for expr_id, (call, _relations) in scope.relations.items()
             if id(call) == expr_id
         }
         self.address_owner = {
@@ -821,15 +969,9 @@ class Lowering(ExprVisitor[Expr]):
         )
         if any(stride != 1 for stride in call.target.strides):
             raise LoweringError(f"{_label(call)} has a strided Slice, which is not contiguous")
-        layout = _plain_layout(call.type)
-        if layout is None:
-            source_layout = _plain_layout(call.args[0].type)
-            strides = (
-                tuple(source_layout.strides)
-                if isinstance(source_layout, Layout) and source_layout.strides is not None
-                else tuple(compact_row_major(tuple(call.args[0].type.shape)))
-            )
-            layout = Layout(tuple(call.type.shape), strides)
+        layout = _plain_layout(
+            replace(call.type, layout=presented_layout_of(call, self.type_ctx))
+        )
         return self._window(
             base,
             starts,
@@ -842,10 +984,9 @@ class Lowering(ExprVisitor[Expr]):
     def _lower_view(self, call: Call, cursor: _Cursor) -> Expr:
         source = self.lower(call.args[0], cursor)
         desired = call.type
-        if isinstance(call.target, Transpose):
-            layout = _plain_layout(desired)
-        else:
-            layout = _plain_layout(desired)
+        layout = _plain_layout(
+            replace(desired, layout=presented_layout_of(call, self.type_ctx))
+        )
         desired = replace(desired, layout=layout)
         starts = tuple(i64_const(0) for _ in source.type.shape)
         return self._window(
@@ -914,11 +1055,15 @@ class Lowering(ExprVisitor[Expr]):
             )
         scope = self.scope_for_call.get(id(call))
         mesh = scope.enclosing_mesh() if scope is not None else None
-        self.type_ctx.current_mesh = mesh
         try:
-            plan = issue_plan(call, self.type_ctx)
-        except (TypeError, ValueError) as error:
-            raise LoweringError(f"{_label(call)} cannot derive an issue plan: {error}") from error
+            relations = (
+                scope.stated_relations(call, self.type_ctx)
+                if scope is not None
+                else access_relation_registry.lookup(type(call.target))(call, self.type_ctx)
+            )
+            geometry = _work_geometry(relations, call.target.order)
+        except (TypeError, ValueError, isl.Error) as error:
+            raise LoweringError(f"{_label(call)} cannot read issue geometry: {error}") from error
 
         params = self._instruction_params(call.target.op)
         reads = tuple(param for param in params if param.effect & MemoryEffect.READ)
@@ -938,8 +1083,42 @@ class Lowering(ExprVisitor[Expr]):
             if id(call) in self.staged
             else self.memo.get(id(call))
         )
+        participant_scope = getattr(getattr(call.target.op, "atom", None), "required_scope", None)
+        operand_mesh = next(
+            (
+                layout.mesh
+                for value in call.args
+                if isinstance((layout := value.type.layout), ShardLayout)
+            ),
+            mesh,
+        )
+        read_desired = tuple(
+            tile_inner_type(
+                TensorType(
+                    value.type.shape,
+                    value.type.dtype,
+                    presented_layout_of(value, self.type_ctx),
+                    value.type.storage,
+                ),
+                _set_extents(_inner_map(boundary).range()),
+                participant=participant_scope,
+                enclosing=operand_mesh,
+                shard_attrs=getattr(
+                    getattr(_read_pattern(param, call.target.op), "layout", None),
+                    "attrs",
+                    None,
+                ),
+            )
+            for param, value, boundary in zip(reads, call.args, relations.inputs, strict=True)
+        )
+        desired_by_read = dict(zip((param.name for param in reads), read_desired, strict=True))
         operands = []
-        for param, desired in zip(params, plan.operand_types, strict=True):
+        for param in params:
+            desired = (
+                desired_by_read[param.name]
+                if param.effect & MemoryEffect.READ
+                else tile_inner_type(call.type, tuple(call.type.shape))
+            )
             if param.effect & MemoryEffect.READ:
                 value = read_values[param.name]
             else:
@@ -954,9 +1133,30 @@ class Lowering(ExprVisitor[Expr]):
             participant = self._issuer_frame(
                 call.target.op, tuple(desired for _, _, desired in operands), mesh
             )
-            for frame, group_lows in self._atom_groups(call, plan, mesh, participant):
+            operand_axes = _operand_work_axes(relations)
+            row_copies = [1] * len(geometry[0])
+            operand_rows = []
+            for desired, axes in zip(read_desired, operand_axes, strict=True):
+                row = _swizzle_row(desired)
+                rows = set()
+                if row is not None and axes[row[0]] is not None:
+                    axis = axes[row[0]]
+                    row_copies[axis] = max(row_copies[axis], row[1])
+                    rows.add(axis)
+                operand_rows.append(frozenset(rows))
+            for frame, group_lows in self._atom_groups(call, geometry, mesh, participant):
                 statement = self._emit_atom_axes(
-                    call, plan, tuple(operands), frame, group_lows, 0, {}, {}
+                    call,
+                    geometry,
+                    tuple(row_copies),
+                    operand_axes,
+                    tuple(operand_rows),
+                    tuple(operands),
+                    frame,
+                    group_lows,
+                    0,
+                    {},
+                    {},
                 )
                 cursor.add(
                     MeshScope(
@@ -1024,15 +1224,11 @@ class Lowering(ExprVisitor[Expr]):
     def _atom_groups(
         self,
         call: Call,
-        plan: IssuePlan,
+        geometry,
         mesh: Mesh | None,
         participant: Mesh,
-    ) -> tuple[tuple[Mesh, dict[str, int]], ...]:
-        grouped = tuple(axis for axis in plan.axes if axis.is_group)
-        if not grouped:
-            return ((participant, {}),)
-        if mesh is None:
-            raise LoweringError(f"{_label(call)} has group axes but no physical mesh")
+    ) -> tuple[tuple[Mesh, dict[int, int]], ...]:
+        names, _extents, atoms, repeats, _order = geometry
         physical_mesh = next(
             (
                 layout.mesh
@@ -1041,6 +1237,8 @@ class Lowering(ExprVisitor[Expr]):
             ),
             mesh,
         )
+        if physical_mesh is None:
+            raise LoweringError(f"{_label(call)} has atom axes but no physical mesh")
         physical = flatten(physical_mesh.layout)
         local = flatten(participant.layout)
         if (
@@ -1053,7 +1251,12 @@ class Lowering(ExprVisitor[Expr]):
         strides = tuple(flatten(physical.strides))
         local_shape = tuple(flatten(local.shape))
         outer_rank = len(shape) - len(local_shape)
-        expected = tuple(axis.repeat for axis in grouped)
+        grouped = tuple(axis for axis, count in enumerate(repeats) if count > 1)[:outer_rank]
+        expected = tuple(repeats[axis] for axis in grouped)
+        if not grouped:
+            return ((participant, {}),)
+        if mesh is None:
+            raise LoweringError(f"{_label(call)} has group axes but no physical mesh")
         if (
             outer_rank != len(grouped)
             or tuple(shape[outer_rank:]) != local_shape
@@ -1065,7 +1268,7 @@ class Lowering(ExprVisitor[Expr]):
             )
         base = starts(physical_mesh)[0]
         groups = []
-        for coordinates in product(*(range(axis.repeat) for axis in grouped)):
+        for coordinates in product(*(range(repeats[axis]) for axis in grouped)):
             offset = base + sum(
                 coordinate * strides[index] for index, coordinate in enumerate(coordinates)
             )
@@ -1078,7 +1281,7 @@ class Lowering(ExprVisitor[Expr]):
                 )
             )
             lows = {
-                axis.name: coordinate * axis.atom
+                axis: coordinate * atoms[axis]
                 for axis, coordinate in zip(grouped, coordinates, strict=True)
             }
             groups.append((frame, lows))
@@ -1087,44 +1290,60 @@ class Lowering(ExprVisitor[Expr]):
     def _emit_atom_axes(
         self,
         call: Call,
-        plan: IssuePlan,
+        geometry,
+        row_copies: tuple[int, ...],
+        operand_axes: tuple[tuple[int | None, ...], ...],
+        operand_rows: tuple[frozenset[int], ...],
         operands: tuple[tuple[str, Expr, TensorType], ...],
         frame: Mesh,
-        group_lows: dict[str, int],
+        group_lows: dict[int, int],
         depth: int,
-        offsets: dict[str, Expr],
-        slices: dict[str, int],
+        offsets: dict[int, Expr],
+        slices: dict[int, int],
     ) -> Sequential:
-        if depth == len(plan.order):
-            return self._emit_atom_call(call, plan, operands, frame, offsets, slices)
-        axis = plan.axes[plan.order[depth]]
-        low = group_lows.get(axis.name, 0)
-        stop = low + axis.atom if axis.is_group else axis.extent
+        names, extents, atoms, _repeats, order = geometry
+        if depth == len(order):
+            return self._emit_atom_call(
+                call,
+                atoms,
+                operand_axes,
+                operand_rows,
+                operands,
+                frame,
+                offsets,
+                slices,
+            )
+        axis = order[depth]
+        low = group_lows.get(axis, 0)
+        stop = low + atoms[axis] if axis in group_lows else extents[axis]
         extent = stop - low
-        if extent % axis.atom:
+        if extent % atoms[axis]:
             raise LoweringError(
-                f"{_label(call)} axis {axis.name} extent {extent} is not divisible by "
-                f"atom {axis.atom}"
+                f"{_label(call)} axis {names[axis]} extent {extent} is not divisible by "
+                f"atom {atoms[axis]}"
             )
-        beside = min(axis.row_copies, extent // axis.atom)
-        if extent % (axis.atom * beside):
+        beside = min(row_copies[axis], extent // atoms[axis])
+        if extent % (atoms[axis] * beside):
             raise LoweringError(
-                f"{_label(call)} axis {axis.name} extent {extent} is not divisible by "
-                f"row {axis.atom} * {beside}"
+                f"{_label(call)} axis {names[axis]} extent {extent} is not divisible by "
+                f"row {atoms[axis]} * {beside}"
             )
-        counter = Var(self.names.fresh(f"o_{axis.name}"), type=_INDEX)
+        counter = Var(self.names.fresh(f"o_{names[axis]}"), type=_INDEX)
         body = _Cursor()
         for copy in range(beside):
-            start = counter if copy == 0 else simplify_dim(DimAdd, (counter, copy * axis.atom))
+            start = counter if copy == 0 else simplify_dim(DimAdd, (counter, copy * atoms[axis]))
             nested = self._emit_atom_axes(
                 call,
-                plan,
+                geometry,
+                row_copies,
+                operand_axes,
+                operand_rows,
                 operands,
                 frame,
                 group_lows,
                 depth + 1,
-                {**offsets, axis.name: start},
-                {**slices, axis.name: copy},
+                {**offsets, axis: start},
+                {**slices, axis: copy},
             )
             for statement in nested.body:
                 body.add(statement)
@@ -1134,7 +1353,7 @@ class Lowering(ExprVisitor[Expr]):
                     counter,
                     i64_const(low),
                     i64_const(stop),
-                    i64_const(axis.atom * beside),
+                    i64_const(atoms[axis] * beside),
                     body.build(),
                 ),
             )
@@ -1143,17 +1362,18 @@ class Lowering(ExprVisitor[Expr]):
     def _emit_atom_call(
         self,
         call: Call,
-        plan: IssuePlan,
+        atoms: tuple[int, ...],
+        operand_axes: tuple[tuple[int | None, ...], ...],
+        operand_rows: tuple[frozenset[int], ...],
         operands: tuple[tuple[str, Expr, TensorType], ...],
         frame: Mesh,
-        offsets: dict[str, Expr],
-        slices: dict[str, int],
+        offsets: dict[int, Expr],
+        slices: dict[int, int],
     ) -> Sequential:
         issue = _Cursor()
         issued_args = []
-        atoms = {axis.name: axis.atom for axis in plan.axes}
         for (role, value, desired), axes, row_axes in zip(
-            operands, plan.operand_axes, plan.operand_rows, strict=True
+            operands, operand_axes, operand_rows, strict=True
         ):
             if any(axis is None for axis in axes):
                 raise LoweringError(

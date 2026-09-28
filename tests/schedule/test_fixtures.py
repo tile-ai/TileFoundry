@@ -41,8 +41,8 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.matmul import MatMul
-from tilefoundry.ir.hir.schedule import ScheduleOp, issue_plan
-from tilefoundry.ir.pattern import PatternMatcher, Tensor
+from tilefoundry.ir.hir.schedule import ScheduleOp
+from tilefoundry.ir.pattern import PatternMatcher, Tensor, TensorPattern
 from tilefoundry.ir.tir import PrimFunction
 from tilefoundry.ir.tir.async_copy import CopyAsync
 from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
@@ -55,10 +55,12 @@ from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
+    access_relation_registry,
     boundary_maps,
+    identity_relations,
     relations_of,
 )
-from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
+from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import inference_type
 from tilefoundry.visitor_registry.verify import verify_prim_function
 
@@ -682,6 +684,63 @@ def test_schedule_typeinfer_requires_instruction_access_relations() -> None:
         inference_type(call)
 
 
+def test_schedule_typeinfer_requires_instruction_verifier(monkeypatch) -> None:
+    type_ = TensorType((4,), DType.bf16, Layout((4,), (1,)), StorageKind.RMEM)
+    call = Call(
+        target=ScheduleOp(op=_UnstatedInstruction()),
+        args=(Var(name="value", type=type_),),
+        type=type_,
+    )
+    monkeypatch.setitem(
+        access_relation_registry._map,
+        _UnstatedInstruction,
+        identity_relations(1),
+    )
+
+    with pytest.raises(ValueError, match="has no registered verifier"):
+        inference_type(call)
+
+
+def test_schedule_typeinfer_requires_whole_instruction_tiles(monkeypatch) -> None:
+    type_ = TensorType((4,), DType.bf16, Layout((4,), (1,)), StorageKind.RMEM)
+    call = Call(
+        target=ScheduleOp(op=_UnstatedInstruction()),
+        args=(Var(name="value", type=type_),),
+        type=type_,
+    )
+    param = _UnstatedInstruction._op_schema.signature[0]
+    monkeypatch.setattr(param, "pattern", TensorPattern(shape=(3,)))
+    monkeypatch.setitem(
+        access_relation_registry._map,
+        _UnstatedInstruction,
+        identity_relations(1),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="iteration extent 4 is not divisible by single-issue extent 3",
+    ):
+        inference_type(call)
+
+
+def test_schedule_typeinfer_requires_declared_write_type(monkeypatch) -> None:
+    type_ = TensorType((4,), DType.bf16, Layout((4,), (1,)), StorageKind.RMEM)
+    call = Call(
+        target=ScheduleOp(op=_UnstatedInstruction()),
+        args=(),
+        type=type_,
+    )
+    param = _UnstatedInstruction._op_schema.signature[0]
+    monkeypatch.setattr(param, "effect", MemoryEffect.WRITE)
+    monkeypatch.setattr(param, "pattern", None)
+
+    with pytest.raises(
+        ValueError,
+        match="value is write-only and declares no result shape",
+    ):
+        inference_type(call)
+
+
 def test_schedule_evaluation_rejects_an_unregistered_instruction() -> None:
     type_ = TensorType((4,), DType.bf16, Layout((4,), (1,)), StorageKind.RMEM)
     value = torch.arange(4, dtype=torch.bfloat16)
@@ -935,34 +994,6 @@ def test_schedule_finalize_json_carries_the_same_source(
     verify_prim_function(_prim_in(python))
 
 
-def test_issue_plan_exposes_group_loop_and_row_facts() -> None:
-    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_repeat_along_k.py"
-    module = _module_in(source)
-    result = analyze(module, module.entry_function(), analysis=("memory",))
-    mma = next(
-        expr
-        for expr in collect_exprs(result.function.body)
-        if isinstance(expr, Call)
-        and isinstance(expr.target, ScheduleOp)
-        and isinstance(expr.target.op, TiledMma)
-    )
-    plan = issue_plan(
-        mma,
-        TypeInferContext(scope=FunctionScope(module, result.function)),
-    )
-
-    assert tuple(
-        (axis.name, axis.extent, axis.atom, axis.repeat, axis.row_copies, axis.is_group)
-        for axis in plan.axes
-    ) == (
-        ("m", 128, 64, 2, 1, True),
-        ("n", 16, 16, 1, 1, False),
-        ("k", 64, 16, 4, 4, False),
-    )
-    assert plan.operand_axes == (("m", "n"), ("m", "k"), ("k", "n"))
-    assert plan.operand_rows == ((), ("k",), ())
-
-
 def _m1_analysis():
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_a_k_major.py"
     module = _module_in(source)
@@ -1050,22 +1081,19 @@ def test_lowering_rejects_invalid_atom_geometry(
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_repeat_along_k.py"
     module = _module_in(source)
     result = analyze(module, module.entry_function(), analysis=("memory",))
-    derive = lowering_module.issue_plan
+    derive = lowering_module._work_geometry
 
-    def malformed(call, ctx):
-        plan = derive(call, ctx)
-        if getattr(call.target.op, "atom", None) is None:
-            return plan
-        axes = list(plan.axes)
+    def malformed(relations, order):
+        names, extents, atoms, repeats, issue_order = derive(relations, order)
         if case == "group":
-            axes[0] = replace(axes[0], repeat=3)
+            repeats = (3, *repeats[1:])
         elif case == "atom":
-            axes[1] = replace(axes[1], extent=17)
+            extents = (extents[0], 17, *extents[2:])
         else:
-            axes[2] = replace(axes[2], extent=80)
-        return replace(plan, axes=tuple(axes))
+            extents = (*extents[:2], 80)
+        return names, extents, atoms, repeats, issue_order
 
     monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
-    monkeypatch.setattr(lowering_module, "issue_plan", malformed)
+    monkeypatch.setattr(lowering_module, "_work_geometry", malformed)
 
     _assert_cli_lowering_error(source, message, tmp_path, capsys)

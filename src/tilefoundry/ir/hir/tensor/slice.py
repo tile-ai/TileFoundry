@@ -29,6 +29,8 @@ from tilefoundry.visitor_registry.access_relation import (
     view_relations,
 )
 
+from .view import presented_layout_of
+
 
 @register_op
 class Slice(Op):
@@ -39,6 +41,27 @@ class Slice(Op):
 
     def __init__(self, **attrs):
         super().__init__(**attrs)
+
+    def presented_layout(self, call: Call, ctx):
+        """The sliced axes and source strides, apart from their runtime origin."""
+        source = presented_layout_of(call.args[0], ctx)
+        inner = None
+        if isinstance(source, ComposedLayout):
+            inner, source = source.inner, source.outer
+        if not isinstance(source, Layout) or source.strides is None:
+            return None
+        if not (len(source.strides) == len(self.sizes) == len(self.strides)):
+            return None
+        layout = Layout(
+            tuple(self.sizes),
+            tuple(
+                source_stride * slice_stride
+                for source_stride, slice_stride in zip(
+                    source.strides, self.strides, strict=True
+                )
+            ),
+        )
+        return layout if inner is None else ComposedLayout(inner, 0, layout)
 
 
 class _Unbounded(ValueError):

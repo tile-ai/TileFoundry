@@ -25,11 +25,30 @@ from tilefoundry.visitor_registry.access_relation import (
     view_relations,
 )
 
+from .view import presented_layout_of
+
 
 @register_op
 class Reshape(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     new_shape = ParamDef(kind="attribute", annotation=tuple)
+
+    def presented_layout(self, call, ctx):
+        """A compact source regrouped over the requested result shape."""
+        source = presented_layout_of(call.args[0], ctx)
+        inner = None
+        if isinstance(source, ComposedLayout):
+            inner, source = source.inner, source.outer
+        if not isinstance(source, Layout):
+            return None
+        expected = try_compact_major(tuple(source.shape))
+        if source.strides is not None and source.strides != expected:
+            return None
+        layout = Layout(
+            tuple(self.new_shape),
+            try_compact_major(tuple(self.new_shape)),
+        )
+        return layout if inner is None else ComposedLayout(inner, 0, layout)
 
 
 def _reshape_view(call: "Call", ctx) -> tuple:

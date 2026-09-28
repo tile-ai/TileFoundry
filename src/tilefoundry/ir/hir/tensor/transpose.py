@@ -22,11 +22,34 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
+from .view import presented_layout_of
+
 
 @register_op
 class Transpose(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     perm = ParamDef(kind="attribute", annotation=tuple)
+
+    def presented_layout(self, call, ctx):
+        """The source arrangement with shape and strides permuted together."""
+        source = presented_layout_of(call.args[0], ctx)
+        inner = None
+        if isinstance(source, ComposedLayout):
+            inner, source = source.inner, source.outer
+        if not isinstance(source, Layout):
+            return None
+        perm = tuple(self.perm)
+        if len(perm) != len(source.shape):
+            return None
+        layout = Layout(
+            tuple(source.shape[axis] for axis in perm),
+            (
+                None
+                if source.strides is None
+                else tuple(source.strides[axis] for axis in perm)
+            ),
+        )
+        return layout if inner is None else ComposedLayout(inner, 0, layout)
 
 
 def _strides(type_: TensorType) -> tuple | None:

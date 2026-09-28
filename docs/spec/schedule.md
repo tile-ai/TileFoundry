@@ -90,21 +90,15 @@ one loop iteration, but it does not remove that axis's loop. Transfer
 instructions emit no such atom loops. Supporting non-identity `order` here is
 an intentional extension beyond the AtomSched reference, which rejects it.
 
-`tilefoundry.ir.hir.schedule.issue_plan` exposes the derived `repeat`, `order`,
-single-issue iteration shape, operand types, per-axis issue facts, and the work
-axis projected onto each operand coordinate. It also identifies which operand
-rows supply row-wise atom issue. Access-relation construction and lowering
-consume this same derivation rather than reconstructing it.
+For each operand layout, non-unit repeat counts name leading CuTe tile modes;
+the remaining inner modes are the instruction fragment matched against its
+operand declaration. A sharded operand's mesh layout follows the same rule:
+leading modes are issue groups and the inner modes are the participant frame.
 
 ## 4. Access relation
 
-The schedule relation is the selected instruction's single-issue relation with
-one outer tiling band. Each instruction dimension is split into an outer repeat
-coordinate and its inner single-issue coordinate; outer coordinates are placed
-in `order`. A schedule whose repeat is all ones reaches the same coordinates as
-one instruction issue.
-
-The input/output convention for TIR instruction relations is defined in
+Schedule access relations follow the registered construction and input/output
+convention defined by
 [semantic-analysis §2](./semantic-analysis.md#2-access-relation-analysis).
 
 ## 5. Buffers and cost

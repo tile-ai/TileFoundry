@@ -22,6 +22,7 @@ from .stack import Stack
 from .topk import TopK
 from .transpose import Transpose
 from .tuple_get_item import TupleGetItem
+from .view import presented_layout_of
 from .where import Where
 from .zeros import Zeros
 
@@ -48,6 +49,7 @@ __all__ = [
     "TopK",
     "Transpose",
     "TupleGetItem",
+    "presented_layout_of",
     "Where",
     "Zeros",
 ]

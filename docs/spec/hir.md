@@ -667,6 +667,14 @@ their input when it states one. For `Slice` and `Reshape`, an input with
 `layout=None` produces a view with `layout=None`. Neither case says that the
 view materialized.
 
+Each view op publicly answers the arrangement it presents to an immediate
+consumer through `presented_layout`; `presented_layout_of` dispatches that
+query without naming a concrete view op. This presented arrangement is not the
+same fact as the view's stored `TensorType.layout`: the stored layout MAY remain
+`None` while the query derives the source strides that the view presents.
+Pattern matching and lowering MUST consume this one query rather than infer
+view strides independently.
+
 - `Transpose` MUST permute the layout shape and strides by the same permutation
   as the tensor shape. A `ShardLayout` MUST remap its split positions through
   the registered relation. An input with `layout=None` MUST permute the C order
