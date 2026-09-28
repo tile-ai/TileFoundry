@@ -100,6 +100,11 @@ def _inner_layout(layout: Layout, whole: tuple, inner: tuple) -> tuple[Layout, d
 
 
 def _participant_mesh(source: Mesh, required: Mesh) -> tuple[Mesh, int]:
+    """Select an exact suffix or its collapsed physical participant frame.
+
+    A source frame such as ``(2, 128)`` may collapse the required ``(4, 8, 4)``
+    modes while retaining the same trailing 128-thread physical frame.
+    """
     required_names = tuple(getattr(topology, "name", topology) for topology in required.topologies)
     source_names = tuple(getattr(topology, "name", topology) for topology in source.topologies)
     if source_names != required_names:

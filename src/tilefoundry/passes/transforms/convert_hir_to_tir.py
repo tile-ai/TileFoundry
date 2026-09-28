@@ -74,7 +74,7 @@ from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.mesh import separate, starts
 from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import i64_const, static_dim_value, tile_inner_type
-from tilefoundry.ir.visitor import ExprVisitor, StmtMutator, collect_exprs
+from tilefoundry.ir.visitor import ExprVisitor, StmtMutator, expr_children
 from tilefoundry.passes.pass_base import ModulePass
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -107,15 +107,26 @@ class _Cursor:
     def __init__(self) -> None:
         self._root: list = []
         self._block = self._root
+        self._preamble: list[tuple[Var, Expr]] = []
+        self._deferred_prefix: tuple[Sequential, list[bool]] | None = None
 
     def add(self, stmt) -> None:
         self._block.append(("stmt", stmt))
 
-    def bind(self, var: Var, value: Expr) -> Var:
+    def bind(self, var: Var, value: Expr, *, hoist: bool = False) -> Var:
+        if hoist:
+            self._preamble.append((var, value))
+            return var
         inner: list = []
         self._block.append(("let", var, value, inner))
         self._block = inner
         return var
+
+    def defer(self, statements: Sequential) -> list[bool]:
+        """Reserve a leading position for statements enabled after traversal."""
+        enabled = [False]
+        self._deferred_prefix = (statements, enabled)
+        return enabled
 
     def build(self) -> Sequential:
         def build(entries: list) -> Sequential:
@@ -128,7 +139,12 @@ class _Cursor:
                     body.append(LetStmt(var, value, build(inner)))
             return Sequential(tuple(body))
 
-        return build(self._root)
+        result = build(self._root)
+        for var, value in reversed(self._preamble):
+            result = Sequential((LetStmt(var, value, result),))
+        if self._deferred_prefix is not None and self._deferred_prefix[1][0]:
+            result = Sequential((*self._deferred_prefix[0].body, *result.body))
+        return result
 
 
 class _MeshScopeCoalescer(StmtMutator):
@@ -161,23 +177,22 @@ class Names:
     def __init__(self, authored: Function) -> None:
         self.used = {param.name for param in authored.params}
         self.authored: dict[SourceSpanMetadata, str] = {}
-        self.scopes: dict[SourceSpanMetadata, str] = {}
-        for expr in collect_exprs(authored.body):
-            span = get_metadata(expr, SourceSpanMetadata)
-            binding = get_metadata(expr, BindingMetadata)
-            if span is not None and binding is not None:
-                self.authored[span] = binding.name
-            if (
-                isinstance(expr, MeshRegion)
-                and expr is not authored.body
-                and not (isinstance(expr.body, Call) and isinstance(expr.body.target, Zeros))
-                and not any(
-                    getattr(topology, "name", topology) == "cta"
-                    for topology in expr.mesh.topologies
-                )
-                and span is not None
-            ):
-                self.scopes[span] = self.fresh("scope")
+        self.pending = iter(self._values(authored.body))
+
+    @staticmethod
+    def _values(root: Expr):
+        """Yield authored values once, operands before their consumer."""
+        seen: set[int] = set()
+
+        def visit(expr: Expr):
+            if id(expr) in seen:
+                return
+            seen.add(id(expr))
+            for child in expr_children(expr):
+                yield from visit(child)
+            yield expr
+
+        yield from visit(root)
 
     def fresh(self, stem: str) -> str:
         if stem not in self.used:
@@ -193,14 +208,16 @@ class Names:
     def binding(self, expr: Expr, fallback: str = "value") -> str:
         span = get_metadata(expr, SourceSpanMetadata)
         authored = self.authored.get(span) if span is not None else None
+        while span is not None and authored is None:
+            source = next(self.pending, None)
+            if source is None:
+                break
+            source_span = get_metadata(source, SourceSpanMetadata)
+            binding = get_metadata(source, BindingMetadata)
+            if source_span is not None and binding is not None:
+                self.authored[source_span] = binding.name
+            authored = self.authored.get(span)
         return self.fresh(authored or fallback)
-
-    def scope(self, expr: MeshRegion) -> str:
-        span = get_metadata(expr, SourceSpanMetadata)
-        if span is not None and span in self.scopes:
-            return self.scopes[span]
-        return self.fresh("scope")
-
 
 def _frame(mesh: Mesh) -> Mesh:
     rank = len(tuple(flatten(flatten(mesh.layout).shape)))
@@ -436,10 +453,15 @@ class Lowering(ExprVisitor[Expr]):
         self.logical: dict[int, TensorType] = {}
         self.staged: dict[int, Var] = {}
         self.frames: list[Mesh] = []
-        self.current_mesh: list[Mesh] = []
         self.current_loops: list[tuple[LoopRegion, Var]] = []
         self.output: Var | None = None
         self.scratch: list[Var] = []
+        self.owner_cursors: dict[int, _Cursor] = {}
+        self.bindings: dict[int, Expr] = {}
+        self.output_windows: dict[int, Call] = {}
+        self.output_seed: Call | None = None
+        self.output_fill: list[bool] | None = None
+        self.output_covered = False
         self.scopes = build_scopes(self.module, self.function)
         self.scope_for_call = {
             expr_id: scope
@@ -447,39 +469,7 @@ class Lowering(ExprVisitor[Expr]):
             for expr_id, (call, _relations) in scope.relations.items()
             if id(call) == expr_id
         }
-        self.address_owner = {
-            id(expr): id(self._staging_owner(expr))
-            for expr in collect_exprs(self.function.body)
-            if isinstance(expr, Call)
-            and isinstance(expr.target, ScheduleOp)
-            and isinstance(expr.type, TensorType)
-            and expr.type.storage in (StorageKind.SMEM, StorageKind.GMEM)
-        }
         self.type_ctx = TypeInferContext(scope=FunctionScope(self.module, self.function))
-        self.bindings = {
-            id(param): value
-            for expr in collect_exprs(self.function.body)
-            if isinstance(expr, MeshRegion)
-            for param, value in zip(expr.params, expr.args, strict=True)
-        }
-        self.bindings.update(
-            {
-                id(param): value
-                for expr in collect_exprs(self.function.body)
-                if isinstance(expr, LoopRegion)
-                for param, value in zip(expr.carried_args, expr.init_args, strict=True)
-            }
-        )
-        self.output_windows = {
-            id(root): expr
-            for expr in collect_exprs(self.function.body)
-            if isinstance(expr, Call)
-            and isinstance(expr.target, InsertSlice)
-            and isinstance((root := self._material_root(expr.args[1])), Call)
-            and isinstance(root.target, ScheduleOp)
-            and isinstance(root.type, TensorType)
-            and root.type.storage is StorageKind.GMEM
-        }
         for param in self.function.params:
             physical = Var(param.name, type=param.type, is_const=param.is_const)
             self.memo[id(param)] = physical
@@ -496,26 +486,23 @@ class Lowering(ExprVisitor[Expr]):
         out_type = TensorType(tuple(result_type.shape), result_type.dtype, None, StorageKind.GMEM)
         self.output = Var(self.names.fresh("out"), type=out_type)
         body = self.function.body
+        inner = _Cursor()
+        self.owner_cursors[id(self.function)] = inner
         if isinstance(body, MeshRegion):
             root_mesh = self._physical_frame(body.mesh)
-            inner = _Cursor()
-            self._seed_output(inner)
-            self._prepare_buffers(self.function, inner)
-            self.current_mesh.append(body.mesh)
+            self.owner_cursors[id(body)] = inner
             self._bind_region_args(body, inner)
             result = self.lower(body.body, inner)
-            self.current_mesh.pop()
-            self._finish(result, inner)
-            statements = Sequential(
-                (MeshScope(root_mesh, Var(self.names.fresh("cta"), type=_BINDING), inner.build()),)
-            )
         else:
-            inner = _Cursor()
-            self._seed_output(inner)
-            self._prepare_buffers(self.function, inner)
             result = self.lower(body, inner)
-            self._finish(result, inner)
-            statements = inner.build()
+        self._finish(result, inner)
+        if self.output_fill is not None:
+            self.output_fill[0] = not self.output_covered
+        statements = inner.build()
+        if isinstance(body, MeshRegion):
+            statements = Sequential(
+                (MeshScope(root_mesh, Var(self.names.fresh("cta"), type=_BINDING), statements),)
+            )
 
         statements = _MeshScopeCoalescer().visit(statements)
 
@@ -537,62 +524,21 @@ class Lowering(ExprVisitor[Expr]):
             cursor = cursor.parent
         return self.function
 
-    def _prepare_buffers(self, owner: Expr, cursor: _Cursor) -> None:
-        """Declare eager values and staged buffers at their owning scope."""
-        for expr in collect_exprs(self.function.body):
-            if not isinstance(expr, Call):
-                continue
-            if (
-                isinstance(expr.target, Zeros)
-                and isinstance(expr.type, TensorType)
-                and expr.type.storage is StorageKind.GMEM
-            ):
-                assert self.output is not None
-                self.memo[id(expr)] = self.output
-                self.logical[id(self.output)] = expr.type
-                continue
-            if isinstance(expr.target, (Zeros, HirCast)):
-                if owner is self.function:
-                    self._declare(expr, expr.type, 1, cursor)
-                continue
-            if not isinstance(expr.target, ScheduleOp):
-                continue
-            if id(expr) in self.output_windows or self.address_owner.get(id(expr)) != id(owner):
-                continue
-            params = self._instruction_params(expr.target.op)
-            writes = tuple(param for param in params if param.effect & MemoryEffect.WRITE)
-            produced = tuple(param for param in writes if not param.effect & MemoryEffect.READ)
-            if produced:
-                self._declare(expr, expr.type, expr.target.buffers, cursor)
-
-    def _seed_output(self, cursor: _Cursor) -> None:
-        """Materialize a returned zero seed unless window writes cover it whole."""
+    def _ensure_output_seed(self, seed: Call) -> Expr:
+        """Bind one reached gmem zero to the function output at first use."""
         assert self.output is not None
-        seeds = tuple(
-            expr
-            for expr in collect_exprs(self.function.body)
-            if isinstance(expr, Call)
-            and isinstance(expr.target, Zeros)
-            and isinstance(expr.type, TensorType)
-            and expr.type.storage is StorageKind.GMEM
-        )
-        if not seeds:
-            return
-        if len(seeds) != 1:
+        if self.output_seed is not None and self.output_seed is not seed:
             raise LoweringError("scheduled lowering cannot choose among multiple gmem seeds")
-        seed = seeds[0]
-        writes = tuple(
-            expr
-            for expr in collect_exprs(self.function.body)
-            if isinstance(expr, Call)
-            and isinstance(expr.target, InsertSlice)
-            and self._material_root(expr.args[0]) is seed
-        )
-        if not any(self._covers_output(write) for write in writes):
-            self._emit_fill(self.output, seed.type, cursor)
+        self.output_seed = seed
+        if self.output_fill is None:
+            fill = _Cursor()
+            self._emit_fill(self.output, seed.type, fill)
+            cursor = self.owner_cursors[id(self.function)]
+            self.output_fill = cursor.defer(fill.build())
         self.memo[id(seed)] = self.output
         self.logical[id(self.output)] = seed.type
         self.emitted.add(id(seed))
+        return self.output
 
     def _material_root(self, value: Expr) -> Expr:
         seen: set[int] = set()
@@ -697,7 +643,15 @@ class Lowering(ExprVisitor[Expr]):
                 return operation()
         raise LoweringError(f"output window start {value!r} is not statically enumerable")
 
-    def _declare(self, expr: Call, type_: object, buffers: int, cursor: _Cursor) -> Expr:
+    def _declare(
+        self,
+        expr: Call,
+        type_: object,
+        buffers: int,
+        cursor: _Cursor,
+        *,
+        hoist: bool = False,
+    ) -> Expr:
         known = self.memo.get(id(expr))
         if known is not None:
             return known
@@ -714,6 +668,7 @@ class Lowering(ExprVisitor[Expr]):
             self.memo[id(expr)] = cursor.bind(
                 var,
                 Call(AllocTensor(tensor_type=storage_type), (), type=storage_type),
+                hoist=hoist,
             )
             self.logical[id(var)] = type_
             return var
@@ -754,6 +709,7 @@ class Lowering(ExprVisitor[Expr]):
                 desired,
                 cursor,
                 stem,
+                hoist=hoist,
             )
             self.memo[id(expr)] = var
             self.logical[id(var)] = type_
@@ -761,12 +717,12 @@ class Lowering(ExprVisitor[Expr]):
         fields = tuple(self._literal_view(storage_type, offset) for offset in offsets)
         if len(fields) == 1:
             var = Var(stem, type=storage_type)
-            self.memo[id(expr)] = cursor.bind(var, fields[0])
+            self.memo[id(expr)] = cursor.bind(var, fields[0], hoist=hoist)
             self.logical[id(var)] = type_
             return var
         tuple_type = TupleType(tuple(field.type for field in fields))
         stages = Var(self.names.fresh(f"{stem}_stages"), type=tuple_type)
-        cursor.bind(stages, Tuple(fields, type=tuple_type))
+        cursor.bind(stages, Tuple(fields, type=tuple_type), hoist=hoist)
         self.logical[id(stages)] = type_
         self.staged[id(expr)] = stages
         selected = self._stage(expr, stages)
@@ -810,6 +766,8 @@ class Lowering(ExprVisitor[Expr]):
         return expr if known is None else known
 
     def _bind_region_args(self, region: MeshRegion, cursor: _Cursor) -> None:
+        for param, value in zip(region.params, region.args, strict=True):
+            self.bindings[id(param)] = value
         values = tuple(self.lower(arg, cursor) for arg in region.args)
         for param, value in zip(region.params, values, strict=True):
             self.memo[id(param)] = value
@@ -843,22 +801,18 @@ class Lowering(ExprVisitor[Expr]):
     def _lower_mesh(self, region: MeshRegion, cursor: _Cursor) -> Expr:
         self._bind_region_args(region, cursor)
         if isinstance(region.body, Call) and isinstance(region.body.target, Zeros):
-            self.current_mesh.append(region.mesh)
             result = self.lower(region.body, cursor)
-            self.current_mesh.pop()
             self.memo[id(region)] = result
             return result
         inner = _Cursor()
-        self._prepare_buffers(region, inner)
-        self.current_mesh.append(region.mesh)
+        self.owner_cursors[id(region)] = inner
         result = self.lower(region.body, inner)
-        self.current_mesh.pop()
         built = inner.build()
         if built.body:
             cursor.add(
                 MeshScope(
                     self._physical_frame(region.mesh),
-                    Var(self.names.scope(region), type=_BINDING),
+                    Var(self.names.fresh("scope"), type=_BINDING),
                     built,
                 )
             )
@@ -866,6 +820,8 @@ class Lowering(ExprVisitor[Expr]):
         return result
 
     def _lower_loop(self, loop: LoopRegion, cursor: _Cursor) -> Expr:
+        for var, value in zip(loop.carried_args, loop.init_args, strict=True):
+            self.bindings[id(var)] = value
         init = tuple(self.lower(value, cursor) for value in loop.init_args)
         if len(init) != len(loop.carried_args):
             raise LoweringError("loop carry arity changed during lowering")
@@ -874,7 +830,7 @@ class Lowering(ExprVisitor[Expr]):
         induction = Var(loop.induction_var.name, type=_INDEX)
         self.memo[id(loop.induction_var)] = induction
         inner = _Cursor()
-        self._prepare_buffers(loop, inner)
+        self.owner_cursors[id(loop)] = inner
         self.current_loops.append((loop, induction))
         self.lower(loop.body, inner)
         yielded = tuple(self.lower(value, inner) for value in loop.yield_values)
@@ -943,10 +899,25 @@ class Lowering(ExprVisitor[Expr]):
         elif isinstance(target, (Reshape, Transpose)):
             result = self._lower_view(call, cursor)
         elif isinstance(target, Zeros):
-            result = self.memo[id(call)]
-            self._emit_fill(result, call.type, cursor)
+            if call.type.storage is StorageKind.GMEM:
+                result = self._ensure_output_seed(call)
+            else:
+                result = self._declare(
+                    call,
+                    call.type,
+                    1,
+                    self.owner_cursors[id(self.function)],
+                    hoist=True,
+                )
+                self._emit_fill(result, call.type, cursor)
         elif isinstance(target, HirCast):
-            result = self.memo[id(call)]
+            result = self._declare(
+                call,
+                call.type,
+                1,
+                self.owner_cursors[id(self.function)],
+                hoist=True,
+            )
             source = self.lower(call.args[0], cursor)
             self._emit_cast(call, source, result, call.type, cursor)
         elif isinstance(target, InsertSlice):
@@ -1001,10 +972,27 @@ class Lowering(ExprVisitor[Expr]):
     def _lower_insert(self, call: Call, cursor: _Cursor) -> Expr:
         assert self.output is not None
         destination = call.args[0]
+        destination_root = self._material_root(destination)
+        if (
+            isinstance(destination_root, Call)
+            and isinstance(destination_root.target, Zeros)
+            and destination_root.type.storage is StorageKind.GMEM
+        ):
+            self._ensure_output_seed(destination_root)
         if not (isinstance(destination, Call) and isinstance(destination.target, Zeros)):
             self.lower(destination, cursor)
+        update_root = self._material_root(call.args[1])
+        if (
+            isinstance(update_root, Call)
+            and isinstance(update_root.target, ScheduleOp)
+            and isinstance(update_root.type, TensorType)
+            and update_root.type.storage is StorageKind.GMEM
+        ):
+            self.output_windows[id(update_root)] = call
+        if destination_root is self.output_seed and self._covers_output(call):
+            self.output_covered = True
         update = self.lower(call.args[1], cursor)
-        if id(self._material_root(call.args[1])) in self.output_windows:
+        if id(update_root) in self.output_windows:
             return self.output
         offsets = call.args[2]
         starts = (
@@ -1071,9 +1059,16 @@ class Lowering(ExprVisitor[Expr]):
         produced = tuple(param for param in writes if not param.effect & MemoryEffect.READ)
         output_window = self.output_windows.get(id(call))
         if produced and output_window is None and id(call) not in self.memo:
-            if call.target.buffers != 1:
+            staged = isinstance(call.type, TensorType) and call.type.storage in (
+                StorageKind.SMEM,
+                StorageKind.GMEM,
+            )
+            owner = self._staging_owner(call) if staged else None
+            destination = self.owner_cursors.get(id(owner)) if owner is not None else cursor
+            if destination is None or (not staged and call.target.buffers != 1):
                 raise LoweringError(f"{_label(call)} staged buffer has no owning scope")
-            self._declare(call, call.type, 1, cursor)
+            buffers = call.target.buffers if staged else 1
+            self._declare(call, call.type, buffers, destination, hoist=staged)
         read_values = {
             param.name: self.lower(value, cursor)
             for param, value in zip(reads, call.args, strict=True)
@@ -1473,6 +1468,8 @@ class Lowering(ExprVisitor[Expr]):
         desired: TensorType,
         cursor: _Cursor,
         stem: str,
+        *,
+        hoist: bool = False,
     ) -> Var:
         held = base.type
         if not isinstance(held, TensorType):
@@ -1508,7 +1505,7 @@ class Lowering(ExprVisitor[Expr]):
             (pointer,),
             type=desired,
         )
-        return cursor.bind(Var(self.names.fresh(stem), type=desired), view)
+        return cursor.bind(Var(self.names.fresh(stem), type=desired), view, hoist=hoist)
 
     def _holder_mesh(self, type_: TensorType) -> Mesh | None:
         layout = type_.layout
