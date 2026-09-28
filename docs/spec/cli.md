@@ -452,7 +452,14 @@ tilefoundry schedule candidates SOURCE PATH [--json]
 every selected instruction, and writes the verified `PrimFunction` as canonical
 Python TIR. With `--json`, `PATH` instead contains an object whose `source`
 field is that same canonical TIR. `facts` describes the instructions admitted
-by one target, optionally narrowed to one fully-qualified instruction name.
+by the exact `TARGET` identity, optionally narrowed to one fully-qualified
+`INSTRUCTION` name. With no `INSTRUCTION`, it lists every declaration whose
+class-level capability occurs in the target architecture's capability set.
+With one, it reports that declaration's capability, issuing mesh, parameters,
+operands, cross-operand constraints, and attributes; declaration sections are
+the canonical `PatternPrinter.declaration` text. Atom declarations and TIR ops
+with class-level capabilities form this inventory; a scheduling wrapper with
+an instance-level capability is not itself an instruction in this report.
 `candidates` reports the instructions whose access relation and operand
 patterns can implement each unscheduled matmul or reshard site.
 
@@ -464,6 +471,9 @@ patterns can implement each unscheduled matmul or reshard site.
     `PrimFunction` receives the manager's automatic TIR verification.
   - `--json` changes only representation. It MUST carry the same TIR source or
     report facts as the text form.
+  - `facts --target` is required. `TARGET` and `INSTRUCTION`, when present,
+    match exact identities; neither accepts a short alias or a best-effort
+    fallback.
   - A missing instruction access relation, an addressable result without an
     analyzed offset, an unsupported HIR call, an unknown instruction, an
     unknown target, or a source with no candidate site MUST print

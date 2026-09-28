@@ -14,6 +14,7 @@ from tilefoundry.cli.check import add_arguments as add_check_arguments
 from tilefoundry.cli.check import guidance as check_guidance
 from tilefoundry.cli.check import run_check
 from tilefoundry.cli.models import run_models
+from tilefoundry.cli.schedule import run_facts as run_schedule_facts
 from tilefoundry.cli.schedule import run_finalize as run_schedule_finalize
 from tilefoundry.cli.source import load_authored_ir, one_extent_per_dim, parse_dims
 from tilefoundry.cli.spec import read_spec, run_spec, spec_path
@@ -46,6 +47,7 @@ _TARGET_COMMANDS = {
 
 _SCHEDULE_COMMANDS = {
     "finalize": "lower scheduled HIR to verified TIR",
+    "facts": "describe the instructions admitted by one target",
 }
 
 
@@ -229,6 +231,21 @@ def build_parser() -> argparse.ArgumentParser:
     schedule_finalize.add_argument(
         "--json", action="store_true", help="write an object containing the TIR source"
     )
+    schedule_facts = schedule_commands.add_parser("facts", help=_SCHEDULE_COMMANDS["facts"])
+    schedule_facts.set_defaults(_command_parser=schedule_facts)
+    schedule_facts.add_argument("--target", required=True, metavar="TARGET")
+    schedule_facts.add_argument(
+        "instruction_or_out",
+        metavar="INSTRUCTION|PATH",
+        help="one instruction to select, or PATH when listing every instruction",
+    )
+    schedule_facts.add_argument(
+        "out",
+        nargs="?",
+        metavar="PATH",
+        help="write one selected instruction here; stdout carries none of it",
+    )
+    schedule_facts.add_argument("--json", action="store_true", help="write the same facts as JSON")
 
     return parser
 
@@ -307,6 +324,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
     if args.command == "schedule":
         try:
+            if args.schedule_command == "facts":
+                instruction, out = (
+                    (None, args.instruction_or_out)
+                    if args.out is None
+                    else (args.instruction_or_out, args.out)
+                )
+                return run_schedule_facts(
+                    instruction,
+                    args.target,
+                    out,
+                    as_json=args.json,
+                )
             return run_schedule_finalize(args.source, args.out, as_json=args.json)
         except Exception as error:
             print(f"tilefoundry: error: {error}", file=sys.stderr)

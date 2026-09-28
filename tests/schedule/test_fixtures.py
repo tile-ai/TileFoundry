@@ -72,6 +72,7 @@ PLAIN = (
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
 WGMMA_DECLARATION = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.described.txt"
+WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
 ANALYSES = (
     ("compute-cost", ComputeCostMetadata),
     ("memory", MemoryMetadata),
@@ -652,6 +653,97 @@ def test_tir_program_is_verified_and_canonical(path: Path) -> None:
 
 def test_wgmma_declaration_is_canonical() -> None:
     assert PatternPrinter().declaration(Wgmma) + "\n" == WGMMA_DECLARATION.read_text()
+
+
+def test_schedule_facts_writes_wgmma_declaration(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "facts.txt"
+
+    assert (
+        cli_main(
+            [
+                "schedule",
+                "facts",
+                "T.cuda.sm90.Wgmma",
+                "--target",
+                "nvidia.h200_sxm",
+                str(out),
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr() == ("", "")
+    assert out.read_bytes() == WGMMA_FACTS.read_bytes()
+    facts = out.read_text()
+    declaration = WGMMA_DECLARATION.read_text()
+    assert facts[facts.index("  parameters") :] == declaration[declaration.index("  parameters") :]
+
+
+def test_schedule_facts_lists_target_instructions_as_text_and_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    text_out = tmp_path / "facts.txt"
+    json_out = tmp_path / "facts.json"
+    args = ["schedule", "facts", "--target", "nvidia.h200_sxm"]
+
+    assert cli_main([*args, str(text_out)]) == 0
+    assert cli_main([*args, str(json_out), "--json"]) == 0
+    assert capsys.readouterr() == ("", "")
+    expected = {
+        "target": "nvidia.h200_sxm",
+        "instructions": [
+            {"id": "T.cuda.sm80.Mma", "capability": "mma.sync"},
+            {"id": "T.cuda.sm90.Wgmma", "capability": "wgmma.mma_async"},
+            {"id": "T.ldmatrix", "capability": "ldmatrix"},
+            {
+                "id": "T.copy_async_tensor",
+                "capability": "cp.async.bulk.tensor",
+            },
+        ],
+    }
+    assert json.loads(json_out.read_text()) == expected
+    assert (
+        text_out.read_text()
+        == """\
+target nvidia.h200_sxm
+instructions
+  T.cuda.sm80.Mma      mma.sync
+  T.cuda.sm90.Wgmma    wgmma.mma_async
+  T.ldmatrix           ldmatrix
+  T.copy_async_tensor  cp.async.bulk.tensor
+"""
+    )
+
+
+@pytest.mark.parametrize(
+    ("selection", "message"),
+    (
+        (
+            ["T.cuda.sm90.Unknown", "--target", "nvidia.h200_sxm"],
+            "unknown instruction 'T.cuda.sm90.Unknown'",
+        ),
+        (
+            ["T.cuda.sm90.Wgmma", "--target", "nvidia.unknown"],
+            "unknown target identity 'nvidia.unknown'",
+        ),
+    ),
+    ids=("instruction", "target"),
+)
+def test_schedule_facts_rejects_unknown_selection_without_output(
+    selection: list[str],
+    message: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    out = tmp_path / "facts.txt"
+
+    assert cli_main(["schedule", "facts", *selection, str(out)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("tilefoundry: error: ")
+    assert message in captured.err
+    assert not out.exists()
 
 
 @pytest.mark.parametrize("source", HIR, ids=lambda path: path.stem)
