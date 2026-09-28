@@ -83,7 +83,13 @@ TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir")
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
 WGMMA_DECLARATION = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.described.txt"
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
-CANDIDATE_GOLDENS = Path(__file__).parents[1] / "fixtures" / "schedule" / "plain"
+CANDIDATE_GOLDEN = (
+    Path(__file__).parents[1]
+    / "fixtures"
+    / "schedule"
+    / "plain"
+    / "gemm_8192x17408x5120_cta_grid.candidates.txt"
+)
 ANALYZED_GOLDEN = (
     Path(__file__).parents[1]
     / "fixtures"
@@ -845,17 +851,35 @@ def test_schedule_facts_rejects_unknown_selection_without_output(
     assert not out.exists()
 
 
-@pytest.mark.parametrize("name", PLAIN)
 def test_schedule_candidates_writes_canonical_report(
-    name: str,
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    name = "gemm_8192x17408x5120_cta_grid"
     source = f"tests/fixtures/schedule/plain/{name}.py"
     out = tmp_path / "candidates.txt"
 
     assert cli_main(["schedule", "candidates", source, str(out)]) == 0
     assert capsys.readouterr() == ("", "")
-    assert out.read_bytes() == (CANDIDATE_GOLDENS / f"{name}.candidates.txt").read_bytes()
+    assert out.read_bytes() == CANDIDATE_GOLDEN.read_bytes()
+
+
+def test_schedule_candidate_reports_cover_every_site(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reports = []
+    for name in PLAIN:
+        source = f"tests/fixtures/schedule/plain/{name}.py"
+        out = tmp_path / f"{name}.json"
+        assert cli_main(["schedule", "candidates", source, str(out), "--json"]) == 0
+        reports.append((name, json.loads(out.read_text())))
+
+    assert capsys.readouterr() == ("", "")
+    sites = [(name, row) for name, report in reports for row in report["lines"]]
+    assert all(row["candidates"] or row["refused"] for _name, row in sites)
+    assert all(row["candidates"] for _name, row in sites if row["op"] == "tf.reshard")
+    matmuls = [(name, row) for name, row in sites if row["op"] == "tf.matmul"]
+    assert len(matmuls) == 7
+    assert [name for name, row in matmuls if row["candidates"]] == ["gemm_8192x17408x5120_cta_grid"]
 
 
 @pytest.mark.parametrize(

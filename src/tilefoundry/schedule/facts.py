@@ -87,7 +87,7 @@ def one(target: Target, wanted: str | type) -> dict[str, Any]:
 
 def _column(label: str, value: str) -> list[str]:
     first, *rest = value.splitlines()
-    prefix = f"  {label:<12}"
+    prefix = f"  {label:<19}"
     return [prefix + first, *(" " * len(prefix) + line for line in rest)]
 
 
@@ -112,9 +112,9 @@ def render(data: dict[str, Any]) -> str:
 
     lines = [data["id"], *_column("target", data["target"])]
     if data["capability"] is not None:
-        lines.extend(_column("needs", _written_capability(data["capability"])))
+        lines.extend(_column("target capability", _written_capability(data["capability"])))
     if data["issued_by"] is not None:
-        lines.extend(_column("issued by", data["issued_by"]))
+        lines.extend(_column("issuer mesh", data["issued_by"]))
     for heading in ("parameters", "operands"):
         if data[heading]:
             lines.append(f"  {heading}")

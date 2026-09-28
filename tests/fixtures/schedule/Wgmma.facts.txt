@@ -1,19 +1,19 @@
 T.cuda.sm90.Wgmma
-  target      nvidia.h200_sxm
-  needs       wgmma.mma_async
-  issued by   Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),))))
-                predicates:
-                  p0 % 128 == 0
-                  each top-level mode has no backward step
-                  each top-level mode reaches each of its own slots exactly once
+  target             nvidia.h200_sxm
+  target capability  wgmma.mma_async
+  issuer mesh        Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),))))
+                       predicates:
+                         p0 % 128 == 0
+                         each top-level mode has no backward step
+                         each top-level mode reaches each of its own slots exactly once
   parameters
-    n        n
-               predicates:
-                 n % 8 == 0
-                 8 <= n <= 256
-    form     form
-               predicates:
-                 form in {Form.SS, Form.RS}
+    n
+        predicates:
+          n % 8 == 0
+          8 <= n <= 256
+    form
+        predicates:
+          form in {Form.SS, Form.RS}
     a_major  form=SS  a_major in {Major.MN, Major.K} (default Major.MN)
              form=RS  Major.K
   operands

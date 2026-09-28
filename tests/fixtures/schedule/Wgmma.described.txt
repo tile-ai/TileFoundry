@@ -1,12 +1,12 @@
 T.cuda.sm90.Wgmma
   parameters
-    n        n
-               predicates:
-                 n % 8 == 0
-                 8 <= n <= 256
-    form     form
-               predicates:
-                 form in {Form.SS, Form.RS}
+    n
+        predicates:
+          n % 8 == 0
+          8 <= n <= 256
+    form
+        predicates:
+          form in {Form.SS, Form.RS}
     a_major  form=SS  a_major in {Major.MN, Major.K} (default Major.MN)
              form=RS  Major.K
   operands

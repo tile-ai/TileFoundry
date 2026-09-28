@@ -123,12 +123,19 @@ class PatternPrinter:
             width = max((len(name) for name, _ in items), default=0)
             for name, pattern in items:
                 described = self._declared(pattern, name).splitlines()
+                repeats_name = described[0] == name
                 parameter = parameters_by_name.get(name)
+                default = ""
                 if parameter is not None and parameter.has_default:
-                    described[0] += f" (default {self._written_value(parameter.default)})"
+                    default = f" (default {self._written_value(parameter.default)})"
                 prefix = f"    {name.ljust(width)}  "
-                lines.append(prefix + described[0])
-                lines.extend(" " * len(prefix) + line for line in described[1:])
+                if repeats_name:
+                    lines.append(f"    {name}{default}")
+                    continuation = "      "
+                else:
+                    lines.append(prefix + described[0] + default)
+                    continuation = " " * len(prefix)
+                lines.extend(continuation + line for line in described[1:])
             rendered[heading] = tuple(lines)
         return rendered
 
