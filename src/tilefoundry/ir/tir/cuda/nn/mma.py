@@ -6,7 +6,7 @@ import torch
 
 from tilefoundry.evaluator.registry import register_schedule_eval
 from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
+from tilefoundry.ir.core import InstructionCapability, Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import (
@@ -59,9 +59,20 @@ _WARP_ALIGNED = ComposedLayoutPattern(
 class TiledMma(Op):
     """Execute one tiled MMA; the atom declares its operand contracts."""
 
-    @property
-    def capability(self):
-        return self.atom.capability
+    capability = (
+        InstructionCapability(
+            Wgmma.capability,
+            report_order=0,
+            declaration=Wgmma,
+            attribute="atom",
+        ),
+        InstructionCapability(
+            _Sm80Mma.capability,
+            report_order=0,
+            declaration=_Sm80Mma,
+            attribute="atom",
+        ),
+    )
 
     @property
     def resource(self):
@@ -116,8 +127,8 @@ def verify_mma(call: "Call", ctx: "VerifyContext") -> None:
     atom = op.atom
     if ctx.scope is not None and ctx.scope.module is not None:
         capabilities = ctx.scope.module.target.architecture.capabilities
-        if op.capability not in capabilities:
-            ctx.error(call, f"target does not support {op.capability}")
+        if atom.capability not in capabilities:
+            ctx.error(call, f"target does not support {atom.capability}")
     if not ctx.mesh_scope:
         ctx.error(call, "MMA requires an active physical mesh scope")
     current = ctx.mesh_scope[-1]

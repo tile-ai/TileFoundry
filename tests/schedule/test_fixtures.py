@@ -801,13 +801,18 @@ def test_schedule_facts_lists_target_instructions_as_text_and_json(
     expected = {
         "target": "nvidia.h200_sxm",
         "instructions": [
-            {"id": "T.cuda.sm80.Mma", "capability": "mma.sync"},
-            {"id": "T.cuda.sm90.Wgmma", "capability": "wgmma.mma_async"},
-            {"id": "T.ldmatrix", "capability": "ldmatrix"},
+            {
+                "id": "T.tiled_mma",
+                "capability": ["wgmma.mma_async", "mma.sync"],
+            },
             {
                 "id": "T.copy_async_tensor",
                 "capability": "cp.async.bulk.tensor",
             },
+            {"id": "T.copy_async", "capability": None},
+            {"id": "T.copy_async_bulk", "capability": None},
+            {"id": "T.ldmatrix", "capability": "ldmatrix"},
+            {"id": "T.copy", "capability": None},
         ],
     }
     assert json.loads(json_out.read_text()) == expected
@@ -816,10 +821,12 @@ def test_schedule_facts_lists_target_instructions_as_text_and_json(
         == """\
 target nvidia.h200_sxm
 instructions
-  T.cuda.sm80.Mma      mma.sync
-  T.cuda.sm90.Wgmma    wgmma.mma_async
-  T.ldmatrix           ldmatrix
+  T.tiled_mma          wgmma.mma_async, mma.sync
   T.copy_async_tensor  cp.async.bulk.tensor
+  T.copy_async         all targets
+  T.copy_async_bulk    all targets
+  T.ldmatrix           ldmatrix
+  T.copy               all targets
 """
     )
 

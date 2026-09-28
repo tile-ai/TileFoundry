@@ -1,9 +1,4 @@
-"""Instruction declarations admitted by one compilation target.
-
-These are declarations an author can name directly, deliberately not the set
-of TIR ops with registered schedule access relations. In particular,
-``TiledMma`` is an op whose selected atom owns the declaration.
-"""
+"""Instruction declarations admitted by one compilation target."""
 
 from __future__ import annotations
 
@@ -12,13 +7,28 @@ from typing import Any
 from tilefoundry.inspection import PatternPrinter
 from tilefoundry.ir.core.param_def import collect_param_defs
 from tilefoundry.ir.pattern import between_rules
-from tilefoundry.ir.tir.cuda.memory.copy_async_tensor import CopyAsyncTensor
-from tilefoundry.ir.tir.cuda.memory.ldmatrix import LdMatrix
-from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
-from tilefoundry.ir.tir.cuda.nn.wgmma import Wgmma
 from tilefoundry.target import Target
 
-SCHEDULED = (Mma, Wgmma, LdMatrix, CopyAsyncTensor)
+from .instructions import families
+
+
+def instructions(target: Target) -> tuple[type, ...]:
+    """Return the registered instruction Ops supported by ``target``."""
+    return tuple(family.op_type for family in families(target))
+
+
+def listing(target: Target) -> dict[str, Any]:
+    """Describe every instruction declaration supported by ``target``."""
+    return {
+        "target": target.identity,
+        "instructions": [
+            {
+                "id": family.id,
+                "capability": family.capability,
+            }
+            for family in families(target)
+        ],
+    }
 
 
 def _instruction_id(op_type: type) -> str:
@@ -29,34 +39,25 @@ def _instruction_id(op_type: type) -> str:
     return f"{schema.dialect}.{schema.name}"
 
 
-def _capabilities(target: Target) -> frozenset[str]:
-    architecture = getattr(target, "architecture", None)
-    return frozenset(getattr(architecture, "capabilities", ()))
-
-
-def instructions(target: Target) -> tuple[type, ...]:
-    """Return the named instruction declarations supported by ``target``."""
-    capabilities = _capabilities(target)
-    return tuple(
-        op_type
-        for op_type in SCHEDULED
-        if isinstance(getattr(op_type, "capability", None), str)
-        and op_type.capability in capabilities
-    )
-
-
-def listing(target: Target) -> dict[str, Any]:
-    """Describe every instruction declaration supported by ``target``."""
-    return {
-        "target": target.identity,
-        "instructions": [
-            {
-                "id": _instruction_id(op_type),
-                "capability": op_type.capability,
-            }
-            for op_type in instructions(target)
-        ],
-    }
+def _selection(target: Target, wanted_id: str) -> tuple[type, str | tuple[str, ...] | None]:
+    matches: list[tuple[type, str | tuple[str, ...] | None]] = []
+    available = []
+    for family in families(target):
+        available.append(family.id)
+        if family.id == wanted_id:
+            matches.append((family.op_type, family.capability))
+        for declaration in family.declarations:
+            if not declaration.is_variant:
+                continue
+            available.append(declaration.id)
+            if declaration.id == wanted_id:
+                matches.append((declaration.declaration, declaration.capability))
+    if len(matches) != 1:
+        raise ValueError(
+            f"unknown instruction {wanted_id!r} for target {target.identity!r}; "
+            f"available: {available}"
+        )
+    return matches[0]
 
 
 def _issuer_pattern(op_type: type):
@@ -69,22 +70,14 @@ def _issuer_pattern(op_type: type):
 
 def one(target: Target, wanted: str | type) -> dict[str, Any]:
     """Describe one supported instruction declaration by its exact name."""
-    supported = instructions(target)
     wanted_id = _instruction_id(wanted) if isinstance(wanted, type) else wanted
-    matches = tuple(op_type for op_type in supported if _instruction_id(op_type) == wanted_id)
-    if len(matches) != 1:
-        available = [_instruction_id(op_type) for op_type in supported]
-        raise ValueError(
-            f"unknown instruction {wanted_id!r} for target {target.identity!r}; "
-            f"available: {available}"
-        )
-    (op_type,) = matches
+    op_type, capability = _selection(target, wanted_id)
     issuer = _issuer_pattern(op_type)
     sections = PatternPrinter().declaration_sections(op_type)
     return {
         "target": target.identity,
         "id": _instruction_id(op_type),
-        "capability": op_type.capability,
+        "capability": capability,
         "issued_by": None if issuer is None else PatternPrinter().described(issuer),
         "parameters": list(sections.get("parameters", ())),
         "operands": list(sections.get("operands", ())),
@@ -98,18 +91,28 @@ def _column(label: str, value: str) -> list[str]:
     return [prefix + first, *(" " * len(prefix) + line for line in rest)]
 
 
+def _written_capability(capability: str | tuple[str, ...] | None) -> str:
+    if capability is None:
+        return "all targets"
+    if isinstance(capability, tuple):
+        return ", ".join(capability)
+    return capability
+
+
 def render(data: dict[str, Any]) -> str:
     """Render one listing or one declaration report as stable text."""
     if "instructions" in data:
         rows = data["instructions"]
         width = max((len(row["id"]) for row in rows), default=0)
         lines = [f"target {data['target']}", "instructions"]
-        lines.extend(f"  {row['id']:<{width}}  {row['capability']}" for row in rows)
+        lines.extend(
+            f"  {row['id']:<{width}}  {_written_capability(row['capability'])}" for row in rows
+        )
         return "\n".join(lines)
 
     lines = [data["id"], *_column("target", data["target"])]
     if data["capability"] is not None:
-        lines.extend(_column("needs", data["capability"]))
+        lines.extend(_column("needs", _written_capability(data["capability"])))
     if data["issued_by"] is not None:
         lines.extend(_column("issued by", data["issued_by"]))
     for heading in ("parameters", "operands"):
@@ -122,4 +125,4 @@ def render(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["SCHEDULED", "instructions", "listing", "one", "render"]
+__all__ = ["instructions", "listing", "one", "render"]

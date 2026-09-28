@@ -20,7 +20,7 @@ from .metadata import (
     remove_metadata,
     source_metadata,
 )
-from .op import Op, ParameterInfo
+from .op import InstructionCapability, Op, ParameterInfo
 from .values import TotalAndPerUnit, TripInterval
 from tilefoundry.visitor_registry.registries import (
     DispatchRegistry,
@@ -54,6 +54,7 @@ __all__ = [
     "get_metadata",
     "remove_metadata",
     "Op",
+    "InstructionCapability",
     "ParameterInfo",
     "TotalAndPerUnit",
     "TripInterval",

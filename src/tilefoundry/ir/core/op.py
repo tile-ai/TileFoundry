@@ -51,6 +51,28 @@ class ParameterInfo:
     type: Any
 
 
+@dataclass(frozen=True)
+class InstructionCapability:
+    """One target capability exposed by a registered instruction Op.
+
+    ``name=None`` means that every target admits the instruction.  A carrier
+    with several concrete declarations lists one record per variant; the
+    declaration and attribute say how an instance of that declaration is bound
+    back to the carrier without teaching registry consumers about its shape.
+    ``report_order`` preserves the stable presentation order of instruction
+    reports; it is not a capability preference.
+    """
+
+    name: str | None
+    report_order: int
+    declaration: type | None = None
+    attribute: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.declaration is None) != (self.attribute is None):
+            raise ValueError("a capability variant states both declaration and attribute")
+
+
 class Op:
     """All Op classes inherit from this. Reflection-based param discovery."""
 
@@ -112,4 +134,4 @@ class Op:
         return infos
 
 
-__all__ = ["Op", "ParameterInfo"]
+__all__ = ["InstructionCapability", "Op", "ParameterInfo"]

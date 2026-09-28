@@ -1,9 +1,4 @@
-"""Instruction candidates for unscheduled HIR matmul and reshard sites.
-
-The declaration set here is deliberately different from ``facts.SCHEDULED``:
-these are TIR ops with schedule access relations, and ``TiledMma`` expands into
-its atom declarations in the report.
-"""
+"""Instruction candidates for unscheduled HIR matmul and reshard sites."""
 
 from __future__ import annotations
 
@@ -23,33 +18,19 @@ from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.pattern import PatternMatcher, SwitchPattern, TensorPattern, between_rules
-from tilefoundry.ir.tir.async_copy import CopyAsync
-from tilefoundry.ir.tir.cuda.memory.copy_async_tensor import CopyAsyncTensor
-from tilefoundry.ir.tir.cuda.memory.ldmatrix import LdMatrix
-from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
-from tilefoundry.ir.tir.memory.copy import Copy
 from tilefoundry.ir.types import TensorType, UnitType
 from tilefoundry.ir.types.int_tuple import flatten
 from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import Target
-from tilefoundry.visitor_registry.access_relation import relation_of, relations_of
+from tilefoundry.visitor_registry.access_relation import (
+    access_relation_registry,
+    relation_of,
+    relations_of,
+)
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
-SCHEDULED = (TiledMma, CopyAsyncTensor, CopyAsync, LdMatrix, Copy)
-
-
-@dataclass(frozen=True)
-class _Instruction:
-    op_type: type
-    atom_type: type | None = None
-
-    @property
-    def id(self) -> str:
-        if self.atom_type is not None:
-            return self.atom_type.reference_name
-        schema = self.op_type._op_schema
-        return f"{schema.dialect}.{schema.name}"
+from .instructions import Instruction, declarations
 
 
 @dataclass(frozen=True)
@@ -62,26 +43,13 @@ class _Site:
     leaves: tuple[tuple[str, TensorType], ...]
 
 
-def _capabilities(target: Target) -> frozenset[str]:
-    architecture = getattr(target, "architecture", None)
-    return frozenset(getattr(architecture, "capabilities", ()))
-
-
-def _instructions(target: Target) -> tuple[_Instruction, ...]:
-    capabilities = _capabilities(target)
-    declared: list[_Instruction] = []
-    for op_type in SCHEDULED:
-        if op_type is TiledMma:
-            declared.extend(
-                _Instruction(op_type, atom_type)
-                for atom_type in TiledMma.atom.pattern.declarations
-                if atom_type.capability in capabilities
-            )
-            continue
-        capability = getattr(op_type, "capability", None)
-        if not isinstance(capability, str) or capability in capabilities:
-            declared.append(_Instruction(op_type))
-    return tuple(declared)
+def _instructions(target: Target) -> tuple[Instruction, ...]:
+    """Return discoverable declarations that state comparable coordinates."""
+    return tuple(
+        instruction
+        for instruction in declarations(target)
+        if access_relation_registry.lookup(instruction.op_type) is not None
+    )
 
 
 def _input_params(op_type: type) -> tuple[ParamDef, ...]:
@@ -219,11 +187,13 @@ def _parameter_values(param: ParamDef, site: _Site) -> tuple:
     return ()
 
 
-def _atoms(instruction: _Instruction, site: _Site) -> tuple[tuple[object | None, dict], ...]:
-    if instruction.atom_type is None:
+def _variant_instances(
+    instruction: Instruction, site: _Site
+) -> tuple[tuple[object | None, dict], ...]:
+    if not instruction.is_variant:
         return ((None, {}),)
     states: tuple[dict, ...] = ({},)
-    for param in instruction.atom_type.parameters:
+    for param in instruction.declaration.parameters:
         if param.has_default:
             continue
         held = []
@@ -233,13 +203,13 @@ def _atoms(instruction: _Instruction, site: _Site) -> tuple[tuple[object | None,
                 if matcher.match(param.pattern, value) and matcher.solve():
                     held.append({**state, param.name: value})
         states = tuple(held)
-    atoms = []
+    variants = []
     for state in states:
         try:
-            atoms.append((instruction.atom_type(**state), state))
+            variants.append((instruction.declaration(**state), state))
         except ValueError:
             continue
-    return tuple(atoms)
+    return tuple(variants)
 
 
 def _selected(pattern, bindings: dict):
@@ -322,8 +292,8 @@ def _type_refusals(
     return single, tuple(refused)
 
 
-def _whole_tiles(site: _Site, op, atom) -> bool:
-    bindings = dict(getattr(atom, "bindings", {}))
+def _whole_tiles(site: _Site, op, variant) -> bool:
+    bindings = dict(getattr(variant, "bindings", {}))
     asked = _asked(site, op)
     if asked is None:
         return False
@@ -342,8 +312,8 @@ def _whole_tiles(site: _Site, op, atom) -> bool:
     return True
 
 
-def _pattern_refusals(site: _Site, op, atom) -> tuple[str, ...]:
-    bindings = dict(getattr(atom, "bindings", {}))
+def _pattern_refusals(site: _Site, op, variant) -> tuple[str, ...]:
+    bindings = dict(getattr(variant, "bindings", {}))
     asked = _asked(site, op)
     if asked is None:
         return ("operand counts differ",)
@@ -379,8 +349,8 @@ def _asked(site: _Site, op) -> tuple[tuple[ParamDef, TensorType], ...] | None:
     )
 
 
-def _refusals(site: _Site, op, atom) -> tuple[str, ...]:
-    bindings = dict(getattr(atom, "bindings", {}))
+def _refusals(site: _Site, op, variant) -> tuple[str, ...]:
+    bindings = dict(getattr(variant, "bindings", {}))
     asked = _asked(site, op)
     if asked is None:
         return ("operand counts differ",)
@@ -399,9 +369,9 @@ def _refusals(site: _Site, op, atom) -> tuple[str, ...]:
     return tuple(refused)
 
 
-def _scope_pattern(op, atom):
-    if atom is not None:
-        return type(atom).scope_pattern()
+def _scope_pattern(op, variant):
+    if variant is not None:
+        return type(variant).scope_pattern()
     scope = next((param for param in op._op_schema.signature if param.name == "scope"), None)
     return None if scope is None else scope.pattern
 
@@ -413,18 +383,24 @@ def _fixed_scope_size(pattern) -> int | None:
     return prod(shape) if shape and all(type(extent) is int for extent in shape) else None
 
 
-def _needs(site: _Site, op, atom) -> str | None:
-    pattern = _scope_pattern(op, atom)
+def _needs(site: _Site, op, variant) -> str | None:
+    pattern = _scope_pattern(op, variant)
     size = _fixed_scope_size(pattern)
     if size is None:
         return None
     groups = 1
-    if atom is not None:
-        lhs = site.reads[0][1]
-        lhs_pattern = _selected(type(atom).A, atom.bindings)
-        atom_shape = _declared_shape(lhs_pattern, atom.bindings)
-        if atom_shape is not None and lhs.shape[0] % atom_shape[0] == 0:
-            groups = lhs.shape[0] // atom_shape[0]
+    if variant is not None:
+        asked = _asked(site, op)
+        first_read = None if asked is None else next(iter(asked), None)
+        if first_read is not None:
+            param, whole = first_read
+            bindings = dict(getattr(variant, "bindings", {}))
+            operand_pattern = _operand_pattern(param, op, bindings)
+            declared = (
+                None if operand_pattern is None else _declared_shape(operand_pattern, bindings)
+            )
+            if declared is not None and whole.shape[0] % declared[0] == 0:
+                groups = whole.shape[0] // declared[0]
     topology = pattern.topologies[0]
     return f"{topology} p0:p0+{size * groups}, p0 % {size} = 0"
 
@@ -470,27 +446,27 @@ def candidates(module, entry, *, source: str | None = None) -> dict[str, Any]:
         usable, refused = [], []
         handed_result = False
         for instruction in declared:
-            atoms = _atoms(instruction, site)
-            if not atoms:
+            variants = _variant_instances(instruction, site)
+            if not variants:
                 continue
-            prototype, _binding = atoms[0]
-            op = instruction.op_type(**({"atom": prototype} if prototype is not None else {}))
+            prototype, _binding = variants[0]
+            op = instruction.instantiate(prototype)
             if _instruction_relation_shape(site, op) != site_shape:
                 continue
             if any(param.effect == MemoryEffect.WRITE for param in _input_params(type(op))):
                 handed_result = True
             accepted, reasons, needs = [], [], []
-            for atom, binding in atoms:
-                held = instruction.op_type(**({"atom": atom} if atom is not None else {}))
-                if not _whole_tiles(site, held, atom):
-                    reasons.append(_pattern_refusals(site, held, atom))
+            for variant, binding in variants:
+                held = instruction.instantiate(variant)
+                if not _whole_tiles(site, held, variant):
+                    reasons.append(_pattern_refusals(site, held, variant))
                     continue
-                rejected = _refusals(site, held, atom)
+                rejected = _refusals(site, held, variant)
                 if rejected:
                     reasons.append(rejected)
                     continue
                 accepted.append(_written_bindings(binding))
-                needs.append(_needs(site, held, atom))
+                needs.append(_needs(site, held, variant))
             if accepted:
                 usable.append(
                     {
@@ -540,4 +516,4 @@ def render(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["SCHEDULED", "candidates", "render"]
+__all__ = ["candidates", "render"]

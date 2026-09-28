@@ -453,21 +453,27 @@ every selected instruction, and writes the verified `PrimFunction` as canonical
 Python TIR. With `--json`, `PATH` instead contains an object whose `source`
 field is that same canonical TIR. `facts` describes the instructions admitted
 by the exact `TARGET` identity, optionally narrowed to one fully-qualified
-`INSTRUCTION` name. With no `INSTRUCTION`, it lists every declaration whose
-class-level capability occurs in the target architecture's capability set.
-With one, it reports that declaration's capability, issuing mesh, parameters,
-operands, and cross-operand constraints; the parameter and operand sections
-are canonical `PatternPrinter.declaration` text. Atom declarations and TIR ops
-with class-level capabilities form this inventory; a scheduling wrapper with an
-instance-level capability is not itself an instruction in this report.
+`INSTRUCTION` name. With no `INSTRUCTION`, it lists every registered TIR Op
+that owns a class-level instruction-capability declaration. A named capability
+must occur in the target architecture's capability set; a declaration with no
+required capability is admitted by every target. A carrier may associate more
+than one named declaration with itself. The inventory lists that carrier once,
+while each associated declaration remains addressable by its own exact name.
+With one name, `facts` reports that declaration's capability, issuing mesh,
+parameters, operands, and cross-operand constraints; the parameter and operand
+sections are canonical `PatternPrinter.declaration` text.
 `candidates` reports the instructions whose access relation and operand
 patterns can implement each unscheduled matmul or reshard site. Relation rank
 and coordinate projections decide which instruction families enter the report;
 tile extents do not have to equal one instruction issue because repetition is a
 later scheduling choice. Operand dtype, storage, rank, divisibility, and
 cross-operand constraints then decide whether each declaration is a candidate
-or a refusal. MMA families are reported by atom name, not by the `TiledMma`
-carrier op. A site with no accepted instruction still reports its refusals.
+or a refusal. A carrier family is reported by its associated declaration name,
+not by the carrier Op name. A site with no accepted instruction still reports
+its refusals.
+An inventory Op with no access relation is not comparable and is skipped by
+candidate discovery; explicitly selecting that Op in `tf.schedule` remains an
+error.
 
 - constraints:
   - `PATH` is required, is the only report destination, and MUST NOT be partly
@@ -480,9 +486,9 @@ carrier op. A site with no accepted instruction still reports its refusals.
   - `facts --target` is required. `TARGET` and `INSTRUCTION`, when present,
     match exact identities; neither accepts a short alias or a best-effort
     fallback.
-  - A missing instruction access relation, an addressable result without an
-    analyzed offset, an unsupported HIR call, an unknown instruction, an
-    unknown target, or a source with no candidate site MUST print
+  - A selected instruction with no access relation, an addressable result
+    without an analyzed offset, an unsupported HIR call, an unknown instruction,
+    an unknown target, or a source with no candidate site MUST print
     `tilefoundry: error: REASON` to stderr and exit 1. No partial output is
     permitted.
 

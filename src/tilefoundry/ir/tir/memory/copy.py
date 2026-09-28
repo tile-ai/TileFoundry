@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from tilefoundry.evaluator.registry import register_schedule_eval
 from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op
+from tilefoundry.ir.core import InstructionCapability, Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import utils
@@ -26,6 +26,8 @@ from tilefoundry.visitor_registry.access_relation import (
 @register_op
 class Copy(Op):
     """Copies ``src`` into ``dst`` (in-place memory write)."""
+
+    capability = InstructionCapability(None, report_order=5)
 
     src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=utils.operand_tile(0))
     dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=utils.operand_tile(1))
