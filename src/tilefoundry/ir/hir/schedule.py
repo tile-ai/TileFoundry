@@ -101,6 +101,8 @@ class IssuePlan:
 
     ``operand_axes`` follows instruction schema order, then tensor-coordinate
     order; ``None`` marks a coordinate that is not a projection of one work axis.
+    ``operand_rows`` names the work axes whose adjacent atoms share one swizzled
+    row for each operand, again in schema order.
     """
 
     repeat: tuple[int, ...]
@@ -109,6 +111,7 @@ class IssuePlan:
     operand_types: tuple[TensorType, ...]
     axes: tuple[IssueAxis, ...]
     operand_axes: tuple[tuple[str | None, ...], ...]
+    operand_rows: tuple[tuple[str, ...], ...]
 
 
 @register_eval(ScheduleOp)
@@ -682,8 +685,21 @@ def _derive_issue(
         if len(whole_shape) != len(single_shape):
             raise ValueError("single-issue and scheduled iteration ranks differ")
 
-    axes = _issue_axes(op, whole_shape, single_shape, repeat, single_types, operand_axes)
-    return IssuePlan(repeat, order, single_shape, single_types, axes, operand_axes), single
+    axes, operand_rows = _issue_axes(
+        op, whole_shape, single_shape, repeat, single_types, operand_axes
+    )
+    return (
+        IssuePlan(
+            repeat,
+            order,
+            single_shape,
+            single_types,
+            axes,
+            operand_axes,
+            operand_rows,
+        ),
+        single,
+    )
 
 
 def _issue_plan(call: Call, ctx) -> tuple[IssuePlan, AccessRelations]:
@@ -699,13 +715,16 @@ def _issue_axes(
     repeat: tuple[int, ...],
     single_types: tuple[TensorType, ...],
     operand_axes: tuple[tuple[str | None, ...], ...],
-) -> tuple[IssueAxis, ...]:
+) -> tuple[tuple[IssueAxis, ...], tuple[tuple[str, ...], ...]]:
     """Derive grouping and row-wise issue facts from the same single issue."""
     atom = getattr(op, "atom", None)
     names = _axis_names(op, len(single_shape))
     copies = {name: 1 for name in names}
+    operand_rows: list[set[str]] = [set() for _ in single_types]
     if atom is not None:
-        for type_, mapped_axes in zip(single_types, operand_axes, strict=True):
+        for index, (type_, mapped_axes) in enumerate(
+            zip(single_types, operand_axes, strict=True)
+        ):
             layout = type_.layout
             if isinstance(layout, ShardLayout):
                 layout = layout.layout
@@ -723,18 +742,22 @@ def _issue_axes(
             axis_name = mapped_axes[operand_axis]
             if axis_name is not None:
                 copies[axis_name] = max(copies[axis_name], available)
-    return tuple(
-        IssueAxis(
-            name=name,
-            extent=extent,
-            atom=atom_extent,
-            repeat=count,
-            row_copies=copies[name],
-            is_group=atom is not None and index == 0 and count > 1,
-        )
-        for index, (name, extent, atom_extent, count) in enumerate(
-            zip(names, whole_shape, single_shape, repeat, strict=True)
-        )
+                operand_rows[index].add(axis_name)
+    return (
+        tuple(
+            IssueAxis(
+                name=name,
+                extent=extent,
+                atom=atom_extent,
+                repeat=count,
+                row_copies=copies[name],
+                is_group=atom is not None and index == 0 and count > 1,
+            )
+            for index, (name, extent, atom_extent, count) in enumerate(
+                zip(names, whole_shape, single_shape, repeat, strict=True)
+            )
+        ),
+        tuple(tuple(name for name in names if name in rows) for rows in operand_rows),
     )
 
 

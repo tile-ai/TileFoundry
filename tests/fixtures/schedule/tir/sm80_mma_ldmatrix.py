@@ -19,8 +19,8 @@ def gemm(a: Tensor[(16, 32), "bf16"], b: Tensor[(32, 8), "bf16"], out: Tensor[(1
         with Mesh(
             (Topology("thread", 64),), Layout((2, 32), (32, 1)), names=("d0", "d1")
         ) as scope_3:
-            lhs_stages = (T.tensor_view(256, dtype='bf16', storage=StorageKind.SMEM, layout=Layout((16, 16), (16, 1)), shape=(16, 16)), T.tensor_view(512, dtype='bf16', storage=StorageKind.SMEM, layout=Layout((16, 16), (16, 1)), shape=(16, 16)))
-            rhs_stages = (T.tensor_view(0, dtype='bf16', storage=StorageKind.SMEM, layout=Layout((16, 8), (8, 1)), shape=(16, 8)), T.tensor_view(128, dtype='bf16', storage=StorageKind.SMEM, layout=Layout((16, 8), (8, 1)), shape=(16, 8)))
+            lhs_stages = (T.tensor_view(512, dtype='bf16', storage=StorageKind.SMEM, layout=Layout((16, 16), (16, 1)), shape=(16, 16)), T.tensor_view(1024, dtype='bf16', storage=StorageKind.SMEM, layout=Layout((16, 16), (16, 1)), shape=(16, 16)))
+            rhs_stages = (T.tensor_view(0, dtype='bf16', storage=StorageKind.SMEM, layout=Layout((16, 8), (8, 1)), shape=(16, 8)), T.tensor_view(256, dtype='bf16', storage=StorageKind.SMEM, layout=Layout((16, 8), (8, 1)), shape=(16, 8)))
             with Mesh(
                 (Topology("thread", 64),), ComposedLayout(
     inner=None,
@@ -58,7 +58,7 @@ def gemm(a: Tensor[(16, 32), "bf16"], b: Tensor[(32, 8), "bf16"], out: Tensor[(1
                     ) as threads_2:
                         T.copy_async_tensor(tile_1, rhs_stages[(k // 16) % 2])
                 with scope_3[1:] as scope_1:
-                    ldmatrix = T.alloc_tensor(
+                    lhs_frag = T.alloc_tensor(
                         tensor_type=Tensor[
                             (16, 16),
                             "bf16",
@@ -73,13 +73,13 @@ def gemm(a: Tensor[(16, 32), "bf16"], b: Tensor[(32, 8), "bf16"], out: Tensor[(1
     outer=Layout((4, 8), (1, 4)),
 ), names=("d0", "d1")
                     ) as threads_3:
-                        ldmatrix_view = T.tensor_view(
-                            T.ptr_of(ldmatrix),
+                        dst_frame = T.tensor_view(
+                            T.ptr_of(lhs_frag[0:0 + 16, 0:0 + 16]),
                             layout=((2, 4 @ threads_3.d0, 2, 8 @ threads_3.d1, 2), (1, 2, 8, 16, 128)),
                             shape=(16, 16),
                         )
-                        T.ldmatrix(lhs_stages[(k // 16) % 2], ldmatrix_view)
-                    copy = T.alloc_tensor(
+                        T.ldmatrix(lhs_stages[(k // 16) % 2], dst_frame)
+                    rhs_frag = T.alloc_tensor(
                         tensor_type=Tensor[
                             (16, 8), "bf16", Layout((8, 2, 4, 2), (1, 8, 16, 64)), "rmem"
                         ]
@@ -91,7 +91,12 @@ def gemm(a: Tensor[(16, 32), "bf16"], b: Tensor[(32, 8), "bf16"], out: Tensor[(1
     outer=Layout((4, 8), (1, 4)),
 ), names=("d0", "d1")
                     ) as threads_4:
-                        T.copy(rhs_stages[(k // 16) % 2], copy)
+                        dst_frame_1 = T.tensor_view(
+                            T.ptr_of(rhs_frag[0:0 + 16, 0:0 + 8]),
+                            layout=((8 @ threads_4.d1, 2, 4 @ threads_4.d0, 2), (1, 8, 16, 64)),
+                            shape=(16, 8),
+                        )
+                        T.copy(rhs_stages[(k // 16) % 2], dst_frame_1)
                         for o_m in range(0, 16, 16):
                             for o_n in range(0, 8, 8):
                                 for o_k in range(0, 16, 16):
@@ -101,12 +106,12 @@ def gemm(a: Tensor[(16, 32), "bf16"], b: Tensor[(32, 8), "bf16"], out: Tensor[(1
                                         shape=(16, 8),
                                     )
                                     lhs_view = T.tensor_view(
-                                        T.ptr_of(ldmatrix[o_m:o_m + 16, o_k:o_k + 16]),
+                                        T.ptr_of(lhs_frag[o_m:o_m + 16, o_k:o_k + 16]),
                                         layout=((2, 4 @ threads_4.d0, 2, 8 @ threads_4.d1, 2), (1, 2, 8, 16, 128)),
                                         shape=(16, 16),
                                     )
                                     rhs_view = T.tensor_view(
-                                        T.ptr_of(copy[o_k:o_k + 16, o_n:o_n + 8]),
+                                        T.ptr_of(rhs_frag[o_k:o_k + 16, o_n:o_n + 8]),
                                         layout=((8 @ threads_4.d1, 2, 4 @ threads_4.d0, 2), (1, 8, 16, 64)),
                                         shape=(16, 8),
                                     )

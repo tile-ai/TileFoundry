@@ -12,7 +12,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import prod
 from pathlib import Path
 
@@ -80,22 +80,6 @@ ANALYSES = (
 )
 _TENSOR_CLOCK_HZ = 1_830_000_000
 
-M1_LOWERING = (
-    "sm80_mma_ldmatrix",
-    "wgmma_a_k_major",
-    "wgmma_a_mn_major",
-    "wgmma_cast_between_schedules",
-    "wgmma_cp_async_loads",
-    "wgmma_explicit_windows",
-    "wgmma_insert_tiles_into_output",
-    "wgmma_one_tile_of_larger_output",
-    "wgmma_rs_a_from_accumulator",
-    "wgmma_rs_a_from_smem",
-    "wgmma_swizzled_smem",
-    "wgmma_two_schedules",
-)
-M2_LOWERING = tuple(path.stem for path in HIR if path.stem not in M1_LOWERING)
-
 
 @dataclass(frozen=True)
 class _RmemExpectation:
@@ -120,6 +104,7 @@ SMEM_GOLDEN = {
     "wgmma_one_tile_of_larger_output": 6_144,
     "wgmma_repeat_along_k": 36_864,
     "wgmma_repeat_along_n": 24_576,
+    "wgmma_repeat_along_n_order": 24_576,
     "wgmma_rs_a_from_accumulator": 5_120,
     "wgmma_rs_a_from_smem": 6_144,
     "wgmma_swizzled_smem": 6_144,
@@ -222,6 +207,12 @@ RMEM_EXPECTED = {
         "thread@0:384#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
     },
     "wgmma_repeat_along_n": {
+        "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
+        "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
+        "thread@128:256#2": _RmemExpectation(131_072, "f32 loop result/bf16 cast alias"),
+        "thread@0:384#0": _RmemExpectation(131_072, "parent envelope of one alias chain"),
+    },
+    "wgmma_repeat_along_n_order": {
         "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
         "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
         "thread@128:256#2": _RmemExpectation(131_072, "f32 loop result/bf16 cast alias"),
@@ -663,41 +654,18 @@ def test_wgmma_declaration_is_canonical() -> None:
     assert PatternPrinter().declaration(Wgmma) + "\n" == WGMMA_DECLARATION.read_text()
 
 
-@pytest.mark.parametrize("name", M1_LOWERING)
+@pytest.mark.parametrize("source", HIR, ids=lambda path: path.stem)
 def test_schedule_finalize_writes_verified_tir(
-    name: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    source: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / f"{name}.py"
-    out = tmp_path / f"{name}.py"
+    out = tmp_path / source.name
+    expected = source.parent.parent / "tir" / source.name
 
     assert cli_main(["schedule", "finalize", str(source), str(out)]) == 0
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
-    verify_prim_function(_prim_in(out))
-
-    if name == "wgmma_a_k_major":
-        rendered = out.read_text()
-        assert "lhs_stages = (T.tensor_view(2048" in rendered
-        assert "rhs_stages = (T.tensor_view(0" in rendered
-        assert "lhs_stages[(k // 16) % 2]" in rendered
-        assert "acc = T.alloc_tensor" in rendered
-        assert "result = T.alloc_tensor" in rendered
-
-
-@pytest.mark.parametrize("name", M2_LOWERING)
-def test_schedule_finalize_marks_later_issue_shapes(
-    name: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / f"{name}.py"
-    out = tmp_path / f"{name}.py"
-
-    assert cli_main(["schedule", "finalize", str(source), str(out)]) == 1
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "tilefoundry: error:" in captured.err
-    assert "M2 not implemented" in captured.err
-    assert not out.exists()
+    assert out.read_bytes() == expected.read_bytes()
 
 
 def test_schedule_finalize_json_carries_the_same_source(
@@ -740,6 +708,7 @@ def test_issue_plan_exposes_group_loop_and_row_facts() -> None:
         ("k", 64, 16, 4, 4, False),
     )
     assert plan.operand_axes == (("m", "n"), ("m", "k"), ("k", "n"))
+    assert plan.operand_rows == ((), ("k",), ())
 
 
 def _m1_analysis():
@@ -809,3 +778,42 @@ def test_lowering_rejects_unknown_hir_call(
     monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
 
     _assert_cli_lowering_error(source, "unknown HIR call _UnstatedInstruction", tmp_path, capsys)
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    (
+        ("group", "is not outer modes followed by participant frame"),
+        ("atom", "axis n extent 17 is not divisible by atom 16"),
+        ("row", "axis k extent 80 is not divisible by row 16 * 4"),
+    ),
+)
+def test_lowering_rejects_invalid_atom_geometry(
+    case: str,
+    message: str,
+    monkeypatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_repeat_along_k.py"
+    module = _module_in(source)
+    result = analyze(module, module.entry_function(), analysis=("memory",))
+    derive = lowering_module.issue_plan
+
+    def malformed(call, ctx):
+        plan = derive(call, ctx)
+        if getattr(call.target.op, "atom", None) is None:
+            return plan
+        axes = list(plan.axes)
+        if case == "group":
+            axes[0] = replace(axes[0], repeat=3)
+        elif case == "atom":
+            axes[1] = replace(axes[1], extent=17)
+        else:
+            axes[2] = replace(axes[2], extent=80)
+        return replace(plan, axes=tuple(axes))
+
+    monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
+    monkeypatch.setattr(lowering_module, "issue_plan", malformed)
+
+    _assert_cli_lowering_error(source, message, tmp_path, capsys)

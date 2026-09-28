@@ -31,8 +31,8 @@ def gemm(
         with Mesh(
             (Topology("thread", 384),), Layout((3, 128), (128, 1)), names=("d0", "d1")
         ) as scope_3:
-            lhs_stages = (T.tensor_view(768, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))), shape=(128, 16)), T.tensor_view(2816, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))), shape=(128, 16)), T.tensor_view(4864, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))), shape=(128, 16)))
-            rhs_stages = (T.tensor_view(0, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))), shape=(16, 16)), T.tensor_view(256, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))), shape=(16, 16)), T.tensor_view(512, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))), shape=(16, 16)))
+            lhs_stages = (T.tensor_view(1536, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))), shape=(128, 16)), T.tensor_view(5632, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))), shape=(128, 16)), T.tensor_view(9728, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8, 8), (2, 8)), ((1024, 128, 8), (64, 1))), shape=(128, 16)))
+            rhs_stages = (T.tensor_view(0, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))), shape=(16, 16)), T.tensor_view(512, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))), shape=(16, 16)), T.tensor_view(1024, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8), (2, 8)), ((64, 8), (128, 1))), shape=(16, 16)))
             with Mesh(
                 (Topology("thread", 384),), ComposedLayout(
     inner=None,

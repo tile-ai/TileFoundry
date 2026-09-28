@@ -32,20 +32,31 @@ def gemm(
             (Topology("thread", 384),), Layout((3, 128), (128, 1)), names=("d0", "d1")
         ) as scope_4:
             for m in range(128 * cta.d0, (128 * cta.d0) + 128, 128):
+                staged = T.tensor_view(
+                    0,
+                    dtype='bf16',
+                    storage=StorageKind.SMEM,
+                    layout=ComposedLayout(
+                        inner=Swizzle(3, 4, 3),
+                        offset=0,
+                        outer=Layout((128, (4, 64)), (64, (8192, 1))),
+                    ),
+                    shape=(128, 256),
+                )
                 for n in range(256 * cta.d1, (256 * cta.d1) + 256, 256):
-                    lhs_stages = (T.tensor_view(65536, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
+                    lhs_stages = (T.tensor_view(131072, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
                             inner=Swizzle(3, 4, 3),
                             offset=0,
                             outer=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))),
-                        ), shape=(128, 64)), T.tensor_view(73728, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
+                        ), shape=(128, 64)), T.tensor_view(147456, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
                             inner=Swizzle(3, 4, 3),
                             offset=0,
                             outer=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))),
-                        ), shape=(128, 64)), T.tensor_view(81920, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
+                        ), shape=(128, 64)), T.tensor_view(163840, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
                             inner=Swizzle(3, 4, 3),
                             offset=0,
                             outer=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))),
-                        ), shape=(128, 64)), T.tensor_view(90112, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
+                        ), shape=(128, 64)), T.tensor_view(180224, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
                             inner=Swizzle(3, 4, 3),
                             offset=0,
                             outer=Layout(((2, 8, 8), (4, 16)), ((4096, 512, 64), (16, 1))),
@@ -54,15 +65,15 @@ def gemm(
                             inner=Swizzle(3, 4, 3),
                             offset=0,
                             outer=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))),
-                        ), shape=(64, 256)), T.tensor_view(16384, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
-                            inner=Swizzle(3, 4, 3),
-                            offset=0,
-                            outer=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))),
                         ), shape=(64, 256)), T.tensor_view(32768, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
                             inner=Swizzle(3, 4, 3),
                             offset=0,
                             outer=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))),
-                        ), shape=(64, 256)), T.tensor_view(49152, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
+                        ), shape=(64, 256)), T.tensor_view(65536, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
+                            inner=Swizzle(3, 4, 3),
+                            offset=0,
+                            outer=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))),
+                        ), shape=(64, 256)), T.tensor_view(98304, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
                             inner=Swizzle(3, 4, 3),
                             offset=0,
                             outer=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))),
@@ -420,17 +431,6 @@ def gemm(
                                                 rhs_view_7,
                                                 atom=T.cuda.sm90.Wgmma(n=256, form=T.cuda.sm90.Form.SS, a_major=T.cuda.sm90.Major.K, mesh=threads_4),
                                             )
-                    copy = T.tensor_view(
-                        0,
-                        dtype='bf16',
-                        storage=StorageKind.SMEM,
-                        layout=ComposedLayout(
-                            inner=Swizzle(3, 4, 3),
-                            offset=0,
-                            outer=Layout((128, (4, 64)), (64, (8192, 1))),
-                        ),
-                        shape=(128, 256),
-                    )
                     with scope_4[1:] as scope_2:
                         with Mesh(
                             (Topology("thread", 384),), ComposedLayout(
@@ -450,7 +450,7 @@ def gemm(
                                 layout=((2 @ threads_5.d0, 8 @ threads_5.d2, 2, 4 @ threads_5.d1, 2, 4 @ threads_5.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
                                 shape=(128, 256),
                             )
-                            T.copy(src_frame, copy)
+                            T.copy(src_frame, staged)
                     with scope_4[:1, :32] as scope_3:
                         with Mesh(
                             (Topology("thread", 384),), ComposedLayout(
@@ -464,4 +464,4 @@ def gemm(
                                 layout=Layout((128, 256), (17408, 1)),
                                 shape=(128, 256),
                             )
-                            T.copy_async_tensor(copy, window)
+                            T.copy_async_tensor(staged, window)

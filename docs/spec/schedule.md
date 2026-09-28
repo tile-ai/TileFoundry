@@ -82,12 +82,19 @@ one and a larger count is rejected as `transfer tiling is not yet supported`.
 
 `order` is a permutation of the iteration dimension positions and defaults to
 the identity permutation. `order` controls lowering loop nesting; it does not
-change operand or result types.
+change operand or result types. For an atom instruction, lowering emits one
+`For(o_<axis>)` per iteration dimension inside each physical issue group, in
+`order` from outermost to innermost. It emits the loop even when its trip count
+is one. A swizzled row may issue adjacent atoms as straight-line statements in
+one loop iteration, but it does not remove that axis's loop. Transfer
+instructions emit no such atom loops. Supporting non-identity `order` here is
+an intentional extension beyond the AtomSched reference, which rejects it.
 
 `tilefoundry.ir.hir.schedule.issue_plan` exposes the derived `repeat`, `order`,
 single-issue iteration shape, operand types, per-axis issue facts, and the work
-axis projected onto each operand coordinate. Access-relation construction and
-lowering consume this same derivation rather than reconstructing it.
+axis projected onto each operand coordinate. It also identifies which operand
+rows supply row-wise atom issue. Access-relation construction and lowering
+consume this same derivation rather than reconstructing it.
 
 ## 4. Access relation
 
@@ -120,9 +127,8 @@ target states a bandwidth, and the longest such time is the memory time. These
 levels may overlap, so their times are not summed. A level with no stated rate
 contributes no bound; it is neither treated as zero bandwidth nor rejected.
 
-The concrete mapping of issues to participants, and the lowering loop nest
-selected by `order`, are lowering contracts rather than authored ScheduleOp
-state.
+The concrete mapping of issues to participants is a lowering contract rather
+than authored ScheduleOp state.
 
 ## 6. Reference value semantics
 

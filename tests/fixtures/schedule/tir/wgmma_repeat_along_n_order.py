@@ -77,8 +77,8 @@ def gemm(
     outer=Layout((4, 8, 4), (32, 4, 1)),
 ), names=("d0", "d1", "d2")
                     ) as threads_3:
-                        for o_m in range(0, 64, 64):
-                            for o_n in range(0, 256, 64):
+                        for o_n in range(0, 256, 64):
+                            for o_m in range(0, 64, 64):
                                 for o_k in range(0, 16, 16):
                                     acc_view = T.tensor_view(
                                         T.ptr_of(acc[o_m:o_m + 64, o_n:o_n + 64]),
@@ -116,8 +116,8 @@ def gemm(
     outer=Layout((4, 8, 4), (32, 4, 1)),
 ), names=("d0", "d1", "d2")
                     ) as threads_4:
-                        for o_m_1 in range(64, 128, 64):
-                            for o_n_1 in range(0, 256, 64):
+                        for o_n_1 in range(0, 256, 64):
+                            for o_m_1 in range(64, 128, 64):
                                 for o_k_1 in range(0, 16, 16):
                                     acc_view_1 = T.tensor_view(
                                         T.ptr_of(acc[o_m_1:o_m_1 + 64, o_n_1:o_n_1 + 64]),
