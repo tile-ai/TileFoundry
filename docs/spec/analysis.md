@@ -459,13 +459,16 @@ Capacity is settled against authored definition order, which fixes every
 buffer's lifetime before any is measured. Whole-Function `gmem` and `smem`
 peaks use exact polyhedral access relations to place addressable values; the
 Call results report their concrete offsets. A `MeshRegion` peak instead scans
-the live-byte total over its entry-to-exit window. Its `rmem` rows are
-additionally restricted to values whose authored `ShardLayout.mesh`, at every
-topology level named by the region, selects units within that region's mesh.
-Levels omitted by the region do not reject a value. `rmem` is not
-address-solved: required-alias groups count as one physical buffer, and the
-Function reports the maximum of all stage peaks and a whole-Function live-byte
-scan of values that no `MeshRegion` claims.
+the live-byte total over its entry-to-exit window, but only for levels the
+region holds. In the target's ordered topology hierarchy, the region's
+outermost level MUST be the target-declared owner or an enclosing level; a
+region strictly inside the owner does not hold that level. The value's authored
+`ShardLayout.mesh` MUST additionally select units within the region's mesh. A
+target-owned level belongs to no `MeshRegion`. Levels omitted by the region do
+not reject a value's holder selection after ownership has admitted the level.
+`rmem` is not address-solved: required-alias groups count as one physical
+buffer, and the Function reports the maximum of all stage peaks and a
+whole-Function live-byte scan of values that no `MeshRegion` claims.
 
 ```python
 class MemoryLevelPeak:
@@ -480,7 +483,7 @@ class MemoryLevelPeak:
 | Field | How it is computed | Reads the target |
 |---|---|---|
 | `MemoryLevelPeak.memory_level` | Each storage level with at least one lifetime or traffic entry, sorted by name. | No |
-| `MemoryLevelPeak.peak_bytes` | On a Function, the address high-water mark of the first feasible `gmem` or `smem` placement; its `rmem` peak is the maximum of every `MeshRegion` stage peak and the whole-Function live-byte peak of values no mesh region claims. On a `MeshRegion`, the greatest live-byte total in its inclusive entry-to-exit event window; `rmem` compares only topology levels named by the region and includes a value when its selection at each such level is within the region's mesh. | No |
+| `MemoryLevelPeak.peak_bytes` | On a Function, the address high-water mark of the first feasible `gmem` or `smem` placement; its `rmem` peak is the maximum of every `MeshRegion` stage peak and the whole-Function live-byte peak of values no mesh region claims. On a `MeshRegion`, the greatest live-byte total in its inclusive entry-to-exit event window, among levels whose declared owner the region encloses and values whose holder selection is within the region's mesh. | `MemoryHierarchyFacts.explicit_levels[].owner` for a `MeshRegion`; otherwise no. |
 | `MemoryLevelPeak.persistent_bytes` | Sum of persistent lifetimes at that level. | No |
 | `MemoryLevelPeak.capacity_bytes` | Capacity of the matching explicit level, or `None` when unknown. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
 | `RegionMemoryMetadata.peaks` | One peak per occupied or moved storage level. | As above |
@@ -490,10 +493,13 @@ class MemoryLevelPeak:
 
 - constraints:
   - `RegionMemoryMetadata` MUST be attached per reachable `Function` and per
-    `MeshRegion` with a live value at any storage level. A mesh-region record
-    carries only its topology names and per-level peaks; whole-Function traffic,
-    footprints, reuse windows, lifetimes, errors, and advisories stay on the
-    Function.
+    `MeshRegion` with a live value at any storage level it owns. A mesh-region
+    record carries only its topology names and per-level peaks; whole-Function
+    traffic, footprints, reuse windows, lifetimes, errors, and advisories stay
+    on the Function.
+  - Every explicit level considered for a mesh-region peak MUST state an owner
+    in `MemoryHierarchyFacts`. A missing owner is an error, not a reason to
+    treat the level as shared by every region.
   - An access relation that keeps a parameter with a stated finite range is
     exact and MAY prove overlap. A widened relation, and one with an unbounded
     parameter, MUST NOT.

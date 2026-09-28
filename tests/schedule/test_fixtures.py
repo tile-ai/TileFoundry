@@ -395,11 +395,11 @@ def test_scheduled_hir_program_has_analysis_metadata(
             for region in regions
             if (record := get_metadata(region, RegionMemoryMetadata)) is not None
         )
-        assert len(region_records) == len(regions)
         for record in region_records:
             assert record.solver_status == "feasible"
             assert record.topologies == placement.topologies
             assert record.peaks
+            assert all(peak.memory_level == "rmem" for peak in record.peaks)
             assert not record.traffic.storage.kinds
             assert not record.traffic.communication.kinds
             assert record.footprint is None

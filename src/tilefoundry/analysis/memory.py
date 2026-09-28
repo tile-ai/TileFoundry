@@ -26,6 +26,7 @@ from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import bytes_by_storage
 from tilefoundry.ir.visitor import ExprVisitor
+from tilefoundry.target.facts import TopologyFacts
 from tilefoundry.utils.units import format_bytes
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -42,7 +43,7 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .allocation import AllocationValue, alias_components, find_aliases, solve_allocation
 from .errors import AnalysisError
-from .facts import MemoryHierarchyFacts
+from .facts import TARGET_MEMORY_OWNER, MemoryHierarchyFacts
 from .footprint import (
     ReachedAddresses,
     cached_level,
@@ -502,17 +503,38 @@ def values_in_region(
     region: MeshRegion,
     entered_at: int,
     exited_at: int,
+    facts: MemoryHierarchyFacts,
+    topology_names: tuple[str, ...],
 ) -> tuple[AllocationValue, ...]:
     """Resident values whose lifetimes and ownership intersect one mesh region."""
+    positions = {name: index for index, name in enumerate(topology_names)}
+    region_positions = tuple(
+        positions[getattr(topology, "name", topology)] for topology in region.mesh.topologies
+    )
+    outermost_region = min(region_positions)
     result = []
     for item in values:
         lifetime = item.lifetime
         if lifetime.last_used_at < entered_at or lifetime.defined_at > exited_at:
             continue
-        if lifetime.memory_level == str(StorageKind.RMEM):
-            layout = shard_layout_of(getattr(item.value.type, "layout", None))
-            if layout is None or not held_in_region(layout.mesh, region.mesh):
-                continue
+        declared = facts.explicit(lifetime.memory_level)
+        if declared is None or not declared.owner:
+            raise AnalysisError(
+                f"memory: level {lifetime.memory_level!r} has no declared owner"
+            )
+        if declared.owner == TARGET_MEMORY_OWNER:
+            continue
+        owner_position = positions.get(declared.owner)
+        if owner_position is None:
+            raise AnalysisError(
+                f"memory: level {lifetime.memory_level!r} owner {declared.owner!r} "
+                f"is not a declared topology in {topology_names}"
+            )
+        if outermost_region > owner_position:
+            continue
+        layout = shard_layout_of(getattr(item.value.type, "layout", None))
+        if layout is None or not held_in_region(layout.mesh, region.mesh):
+            continue
         result.append(item)
     return tuple(result)
 
@@ -669,6 +691,17 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     module = context.module
     topology_level = context.topology_level
     facts = context.target.get_facts(MemoryHierarchyFacts)
+    owner_topologies = tuple(
+        level.name for level in context.target.get_facts(TopologyFacts).topologies
+    )
+    for level in facts.explicit_levels:
+        if not level.owner:
+            raise AnalysisError(f"memory: level {level.name!r} has no declared owner")
+        if level.owner != TARGET_MEMORY_OWNER and level.owner not in owner_topologies:
+            raise AnalysisError(
+                f"memory: level {level.name!r} owner {level.owner!r} is not a "
+                f"target topology in {owner_topologies}"
+            )
     topologies = module.effective_topologies()
     whole = CostContext(scope=FunctionScope(module, function))
     cache = cached_level(facts)
@@ -781,6 +814,8 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             window.region,
             window.entered_at,
             window.exited_at,
+            facts,
+            owner_topologies,
         )
         region_levels = []
         for name in sorted({item.lifetime.memory_level for item in region_values}):
