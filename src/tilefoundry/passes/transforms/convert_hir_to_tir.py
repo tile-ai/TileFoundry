@@ -107,26 +107,15 @@ class _Cursor:
     def __init__(self) -> None:
         self._root: list = []
         self._block = self._root
-        self._preamble: list[tuple[Var, Expr]] = []
-        self._deferred_prefix: tuple[Sequential, list[bool]] | None = None
 
     def add(self, stmt) -> None:
         self._block.append(("stmt", stmt))
 
-    def bind(self, var: Var, value: Expr, *, hoist: bool = False) -> Var:
-        if hoist:
-            self._preamble.append((var, value))
-            return var
+    def bind(self, var: Var, value: Expr) -> Var:
         inner: list = []
         self._block.append(("let", var, value, inner))
         self._block = inner
         return var
-
-    def defer(self, statements: Sequential) -> list[bool]:
-        """Reserve a leading position for statements enabled after traversal."""
-        enabled = [False]
-        self._deferred_prefix = (statements, enabled)
-        return enabled
 
     def build(self) -> Sequential:
         def build(entries: list) -> Sequential:
@@ -139,12 +128,7 @@ class _Cursor:
                     body.append(LetStmt(var, value, build(inner)))
             return Sequential(tuple(body))
 
-        result = build(self._root)
-        for var, value in reversed(self._preamble):
-            result = Sequential((LetStmt(var, value, result),))
-        if self._deferred_prefix is not None and self._deferred_prefix[1][0]:
-            result = Sequential((*self._deferred_prefix[0].body, *result.body))
-        return result
+        return build(self._root)
 
 
 class _MeshScopeCoalescer(StmtMutator):
@@ -176,23 +160,6 @@ class Names:
 
     def __init__(self, authored: Function) -> None:
         self.used = {param.name for param in authored.params}
-        self.authored: dict[SourceSpanMetadata, str] = {}
-        self.pending = iter(self._values(authored.body))
-
-    @staticmethod
-    def _values(root: Expr):
-        """Yield authored values once, operands before their consumer."""
-        seen: set[int] = set()
-
-        def visit(expr: Expr):
-            if id(expr) in seen:
-                return
-            seen.add(id(expr))
-            for child in expr_children(expr):
-                yield from visit(child)
-            yield expr
-
-        yield from visit(root)
 
     def fresh(self, stem: str) -> str:
         if stem not in self.used:
@@ -205,19 +172,9 @@ class Names:
         self.used.add(result)
         return result
 
-    def binding(self, expr: Expr, fallback: str = "value") -> str:
-        span = get_metadata(expr, SourceSpanMetadata)
-        authored = self.authored.get(span) if span is not None else None
-        while span is not None and authored is None:
-            source = next(self.pending, None)
-            if source is None:
-                break
-            source_span = get_metadata(source, SourceSpanMetadata)
-            binding = get_metadata(source, BindingMetadata)
-            if source_span is not None and binding is not None:
-                self.authored[source_span] = binding.name
-            authored = self.authored.get(span)
-        return self.fresh(authored or fallback)
+    def binding(self, authored: Expr | None, fallback: str = "value") -> str:
+        binding = get_metadata(authored, BindingMetadata) if authored is not None else None
+        return self.fresh(binding.name if binding is not None else fallback)
 
 def _frame(mesh: Mesh) -> Mesh:
     rank = len(tuple(flatten(flatten(mesh.layout).shape)))
@@ -460,8 +417,10 @@ class Lowering(ExprVisitor[Expr]):
         self.bindings: dict[int, Expr] = {}
         self.output_windows: dict[int, Call] = {}
         self.output_seed: Call | None = None
-        self.output_fill: list[bool] | None = None
-        self.output_covered = False
+        self.output_initialized = False
+        self.authored_values: dict[int, Expr] = {}
+        if self.function.body is not None and self.authored.body is not None:
+            self.authored_values[id(self.function.body)] = self.authored.body
         self.scopes = build_scopes(self.module, self.function)
         self.scope_for_call = {
             expr_id: scope
@@ -491,13 +450,12 @@ class Lowering(ExprVisitor[Expr]):
         if isinstance(body, MeshRegion):
             root_mesh = self._physical_frame(body.mesh)
             self.owner_cursors[id(body)] = inner
+            self._pair_authored(body)
             self._bind_region_args(body, inner)
             result = self.lower(body.body, inner)
         else:
             result = self.lower(body, inner)
         self._finish(result, inner)
-        if self.output_fill is not None:
-            self.output_fill[0] = not self.output_covered
         statements = inner.build()
         if isinstance(body, MeshRegion):
             statements = Sequential(
@@ -530,11 +488,6 @@ class Lowering(ExprVisitor[Expr]):
         if self.output_seed is not None and self.output_seed is not seed:
             raise LoweringError("scheduled lowering cannot choose among multiple gmem seeds")
         self.output_seed = seed
-        if self.output_fill is None:
-            fill = _Cursor()
-            self._emit_fill(self.output, seed.type, fill)
-            cursor = self.owner_cursors[id(self.function)]
-            self.output_fill = cursor.defer(fill.build())
         self.memo[id(seed)] = self.output
         self.logical[id(self.output)] = seed.type
         self.emitted.add(id(seed))
@@ -579,10 +532,22 @@ class Lowering(ExprVisitor[Expr]):
             return False
 
         loops = []
+        bindings: dict[int, Expr] = {}
         cursor = scope
         while cursor is not None:
             if isinstance(cursor.owner, LoopRegion):
                 loops.append(cursor.owner)
+                bindings.update(
+                    zip(
+                        map(id, cursor.owner.carried_args),
+                        cursor.owner.init_args,
+                        strict=True,
+                    )
+                )
+            elif isinstance(cursor.owner, MeshRegion):
+                bindings.update(
+                    zip(map(id, cursor.owner.params), cursor.owner.args, strict=True)
+                )
             cursor = cursor.parent
         loops.reverse()
         if len(loops) != scope.depth:
@@ -602,7 +567,9 @@ class Lowering(ExprVisitor[Expr]):
                 }
             )
             try:
-                origin = tuple(self._constant_index(start, values) for start in starts_)
+                origin = tuple(
+                    self._constant_index(start, values, bindings) for start in starts_
+                )
             except (ArithmeticError, LoweringError):
                 return
             if all(
@@ -617,10 +584,15 @@ class Lowering(ExprVisitor[Expr]):
             return False
         return len(origins) * prod(sizes) == prod(output_shape)
 
-    def _constant_index(self, value: Expr, values: dict[int, int]) -> int:
-        bound = self.bindings.get(id(value))
+    def _constant_index(
+        self,
+        value: Expr,
+        values: dict[int, int],
+        bindings: dict[int, Expr],
+    ) -> int:
+        bound = bindings.get(id(value))
         if bound is not None:
-            return self._constant_index(bound, values)
+            return self._constant_index(bound, values, bindings)
         if isinstance(value, Constant) and type(value.value) is int:
             return value.value
         if isinstance(value, Var) and id(value) in values:
@@ -630,7 +602,9 @@ class Lowering(ExprVisitor[Expr]):
             if known is not None:
                 return known
         if isinstance(value, Call) and isinstance(value.target, HirBinary):
-            lhs, rhs = (self._constant_index(arg, values) for arg in value.args)
+            lhs, rhs = (
+                self._constant_index(arg, values, bindings) for arg in value.args
+            )
             operations = {
                 BinaryKind.ADD: lambda: lhs + rhs,
                 BinaryKind.SUB: lambda: lhs - rhs,
@@ -649,8 +623,6 @@ class Lowering(ExprVisitor[Expr]):
         type_: object,
         buffers: int,
         cursor: _Cursor,
-        *,
-        hoist: bool = False,
     ) -> Expr:
         known = self.memo.get(id(expr))
         if known is not None:
@@ -661,14 +633,13 @@ class Lowering(ExprVisitor[Expr]):
         stem = (
             self.names.fresh("value")
             if isinstance(expr.target, HirCast)
-            else self.names.binding(expr)
+            else self.names.binding(self.authored_values.get(id(expr)))
         )
         if storage_type.storage is StorageKind.RMEM:
             var = Var(stem, type=storage_type)
             self.memo[id(expr)] = cursor.bind(
                 var,
                 Call(AllocTensor(tensor_type=storage_type), (), type=storage_type),
-                hoist=hoist,
             )
             self.logical[id(var)] = type_
             return var
@@ -709,7 +680,6 @@ class Lowering(ExprVisitor[Expr]):
                 desired,
                 cursor,
                 stem,
-                hoist=hoist,
             )
             self.memo[id(expr)] = var
             self.logical[id(var)] = type_
@@ -717,12 +687,12 @@ class Lowering(ExprVisitor[Expr]):
         fields = tuple(self._literal_view(storage_type, offset) for offset in offsets)
         if len(fields) == 1:
             var = Var(stem, type=storage_type)
-            self.memo[id(expr)] = cursor.bind(var, fields[0], hoist=hoist)
+            self.memo[id(expr)] = cursor.bind(var, fields[0])
             self.logical[id(var)] = type_
             return var
         tuple_type = TupleType(tuple(field.type for field in fields))
         stages = Var(self.names.fresh(f"{stem}_stages"), type=tuple_type)
-        cursor.bind(stages, Tuple(fields, type=tuple_type), hoist=hoist)
+        cursor.bind(stages, Tuple(fields, type=tuple_type))
         self.logical[id(stages)] = type_
         self.staged[id(expr)] = stages
         selected = self._stage(expr, stages)
@@ -766,13 +736,29 @@ class Lowering(ExprVisitor[Expr]):
         return expr if known is None else known
 
     def _bind_region_args(self, region: MeshRegion, cursor: _Cursor) -> None:
-        for param, value in zip(region.params, region.args, strict=True):
-            self.bindings[id(param)] = value
+        self.bindings.update(zip(map(id, region.params), region.args, strict=True))
         values = tuple(self.lower(arg, cursor) for arg in region.args)
         for param, value in zip(region.params, values, strict=True):
             self.memo[id(param)] = value
 
+    def _pair_authored(self, expr: Expr) -> None:
+        authored = self.authored_values.get(id(expr))
+        if authored is None:
+            return
+        actual_children = expr_children(expr)
+        authored_children = expr_children(authored)
+        if len(actual_children) != len(authored_children):
+            return
+        for actual, source in zip(actual_children, authored_children, strict=True):
+            actual_span = get_metadata(actual, SourceSpanMetadata)
+            source_span = get_metadata(source, SourceSpanMetadata)
+            if type(actual) is type(source) and (
+                actual_span is None or source_span is None or actual_span == source_span
+            ):
+                self.authored_values[id(actual)] = source
+
     def lower(self, expr: Expr, cursor: _Cursor) -> Expr:
+        self._pair_authored(expr)
         known = self.memo.get(id(expr))
         material_call = isinstance(expr, Call) and isinstance(
             expr.target, (Zeros, HirCast, ScheduleOp)
@@ -820,8 +806,7 @@ class Lowering(ExprVisitor[Expr]):
         return result
 
     def _lower_loop(self, loop: LoopRegion, cursor: _Cursor) -> Expr:
-        for var, value in zip(loop.carried_args, loop.init_args, strict=True):
-            self.bindings[id(var)] = value
+        self.bindings.update(zip(map(id, loop.carried_args), loop.init_args, strict=True))
         init = tuple(self.lower(value, cursor) for value in loop.init_args)
         if len(init) != len(loop.carried_args):
             raise LoweringError("loop carry arity changed during lowering")
@@ -907,7 +892,6 @@ class Lowering(ExprVisitor[Expr]):
                     call.type,
                     1,
                     self.owner_cursors[id(self.function)],
-                    hoist=True,
                 )
                 self._emit_fill(result, call.type, cursor)
         elif isinstance(target, HirCast):
@@ -916,7 +900,6 @@ class Lowering(ExprVisitor[Expr]):
                 call.type,
                 1,
                 self.owner_cursors[id(self.function)],
-                hoist=True,
             )
             source = self.lower(call.args[0], cursor)
             self._emit_cast(call, source, result, call.type, cursor)
@@ -979,6 +962,11 @@ class Lowering(ExprVisitor[Expr]):
             and destination_root.type.storage is StorageKind.GMEM
         ):
             self._ensure_output_seed(destination_root)
+            if not self.output_initialized:
+                if not self._covers_output(call):
+                    owner = self.owner_cursors[id(self.function)]
+                    self._emit_fill(self.output, destination_root.type, owner)
+                self.output_initialized = True
         if not (isinstance(destination, Call) and isinstance(destination.target, Zeros)):
             self.lower(destination, cursor)
         update_root = self._material_root(call.args[1])
@@ -989,8 +977,6 @@ class Lowering(ExprVisitor[Expr]):
             and update_root.type.storage is StorageKind.GMEM
         ):
             self.output_windows[id(update_root)] = call
-        if destination_root is self.output_seed and self._covers_output(call):
-            self.output_covered = True
         update = self.lower(call.args[1], cursor)
         if id(update_root) in self.output_windows:
             return self.output
@@ -1063,12 +1049,18 @@ class Lowering(ExprVisitor[Expr]):
                 StorageKind.SMEM,
                 StorageKind.GMEM,
             )
-            owner = self._staging_owner(call) if staged else None
-            destination = self.owner_cursors.get(id(owner)) if owner is not None else cursor
-            if destination is None or (not staged and call.target.buffers != 1):
+            if (
+                isinstance(call.type, TensorType)
+                and call.type.storage is StorageKind.RMEM
+                and call.target.buffers != 1
+            ):
                 raise LoweringError(f"{_label(call)} staged buffer has no owning scope")
-            buffers = call.target.buffers if staged else 1
-            self._declare(call, call.type, buffers, destination, hoist=staged)
+            destination = (
+                self.owner_cursors.get(id(self._staging_owner(call))) if staged else cursor
+            )
+            if destination is None:
+                raise LoweringError(f"{_label(call)} staged buffer has no owning scope")
+            self._declare(call, call.type, call.target.buffers, destination)
         read_values = {
             param.name: self.lower(value, cursor)
             for param, value in zip(reads, call.args, strict=True)
@@ -1468,8 +1460,6 @@ class Lowering(ExprVisitor[Expr]):
         desired: TensorType,
         cursor: _Cursor,
         stem: str,
-        *,
-        hoist: bool = False,
     ) -> Var:
         held = base.type
         if not isinstance(held, TensorType):
@@ -1505,7 +1495,7 @@ class Lowering(ExprVisitor[Expr]):
             (pointer,),
             type=desired,
         )
-        return cursor.bind(Var(self.names.fresh(stem), type=desired), view, hoist=hoist)
+        return cursor.bind(Var(self.names.fresh(stem), type=desired), view)
 
     def _holder_mesh(self, type_: TensorType) -> Mesh | None:
         layout = type_.layout
@@ -1666,6 +1656,9 @@ class Lowering(ExprVisitor[Expr]):
 
     def _finish(self, result: Expr, cursor: _Cursor) -> None:
         assert self.output is not None
+        if self.output_seed is not None and not self.output_initialized:
+            self._emit_fill(self.output, self.output_seed.type, cursor)
+            self.output_initialized = True
         if result is not self.output:
             self._emit_copy(result, self.output, cursor)
 

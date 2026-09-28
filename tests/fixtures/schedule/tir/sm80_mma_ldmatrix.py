@@ -19,8 +19,6 @@ def gemm(a: Tensor[(16, 32), "bf16"], b: Tensor[(32, 8), "bf16"], out: Tensor[(1
         with Mesh(
             (Topology("thread", 64),), Layout((2, 32), (32, 1)), names=("d0", "d1")
         ) as scope_3:
-            lhs_stages = (T.tensor_view(512, dtype='bf16', storage=StorageKind.SMEM, layout=Layout((16, 16), (16, 1)), shape=(16, 16)), T.tensor_view(1024, dtype='bf16', storage=StorageKind.SMEM, layout=Layout((16, 16), (16, 1)), shape=(16, 16)))
-            rhs_stages = (T.tensor_view(0, dtype='bf16', storage=StorageKind.SMEM, layout=Layout((16, 8), (8, 1)), shape=(16, 8)), T.tensor_view(256, dtype='bf16', storage=StorageKind.SMEM, layout=Layout((16, 8), (8, 1)), shape=(16, 8)))
             with Mesh(
                 (Topology("thread", 64),), ComposedLayout(
     inner=None,
@@ -29,6 +27,8 @@ def gemm(a: Tensor[(16, 32), "bf16"], b: Tensor[(32, 8), "bf16"], out: Tensor[(1
 ), names=("d0", "d1")
             ) as threads:
                 T.fill(acc, 0.0)
+            lhs_stages = (T.tensor_view(512, dtype='bf16', storage=StorageKind.SMEM, layout=Layout((16, 16), (16, 1)), shape=(16, 16)), T.tensor_view(1024, dtype='bf16', storage=StorageKind.SMEM, layout=Layout((16, 16), (16, 1)), shape=(16, 16)))
+            rhs_stages = (T.tensor_view(0, dtype='bf16', storage=StorageKind.SMEM, layout=Layout((16, 8), (8, 1)), shape=(16, 8)), T.tensor_view(256, dtype='bf16', storage=StorageKind.SMEM, layout=Layout((16, 8), (8, 1)), shape=(16, 8)))
             for k in range(0, 32, 16):
                 with scope_3[:1] as scope:
                     tile = T.tensor_view(

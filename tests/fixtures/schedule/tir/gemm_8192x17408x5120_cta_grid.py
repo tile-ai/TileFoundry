@@ -44,6 +44,14 @@ def gemm(
                     shape=(128, 256),
                 )
                 for n in range(256 * cta.d1, (256 * cta.d1) + 256, 256):
+                    with Mesh(
+                        (Topology("thread", 384),), ComposedLayout(
+    inner=None,
+    offset=128,
+    outer=Layout((2, 4, 8, 4), (128, 32, 4, 1)),
+), names=("d0", "d1", "d2", "d3")
+                    ) as threads:
+                        T.fill(acc, 0.0)
                     lhs_stages = (T.tensor_view(131072, dtype='bf16', storage=StorageKind.SMEM, layout=ComposedLayout(
                             inner=Swizzle(3, 4, 3),
                             offset=0,
@@ -78,14 +86,6 @@ def gemm(
                             offset=0,
                             outer=Layout(((4, 2, 8), (4, 64)), ((4096, 512, 64), (1024, 1))),
                         ), shape=(64, 256)))
-                    with Mesh(
-                        (Topology("thread", 384),), ComposedLayout(
-    inner=None,
-    offset=128,
-    outer=Layout((2, 4, 8, 4), (128, 32, 4, 1)),
-), names=("d0", "d1", "d2", "d3")
-                    ) as threads:
-                        T.fill(acc, 0.0)
                     for k in range(0, 5120, 64):
                         with scope_4[:1, :32] as scope:
                             tile = T.tensor_view(
