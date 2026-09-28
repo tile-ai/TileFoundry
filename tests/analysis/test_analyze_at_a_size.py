@@ -34,13 +34,15 @@ from tilefoundry.analysis import (
     analyze,
 )
 from tilefoundry.analysis.access import Access, AccessPrecision
-from tilefoundry.analysis.allocation import aligned
+from tilefoundry.analysis.allocation import aligned, alignment_of
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import IterationScope, build_scopes, walk_scopes
+from tilefoundry.analysis.liveness import analyze_liveness
+from tilefoundry.analysis.memory import view_root as resident_view_root
 from tilefoundry.cli import main as cli_main
 from tilefoundry.cli.source import load_namespace
-from tilefoundry.ir.core import Call, describe_expr, get_metadata
+from tilefoundry.ir.core import Call, Constant, describe_expr, get_metadata, value_labels
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.specialize import (
@@ -558,6 +560,29 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
                 assert 0 <= held.timeline.start_ns <= held.timeline.end_ns
 
 
+def _allocation_alignments(function: Function) -> dict[str, int]:
+    """Rebuild the allocator's binding-to-alignment map for bound checks."""
+    liveness = analyze_liveness(function)
+    resident_ids = {id(parameter) for parameter in function.params}
+    for interval in liveness.intervals:
+        value = interval.value
+        if isinstance(value, (Call, Constant, LoopRegion)) and resident_view_root(value) is value:
+            resident_ids.add(id(value))
+        if isinstance(value, LoopRegion):
+            resident_ids.update(id(phi) for phi in value.carried_args)
+    intervals = tuple(
+        interval for interval in liveness.intervals if id(interval.value) in resident_ids
+    )
+    return {
+        label: alignment_of(interval.value)
+        for label, interval in zip(
+            value_labels(interval.value for interval in intervals),
+            intervals,
+            strict=True,
+        )
+    }
+
+
 def _case_source(case: ConcreteCase, tmp_path: Path) -> str:
     """Name a corpus case through the same SOURCE selector the CLI accepts."""
     identity = case.id.partition("[")[0].split(".")
@@ -568,7 +593,7 @@ def _case_source(case: ConcreteCase, tmp_path: Path) -> str:
     try:
         module.resolve_target()
         source = fixture
-    except Exception:  # noqa: BLE001 - the corpus deliberately supplies the missing target
+    except ValueError:
         source = tmp_path / f"{file}_{root}.py"
         source.write_text(
             "from dataclasses import replace\n"
@@ -615,6 +640,7 @@ def test_every_concrete_program_predicts_coherently(
     assert_performance_contract(result)
     placement = get_metadata(result.function, RegionMemoryMetadata)
     assert placement is not None
+    alignments = _allocation_alignments(result.function)
     over_bound: set[tuple[str, str]] = set()
     for peak in reported["peaks"]:
         memory_level = peak["memory_level"]
@@ -631,7 +657,7 @@ def test_every_concrete_program_predicts_coherently(
         aligned_live_upper = max(
             (
                 sum(
-                    aligned(lifetime["bytes"], 16)
+                    aligned(lifetime["bytes"], alignments[lifetime["binding"]])
                     for lifetime in level_lifetimes
                     if lifetime["defined_at"] <= point <= lifetime["last_used_at"]
                 )
