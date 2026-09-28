@@ -440,13 +440,12 @@ explicit analysis; there is no ordinary `--target` option.
 ## Schedule
 
 `schedule` owns the transition from checked scheduling HIR to executable TIR
-and the reports used to choose and inspect an instruction. Its subcommands are:
+and the two reports used to choose an instruction. Its subcommands are:
 
 ```text
 tilefoundry schedule finalize SOURCE PATH [--json]
 tilefoundry schedule facts [INSTRUCTION] --target TARGET PATH [--json]
 tilefoundry schedule candidates SOURCE PATH [--json]
-tilefoundry schedule matched SOURCE PATH [--json]
 ```
 
 `finalize` checks and inlines the selected entry, runs memory analysis, lowers
@@ -469,12 +468,6 @@ later scheduling choice. Operand dtype, storage, rank, divisibility, and
 cross-operand constraints then decide whether each declaration is a candidate
 or a refusal. MMA families are reported by atom name, not by the `TiledMma`
 carrier op. A site with no accepted instruction still reports its refusals.
-`matched` is the exception to the command-wide HIR `SOURCE` convention: its
-`SOURCE` MUST define exactly one top-level TIR `PrimFunction`, or select one by
-name. It reports each effect instruction's operands, the unique declared
-arrangement each operand matches, and all captures made while matching. A
-non-TIR source or an operand that does not select exactly one arrangement is an
-error.
 
 - constraints:
   - `PATH` is required, is the only report destination, and MUST NOT be partly
@@ -489,8 +482,7 @@ error.
     fallback.
   - A missing instruction access relation, an addressable result without an
     analyzed offset, an unsupported HIR call, an unknown instruction, an
-    unknown target, a source with no candidate site, a non-TIR `matched` source,
-    or a TIR operand without one unique declaration match MUST print
+    unknown target, or a source with no candidate site MUST print
     `tilefoundry: error: REASON` to stderr and exit 1. No partial output is
     permitted.
 

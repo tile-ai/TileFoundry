@@ -2,24 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from enum import Enum
 
 from tilefoundry.ir.clause.layout import is_layout_wildcard
 from tilefoundry.ir.core.param_def import collect_param_defs
-from tilefoundry.ir.pattern import (
-    OrPattern,
-    PatternMatcher,
-    ShardLayoutPattern,
-    SwitchPattern,
-    TensorPattern,
-    between_rules,
-)
 from tilefoundry.ir.pattern.pattern import Pattern
-from tilefoundry.ir.tir.stmts import Evaluate
-from tilefoundry.ir.types import Broadcast, DType, Split, TensorType
+from tilefoundry.ir.types import Broadcast, DType, Split
 from tilefoundry.ir.types.dim import DimFloorDiv, DimMul, DimVar, is_dim_op_call
-from tilefoundry.ir.visitor import StmtVisitor
 
 _UNNAMED = "_"
 _ARRANGEMENT = "every arrangement"
@@ -142,16 +131,6 @@ class PatternPrinter:
                 lines.extend(" " * len(prefix) + line for line in described[1:])
             rendered[heading] = tuple(lines)
         return rendered
-
-    def matches(self, function) -> dict[str, object]:
-        """Describe the uniquely selected operand arrangement of every TIR instruction."""
-        collector = _InstructionMatches(self)
-        collector.visit(function.body)
-        return {
-            "function": function.name,
-            "target": function.target.identity,
-            "calls": collector.calls,
-        }
 
     def _declared(self, pattern, name: str) -> str:
         if not any(cls.__name__ == "SwitchPattern" for cls in type(pattern).__mro__):
@@ -640,160 +619,6 @@ class PatternPrinter:
 
     def alternatives_ShardLayoutPattern(self, pattern, bindings) -> tuple:
         return self.alternatives(pattern.layout, bindings)
-
-
-def _layout_alternatives(pattern, bindings: dict) -> tuple[tuple[dict, object], ...]:
-    """Expand layout branches while preserving wrappers needed for matching."""
-    if isinstance(pattern, OrPattern):
-        return tuple(
-            held
-            for alternative in pattern.patterns
-            for held in _layout_alternatives(alternative, dict(bindings))
-        )
-    if isinstance(pattern, SwitchPattern):
-        return tuple(
-            held
-            for value, branch in pattern.branches
-            if pattern.param not in bindings or bindings[pattern.param] == value
-            for held in _layout_alternatives(branch, {**bindings, pattern.param: value})
-        )
-    if isinstance(pattern, ShardLayoutPattern):
-        return tuple(
-            (held, replace(pattern, layout=alternative))
-            for held, alternative in _layout_alternatives(pattern.layout, dict(bindings))
-        )
-    return ((dict(bindings), pattern),)
-
-
-def _operand_alternatives(pattern, bindings: dict) -> tuple[tuple[dict, object], ...]:
-    """Expand one operand to the complete tensor arrangement branches it admits."""
-    if isinstance(pattern, OrPattern):
-        return tuple(
-            held
-            for alternative in pattern.patterns
-            for held in _operand_alternatives(alternative, dict(bindings))
-        )
-    if isinstance(pattern, SwitchPattern):
-        return tuple(
-            held
-            for value, branch in pattern.branches
-            if pattern.param not in bindings or bindings[pattern.param] == value
-            for held in _operand_alternatives(branch, {**bindings, pattern.param: value})
-        )
-    if isinstance(pattern, TensorPattern) and pattern.layout is not None:
-        return tuple(
-            (held, replace(pattern, layout=alternative))
-            for held, alternative in _layout_alternatives(pattern.layout, dict(bindings))
-        )
-    return ((dict(bindings), pattern),)
-
-
-def _instruction_id(op) -> str:
-    schema = type(op)._op_schema
-    return f"{schema.dialect}.{schema.name}"
-
-
-def _type_text(type_) -> str:
-    if not isinstance(type_, TensorType):
-        return str(type_)
-    shape = ",".join(str(extent) for extent in type_.shape)
-    return f"{type_.dtype.name}[{shape}] {type_.storage}"
-
-
-class _InstructionMatches(StmtVisitor[None]):
-    """Collect the declaration branch selected by each effect instruction."""
-
-    def __init__(self, printer: PatternPrinter) -> None:
-        self.printer = printer
-        self.calls: list[dict[str, object]] = []
-
-    def _written_captures(self, captures: dict) -> dict[str, str]:
-        return {
-            name: self.printer.written(captures[name])
-            for name in sorted(captures)
-        }
-
-    def _arrangement(self, op, param, type_, seed: dict) -> dict[str, object]:
-        pattern = param.pattern.read_on(op) if hasattr(param.pattern, "read_on") else param.pattern
-        alternatives = _operand_alternatives(pattern, dict(seed))
-        matched = []
-        refusals = []
-        for bindings, candidate in alternatives:
-            matcher = PatternMatcher(bindings)
-            if matcher.match(candidate, type_) and matcher.solve():
-                matched.append((candidate, dict(matcher.bindings)))
-            else:
-                refusals.append(self.printer.refusal(matcher.refusal))
-        if len(matched) != 1:
-            reason = refusals[0] if refusals else "the declaration is ambiguous"
-            raise ValueError(
-                f"{_instruction_id(op)} operand {param.name!r} matched "
-                f"{len(matched)} arrangements, expected exactly one: {reason}"
-            )
-        selected, captures = matched[0]
-        layout = getattr(selected, "layout", None)
-        arrangement = (
-            "any arrangement"
-            if isinstance(selected, TensorPattern) and layout is None
-            else self.printer.written(layout if layout is not None else selected, param.name)
-        )
-        return {
-            "name": param.name,
-            "type": _type_text(type_),
-            "arrangement": arrangement,
-            "captures": self._written_captures(captures),
-        }
-
-    def visit_Evaluate(self, stmt: Evaluate) -> None:
-        op = stmt.callable
-        schema = getattr(type(op), "_op_schema", None)
-        if schema is None:
-            return
-        inputs = tuple(param for param in schema.signature if param.kind == "input")
-        patterned = tuple(
-            (param, arg)
-            for param, arg in zip(inputs, stmt.args, strict=True)
-            if param.pattern is not None
-        )
-        if not patterned:
-            return
-        atom = getattr(op, "atom", None)
-        seed = dict(getattr(atom, "bindings", {}))
-        operands = [
-            self._arrangement(op, param, arg.type, seed) for param, arg in patterned
-        ]
-
-        matcher = PatternMatcher(seed)
-        given = {}
-        for param, arg in patterned:
-            pattern = (
-                param.pattern.read_on(op)
-                if hasattr(param.pattern, "read_on")
-                else param.pattern
-            )
-            if not matcher.match(pattern, arg.type):
-                raise ValueError(
-                    f"{_instruction_id(op)} operand {param.name!r}: "
-                    f"{self.printer.refusal(matcher.refusal)}"
-                )
-            given[param.name] = arg.type
-        if not matcher.solve():
-            raise ValueError(
-                f"{_instruction_id(op)} operands: {self.printer.refusal(matcher.refusal)}"
-            )
-        for rule in between_rules(type(op)):
-            if not rule.holds(given):
-                raise ValueError(f"{_instruction_id(op)}: {rule.refused(given)}")
-
-        instruction = getattr(atom, "reference_name", None)
-        self.calls.append(
-            {
-                "index": len(self.calls),
-                "op": _instruction_id(op),
-                "instruction": instruction,
-                "operands": operands,
-            }
-        )
 
 
 __all__ = ["PatternPrinter"]

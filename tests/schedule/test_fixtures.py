@@ -69,20 +69,10 @@ PLAIN = (
     "gemm_relu_gemm_untiled",
 )
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
-TIR_MATCHES = tuple(
-    path for path in TIR if path.stem != "gemm_8192x17408x5120_tma_store"
-)
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
 WGMMA_DECLARATION = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.described.txt"
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
 CANDIDATE_GOLDENS = Path(__file__).parents[1] / "fixtures" / "schedule" / "plain"
-MATCHED_GOLDEN = (
-    Path(__file__).parents[1]
-    / "fixtures"
-    / "schedule"
-    / "tir"
-    / "gemm_8192x17408x5120_tma_store.matched.txt"
-)
 ANALYZED_GOLDEN = (
     Path(__file__).parents[1]
     / "fixtures"
@@ -864,48 +854,6 @@ def test_schedule_candidates_omit_selected_schedule_calls(
     assert not out.exists()
 
 
-def test_schedule_matched_writes_text_and_json(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    source = "tests/fixtures/schedule/tir/gemm_8192x17408x5120_tma_store.py"
-    text_out = tmp_path / "matched.txt"
-    json_out = tmp_path / "matched.json"
-
-    assert cli_main(["schedule", "matched", source, str(text_out)]) == 0
-    assert cli_main(["schedule", "matched", source, str(json_out), "--json"]) == 0
-    assert capsys.readouterr() == ("", "")
-    assert text_out.read_bytes() == MATCHED_GOLDEN.read_bytes()
-    report = json.loads(json_out.read_text())
-    assert (report["source"], report["function"], report["target"]) == (
-        source,
-        "gemm",
-        "nvidia.h200_sxm",
-    )
-    wgmma = [call for call in report["calls"] if call["instruction"] == "T.cuda.sm90.Wgmma"]
-    assert wgmma
-    assert all(
-        {"a_major", "a_swizzle"} <= call["operands"][1]["captures"].keys()
-        for call in wgmma
-    )
-
-
-@pytest.mark.parametrize("path", TIR_MATCHES, ids=lambda path: path.stem)
-def test_tir_instruction_operands_match_one_declared_arrangement(path: Path) -> None:
-    found = _direct_operand_matches(_prim_in(path))
-    assert found
-    wgmma_lhs = [
-        captures
-        for op, name, captures in found
-        if isinstance(getattr(op, "atom", None), Wgmma) and name == "lhs"
-    ]
-    assert all("a_major" in captures for captures in wgmma_lhs)
-    assert all(
-        "a_swizzle" in captures
-        for captures in wgmma_lhs
-        if captures["form"].name == "SS"
-    )
-
-
 def test_operand_match_refusal_names_the_failed_pattern() -> None:
     function = _prim_in(
         Path(__file__).parents[1]
@@ -934,40 +882,6 @@ def test_operand_match_refusal_names_the_failed_pattern() -> None:
     assert "StorageKind.SMEM" in rejected
 
 
-def test_schedule_matched_rejects_non_tir_without_output(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    source = "tests/fixtures/schedule/hir/wgmma_a_k_major.py"
-    out = tmp_path / "matched.txt"
-
-    assert cli_main(["schedule", "matched", source, str(out)]) == 1
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "matched expects a TIR PrimFunction" in captured.err
-    assert not out.exists()
-
-
-def test_schedule_matched_rejects_an_operand_mismatch_without_output(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    original = (
-        Path(__file__).parents[1]
-        / "fixtures"
-        / "schedule"
-        / "tir"
-        / "wgmma_a_k_major.py"
-    ).read_text()
-    source = tmp_path / "mismatched.py"
-    source.write_text(original.replace("StorageKind.SMEM", "StorageKind.GMEM", 1))
-    out = tmp_path / "matched.txt"
-
-    assert cli_main(["schedule", "matched", str(source), str(out)]) == 1
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "storage" in captured.err
-    assert not out.exists()
-
-
 def test_schedule_analyze_writes_memory_report(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -991,6 +905,19 @@ def test_schedule_finalize_writes_verified_tir(
     assert captured.out == ""
     assert captured.err == ""
     assert out.read_bytes() == expected.read_bytes()
+    found = _direct_operand_matches(_prim_in(out))
+    assert found
+    wgmma_lhs = [
+        captures
+        for op, name, captures in found
+        if isinstance(getattr(op, "atom", None), Wgmma) and name == "lhs"
+    ]
+    assert all("a_major" in captures for captures in wgmma_lhs)
+    assert all(
+        "a_swizzle" in captures
+        for captures in wgmma_lhs
+        if captures["form"].name == "SS"
+    )
 
 
 def test_schedule_finalize_json_carries_the_same_source(

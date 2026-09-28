@@ -12,7 +12,6 @@ from typing import Mapping, Sequence
 
 from tilefoundry.ir.core.module import Module, select
 from tilefoundry.ir.hir.function import Function
-from tilefoundry.ir.tir.prim_function import PrimFunction
 
 
 def _split_source(source: str) -> tuple[Path, str | None]:
@@ -326,51 +325,6 @@ def load_authored_ir(source: str) -> Module:
     return select_ir(namespace, selector)
 
 
-def load_prim_function(source: str) -> PrimFunction:
-    """Execute one TIR source and select exactly one ``PrimFunction``.
-
-    This is deliberately separate from :func:`select_ir`: that HIR selector
-    rejects bare ``Function`` values because they carry neither a Target nor a
-    topology hierarchy. A ``PrimFunction`` carries its own Target, so folding it
-    into the HIR-only ``Module`` contract would erase the reason for that rule.
-    """
-    namespace, selector = load_namespace(source)
-    if selector is not None:
-        if "." in selector:
-            raise ValueError(
-                f"TIR selector {selector!r} must name one top-level PrimFunction"
-            )
-        selected = namespace.get(selector)
-        if selected is None:
-            raise ValueError(f"selector {selector!r} is not defined by the source")
-        if not isinstance(selected, PrimFunction):
-            raise TypeError(
-                f"selector {selector!r} resolves to {type(selected).__name__}, "
-                "expected a TIR PrimFunction"
-            )
-        return selected
-
-    functions = _unique_values(namespace, PrimFunction)
-    if len(functions) == 1:
-        return functions[0]  # type: ignore[return-value]
-    if len(functions) > 1:
-        names = ", ".join(sorted(function.name for function in functions))
-        raise ValueError(f"source defines multiple TIR PrimFunctions ({names}); add ':NAME'")
-    modules = _unique_values(namespace, Module)
-    if modules:
-        names = ", ".join(sorted(module.name for module in modules))
-        raise TypeError(
-            f"matched expects a TIR PrimFunction, but source defines HIR Modules ({names})"
-        )
-    hir_functions = _unique_values(namespace, Function)
-    if hir_functions:
-        names = ", ".join(sorted(function.name for function in hir_functions))
-        raise TypeError(
-            f"matched expects a TIR PrimFunction, but source defines HIR Functions ({names})"
-        )
-    raise ValueError("matched expects TIR, but source defines no PrimFunction")
-
-
 def selected_target(ir: Module):
     """The Target the selection declares.
 
@@ -440,7 +394,6 @@ def suggested_extents(lo: int, hi: int) -> tuple[int, ...]:
 __all__ = [
     "load_authored_ir",
     "load_namespace",
-    "load_prim_function",
     "one_extent_per_dim",
     "parse_dims",
     "select_ir",
