@@ -850,7 +850,7 @@ class Lowering(ExprVisitor[Expr]):
         if mesh is None:
             raise LoweringError(f"{_label(call)} has atom axes but no declared physical mesh")
         try:
-            groups = tuple(issue_frames(mesh, atom.required_scope, repeat, tile))
+            groups = tuple(issue_frames(mesh, atom.required_execution_mesh, repeat, tile))
         except ValueError as error:
             raise LoweringError(f"{_label(call)} {error}") from error
         for frame, lows in groups:

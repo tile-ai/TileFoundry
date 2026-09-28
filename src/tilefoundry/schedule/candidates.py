@@ -17,7 +17,13 @@ from tilefoundry.ir.core.metadata import SourceSpanMetadata
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.sharding.reshard import Reshard
-from tilefoundry.ir.pattern import PatternMatcher, SwitchPattern, TensorPattern, between_rules
+from tilefoundry.ir.pattern import (
+    PatternMatcher,
+    SwitchPattern,
+    TensorPattern,
+    between_rules,
+    declared_execution_mesh,
+)
 from tilefoundry.ir.types import TensorType, UnitType
 from tilefoundry.ir.types.int_tuple import flatten
 from tilefoundry.ir.types.utils import local_type_of
@@ -369,14 +375,7 @@ def _refusals(site: _Site, op, variant) -> tuple[str, ...]:
     return tuple(refused)
 
 
-def _scope_pattern(op, variant):
-    if variant is not None:
-        return type(variant).scope_pattern()
-    scope = next((param for param in op._op_schema.signature if param.name == "scope"), None)
-    return None if scope is None else scope.pattern
-
-
-def _fixed_scope_size(pattern) -> int | None:
+def _fixed_execution_mesh_size(pattern) -> int | None:
     layout = getattr(pattern, "layout", None)
     outer = getattr(layout, "outer", layout)
     shape = tuple(flatten(getattr(outer, "shape", ())))
@@ -384,8 +383,8 @@ def _fixed_scope_size(pattern) -> int | None:
 
 
 def _needs(site: _Site, op, variant) -> str | None:
-    pattern = _scope_pattern(op, variant)
-    size = _fixed_scope_size(pattern)
+    pattern = declared_execution_mesh(type(variant) if variant is not None else type(op))
+    size = _fixed_execution_mesh_size(pattern)
     if size is None:
         return None
     groups = 1

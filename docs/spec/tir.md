@@ -556,13 +556,15 @@ class Copy(Op):
 
     src: Tensor
     dst: Tensor
+    execution_mesh: MeshPattern
 ```
 - constraints:
   - `src` declares `READ`; `dst` declares `WRITE`.
   - both operands are whole-byte tensors in gmem, smem, or rmem, with equal
     dtype. Their storages MAY be equal; same-storage copy is still a byte move.
-  - `scope` optionally states any non-empty run of threads. `rmem_layout` and
-    `smem_layout` optionally state the author's landing arrangements.
+  - `execution_mesh` is the mesh declaration shared by every rmem operand's
+    `ShardLayoutPattern.mesh`. `rmem_layout` and `smem_layout` optionally state
+    the author's landing arrangements.
 
 ##### Fill
 ```python
@@ -576,12 +578,14 @@ class Fill(Op):
 
     tensor: Tensor
     value: Tensor
+    execution_mesh: MeshPattern
 ```
 - constraints:
   - `tensor` declares `WRITE`; `value` declares `READ` and MUST be scalar.
   - a nonconstant value's dtype MUST equal the destination dtype. Constant zero
     is convertible and MAY use the parser's default scalar dtype.
-  - `scope` optionally states any non-empty run of threads.
+  - `execution_mesh` is the same mesh referenced by `tensor` when it is rmem;
+    the scalar carries no shard mesh.
 
 ##### Cast
 ```python
@@ -590,12 +594,12 @@ class Cast(Op):
 
     src: Tensor
     dst: Tensor
-    scope: Mesh | None = None
+    execution_mesh: MeshPattern
 ```
 - constraints:
   - `src` declares `READ`; `dst` declares `WRITE`; both are rmem tensors.
   - the operands have equal shapes and distinct dtypes.
-  - `scope` optionally states any non-empty run of threads.
+  - both operand shard layouts reference the same `execution_mesh` declaration.
 
 #### NN Ops (`tir.nn.*`)
 
@@ -609,14 +613,14 @@ class TiledMma(Op):
         lhs: input; left-hand operand fragment.
         rhs: input; right-hand operand fragment.
         atom: attribute; required compile-time ``MmaAtom`` declaration.
-        scope: attribute; optional warp-aligned thread scope.
+        execution_mesh: attribute; optional warp-aligned execution mesh.
     """
 
     acc: Tensor
     lhs: Tensor
     rhs: Tensor
     atom: MmaAtom
-    scope: Mesh | None = None
+    execution_mesh: Mesh | None = None
 ```
 - constraints:
   - matrix-multiply-accumulate `acc += lhs @ rhs`; per-target PTX lowering lives in
@@ -879,10 +883,25 @@ block_y, block_z, *forwarded_args)`:
   non-grid/block launch configuration. A `cluster` / `stream` / `attrs` value
   the active CUDA target does not support MUST be rejected in target lowering.
 
+#### Execution meshes
+
+An instruction Op reserves the class-body name `execution_mesh` for the mesh
+that executes one issue. A fixed instruction declaration MAY state a concrete
+`Mesh`; an Op with a caller-selectable frame MAY state a `ParamDef` whose
+pattern is a `MeshPattern`; and an element-wise Op MAY point directly at the
+same `MeshPattern` used by its operand shard declarations. These are the only
+three forms. An instruction whose `execution_mesh` has another form MUST be
+rejected by name rather than treated as running on arbitrary threads.
+
+An operand that carries a `ShardLayout` and executes element-wise MUST use that
+same execution-mesh pattern in `ShardLayoutPattern.mesh`. Unsharded gmem and
+smem operands carry no holder mesh; the execution declaration does not invent
+one for them.
+
 #### Declarative MMA atoms and `T.tiled_mma`
 
 An MMA instruction is a target-owned `MmaAtom` declaration. The declaration
-class states its authored parameters, required physical scope, target
+class states its authored parameters, required physical execution mesh, target
 capability, and the `TensorPattern` read for each `A`, `B`, and `C` role. An
 instance binds the parameters for one call; it does not carry a second copy of
 concrete fragment layouts that could drift from those patterns.
@@ -890,7 +909,7 @@ concrete fragment layouts that could drift from those patterns.
 ```python
 class MmaAtom:
     namespace: str
-    scope: Mesh
+    execution_mesh: Mesh
     capability: str
     A: TensorPattern | SwitchPattern
     B: TensorPattern | SwitchPattern
@@ -900,7 +919,7 @@ class MmaAtom:
     mesh: Mesh | None
 
     def role(self, role: str) -> TensorPattern: ...
-    def scope_pattern(self) -> MeshPattern: ...
+    def execution_mesh_pattern(self) -> MeshPattern: ...
 ```
 
 - constraints:
@@ -912,9 +931,9 @@ class MmaAtom:
     role pattern under the instance bindings. The logical TIR orientation is
     always A `(M,K)`, B `(K,N)`, C `(M,N)`; each role pattern separately states
     the fragment's physical arrangement.
-  - `scope_pattern()` MUST require the declaration's exact participant count
-    at an aligned offset. `mesh`, when present, binds the atom to one concrete
-    frame and MUST match the active frame at verify.
+  - `execution_mesh_pattern()` MUST require the declaration's exact participant
+    count at an aligned offset. `mesh`, when present, binds the atom to one
+    concrete frame and MUST match the active frame at verify.
   - `capability` MUST use the emitted instruction-family name and be present in
     the active CUDA architecture's `capabilities`. `resource` MUST name the
     execution engine with an `_engine` suffix. These are separate axes: support
@@ -941,7 +960,7 @@ T.tiled_mma(acc, lhs, rhs, atom=T.cuda.sm80.Mma())
 - `rhs` MUST match `atom.role("B")` and is read-only.
 - A, B, and C shapes MUST be `(M,K)`, `(K,N)`, and `(M,N)` respectively;
   operands MUST use the atom's declared dtypes and fragment arrangements.
-- The active physical mesh MUST satisfy `atom.scope_pattern()`. If the atom
+- The active physical mesh MUST satisfy `atom.execution_mesh_pattern()`. If the atom
   carries `mesh=...`, its affine offset and ordered lanes MUST equal the active
   frame.
 
@@ -973,6 +992,7 @@ class CopyAsync(Op):
     src: Tensor
     dst: Tensor
     smem_layout: Layout | None = None
+    execution_mesh: MeshPattern
 ```
 - constraints:
   - Its instruction capability is `cp.async`; a CUDA architecture that admits
@@ -986,6 +1006,8 @@ class CopyAsync(Op):
     and shard attrs are identical.
   - A later read of `dst` is ordered by `CpAsyncCommit` followed by
     `CpAsyncWait`.
+  - `execution_mesh` states the issuing threads. The gmem and smem operands are
+    unsharded and therefore declare no separate holder mesh.
 
 ##### CpAsyncCommit
 
@@ -1070,7 +1092,7 @@ class CopyAsyncTensor(Op):
     src: Tensor
     dst: Tensor
     smem_layout: Layout | None = None
-    scope: Mesh | None = None
+    execution_mesh: Mesh | None = None
 ```
 
 - constraints:
@@ -1079,7 +1101,7 @@ class CopyAsyncTensor(Op):
     with one contiguous mode and every other byte stride a multiple of 16.
     The shared end is an at-most-five-dimensional box, each extent at most
     256, optionally using a 32-, 64-, or 128-byte TMA swizzle.
-  - Both ends walk the same tile modes. The issuing scope is one aligned warp.
+  - Both ends walk the same tile modes. The execution mesh is one aligned warp.
   - The declaration requires the target's `tma` capability. CUDA codegen MUST
     reject it until host-encoded tensor-map construction exists; this stage
     does not silently lower it to another copy instruction.
@@ -1090,7 +1112,7 @@ class CopyAsyncTensor(Op):
 class LdMatrix(Op):
     src: Tensor
     dst: Tensor
-    scope: Mesh | None = None
+    execution_mesh: Mesh | None = None
 ```
 
 - constraints:

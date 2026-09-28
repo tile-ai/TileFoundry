@@ -55,11 +55,12 @@ from .predicates import (
 from .utils import (
     MOVED_STORAGES,
     _mangle_variant_name,
-    any_threads,
+    declared_execution_mesh,
     dtype_place,
     locate_dim_var,
     operand_tile,
     storage_place,
+    thread_execution_mesh,
     whole_vectors,
 )
 
@@ -101,8 +102,8 @@ __all__ = [
     "Unknown",
     "WildcardPattern",
     "_mangle_variant_name",
-    "any_threads",
     "between_rules",
+    "declared_execution_mesh",
     "evaluate",
     "evaluated",
     "dtype_place",
@@ -112,6 +113,7 @@ __all__ = [
     "operand_tile",
     "refusals_between",
     "storage_place",
+    "thread_execution_mesh",
     "failing",
     "predicates",
     "solve",

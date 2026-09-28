@@ -8,13 +8,13 @@ from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import (
     DistinctConstraint,
     SameConstraint,
-    any_threads,
     utils,
 )
 from tilefoundry.ir.types import StorageKind, UnitType
 from tilefoundry.visitor_registry import register_typeinfer
 
-_IN_RMEM = utils.tensor_in(StorageKind.RMEM)
+_EXECUTION_MESH = utils.thread_execution_mesh()
+_IN_RMEM = utils.tensor_in(StorageKind.RMEM, _EXECUTION_MESH)
 
 
 @register_op(dialect="T", category="arith", name="cast")
@@ -27,7 +27,7 @@ class Cast(Op):
         SameConstraint("shape", "src", "dst"),
         DistinctConstraint("dtype", "src", "dst"),
     )
-    scope = any_threads()
+    execution_mesh = _EXECUTION_MESH
 
 
 @register_typeinfer(Cast)

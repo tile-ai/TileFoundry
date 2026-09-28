@@ -26,6 +26,7 @@ from .pattern import (
     Pattern,
     RangePattern,
     ShardLayoutPattern,
+    StarPattern,
     SwitchPattern,
     TensorPattern,
     WildcardPattern,
@@ -34,12 +35,23 @@ from .pattern import (
 MOVED_STORAGES = (StorageKind.GMEM, StorageKind.SMEM, StorageKind.RMEM)
 
 
-def tensor_in(storage: StorageKind) -> TensorPattern:
+def tensor_in(
+    storage: StorageKind,
+    execution_mesh: MeshPattern | None = None,
+) -> TensorPattern:
     """A tensor of any shape and dtype held in *storage*."""
-    return TensorPattern(storage=storage)
+    layout = None
+    if storage == StorageKind.RMEM and execution_mesh is not None:
+        layout = _sharded_on(execution_mesh)
+    return TensorPattern(storage=storage, layout=layout)
 
 
-def operand_tile(index: int, storage=None, layout=None) -> TensorPattern:
+def operand_tile(
+    index: int,
+    storage=None,
+    layout=None,
+    execution_mesh: MeshPattern | None = None,
+) -> TensorPattern:
     """A tensor tile whose dtype and storage captures are named by operand slot."""
     storages = MOVED_STORAGES if storage is None else storage
     dtype_name = dtype_place(index)
@@ -47,6 +59,18 @@ def operand_tile(index: int, storage=None, layout=None) -> TensorPattern:
     predicates = [P.Bits(dtype_name) % 8 == 0]
     if isinstance(storages, tuple):
         predicates.append(P.In(WildcardPattern(storage_name), storages))
+    if layout is None and execution_mesh is not None:
+        sharded = _sharded_on(execution_mesh)
+        if isinstance(storages, tuple):
+            layout = SwitchPattern(
+                storage_name,
+                {
+                    held: sharded if held == StorageKind.RMEM else WildcardPattern()
+                    for held in storages
+                },
+            )
+        elif storages == StorageKind.RMEM:
+            layout = sharded
     return TensorPattern(
         dtype=WildcardPattern(dtype_name),
         storage=(WildcardPattern(storage_name) if isinstance(storages, tuple) else storages),
@@ -78,29 +102,46 @@ def whole_vectors(index: int, widths: tuple[int, ...]) -> LayoutPattern:
     )
 
 
-_ANY_THREADS = ComposedLayoutPattern(
+_THREAD_EXECUTION_LAYOUT = ComposedLayoutPattern(
     inner=None,
-    offset=WildcardPattern(),
+    offset=WildcardPattern("p0"),
     outer=LayoutPattern(
-        ((WildcardPattern("n"),),),
-        ((1,),),
-        predicates=(
-            WildcardPattern("n") >= 1,
-            P.Forward(per_mode=True),
-            P.Injective(per_mode=True),
-        ),
+        (StarPattern(WildcardPattern("execution_shape")),),
+        (StarPattern(WildcardPattern("execution_strides")),),
     ),
 )
 
 
-def any_threads() -> ParamDef:
-    """Declare an optional scope spanning one or more threads."""
-    return ParamDef(
-        kind="attribute",
-        annotation=Mesh,
-        pattern=MeshPattern(("thread",), _ANY_THREADS),
-        optional=True,
-        default=None,
+def thread_execution_mesh() -> MeshPattern:
+    """Declare one contiguous non-empty run of executing threads."""
+    return MeshPattern(("thread",), _THREAD_EXECUTION_LAYOUT)
+
+
+def declared_execution_mesh(op_type: type) -> MeshPattern:
+    """Return one op's reserved execution-mesh declaration or reject it."""
+    factory = getattr(op_type, "execution_mesh_pattern", None)
+    if callable(factory):
+        declared = factory()
+    else:
+        stated = getattr(op_type, "execution_mesh", None)
+        declared = stated.pattern if isinstance(stated, ParamDef) else stated
+    if not isinstance(declared, MeshPattern):
+        name = getattr(op_type, "reference_name", "") or op_type.__name__
+        raise ValueError(
+            f"{name} execution_mesh must be a constant, ParamDef, or operand mesh reference"
+        )
+    return declared
+
+
+def _sharded_on(execution_mesh: MeshPattern) -> OrPattern:
+    """A lexical tile, or a shard explicitly held by *execution_mesh*."""
+    return OrPattern(
+        ShardLayoutPattern(
+            layout=WildcardPattern(),
+            attrs=WildcardPattern(),
+            mesh=execution_mesh,
+        ),
+        LayoutPattern(),
     )
 
 
@@ -272,11 +313,12 @@ def _mangle_variant_name(name: str, specializations: tuple[Pattern, ...]) -> str
 __all__ = [
     "MOVED_STORAGES",
     "_mangle_variant_name",
-    "any_threads",
+    "declared_execution_mesh",
     "dtype_place",
     "locate_dim_var",
     "operand_tile",
     "storage_place",
     "tensor_in",
+    "thread_execution_mesh",
     "whole_vectors",
 ]

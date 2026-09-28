@@ -182,7 +182,7 @@ class CopyAsyncTensor(Op):
         optional=True,
         default=None,
     )
-    scope = ParamDef(
+    execution_mesh = ParamDef(
         kind="attribute",
         annotation=Mesh,
         pattern=_warp_scope(),

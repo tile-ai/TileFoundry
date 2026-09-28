@@ -35,7 +35,8 @@ from tilefoundry.cli import main as cli_main
 from tilefoundry.evaluator import EvalError, evaluate
 from tilefoundry.inspection import PatternPrinter, as_script
 from tilefoundry.ir.core import Call, Op, Var, detach_metadata, get_metadata
-from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
+from tilefoundry.ir.core.op_registry import iter_schemas
+from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef, collect_param_defs
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
@@ -43,7 +44,12 @@ from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.hir.tensor.cast import Cast as HirCast
-from tilefoundry.ir.pattern import PatternMatcher, Tensor, TensorPattern
+from tilefoundry.ir.pattern import (
+    PatternMatcher,
+    Tensor,
+    TensorPattern,
+    declared_execution_mesh,
+)
 from tilefoundry.ir.tir import PrimFunction
 from tilefoundry.ir.tir.async_copy import CopyAsync
 from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
@@ -62,6 +68,7 @@ from tilefoundry.ir.types import (
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
+from tilefoundry.schedule.instructions import registered_families
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     access_relation_registry,
@@ -740,6 +747,35 @@ def test_tir_program_is_verified_and_canonical(path: Path) -> None:
 
 def test_wgmma_declaration_is_canonical() -> None:
     assert PatternPrinter().declaration(Wgmma) + "\n" == WGMMA_DECLARATION.read_text()
+
+
+def test_parameter_structure_does_not_repeat_its_name() -> None:
+    declarations = {
+        schema.op_class
+        for schema in iter_schemas()
+        if schema.op_class is not None
+    }
+    declarations.update(
+        instruction.declaration
+        for family in registered_families()
+        for instruction in family.declarations
+    )
+    printer = PatternPrinter()
+    for declaration in declarations:
+        parameters = tuple(getattr(declaration, "parameters", ())) or collect_param_defs(
+            declaration
+        )
+        for parameter in parameters:
+            if parameter.pattern is not None:
+                assert printer.written(parameter.pattern, parameter.name) != parameter.name, (
+                    f"{declaration.__name__}.{parameter.name} puts a predicate in its "
+                    "structural pattern slot"
+                )
+
+
+def test_instruction_requires_an_execution_mesh_declaration() -> None:
+    with pytest.raises(ValueError, match="_UnstatedInstruction execution_mesh must be"):
+        declared_execution_mesh(_UnstatedInstruction)
 
 
 def test_schedule_facts_writes_wgmma_declaration(

@@ -459,7 +459,7 @@ must occur in the target architecture's capability set; a declaration with no
 required capability is admitted by every target. A carrier may associate more
 than one named declaration with itself. The inventory lists that carrier once,
 while each associated declaration remains addressable by its own exact name.
-With one name, `facts` reports that declaration's capability, issuing mesh,
+With one name, `facts` reports that declaration's capability, execution mesh,
 parameters, operands, and cross-operand constraints; the parameter and operand
 sections are canonical `PatternPrinter.declaration` text.
 `candidates` reports the instructions whose access relation and operand

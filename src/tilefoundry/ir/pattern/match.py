@@ -149,7 +149,9 @@ class PatternMatcher:
         for cls in type(pattern).__mro__:
             visitor = getattr(self, f"visit_{cls.__name__}", None)
             if visitor is not None:
-                return visitor(pattern, subject)
+                return visitor(pattern, subject) and all(
+                    self.match(predicate, subject) for predicate in pattern.predicates
+                )
         return self._fail(pattern, subject)
 
     def visit_Pattern(self, pattern, subject) -> bool:
@@ -367,7 +369,7 @@ class PatternMatcher:
                     self.match(place, value) for place, value in zip(places, values)
                 ):
                     return False
-        return all(self.match(predicate, subject) for predicate in pattern.predicates)
+        return True
 
     def visit_SwizzlePattern(self, pattern, subject) -> bool:
         if subject is None:
@@ -384,7 +386,6 @@ class PatternMatcher:
         )
 
     def visit_ComposedLayoutPattern(self, pattern, subject) -> bool:
-        stated = subject
         if isinstance(subject, Layout):
             subject = ComposedLayout(None, 0, subject)
         if not isinstance(subject, ComposedLayout):
@@ -396,7 +397,7 @@ class PatternMatcher:
                 (pattern.offset, subject.offset),
                 (pattern.outer, subject.outer),
             )
-        ) and all(self.match(predicate, stated) for predicate in pattern.predicates)
+        )
 
     def visit_MeshPattern(self, pattern, subject) -> bool:
         if not isinstance(subject, Mesh):
@@ -427,10 +428,7 @@ class PatternMatcher:
         for place, value in ((pattern.dtype, subject.dtype), (pattern.storage, subject.storage)):
             if not self.match(place, value):
                 return False
-        return (
-            (pattern.layout is None or self.match(pattern.layout, subject.layout))
-            and all(self.match(predicate, subject) for predicate in pattern.predicates)
-        )
+        return pattern.layout is None or self.match(pattern.layout, subject.layout)
 
     def visit_ShardLayoutPattern(self, pattern, subject) -> bool:
         if not isinstance(subject, ShardLayout):
@@ -447,7 +445,7 @@ class PatternMatcher:
                 (pattern.attrs, subject.attrs),
                 (pattern.mesh, subject.mesh),
             )
-        ) and all(self.match(predicate, subject) for predicate in pattern.predicates)
+        )
 
     def visit_Predicate(self, pattern, subject) -> bool:
         held = pattern.holds(subject, self.bindings)

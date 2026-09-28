@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import pytest
 
 from tests.fixtures.meshes import CT, CTA
@@ -5,12 +7,19 @@ from tilefoundry.ir.pattern import (
     ComposedLayoutPattern,
     LayoutPattern,
     MeshPattern,
+    Predicate,
     WildcardPattern,
 )
 from tilefoundry.ir.pattern import (
     predicates as P,
 )
 from tilefoundry.ir.types import ComposedLayout, DType, Layout
+
+
+@dataclass(frozen=True)
+class _BareLayout(Predicate):
+    def holds(self, subject, bindings):
+        return isinstance(subject, Layout)
 
 
 def test_mesh_pattern_matches_the_levels_it_names():
@@ -69,3 +78,16 @@ def test_layout_predicates_read_through_composition():
     subject = ComposedLayout(None, 0, Layout(((128, 4),), ((4, 1),)))
 
     assert pattern.match(subject, {"dtype0": DType.f32}).captures["width"] == 16
+
+
+def test_composed_layout_predicates_read_the_received_subject():
+    pattern = ComposedLayoutPattern(
+        inner=None,
+        offset=0,
+        outer=LayoutPattern(),
+        predicates=(_BareLayout(),),
+    )
+    bare = Layout((4,), (1,))
+
+    assert pattern.match(bare) is not None
+    assert pattern.match(ComposedLayout(None, 0, bare)) is None

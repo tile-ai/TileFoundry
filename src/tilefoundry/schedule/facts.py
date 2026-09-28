@@ -5,8 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from tilefoundry.inspection import PatternPrinter
-from tilefoundry.ir.core.param_def import collect_param_defs
-from tilefoundry.ir.pattern import between_rules
+from tilefoundry.ir.pattern import between_rules, declared_execution_mesh
 from tilefoundry.target import Target
 
 from .instructions import families
@@ -60,25 +59,17 @@ def _selection(target: Target, wanted_id: str) -> tuple[type, str | tuple[str, .
     return matches[0]
 
 
-def _issuer_pattern(op_type: type):
-    scope_pattern = getattr(op_type, "scope_pattern", None)
-    if callable(scope_pattern):
-        return scope_pattern()
-    scope = next((param for param in collect_param_defs(op_type) if param.name == "scope"), None)
-    return None if scope is None else scope.pattern
-
-
 def one(target: Target, wanted: str | type) -> dict[str, Any]:
     """Describe one supported instruction declaration by its exact name."""
     wanted_id = _instruction_id(wanted) if isinstance(wanted, type) else wanted
     op_type, capability = _selection(target, wanted_id)
-    issuer = _issuer_pattern(op_type)
+    execution_mesh = declared_execution_mesh(op_type)
     sections = PatternPrinter().declaration_sections(op_type)
     return {
         "target": target.identity,
         "id": _instruction_id(op_type),
         "capability": capability,
-        "issued_by": None if issuer is None else PatternPrinter().described(issuer),
+        "execution_mesh": PatternPrinter().described(execution_mesh),
         "parameters": list(sections.get("parameters", ())),
         "operands": list(sections.get("operands", ())),
         "between": [rule.written() for rule in between_rules(op_type)],
@@ -113,8 +104,7 @@ def render(data: dict[str, Any]) -> str:
     lines = [data["id"], *_column("target", data["target"])]
     if data["capability"] is not None:
         lines.extend(_column("target capability", _written_capability(data["capability"])))
-    if data["issued_by"] is not None:
-        lines.extend(_column("issuer mesh", data["issued_by"]))
+    lines.extend(_column("execution mesh", data["execution_mesh"]))
     for heading in ("parameters", "operands"):
         if data[heading]:
             lines.append(f"  {heading}")

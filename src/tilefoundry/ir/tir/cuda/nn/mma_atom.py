@@ -29,14 +29,14 @@ from tilefoundry.ir.types.utils import tile_view_layout
 _MISS = object()
 
 
-def scope_pattern(scope: Mesh) -> MeshPattern:
-    """Any run of *scope*'s threads that starts on a whole multiple of its size."""
-    (topology,) = scope.topologies
+def execution_mesh_pattern(execution_mesh: Mesh) -> MeshPattern:
+    """Any aligned run matching an instruction's execution mesh."""
+    (topology,) = execution_mesh.topologies
     per_mode = (P.Forward(per_mode=True), P.Injective(per_mode=True))
     layout = ComposedLayoutPattern(
         inner=None,
         offset=WildcardPattern("p0"),
-        outer=LayoutPattern.from_layout(scope.layout, predicates=per_mode),
+        outer=LayoutPattern.from_layout(execution_mesh.layout, predicates=per_mode),
         predicates=(WildcardPattern("p0") % topology.size == 0,),
     )
     return MeshPattern((topology.name,), layout)
@@ -46,7 +46,7 @@ class MmaAtom:
     """One instruction declaration; an instance binds its authored parameters."""
 
     namespace: str
-    scope: Mesh
+    execution_mesh: Mesh
     capability: str
     resource: str
     C: object
@@ -152,12 +152,12 @@ class MmaAtom:
         return tuple(tiles), rows
 
     @property
-    def required_scope(self) -> Mesh:
-        return self.scope
+    def required_execution_mesh(self) -> Mesh:
+        return self.execution_mesh
 
     @classmethod
-    def scope_pattern(cls) -> MeshPattern:
-        return scope_pattern(cls.scope)
+    def execution_mesh_pattern(cls) -> MeshPattern:
+        return execution_mesh_pattern(cls.execution_mesh)
 
     def on(self, mesh: Mesh) -> MmaAtom:
         return type(self)(mesh=mesh, **self.bindings)
@@ -263,5 +263,5 @@ __all__ = [
     "FromAtom",
     "MmaAtom",
     "physical_frames_match",
-    "scope_pattern",
+    "execution_mesh_pattern",
 ]

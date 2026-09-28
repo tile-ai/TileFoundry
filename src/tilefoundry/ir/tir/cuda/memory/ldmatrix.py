@@ -28,10 +28,10 @@ class LdMatrix(Op):
 
     src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=utils.operand_tile(0, S.SMEM))
     dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=Mma.A)
-    scope = ParamDef(
+    execution_mesh = ParamDef(
         kind="attribute",
         annotation=Mesh,
-        pattern=Mma.scope_pattern(),
+        pattern=Mma.execution_mesh_pattern(),
         optional=True,
         default=None,
     )

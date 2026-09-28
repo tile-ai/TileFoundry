@@ -18,9 +18,14 @@ from tilefoundry.visitor_registry import register_typeinfer, register_verify_stm
 class Fill(Op):
     """Fills ``tensor`` element-wise with ``value`` (rank-0 scalar)."""
 
-    tensor = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=utils.operand_tile(0))
+    execution_mesh = utils.thread_execution_mesh()
+
+    tensor = ParamDef(
+        kind="input",
+        effect=MemoryEffect.WRITE,
+        pattern=utils.operand_tile(0, execution_mesh=execution_mesh),
+    )
     value = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=Scalar)
-    scope = utils.any_threads()
 
 
 @register_typeinfer(Fill)

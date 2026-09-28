@@ -90,7 +90,7 @@ class TiledMma(Op):
         annotation=MmaAtom,
         pattern=AtomPattern(Wgmma, _Sm80Mma),
     )
-    scope = ParamDef(
+    execution_mesh = ParamDef(
         kind="attribute",
         annotation=Mesh,
         pattern=MeshPattern(("thread",), _WARP_ALIGNED),
@@ -132,7 +132,7 @@ def verify_mma(call: "Call", ctx: "VerifyContext") -> None:
     if not ctx.mesh_scope:
         ctx.error(call, "MMA requires an active physical mesh scope")
     current = ctx.mesh_scope[-1]
-    participation = atom.scope_pattern()
+    participation = atom.execution_mesh_pattern()
     if participation.match(current) is None:
         ctx.error(
             call,

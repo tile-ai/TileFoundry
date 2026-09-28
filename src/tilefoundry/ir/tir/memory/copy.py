@@ -29,13 +29,20 @@ class Copy(Op):
 
     capability = InstructionCapability(None, report_order=5)
 
-    src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=utils.operand_tile(0))
-    dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=utils.operand_tile(1))
+    execution_mesh = utils.thread_execution_mesh()
+
+    src = ParamDef(
+        kind="input",
+        effect=MemoryEffect.READ,
+        pattern=utils.operand_tile(0, execution_mesh=execution_mesh),
+    )
+    dst = ParamDef(
+        kind="input",
+        effect=MemoryEffect.WRITE,
+        pattern=utils.operand_tile(1, execution_mesh=execution_mesh),
+    )
     rmem_layout = ParamDef(kind="attribute", annotation=LayoutBase, optional=True, default=None)
     smem_layout = ParamDef(kind="attribute", annotation=LayoutBase, optional=True, default=None)
-
-    scope = utils.any_threads()
-
 
 @register_typeinfer(Copy)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:

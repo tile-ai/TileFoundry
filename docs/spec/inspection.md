@@ -402,9 +402,14 @@ values is one set-valued alternative rather than several structural branches.
 For tensor arrangements, rules shared by every alternative appear in the
 common predicates block; rules unique to one alternative remain indented under
 that arrangement. Parameter defaults are stated on their parameter line.
-Instruction declarations report their participation mesh once as the `scope`
-attribute, with the mesh's predicates, instead of repeating those predicates
-under every operand.
+Every `Pattern` carries its own `predicates` slot. The structural line comes
+only from that pattern's structural fields, while its predicate block comes
+only from `pattern.predicates`; the printer MUST NOT infer one role from the
+text produced for the other. `ShardLayoutPattern` arrangements render all
+three declared fields through the same visitor/rules dispatch: local layout,
+shard attrs, and holder mesh. Instruction declarations call the reserved field
+`execution mesh` everywhere, including the standalone facts field and the
+declaration attributes section.
 
 This report printer is separate from `PythonPrinter`: it does not inherit the
 round-trip source printer, request import or mesh-name registration, or accept

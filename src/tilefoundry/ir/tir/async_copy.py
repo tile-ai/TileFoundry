@@ -24,16 +24,27 @@ class CopyAsync(Op):
     """Async gmem→smem copy (``cp.async.cg.shared.global``); non-blocking."""
 
     capability = InstructionCapability("cp.async", report_order=2)
+    execution_mesh = utils.thread_execution_mesh()
 
     src = ParamDef(
         kind="input",
         effect=MemoryEffect.READ,
-        pattern=utils.operand_tile(0, S.GMEM, utils.whole_vectors(0, ASYNC_WIDTHS)),
+        pattern=utils.operand_tile(
+            0,
+            S.GMEM,
+            utils.whole_vectors(0, ASYNC_WIDTHS),
+            execution_mesh,
+        ),
     )
     dst = ParamDef(
         kind="input",
         effect=MemoryEffect.WRITE,
-        pattern=utils.operand_tile(1, S.SMEM, utils.whole_vectors(1, ASYNC_WIDTHS)),
+        pattern=utils.operand_tile(
+            1,
+            S.SMEM,
+            utils.whole_vectors(1, ASYNC_WIDTHS),
+            execution_mesh,
+        ),
     )
     between = (
         DistinctConstraint("storage", "src", "dst"),
@@ -45,9 +56,6 @@ class CopyAsync(Op):
         optional=True,
         default=None,
     )
-    scope = utils.any_threads()
-
-
 @register_typeinfer(CopyAsync)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()

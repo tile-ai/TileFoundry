@@ -6,7 +6,6 @@ from enum import Enum
 
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.pattern import (
-    AndPattern,
     ComposedLayoutPattern,
     LayoutPattern,
     OrPattern,
@@ -24,7 +23,7 @@ from tilefoundry.ir.types import Broadcast, DType, Layout, Mesh, Split, Topology
 from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.storage import StorageKind as S
 
-from .mma_atom import MmaAtom, scope_pattern
+from .mma_atom import MmaAtom, execution_mesh_pattern
 
 WARPGROUP = Mesh(
     (Topology("thread", 128),),
@@ -54,7 +53,6 @@ n, b, W, p, r, l, s, c = (
 n_extent = n
 bb, Wb, rb, lb, sb = (WildcardPattern(name) for name in ("b_swizzle", "Wb", "rb", "lb", "sb"))
 RUN = P.Table((8, 16, 32, 64))[b]
-WARPGROUP_SCOPE = scope_pattern(WARPGROUP)
 BROADCAST = (Broadcast(), Broadcast(), Broadcast())
 PER_THREAD = (Split(2), Split(0), Split(4))
 
@@ -87,25 +85,28 @@ class Wgmma(MmaAtom):
     """A BF16 warpgroup MMA, 64 x n x 16, accumulating in F32."""
 
     namespace = "T.cuda.sm90"
-    scope = WARPGROUP
+    execution_mesh = WARPGROUP
     capability = "wgmma.mma_async"
     resource = "wgmma_engine"
 
     n = ParamDef(
         kind="attribute",
         annotation=int,
-        pattern=AndPattern(
-            (
-                WildcardPattern("n"),
+        pattern=WildcardPattern(
+            "n",
+            predicates=(
                 RangePattern(lo=N.lo, hi=N.hi - 1),
                 WildcardPattern("n") % 8 == 0,
-            )
+            ),
         ),
     )
     form = ParamDef(
         kind="attribute",
         annotation=Form,
-        pattern=OrPattern(*tuple(Form)),
+        pattern=WildcardPattern(
+            "form",
+            predicates=(OrPattern(*tuple(Form)),),
+        ),
     )
     a_major = ParamDef(
         kind="attribute",
@@ -124,7 +125,11 @@ class Wgmma(MmaAtom):
         shape=(64, N),
         dtype=DType.f32,
         storage=S.RMEM,
-        layout=ShardLayoutPattern(fragment, PER_THREAD, WARPGROUP_SCOPE),
+        layout=ShardLayoutPattern(
+            fragment,
+            PER_THREAD,
+            execution_mesh_pattern(WARPGROUP),
+        ),
         predicates=(8 * c == n_extent,),
     )
     A = SwitchPattern(
@@ -143,7 +148,7 @@ class Wgmma(MmaAtom):
                         },
                     ),
                     BROADCAST,
-                    WARPGROUP_SCOPE,
+                    execution_mesh_pattern(WARPGROUP),
                 ),
             ),
             Form.RS: TensorPattern(
@@ -156,7 +161,7 @@ class Wgmma(MmaAtom):
                         (1, 8, 16, 64, 128, 512),
                     ),
                     PER_THREAD,
-                    WARPGROUP_SCOPE,
+                    execution_mesh_pattern(WARPGROUP),
                 ),
             ),
         },
@@ -178,7 +183,7 @@ class Wgmma(MmaAtom):
                 ),
             ),
             BROADCAST,
-            WARPGROUP_SCOPE,
+            execution_mesh_pattern(WARPGROUP),
         ),
     )
 
@@ -190,7 +195,6 @@ __all__ = [
     "N",
     "PER_THREAD",
     "WARPGROUP",
-    "WARPGROUP_SCOPE",
     "Wgmma",
     "a_k_sliced",
     "a_k_whole",

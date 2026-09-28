@@ -10,7 +10,7 @@ from tilefoundry.ir.pattern import (
 from tilefoundry.ir.types import DType, Layout, Mesh, ShardLayout, Split, Topology
 from tilefoundry.ir.types.storage import StorageKind as S
 
-from .mma_atom import MmaAtom, scope_pattern
+from .mma_atom import MmaAtom, execution_mesh_pattern
 
 WARP = Mesh(
     topologies=(Topology("thread", 32),),
@@ -34,9 +34,6 @@ _C_FRAGMENT = ShardLayout(
     mesh=WARP,
 )
 
-_WARP_SCOPE = scope_pattern(WARP)
-
-
 def _fragment(shape: tuple, dtype, held: ShardLayout) -> TensorPattern:
     return TensorPattern(
         shape=shape,
@@ -45,7 +42,7 @@ def _fragment(shape: tuple, dtype, held: ShardLayout) -> TensorPattern:
         layout=ShardLayoutPattern(
             layout=LayoutPattern.from_layout(held.layout),
             attrs=held.attrs,
-            mesh=_WARP_SCOPE,
+            mesh=execution_mesh_pattern(WARP),
         ),
     )
 
@@ -54,7 +51,7 @@ class Mma(MmaAtom):
     """A BF16 warp MMA, 16 x 8 x 16, accumulating in F32."""
 
     namespace = "T.cuda.sm80"
-    scope = WARP
+    execution_mesh = WARP
     capability = "mma.sync"
     resource = "tensor_core_engine"
 

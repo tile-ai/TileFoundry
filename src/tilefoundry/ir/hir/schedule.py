@@ -167,7 +167,7 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
     order = tuple(range(len(repeat))) if schedule.order is None else schedule.order
     if sorted(order) != list(range(len(repeat))):
         raise ValueError(f"order {order} is not a permutation of iteration dimensions")
-    participant = getattr(getattr(op, "atom", None), "required_scope", None)
+    participant = getattr(getattr(op, "atom", None), "required_execution_mesh", None)
     read_args = dict(zip((param.name for param in reads), call.args, strict=True))
     inner_types = (
         tuple(
