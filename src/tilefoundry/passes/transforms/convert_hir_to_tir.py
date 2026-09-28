@@ -27,7 +27,7 @@ from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.schedule import ScheduleOp, issue_plan
+from tilefoundry.ir.hir.schedule import IssuePlan, ScheduleOp, issue_plan
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.hir.tensor.cast import Cast as HirCast
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
@@ -176,6 +176,11 @@ def _label(call: Call) -> str:
     return binding.name if binding is not None else type(call.target).__name__
 
 
+def _needs_m2(plan: IssuePlan) -> bool:
+    """Whether an atom issue needs grouping, repetition, or row widening."""
+    return any(axis.is_group or axis.extent // axis.atom != 1 for axis in plan.axes)
+
+
 @dataclass
 class Lowering(ExprVisitor[Expr]):
     """Mechanical lowering of one analyzed HIR function."""
@@ -262,12 +267,7 @@ class Lowering(ExprVisitor[Expr]):
                 plan = issue_plan(expr, self.type_ctx)
             except (TypeError, ValueError):
                 continue
-            if any(
-                axis.is_group
-                or axis.extent // axis.atom != 1
-                or min(axis.row_copies, axis.extent // axis.atom) != 1
-                for axis in plan.axes
-            ):
+            if _needs_m2(plan):
                 raise LoweringError(
                     f"{_label(expr)} needs grouped, repeated, or row-wise atom issue; "
                     "M2 not implemented"
@@ -645,12 +645,7 @@ class Lowering(ExprVisitor[Expr]):
             operands.append((param.name, value, desired))
 
         if isinstance(call.target.op, TiledMma):
-            if any(
-                axis.is_group
-                or axis.extent // axis.atom != 1
-                or min(axis.row_copies, axis.extent // axis.atom) != 1
-                for axis in plan.axes
-            ):
+            if _needs_m2(plan):
                 raise LoweringError(
                     f"{_label(call)} needs grouped, repeated, or row-wise atom issue; "
                     "M2 not implemented"
@@ -662,14 +657,11 @@ class Lowering(ExprVisitor[Expr]):
             }
             issue = _Cursor()
             issued_args = []
-            for role, value, desired in operands:
-                axes = {
-                    "acc": ("m", "n"),
-                    "lhs": ("m", "k"),
-                    "rhs": ("k", "n"),
-                }.get(role)
-                if axes is None:
-                    raise LoweringError(f"{_label(call)} has unknown MMA operand role {role!r}")
+            for (role, value, desired), axes in zip(operands, plan.operand_axes, strict=True):
+                if any(axis is None for axis in axes):
+                    raise LoweringError(
+                        f"{_label(call)} operand {role!r} is not a projection of work axes"
+                    )
                 starts = tuple(counters[axis] for axis in axes)
                 issued_args.append(
                     self._window(

@@ -72,8 +72,9 @@ the identity permutation. `order` controls lowering loop nesting; it does not
 change operand or result types.
 
 `tilefoundry.ir.hir.schedule.issue_plan` exposes the derived `repeat`, `order`,
-single-issue iteration shape, and operand types. Access-relation construction
-and lowering consume this same derivation rather than reconstructing it.
+single-issue iteration shape, operand types, per-axis issue facts, and the work
+axis projected onto each operand coordinate. Access-relation construction and
+lowering consume this same derivation rather than reconstructing it.
 
 ## 4. Access relation
 

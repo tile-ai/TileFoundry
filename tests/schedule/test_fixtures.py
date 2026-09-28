@@ -360,7 +360,9 @@ def test_scheduled_hir_program_has_analysis_metadata(
     if analysis == "memory":
         placement = get_metadata(result.function, RegionMemoryMetadata)
         assert placement is not None
-        smem_peak = next(item.peak_bytes for item in placement.peaks if item.memory_level == "smem")
+        smem_peak = next(
+            item.peak_bytes for item in placement.peaks if item.memory_level == "smem"
+        )
         assert smem_peak == SMEM_GOLDEN[path.stem]
         for expr in collect_exprs(result.function.body):
             if not isinstance(expr, Call):
@@ -415,10 +417,12 @@ def test_scheduled_hir_program_has_analysis_metadata(
             if peak is not None:
                 observed_rmem[key] = peak.peak_bytes
         expected_rmem = {
-            key: expectation.peak_bytes for key, expectation in RMEM_EXPECTED[path.stem].items()
+            key: expectation.peak_bytes
+            for key, expectation in RMEM_EXPECTED[path.stem].items()
         }
         assert observed_rmem == expected_rmem, {
-            key: expectation.derivation for key, expectation in RMEM_EXPECTED[path.stem].items()
+            key: expectation.derivation
+            for key, expectation in RMEM_EXPECTED[path.stem].items()
         }
         assert placement.peak_for("rmem").peak_bytes == max(region_rmem_peaks, default=0)
 
@@ -441,7 +445,11 @@ def test_scheduled_hir_program_has_analysis_metadata(
         for use in liveness.uses:
             interval = intervals[id(use.value)]
             for phi, backedge in loop_bounds:
-                if not use.synthetic and phi < use.at < backedge and interval.defined_at < phi:
+                if (
+                    not use.synthetic
+                    and phi < use.at < backedge
+                    and interval.defined_at < phi
+                ):
                     outside_uses += 1
                     assert interval.last_used_at >= backedge
         assert outside_uses
@@ -731,6 +739,7 @@ def test_issue_plan_exposes_group_loop_and_row_facts() -> None:
         ("n", 16, 16, 1, 1, False),
         ("k", 64, 16, 4, 4, False),
     )
+    assert plan.operand_axes == (("m", "n"), ("m", "k"), ("k", "n"))
 
 
 def _m1_analysis():

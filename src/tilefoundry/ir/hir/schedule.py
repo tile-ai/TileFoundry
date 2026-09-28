@@ -97,13 +97,18 @@ class IssueAxis:
 
 @dataclass(frozen=True)
 class IssuePlan:
-    """The lowering facts derived for one scheduled instruction issue."""
+    """The lowering facts derived for one scheduled instruction issue.
+
+    ``operand_axes`` follows instruction schema order, then tensor-coordinate
+    order; ``None`` marks a coordinate that is not a projection of one work axis.
+    """
 
     repeat: tuple[int, ...]
     order: tuple[int, ...]
     single_shape: tuple[int, ...]
     operand_types: tuple[TensorType, ...]
     axes: tuple[IssueAxis, ...]
+    operand_axes: tuple[tuple[str | None, ...], ...]
 
 
 @register_eval(ScheduleOp)
@@ -577,8 +582,8 @@ def _issue_plan(call: Call, ctx) -> tuple[IssuePlan, AccessRelations]:
     whole = _single_issue_relations(op, whole_types)
     repeat, order, single_shape = _repeat_order(call.target, whole, single)
     whole_shape = _iteration_shape(whole)
-    axes = _issue_axes(op, whole_shape, single_shape, repeat, single, single_types)
-    return IssuePlan(repeat, order, single_shape, single_types, axes), single
+    axes, operand_axes = _issue_axes(op, whole_shape, single_shape, repeat, single, single_types)
+    return IssuePlan(repeat, order, single_shape, single_types, axes, operand_axes), single
 
 
 def _issue_axes(
@@ -588,25 +593,37 @@ def _issue_axes(
     repeat: tuple[int, ...],
     single: AccessRelations,
     single_types: tuple[TensorType, ...],
-) -> tuple[IssueAxis, ...]:
+) -> tuple[tuple[IssueAxis, ...], tuple[tuple[str | None, ...], ...]]:
     """Derive grouping and row-wise issue facts from the same single issue."""
-    from tilefoundry.ir.tir.cuda.nn.mma import TiledMma  # noqa: PLC0415
-
-    tiled_mma = isinstance(op, TiledMma)
+    atom = getattr(op, "atom", None)
     names = (
         ("m", "n", "k")
-        if tiled_mma and len(single_shape) == 3
+        if atom is not None and len(single_shape) == 3
         else tuple(f"d{index}" for index in range(len(single_shape)))
     )
-    copies = {name: 1 for name in names}
-    if tiled_mma:
-        universe = iteration_universe(single)
-        domain_names = tuple(
-            universe.get_dim_name(isl.dim_type.SET, index) or f"d{index}"
-            for index in range(universe.dim(isl.dim_type.SET))
+    universe = iteration_universe(single)
+    domain_names = tuple(
+        universe.get_dim_name(isl.dim_type.SET, index) or f"d{index}"
+        for index in range(universe.dim(isl.dim_type.SET))
+    )
+    aliases = dict(zip(domain_names, names, strict=True))
+    operand_axes = tuple(
+        tuple(
+            next(
+                (
+                    aliases.get(domain_names[source_axis])
+                    for source_axis in range(relation.dim(isl.dim_type.IN))
+                    if _is_projection(relation, source_axis, operand_axis)
+                ),
+                None,
+            )
+            for operand_axis in range(relation.dim(isl.dim_type.OUT))
         )
-        aliases = dict(zip(domain_names, names, strict=True))
-        for type_, boundary in zip(single_types, single.inputs, strict=True):
+        for relation in (relation_of(boundary.pattern) for boundary in single.inputs)
+    )
+    copies = {name: 1 for name in names}
+    if atom is not None:
+        for type_, mapped_axes in zip(single_types, operand_axes, strict=True):
             layout = type_.layout
             if isinstance(layout, ShardLayout):
                 layout = layout.layout
@@ -620,32 +637,25 @@ def _issue_axes(
             room = _row_room(tuple(layout.outer.shape), tuple(layout.outer.strides))
             if room is None:
                 continue
-            relation = relation_of(boundary.pattern)
             operand_axis, available = room
-            mapped = next(
-                (
-                    index
-                    for index in range(relation.dim(isl.dim_type.IN))
-                    if _is_projection(relation, index, operand_axis)
-                ),
-                None,
-            )
-            reached = None if mapped is None else domain_names[mapped]
-            axis_name = aliases.get(reached)
+            axis_name = mapped_axes[operand_axis]
             if axis_name is not None:
                 copies[axis_name] = max(copies[axis_name], available)
-    return tuple(
-        IssueAxis(
-            name=name,
-            extent=extent,
-            atom=atom,
-            repeat=count,
-            row_copies=copies[name],
-            is_group=tiled_mma and index == 0 and count > 1,
-        )
-        for index, (name, extent, atom, count) in enumerate(
-            zip(names, whole_shape, single_shape, repeat, strict=True)
-        )
+    return (
+        tuple(
+            IssueAxis(
+                name=name,
+                extent=extent,
+                atom=atom_extent,
+                repeat=count,
+                row_copies=copies[name],
+                is_group=atom is not None and index == 0 and count > 1,
+            )
+            for index, (name, extent, atom_extent, count) in enumerate(
+                zip(names, whole_shape, single_shape, repeat, strict=True)
+            )
+        ),
+        operand_axes,
     )
 
 
