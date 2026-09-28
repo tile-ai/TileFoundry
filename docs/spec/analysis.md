@@ -464,9 +464,10 @@ region holds. In the target's ordered topology hierarchy, the region's
 outermost level MUST be the target-declared owner or an enclosing level; a
 region strictly inside the owner is not eligible to report that level, and a
 target-owned level makes no `MeshRegion` eligible. Eligibility does not decide
-attribution: the value's authored holder mesh MUST select the region, and that
-one region reports it. A value that declares no holder belongs to no region;
-analysis does not infer a holder from its layout or storage name. `rmem` is not
+attribution: every eligible region whose mesh contains the value's authored
+holder mesh reports it, so an enclosing region also counts values held by its
+nested regions. A value that declares no holder belongs to no region; analysis
+does not infer a holder from its layout or storage name. `rmem` is not
 address-solved: required-alias groups count as one physical buffer, and the
 Function reports the maximum of all stage peaks and a whole-Function live-byte
 scan of values that no `MeshRegion` claims.
