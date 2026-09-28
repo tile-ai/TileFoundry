@@ -388,7 +388,9 @@ printer.rules(pattern)         # ordered, de-duplicated condition lines
 printer.described(pattern)     # value shape plus an indented predicates line
 printer.alternatives(pattern)  # flattened structural Or/Switch branches
 printer.declaration(op_type)   # one complete operation declaration
+printer.declaration_sections(op_type)  # rendered sections, still structured
 printer.refusal(refusal)       # consumer-facing match failure
+printer.matches(function)      # structured TIR operand arrangements and captures
 ```
 
 Layout values use single-line positional forms such as `Layout((r, W), (l,

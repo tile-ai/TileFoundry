@@ -5,16 +5,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tilefoundry.cli.source import load_authored_ir
+from tilefoundry.cli.source import load_authored_ir, load_prim_function
 from tilefoundry.cli.target import target_by_identity
 from tilefoundry.inspection import as_script
 from tilefoundry.schedule import (
     candidates,
     finalize,
     listing,
+    matched,
     one,
     render,
     render_candidates,
+    render_matched,
 )
 
 
@@ -58,4 +60,12 @@ def run_candidates(source: str, out: str, *, as_json: bool = False) -> int:
     return 0
 
 
-__all__ = ["run_candidates", "run_facts", "run_finalize"]
+def run_matched(source: str, out: str, *, as_json: bool = False) -> int:
+    """Write operand-pattern matches for an already lowered TIR source."""
+    report = matched(load_prim_function(source), source=source)
+    text = json.dumps(report, indent=2) if as_json else render_matched(report)
+    _write(out, text)
+    return 0
+
+
+__all__ = ["run_candidates", "run_facts", "run_finalize", "run_matched"]

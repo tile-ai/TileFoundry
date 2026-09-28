@@ -59,23 +59,6 @@ def listing(target: Target) -> dict[str, Any]:
     }
 
 
-def _sections(op_type: type) -> dict[str, list[str]]:
-    lines = PatternPrinter().declaration(op_type).splitlines()
-    sections: dict[str, list[str]] = {
-        "parameters": [],
-        "operands": [],
-    }
-    current: str | None = None
-    for line in lines[1:]:
-        heading = line.strip()
-        if line == f"  {heading}" and heading in (*sections, "attributes"):
-            current = heading if heading in sections else None
-            continue
-        if current is not None:
-            sections[current].append(line)
-    return sections
-
-
 def _issuer_pattern(op_type: type):
     scope_pattern = getattr(op_type, "scope_pattern", None)
     if callable(scope_pattern):
@@ -97,13 +80,14 @@ def one(target: Target, wanted: str | type) -> dict[str, Any]:
         )
     (op_type,) = matches
     issuer = _issuer_pattern(op_type)
-    sections = _sections(op_type)
+    sections = PatternPrinter().declaration_sections(op_type)
     return {
         "target": target.identity,
         "id": _instruction_id(op_type),
         "capability": op_type.capability,
         "issued_by": None if issuer is None else PatternPrinter().described(issuer),
-        **sections,
+        "parameters": list(sections.get("parameters", ())),
+        "operands": list(sections.get("operands", ())),
         "between": [rule.written() for rule in between_rules(op_type)],
     }
 

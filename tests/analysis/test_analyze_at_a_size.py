@@ -11,7 +11,9 @@ answer for -- it only lets the ones it owns be asked about at a size.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 import isl
 import pytest
@@ -32,13 +34,13 @@ from tilefoundry.analysis import (
     analyze,
 )
 from tilefoundry.analysis.access import Access, AccessPrecision
-from tilefoundry.analysis.allocation import aligned, alignment_of
+from tilefoundry.analysis.allocation import aligned
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import IterationScope, build_scopes, walk_scopes
-from tilefoundry.analysis.liveness import analyze_liveness
-from tilefoundry.analysis.memory import view_root as resident_view_root
-from tilefoundry.ir.core import Call, Constant, describe_expr, get_metadata, value_labels
+from tilefoundry.cli import main as cli_main
+from tilefoundry.cli.source import load_namespace
+from tilefoundry.ir.core import Call, describe_expr, get_metadata
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.specialize import (
@@ -556,31 +558,33 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
                 assert 0 <= held.timeline.start_ns <= held.timeline.end_ns
 
 
-def _allocation_alignments(function: Function) -> dict[str, int]:
-    """Rebuild the allocator's binding-to-alignment map for bound checks."""
-    liveness = analyze_liveness(function)
-    resident_ids = {id(parameter) for parameter in function.params}
-    for interval in liveness.intervals:
-        value = interval.value
-        if isinstance(value, (Call, Constant, LoopRegion)) and resident_view_root(value) is value:
-            resident_ids.add(id(value))
-        if isinstance(value, LoopRegion):
-            resident_ids.update(id(phi) for phi in value.carried_args)
-    intervals = tuple(
-        interval for interval in liveness.intervals if id(interval.value) in resident_ids
-    )
-    return {
-        label: alignment_of(interval.value)
-        for label, interval in zip(
-            value_labels(interval.value for interval in intervals),
-            intervals,
-            strict=True,
+def _case_source(case: ConcreteCase, tmp_path: Path) -> str:
+    """Name a corpus case through the same SOURCE selector the CLI accepts."""
+    identity = case.id.partition("[")[0].split(".")
+    file, root, *selection = identity
+    fixture = Path(__file__).parents[1] / "fixtures" / "placed" / f"{file}.py"
+    namespace, _selector = load_namespace(str(fixture))
+    module = namespace[root]
+    try:
+        module.resolve_target()
+        source = fixture
+    except Exception:  # noqa: BLE001 - the corpus deliberately supplies the missing target
+        source = tmp_path / f"{file}_{root}.py"
+        source.write_text(
+            "from dataclasses import replace\n"
+            f"from tests.fixtures.placed.{file} import {root} as authored\n"
+            "from tilefoundry.target import CudaTarget\n"
+            f"{root} = replace(authored, target=CudaTarget('nvidia.h200_sxm'))\n"
         )
-    }
+    return f"{source}:{root}.{'.'.join(selection)}"
 
 
 @pytest.mark.parametrize("case", INVENTORY)
-def test_every_concrete_program_predicts_coherently(case: ConcreteCase) -> None:
+def test_every_concrete_program_predicts_coherently(
+    case: ConcreteCase,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """Every placed program, at every size and selector it exposes.
 
     This inventory is the whole of what these four analyses are held to: it is
@@ -589,6 +593,20 @@ def test_every_concrete_program_predicts_coherently(case: ConcreteCase) -> None:
     them is asked for all four families and has to answer with a coherent
     prediction.
     """
+    report_path = tmp_path / "memory.json"
+    command = [
+        "analyze",
+        _case_source(case, tmp_path),
+        str(report_path),
+        "--memory",
+        "--json",
+    ]
+    for name, extent in (case.dims or {}).items():
+        command.extend(("--dim", f"{name}={extent}"))
+    assert cli_main(command) == 0
+    assert capsys.readouterr() == ("", "")
+    reported = json.loads(report_path.read_text())["function_records"]["memory"]
+
     owner, function = case.program()
     result = analyze(owner, function, analysis=FAMILIES, dims=case.dims)
 
@@ -597,29 +615,29 @@ def test_every_concrete_program_predicts_coherently(case: ConcreteCase) -> None:
     assert_performance_contract(result)
     placement = get_metadata(result.function, RegionMemoryMetadata)
     assert placement is not None
-    alignments = _allocation_alignments(result.function)
     over_bound: set[tuple[str, str]] = set()
-    for peak in placement.peaks:
+    for peak in reported["peaks"]:
+        memory_level = peak["memory_level"]
         level_lifetimes = tuple(
             lifetime
-            for lifetime in placement.lifetimes
-            if lifetime.memory_level == peak.memory_level
+            for lifetime in reported["lifetimes"]
+            if lifetime["memory_level"] == memory_level
         )
         largest_value = max(
-            (lifetime.bytes for lifetime in level_lifetimes),
+            (lifetime["bytes"] for lifetime in level_lifetimes),
             default=0,
         )
-        assert peak.peak_bytes >= largest_value
+        assert peak["peak_bytes"] >= largest_value
         aligned_live_upper = max(
             (
                 sum(
-                    aligned(lifetime.bytes, alignments[lifetime.binding])
+                    aligned(lifetime["bytes"], 16)
                     for lifetime in level_lifetimes
-                    if lifetime.defined_at <= point <= lifetime.last_used_at
+                    if lifetime["defined_at"] <= point <= lifetime["last_used_at"]
                 )
                 for point in range(
                     max(
-                        (lifetime.last_used_at for lifetime in level_lifetimes),
+                        (lifetime["last_used_at"] for lifetime in level_lifetimes),
                         default=-1,
                     )
                     + 1
@@ -627,8 +645,8 @@ def test_every_concrete_program_predicts_coherently(case: ConcreteCase) -> None:
             ),
             default=0,
         )
-        if peak.peak_bytes > aligned_live_upper:
-            over_bound.add((case.id, peak.memory_level))
+        if peak["peak_bytes"] > aligned_live_upper:
+            over_bound.add((case.id, memory_level))
     assert over_bound == {
         key for key in KNOWN_OVER_BOUND if key[0] == case.id
     }, {
@@ -636,7 +654,7 @@ def test_every_concrete_program_predicts_coherently(case: ConcreteCase) -> None:
         for key in KNOWN_OVER_BOUND
         if key[0] == case.id
     }
-    observed = {item.memory_level: item.peak_bytes for item in placement.peaks}
+    observed = {item["memory_level"]: item["peak_bytes"] for item in reported["peaks"]}
     assert observed == EXPECTED_MEMORY_PEAKS[case.id]
     expected_schedule = EXPECTED_PERSISTENT_SCHEDULES.get(case.id)
     if expected_schedule is not None:

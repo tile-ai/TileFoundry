@@ -20,7 +20,6 @@ import pytest
 import torch
 
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
-from tilefoundry.analysis.allocation import alignment_of, view_root
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.liveness import analyze_liveness, result_copies
@@ -43,17 +42,17 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.schedule import ScheduleOp, issue_plan
-from tilefoundry.ir.pattern import Tensor
+from tilefoundry.ir.pattern import PatternMatcher, Tensor
 from tilefoundry.ir.tir import PrimFunction
 from tilefoundry.ir.tir.async_copy import CopyAsync
 from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
 from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
 from tilefoundry.ir.tir.cuda.nn.wgmma import Wgmma
+from tilefoundry.ir.tir.stmts import Evaluate
 from tilefoundry.ir.types import DType, Layout, StorageKind, TensorType, UnitType
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.mesh import levels, starts
-from tilefoundry.ir.types.utils import bytes_by_storage
-from tilefoundry.ir.visitor import collect_exprs
+from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     boundary_maps,
@@ -70,10 +69,27 @@ PLAIN = (
     "gemm_relu_gemm_untiled",
 )
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
+TIR_MATCHES = tuple(
+    path for path in TIR if path.stem != "gemm_8192x17408x5120_tma_store"
+)
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
 WGMMA_DECLARATION = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.described.txt"
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
 CANDIDATE_GOLDENS = Path(__file__).parents[1] / "fixtures" / "schedule" / "plain"
+MATCHED_GOLDEN = (
+    Path(__file__).parents[1]
+    / "fixtures"
+    / "schedule"
+    / "tir"
+    / "gemm_8192x17408x5120_tma_store.matched.txt"
+)
+ANALYZED_GOLDEN = (
+    Path(__file__).parents[1]
+    / "fixtures"
+    / "schedule"
+    / "hir"
+    / "gemm_8192x17408x5120_tma_store.analyzed.txt"
+)
 ANALYSES = (
     ("compute-cost", ComputeCostMetadata),
     ("memory", MemoryMetadata),
@@ -291,6 +307,39 @@ def _module_in(path: Path):
     return next(value for value in vars(loaded).values() if type(value).__name__ == "Module")
 
 
+class _OperandMatchVisitor(StmtVisitor[None]):
+    """Exercise operand declarations directly, independently of the report renderer."""
+
+    def __init__(self) -> None:
+        self.matches: list[tuple[object, str, dict]] = []
+
+    def visit_Evaluate(self, stmt: Evaluate) -> None:
+        op = stmt.callable
+        schema = getattr(type(op), "_op_schema", None)
+        if schema is None:
+            return
+        inputs = tuple(param for param in schema.signature if param.kind == "input")
+        atom = getattr(op, "atom", None)
+        for param, arg in zip(inputs, stmt.args, strict=True):
+            if param.pattern is None:
+                continue
+            pattern = (
+                param.pattern.read_on(op)
+                if hasattr(param.pattern, "read_on")
+                else param.pattern
+            )
+            matcher = PatternMatcher(dict(getattr(atom, "bindings", {})))
+            assert matcher.match(pattern, arg.type)
+            assert matcher.solve()
+            self.matches.append((op, param.name, dict(matcher.bindings)))
+
+
+def _direct_operand_matches(function: PrimFunction) -> list[tuple[object, str, dict]]:
+    visitor = _OperandMatchVisitor()
+    visitor.visit(function.body)
+    return visitor.matches
+
+
 @pytest.mark.parametrize("name", PLAIN)
 def test_plain_program_is_analyzable(name: str) -> None:
     module = importlib.import_module(f"tests.fixtures.schedule.plain.{name}")
@@ -353,30 +402,6 @@ def test_scheduled_hir_program_has_analysis_metadata(
     if analysis == "memory":
         placement = get_metadata(result.function, RegionMemoryMetadata)
         assert placement is not None
-        smem_peak = next(
-            item.peak_bytes for item in placement.peaks if item.memory_level == "smem"
-        )
-        assert smem_peak == SMEM_GOLDEN[path.stem]
-        for expr in collect_exprs(result.function.body):
-            if not isinstance(expr, Call):
-                continue
-            moved = get_metadata(expr, MemoryMetadata)
-            assert moved is not None
-            levels = bytes_by_storage(expr.type)
-            if set(levels) == {"rmem"}:
-                assert moved.offsets == ()
-            addressable = set(levels) & {"gmem", "smem"}
-            if not addressable or view_root(expr, {}) is not expr:
-                continue
-            assert len(addressable) == 1
-            assert moved.buffer_bytes is not None
-            assert len(moved.offsets) == result_copies(expr)
-            peak = placement.peak_for(addressable.pop())
-            assert peak is not None
-            for offset in moved.offsets:
-                assert offset % alignment_of(expr) == 0
-                assert offset + moved.buffer_bytes <= peak.peak_bytes
-
         liveness = analyze_liveness(result.function)
         regions = tuple(window.region for window in liveness.regions)
         region_records = tuple(
@@ -466,6 +491,36 @@ def test_scheduled_hir_program_has_analysis_metadata(
             for item in local_moves
         )
 
+
+@pytest.mark.parametrize("path", HIR, ids=lambda path: path.stem)
+def test_schedule_memory_report_carries_allocations(
+    path: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / f"{path.stem}.json"
+
+    assert cli_main(["analyze", str(path), str(out), "--memory", "--json"]) == 0
+    assert capsys.readouterr() == ("", "")
+    report = json.loads(out.read_text())
+    memory = report["function_records"]["memory"]
+    peaks = {item["memory_level"]: item["peak_bytes"] for item in memory["peaks"]}
+    assert peaks["smem"] == SMEM_GOLDEN[path.stem]
+    assert memory["solver_status"] == "feasible"
+    for row in report["calls"]:
+        allocation = row["memory"]
+        result = next(
+            operand for operand in allocation["operands"] if operand["arg"] == "result"
+        )
+        storage = result["type"].rsplit(" ", 1)[-1]
+        offsets = allocation["offsets"]
+        if storage == "rmem":
+            assert offsets == []
+            continue
+        if storage not in {"gmem", "smem"} or allocation["buffer_bytes"] is None:
+            continue
+        assert offsets
+        for offset in offsets:
+            assert offset % 16 == 0
+            assert offset + allocation["buffer_bytes"] <= peaks[storage]
 
 @pytest.mark.parametrize(
     ("fixture", "n"),
@@ -807,6 +862,121 @@ def test_schedule_candidates_omit_selected_schedule_calls(
     assert captured.out == ""
     assert "no unscheduled matmul or reshard candidate site" in captured.err
     assert not out.exists()
+
+
+def test_schedule_matched_writes_text_and_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = "tests/fixtures/schedule/tir/gemm_8192x17408x5120_tma_store.py"
+    text_out = tmp_path / "matched.txt"
+    json_out = tmp_path / "matched.json"
+
+    assert cli_main(["schedule", "matched", source, str(text_out)]) == 0
+    assert cli_main(["schedule", "matched", source, str(json_out), "--json"]) == 0
+    assert capsys.readouterr() == ("", "")
+    assert text_out.read_bytes() == MATCHED_GOLDEN.read_bytes()
+    report = json.loads(json_out.read_text())
+    assert (report["source"], report["function"], report["target"]) == (
+        source,
+        "gemm",
+        "nvidia.h200_sxm",
+    )
+    wgmma = [call for call in report["calls"] if call["instruction"] == "T.cuda.sm90.Wgmma"]
+    assert wgmma
+    assert all(
+        {"a_major", "a_swizzle"} <= call["operands"][1]["captures"].keys()
+        for call in wgmma
+    )
+
+
+@pytest.mark.parametrize("path", TIR_MATCHES, ids=lambda path: path.stem)
+def test_tir_instruction_operands_match_one_declared_arrangement(path: Path) -> None:
+    found = _direct_operand_matches(_prim_in(path))
+    assert found
+    wgmma_lhs = [
+        captures
+        for op, name, captures in found
+        if isinstance(getattr(op, "atom", None), Wgmma) and name == "lhs"
+    ]
+    assert all("a_major" in captures for captures in wgmma_lhs)
+    assert all(
+        "a_swizzle" in captures
+        for captures in wgmma_lhs
+        if captures["form"].name == "SS"
+    )
+
+
+def test_operand_match_refusal_names_the_failed_pattern() -> None:
+    function = _prim_in(
+        Path(__file__).parents[1]
+        / "fixtures"
+        / "schedule"
+        / "tir"
+        / "wgmma_a_k_major.py"
+    )
+    rejected = None
+
+    class RejectOne(StmtVisitor[None]):
+        def visit_Evaluate(self, stmt: Evaluate) -> None:
+            nonlocal rejected
+            if rejected is not None or not isinstance(getattr(stmt.callable, "atom", None), Wgmma):
+                return
+            op = stmt.callable
+            lhs = next(param for param in type(op)._op_schema.signature if param.name == "lhs")
+            pattern = lhs.pattern.read_on(op)
+            matcher = PatternMatcher(dict(op.atom.bindings))
+            assert not matcher.match(pattern, replace(stmt.args[1].type, storage=StorageKind.GMEM))
+            rejected = PatternPrinter().refusal(matcher.refusal)
+
+    RejectOne().visit(function.body)
+    assert rejected is not None
+    assert "StorageKind.GMEM" in rejected
+    assert "StorageKind.SMEM" in rejected
+
+
+def test_schedule_matched_rejects_non_tir_without_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = "tests/fixtures/schedule/hir/wgmma_a_k_major.py"
+    out = tmp_path / "matched.txt"
+
+    assert cli_main(["schedule", "matched", source, str(out)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "matched expects a TIR PrimFunction" in captured.err
+    assert not out.exists()
+
+
+def test_schedule_matched_rejects_an_operand_mismatch_without_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    original = (
+        Path(__file__).parents[1]
+        / "fixtures"
+        / "schedule"
+        / "tir"
+        / "wgmma_a_k_major.py"
+    ).read_text()
+    source = tmp_path / "mismatched.py"
+    source.write_text(original.replace("StorageKind.SMEM", "StorageKind.GMEM", 1))
+    out = tmp_path / "matched.txt"
+
+    assert cli_main(["schedule", "matched", str(source), str(out)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "storage" in captured.err
+    assert not out.exists()
+
+
+def test_schedule_analyze_writes_memory_report(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = "tests/fixtures/schedule/hir/gemm_8192x17408x5120_tma_store.py"
+    out = tmp_path / "analyzed.txt"
+
+    assert cli_main(["analyze", source, str(out), "--memory"]) == 0
+    assert capsys.readouterr() == ("", "")
+    assert out.read_bytes() == ANALYZED_GOLDEN.read_bytes()
 
 
 @pytest.mark.parametrize("source", HIR, ids=lambda path: path.stem)

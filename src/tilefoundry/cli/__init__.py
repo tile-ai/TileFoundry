@@ -17,6 +17,7 @@ from tilefoundry.cli.models import run_models
 from tilefoundry.cli.schedule import run_candidates as run_schedule_candidates
 from tilefoundry.cli.schedule import run_facts as run_schedule_facts
 from tilefoundry.cli.schedule import run_finalize as run_schedule_finalize
+from tilefoundry.cli.schedule import run_matched as run_schedule_matched
 from tilefoundry.cli.source import load_authored_ir, one_extent_per_dim, parse_dims
 from tilefoundry.cli.spec import read_spec, run_spec, spec_path
 from tilefoundry.cli.target import load_registrations, registry_path
@@ -50,6 +51,7 @@ _SCHEDULE_COMMANDS = {
     "finalize": "lower scheduled HIR to verified TIR",
     "facts": "describe the instructions admitted by one target",
     "candidates": "report instruction choices for unscheduled HIR sites",
+    "matched": "report operand-pattern matches in lowered TIR",
 }
 
 
@@ -258,6 +260,20 @@ def build_parser() -> argparse.ArgumentParser:
     schedule_candidates.add_argument(
         "--json", action="store_true", help="write the same candidate report as JSON"
     )
+    schedule_matched = schedule_commands.add_parser(
+        "matched", help=_SCHEDULE_COMMANDS["matched"]
+    )
+    schedule_matched.add_argument(
+        "source",
+        metavar="SOURCE",
+        help="tir.py[:PrimFunction]",
+    )
+    schedule_matched.add_argument(
+        "out", metavar="PATH", help="write the match report here; stdout carries none of it"
+    )
+    schedule_matched.add_argument(
+        "--json", action="store_true", help="write the same match report as JSON"
+    )
 
     return parser
 
@@ -350,6 +366,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     out,
                     as_json=args.json,
                 )
+            if args.schedule_command == "matched":
+                return run_schedule_matched(args.source, args.out, as_json=args.json)
             return run_schedule_finalize(args.source, args.out, as_json=args.json)
         except Exception as error:
             print(f"tilefoundry: error: {error}", file=sys.stderr)
