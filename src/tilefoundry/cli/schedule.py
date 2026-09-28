@@ -8,7 +8,14 @@ from pathlib import Path
 from tilefoundry.cli.source import load_authored_ir
 from tilefoundry.cli.target import target_by_identity
 from tilefoundry.inspection import as_script
-from tilefoundry.schedule import finalize, listing, one, render
+from tilefoundry.schedule import (
+    candidates,
+    finalize,
+    listing,
+    one,
+    render,
+    render_candidates,
+)
 
 
 def _write(out: str, text: str) -> None:
@@ -42,4 +49,13 @@ def run_facts(
     return 0
 
 
-__all__ = ["run_facts", "run_finalize"]
+def run_candidates(source: str, out: str, *, as_json: bool = False) -> int:
+    """Write instruction candidates for the unscheduled sites in ``source``."""
+    module = load_authored_ir(source)
+    report = candidates(module, module.entry_function(), source=source)
+    text = json.dumps(report, indent=2) if as_json else render_candidates(report)
+    _write(out, text)
+    return 0
+
+
+__all__ = ["run_candidates", "run_facts", "run_finalize"]

@@ -461,7 +461,13 @@ are canonical `PatternPrinter.declaration` text. Atom declarations and TIR ops
 with class-level capabilities form this inventory; a scheduling wrapper with an
 instance-level capability is not itself an instruction in this report.
 `candidates` reports the instructions whose access relation and operand
-patterns can implement each unscheduled matmul or reshard site.
+patterns can implement each unscheduled matmul or reshard site. Relation rank
+and coordinate projections decide which instruction families enter the report;
+tile extents do not have to equal one instruction issue because repetition is a
+later scheduling choice. Operand dtype, storage, rank, divisibility, and
+cross-operand constraints then decide whether each declaration is a candidate
+or a refusal. MMA families are reported by atom name, not by the `TiledMma`
+carrier op. A site with no accepted instruction still reports its refusals.
 
 - constraints:
   - `PATH` is required, is the only report destination, and MUST NOT be partly

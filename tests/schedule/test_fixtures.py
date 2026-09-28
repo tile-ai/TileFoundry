@@ -73,6 +73,13 @@ TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir")
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
 WGMMA_DECLARATION = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.described.txt"
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
+CTA_GRID_CANDIDATES = (
+    Path(__file__).parents[1]
+    / "fixtures"
+    / "schedule"
+    / "plain"
+    / "gemm_8192x17408x5120_cta_grid.candidates.txt"
+)
 ANALYSES = (
     ("compute-cost", ComputeCostMetadata),
     ("memory", MemoryMetadata),
@@ -746,6 +753,63 @@ def test_schedule_facts_rejects_unknown_selection_without_output(
     assert captured.out == ""
     assert captured.err.startswith("tilefoundry: error: ")
     assert message in captured.err
+    assert not out.exists()
+
+
+def test_schedule_candidates_writes_cta_grid_report(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = "tests/fixtures/schedule/plain/gemm_8192x17408x5120_cta_grid.py"
+    out = tmp_path / "candidates.txt"
+
+    assert cli_main(["schedule", "candidates", source, str(out)]) == 0
+    assert capsys.readouterr() == ("", "")
+    assert out.read_bytes() == CTA_GRID_CANDIDATES.read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("name", "matmuls", "reshards", "accepted_matmuls"),
+    (
+        ("gemm_8192x17408x5120_cta_grid", 1, 4, 1),
+        ("gemm_relu_gemm_smem_staged", 2, 6, 0),
+        ("gemm_relu_gemm_tiled", 2, 2, 0),
+        ("gemm_relu_gemm_untiled", 2, 0, 0),
+    ),
+)
+def test_schedule_candidates_reports_every_plain_site(
+    name: str,
+    matmuls: int,
+    reshards: int,
+    accepted_matmuls: int,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = f"tests/fixtures/schedule/plain/{name}.py"
+    out = tmp_path / f"{name}.json"
+
+    assert cli_main(["schedule", "candidates", source, str(out), "--json"]) == 0
+    assert capsys.readouterr() == ("", "")
+    report = json.loads(out.read_text())
+    assert report["source"] == source
+    assert report["target"] == "nvidia.h200_sxm"
+    matmul_rows = [row for row in report["lines"] if row["op"] == "tf.matmul"]
+    reshard_rows = [row for row in report["lines"] if row["op"] == "tf.reshard"]
+    assert (len(matmul_rows), len(reshard_rows)) == (matmuls, reshards)
+    assert sum(bool(row["candidates"]) for row in matmul_rows) == accepted_matmuls
+    assert all(row["candidates"] or row["refused"] for row in report["lines"])
+    assert all(row["candidates"] for row in reshard_rows)
+
+
+@pytest.mark.parametrize("source", HIR, ids=lambda path: path.stem)
+def test_schedule_candidates_omit_selected_schedule_calls(
+    source: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / f"{source.stem}.json"
+
+    assert cli_main(["schedule", "candidates", str(source), str(out), "--json"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "no unscheduled matmul or reshard candidate site" in captured.err
     assert not out.exists()
 
 

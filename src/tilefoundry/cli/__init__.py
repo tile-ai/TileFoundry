@@ -14,6 +14,7 @@ from tilefoundry.cli.check import add_arguments as add_check_arguments
 from tilefoundry.cli.check import guidance as check_guidance
 from tilefoundry.cli.check import run_check
 from tilefoundry.cli.models import run_models
+from tilefoundry.cli.schedule import run_candidates as run_schedule_candidates
 from tilefoundry.cli.schedule import run_facts as run_schedule_facts
 from tilefoundry.cli.schedule import run_finalize as run_schedule_finalize
 from tilefoundry.cli.source import load_authored_ir, one_extent_per_dim, parse_dims
@@ -48,6 +49,7 @@ _TARGET_COMMANDS = {
 _SCHEDULE_COMMANDS = {
     "finalize": "lower scheduled HIR to verified TIR",
     "facts": "describe the instructions admitted by one target",
+    "candidates": "report instruction choices for unscheduled HIR sites",
 }
 
 
@@ -246,6 +248,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="write one selected instruction here; stdout carries none of it",
     )
     schedule_facts.add_argument("--json", action="store_true", help="write the same facts as JSON")
+    schedule_candidates = schedule_commands.add_parser(
+        "candidates", help=_SCHEDULE_COMMANDS["candidates"]
+    )
+    _add_source_argument(schedule_candidates)
+    schedule_candidates.add_argument(
+        "out", metavar="PATH", help="write the candidate report here; stdout carries none of it"
+    )
+    schedule_candidates.add_argument(
+        "--json", action="store_true", help="write the same candidate report as JSON"
+    )
 
     return parser
 
@@ -324,6 +336,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
     if args.command == "schedule":
         try:
+            if args.schedule_command == "candidates":
+                return run_schedule_candidates(args.source, args.out, as_json=args.json)
             if args.schedule_command == "facts":
                 instruction, out = (
                     (None, args.instruction_or_out)
