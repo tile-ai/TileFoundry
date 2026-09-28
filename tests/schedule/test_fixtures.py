@@ -73,13 +73,7 @@ TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir")
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
 WGMMA_DECLARATION = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.described.txt"
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
-CTA_GRID_CANDIDATES = (
-    Path(__file__).parents[1]
-    / "fixtures"
-    / "schedule"
-    / "plain"
-    / "gemm_8192x17408x5120_cta_grid.candidates.txt"
-)
+CANDIDATE_GOLDENS = Path(__file__).parents[1] / "fixtures" / "schedule" / "plain"
 ANALYSES = (
     ("compute-cost", ComputeCostMetadata),
     ("memory", MemoryMetadata),
@@ -756,15 +750,17 @@ def test_schedule_facts_rejects_unknown_selection_without_output(
     assert not out.exists()
 
 
-def test_schedule_candidates_writes_cta_grid_report(
+@pytest.mark.parametrize("name", PLAIN)
+def test_schedule_candidates_writes_canonical_report(
+    name: str,
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    source = "tests/fixtures/schedule/plain/gemm_8192x17408x5120_cta_grid.py"
+    source = f"tests/fixtures/schedule/plain/{name}.py"
     out = tmp_path / "candidates.txt"
 
     assert cli_main(["schedule", "candidates", source, str(out)]) == 0
     assert capsys.readouterr() == ("", "")
-    assert out.read_bytes() == CTA_GRID_CANDIDATES.read_bytes()
+    assert out.read_bytes() == (CANDIDATE_GOLDENS / f"{name}.candidates.txt").read_bytes()
 
 
 @pytest.mark.parametrize(

@@ -311,13 +311,6 @@ def _type_refusals(
     shape = _declared_shape(pattern, bindings)
     if shape is None:
         shape = tuple(whole.shape)
-    if len(shape) != len(whole.shape):
-        return whole, (f"{name} rank={len(whole.shape)}, reads rank={len(shape)}",)
-    if any(
-        not isinstance(extent, int) or extent % atom_extent
-        for extent, atom_extent in zip(whole.shape, shape, strict=True)
-    ):
-        return whole, (f"{name} shape={tuple(whole.shape)}, reads whole tiles of {shape}",)
     single = TensorType(shape, whole.dtype, None, whole.storage)
     simplified = replace(pattern, layout=None)
     matcher = PatternMatcher(bindings)
@@ -327,6 +320,47 @@ def _type_refusals(
     if not refused:
         refused.append(f"{name}: {PatternPrinter().refusal(matcher.refusal)}")
     return single, tuple(refused)
+
+
+def _whole_tiles(site: _Site, op, atom) -> bool:
+    bindings = dict(getattr(atom, "bindings", {}))
+    asked = _asked(site, op)
+    if asked is None:
+        return False
+    for param, whole in asked:
+        pattern = _operand_pattern(param, op, bindings)
+        if pattern is None:
+            return False
+        shape = _declared_shape(pattern, bindings)
+        if shape is None:
+            continue
+        if len(shape) != len(whole.shape) or any(
+            not isinstance(extent, int) or extent % atom_extent
+            for extent, atom_extent in zip(whole.shape, shape, strict=True)
+        ):
+            return False
+    return True
+
+
+def _pattern_refusals(site: _Site, op, atom) -> tuple[str, ...]:
+    bindings = dict(getattr(atom, "bindings", {}))
+    asked = _asked(site, op)
+    if asked is None:
+        return ("operand counts differ",)
+    given = {}
+    refused = []
+    for param, whole in asked:
+        pattern = _operand_pattern(param, op, bindings)
+        if pattern is None:
+            refused.append(f"{param.name} states no tensor pattern")
+            continue
+        simplified = replace(pattern, layout=None)
+        refused.extend(_field_refusals(param.name, simplified, whole, bindings))
+        given[param.name] = whole
+    for rule in between_rules(type(op)):
+        if rule.field in ("storage", "dtype") and not rule.holds(given):
+            refused.append(rule.refused(given))
+    return tuple(refused)
 
 
 def _asked(site: _Site, op) -> tuple[tuple[ParamDef, TensorType], ...] | None:
@@ -448,6 +482,9 @@ def candidates(module, entry, *, source: str | None = None) -> dict[str, Any]:
             accepted, reasons, needs = [], [], []
             for atom, binding in atoms:
                 held = instruction.op_type(**({"atom": atom} if atom is not None else {}))
+                if not _whole_tiles(site, held, atom):
+                    reasons.append(_pattern_refusals(site, held, atom))
+                    continue
                 rejected = _refusals(site, held, atom)
                 if rejected:
                     reasons.append(rejected)
@@ -463,7 +500,9 @@ def candidates(module, entry, *, source: str | None = None) -> dict[str, Any]:
                     }
                 )
             else:
-                refused.append({"id": instruction.id, "refused": _common(reasons)})
+                common = _common(reasons)
+                if common:
+                    refused.append({"id": instruction.id, "refused": common})
         operands = [
             *(_written_operand(name, type_) for name, type_ in site.reads),
             *(_written_operand(name, type_) for name, type_ in site.leaves if handed_result),

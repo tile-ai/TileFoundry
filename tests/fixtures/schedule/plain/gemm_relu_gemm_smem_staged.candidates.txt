@@ -1,0 +1,52 @@
+source tests/fixtures/schedule/plain/gemm_relu_gemm_smem_staged.py
+target nvidia.h200_sxm
+  v5:36  tf.reshard  per cta  x=(32, 32) bf16 gmem  result=(32, 32) bf16 smem
+    candidate   T.copy_async_tensor  needs thread p0:p0+32, p0 % 32 = 0
+    candidate   T.copy_async
+    candidate   T.copy
+    refused     T.ldmatrix: dst storage=smem, reads storage=rmem
+    refused     T.ldmatrix: src storage=gmem, reads storage=smem
+  v8:37  tf.reshard  per cta  x=(32, 16) bf16 gmem  result=(32, 16) bf16 smem
+    candidate   T.copy_async_tensor  needs thread p0:p0+32, p0 % 32 = 0
+    candidate   T.copy_async
+    candidate   T.copy
+    refused     T.ldmatrix: dst storage=smem, reads storage=rmem
+    refused     T.ldmatrix: src storage=gmem, reads storage=smem
+  v10:41  tf.matmul  per cta  lhs=(32, 32) f32 smem  rhs=(32, 16) f32 smem
+    refused     T.cuda.sm90.Wgmma: lhs dtype=f32, reads dtype=bf16
+    refused     T.cuda.sm90.Wgmma: rhs dtype=f32, reads dtype=bf16
+    refused     T.cuda.sm80.Mma: lhs dtype=f32, reads dtype=bf16
+    refused     T.cuda.sm80.Mma: lhs storage=smem, reads storage=rmem
+    refused     T.cuda.sm80.Mma: rhs dtype=f32, reads dtype=bf16
+    refused     T.cuda.sm80.Mma: rhs storage=smem, reads storage=rmem
+  v11:40  tf.reshard  per cta  x=(32, 16) f32 smem  result=(32, 16) f32 rmem
+    candidate   T.copy
+    refused     T.copy_async_tensor: dst: could not satisfy storage1 in {StorageKind.GMEM, StorageKind.SMEM} (dtype1=f32, storage1=RMEM)
+    refused     T.copy_async: dst storage=rmem, reads storage=smem
+    refused     T.copy_async: src storage=smem, reads storage=gmem
+    refused     T.ldmatrix: dst dtype=f32, reads dtype=bf16
+  v17:51  tf.reshard  per cta  x=(32, 32) bf16 gmem  result=(32, 32) bf16 smem
+    candidate   T.copy_async_tensor  needs thread p0:p0+32, p0 % 32 = 0
+    candidate   T.copy_async
+    candidate   T.copy
+    refused     T.ldmatrix: dst storage=smem, reads storage=rmem
+    refused     T.ldmatrix: src storage=gmem, reads storage=smem
+  v20:52  tf.reshard  per cta  x=(32, 16) bf16 gmem  result=(32, 16) bf16 smem
+    candidate   T.copy_async_tensor  needs thread p0:p0+32, p0 % 32 = 0
+    candidate   T.copy_async
+    candidate   T.copy
+    refused     T.ldmatrix: dst storage=smem, reads storage=rmem
+    refused     T.ldmatrix: src storage=gmem, reads storage=smem
+  v22:56  tf.matmul  per cta  lhs=(32, 32) f32 smem  rhs=(32, 16) f32 smem
+    refused     T.cuda.sm90.Wgmma: lhs dtype=f32, reads dtype=bf16
+    refused     T.cuda.sm90.Wgmma: rhs dtype=f32, reads dtype=bf16
+    refused     T.cuda.sm80.Mma: lhs dtype=f32, reads dtype=bf16
+    refused     T.cuda.sm80.Mma: lhs storage=smem, reads storage=rmem
+    refused     T.cuda.sm80.Mma: rhs dtype=f32, reads dtype=bf16
+    refused     T.cuda.sm80.Mma: rhs storage=smem, reads storage=rmem
+  v23:55  tf.reshard  per cta  x=(32, 16) f32 smem  result=(32, 16) f32 rmem
+    candidate   T.copy
+    refused     T.copy_async_tensor: dst: could not satisfy storage1 in {StorageKind.GMEM, StorageKind.SMEM} (dtype1=f32, storage1=RMEM)
+    refused     T.copy_async: dst storage=rmem, reads storage=smem
+    refused     T.copy_async: src storage=smem, reads storage=gmem
+    refused     T.ldmatrix: dst dtype=f32, reads dtype=bf16
