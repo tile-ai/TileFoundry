@@ -395,6 +395,9 @@ def test_scheduled_hir_program_has_analysis_metadata(
             for region in regions
             if (record := get_metadata(region, RegionMemoryMetadata)) is not None
         )
+        assert region_records
+        if path.stem == "gemm_8192x17408x5120_tma_store":
+            assert len(region_records) == 4
         for record in region_records:
             assert record.solver_status == "feasible"
             assert record.topologies == placement.topologies
