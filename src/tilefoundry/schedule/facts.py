@@ -64,13 +64,12 @@ def _sections(op_type: type) -> dict[str, list[str]]:
     sections: dict[str, list[str]] = {
         "parameters": [],
         "operands": [],
-        "attributes": [],
     }
     current: str | None = None
     for line in lines[1:]:
         heading = line.strip()
-        if line == f"  {heading}" and heading in sections:
-            current = heading
+        if line == f"  {heading}" and heading in (*sections, "attributes"):
+            current = heading if heading in sections else None
             continue
         if current is not None:
             sections[current].append(line)
@@ -129,7 +128,7 @@ def render(data: dict[str, Any]) -> str:
         lines.extend(_column("needs", data["capability"]))
     if data["issued_by"] is not None:
         lines.extend(_column("issued by", data["issued_by"]))
-    for heading in ("parameters", "operands", "attributes"):
+    for heading in ("parameters", "operands"):
         if data[heading]:
             lines.append(f"  {heading}")
             lines.extend(data[heading])

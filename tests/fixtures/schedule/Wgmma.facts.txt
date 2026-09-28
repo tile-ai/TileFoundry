@@ -51,9 +51,3 @@ T.cuda.sm90.Wgmma
            rb * Wb == n
            lb == 16 * Wb
            sb == 8 * Wb
-  attributes
-    scope  Mesh(('thread',), ComposedLayout(None, p0, Layout(((4, 8, 4),), ((32, 4, 1),))))
-             predicates:
-               p0 % 128 == 0
-               each top-level mode has no backward step
-               each top-level mode reaches each of its own slots exactly once

@@ -677,7 +677,10 @@ def test_schedule_facts_writes_wgmma_declaration(
     assert out.read_bytes() == WGMMA_FACTS.read_bytes()
     facts = out.read_text()
     declaration = WGMMA_DECLARATION.read_text()
-    assert facts[facts.index("  parameters") :] == declaration[declaration.index("  parameters") :]
+    assert (
+        facts[facts.index("  parameters") :]
+        == declaration[declaration.index("  parameters") : declaration.index("  attributes")]
+    )
 
 
 def test_schedule_facts_lists_target_instructions_as_text_and_json(

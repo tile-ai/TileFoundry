@@ -456,10 +456,10 @@ by the exact `TARGET` identity, optionally narrowed to one fully-qualified
 `INSTRUCTION` name. With no `INSTRUCTION`, it lists every declaration whose
 class-level capability occurs in the target architecture's capability set.
 With one, it reports that declaration's capability, issuing mesh, parameters,
-operands, cross-operand constraints, and attributes; declaration sections are
-the canonical `PatternPrinter.declaration` text. Atom declarations and TIR ops
-with class-level capabilities form this inventory; a scheduling wrapper with
-an instance-level capability is not itself an instruction in this report.
+operands, and cross-operand constraints; the parameter and operand sections
+are canonical `PatternPrinter.declaration` text. Atom declarations and TIR ops
+with class-level capabilities form this inventory; a scheduling wrapper with an
+instance-level capability is not itself an instruction in this report.
 `candidates` reports the instructions whose access relation and operand
 patterns can implement each unscheduled matmul or reshard site.
 
