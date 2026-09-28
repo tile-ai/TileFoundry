@@ -60,14 +60,27 @@ matrix multiplication these are `(m, n, k)`; an elementwise transfer uses the
 tile axes in order.
 
 `repeat[i]` is the number of single instruction extents that cover iteration
-dimension `i`. If omitted, it is inferred as:
+dimension `i`. Its derivation depends on whether the selected instruction
+patterns fix a single-issue shape.
+
+If any selected operand pattern declares a shape, that shape is the fixed
+single-issue contract. Repeat is inferred as:
 
 ```text
 whole scheduled extent[i] / single-issue extent[i]
 ```
 
 Every division MUST be exact. An authored `repeat` MUST equal the inferred
-tuple. `order` is a permutation of these dimension positions and defaults to
+tuple. This is the hardware-fixed path used by tiled MMA instructions.
+
+If no selected operand pattern declares a shape, authored `repeat` is the
+source of the single-issue shape and defaults to all ones. Each operand
+coordinate projected from iteration dimension `i` has single-issue extent
+`whole extent / repeat[i]`; every division MUST again be exact. Tiling on this
+open-shape path is not implemented yet, so every repeat count MUST currently be
+one and a larger count is rejected as `transfer tiling is not yet supported`.
+
+`order` is a permutation of the iteration dimension positions and defaults to
 the identity permutation. `order` controls lowering loop nesting; it does not
 change operand or result types.
 

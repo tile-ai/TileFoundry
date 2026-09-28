@@ -610,7 +610,7 @@ def test_single_issue_schedule_preserves_instruction_relations() -> None:
 @pytest.mark.parametrize(
     ("call", "message"),
     (
-        (_copy_schedule_call(repeat=(2,)), "conflicts with inferred repeat"),
+        (_copy_schedule_call(repeat=(2,)), "transfer tiling is not yet supported"),
         (_copy_schedule_call(order=(1,)), "is not a permutation"),
         (
             _copy_schedule_call(storage=StorageKind.SMEM),

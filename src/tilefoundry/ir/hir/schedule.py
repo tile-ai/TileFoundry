@@ -343,18 +343,31 @@ def _single_type(
     bindings: dict,
     op: Op,
     consumer_mesh: Mesh | None,
+    counts: tuple[int, ...] | None = None,
 ) -> TensorType:
-    shape = _declared_shape(pattern, bindings) or tuple(type_.shape)
+    shape = _declared_shape(pattern, bindings)
+    if shape is None and counts is not None:
+        if len(counts) != len(type_.shape):
+            raise ValueError(
+                f"operand rank {len(type_.shape)} differs from repeat-derived rank {len(counts)}"
+            )
+        divided = []
+        for whole, count in zip(type_.shape, counts, strict=True):
+            if type(whole) is not int or whole % count:
+                raise ValueError(f"operand extent {whole} is not divisible by repeat {count}")
+            divided.append(whole // count)
+        shape = tuple(divided)
+    shape = shape or tuple(type_.shape)
     if len(shape) != len(type_.shape):
         return TensorType(shape, type_.dtype, None, type_.storage)
-    counts = []
+    layout_counts = []
     for whole, single in zip(type_.shape, shape, strict=True):
         if type(whole) is not int or type(single) is not int or single < 1 or whole % single:
-            counts.append(1)
+            layout_counts.append(1)
         else:
-            counts.append(whole // single)
+            layout_counts.append(whole // single)
     layout_pattern = None if pattern is None else pattern.layout
-    layout = _single_layout(type_.layout, tuple(counts), layout_pattern, op, consumer_mesh)
+    layout = _single_layout(type_.layout, tuple(layout_counts), layout_pattern, op, consumer_mesh)
     return TensorType(shape, type_.dtype, layout, type_.storage)
 
 
@@ -506,8 +519,15 @@ def _instruction_schema(
 
 def _relation_types(
     call: Call, ctx
-) -> tuple[Op, tuple[ParamDef, ...], tuple[TensorType, ...], tuple[TensorType, ...]]:
-    """Build whole and single-issue boundaries without reading the Call Type."""
+) -> tuple[
+    Op,
+    tuple[ParamDef, ...],
+    tuple[TensorPattern | None, ...],
+    dict,
+    tuple[TensorType, ...],
+    Mesh | None,
+]:
+    """Build whole boundaries and selected patterns without reading the Call Type."""
     schedule = call.target
     op = schedule.op
     params, reads, writes = _instruction_schema(op)
@@ -530,31 +550,22 @@ def _relation_types(
             bindings,
             getattr(ctx, "current_mesh", None),
         )
-    single = {
-        name: _single_type(
-            type_,
-            patterns[name],
-            bindings,
-            op,
-            _thread_mesh(getattr(ctx, "current_mesh", None)),
-        )
-        for name, type_ in whole.items()
-    }
+    mesh = getattr(ctx, "current_mesh", None)
     return (
         op,
         params,
+        tuple(patterns[param.name] for param in params),
+        bindings,
         tuple(whole[param.name] for param in params),
-        tuple(single[param.name] for param in params),
+        mesh,
     )
 
 
 def _repeat_order(
     schedule: ScheduleOp,
-    whole_relations: AccessRelations,
-    single_relations: AccessRelations,
+    whole_shape: tuple[int, ...],
+    single_shape: tuple[int, ...],
 ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
-    whole_shape = _iteration_shape(whole_relations)
-    single_shape = _iteration_shape(single_relations)
     if len(whole_shape) != len(single_shape):
         raise ValueError("single-issue and scheduled iteration ranks differ")
     repeat = []
@@ -569,45 +580,44 @@ def _repeat_order(
     actual = inferred if schedule.repeat is None else schedule.repeat
     if actual != inferred:
         raise ValueError(f"repeat {actual} conflicts with inferred repeat {inferred}")
-    order = tuple(range(len(inferred))) if schedule.order is None else schedule.order
-    if sorted(order) != list(range(len(inferred))):
+    return actual, _issue_order(schedule, len(inferred)), single_shape
+
+
+def _issue_order(schedule: ScheduleOp, rank: int) -> tuple[int, ...]:
+    order = tuple(range(rank)) if schedule.order is None else schedule.order
+    if sorted(order) != list(range(rank)):
         raise ValueError(f"order {order} is not a permutation of iteration dimensions")
-    return actual, order, single_shape
+    return order
 
 
-def _issue_plan(call: Call, ctx) -> tuple[IssuePlan, AccessRelations]:
-    """Derive one plan together with the relations used to build it."""
-    op, _params, whole_types, single_types = _relation_types(call, ctx)
-    single = _single_issue_relations(op, single_types)
-    whole = _single_issue_relations(op, whole_types)
-    repeat, order, single_shape = _repeat_order(call.target, whole, single)
-    whole_shape = _iteration_shape(whole)
-    axes, operand_axes = _issue_axes(op, whole_shape, single_shape, repeat, single, single_types)
-    return IssuePlan(repeat, order, single_shape, single_types, axes, operand_axes), single
+def _open_repeat_order(schedule: ScheduleOp, rank: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    repeat = (1,) * rank if schedule.repeat is None else schedule.repeat
+    if len(repeat) != rank:
+        raise ValueError(f"repeat {repeat} has rank {len(repeat)}, expected {rank}")
+    if any(count != 1 for count in repeat):
+        raise ValueError("transfer tiling is not yet supported")
+    return repeat, _issue_order(schedule, rank)
 
 
-def _issue_axes(
-    op: Op,
-    whole_shape: tuple[int, ...],
-    single_shape: tuple[int, ...],
-    repeat: tuple[int, ...],
-    single: AccessRelations,
-    single_types: tuple[TensorType, ...],
-) -> tuple[tuple[IssueAxis, ...], tuple[tuple[str | None, ...], ...]]:
-    """Derive grouping and row-wise issue facts from the same single issue."""
-    atom = getattr(op, "atom", None)
-    names = (
-        ("m", "n", "k")
-        if atom is not None and len(single_shape) == 3
-        else tuple(f"d{index}" for index in range(len(single_shape)))
-    )
-    universe = iteration_universe(single)
+def _axis_names(op: Op, rank: int) -> tuple[str, ...]:
+    if getattr(op, "atom", None) is not None and rank == 3:
+        return ("m", "n", "k")
+    return tuple(f"d{index}" for index in range(rank))
+
+
+def _operand_axes(
+    relations: AccessRelations, axis_names: tuple[str, ...]
+) -> tuple[tuple[str | None, ...], ...]:
+    """Project each operand coordinate onto at most one work axis."""
+    universe = iteration_universe(relations)
+    if universe is None:
+        raise ValueError("instruction access relations state no iteration space")
     domain_names = tuple(
         universe.get_dim_name(isl.dim_type.SET, index) or f"d{index}"
         for index in range(universe.dim(isl.dim_type.SET))
     )
-    aliases = dict(zip(domain_names, names, strict=True))
-    operand_axes = tuple(
+    aliases = dict(zip(domain_names, axis_names, strict=True))
+    return tuple(
         tuple(
             next(
                 (
@@ -619,8 +629,80 @@ def _issue_axes(
             )
             for operand_axis in range(relation.dim(isl.dim_type.OUT))
         )
-        for relation in (relation_of(boundary.pattern) for boundary in single.inputs)
+        for relation in (relation_of(boundary.pattern) for boundary in relations.inputs)
     )
+
+
+def _operand_counts(
+    operand_axes: tuple[tuple[str | None, ...], ...],
+    axis_names: tuple[str, ...],
+    repeat: tuple[int, ...],
+) -> tuple[tuple[int, ...], ...]:
+    counts = dict(zip(axis_names, repeat, strict=True))
+    return tuple(
+        tuple(1 if axis is None else counts[axis] for axis in axes) for axes in operand_axes
+    )
+
+
+def _derive_issue(
+    schedule: ScheduleOp,
+    op: Op,
+    patterns: tuple[TensorPattern | None, ...],
+    whole_types: tuple[TensorType, ...],
+    bindings: dict,
+    mesh: Mesh | None,
+) -> tuple[IssuePlan, AccessRelations]:
+    """Derive fixed-shape and author-directed issues through one path."""
+    whole = _single_issue_relations(op, whole_types)
+    whole_shape = _iteration_shape(whole)
+    axis_names = _axis_names(op, len(whole_shape))
+    operand_axes = _operand_axes(whole, axis_names)
+    fixed_shape = any(_declared_shape(pattern, bindings) is not None for pattern in patterns)
+
+    if fixed_shape:
+        single_types = tuple(
+            _single_type(type_, pattern, bindings, op, _thread_mesh(mesh))
+            for type_, pattern in zip(whole_types, patterns, strict=True)
+        )
+        single = _single_issue_relations(op, single_types)
+        repeat, order, single_shape = _repeat_order(
+            schedule, whole_shape, _iteration_shape(single)
+        )
+    else:
+        repeat, order = _open_repeat_order(schedule, len(whole_shape))
+        counts = _operand_counts(operand_axes, axis_names, repeat)
+        single_types = tuple(
+            _single_type(type_, pattern, bindings, op, _thread_mesh(mesh), held_counts)
+            for type_, pattern, held_counts in zip(
+                whole_types, patterns, counts, strict=True
+            )
+        )
+        single = _single_issue_relations(op, single_types)
+        single_shape = _iteration_shape(single)
+        if len(whole_shape) != len(single_shape):
+            raise ValueError("single-issue and scheduled iteration ranks differ")
+
+    axes = _issue_axes(op, whole_shape, single_shape, repeat, single_types, operand_axes)
+    return IssuePlan(repeat, order, single_shape, single_types, axes, operand_axes), single
+
+
+def _issue_plan(call: Call, ctx) -> tuple[IssuePlan, AccessRelations]:
+    """Derive one plan together with the relations used to build it."""
+    op, _params, patterns, bindings, whole_types, mesh = _relation_types(call, ctx)
+    return _derive_issue(call.target, op, patterns, whole_types, bindings, mesh)
+
+
+def _issue_axes(
+    op: Op,
+    whole_shape: tuple[int, ...],
+    single_shape: tuple[int, ...],
+    repeat: tuple[int, ...],
+    single_types: tuple[TensorType, ...],
+    operand_axes: tuple[tuple[str | None, ...], ...],
+) -> tuple[IssueAxis, ...]:
+    """Derive grouping and row-wise issue facts from the same single issue."""
+    atom = getattr(op, "atom", None)
+    names = _axis_names(op, len(single_shape))
     copies = {name: 1 for name in names}
     if atom is not None:
         for type_, mapped_axes in zip(single_types, operand_axes, strict=True):
@@ -641,21 +723,18 @@ def _issue_axes(
             axis_name = mapped_axes[operand_axis]
             if axis_name is not None:
                 copies[axis_name] = max(copies[axis_name], available)
-    return (
-        tuple(
-            IssueAxis(
-                name=name,
-                extent=extent,
-                atom=atom_extent,
-                repeat=count,
-                row_copies=copies[name],
-                is_group=atom is not None and index == 0 and count > 1,
-            )
-            for index, (name, extent, atom_extent, count) in enumerate(
-                zip(names, whole_shape, single_shape, repeat, strict=True)
-            )
-        ),
-        operand_axes,
+    return tuple(
+        IssueAxis(
+            name=name,
+            extent=extent,
+            atom=atom_extent,
+            repeat=count,
+            row_copies=copies[name],
+            is_group=atom is not None and index == 0 and count > 1,
+        )
+        for index, (name, extent, atom_extent, count) in enumerate(
+            zip(names, whole_shape, single_shape, repeat, strict=True)
+        )
     )
 
 
@@ -840,10 +919,18 @@ def _infer_schedule(call: Call, ctx) -> TensorType:
         whole[param.name] = results[param.name]
 
     match_types = {**whole, **arranged}
-    single = {
-        name: _single_type(type_, patterns[name], bindings, op, _thread_mesh(ctx.current_mesh))
-        for name, type_ in match_types.items()
-    }
+    try:
+        plan, _single_relations = _derive_issue(
+            schedule,
+            op,
+            tuple(patterns[param.name] for param in params),
+            tuple(match_types[param.name] for param in params),
+            bindings,
+            ctx.current_mesh,
+        )
+    except (TypeError, ValueError) as error:
+        ctx.error(call, str(error))
+    single = dict(zip((param.name for param in params), plan.operand_types, strict=True))
     matcher = PatternMatcher(bindings)
     for param in params:
         _check_pattern(call, ctx, matcher, param, patterns[param.name], single[param.name])
@@ -854,37 +941,6 @@ def _infer_schedule(call: Call, ctx) -> TensorType:
     for rule in between_rules(type(op)):
         if not rule.holds(single):
             ctx.error(call, rule.refused(single))
-
-    ordered_whole = tuple(whole[param.name] for param in params)
-    ordered_single = tuple(single[param.name] for param in params)
-    try:
-        whole_relations = _single_issue_relations(op, ordered_whole)
-        single_relations = _single_issue_relations(op, ordered_single)
-        whole_shape = _iteration_shape(whole_relations)
-        single_shape = _iteration_shape(single_relations)
-    except (TypeError, ValueError) as error:
-        ctx.error(call, str(error))
-    if len(whole_shape) != len(single_shape):
-        ctx.error(call, "single-issue and scheduled iteration ranks differ")
-    inferred = []
-    for whole_extent, single_extent in zip(whole_shape, single_shape, strict=True):
-        if single_extent < 1 or whole_extent % single_extent:
-            ctx.error(
-                call,
-                f"iteration extent {whole_extent} is not divisible by single-issue "
-                f"extent {single_extent}",
-            )
-        inferred.append(whole_extent // single_extent)
-    inferred_repeat = tuple(inferred)
-    repeat = inferred_repeat if schedule.repeat is None else schedule.repeat
-    if repeat != inferred_repeat:
-        ctx.error(
-            call,
-            f"repeat {repeat} conflicts with inferred repeat {inferred_repeat}",
-        )
-    order = tuple(range(len(inferred_repeat))) if schedule.order is None else schedule.order
-    if sorted(order) != list(range(len(inferred_repeat))):
-        ctx.error(call, f"order {order} is not a permutation of iteration dimensions")
 
     return results[writes[0].name]
 
