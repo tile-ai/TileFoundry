@@ -90,6 +90,12 @@ one loop iteration, but it does not remove that axis's loop. Transfer
 instructions emit no such atom loops. Supporting non-identity `order` here is
 an intentional extension beyond the AtomSched reference, which rejects it.
 
+Straight-line row issue is a property of the matched operand layout
+alternative. An alternative that packs adjacent issues MUST declare their
+tensor axis and count; an alternative without that property contributes one
+issue. Lowering MUST consume this declaration and MUST NOT infer the count from
+layout strides.
+
 For each operand layout, non-unit repeat counts name leading CuTe tile modes;
 the remaining inner modes are the instruction fragment matched against its
 operand declaration. A sharded operand's mesh layout follows the same rule:

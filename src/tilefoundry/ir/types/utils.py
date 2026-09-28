@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import math
+from itertools import product
 from typing import Optional
 
 from tilefoundry.ir.types.int_tuple import flatten as flatten_tuple
-from tilefoundry.ir.types.int_tuple import product, repeat_like
+from tilefoundry.ir.types.int_tuple import repeat_like
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.storage import StorageKind
 
 from .dtype import DType
-from .layout import ComposedLayout, Layout
+from .layout import ComposedLayout, Layout, apply
 from .layout_algebra import size
 from .mesh import Mesh, Topology, separate
 from .shard_layout import (
@@ -99,12 +100,8 @@ def _inner_layout(layout: Layout, whole: tuple, inner: tuple) -> tuple[Layout, d
     )
 
 
-def _participant_mesh(source: Mesh, required: Mesh) -> tuple[Mesh, int]:
-    """Select an exact suffix or its collapsed physical participant frame.
-
-    A source frame such as ``(2, 128)`` may collapse the required ``(4, 8, 4)``
-    modes while retaining the same trailing 128-thread physical frame.
-    """
+def participant_mesh(source: Mesh, required: Mesh) -> tuple[Mesh, int]:
+    """Select the trailing modes that state the required physical frame."""
     required_names = tuple(getattr(topology, "name", topology) for topology in required.topologies)
     source_names = tuple(getattr(topology, "name", topology) for topology in source.topologies)
     if source_names != required_names:
@@ -122,57 +119,103 @@ def _participant_mesh(source: Mesh, required: Mesh) -> tuple[Mesh, int]:
     if not isinstance(source_layout, Layout) or not isinstance(required_layout, Layout):
         raise ValueError("tile participant meshes require concrete layouts")
     source_shape = tuple(source_layout.shape)
-    required_shape = tuple(required_layout.shape)
     if source_layout.strides is None or required_layout.strides is None:
         raise ValueError("tile participant meshes require strided layouts")
     source_strides = tuple(source_layout.strides)
-    required_strides = tuple(required_layout.strides)
-    exact = (
-        len(source_shape) >= len(required_shape)
-        and source_shape[-len(required_shape) :] == required_shape
-        and source_strides[-len(required_strides) :] == required_strides
+    stated = {apply(required_layout, index) for index in range(size(required_layout))}
+    dropped = next(
+        (
+            begin
+            for begin in range(len(source_shape) - 1, -1, -1)
+            if (
+                (suffix := Layout(source_shape[begin:], source_strides[begin:]))
+                and {apply(suffix, index) for index in range(size(suffix))} == stated
+            )
+        ),
+        None,
     )
-    nonunit = tuple(
-        (extent, stride)
-        for extent, stride in zip(source_shape, source_strides, strict=True)
-        if extent != 1
-    )
-    collapsed = (
-        nonunit
-        and nonunit[-1][0] == product(required_shape)
-        and nonunit[-1][1] == required_strides[-1]
-    )
-    if not exact and not collapsed:
+    if dropped is None:
         raise ValueError(
-            f"mesh layout {source_shape} does not end in participant frame {required_shape}"
+            f"mesh layout {source_shape} does not end in participant frame "
+            f"{tuple(required_layout.shape)}"
         )
     from .mesh import starts  # noqa: PLC0415 - Mesh imports this module through types
 
-    dropped = len(source_shape) - len(required_shape) if exact else len(nonunit) - 1
-    names = (
-        source.names[dropped:]
-        if exact and len(source.names) >= dropped + len(required.names)
-        else required.names
-    )
     return (
         Mesh(
             source.topologies,
             ComposedLayout(None, starts(source)[0], required.layout),
-            names,
+            required.names,
         ),
         dropped,
     )
 
 
-def tile_inner_type(
+def nonunit_mesh(source: Mesh) -> Mesh:
+    """Return the source mesh with lexical unit modes omitted."""
+    layout = flatten(source.layout)
+    if not isinstance(layout, Layout) or layout.strides is None:
+        raise ValueError("instruction issue needs a static strided mesh")
+    modes = tuple(
+        (extent, stride)
+        for extent, stride in zip(layout.shape, layout.strides, strict=True)
+        if extent != 1
+    ) or ((1, 1),)
+    from .mesh import starts  # noqa: PLC0415 - Mesh imports this module through types
+
+    return Mesh(
+        source.topologies,
+        ComposedLayout(None, starts(source)[0], Layout(*zip(*modes, strict=True))),
+        tuple(f"d{index}" for index in range(len(modes))),
+    )
+
+
+def issue_frames(source: Mesh, required: Mesh, repeat: tuple, tile: tuple):
+    """Yield each declared issue frame and its grouped work-axis origins."""
+    physical = flatten(source.layout)
+    if not isinstance(physical, Layout) or physical.strides is None:
+        raise ValueError("group axes need a static strided physical mesh")
+    participant, dropped = participant_mesh(source, required)
+    outer = tuple(
+        (index, extent)
+        for index, extent in enumerate(physical.shape[:dropped])
+        if extent != 1
+    )
+    grouped = tuple(axis for axis, count in enumerate(repeat) if count > 1)[: len(outer)]
+    expected = tuple(repeat[axis] for axis in grouped)
+    if tuple(extent for _, extent in outer) != expected:
+        raise ValueError(
+            f"physical mesh {tuple(physical.shape)} is not outer modes followed by "
+            "participant frame"
+        )
+    from .mesh import starts  # noqa: PLC0415 - Mesh imports this module through types
+
+    local = flatten(participant.layout)
+    for coordinates in product(*(range(extent) for _, extent in outer)):
+        offset = starts(source)[0] + sum(
+            coordinate * physical.strides[index]
+            for (index, _extent), coordinate in zip(outer, coordinates, strict=True)
+        )
+        frame = Mesh(
+            source.topologies,
+            ComposedLayout(None, offset, local),
+            required.names,
+        )
+        yield frame, {
+            axis: coordinate * tile[axis]
+            for axis, coordinate in zip(grouped, coordinates, strict=True)
+        }
+
+
+def tile_view_layout(
     type_: TensorType,
     inner_shape: tuple,
     *,
     participant: Mesh | None = None,
     enclosing: Mesh | None = None,
     shard_attrs: tuple | None = None,
-) -> TensorType:
-    """Take the inner fragment after leading CuTe tile modes are removed.
+) -> object:
+    """Return the layout presented by one tile after leading modes are removed.
 
     Tensor and mesh layouts use the same convention: leading modes are tile or
     group coordinates and trailing modes are the instruction fragment/frame.
@@ -191,7 +234,7 @@ def tile_inner_type(
             mesh, dropped = (
                 (outer.mesh, 0)
                 if participant is None
-                else _participant_mesh(outer.mesh, participant)
+                else participant_mesh(outer.mesh, participant)
             )
             attrs = []
             for attr in outer.attrs[dropped:]:
@@ -210,9 +253,28 @@ def tile_inner_type(
     if shard_attrs is not None and not isinstance(inner_layout, ShardLayout):
         if participant is None or enclosing is None:
             raise ValueError("a declared shard fragment needs an enclosing participant mesh")
-        frame, _dropped = _participant_mesh(enclosing, participant)
+        frame, _dropped = participant_mesh(enclosing, participant)
         inner_layout = ShardLayout(inner_layout, shard_attrs, frame)
-    return TensorType(tuple(inner_shape), type_.dtype, inner_layout, type_.storage)
+    return inner_layout
+
+
+def tile_inner_type(
+    type_: TensorType,
+    inner_shape: tuple,
+    *,
+    participant: Mesh | None = None,
+    enclosing: Mesh | None = None,
+    shard_attrs: tuple | None = None,
+) -> TensorType:
+    """Take the inner fragment after leading CuTe tile modes are removed."""
+    layout = tile_view_layout(
+        type_,
+        inner_shape,
+        participant=participant,
+        enclosing=enclosing,
+        shard_attrs=shard_attrs,
+    )
+    return TensorType(tuple(inner_shape), type_.dtype, layout, type_.storage)
 
 
 def types_compatible(declared: Type, actual: Type) -> bool:

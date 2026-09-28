@@ -75,6 +75,7 @@ a_k_sliced = ComposedLayoutPattern(
     p,
     LayoutPattern(((8, 8), 16), ((l, W), 1)),
     predicates=(W == RUN, b >= 2, l == 8 * W, p % 16 == 0, 0 <= p, p < W),
+    issues_per_row=lambda captures: (1, captures["W"] // 16),
 )
 fragment = LayoutPattern((8, 2, 4, 2, 4, c), (1, 8, 16, 64, 128, 512))
 

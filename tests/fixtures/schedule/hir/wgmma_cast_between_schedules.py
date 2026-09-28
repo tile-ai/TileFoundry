@@ -1,10 +1,9 @@
-"""Ordinary HIR written between two scheduled instructions.
+"""Author the distribution of a tiled cast between scheduled instructions.
 
-``b`` arrives as f32 and is narrowed by an ordinary ``tf.cast`` that AtomSched
-neither schedules nor owns. That cast sits between the ``tf.schedule`` staging
-A and the ``tf.schedule`` staging B, and the second transfer reads its result.
-A function is a mixed HIR program: each schedule answers for its own operands
-and says nothing about what is written around it.
+Each K tile of ``b_f32`` is copied into registers held by the loader warp,
+narrowed there, and copied into shared memory. The author therefore owns the
+three storage transitions; lowering does not invent a distribution for an
+unscheduled whole-tensor cast.
 """
 
 from tilefoundry import func, module
@@ -24,8 +23,11 @@ STAGES = 2
 _COMPUTE = ThreadMesh((Topology("thread", 256),),
                       ComposedLayout(None, 128, Layout((4, 8, 4), (32, 4, 1))),
                       ("warp", "lane8", "lane4"))
+_LOADER = ThreadMesh((Topology("thread", 256),),
+                     Layout((32,), (1,)), ("lane",))
 A_SMEM = Layout(((8, 8), (2, 8)), ((128, 8), (64, 1)))
 B_SMEM = Layout(((2, 8), (4, 8)), ((64, 8), (128, 1)))
+B_REG = ShardLayout(Layout((32, 16), (16, 1)), (Split(0),), _LOADER)
 ACC = ShardLayout(Layout((8, 2, 4, 2, 4, 4),
                          (1, 8, 16, 64, 128, 512)),
                   (Split(2), Split(0), Split(4)), _COMPUTE)
@@ -61,12 +63,15 @@ class WGMMA_CAST_BETWEEN_SCHEDULES:
                             buffers=STAGES,
                         )
 
-                    b = tf.cast(b_f32, dtype="bf16")
-
                     with threads[0, :32] as _loader:
+                        b_tile = tf.schedule(
+                            (b_f32[k, :],),
+                            op=T.copy(rmem_layout=B_REG),
+                        )
+                        b = tf.cast(b_tile, dtype="bf16")
                         rhs = tf.schedule(
-                            (b[k, :],),
-                            op=T.copy_async_tensor(smem_layout=B_SMEM),
+                            (b,),
+                            op=T.copy(smem_layout=B_SMEM),
                             buffers=STAGES,
                         )
 

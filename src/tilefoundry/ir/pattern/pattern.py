@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from tilefoundry.ir.types import ComposedLayout, Layout, Swizzle
 from tilefoundry.ir.types.layout import flatten
@@ -313,6 +313,11 @@ class ComposedLayoutPattern(Pattern):
     offset: object = None
     outer: object = None
     predicates: tuple[Predicate, ...] = field(default_factory=tuple)
+    issues_per_row: Callable[[dict], tuple[int, int] | None] | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
 
     def fixed(self):
         held = []

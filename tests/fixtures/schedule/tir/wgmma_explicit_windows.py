@@ -17,6 +17,7 @@ def gemm(
                 (64, 32), "f32", Layout((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), "rmem"
             ]
         )
+        T.fill(out, 0.0)
         value = T.alloc_tensor(
             tensor_type=Tensor[
                 (64, 32), "bf16", Layout((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), "rmem"

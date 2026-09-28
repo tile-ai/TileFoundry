@@ -28,6 +28,7 @@ def gemm(
                 "rmem",
             ]
         )
+        T.fill(out, 0.0)
         with Mesh(
             (Topology("thread", 384),), Layout((3, 128), (128, 1)), names=("d0", "d1")
         ) as scope_4:

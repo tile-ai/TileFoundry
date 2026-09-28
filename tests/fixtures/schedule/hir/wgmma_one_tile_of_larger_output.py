@@ -1,8 +1,7 @@
 """One tile written into a larger output: the seeded zeros is not dead.
 
-The counterpart to ``wgmma_insert_tiles_into_output``. There the M/N loops tile the whole
-result, so the ``tf.zeros`` the author seeded it with is overwritten to the last
-element and the memset it asks for is waste. Here there is one tile and no outer
+The M/N loops intentionally cover only one tile, so the ``tf.zeros`` the author
+seeded it with remains live outside that window. Here there is no outer
 loop, so every element of the output outside that 64x32 window is what the zeros
 says it is -- and if the zeros is dropped, that part of the output is whatever
 the caller happened to leave in it, which is a different program from the one

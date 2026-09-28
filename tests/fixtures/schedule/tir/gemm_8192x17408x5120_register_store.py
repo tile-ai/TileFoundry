@@ -20,6 +20,7 @@ def gemm(
                 "rmem",
             ]
         )
+        T.fill(out, 0.0)
         value = T.alloc_tensor(
             tensor_type=Tensor[
                 (128, 256),

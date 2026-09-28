@@ -1,7 +1,7 @@
 """A 256-wide schedule whose authored order makes N the outer atom loop.
 
-The work and instruction are the same as ``wgmma_repeat_along_n``.  Only the
-MMA order differs: each warpgroup walks N outside M, with K innermost.
+The N repeat is a true loop. Its authored order makes each warpgroup walk N
+outside M, with K innermost.
 """
 
 from tilefoundry import func, module

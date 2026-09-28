@@ -42,6 +42,7 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.schedule import ScheduleOp
+from tilefoundry.ir.hir.tensor.cast import Cast as HirCast
 from tilefoundry.ir.pattern import PatternMatcher, Tensor, TensorPattern
 from tilefoundry.ir.tir import PrimFunction
 from tilefoundry.ir.tir.async_copy import CopyAsync
@@ -49,7 +50,15 @@ from tilefoundry.ir.tir.cuda.nn.mma import TiledMma
 from tilefoundry.ir.tir.cuda.nn.sm80_mma import Mma
 from tilefoundry.ir.tir.cuda.nn.wgmma import Wgmma
 from tilefoundry.ir.tir.stmts import Evaluate
-from tilefoundry.ir.types import DType, Layout, StorageKind, TensorType, UnitType
+from tilefoundry.ir.types import (
+    ComposedLayout,
+    DType,
+    Layout,
+    ShardLayout,
+    StorageKind,
+    TensorType,
+    UnitType,
+)
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
@@ -98,8 +107,6 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
-    "gemm_8192x17408x5120_cta_grid": 196_608,
-    "gemm_8192x17408x5120_persistent": 196_608,
     "gemm_8192x17408x5120_register_store": 196_608,
     "gemm_8192x17408x5120_tma_store": 196_608,
     "sm80_mma_ldmatrix": 1_536,
@@ -109,11 +116,9 @@ SMEM_GOLDEN = {
     "wgmma_cp_async_loads": 6_144,
     "wgmma_cta_grid_4x17": 13_824,
     "wgmma_explicit_windows": 6_144,
-    "wgmma_insert_tiles_into_output": 6_144,
     "wgmma_k_slices_of_wide_run": 12_288,
     "wgmma_one_tile_of_larger_output": 6_144,
     "wgmma_repeat_along_k": 36_864,
-    "wgmma_repeat_along_n": 24_576,
     "wgmma_repeat_along_n_order": 24_576,
     "wgmma_rs_a_from_accumulator": 5_120,
     "wgmma_rs_a_from_smem": 6_144,
@@ -123,18 +128,6 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
-    "gemm_8192x17408x5120_cta_grid": {
-        "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
-        "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
-        "thread@128:256#2": _RmemExpectation(131_072, "f32 loop result/bf16 cast alias"),
-        "thread@0:384#0": _RmemExpectation(131_072, "parent envelope of one alias chain"),
-    },
-    "gemm_8192x17408x5120_persistent": {
-        "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
-        "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
-        "thread@128:256#2": _RmemExpectation(131_072, "f32 loop result/bf16 cast alias"),
-        "thread@0:384#0": _RmemExpectation(131_072, "parent envelope of one alias chain"),
-    },
     "gemm_8192x17408x5120_register_store": {
         "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
         "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
@@ -172,7 +165,14 @@ RMEM_EXPECTED = {
         "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
         "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
         "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
-        "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
+        "thread@0:32#1": _RmemExpectation(
+            3_072,
+            "16x32 f32 loader tile (2048) plus bf16 cast tile (1024)",
+        ),
+        "thread@0:256#0": _RmemExpectation(
+            11_264,
+            "64x32 f32 accumulator (8192) plus overlapping loader tiles (3072)",
+        ),
     },
     "wgmma_cp_async_loads": {
         "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
@@ -187,12 +187,6 @@ RMEM_EXPECTED = {
         "thread@0:384#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
     },
     "wgmma_explicit_windows": {
-        "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
-        "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
-        "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
-        "thread@0:256#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
-    },
-    "wgmma_insert_tiles_into_output": {
         "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
         "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
         "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
@@ -215,12 +209,6 @@ RMEM_EXPECTED = {
         "thread@128:256#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
         "thread@128:256#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
         "thread@0:384#0": _RmemExpectation(8_192, "parent envelope of one alias chain"),
-    },
-    "wgmma_repeat_along_n": {
-        "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
-        "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
-        "thread@128:256#2": _RmemExpectation(131_072, "f32 loop result/bf16 cast alias"),
-        "thread@0:384#0": _RmemExpectation(131_072, "parent envelope of one alias chain"),
     },
     "wgmma_repeat_along_n_order": {
         "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
@@ -469,21 +457,6 @@ def test_scheduled_hir_program_has_analysis_metadata(
                 continue
             assert (interval.defined_at, interval.last_used_at) in loop_bounds
 
-    if analysis == "performance" and path.stem == "gemm_8192x17408x5120_cta_grid":
-        local_moves = []
-        for expr in collect_exprs(result.function.body):
-            if not isinstance(expr, Call) or not isinstance(expr.target, ScheduleOp):
-                continue
-            moved = get_metadata(expr, MemoryMetadata)
-            levels = moved.traffic.storage.names()
-            if "smem" in levels and "gmem" not in levels:
-                local_moves.append(get_metadata(expr, PerformanceMetadata))
-        assert local_moves and all(
-            item is not None and item.timeline.end_ns > item.timeline.start_ns
-            for item in local_moves
-        )
-
-
 @pytest.mark.parametrize("path", HIR, ids=lambda path: path.stem)
 def test_schedule_memory_report_carries_allocations(
     path: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -518,7 +491,7 @@ def test_schedule_memory_report_carries_allocations(
     ("fixture", "n"),
     (
         ("wgmma_rs_a_from_accumulator", 16),
-        ("wgmma_repeat_along_n", 64),
+        ("wgmma_repeat_along_n_order", 64),
         ("gemm_8192x17408x5120_register_store", 256),
     ),
 )
@@ -1081,6 +1054,26 @@ def test_lowering_rejects_unknown_hir_call(
     _assert_cli_lowering_error(source, "unknown HIR call _UnstatedInstruction", tmp_path, capsys)
 
 
+def test_lowering_rejects_unscheduled_gmem_cast(
+    monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source, _module, result = _m1_analysis()
+    cast = next(
+        expr
+        for expr in collect_exprs(result.function.body)
+        if isinstance(expr, Call) and isinstance(expr.target, HirCast)
+    )
+    cast.type = replace(cast.type, storage=StorageKind.GMEM)
+    monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
+
+    _assert_cli_lowering_error(
+        source,
+        "T.cast accepts only rmem operands, so write an explicit tf.schedule",
+        tmp_path,
+        capsys,
+    )
+
+
 @pytest.mark.parametrize(
     ("case", "message"),
     (
@@ -1099,19 +1092,49 @@ def test_lowering_rejects_invalid_atom_geometry(
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_repeat_along_k.py"
     module = _module_in(source)
     result = analyze(module, module.entry_function(), analysis=("memory",))
-    derive = lowering_module._work_geometry
+    emit = lowering_module.Lowering._emit_atom
 
-    def malformed(relations, order):
-        names, extents, atoms, repeats, issue_order = derive(relations, order)
-        if case == "group":
-            repeats = (3, *repeats[1:])
-        elif case == "atom":
-            extents = (extents[0], 17, *extents[2:])
-        else:
-            extents = (*extents[:2], 80)
-        return names, extents, atoms, repeats, issue_order
+    def malformed(self, call, atom, operands, mesh, cursor):
+        acc, lhs, rhs = (value for _role, value in operands)
+        acc_type = self.logical.get(id(acc), acc.type)
+        assert isinstance(acc_type.layout, ShardLayout)
+        if case == "atom":
+            acc_type = replace(acc_type, shape=(acc_type.shape[0], 17))
+        elif case == "row":
+            lhs_type = self.logical.get(id(lhs), lhs.type)
+            assert isinstance(lhs_type.layout, ComposedLayout)
+            assert isinstance(lhs_type.layout.outer, Layout)
+            lhs_outer = replace(
+                lhs_type.layout.outer,
+                shape=(*lhs_type.layout.outer.shape[:-1], (5, 16)),
+            )
+            self.logical[id(lhs)] = replace(
+                lhs_type,
+                shape=(lhs_type.shape[0], 80),
+                layout=replace(lhs_type.layout, outer=lhs_outer),
+            )
+            rhs_type = self.logical.get(id(rhs), rhs.type)
+            assert isinstance(rhs_type.layout, Layout)
+            rhs_layout = replace(
+                rhs_type.layout,
+                shape=((5, *rhs_type.layout.shape[0][1:]), *rhs_type.layout.shape[1:]),
+            )
+            self.logical[id(rhs)] = replace(
+                rhs_type,
+                shape=(80, rhs_type.shape[1]),
+                layout=rhs_layout,
+            )
+        self.logical[id(acc)] = acc_type
+        return emit(self, call, atom, operands, mesh, cursor)
 
     monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
-    monkeypatch.setattr(lowering_module, "_work_geometry", malformed)
+    if case == "group":
+        frames = lowering_module.issue_frames
+
+        def misplaced(source, required, repeat, tile):
+            return frames(source, required, (3, *repeat[1:]), tile)
+
+        monkeypatch.setattr(lowering_module, "issue_frames", misplaced)
+    monkeypatch.setattr(lowering_module.Lowering, "_emit_atom", malformed)
 
     _assert_cli_lowering_error(source, message, tmp_path, capsys)

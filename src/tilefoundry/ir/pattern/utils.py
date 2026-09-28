@@ -119,6 +119,26 @@ def selected_pattern(pattern, bindings: dict):
     return pattern
 
 
+def matched_row_issues(pattern, matcher) -> tuple[int, int] | None:
+    """Read the row-issue property from the layout alternative that matched."""
+
+    def find(value):
+        if isinstance(value, Pattern):
+            declared = getattr(value, "issues_per_row", None)
+            if declared is not None and id(value) in matcher.memo:
+                return declared(dict(matcher.bindings))
+            for child in vars(value).values():
+                if (found := find(child)) is not None:
+                    return found
+        elif isinstance(value, tuple):
+            for child in value:
+                if (found := find(child)) is not None:
+                    return found
+        return None
+
+    return find(pattern)
+
+
 def fixed_pattern_value(value, bindings: dict):
     """Resolve one declaration value when every symbolic leaf is bound."""
     if isinstance(value, tuple):
