@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import InstructionCapability, Op
+from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import Tensor
@@ -14,8 +14,6 @@ from tilefoundry.visitor_registry import register_typeinfer, register_verify_stm
 @register_op(dialect="T", category="async", name="copy_async_bulk")
 class CopyAsyncBulk(Op):
     """Stage a tile from global to shared memory, completing on a barrier."""
-
-    capability = InstructionCapability(None, report_order=3)
 
     src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=Tensor)
     dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=Tensor)

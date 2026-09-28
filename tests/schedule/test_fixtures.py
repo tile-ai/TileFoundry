@@ -809,8 +809,7 @@ def test_schedule_facts_lists_target_instructions_as_text_and_json(
                 "id": "T.copy_async_tensor",
                 "capability": "cp.async.bulk.tensor",
             },
-            {"id": "T.copy_async", "capability": None},
-            {"id": "T.copy_async_bulk", "capability": None},
+            {"id": "T.copy_async", "capability": "cp.async"},
             {"id": "T.ldmatrix", "capability": "ldmatrix"},
             {"id": "T.copy", "capability": None},
         ],
@@ -823,12 +822,24 @@ target nvidia.h200_sxm
 instructions
   T.tiled_mma          wgmma.mma_async, mma.sync
   T.copy_async_tensor  cp.async.bulk.tensor
-  T.copy_async         all targets
-  T.copy_async_bulk    all targets
+  T.copy_async         cp.async
   T.ldmatrix           ldmatrix
   T.copy               all targets
 """
     )
+
+
+@pytest.mark.parametrize("target", ("cpu", "apple.m2_pro"))
+def test_schedule_facts_only_lists_target_neutral_instructions_for_non_cuda(
+    target: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    out = tmp_path / "facts.txt"
+
+    assert cli_main(["schedule", "facts", "--target", target, str(out)]) == 0
+    assert capsys.readouterr() == ("", "")
+    assert out.read_text() == f"target {target}\ninstructions\n  T.copy  all targets\n"
 
 
 @pytest.mark.parametrize(

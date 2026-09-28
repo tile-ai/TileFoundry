@@ -23,7 +23,7 @@ ASYNC_WIDTHS = (4, 8, 16)
 class CopyAsync(Op):
     """Async gmem→smem copy (``cp.async.cg.shared.global``); non-blocking."""
 
-    capability = InstructionCapability(None, report_order=2)
+    capability = InstructionCapability("cp.async", report_order=2)
 
     src = ParamDef(
         kind="input",

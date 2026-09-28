@@ -11,7 +11,7 @@ source = "https://docs.nvidia.com/cuda/hopper-tuning-guide/index.html"
 conditions = "compilation architecture identity"
 
 [facts.capabilities]
-value = ["mma.sync", "wgmma.mma_async", "ldmatrix", "cp.async.bulk.tensor"]
+value = ["mma.sync", "wgmma.mma_async", "ldmatrix", "cp.async", "cp.async.bulk.tensor"]
 unit = "name"
 origin = "vendor"
 source = "https://docs.nvidia.com/cuda/hopper-compatibility-guide/index.html"

@@ -11,7 +11,7 @@ source = "https://docs.nvidia.com/cuda/blackwell-tuning-guide/index.html"
 conditions = "compilation architecture identity of compute capability 10.0"
 
 [facts.capabilities]
-value = ["mma.sync", "ldmatrix", "tcgen05", "cp.async.bulk.tensor"]
+value = ["mma.sync", "ldmatrix", "tcgen05", "cp.async", "cp.async.bulk.tensor"]
 unit = "name"
 origin = "vendor"
 source = "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html"

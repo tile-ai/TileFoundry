@@ -15,9 +15,8 @@ from pathlib import Path
 import pytest
 
 from tilefoundry.analysis.facts import MemoryHierarchyFacts, ThroughputFacts
-from tilefoundry.ir.core.op_registry import iter_schemas
-from tilefoundry.ir.tir.cuda.nn.mma_atom import AtomPattern
 from tilefoundry.ir.types import DType
+from tilefoundry.schedule.instructions import registered_families
 from tilefoundry.target.amx import AmxTarget
 from tilefoundry.target.amx import spec as amx_spec
 from tilefoundry.target.base import Architecture, Device
@@ -453,25 +452,26 @@ def test_cuda_sm_clocks_are_the_typed_floor_of_existing_device_facts() -> None:
 
 def test_instruction_capabilities_and_execution_resources_are_separate_axes() -> None:
     """Enumerate instruction declarations and reconcile only their capability side."""
-    declarations = set()
-    for schema in iter_schemas():
-        if schema.op_class is None:
-            continue
-        if isinstance(getattr(schema.op_class, "capability", None), str):
-            declarations.add(schema.op_class)
-        for param in schema.signature:
-            if isinstance(param.pattern, AtomPattern):
-                declarations.update(param.pattern.declarations)
-
-    capabilities = {declaration.capability for declaration in declarations}
-    resources = {declaration.resource for declaration in declarations}
+    instructions = tuple(
+        instruction
+        for family in registered_families()
+        for instruction in family.declarations
+        if instruction.capability is not None
+    )
+    capabilities = {instruction.capability for instruction in instructions}
+    resources = {
+        resource
+        for instruction in instructions
+        if isinstance((resource := getattr(instruction.declaration, "resource", None)), str)
+    }
     architecture_capabilities = {
         capability
         for target in (*CudaTarget.available(), *AmxTarget.available())
         for capability in target.architecture.capabilities
     }
 
-    assert declarations
+    assert instructions
     assert capabilities <= architecture_capabilities
+    assert all("cp.async" in target.architecture.capabilities for target in CudaTarget.available())
     assert capabilities.isdisjoint(resources)
     assert all(resource.endswith("_engine") for resource in resources)

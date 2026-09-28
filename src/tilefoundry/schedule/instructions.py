@@ -97,8 +97,8 @@ def _supported(name: str | None, target: Target) -> bool:
     return name in frozenset(getattr(architecture, "capabilities", ()))
 
 
-def families(target: Target) -> tuple[InstructionFamily, ...]:
-    """Return supported registered instruction Ops in stable report order."""
+def registered_families() -> tuple[InstructionFamily, ...]:
+    """Return every registered instruction Op before target filtering."""
     declared = []
     for position, schema in enumerate(iter_schemas()):
         if schema.dialect != "T" or schema.op_class is None:
@@ -115,12 +115,24 @@ def families(target: Target) -> tuple[InstructionFamily, ...]:
                 attribute=capability.attribute,
             )
             for capability in capabilities
-            if _supported(capability.name, target)
         )
-        if variants:
-            declared.append((InstructionFamily(schema.op_class, variants), position))
+        declared.append((InstructionFamily(schema.op_class, variants), position))
     declared.sort(key=lambda item: (item[0].report_order, item[1]))
     return tuple(family for family, _position in declared)
+
+
+def families(target: Target) -> tuple[InstructionFamily, ...]:
+    """Return target-supported instruction Ops in stable report order."""
+    supported = []
+    for family in registered_families():
+        variants = tuple(
+            declaration
+            for declaration in family.declarations
+            if _supported(declaration.capability, target)
+        )
+        if variants:
+            supported.append(InstructionFamily(family.op_type, variants))
+    return tuple(supported)
 
 
 def declarations(target: Target) -> tuple[Instruction, ...]:
@@ -128,4 +140,10 @@ def declarations(target: Target) -> tuple[Instruction, ...]:
     return tuple(declaration for family in families(target) for declaration in family.declarations)
 
 
-__all__ = ["Instruction", "InstructionFamily", "declarations", "families"]
+__all__ = [
+    "Instruction",
+    "InstructionFamily",
+    "declarations",
+    "families",
+    "registered_families",
+]

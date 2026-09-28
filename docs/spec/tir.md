@@ -975,6 +975,8 @@ class CopyAsync(Op):
     smem_layout: Layout | None = None
 ```
 - constraints:
+  - Its instruction capability is `cp.async`; a CUDA architecture that admits
+    this op lists that emitted ISA family in its hardware document.
   - Lowers to `tilefoundry::ops::copy_async(src, dst)`.
   - `src` is gmem and `dst` is smem, with the same dtype. Each layout MUST
     admit the same width from `ASYNC_WIDTHS` and MUST walk the same tile
