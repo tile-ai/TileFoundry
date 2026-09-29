@@ -9,7 +9,7 @@ from tilefoundry.ir.core import Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import Tensor
-from tilefoundry.ir.types import ComposedLayout, Layout, TensorType
+from tilefoundry.ir.types import Layout, TensorType
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.visitor_registry import register_typeinfer
@@ -22,35 +22,13 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
-from .view import presented_layout_of
+from ._view_layout import derive_view_layout
 
 
 @register_op
 class Transpose(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     perm = ParamDef(kind="attribute", annotation=tuple)
-
-    def presented_layout(self, call, ctx):
-        """The source arrangement with shape and strides permuted together."""
-        source = presented_layout_of(call.args[0], ctx)
-        inner = None
-        if isinstance(source, ComposedLayout):
-            inner, source = source.inner, source.outer
-        if not isinstance(source, Layout):
-            return None
-        perm = tuple(self.perm)
-        if len(perm) != len(source.shape):
-            return None
-        layout = Layout(
-            tuple(source.shape[axis] for axis in perm),
-            (
-                None
-                if source.strides is None
-                else tuple(source.strides[axis] for axis in perm)
-            ),
-        )
-        return layout if inner is None else ComposedLayout(inner, 0, layout)
-
 
 def _strides(type_: TensorType) -> tuple | None:
     """The per-axis strides one position addresses this Type with."""
@@ -116,31 +94,17 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
         if derived is not None:
             new_layout = derived
     else:
-        source = x_ty.layout
-        if source is None:
-            source = Layout(shape=tuple(x_ty.shape), strides=try_compact_major(tuple(x_ty.shape)))
-            if source.strides is None:
-                source = None
-        if isinstance(source, Layout):
-            new_layout = Layout(
-                shape=tuple(source.shape[p] for p in perm),
+        def transposed(layout: Layout) -> Layout:
+            return Layout(
+                shape=tuple(layout.shape[p] for p in perm),
                 strides=(
-                    None if source.strides is None else tuple(source.strides[p] for p in perm)
+                    None if layout.strides is None else tuple(layout.strides[p] for p in perm)
                 ),
             )
-        elif isinstance(source, ComposedLayout) and isinstance(source.outer, Layout):
-            new_layout = ComposedLayout(
-                inner=source.inner,
-                offset=source.offset,
-                outer=Layout(
-                    shape=tuple(source.outer.shape[p] for p in perm),
-                    strides=(
-                        None
-                        if source.outer.strides is None
-                        else tuple(source.outer.strides[p] for p in perm)
-                    ),
-                ),
-            )
+
+        new_layout = derive_view_layout(x_ty, new_shape, transposed)
+    if new_layout is None:
+        ctx.error(call, f"Transpose cannot preserve {type(x_ty.layout).__name__} layout")
     return TensorType(shape=new_shape, dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage)
 
 

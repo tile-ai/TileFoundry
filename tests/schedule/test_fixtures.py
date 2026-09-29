@@ -44,6 +44,9 @@ from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.hir.tensor.cast import Cast as HirCast
+from tilefoundry.ir.hir.tensor.reshape import Reshape
+from tilefoundry.ir.hir.tensor.slice import Slice
+from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.pattern import (
     PatternMatcher,
     Tensor,
@@ -347,6 +350,22 @@ def test_scheduled_hir_program_is_well_typed(path: Path) -> None:
     program = _module_in(path)
     entry = next(function for function in program.functions if function.name == "gemm")
     check_program(program, entry)
+
+
+def test_scheduled_hir_view_calls_declare_layouts() -> None:
+    views = []
+    for path in HIR:
+        program = _module_in(path)
+        entry = next(function for function in program.functions if function.name == "gemm")
+        check_program(program, entry)
+        views.extend(
+            (path.stem, type(expr.target).__name__, expr)
+            for expr in collect_exprs(entry.body)
+            if isinstance(expr, Call)
+            and isinstance(expr.target, (Reshape, Slice, Transpose))
+        )
+    missing = [(path, op) for path, op, expr in views if expr.type.layout is None]
+    assert not missing, f"{len(missing)} of {len(views)} view calls omit layout: {missing}"
 
 
 @pytest.mark.parametrize(("analysis", "metadata_type"), ANALYSES)

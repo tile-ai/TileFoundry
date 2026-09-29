@@ -662,18 +662,15 @@ Tensor structural operations; consensus ops (`Transpose` / `Slice` / `Concat`
 / `Stack` / `ShapeOf` / `Rank`) follow torch / numpy
 ([torch tensor manipulation ops](https://pytorch.org/docs/stable/torch.html#indexing-slicing-joining-mutating-ops)).
 
-`Transpose`, statically positioned `Slice`, and `Reshape` derive a view layout from
-their input when it states one. For `Slice` and `Reshape`, an input with
-`layout=None` produces a view with `layout=None`. Neither case says that the
-view materialized.
+`Transpose`, statically positioned `Slice`, and `Reshape` derive their result
+layout during type inference. Their result `TensorType.layout` MUST NOT be
+`None`; a `Layout` whose `strides` are `None` states that the view arrangement
+is known while its steps are not. A missing input layout is the compact
+arrangement that HIR readers assign to that value. This requirement applies to
+these view ops, not to every tensor-producing HIR op.
 
-Each view op publicly answers the arrangement it presents to an immediate
-consumer through `presented_layout`; `presented_layout_of` dispatches that
-query without naming a concrete view op. This presented arrangement is not the
-same fact as the view's stored `TensorType.layout`: the stored layout MAY remain
-`None` while the query derives the source strides that the view presents.
-Pattern matching and lowering MUST consume this one query rather than infer
-view strides independently.
+Pattern matching and lowering MUST read this result type rather than derive a
+second presentation of the view.
 
 - `Transpose` MUST permute the layout shape and strides by the same permutation
   as the tensor shape. A `ShardLayout` MUST remap its split positions through

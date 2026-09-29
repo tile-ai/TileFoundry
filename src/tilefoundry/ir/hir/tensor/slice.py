@@ -29,7 +29,7 @@ from tilefoundry.visitor_registry.access_relation import (
     view_relations,
 )
 
-from .view import presented_layout_of
+from ._view_layout import derive_view_layout
 
 
 @register_op
@@ -41,28 +41,6 @@ class Slice(Op):
 
     def __init__(self, **attrs):
         super().__init__(**attrs)
-
-    def presented_layout(self, call: Call, ctx):
-        """The sliced axes and source strides, apart from their runtime origin."""
-        source = presented_layout_of(call.args[0], ctx)
-        inner = None
-        if isinstance(source, ComposedLayout):
-            inner, source = source.inner, source.outer
-        if not isinstance(source, Layout) or source.strides is None:
-            return None
-        if not (len(source.strides) == len(self.sizes) == len(self.strides)):
-            return None
-        layout = Layout(
-            tuple(self.sizes),
-            tuple(
-                source_stride * slice_stride
-                for source_stride, slice_stride in zip(
-                    source.strides, self.strides, strict=True
-                )
-            ),
-        )
-        return layout if inner is None else ComposedLayout(inner, 0, layout)
-
 
 class _Unbounded(ValueError):
     """A relation would have a parameter nothing can bound."""
@@ -513,6 +491,21 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
                     offset=inherited_offset + moved,
                     outer=window,
                 )
+    if new_layout is None:
+        def sliced(layout: Layout) -> Layout:
+            strides = None
+            if layout.strides is not None and len(layout.strides) == rank:
+                strides = tuple(
+                    source_stride * slice_stride
+                    for source_stride, slice_stride in zip(
+                        layout.strides, op.strides, strict=True
+                    )
+                )
+            return Layout(shape, strides)
+
+        new_layout = derive_view_layout(x_ty, shape, sliced)
+    if new_layout is None:
+        ctx.error(call, f"Slice cannot preserve {type(x_ty.layout).__name__} layout")
     return TensorType(shape=shape, dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage)
 
 

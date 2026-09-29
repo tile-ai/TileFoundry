@@ -8,7 +8,7 @@ from tilefoundry.ir.core import Call, Op
 from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import Tensor
-from tilefoundry.ir.types import ComposedLayout, TensorType
+from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.layout import Layout, flatten
 from tilefoundry.ir.types.shard_layout import (
     Broadcast,
@@ -25,31 +25,13 @@ from tilefoundry.visitor_registry.access_relation import (
     view_relations,
 )
 
-from .view import presented_layout_of
+from ._view_layout import derive_view_layout
 
 
 @register_op
 class Reshape(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     new_shape = ParamDef(kind="attribute", annotation=tuple)
-
-    def presented_layout(self, call, ctx):
-        """A compact source regrouped over the requested result shape."""
-        source = presented_layout_of(call.args[0], ctx)
-        inner = None
-        if isinstance(source, ComposedLayout):
-            inner, source = source.inner, source.outer
-        if not isinstance(source, Layout):
-            return None
-        expected = try_compact_major(tuple(source.shape))
-        if source.strides is not None and source.strides != expected:
-            return None
-        layout = Layout(
-            tuple(self.new_shape),
-            try_compact_major(tuple(self.new_shape)),
-        )
-        return layout if inner is None else ComposedLayout(inner, 0, layout)
-
 
 def _reshape_view(call: "Call", ctx) -> tuple:
     """Where a result coordinate sits in the source it was renamed from."""
@@ -198,40 +180,25 @@ def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
 
     new_layout = None
     if isinstance(x_ty.layout, ShardLayout):
-        genuine = any(not isinstance(a, Broadcast) for a in x_ty.layout.attrs)
         new_layout = _carry_sharded_reshape(x_ty.layout, new_shape)
-        if new_layout is None and genuine:
+        if new_layout is None and genuine_sharding:
             ctx.error(
                 call,
                 "Reshape cannot express the sharded layout: new shape does "
                 "not align with the input layout factorization",
             )
+        if new_layout is None:
+            new_layout = replace(x_ty.layout, layout=Layout(new_shape, None))
     else:
-        source = x_ty.layout
-        if isinstance(source, Layout):
-            source_strides = source.strides
-            expected_strides = try_compact_major(source.shape)
-            if source_strides is None or source_strides == expected_strides:
-                new_layout = Layout(
-                    shape=new_shape,
-                    strides=try_compact_major(new_shape),
-                )
-        elif (
-            isinstance(source, ComposedLayout)
-            and isinstance(source.outer, Layout)
-            and (
-                source.outer.strides is None
-                or source.outer.strides == try_compact_major(source.outer.shape)
-            )
-        ):
-            new_layout = ComposedLayout(
-                inner=source.inner,
-                offset=source.offset,
-                outer=Layout(
-                    shape=new_shape,
-                    strides=try_compact_major(new_shape),
-                ),
-            )
+        def reshaped(layout: Layout) -> Layout | None:
+            expected = try_compact_major(layout.shape)
+            if layout.strides is not None and layout.strides != expected:
+                return None
+            return Layout(new_shape, try_compact_major(new_shape))
+
+        new_layout = derive_view_layout(x_ty, new_shape, reshaped)
+    if new_layout is None:
+        ctx.error(call, f"Reshape cannot preserve {type(x_ty.layout).__name__} layout")
     return TensorType(
         shape=new_shape,
         dtype=x_ty.dtype,

@@ -37,7 +37,6 @@ from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
-from tilefoundry.ir.hir.tensor.view import presented_layout_of
 from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.tir.cast import Cast as TirCast
 from tilefoundry.ir.tir.memory import AllocTensor, Copy, Fill, PtrOf, TensorView
@@ -630,9 +629,7 @@ class Lowering(ExprVisitor[Expr]):
         )
         if any(stride != 1 for stride in call.target.strides):
             raise LoweringError(f"{_label(call)} has a strided Slice, which is not contiguous")
-        layout = _plain_layout(
-            replace(call.type, layout=presented_layout_of(call, self.type_ctx))
-        )
+        layout = _plain_layout(call.type)
         return self._window(
             base,
             starts,
@@ -645,9 +642,7 @@ class Lowering(ExprVisitor[Expr]):
     def _lower_view(self, call: Call, cursor: _Cursor) -> Expr:
         source = self.lower(call.args[0], cursor)
         desired = call.type
-        layout = _plain_layout(
-            replace(desired, layout=presented_layout_of(call, self.type_ctx))
-        )
+        layout = _plain_layout(desired)
         desired = replace(desired, layout=layout)
         starts = tuple(i64_const(0) for _ in source.type.shape)
         return self._window(

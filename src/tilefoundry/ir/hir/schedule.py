@@ -11,7 +11,6 @@ from tilefoundry.evaluator.value import EvalError
 from tilefoundry.ir.core import Call, Op, Var
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
-from tilefoundry.ir.hir.tensor.view import presented_layout_of
 from tilefoundry.ir.pattern import PatternMatcher, ShardLayoutPattern, Tensor, TensorPattern
 from tilefoundry.ir.pattern.utils import declared_shape, declared_write_type, selected_pattern
 from tilefoundry.ir.types import TensorType, UnitType
@@ -176,7 +175,7 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
                     TensorType(
                         type_.shape,
                         type_.dtype,
-                        presented_layout_of(read_args[param.name], ctx),
+                        ctx.type_of(read_args[param.name]).layout,
                         type_.storage,
                     )
                     if param.name in read_args
