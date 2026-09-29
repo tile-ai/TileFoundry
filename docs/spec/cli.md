@@ -463,14 +463,17 @@ With one name, `facts` reports that declaration's capability, execution mesh,
 parameters, operands, and cross-operand constraints; the parameter and operand
 sections are canonical `PatternPrinter.declaration` text.
 `candidates` reports the instructions whose access relation and operand
-patterns can implement each unscheduled matmul or reshard site. Relation rank
-and coordinate projections decide which instruction families enter the report;
-tile extents do not have to equal one instruction issue because repetition is a
-later scheduling choice. Operand dtype, storage, rank, divisibility, and
-cross-operand constraints then decide whether each declaration is a candidate
-or a refusal. A carrier family is reported by its associated declaration name,
-not by the carrier Op name. A site with no accepted instruction still reports
-its refusals.
+patterns can implement each unscheduled registered HIR site. A target-neutral
+pairing registry decides which TIR carrier families are relevant to each HIR
+Op; a HIR Op with no pairing is not a candidate site. Target capabilities then
+silently remove paired carriers unsupported by the selected target. Relation
+rank and coordinate projections decide which remaining families enter the
+report; tile extents do not have to equal one instruction issue because
+repetition is a later scheduling choice. Operand dtype, storage, rank,
+divisibility, and cross-operand constraints then decide whether each declaration
+is a candidate or a refusal. A carrier family is reported by its associated
+declaration name, not by the carrier Op name. A site with no accepted
+instruction still reports its refusals.
 An inventory Op with no access relation is not comparable and is skipped by
 candidate discovery; explicitly selecting that Op in `tf.schedule` remains an
 error.

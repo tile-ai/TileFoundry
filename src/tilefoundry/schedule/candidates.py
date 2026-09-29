@@ -22,8 +22,6 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.metadata import SourceSpanMetadata
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
-from tilefoundry.ir.hir.nn.matmul import MatMul
-from tilefoundry.ir.hir.sharding.reshard import Reshard
 from tilefoundry.ir.pattern import (
     PatternMatcher,
     SwitchPattern,
@@ -43,6 +41,7 @@ from tilefoundry.visitor_registry.access_relation import (
     relation_of,
     relations_of,
 )
+from tilefoundry.visitor_registry.candidates import candidate_ops
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
 
@@ -54,6 +53,7 @@ class _Site:
     scope: str
     reads: tuple[tuple[str, TensorType], ...]
     leaves: tuple[tuple[str, TensorType], ...]
+    instructions: tuple[type, ...]
 
 
 def _instructions(target: Target) -> tuple[tuple[type, OpCapability], ...]:
@@ -70,12 +70,21 @@ def _input_params(op_type: type) -> tuple[ParamDef, ...]:
     return tuple(param for param in op_type._op_schema.signature if param.kind == "input")
 
 
-def _site_types(call: Call) -> tuple[tuple[TensorType, ...], TensorType]:
+def _site_types(
+    call: Call, ctx: TypeInferContext
+) -> tuple[tuple[TensorType, ...], TensorType]:
     reads = tuple(local_type_of(arg.type) for arg in call.args)
     output = local_type_of(call.type)
     if not all(isinstance(type_, TensorType) for type_ in (*reads, output)):
         raise ValueError(f"{type(call.target).__name__} candidate site is not tensor-valued")
-    if isinstance(call.target, Reshard):
+    relations = relations_of(call, ctx)
+    same_coordinates = (
+        len(reads) == len(relations.inputs) == len(relations.outputs) == 1
+        and relation_of(relations.inputs[0].pattern).is_equal(
+            relation_of(relations.outputs[0].pattern)
+        )
+    )
+    if same_coordinates:
         shape = tuple(
             min(source, destination)
             for source, destination in zip(reads[0].shape, output.shape, strict=True)
@@ -85,14 +94,17 @@ def _site_types(call: Call) -> tuple[tuple[TensorType, ...], TensorType]:
     return reads, output
 
 
-def _sites(module, function) -> tuple[_Site, ...]:
+def _sites(module, function, ctx: TypeInferContext) -> tuple[_Site, ...]:
     root = build_scopes(module, function)
     owners = {identity: scope for scope in walk_scopes(root) for identity in scope.relations}
     sites = []
     for expr in collect_exprs(function.body):
-        if not isinstance(expr, Call) or not isinstance(expr.target, (MatMul, Reshard)):
+        if not isinstance(expr, Call):
             continue
-        reads, output = _site_types(expr)
+        instructions = candidate_ops(type(expr.target))
+        if not instructions:
+            continue
+        reads, output = _site_types(expr, ctx)
         schema = type(expr.target)._op_schema
         names = tuple(param.name for param in schema.signature if param.kind == "input")
         scope = owners[id(expr)]
@@ -106,6 +118,7 @@ def _sites(module, function) -> tuple[_Site, ...]:
                 scope="whole program" if level is None else f"per {level}",
                 reads=tuple(zip(names, reads, strict=True)),
                 leaves=(("result", output),),
+                instructions=instructions,
             )
         )
     return tuple(sites)
@@ -432,18 +445,20 @@ def _source_label(sites: tuple[_Site, ...], module, source: str | None) -> str:
 def candidates(module, entry, *, source: str | None = None) -> dict[str, Any]:
     """Report instruction candidates for every unscheduled supported HIR site."""
     result = analyze(module, entry, analysis=("memory",))
-    sites = _sites(result.module, result.function)
+    ctx = TypeInferContext(scope=FunctionScope(result.module, result.function))
+    sites = _sites(result.module, result.function, ctx)
     if not sites:
         raise ValueError("source has no unscheduled matmul or reshard candidate site")
     target = result.module.resolve_target()
     declared = _instructions(target)
-    ctx = TypeInferContext(scope=FunctionScope(result.module, result.function))
     rows = []
     for site in sites:
         site_shape = _site_relation_shape(site, ctx)
         usable, refused = [], []
         handed_result = False
         for op_type, capability in declared:
+            if op_type not in site.instructions:
+                continue
             variants = _variant_instances(op_type, capability, site)
             if not variants:
                 continue
