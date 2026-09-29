@@ -100,7 +100,7 @@ class MmaAtom:
     def role(self, role: str):
         return getattr(type(self), role)
 
-    def issue_shapes(self) -> tuple[tuple[int, ...], ...]:
+    def operand_shapes(self) -> tuple[tuple[int, ...], ...]:
         """Return the declared C, A, and B shapes for one atom issue."""
         shapes = tuple(
             declared_shape(selected_pattern(self.role(role), self.bindings), self.bindings)
@@ -110,18 +110,14 @@ class MmaAtom:
             raise ValueError(f"{self.reference_name} does not declare fixed operand shapes")
         return shapes
 
-    @staticmethod
-    def issue_axes() -> tuple[tuple[int, int], ...]:
-        """Map C, A, and B tensor axes onto the atom's (M, N, K) work axes."""
-        return ((0, 1), (0, 2), (2, 1))
-
-    def issue_tiles(
+    def operand_tiles(
         self,
         whole_types: tuple[TensorType, ...],
         frame: Mesh,
+        axes: tuple[tuple[int, ...], ...],
     ) -> tuple[tuple[TensorType, ...], tuple[tuple[int, int] | None, ...]]:
         """Return the operand tiles and declared adjacent-issue properties."""
-        shapes, axes = self.issue_shapes(), self.issue_axes()
+        shapes = self.operand_shapes()
         patterns = tuple(
             selected_pattern(self.role(role), self.bindings) for role in ("C", "A", "B")
         )

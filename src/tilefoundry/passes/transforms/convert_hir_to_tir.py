@@ -39,6 +39,7 @@ from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.tir.cast import Cast as TirCast
+from tilefoundry.ir.tir.cuda.nn.mma import operand_axes
 from tilefoundry.ir.tir.memory import AllocTensor, Copy, Fill, PtrOf, TensorView
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, For, LetStmt, MeshScope, Sequential
@@ -830,8 +831,12 @@ class Lowering(ExprVisitor[Expr]):
         return written
 
     def _emit_atom(self, call, atom, operands, mesh, cursor) -> None:
-        shapes, axes = atom.issue_shapes(), atom.issue_axes()
         logical = tuple(self.logical.get(id(value), value.type) for _, value in operands)
+        shapes = atom.operand_shapes()
+        try:
+            axes = operand_axes(call.target.op, logical)
+        except ValueError as error:
+            raise LoweringError(f"{_label(call)} {error}") from error
         whole = (logical[0].shape[0], logical[0].shape[1], logical[1].shape[1])
         tile = (shapes[0][0], shapes[0][1], shapes[1][1])
         repeat = tuple(full // part for full, part in zip(whole, tile, strict=True))
@@ -851,7 +856,7 @@ class Lowering(ExprVisitor[Expr]):
         for frame, lows in groups:
             frame = self._physical_frame(frame)
             try:
-                desired, declared_rows = atom.issue_tiles(logical, frame)
+                desired, declared_rows = atom.operand_tiles(logical, frame, axes)
             except ValueError as error:
                 raise LoweringError(f"{_label(call)} {error}") from error
             rows = [1, 1, 1]

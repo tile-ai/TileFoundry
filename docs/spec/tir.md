@@ -937,6 +937,9 @@ class MmaAtom:
     role pattern under the instance bindings. The logical TIR orientation is
     always A `(M,K)`, B `(K,N)`, C `(M,N)`; each role pattern separately states
     the fragment's physical arrangement.
+  - The registered `T.tiled_mma` access relation is the sole source of the map
+    from each operand axis to the operation's work axes. Atom declarations state
+    operand shapes and arrangements, but MUST NOT repeat that axis map.
   - `execution_mesh_pattern()` MUST require the declaration's exact participant
     count at an aligned offset. `mesh`, when present, binds the atom to one
     concrete frame and MUST match the active frame at verify.

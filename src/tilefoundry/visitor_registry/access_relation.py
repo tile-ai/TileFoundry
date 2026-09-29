@@ -708,6 +708,25 @@ def relation_of(pattern: "AffineAccess") -> "isl.map":
     return pattern.relation
 
 
+def projected_axes(pattern: "AffineAccess") -> tuple[int | None, ...]:
+    """Which one input axis, if any, each output axis projects from."""
+    relation = relation_of(pattern)
+    source_rank = relation.dim(isl.dim_type.IN)
+    axes = []
+    for target_axis in range(relation.dim(isl.dim_type.OUT)):
+        sources = []
+        for source_axis in range(source_rank):
+            local = isl.local_space.from_space(relation.get_space())
+            equal = isl.constraint.alloc_equality(local)
+            equal = equal.set_coefficient_si(isl.dim_type.IN, source_axis, 1)
+            equal = equal.set_coefficient_si(isl.dim_type.OUT, target_axis, -1)
+            projected = isl.map.universe(relation.get_space()).add_constraint(equal)
+            if relation.is_subset(projected):
+                sources.append(source_axis)
+        axes.append(sources[0] if len(sources) == 1 else None)
+    return tuple(axes)
+
+
 def _as_number(value) -> int | None:
     """The number a bound parameter's value is, when it is one."""
     number = static_dim_value(value)
@@ -1353,6 +1372,7 @@ __all__ = [
     "placed_window",
     "boundary_maps",
     "projected",
+    "projected_axes",
     "leaves_of",
     "reached_elements",
     "reached_leaves",

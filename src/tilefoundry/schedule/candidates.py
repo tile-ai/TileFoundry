@@ -39,6 +39,7 @@ from tilefoundry.schedule._reporting import capability_families
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
+    projected_axes,
     relation_of,
     relations_of,
 )
@@ -110,27 +111,9 @@ def _sites(module, function) -> tuple[_Site, ...]:
     return tuple(sites)
 
 
-def _is_projection(relation: isl.map, source_axis: int, target_axis: int) -> bool:
-    local = isl.local_space.from_space(relation.get_space())
-    equal = isl.constraint.alloc_equality(local)
-    equal = equal.set_coefficient_si(isl.dim_type.IN, source_axis, 1)
-    equal = equal.set_coefficient_si(isl.dim_type.OUT, target_axis, -1)
-    projected = isl.map.universe(relation.get_space()).add_constraint(equal)
-    return relation.is_subset(projected)
-
-
 def _relation_shape(boundary) -> tuple[int, tuple[int | None, ...]]:
     relation = relation_of(boundary.pattern)
-    source_rank = relation.dim(isl.dim_type.IN)
-    axes = []
-    for target_axis in range(relation.dim(isl.dim_type.OUT)):
-        sources = tuple(
-            source_axis
-            for source_axis in range(source_rank)
-            if _is_projection(relation, source_axis, target_axis)
-        )
-        axes.append(sources[0] if len(sources) == 1 else None)
-    return source_rank, tuple(axes)
+    return relation.dim(isl.dim_type.IN), projected_axes(boundary.pattern)
 
 
 def _site_relation_shape(site: _Site, ctx: TypeInferContext) -> tuple:

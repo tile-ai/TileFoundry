@@ -6,7 +6,7 @@ import torch
 
 from tilefoundry.evaluator.registry import register_schedule_eval
 from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import Op, OpCapability
+from tilefoundry.ir.core import Call, Op, OpCapability, Var
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import (
@@ -18,13 +18,16 @@ from tilefoundry.ir.pattern import (
 from tilefoundry.ir.pattern import (
     predicates as P,
 )
-from tilefoundry.ir.types import DType, Mesh, UnitType
+from tilefoundry.ir.types import DType, Mesh, TensorType, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     matmul_relations,
+    projected_axes,
     register_access_relation,
+    relations_of,
 )
+from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 from .mma_atom import AtomPattern, FromAtom, MmaAtom, physical_frames_match
 from .sm80_mma import Mma as _Sm80Mma
@@ -112,6 +115,29 @@ def _tiled_mma_access_relation(call: "Call", ctx) -> AccessRelations:
     )
 
 
+def operand_axes(
+    op: TiledMma, operand_types: tuple[TensorType, ...]
+) -> tuple[tuple[int, ...], ...]:
+    """Map operand axes to work axes using the Op's registered relation."""
+    args = tuple(
+        Var(name=f"operand{index}", type=type_)
+        for index, type_ in enumerate(operand_types)
+    )
+    call = Call(target=op, args=args, type=UnitType())
+    try:
+        relations = relations_of(call, TypeInferContext())
+    except ValueError as error:
+        raise ValueError(
+            f"{op.atom.reference_name} has no registered operand access relation: {error}"
+        ) from error
+    axes = tuple(projected_axes(boundary.pattern) for boundary in relations.inputs)
+    if any(axis is None for mapped in axes for axis in mapped):
+        raise ValueError(
+            f"{op.atom.reference_name} access relation does not project every operand axis"
+        )
+    return tuple(tuple(axis for axis in mapped if axis is not None) for mapped in axes)
+
+
 @register_schedule_eval(TiledMma)
 def _eval_scheduled_mma(ctx):
     acc, lhs, rhs = (arg.data for arg in ctx.args)
@@ -165,4 +191,4 @@ def verify_operand_shapes(call: "Call", ctx: "VerifyContext") -> None:
         )
 
 
-__all__ = ["TiledMma", "verify_mma", "verify_operand_shapes"]
+__all__ = ["TiledMma", "operand_axes", "verify_mma", "verify_operand_shapes"]
