@@ -269,7 +269,7 @@ def test_plain_row_and_column_slices_derive_subbox_layouts():
     )
 
 
-def test_runtime_start_slice_does_not_claim_a_static_layout():
+def test_runtime_start_slice_preserves_static_strides():
     start = Var(type=make_tensor_type((), DType.i64), name="start")
 
     sliced = _slice_type(
@@ -283,9 +283,10 @@ def test_runtime_start_slice_does_not_claim_a_static_layout():
         (1, 1),
     )
 
-    assert sliced.layout is None
+    assert sliced.layout == Layout(shape=(256, 2048), strides=(2048, 1))
     assert (
-        _slice_type(make_tensor_type((1024, 2048), _F), (0, 0), (256, 2048), (1, 1)).layout is None
+        _slice_type(make_tensor_type((1024, 2048), _F), (0, 0), (256, 2048), (1, 1)).layout
+        == Layout(shape=(256, 2048), strides=(2048, 1))
     )
 
 

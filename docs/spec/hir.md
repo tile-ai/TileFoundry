@@ -708,10 +708,12 @@ second presentation of the view.
 - Narrowing a logical axis targeted by any `Split` MUST fail type inference:
   the window need not align with that mesh division. A narrowed axis represented
   by more than one factored layout position MUST also fail rather than guess.
-- Runtime starts MUST remain ordinary Call operands. A plain layout produces
-  `layout=None`; a safe sharded slice follows the preservation rule above.
-  The result type describes a full window; whether a loop iteration can contain
-  that window is an analysis-domain question, not a type-inference question.
+- Runtime starts MUST remain ordinary Call operands. They move the view's base
+  address, not its strides: a plain input therefore still produces a result
+  `Layout`, while the runtime offset is not carried by that layout. A safe
+  sharded slice follows the preservation rule above. The result type describes
+  a full window; whether a loop iteration can contain that window is an
+  analysis-domain question, not a type-inference question.
 
 ##### Concat
 
