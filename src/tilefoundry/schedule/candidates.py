@@ -11,7 +11,7 @@ import isl
 
 from tilefoundry.analysis import analyze
 from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
-from tilefoundry.inspection import PatternPrinter
+from tilefoundry.inspection import PatternPrinter, PythonPrinter
 from tilefoundry.ir.core import (
     Call,
     OpCapability,
@@ -428,10 +428,6 @@ def _common(groups: list[tuple[str, ...]]) -> list[str]:
     return sorted(shared if shared else set().union(*sets))
 
 
-def _written_operand(name: str, type_: TensorType) -> str:
-    return f"{name}={tuple(type_.shape)} {type_.dtype.name} {type_.storage}"
-
-
 def _source_label(sites: tuple[_Site, ...], module, source: str | None) -> str:
     if source is not None:
         return source
@@ -451,6 +447,7 @@ def candidates(module, entry, *, source: str | None = None) -> dict[str, Any]:
         raise ValueError("source has no unscheduled matmul or reshard candidate site")
     target = result.module.resolve_target()
     declared = _instructions(target)
+    type_printer = PythonPrinter()
     rows = []
     for site in sites:
         site_shape = _site_relation_shape(site, ctx)
@@ -498,8 +495,12 @@ def candidates(module, entry, *, source: str | None = None) -> dict[str, Any]:
                         }
                     )
         operands = [
-            *(_written_operand(name, type_) for name, type_ in site.reads),
-            *(_written_operand(name, type_) for name, type_ in site.leaves if handed_result),
+            *(f"{name}={type_printer.visit(type_)}" for name, type_ in site.reads),
+            *(
+                f"{name}={type_printer.visit(type_)}"
+                for name, type_ in site.leaves
+                if handed_result
+            ),
         ]
         rows.append(
             {

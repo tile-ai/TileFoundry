@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from math import prod
 
+import isl
+
 from tilefoundry.analysis import MemoryMetadata, analyze
 from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
 from tilefoundry.ir.core import (
@@ -38,7 +40,7 @@ from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.tir.cast import Cast as TirCast
-from tilefoundry.ir.tir.cuda.nn.mma import operand_axes
+from tilefoundry.ir.tir.cuda.nn.mma import operand_relations
 from tilefoundry.ir.tir.memory import AllocTensor, Copy, Fill, PtrOf, TensorView
 from tilefoundry.ir.tir.prim_function import PrimFunction
 from tilefoundry.ir.tir.stmts import Evaluate, For, LetStmt, MeshScope, Sequential
@@ -68,7 +70,11 @@ from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.ir.types.utils import i64_const, issue_frames, nonunit_mesh, static_dim_value
 from tilefoundry.ir.visitor import ExprVisitor, StmtMutator, expr_children
 from tilefoundry.passes.pass_base import ModulePass
-from tilefoundry.visitor_registry.access_relation import access_relation_registry
+from tilefoundry.visitor_registry.access_relation import (
+    access_relation_registry,
+    iteration_universe,
+    projected_axes,
+)
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.registries import typeinfer_registry
 
@@ -82,6 +88,21 @@ _DIM_BINARY = {
     BinaryKind.FLOOR_DIV: DimFloorDiv,
     BinaryKind.MOD: DimMod,
 }
+
+
+def _iteration_geometry(relations) -> tuple[tuple[int, ...], tuple[str, ...]]:
+    """Static extents and authored axis names of one relation domain."""
+    domain = iteration_universe(relations)
+    if domain is None:
+        raise ValueError("access relations state no iteration space")
+    extents, names = [], []
+    for axis in range(domain.tuple_dim()):
+        low, high = domain.dim_min_val(axis), domain.dim_max_val(axis)
+        if not (low.is_int() and high.is_int() and low.get_num_si() == 0):
+            raise ValueError(f"iteration axis {axis} is not a zero-based static extent")
+        extents.append(high.get_num_si() + 1)
+        names.append(domain.get_dim_name(isl.dim_type.SET, axis) or str(axis))
+    return tuple(extents), tuple(names)
 
 
 class LoweringError(ValueError):
@@ -818,19 +839,36 @@ class Lowering(ExprVisitor[Expr]):
         logical = tuple(self.logical.get(id(value), value.type) for _, value in operands)
         shapes = atom.operand_shapes()
         try:
-            axes = operand_axes(call.target.op, logical)
+            relations = operand_relations(call.target.op, logical)
+            projected = tuple(projected_axes(boundary.pattern) for boundary in relations.inputs)
+            if any(axis is None for mapped in projected for axis in mapped):
+                raise ValueError(
+                    f"{atom.reference_name} access relation does not project every operand axis"
+                )
+            axes = tuple(
+                tuple(axis for axis in mapped if axis is not None) for mapped in projected
+            )
+            whole, axis_names = _iteration_geometry(relations)
+            single_types = tuple(
+                replace(type_, shape=shape)
+                for type_, shape in zip(logical, shapes, strict=True)
+            )
+            tile, _ = _iteration_geometry(operand_relations(call.target.op, single_types))
         except ValueError as error:
             raise LoweringError(f"{_label(call)} {error}") from error
-        whole = (logical[0].shape[0], logical[0].shape[1], logical[1].shape[1])
-        tile = (shapes[0][0], shapes[0][1], shapes[1][1])
+        if len(whole) != len(tile):
+            raise LoweringError(
+                f"{_label(call)} whole and atom iteration ranks differ: "
+                f"{len(whole)} vs {len(tile)}"
+            )
         repeat = tuple(full // part for full, part in zip(whole, tile, strict=True))
         if any(full % part for full, part in zip(whole, tile, strict=True)):
             axis = next(i for i, (full, part) in enumerate(zip(whole, tile)) if full % part)
             raise LoweringError(
-                f"{_label(call)} axis {('m', 'n', 'k')[axis]} extent {whole[axis]} "
+                f"{_label(call)} axis {axis_names[axis]} extent {whole[axis]} "
                 f"is not divisible by atom {tile[axis]}"
             )
-        order = call.target.order or tuple(range(3))
+        order = call.target.order or tuple(range(len(whole)))
         if mesh is None:
             raise LoweringError(f"{_label(call)} has atom axes but no declared physical mesh")
         try:
@@ -843,7 +881,7 @@ class Lowering(ExprVisitor[Expr]):
                 desired, declared_rows = atom.operand_tiles(logical, frame, axes)
             except ValueError as error:
                 raise LoweringError(f"{_label(call)} {error}") from error
-            rows = [1, 1, 1]
+            rows = [1] * len(whole)
             row_axes = tuple(None if row is None else row[0] for row in declared_rows)
             for axis, count in (row for row in declared_rows if row is not None):
                 rows[axis] = max(rows[axis], count)
@@ -872,10 +910,11 @@ class Lowering(ExprVisitor[Expr]):
                 beside = min(rows[axis], extent // tile[axis])
                 if extent % (tile[axis] * beside):
                     raise LoweringError(
-                        f"{_label(call)} axis {('m', 'n', 'k')[axis]} extent {extent} "
+                        f"{_label(call)} axis {axis_names[axis]} extent {extent} "
                         f"is not divisible by row {tile[axis]} * {beside}"
                     )
-                counter, body = Var(self.names.fresh(f"o_{('m', 'n', 'k')[axis]}"), type=_INDEX), _Cursor()
+                counter = Var(self.names.fresh(f"o_{axis_names[axis]}"), type=_INDEX)
+                body = _Cursor()
                 for copy in range(beside):
                     start = counter if copy == 0 else simplify_dim(DimAdd, (counter, copy * tile[axis]))
                     for statement in emit(depth + 1, {**offsets, axis: start}, {**copies, axis: copy}).body:

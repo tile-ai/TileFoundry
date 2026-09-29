@@ -23,7 +23,6 @@ from tilefoundry.visitor_registry import register_typeinfer, register_verify_stm
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     matmul_relations,
-    projected_axes,
     register_access_relation,
     relations_of,
 )
@@ -115,10 +114,10 @@ def _tiled_mma_access_relation(call: "Call", ctx) -> AccessRelations:
     )
 
 
-def operand_axes(
+def operand_relations(
     op: TiledMma, operand_types: tuple[TensorType, ...]
-) -> tuple[tuple[int, ...], ...]:
-    """Map operand axes to work axes using the Op's registered relation."""
+) -> AccessRelations:
+    """Return the registered operand relations for these concrete types."""
     args = tuple(
         Var(name=f"operand{index}", type=type_)
         for index, type_ in enumerate(operand_types)
@@ -130,12 +129,7 @@ def operand_axes(
         raise ValueError(
             f"{op.atom.reference_name} has no registered operand access relation: {error}"
         ) from error
-    axes = tuple(projected_axes(boundary.pattern) for boundary in relations.inputs)
-    if any(axis is None for mapped in axes for axis in mapped):
-        raise ValueError(
-            f"{op.atom.reference_name} access relation does not project every operand axis"
-        )
-    return tuple(tuple(axis for axis in mapped if axis is not None) for mapped in axes)
+    return relations
 
 
 @register_schedule_eval(TiledMma)
@@ -191,4 +185,4 @@ def verify_operand_shapes(call: "Call", ctx: "VerifyContext") -> None:
         )
 
 
-__all__ = ["TiledMma", "operand_axes", "verify_mma", "verify_operand_shapes"]
+__all__ = ["TiledMma", "operand_relations", "verify_mma", "verify_operand_shapes"]

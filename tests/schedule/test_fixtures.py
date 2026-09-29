@@ -1175,6 +1175,8 @@ def test_lowering_rejects_invalid_atom_geometry(
         assert isinstance(acc_type.layout, ShardLayout)
         if case == "atom":
             acc_type = replace(acc_type, shape=(acc_type.shape[0], 17))
+            rhs_type = self.logical.get(id(rhs), rhs.type)
+            self.logical[id(rhs)] = replace(rhs_type, shape=(rhs_type.shape[0], 17))
         elif case == "row":
             lhs_type = self.logical.get(id(lhs), lhs.type)
             assert isinstance(lhs_type.layout, ComposedLayout)
