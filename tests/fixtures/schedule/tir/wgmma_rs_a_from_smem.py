@@ -126,7 +126,7 @@ def gemm(
                         layout=((8 @ threads_5.d1, 2, 4 @ threads_5.d0, 2, 4 @ threads_5.d2, 4), (1, 8, 16, 64, 128, 512)),
                         shape=(64, 32),
                     )
-                    T.cast(acc, value_view)
+                    T.cast(acc, value_view, dtype='bf16')
         with Mesh(
             (Topology("thread", 256),), ComposedLayout(
     inner=None,

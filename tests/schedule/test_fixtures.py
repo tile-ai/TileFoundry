@@ -91,12 +91,12 @@ PLAIN = (
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
-CANDIDATE_GOLDEN = (
-    Path(__file__).parents[1]
-    / "fixtures"
-    / "schedule"
-    / "plain"
-    / "gemm_8192x17408x5120_cta_grid.candidates.txt"
+CANDIDATE_GOLDENS = tuple(
+    Path(__file__).parents[1] / "fixtures" / "schedule" / "plain" / name
+    for name in (
+        "gemm_8192x17408x5120_cta_grid.candidates.txt",
+        "gemm_relu_gemm_tiled.candidates.txt",
+    )
 )
 ANALYZED_GOLDEN = (
     Path(__file__).parents[1]
@@ -831,6 +831,10 @@ def test_schedule_facts_lists_target_instructions_as_text_and_json(
     expected = {
         "target": "nvidia.h200_sxm",
         "instructions": [
+            {"id": "T.binary", "capability": None},
+            {"id": "T.cast", "capability": None},
+            {"id": "T.clamp", "capability": None},
+            {"id": "T.unary", "capability": None},
             {"id": "T.copy_async", "capability": "cp.async"},
             {
                 "id": "T.copy_async_tensor",
@@ -838,10 +842,12 @@ def test_schedule_facts_lists_target_instructions_as_text_and_json(
             },
             {"id": "T.copy", "capability": None},
             {"id": "T.ldmatrix", "capability": "ldmatrix"},
+            {"id": "T.relu", "capability": None},
             {
                 "id": "T.tiled_mma",
                 "capability": ["wgmma.mma_async", "mma.sync"],
             },
+            {"id": "T.reduce", "capability": None},
         ],
     }
     assert json.loads(json_out.read_text()) == expected
@@ -850,11 +856,17 @@ def test_schedule_facts_lists_target_instructions_as_text_and_json(
         == """\
 target nvidia.h200_sxm
 instructions
+  T.binary             all targets
+  T.cast               all targets
+  T.clamp              all targets
+  T.unary              all targets
   T.copy_async         cp.async
   T.copy_async_tensor  cp.async.bulk.tensor
   T.copy               all targets
   T.ldmatrix           ldmatrix
+  T.relu               all targets
   T.tiled_mma          wgmma.mma_async, mma.sync
+  T.reduce             all targets
 """
     )
 
@@ -869,7 +881,16 @@ def test_schedule_facts_only_lists_target_neutral_instructions_for_non_cuda(
 
     assert cli_main(["schedule", "facts", "--target", target, str(out)]) == 0
     assert capsys.readouterr() == ("", "")
-    assert out.read_text() == f"target {target}\ninstructions\n  T.copy  all targets\n"
+    assert out.read_text() == f"""target {target}
+instructions
+  T.binary  all targets
+  T.cast    all targets
+  T.clamp   all targets
+  T.unary   all targets
+  T.copy    all targets
+  T.relu    all targets
+  T.reduce  all targets
+"""
 
 
 @pytest.mark.parametrize(
@@ -902,16 +923,17 @@ def test_schedule_facts_rejects_unknown_selection_without_output(
     assert not out.exists()
 
 
+@pytest.mark.parametrize("golden", CANDIDATE_GOLDENS, ids=lambda path: path.stem)
 def test_schedule_candidates_writes_canonical_report(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    golden: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    name = "gemm_8192x17408x5120_cta_grid"
+    name = golden.name.removesuffix(".candidates.txt")
     source = f"tests/fixtures/schedule/plain/{name}.py"
     out = tmp_path / "candidates.txt"
 
     assert cli_main(["schedule", "candidates", source, str(out)]) == 0
     assert capsys.readouterr() == ("", "")
-    assert out.read_bytes() == CANDIDATE_GOLDEN.read_bytes()
+    assert out.read_bytes() == golden.read_bytes()
 
 
 def test_schedule_candidate_reports_cover_every_site(
@@ -972,11 +994,11 @@ def test_schedule_candidates_omit_selected_schedule_calls(
 ) -> None:
     out = tmp_path / f"{source.stem}.json"
 
-    assert cli_main(["schedule", "candidates", str(source), str(out), "--json"]) == 1
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "no unscheduled matmul or reshard candidate site" in captured.err
-    assert not out.exists()
+    assert cli_main(["schedule", "candidates", str(source), str(out), "--json"]) == 0
+    assert capsys.readouterr() == ("", "")
+    report = json.loads(out.read_text())
+    assert report["lines"]
+    assert all(row["op"] != "tf.schedule" for row in report["lines"])
 
 
 def test_operand_match_refusal_names_the_failed_pattern() -> None:

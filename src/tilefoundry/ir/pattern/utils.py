@@ -12,6 +12,13 @@ from tilefoundry.ir.types import (
     TensorType,
 )
 from tilefoundry.ir.types.mesh import separate, starts
+from tilefoundry.ir.types.shard_layout import (
+    Broadcast,
+    Split,
+    canonical_shard_layout,
+    layout_axis_to_tensor_axis,
+    shard_layout_of,
+)
 from tilefoundry.ir.types.stride import compact_row_major
 
 from . import predicates as P
@@ -258,8 +265,27 @@ def declared_write_type(op, param, pattern: TensorPattern | None, inputs: dict, 
     )
     source = next(iter(inputs.values()))
     bindings = dict(getattr(getattr(op, "atom", None), "bindings", {}))
-    shape = declared_shape(pattern, bindings) or tuple(source.shape)
-    dtype = pattern.dtype if hasattr(pattern.dtype, "bit_width") else source.dtype
+    shape = declared_shape(pattern, bindings)
+    if shape is None and hasattr(op, "axes") and hasattr(op, "keepdim"):
+        rank = len(source.shape)
+        axes = tuple(axis + rank if axis < 0 else axis for axis in op.axes)
+        if any(axis < 0 or axis >= rank for axis in axes):
+            raise ValueError(f"{type(op).__name__} axes {op.axes} exceed source rank {rank}")
+        shape = tuple(
+            1 if axis in axes else extent
+            for axis, extent in enumerate(source.shape)
+            if op.keepdim or axis not in axes
+        )
+    if shape is None:
+        shape = tuple(source.shape)
+    stated_dtype = getattr(op, "dtype", None)
+    dtype = (
+        stated_dtype
+        if hasattr(stated_dtype, "bit_width")
+        else pattern.dtype
+        if hasattr(pattern.dtype, "bit_width")
+        else source.dtype
+    )
     layout = None
     if isinstance(pattern.storage, StorageKind):
         storage = pattern.storage
@@ -268,11 +294,13 @@ def declared_write_type(op, param, pattern: TensorPattern | None, inputs: dict, 
         storage, layout = stated[0]
     else:
         storage = None
+        constrained = False
         for rule in between_rules(type(op)):
             if not isinstance(rule, DistinctConstraint) or rule.field != "storage":
                 continue
             if param.name not in (rule.left, rule.right):
                 continue
+            constrained = True
             other = rule.right if param.name == rule.left else rule.left
             if other in inputs:
                 choices = tuple(
@@ -282,9 +310,42 @@ def declared_write_type(op, param, pattern: TensorPattern | None, inputs: dict, 
                 )
                 storage = choices[0] if len(choices) == 1 else None
                 break
+        if not constrained:
+            storage = source.storage
         if storage is None:
             raise ValueError(f"{type(op).__name__} does not determine {param.name} storage")
     layout = layout or declared_layout(pattern.layout, bindings, mesh)
+    source_shard = shard_layout_of(source.layout)
+    if layout is None and storage is source.storage and tuple(shape) == tuple(source.shape):
+        layout = source.layout
+    if (
+        layout is None
+        and source_shard is not None
+        and storage is source.storage
+        and hasattr(op, "axes")
+        and hasattr(op, "keepdim")
+    ):
+        rank = len(source.shape)
+        axes = tuple(axis + rank if axis < 0 else axis for axis in op.axes)
+        layout_to_tensor = layout_axis_to_tensor_axis(
+            source_shard.layout.shape, source.shape
+        )
+        attrs = []
+        for attr in source_shard.attrs:
+            if not isinstance(attr, Split):
+                attrs.append(attr)
+                continue
+            tensor_axis = layout_to_tensor[attr.axis]
+            if tensor_axis in axes:
+                attrs.append(Broadcast())
+                continue
+            output_axis = (
+                tensor_axis
+                if op.keepdim
+                else tensor_axis - sum(axis < tensor_axis for axis in axes)
+            )
+            attrs.append(Split(output_axis))
+        layout = canonical_shard_layout(shape, source_shard.mesh, tuple(attrs))
     layout = layout or Layout(shape, tuple(compact_row_major(shape)))
     return TensorType(shape, dtype, layout, storage)
 

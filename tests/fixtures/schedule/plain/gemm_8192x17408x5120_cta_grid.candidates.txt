@@ -22,12 +22,19 @@ target nvidia.h200_sxm
                   n=256, form=SS
     refused     T.cuda.sm80.Mma: lhs storage=smem, reads storage=rmem
     refused     T.cuda.sm80.Mma: rhs storage=smem, reads storage=rmem
+  v6:37  tf.cast  per cta  x=Tensor[(128, 256), "bf16", "smem"]  result=Tensor[(128, 256), "f32", "smem"]
+    refused     T.cast: dst storage=smem, reads storage=rmem
+    refused     T.cast: src storage=smem, reads storage=rmem
   v7:37  tf.reshard  per cta  x=Tensor[(128, 256), "f32", "smem"]  result=Tensor[(128, 256), "f32", "rmem"]
     candidate   T.copy
     refused     T.copy_async: dst storage=rmem, reads storage=smem
     refused     T.copy_async: src storage=smem, reads storage=gmem
     refused     T.copy_async_tensor: dst: could not satisfy storage1 in {StorageKind.GMEM, StorageKind.SMEM} (dtype1=f32, storage1=RMEM)
     refused     T.ldmatrix: dst dtype=f32, reads dtype=bf16
+  v8:37  tf.binary  per cta  lhs=Tensor[(128, 256), "f32", "rmem"]  rhs=Tensor[(128, 256), "f32", "rmem"]  result=Tensor[(128, 256), "f32", "rmem"]
+    default     T.binary
+  v9:38  tf.cast  per cta  x=Tensor[(128, 256), "f32", "rmem"]  result=Tensor[(128, 256), "bf16", "rmem"]
+    default     T.cast
   v10:38  tf.reshard  per cta  x=Tensor[(128, 256), "bf16", "rmem"]  result=Tensor[(128, 256), "bf16"]
     candidate   T.copy
     refused     T.copy_async: dst storage=gmem, reads storage=smem

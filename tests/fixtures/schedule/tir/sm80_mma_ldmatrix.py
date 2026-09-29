@@ -134,7 +134,7 @@ def gemm(a: Tensor[(16, 32), "bf16"], b: Tensor[(32, 8), "bf16"], out: Tensor[(1
                         layout=((2, 4 @ threads_6.d0, 8 @ threads_6.d1, 2), (1, 2, 8, 64)),
                         shape=(16, 8),
                     )
-                    T.cast(acc, value_view)
+                    T.cast(acc, value_view, dtype='bf16')
         with Mesh(
             (Topology("thread", 64),), ComposedLayout(
     inner=None,

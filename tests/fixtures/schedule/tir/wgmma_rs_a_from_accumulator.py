@@ -126,7 +126,7 @@ def gemm(
                         layout=((8 @ threads_4.d1, 2, 4 @ threads_4.d0, 2, 4 @ threads_4.d2, 2), (1, 8, 16, 64, 128, 512)),
                         shape=(64, 16),
                     )
-                    T.cast(p, value_view)
+                    T.cast(p, value_view, dtype='bf16')
                     T.fill(acc, 0.0)
             rhs_1_stages = (T.tensor_view(0, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)), T.tensor_view(1024, dtype='bf16', storage=StorageKind.SMEM, layout=Layout(((2, 8), (4, 8)), ((64, 8), (128, 1))), shape=(16, 32)))
             for j in range(0, 16, 16):
@@ -193,7 +193,7 @@ def gemm(
                         layout=((8 @ threads_8.d1, 2, 4 @ threads_8.d0, 2, 4 @ threads_8.d2, 4), (1, 8, 16, 64, 128, 512)),
                         shape=(64, 32),
                     )
-                    T.cast(acc, value_view_1)
+                    T.cast(acc, value_view_1, dtype='bf16')
         with Mesh(
             (Topology("thread", 256),), ComposedLayout(
     inner=None,

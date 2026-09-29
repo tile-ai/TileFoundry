@@ -12,13 +12,17 @@ result value), matching the TIR convention shared with
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Op
+from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.kinds import BinaryKind, UnaryKind
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import utils
 from tilefoundry.ir.types import StorageKind, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+)
 
 __all__ = ["BinaryKind", "Binary", "UnaryKind", "Unary"]
 
@@ -29,6 +33,9 @@ _IN_RMEM = utils.tensor_in(StorageKind.RMEM)
 class Binary(Op):
     """Effect-form pointwise binary operation: ``dst = lhs <kind> rhs``."""
 
+    capability = OpCapability(None)
+    execution_mesh = utils.thread_execution_mesh()
+
     lhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_IN_RMEM)
     rhs = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_IN_RMEM)
     dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=_IN_RMEM)
@@ -38,6 +45,9 @@ class Binary(Op):
 @register_typeinfer(Binary)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
+
+
+register_access_relation(Binary)(identity_relations(3))
 
 
 @register_verify_stmt(Binary)
@@ -55,6 +65,9 @@ def _(call: "Call", ctx: "VerifyContext") -> None:
 class Unary(Op):
     """Effect-form pointwise unary operation: ``dst = <kind>(src)``."""
 
+    capability = OpCapability(None)
+    execution_mesh = utils.thread_execution_mesh()
+
     src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_IN_RMEM)
     dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=_IN_RMEM)
     kind = ParamDef(kind="attribute", annotation=UnaryKind)
@@ -63,6 +76,9 @@ class Unary(Op):
 @register_typeinfer(Unary)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
+
+
+register_access_relation(Unary)(identity_relations(2))
 
 
 @register_verify_stmt(Unary)

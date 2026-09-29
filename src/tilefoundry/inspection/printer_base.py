@@ -419,7 +419,9 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
 
     def render_value(self, value, ctx=None, indent: str = "") -> str:
         """Render a non-expression attribute through the same visitor when possible."""
-        if isinstance(value, (TensorType, PointerType, Mesh, LayoutBase, DType)):
+        if isinstance(value, DType):
+            return repr(value.name)
+        if isinstance(value, (TensorType, PointerType, Mesh, LayoutBase)):
             with self.type_surface(indent=indent):
                 return self.visit(value, ctx)
         if isinstance(value, MmaAtom):

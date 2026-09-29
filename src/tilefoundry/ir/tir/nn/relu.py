@@ -7,12 +7,16 @@ into ``dst`` (in-place memory write). Wrapped by
 
 from __future__ import annotations
 
-from tilefoundry.ir.core import Op
+from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import utils
 from tilefoundry.ir.types import StorageKind, UnitType
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
+from tilefoundry.visitor_registry.access_relation import (
+    identity_relations,
+    register_access_relation,
+)
 
 _IN_RMEM = utils.tensor_in(StorageKind.RMEM)
 
@@ -21,6 +25,9 @@ _IN_RMEM = utils.tensor_in(StorageKind.RMEM)
 class ReLU(Op):
     """Tensor-level pointwise ReLU writing into ``dst``."""
 
+    capability = OpCapability(None)
+    execution_mesh = utils.thread_execution_mesh()
+
     src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_IN_RMEM)
     dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=_IN_RMEM)
 
@@ -28,6 +35,9 @@ class ReLU(Op):
 @register_typeinfer(ReLU)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()
+
+
+register_access_relation(ReLU)(identity_relations(2))
 
 
 @register_verify_stmt(ReLU)

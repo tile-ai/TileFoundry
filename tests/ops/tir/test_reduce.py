@@ -61,7 +61,7 @@ def _pf(*types) -> PrimFunction:
         body=Sequential(
             body=(
                 Evaluate(
-                    callable=Reduce(axes=(0,), kind=ReduceKind.MEAN),
+                    callable=Reduce(axes=(0,), keepdim=True, kind=ReduceKind.MEAN),
                     args=args,
                 ),
                 Return(),
@@ -108,7 +108,13 @@ class _Plain:
             plain_dst = T.tensor_view(
                 T.ptr_of(out_plain), layout=ShardLayout(Layout((128,), (1,)), (Split(0),), mp)
             )
-            T.reduce(plain_src, plain_dst, axes=(1,), kind=ReduceKind.MEAN)
+            T.reduce(
+                plain_src,
+                plain_dst,
+                axes=(1,),
+                keepdim=False,
+                kind=ReduceKind.MEAN,
+            )
 
 
 @module(topologies=(Topology("thread", 32),))
@@ -122,7 +128,13 @@ class _Warp:
             warp_dst = T.tensor_view(
                 T.ptr_of(out_warp), layout=ShardLayout(Layout((1,), (1,)), (Broadcast(),), mw)
             )
-            T.reduce(warp_src, warp_dst, axes=(1,), kind=ReduceKind.ABS_MAX)
+            T.reduce(
+                warp_src,
+                warp_dst,
+                axes=(1,),
+                keepdim=False,
+                kind=ReduceKind.ABS_MAX,
+            )
 
 
 @module(topologies=(Topology("thread", 128),))
@@ -141,7 +153,14 @@ class _Cta:
                 layout=ShardLayout(Layout((1,), (1,)), (Broadcast(), Broadcast()), mc),
             )
             cta_ws = T.alloc_tensor(Tensor[(4,), "f32", None, "smem"])
-            T.reduce(cta_src, cta_dst, cta_ws, axes=(2,), kind=ReduceKind.MEAN)
+            T.reduce(
+                cta_src,
+                cta_dst,
+                cta_ws,
+                axes=(2,),
+                keepdim=False,
+                kind=ReduceKind.MEAN,
+            )
 
 
 @module(topologies=(Topology("thread", 128),))
@@ -160,7 +179,14 @@ class _Cross:
                 layout=ShardLayout(Layout((1, 32), (32, 1)), (Broadcast(), Split(1)), mx),
             )
             cross_ws = T.alloc_tensor(Tensor[(128,), "f32", None, "smem"])
-            T.reduce(cross_src, cross_dst, cross_ws, axes=(0,), kind=ReduceKind.ABS_MAX)
+            T.reduce(
+                cross_src,
+                cross_dst,
+                cross_ws,
+                axes=(0,),
+                keepdim=True,
+                kind=ReduceKind.ABS_MAX,
+            )
 
 
 @module(entry="reduce_tiers_host", target=_CUDA)

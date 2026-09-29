@@ -117,7 +117,7 @@ def gemm(
                         layout=((8 @ threads_4.d1, 2, 4 @ threads_4.d0, 2, 4 @ threads_4.d2, 4), (1, 8, 16, 64, 128, 512)),
                         shape=(64, 32),
                     )
-                    T.cast(acc, value_view)
+                    T.cast(acc, value_view, dtype='bf16')
                     value_view_1 = T.tensor_view(
                         T.ptr_of(value[0:0 + 64, 0:0 + 32]),
                         layout=((8 @ threads_4.d1, 2, 4 @ threads_4.d0, 2, 4 @ threads_4.d2, 4), (1, 8, 16, 64, 128, 512)),

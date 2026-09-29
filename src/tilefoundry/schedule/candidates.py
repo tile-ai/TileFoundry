@@ -22,6 +22,7 @@ from tilefoundry.ir.core import (
 )
 from tilefoundry.ir.core.metadata import SourceSpanMetadata
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
+from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.pattern import (
     PatternMatcher,
     SwitchPattern,
@@ -30,6 +31,7 @@ from tilefoundry.ir.pattern import (
     declared_execution_mesh,
 )
 from tilefoundry.ir.types import TensorType, UnitType
+from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.types.int_tuple import flatten
 from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.ir.visitor import collect_exprs
@@ -41,7 +43,11 @@ from tilefoundry.visitor_registry.access_relation import (
     relation_of,
     relations_of,
 )
-from tilefoundry.visitor_registry.candidates import candidate_ops
+from tilefoundry.visitor_registry.candidates import (
+    automatic_candidate,
+    candidate_attributes,
+    candidate_ops,
+)
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
 
@@ -66,15 +72,35 @@ def _instructions(target: Target) -> tuple[tuple[type, OpCapability], ...]:
     )
 
 
-def _input_params(op_type: type) -> tuple[ParamDef, ...]:
-    return tuple(param for param in op_type._op_schema.signature if param.kind == "input")
+def _input_params(op_type: type, operand_count: int | None = None) -> tuple[ParamDef, ...]:
+    params = tuple(param for param in op_type._op_schema.signature if param.kind == "input")
+    if operand_count is None:
+        return params
+    required_reads = sum(
+        bool(param.effect & MemoryEffect.READ) for param in params if not param.optional
+    )
+    optional_reads = tuple(
+        param for param in params if param.optional and param.effect & MemoryEffect.READ
+    )
+    supplied_optional = operand_count - required_reads
+    included = {id(param) for param in optional_reads[: max(0, supplied_optional)]}
+    return tuple(param for param in params if not param.optional or id(param) in included)
 
 
 def _site_types(
     call: Call, ctx: TypeInferContext
 ) -> tuple[tuple[TensorType, ...], TensorType]:
-    reads = tuple(local_type_of(arg.type) for arg in call.args)
-    output = local_type_of(call.type)
+    def candidate_type(type_):
+        """Project a site unless it is already one indivisible scheduled issue."""
+        try:
+            return local_type_of(type_)
+        except ValueError as error:
+            if "is not evenly divisible by its mesh extent" not in str(error):
+                raise
+            return type_
+
+    reads = tuple(candidate_type(arg.type) for arg in call.args)
+    output = candidate_type(call.type)
     if not all(isinstance(type_, TensorType) for type_ in (*reads, output)):
         raise ValueError(f"{type(call.target).__name__} candidate site is not tensor-valued")
     relations = relations_of(call, ctx)
@@ -101,8 +127,12 @@ def _sites(module, function, ctx: TypeInferContext) -> tuple[_Site, ...]:
     for expr in collect_exprs(function.body):
         if not isinstance(expr, Call):
             continue
+        if is_dim_op_call(expr) or not isinstance(expr.type, TensorType):
+            continue
         instructions = candidate_ops(type(expr.target))
         if not instructions:
+            continue
+        if isinstance(expr.target, HirBinary) and expr.type.shape == ():
             continue
         reads, output = _site_types(expr, ctx)
         schema = type(expr.target)._op_schema
@@ -138,7 +168,7 @@ def _site_relation_shape(site: _Site, ctx: TypeInferContext) -> tuple:
 
 
 def _instruction_operands(site: _Site, op) -> tuple[TensorType, ...] | None:
-    params = _input_params(type(op))
+    params = _input_params(type(op), len(site.reads))
     read_params = tuple(
         param
         for param in params
@@ -165,7 +195,7 @@ def _instruction_relation_shape(site: _Site, op) -> tuple | None:
     args = tuple(Var(name=f"operand{index}", type=type_) for index, type_ in enumerate(types))
     call = Call(target=op, args=args, type=UnitType())
     relations = relations_of(call, TypeInferContext())
-    params = _input_params(type(op))
+    params = _input_params(type(op), len(site.reads))
     reads = tuple(
         _relation_shape(boundary)
         for param, boundary in zip(params, relations.inputs, strict=True)
@@ -202,7 +232,8 @@ def _variant_instances(
     site: _Site,
 ) -> tuple[tuple[object | None, dict], ...]:
     if capability.attribute is None:
-        return ((None, {}),)
+        attributes = candidate_attributes(site.call.target, op_type)
+        return () if attributes is None else ((op_type(**attributes), {}),)
     declaration = capability.declaration
     states: tuple[dict, ...] = ({},)
     for param in declaration.parameters:
@@ -226,7 +257,7 @@ def _variant_instances(
 
 def _instantiate(op_type: type, capability: OpCapability, variant):
     if capability.attribute is None:
-        return op_type()
+        return variant if isinstance(variant, op_type) else op_type()
     return op_type(**{capability.attribute: variant})
 
 
@@ -352,7 +383,7 @@ def _pattern_refusals(site: _Site, op, variant) -> tuple[str, ...]:
 
 
 def _asked(site: _Site, op) -> tuple[tuple[ParamDef, TensorType], ...] | None:
-    params = _input_params(type(op))
+    params = _input_params(type(op), len(site.reads))
     read_params = tuple(param for param in params if param.effect == MemoryEffect.READ)
     write_params = tuple(param for param in params if param.effect == MemoryEffect.WRITE)
     if len(read_params) != len(site.reads) or len(write_params) > len(site.leaves):
@@ -444,13 +475,15 @@ def candidates(module, entry, *, source: str | None = None) -> dict[str, Any]:
     ctx = TypeInferContext(scope=FunctionScope(result.module, result.function))
     sites = _sites(result.module, result.function, ctx)
     if not sites:
-        raise ValueError("source has no unscheduled matmul or reshard candidate site")
+        raise ValueError("source has no unscheduled candidate site")
     target = result.module.resolve_target()
     declared = _instructions(target)
     type_printer = PythonPrinter()
     rows = []
     for site in sites:
         site_shape = _site_relation_shape(site, ctx)
+        automatic = automatic_candidate(site.call.target)
+        automatic_id = None if automatic is None else op_identifier(type(automatic))
         usable, refused = [], []
         handed_result = False
         for op_type, capability in declared:
@@ -463,7 +496,10 @@ def candidates(module, entry, *, source: str | None = None) -> dict[str, Any]:
             op = _instantiate(op_type, capability, prototype)
             if _instruction_relation_shape(site, op) != site_shape:
                 continue
-            if any(param.effect == MemoryEffect.WRITE for param in _input_params(type(op))):
+            if any(
+                param.effect == MemoryEffect.WRITE
+                for param in _input_params(type(op), len(site.reads))
+            ):
                 handed_result = True
             accepted, reasons, needs = [], [], []
             for variant, binding in variants:
@@ -478,13 +514,14 @@ def candidates(module, entry, *, source: str | None = None) -> dict[str, Any]:
                 accepted.append(_written_bindings(binding))
                 needs.append(_needs(site, held, variant))
             if accepted:
-                usable.append(
-                    {
-                        "id": op_identifier(capability.declaration or op_type),
-                        "needs": "; ".join(dict.fromkeys(filter(None, needs))) or None,
-                        "bindings": [binding for binding in accepted if binding],
-                    }
-                )
+                candidate = {
+                    "id": op_identifier(capability.declaration or op_type),
+                    "needs": "; ".join(dict.fromkeys(filter(None, needs))) or None,
+                    "bindings": [binding for binding in accepted if binding],
+                }
+                if candidate["id"] == automatic_id:
+                    candidate["default"] = True
+                usable.append(candidate)
             else:
                 common = _common(reasons)
                 if common:
@@ -525,8 +562,9 @@ def render(data: dict[str, Any]) -> str:
     for row in data["lines"]:
         lines.append(f"  {row['line']}  {row['op']}  {row['scope']}  {'  '.join(row['operands'])}")
         for fit in row["candidates"]:
+            kind = "default" if fit.get("default", False) else "candidate"
             needs = "" if fit["needs"] is None else f"  needs {fit['needs']}"
-            lines.append(f"    candidate   {fit['id']}{needs}")
+            lines.append(f"    {kind:<12}{fit['id']}{needs}")
             lines.extend(f"                  {binding}" for binding in fit["bindings"])
         for rejection in row["refused"]:
             lines.extend(

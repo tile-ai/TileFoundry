@@ -43,6 +43,7 @@ class WGMMA_CAST_BETWEEN_SCHEDULES:
     def gemm(
         a: Tensor[(M, K), "bf16"],
         b_f32: Tensor[(K, N), "f32"],
+        bias: Tensor[(M, N), "f32"],
     ) -> Tensor[(M, N), "bf16", "umat"]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(
@@ -82,5 +83,7 @@ class WGMMA_CAST_BETWEEN_SCHEDULES:
                         )
 
                 with threads[1, :] as _compute:
+                    bias_r = tf.schedule((bias,), op=T.copy(rmem_layout=ACC))
+                    acc = tf.relu(acc + bias_r)
                     result = tf.cast(acc, dtype="bf16")
                 return result
