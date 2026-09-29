@@ -59,12 +59,9 @@ class OpCapability:
     with several concrete declarations lists one record per variant; the
     declaration and attribute say how an instance of that declaration is bound
     back to the carrier without teaching registry consumers about its shape.
-    ``report_order`` preserves the stable presentation order of instruction
-    reports; it is not a capability preference.
     """
 
     name: str | None
-    report_order: int
     declaration: type | None = None
     attribute: str | None = None
 

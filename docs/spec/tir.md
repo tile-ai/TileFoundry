@@ -887,7 +887,9 @@ block_y, block_z, *forwarded_args)`:
 
 Target admission metadata uses `OpCapability`. Its optional `declaration` and
 `attribute` fields bind a named variant declaration back to its registered Op;
-consumers enumerate those records directly from the Op registry.
+consumers enumerate those records directly from the Op registry. Capability
+metadata does not control presentation: instruction reports group by the Op
+schema's `category` and sort by its `name` within each category.
 
 An instruction Op reserves the class-body name `execution_mesh` for the mesh
 that executes one issue. A fixed instruction declaration MAY state a concrete

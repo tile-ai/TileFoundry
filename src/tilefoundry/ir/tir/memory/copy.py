@@ -27,7 +27,7 @@ from tilefoundry.visitor_registry.access_relation import (
 class Copy(Op):
     """Copies ``src`` into ``dst`` (in-place memory write)."""
 
-    capability = OpCapability(None, report_order=5)
+    capability = OpCapability(None)
 
     execution_mesh = utils.thread_execution_mesh()
 
@@ -43,6 +43,7 @@ class Copy(Op):
     )
     rmem_layout = ParamDef(kind="attribute", annotation=LayoutBase, optional=True, default=None)
     smem_layout = ParamDef(kind="attribute", annotation=LayoutBase, optional=True, default=None)
+
 
 @register_typeinfer(Copy)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:

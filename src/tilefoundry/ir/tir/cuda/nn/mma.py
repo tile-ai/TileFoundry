@@ -62,13 +62,11 @@ class TiledMma(Op):
     capability = (
         OpCapability(
             Wgmma.capability,
-            report_order=0,
             declaration=Wgmma,
             attribute="atom",
         ),
         OpCapability(
             _Sm80Mma.capability,
-            report_order=0,
             declaration=_Sm80Mma,
             attribute="atom",
         ),

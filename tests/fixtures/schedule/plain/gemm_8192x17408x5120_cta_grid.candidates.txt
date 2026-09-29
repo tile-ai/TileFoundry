@@ -1,14 +1,14 @@
 source tests/fixtures/schedule/plain/gemm_8192x17408x5120_cta_grid.py
 target nvidia.h200_sxm
   v2:34  tf.reshard  per cta  x=(128, 64) bf16 gmem  result=(128, 64) bf16 smem
-    candidate   T.copy_async_tensor  needs thread p0:p0+32, p0 % 32 = 0
     candidate   T.copy_async
+    candidate   T.copy_async_tensor  needs thread p0:p0+32, p0 % 32 = 0
     candidate   T.copy
     refused     T.ldmatrix: dst storage=smem, reads storage=rmem
     refused     T.ldmatrix: src storage=gmem, reads storage=smem
   v4:35  tf.reshard  per cta  x=(64, 256) bf16 gmem  result=(64, 256) bf16 smem
-    candidate   T.copy_async_tensor  needs thread p0:p0+32, p0 % 32 = 0
     candidate   T.copy_async
+    candidate   T.copy_async_tensor  needs thread p0:p0+32, p0 % 32 = 0
     candidate   T.copy
     refused     T.ldmatrix: dst storage=smem, reads storage=rmem
     refused     T.ldmatrix: src storage=gmem, reads storage=smem
@@ -24,14 +24,14 @@ target nvidia.h200_sxm
     refused     T.cuda.sm80.Mma: rhs storage=smem, reads storage=rmem
   v7:37  tf.reshard  per cta  x=(128, 256) f32 smem  result=(128, 256) f32 rmem
     candidate   T.copy
-    refused     T.copy_async_tensor: dst: could not satisfy storage1 in {StorageKind.GMEM, StorageKind.SMEM} (dtype1=f32, storage1=RMEM)
     refused     T.copy_async: dst storage=rmem, reads storage=smem
     refused     T.copy_async: src storage=smem, reads storage=gmem
+    refused     T.copy_async_tensor: dst: could not satisfy storage1 in {StorageKind.GMEM, StorageKind.SMEM} (dtype1=f32, storage1=RMEM)
     refused     T.ldmatrix: dst dtype=f32, reads dtype=bf16
   v10:38  tf.reshard  per cta  x=(128, 256) bf16 rmem  result=(128, 256) bf16 gmem
     candidate   T.copy
-    refused     T.copy_async_tensor: src: could not satisfy storage0 in {StorageKind.GMEM, StorageKind.SMEM} (dtype0=bf16, storage0=RMEM)
     refused     T.copy_async: dst storage=gmem, reads storage=smem
     refused     T.copy_async: src storage=rmem, reads storage=gmem
+    refused     T.copy_async_tensor: src: could not satisfy storage0 in {StorageKind.GMEM, StorageKind.SMEM} (dtype0=bf16, storage0=RMEM)
     refused     T.ldmatrix: dst storage=gmem, reads storage=rmem
     refused     T.ldmatrix: src storage=rmem, reads storage=smem

@@ -2,26 +2,13 @@
 
 from __future__ import annotations
 
-from itertools import groupby
 from typing import Any
 
 from tilefoundry.inspection import PatternPrinter
-from tilefoundry.ir.core import (
-    OpCapability,
-    op_identifier,
-    supported_op_capabilities,
-)
+from tilefoundry.ir.core import OpCapability, op_identifier
 from tilefoundry.ir.pattern import between_rules, declared_execution_mesh
+from tilefoundry.schedule._reporting import capability_families
 from tilefoundry.target import Target
-
-
-def _families(target: Target) -> tuple[tuple[type, tuple[OpCapability, ...]], ...]:
-    families = [
-        (op_type, tuple(capability for _op_type, capability in entries))
-        for op_type, entries in groupby(supported_op_capabilities(target), key=lambda item: item[0])
-    ]
-    families.sort(key=lambda item: min(cap.report_order for cap in item[1]))
-    return tuple(families)
 
 
 def _family_capability(
@@ -35,7 +22,7 @@ def _family_capability(
 
 def instructions(target: Target) -> tuple[type, ...]:
     """Return the registered instruction Ops supported by ``target``."""
-    return tuple(op_type for op_type, _capabilities in _families(target))
+    return tuple(op_type for op_type, _capabilities in capability_families(target))
 
 
 def listing(target: Target) -> dict[str, Any]:
@@ -47,7 +34,7 @@ def listing(target: Target) -> dict[str, Any]:
                 "id": op_identifier(op_type),
                 "capability": _family_capability(capabilities),
             }
-            for op_type, capabilities in _families(target)
+            for op_type, capabilities in capability_families(target)
         ],
     }
 
@@ -55,7 +42,7 @@ def listing(target: Target) -> dict[str, Any]:
 def _selection(target: Target, wanted_id: str) -> tuple[type, str | tuple[str, ...] | None]:
     matches: list[tuple[type, str | tuple[str, ...] | None]] = []
     available = []
-    for op_type, capabilities in _families(target):
+    for op_type, capabilities in capability_families(target):
         op_id = op_identifier(op_type)
         family_capability = _family_capability(capabilities)
         available.append(op_id)

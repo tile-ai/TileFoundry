@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
-from itertools import groupby
 from math import prod
 from typing import Any
 
@@ -19,7 +18,6 @@ from tilefoundry.ir.core import (
     Var,
     get_metadata,
     op_identifier,
-    supported_op_capabilities,
     value_label,
 )
 from tilefoundry.ir.core.metadata import SourceSpanMetadata
@@ -37,6 +35,7 @@ from tilefoundry.ir.types import TensorType, UnitType
 from tilefoundry.ir.types.int_tuple import flatten
 from tilefoundry.ir.types.utils import local_type_of
 from tilefoundry.ir.visitor import collect_exprs
+from tilefoundry.schedule._reporting import capability_families
 from tilefoundry.target import Target
 from tilefoundry.visitor_registry.access_relation import (
     access_relation_registry,
@@ -58,14 +57,11 @@ class _Site:
 
 def _instructions(target: Target) -> tuple[tuple[type, OpCapability], ...]:
     """Return discoverable declarations that state comparable coordinates."""
-    families = [
-        (op_type, tuple(capability for _op_type, capability in entries))
-        for op_type, entries in groupby(supported_op_capabilities(target), key=lambda item: item[0])
-        if access_relation_registry.lookup(op_type) is not None
-    ]
-    families.sort(key=lambda item: min(cap.report_order for cap in item[1]))
     return tuple(
-        (op_type, capability) for op_type, capabilities in families for capability in capabilities
+        (op_type, capability)
+        for op_type, capabilities in capability_families(target)
+        if access_relation_registry.lookup(op_type) is not None
+        for capability in capabilities
     )
 
 

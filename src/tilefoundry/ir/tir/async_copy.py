@@ -23,7 +23,7 @@ ASYNC_WIDTHS = (4, 8, 16)
 class CopyAsync(Op):
     """Async gmem→smem copy (``cp.async.cg.shared.global``); non-blocking."""
 
-    capability = OpCapability("cp.async", report_order=2)
+    capability = OpCapability("cp.async")
     execution_mesh = utils.thread_execution_mesh()
 
     src = ParamDef(
@@ -56,6 +56,8 @@ class CopyAsync(Op):
         optional=True,
         default=None,
     )
+
+
 @register_typeinfer(CopyAsync)
 def _(call: "Call", ctx: "TypeInferContext") -> UnitType:
     return UnitType()

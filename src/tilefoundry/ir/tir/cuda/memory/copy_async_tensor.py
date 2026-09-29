@@ -151,7 +151,7 @@ def _warp_scope() -> MeshPattern:
 class CopyAsyncTensor(Op):
     """Move one tensor-map box between global and shared memory."""
 
-    capability = OpCapability("cp.async.bulk.tensor", report_order=1)
+    capability = OpCapability("cp.async.bulk.tensor")
     resource = "tma_engine"
 
     src = ParamDef(
