@@ -12,8 +12,9 @@ import isl
 from tilefoundry.analysis import analyze
 from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
 from tilefoundry.inspection import PatternPrinter
-from tilefoundry.ir.core import Call, Var, get_metadata, value_label
+from tilefoundry.ir.core import Call, OpCapability, Var, get_metadata, value_label
 from tilefoundry.ir.core.metadata import SourceSpanMetadata
+from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.sharding.reshard import Reshard
@@ -36,8 +37,6 @@ from tilefoundry.visitor_registry.access_relation import (
 )
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
-from .instructions import Instruction, declarations
-
 
 @dataclass(frozen=True)
 class _Site:
@@ -49,12 +48,49 @@ class _Site:
     leaves: tuple[tuple[str, TensorType], ...]
 
 
-def _instructions(target: Target) -> tuple[Instruction, ...]:
+def _instruction_id(op_type: type) -> str:
+    reference = getattr(op_type, "reference_name", "")
+    if reference:
+        return reference
+    schema = op_type._op_schema
+    return f"{schema.dialect}.{schema.name}"
+
+
+def _capabilities(op_type: type) -> tuple[OpCapability, ...]:
+    stated = vars(op_type).get("capability")
+    if isinstance(stated, OpCapability):
+        return (stated,)
+    if isinstance(stated, tuple) and stated and all(
+        isinstance(item, OpCapability) for item in stated
+    ):
+        return stated
+    if stated is None:
+        return ()
+    raise ValueError(f"{_instruction_id(op_type)} has an invalid op capability declaration")
+
+
+def _supported(capability: OpCapability, target: Target) -> bool:
+    if capability.name is None:
+        return True
+    architecture = getattr(target, "architecture", None)
+    return capability.name in frozenset(getattr(architecture, "capabilities", ()))
+
+
+def _instructions(target: Target) -> tuple[tuple[type, OpCapability], ...]:
     """Return discoverable declarations that state comparable coordinates."""
+    families = []
+    for position, schema in enumerate(iter_schemas()):
+        if schema.dialect != "T" or schema.op_class is None:
+            continue
+        capabilities = _capabilities(schema.op_class)
+        if capabilities and access_relation_registry.lookup(schema.op_class) is not None:
+            families.append((min(cap.report_order for cap in capabilities), position, schema.op_class))
+    families.sort(key=lambda item: item[:2])
     return tuple(
-        instruction
-        for instruction in declarations(target)
-        if access_relation_registry.lookup(instruction.op_type) is not None
+        (op_type, capability)
+        for _order, _position, op_type in families
+        for capability in _capabilities(op_type)
+        if _supported(capability, target)
     )
 
 
@@ -194,12 +230,15 @@ def _parameter_values(param: ParamDef, site: _Site) -> tuple:
 
 
 def _variant_instances(
-    instruction: Instruction, site: _Site
+    op_type: type,
+    capability: OpCapability,
+    site: _Site,
 ) -> tuple[tuple[object | None, dict], ...]:
-    if not instruction.is_variant:
+    if capability.attribute is None:
         return ((None, {}),)
+    declaration = capability.declaration
     states: tuple[dict, ...] = ({},)
-    for param in instruction.declaration.parameters:
+    for param in declaration.parameters:
         if param.has_default:
             continue
         held = []
@@ -212,10 +251,16 @@ def _variant_instances(
     variants = []
     for state in states:
         try:
-            variants.append((instruction.declaration(**state), state))
+            variants.append((declaration(**state), state))
         except ValueError:
             continue
     return tuple(variants)
+
+
+def _instantiate(op_type: type, capability: OpCapability, variant):
+    if capability.attribute is None:
+        return op_type()
+    return op_type(**{capability.attribute: variant})
 
 
 def _selected(pattern, bindings: dict):
@@ -444,19 +489,19 @@ def candidates(module, entry, *, source: str | None = None) -> dict[str, Any]:
         site_shape = _site_relation_shape(site, ctx)
         usable, refused = [], []
         handed_result = False
-        for instruction in declared:
-            variants = _variant_instances(instruction, site)
+        for op_type, capability in declared:
+            variants = _variant_instances(op_type, capability, site)
             if not variants:
                 continue
             prototype, _binding = variants[0]
-            op = instruction.instantiate(prototype)
+            op = _instantiate(op_type, capability, prototype)
             if _instruction_relation_shape(site, op) != site_shape:
                 continue
             if any(param.effect == MemoryEffect.WRITE for param in _input_params(type(op))):
                 handed_result = True
             accepted, reasons, needs = [], [], []
             for variant, binding in variants:
-                held = instruction.instantiate(variant)
+                held = _instantiate(op_type, capability, variant)
                 if not _whole_tiles(site, held, variant):
                     reasons.append(_pattern_refusals(site, held, variant))
                     continue
@@ -469,7 +514,7 @@ def candidates(module, entry, *, source: str | None = None) -> dict[str, Any]:
             if accepted:
                 usable.append(
                     {
-                        "id": instruction.id,
+                        "id": _instruction_id(capability.declaration or op_type),
                         "needs": "; ".join(dict.fromkeys(filter(None, needs))) or None,
                         "bindings": [binding for binding in accepted if binding],
                     }
@@ -477,7 +522,12 @@ def candidates(module, entry, *, source: str | None = None) -> dict[str, Any]:
             else:
                 common = _common(reasons)
                 if common:
-                    refused.append({"id": instruction.id, "refused": common})
+                    refused.append(
+                        {
+                            "id": _instruction_id(capability.declaration or op_type),
+                            "refused": common,
+                        }
+                    )
         operands = [
             *(_written_operand(name, type_) for name, type_ in site.reads),
             *(_written_operand(name, type_) for name, type_ in site.leaves if handed_result),

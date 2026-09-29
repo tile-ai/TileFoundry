@@ -34,7 +34,7 @@ from tilefoundry.analysis.metadata import (
 from tilefoundry.cli import main as cli_main
 from tilefoundry.evaluator import EvalError, evaluate
 from tilefoundry.inspection import PatternPrinter, as_script
-from tilefoundry.ir.core import Call, Op, Var, detach_metadata, get_metadata
+from tilefoundry.ir.core import Call, Op, OpCapability, Var, detach_metadata, get_metadata
 from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef, collect_param_defs
 from tilefoundry.ir.core.register import register_op
@@ -68,7 +68,6 @@ from tilefoundry.ir.types import (
 from tilefoundry.ir.types.layout import flatten
 from tilefoundry.ir.types.mesh import levels, starts
 from tilefoundry.ir.visitor import StmtVisitor, collect_exprs
-from tilefoundry.schedule.instructions import registered_families
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
     access_relation_registry,
@@ -755,11 +754,16 @@ def test_parameter_structure_does_not_repeat_its_name() -> None:
         for schema in iter_schemas()
         if schema.op_class is not None
     }
-    declarations.update(
-        instruction.declaration
-        for family in registered_families()
-        for instruction in family.declarations
-    )
+    for schema in iter_schemas():
+        if schema.op_class is None:
+            continue
+        stated = vars(schema.op_class).get("capability")
+        capabilities = (stated,) if isinstance(stated, OpCapability) else stated or ()
+        declarations.update(
+            capability.declaration
+            for capability in capabilities
+            if capability.declaration is not None
+        )
     printer = PatternPrinter()
     for declaration in declarations:
         parameters = tuple(getattr(declaration, "parameters", ())) or collect_param_defs(

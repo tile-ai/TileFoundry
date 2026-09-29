@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from tilefoundry.evaluator.registry import register_schedule_eval
 from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import InstructionCapability, Op
+from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import DistinctConstraint, SameModesConstraint, utils
@@ -23,7 +23,7 @@ ASYNC_WIDTHS = (4, 8, 16)
 class CopyAsync(Op):
     """Async gmem→smem copy (``cp.async.cg.shared.global``); non-blocking."""
 
-    capability = InstructionCapability("cp.async", report_order=2)
+    capability = OpCapability("cp.async", report_order=2)
     execution_mesh = utils.thread_execution_mesh()
 
     src = ParamDef(

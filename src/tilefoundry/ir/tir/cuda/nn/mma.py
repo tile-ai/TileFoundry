@@ -6,7 +6,7 @@ import torch
 
 from tilefoundry.evaluator.registry import register_schedule_eval
 from tilefoundry.evaluator.value import TensorValue
-from tilefoundry.ir.core import InstructionCapability, Op
+from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import (
@@ -60,13 +60,13 @@ class TiledMma(Op):
     """Execute one tiled MMA; the atom declares its operand contracts."""
 
     capability = (
-        InstructionCapability(
+        OpCapability(
             Wgmma.capability,
             report_order=0,
             declaration=Wgmma,
             attribute="atom",
         ),
-        InstructionCapability(
+        OpCapability(
             _Sm80Mma.capability,
             report_order=0,
             declaration=_Sm80Mma,

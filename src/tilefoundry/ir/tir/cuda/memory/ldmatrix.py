@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tilefoundry.evaluator.registry import register_schedule_eval, schedule_eval_registry
-from tilefoundry.ir.core import InstructionCapability, Op
+from tilefoundry.ir.core import Op, OpCapability
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import utils
@@ -23,7 +23,7 @@ from tilefoundry.visitor_registry.registries import typeinfer_registry, verify_s
 class LdMatrix(Op):
     """Load one warp's shared-memory tile into the SM80 MMA A fragment."""
 
-    capability = InstructionCapability("ldmatrix", report_order=4)
+    capability = OpCapability("ldmatrix", report_order=4)
     resource = "tensor_core_engine"
 
     src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=utils.operand_tile(0, S.SMEM))

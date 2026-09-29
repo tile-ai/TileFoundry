@@ -15,8 +15,9 @@ from pathlib import Path
 import pytest
 
 from tilefoundry.analysis.facts import MemoryHierarchyFacts, ThroughputFacts
+from tilefoundry.ir.core import OpCapability
+from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.types import DType
-from tilefoundry.schedule.instructions import registered_families
 from tilefoundry.target.amx import AmxTarget
 from tilefoundry.target.amx import spec as amx_spec
 from tilefoundry.target.base import Architecture, Device
@@ -452,17 +453,25 @@ def test_cuda_sm_clocks_are_the_typed_floor_of_existing_device_facts() -> None:
 
 def test_instruction_capabilities_and_execution_resources_are_separate_axes() -> None:
     """Enumerate instruction declarations and reconcile only their capability side."""
-    instructions = tuple(
-        instruction
-        for family in registered_families()
-        for instruction in family.declarations
-        if instruction.capability is not None
-    )
-    capabilities = {instruction.capability for instruction in instructions}
+    instructions = []
+    for schema in iter_schemas():
+        if schema.op_class is None:
+            continue
+        stated = vars(schema.op_class).get("capability")
+        capabilities = (stated,) if isinstance(stated, OpCapability) else stated or ()
+        instructions.extend(
+            (schema.op_class, capability)
+            for capability in capabilities
+            if capability.name is not None
+        )
+    instructions = tuple(instructions)
+    capabilities = {capability.name for _op_type, capability in instructions}
     resources = {
         resource
-        for instruction in instructions
-        if isinstance((resource := getattr(instruction.declaration, "resource", None)), str)
+        for op_type, capability in instructions
+        if isinstance(
+            (resource := getattr(capability.declaration or op_type, "resource", None)), str
+        )
     }
     architecture_capabilities = {
         capability

@@ -5,29 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from tilefoundry.inspection import PatternPrinter
+from tilefoundry.ir.core import OpCapability
+from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.pattern import between_rules, declared_execution_mesh
 from tilefoundry.target import Target
-
-from .instructions import families
-
-
-def instructions(target: Target) -> tuple[type, ...]:
-    """Return the registered instruction Ops supported by ``target``."""
-    return tuple(family.op_type for family in families(target))
-
-
-def listing(target: Target) -> dict[str, Any]:
-    """Describe every instruction declaration supported by ``target``."""
-    return {
-        "target": target.identity,
-        "instructions": [
-            {
-                "id": family.id,
-                "capability": family.capability,
-            }
-            for family in families(target)
-        ],
-    }
 
 
 def _instruction_id(op_type: type) -> str:
@@ -38,19 +19,87 @@ def _instruction_id(op_type: type) -> str:
     return f"{schema.dialect}.{schema.name}"
 
 
+def _capabilities(op_type: type) -> tuple[OpCapability, ...]:
+    stated = vars(op_type).get("capability")
+    if isinstance(stated, OpCapability):
+        return (stated,)
+    if isinstance(stated, tuple) and stated and all(
+        isinstance(item, OpCapability) for item in stated
+    ):
+        return stated
+    if stated is None:
+        return ()
+    raise ValueError(f"{_instruction_id(op_type)} has an invalid op capability declaration")
+
+
+def _supported(capability: OpCapability, target: Target) -> bool:
+    if capability.name is None:
+        return True
+    architecture = getattr(target, "architecture", None)
+    return capability.name in frozenset(getattr(architecture, "capabilities", ()))
+
+
+def _families(target: Target) -> tuple[tuple[type, tuple[OpCapability, ...]], ...]:
+    families = []
+    for position, schema in enumerate(iter_schemas()):
+        if schema.dialect != "T" or schema.op_class is None:
+            continue
+        admitted = tuple(
+            capability
+            for capability in _capabilities(schema.op_class)
+            if _supported(capability, target)
+        )
+        if admitted:
+            families.append((schema.op_class, admitted, position))
+    families.sort(key=lambda item: (min(cap.report_order for cap in item[1]), item[2]))
+    return tuple((op_type, capabilities) for op_type, capabilities, _position in families)
+
+
+def _family_capability(
+    capabilities: tuple[OpCapability, ...],
+) -> str | tuple[str, ...] | None:
+    names = tuple(capability.name for capability in capabilities if capability.name is not None)
+    if not names:
+        return None
+    return names[0] if len(names) == 1 else names
+
+
+def instructions(target: Target) -> tuple[type, ...]:
+    """Return the registered instruction Ops supported by ``target``."""
+    return tuple(op_type for op_type, _capabilities in _families(target))
+
+
+def listing(target: Target) -> dict[str, Any]:
+    """Describe every instruction declaration supported by ``target``."""
+    return {
+        "target": target.identity,
+        "instructions": [
+            {
+                "id": _instruction_id(op_type),
+                "capability": _family_capability(capabilities),
+            }
+            for op_type, capabilities in _families(target)
+        ],
+    }
+
+
 def _selection(target: Target, wanted_id: str) -> tuple[type, str | tuple[str, ...] | None]:
     matches: list[tuple[type, str | tuple[str, ...] | None]] = []
     available = []
-    for family in families(target):
-        available.append(family.id)
-        if family.id == wanted_id:
-            matches.append((family.op_type, family.capability))
-        for declaration in family.declarations:
-            if not declaration.is_variant:
+    for op_type, capabilities in _families(target):
+        op_id = _instruction_id(op_type)
+        family_capability = _family_capability(capabilities)
+        available.append(op_id)
+        if op_id == wanted_id:
+            matches.append((op_type, family_capability))
+        for capability in capabilities:
+            if capability.attribute is None:
                 continue
-            available.append(declaration.id)
-            if declaration.id == wanted_id:
-                matches.append((declaration.declaration, declaration.capability))
+            declaration = capability.declaration
+            declaration_id = _instruction_id(declaration)
+            available.append(declaration_id)
+            if declaration_id == wanted_id:
+                matches.append((declaration, capability.name))
     if len(matches) != 1:
         raise ValueError(
             f"unknown instruction {wanted_id!r} for target {target.identity!r}; "

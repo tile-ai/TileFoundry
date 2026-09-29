@@ -52,7 +52,7 @@ class ParameterInfo:
 
 
 @dataclass(frozen=True)
-class InstructionCapability:
+class OpCapability:
     """One target capability exposed by a registered instruction Op.
 
     ``name=None`` means that every target admits the instruction.  A carrier
@@ -134,4 +134,4 @@ class Op:
         return infos
 
 
-__all__ = ["InstructionCapability", "Op", "ParameterInfo"]
+__all__ = ["Op", "OpCapability", "ParameterInfo"]

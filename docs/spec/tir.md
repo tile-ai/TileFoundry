@@ -885,6 +885,10 @@ block_y, block_z, *forwarded_args)`:
 
 #### Execution meshes
 
+Target admission metadata uses `OpCapability`. Its optional `declaration` and
+`attribute` fields bind a named variant declaration back to its registered Op;
+consumers enumerate those records directly from the Op registry.
+
 An instruction Op reserves the class-body name `execution_mesh` for the mesh
 that executes one issue. A fixed instruction declaration MAY state a concrete
 `Mesh`; an Op with a caller-selectable frame MAY state a `ParamDef` whose
