@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
+from itertools import groupby
 from math import prod
 from typing import Any
 
@@ -12,9 +13,16 @@ import isl
 from tilefoundry.analysis import analyze
 from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
 from tilefoundry.inspection import PatternPrinter
-from tilefoundry.ir.core import Call, OpCapability, Var, get_metadata, value_label
+from tilefoundry.ir.core import (
+    Call,
+    OpCapability,
+    Var,
+    get_metadata,
+    op_identifier,
+    supported_op_capabilities,
+    value_label,
+)
 from tilefoundry.ir.core.metadata import SourceSpanMetadata
-from tilefoundry.ir.core.op_registry import iter_schemas
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.hir.nn.matmul import MatMul
 from tilefoundry.ir.hir.sharding.reshard import Reshard
@@ -48,49 +56,16 @@ class _Site:
     leaves: tuple[tuple[str, TensorType], ...]
 
 
-def _instruction_id(op_type: type) -> str:
-    reference = getattr(op_type, "reference_name", "")
-    if reference:
-        return reference
-    schema = op_type._op_schema
-    return f"{schema.dialect}.{schema.name}"
-
-
-def _capabilities(op_type: type) -> tuple[OpCapability, ...]:
-    stated = vars(op_type).get("capability")
-    if isinstance(stated, OpCapability):
-        return (stated,)
-    if isinstance(stated, tuple) and stated and all(
-        isinstance(item, OpCapability) for item in stated
-    ):
-        return stated
-    if stated is None:
-        return ()
-    raise ValueError(f"{_instruction_id(op_type)} has an invalid op capability declaration")
-
-
-def _supported(capability: OpCapability, target: Target) -> bool:
-    if capability.name is None:
-        return True
-    architecture = getattr(target, "architecture", None)
-    return capability.name in frozenset(getattr(architecture, "capabilities", ()))
-
-
 def _instructions(target: Target) -> tuple[tuple[type, OpCapability], ...]:
     """Return discoverable declarations that state comparable coordinates."""
-    families = []
-    for position, schema in enumerate(iter_schemas()):
-        if schema.dialect != "T" or schema.op_class is None:
-            continue
-        capabilities = _capabilities(schema.op_class)
-        if capabilities and access_relation_registry.lookup(schema.op_class) is not None:
-            families.append((min(cap.report_order for cap in capabilities), position, schema.op_class))
-    families.sort(key=lambda item: item[:2])
+    families = [
+        (op_type, tuple(capability for _op_type, capability in entries))
+        for op_type, entries in groupby(supported_op_capabilities(target), key=lambda item: item[0])
+        if access_relation_registry.lookup(op_type) is not None
+    ]
+    families.sort(key=lambda item: min(cap.report_order for cap in item[1]))
     return tuple(
-        (op_type, capability)
-        for _order, _position, op_type in families
-        for capability in _capabilities(op_type)
-        if _supported(capability, target)
+        (op_type, capability) for op_type, capabilities in families for capability in capabilities
     )
 
 
@@ -514,7 +489,7 @@ def candidates(module, entry, *, source: str | None = None) -> dict[str, Any]:
             if accepted:
                 usable.append(
                     {
-                        "id": _instruction_id(capability.declaration or op_type),
+                        "id": op_identifier(capability.declaration or op_type),
                         "needs": "; ".join(dict.fromkeys(filter(None, needs))) or None,
                         "bindings": [binding for binding in accepted if binding],
                     }
@@ -524,7 +499,7 @@ def candidates(module, entry, *, source: str | None = None) -> dict[str, Any]:
                 if common:
                     refused.append(
                         {
-                            "id": _instruction_id(capability.declaration or op_type),
+                            "id": op_identifier(capability.declaration or op_type),
                             "refused": common,
                         }
                     )

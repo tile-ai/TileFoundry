@@ -73,6 +73,46 @@ class OpCapability:
             raise ValueError("a capability variant states both declaration and attribute")
 
 
+def op_identifier(op_type: type) -> str:
+    """Return the registered or externally declared name of an Op."""
+    reference = getattr(op_type, "reference_name", "")
+    if reference:
+        return reference
+    schema = op_type._op_schema
+    return f"{schema.dialect}.{schema.name}"
+
+
+def capabilities_of(op_type: type) -> tuple[OpCapability, ...]:
+    """Return the normalized target-admission declarations of an Op."""
+    stated = vars(op_type).get("capability")
+    if isinstance(stated, OpCapability):
+        return (stated,)
+    if (
+        isinstance(stated, tuple)
+        and stated
+        and all(isinstance(item, OpCapability) for item in stated)
+    ):
+        return stated
+    if stated is None:
+        return ()
+    raise ValueError(f"{op_identifier(op_type)} has an invalid op capability declaration")
+
+
+def supported_op_capabilities(target: object) -> tuple[tuple[type, OpCapability], ...]:
+    """Enumerate registered TIR Ops admitted by ``target`` in registry order."""
+    from tilefoundry.ir.core.op_registry import iter_schemas  # noqa: PLC0415
+
+    architecture = getattr(target, "architecture", None)
+    supported = frozenset(getattr(architecture, "capabilities", ()))
+    return tuple(
+        (schema.op_class, capability)
+        for schema in iter_schemas()
+        if schema.dialect == "T" and schema.op_class is not None
+        for capability in capabilities_of(schema.op_class)
+        if capability.name is None or capability.name in supported
+    )
+
+
 class Op:
     """All Op classes inherit from this. Reflection-based param discovery."""
 
@@ -134,4 +174,11 @@ class Op:
         return infos
 
 
-__all__ = ["Op", "OpCapability", "ParameterInfo"]
+__all__ = [
+    "Op",
+    "OpCapability",
+    "ParameterInfo",
+    "capabilities_of",
+    "op_identifier",
+    "supported_op_capabilities",
+]
