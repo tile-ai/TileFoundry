@@ -387,8 +387,7 @@ printer.written(pattern)       # value shape, with named holes
 printer.rules(pattern)         # ordered, de-duplicated condition lines
 printer.described(pattern)     # value shape plus an indented predicates line
 printer.alternatives(pattern)  # flattened structural Or/Switch branches
-printer.declaration(op_type)   # one complete operation declaration
-printer.declaration_sections(op_type)  # rendered sections, still structured
+printer.declaration(op_type)   # rendered declaration sections, still structured
 printer.refusal(refusal)       # consumer-facing match failure
 ```
 
@@ -396,8 +395,9 @@ Layout values use single-line positional forms such as `Layout((r, W), (l,
 1))`, `ComposedLayout(Swizzle(b, 4, 3), p, Layout(...))`, and
 `ShardLayout(Layout(...), (B(), B(), B()), Mesh(...))`. Named wildcards print
 their names, unnamed wildcards print `_`, and star captures print `*name`.
-Formula conditions precede hand-written layout predicates. Alternative
-bindings retain declaration order. An `OrPattern` containing only ordinary
+Predicate conditions retain structural traversal and authored declaration
+order; de-duplication keeps the first occurrence. Alternative bindings retain
+declaration order. An `OrPattern` containing only ordinary
 values is one set-valued alternative rather than several structural branches.
 For tensor arrangements, rules shared by every alternative appear in the
 common predicates block; rules unique to one alternative remain indented under

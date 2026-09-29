@@ -90,7 +90,6 @@ PLAIN = (
 )
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
-WGMMA_DECLARATION = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.described.txt"
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
 CANDIDATE_GOLDEN = (
     Path(__file__).parents[1]
@@ -763,10 +762,6 @@ def test_tir_program_is_verified_and_canonical(path: Path) -> None:
     assert as_script(function) == path.read_text()
 
 
-def test_wgmma_declaration_is_canonical() -> None:
-    assert PatternPrinter().declaration(Wgmma) + "\n" == WGMMA_DECLARATION.read_text()
-
-
 def test_parameter_structure_does_not_repeat_its_name() -> None:
     declarations = {
         schema.op_class
@@ -821,12 +816,6 @@ def test_schedule_facts_writes_wgmma_declaration(
     )
     assert capsys.readouterr() == ("", "")
     assert out.read_bytes() == WGMMA_FACTS.read_bytes()
-    facts = out.read_text()
-    declaration = WGMMA_DECLARATION.read_text()
-    assert (
-        facts[facts.index("  parameters") :]
-        == declaration[declaration.index("  parameters") : declaration.index("  attributes")]
-    )
 
 
 def test_schedule_facts_lists_target_instructions_as_text_and_json(

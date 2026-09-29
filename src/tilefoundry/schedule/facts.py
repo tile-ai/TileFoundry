@@ -69,7 +69,7 @@ def one(target: Target, wanted: str | type) -> dict[str, Any]:
     wanted_id = op_identifier(wanted) if isinstance(wanted, type) else wanted
     op_type, capability = _selection(target, wanted_id)
     execution_mesh = declared_execution_mesh(op_type)
-    sections = PatternPrinter().declaration_sections(op_type)
+    sections = PatternPrinter().declaration(op_type)
     return {
         "target": target.identity,
         "id": op_identifier(op_type),

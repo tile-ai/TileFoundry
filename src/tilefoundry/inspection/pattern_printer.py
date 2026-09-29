@@ -33,22 +33,11 @@ class PatternPrinter:
             dict.fromkeys(
                 (
                     *self._dispatch("rules", pattern, name),
-                    *self._rules_of(self._ordered_predicates(pattern.predicates), name),
+                    *self._rules_of(pattern.predicates, name),
                 )
             )
         )
-        formulas = frozenset(
-            self._written_expression(formula) for formula in self._formulas(pattern)
-        )
-        return tuple(
-            sorted(
-                lines,
-                key=lambda line: not any(
-                    line == formula or line.startswith(f"{formula} where ")
-                    for formula in formulas
-                ),
-            )
-        )
+        return lines
 
     def described(self, pattern, name: str = _UNNAMED) -> str:
         """Write a value shape followed by its predicate lines, when present."""
@@ -81,19 +70,8 @@ class PatternPrinter:
         bindings = self._written_bindings(refusal.bindings.items())
         return reason if not bindings else f"{reason} ({bindings})"
 
-    def declaration(self, op_type) -> str:
-        """Render all parameter and operand patterns declared by *op_type*."""
-        title = getattr(op_type, "reference_name", "") or getattr(
-            getattr(op_type, "_op_schema", None), "name", op_type.__name__
-        )
-        lines = [title]
-        for heading, section in self.declaration_sections(op_type).items():
-            lines.append(f"  {heading}")
-            lines.extend(section)
-        return "\n".join(lines)
-
-    def declaration_sections(self, op_type) -> dict[str, tuple[str, ...]]:
-        """Render declaration sections without reparsing :meth:`declaration` text."""
+    def declaration(self, op_type) -> dict[str, tuple[str, ...]]:
+        """Render declaration sections without flattening them into report text."""
         sections = []
         parameters = tuple(getattr(op_type, "parameters", ())) or collect_param_defs(op_type)
         parameters_by_name = {param.name: param for param in parameters}
@@ -297,27 +275,6 @@ class PatternPrinter:
         if not label:
             return rule
         return f"{rule}, {label}" if " where " in rule else f"{rule} where {label}"
-
-    @staticmethod
-    def _ordered_predicates(predicates) -> tuple:
-        formulas = tuple(p for p in predicates if type(p).__name__ == "Formula")
-        hand_written = tuple(p for p in predicates if type(p).__name__ != "Formula")
-        return formulas + hand_written
-
-    def _formulas(self, value) -> tuple:
-        if type(value).__name__ == "Formula":
-            return (value,)
-        if isinstance(value, Pattern):
-            return tuple(
-                formula
-                for field_value in vars(value).values()
-                for formula in self._formulas(field_value)
-            )
-        if isinstance(value, tuple):
-            return tuple(
-                formula for item in value for formula in self._formulas(item)
-            )
-        return ()
 
     def visit_WildcardPattern(self, pattern, name) -> str:
         return "any value" if pattern.name == name else pattern.name or name
