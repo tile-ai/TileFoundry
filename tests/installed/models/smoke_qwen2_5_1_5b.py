@@ -29,7 +29,7 @@ def test_every_analysis_answers_at_the_largest_context(tf, shipped_source, case,
     contract.analysed_every_family(tf, shipped_source(MODEL), case, sized.selector, sized.ceiling)
 
 
-def test_the_decode_step_and_the_cache_entry_it_hands_back(tf, shipped_source, tmp_path) -> None:
+def test_the_decode_step_and_the_cache_entry_it_hands_back(tf, shipped_source, comparison_cache) -> None:
     """One decode step of one layer, and the state the step hands back.
 
     The whole layer is compared with ``Qwen2DecoderLayer.forward``. Returned cache
@@ -45,7 +45,7 @@ def test_the_decode_step_and_the_cache_entry_it_hands_back(tf, shipped_source, t
 
     contract.compared(
         tf,
-        tmp_path,
+        comparison_cache,
         source,
         case,
         "decoder_layer",

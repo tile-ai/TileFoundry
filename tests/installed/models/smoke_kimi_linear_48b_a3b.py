@@ -86,13 +86,13 @@ ROTATED = [
 
 
 @pytest.mark.parametrize(("ctx_len", "nope"), ROTATED)
-def test_mla_matches_hugging_face(tf, shipped_source, tmp_path, ctx_len, nope) -> None:
+def test_mla_matches_hugging_face(tf, shipped_source, comparison_cache, ctx_len, nope) -> None:
     step = reference.mla_step_inputs(ctx_len=ctx_len, device="cpu", nope=nope)
 
-    _mla(tf, tmp_path, shipped_source(MODEL), step)
+    _mla(tf, comparison_cache, shipped_source(MODEL), step)
 
 
-def test_mla_scaling_is_qk_head_dim_not_v_head_dim(tf, shipped_source, tmp_path) -> None:
+def test_mla_scaling_is_qk_head_dim_not_v_head_dim(tf, shipped_source, comparison_cache) -> None:
     """`qk_head_dim ** -0.5`, and the plausible wrong guess is detectable.
 
     Nothing in the published config says which dimension the score is scaled by, and
@@ -104,10 +104,10 @@ def test_mla_scaling_is_qk_head_dim_not_v_head_dim(tf, shipped_source, tmp_path)
     args = list(step.args)
     args[11] = torch.full((1, 1, 1, 1), CONFIG.v_head_dim**-0.5, dtype=reference.DTYPE)
 
-    _mla(tf, tmp_path, shipped_source(MODEL), step, args=args, refuse=True)
+    _mla(tf, comparison_cache, shipped_source(MODEL), step, args=args, refuse=True)
 
 
-def test_mla_cache_pairing_is_load_bearing(tf, shipped_source, tmp_path) -> None:
+def test_mla_cache_pairing_is_load_bearing(tf, shipped_source, comparison_cache) -> None:
     """Permuting one side of the cache breaks the answer.
 
     Softmax attention over a cache is permutation-invariant if both sides are
@@ -123,11 +123,11 @@ def test_mla_cache_pairing_is_load_bearing(tf, shipped_source, tmp_path) -> None
 
     keys = list(step.args)
     keys[9] = step.k_cache[:, perm]
-    _mla(tf, tmp_path, source, step, args=keys, refuse=True)
+    _mla(tf, comparison_cache, source, step, args=keys, refuse=True)
 
     values = list(step.args)
     values[10] = step.v_cache[:, perm]
-    _mla(tf, tmp_path, source, step, args=values, refuse=True)
+    _mla(tf, comparison_cache, source, step, args=values, refuse=True)
 
 
 MOE = "moe.moe"
@@ -157,7 +157,7 @@ def _moe(tf, work, source, step, want, *, args=None, refuse=False):
     )
 
 
-def test_moe_matches_hugging_face(tf, shipped_source, tmp_path) -> None:
+def test_moe_matches_hugging_face(tf, shipped_source, comparison_cache) -> None:
     """The full 256-expert MoE: four draws that agree, then three that must not.
 
     The decode contract fixes one token, so four draws broaden expert selection.
@@ -170,18 +170,18 @@ def test_moe_matches_hugging_face(tf, shipped_source, tmp_path) -> None:
     for act_seed in reference.MOE_DRAWS:
         step = reference.moe_inputs(act_seed=act_seed, hf_moe=hf_moe)
         drawn[act_seed] = (step, reference.moe_oracle(step))
-        _moe(tf, tmp_path, source, step, drawn[act_seed][1])
+        _moe(tf, comparison_cache, source, step, drawn[act_seed][1])
 
     step, want = drawn[reference.ACTIVATION_SEED]
 
     biasless = list(step.args)
     biasless[3] = torch.zeros_like(step.args[3])
-    _moe(tf, tmp_path, source, step, want, args=biasless, refuse=True)
+    _moe(tf, comparison_cache, source, step, want, args=biasless, refuse=True)
 
     unscaled = list(step.args)
     unscaled[4] = torch.full_like(step.args[4], 1.0)
-    _moe(tf, tmp_path, source, step, want, args=unscaled, refuse=True)
+    _moe(tf, comparison_cache, source, step, want, args=unscaled, refuse=True)
 
     unshared = list(step.args)
     unshared[8] = torch.zeros_like(step.args[8])
-    _moe(tf, tmp_path, source, step, want, args=unshared, refuse=True)
+    _moe(tf, comparison_cache, source, step, want, args=unshared, refuse=True)

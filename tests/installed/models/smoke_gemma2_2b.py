@@ -31,7 +31,7 @@ def test_every_analysis_answers_at_the_largest_context(tf, shipped_source, case,
     contract.analysed_every_family(tf, shipped_source(MODEL), case, sized.selector, sized.ceiling)
 
 
-def test_the_decode_step_and_the_cache_entry_it_hands_back(tf, shipped_source, tmp_path) -> None:
+def test_the_decode_step_and_the_cache_entry_it_hands_back(tf, shipped_source, comparison_cache) -> None:
     """One decode step of one layer, and the state the step hands back.
 
     The whole layer is compared with ``Gemma2DecoderLayer.forward``. Returned cache
@@ -47,7 +47,7 @@ def test_the_decode_step_and_the_cache_entry_it_hands_back(tf, shipped_source, t
 
     contract.compared(
         tf,
-        tmp_path,
+        comparison_cache,
         source,
         case,
         "decoder_layer",
@@ -66,7 +66,7 @@ def test_the_decode_step_and_the_cache_entry_it_hands_back(tf, shipped_source, t
     assert entry_k.shape[1] == 1 and entry_v.shape[1] == 1
 
 
-def test_the_attention_matches_hugging_face(tf, shipped_source, tmp_path) -> None:
+def test_the_attention_matches_hugging_face(tf, shipped_source, comparison_cache) -> None:
     """Test the attention matches hugging face.
 
     `self_attention` -- input_layernorm plus Gemma2's GQA, RoPE and soft-capped
@@ -98,7 +98,7 @@ def test_the_attention_matches_hugging_face(tf, shipped_source, tmp_path) -> Non
 
     contract.compared(
         tf,
-        tmp_path,
+        comparison_cache,
         source,
         case,
         "self_attention",

@@ -43,7 +43,7 @@ LINEAR = next(case for case in CASES if case.id == "qwen3_5_35b_a3b")
 
 
 @pytest.mark.parametrize("ctx_len", CTX_LENGTHS)
-def test_full_attention_matches_hugging_face(tf, shipped_source, tmp_path, ctx_len) -> None:
+def test_full_attention_matches_hugging_face(tf, shipped_source, comparison_cache, ctx_len) -> None:
     """Test full attention matches hugging face.
 
     `full_attention` -- input_layernorm plus GQA with per-head q_norm/k_norm,
@@ -64,7 +64,7 @@ def test_full_attention_matches_hugging_face(tf, shipped_source, tmp_path, ctx_l
     assert want_key.shape[1] == ctx_len + 1
     contract.compared(
         tf,
-        tmp_path,
+        comparison_cache,
         shipped_source(MODEL),
         FULL,
         "full_attention",
@@ -81,7 +81,7 @@ def test_full_attention_matches_hugging_face(tf, shipped_source, tmp_path, ctx_l
 
 
 @pytest.mark.parametrize("ctx_len", CTX_LENGTHS)
-def test_linear_attention_matches_hugging_face(tf, shipped_source, tmp_path, ctx_len) -> None:
+def test_linear_attention_matches_hugging_face(tf, shipped_source, comparison_cache, ctx_len) -> None:
     """Test linear attention matches hugging face.
 
     Compare normalization, convolution, gated delta rule, and output normalization
@@ -98,7 +98,7 @@ def test_linear_attention_matches_hugging_face(tf, shipped_source, tmp_path, ctx
 
     contract.compared(
         tf,
-        tmp_path,
+        comparison_cache,
         shipped_source(MODEL),
         LINEAR,
         "linear_attention",
@@ -116,7 +116,7 @@ def test_linear_attention_matches_hugging_face(tf, shipped_source, tmp_path, ctx
 MOE = next(case for case in CASES if case.id.endswith("_moe"))
 
 
-def test_the_moe_block_matches_hugging_face(tf, shipped_source, tmp_path) -> None:
+def test_the_moe_block_matches_hugging_face(tf, shipped_source, comparison_cache) -> None:
     """Test the moe block matches hugging face.
 
     The whole block -- post_attention_layernorm plus `Qwen3_5MoeSparseMoeBlock`,
@@ -133,7 +133,7 @@ def test_the_moe_block_matches_hugging_face(tf, shipped_source, tmp_path) -> Non
 
     contract.compared(
         tf,
-        tmp_path,
+        comparison_cache,
         shipped_source(MODEL),
         MOE,
         "",
@@ -171,7 +171,7 @@ ZEROED = ["recurrent_state", "conv_state"]
 
 
 @pytest.mark.parametrize("zeroed", ZEROED)
-def test_each_half_of_the_state_reaches_the_answer(tf, shipped_source, tmp_path, zeroed) -> None:
+def test_each_half_of_the_state_reaches_the_answer(tf, shipped_source, comparison_cache, zeroed) -> None:
     step = reference.linear_step(device="cpu")
     loaded = reference.load_mixer("linear_attention", step.layer)
     held = {"conv_state": step.conv_state, "recurrent_state": step.recurrent_state}
@@ -179,7 +179,7 @@ def test_each_half_of_the_state_reaches_the_answer(tf, shipped_source, tmp_path,
 
     _linear_disagrees(
         tf,
-        tmp_path,
+        comparison_cache,
         shipped_source(MODEL),
         step,
         loaded,
@@ -187,7 +187,7 @@ def test_each_half_of_the_state_reaches_the_answer(tf, shipped_source, tmp_path,
     )
 
 
-def test_the_output_gate_is_applied(tf, shipped_source, tmp_path) -> None:
+def test_the_output_gate_is_applied(tf, shipped_source, comparison_cache) -> None:
     """Half of `q_proj`'s fan-out never reaches a score.
 
     Half of `q_proj`'s fan-out never reaches a score, and this measures that it
@@ -216,7 +216,7 @@ def test_the_output_gate_is_applied(tf, shipped_source, tmp_path) -> None:
 
     contract.disagreed(
         tf,
-        tmp_path,
+        comparison_cache,
         shipped_source(MODEL),
         FULL,
         "full_attention",

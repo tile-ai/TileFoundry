@@ -100,7 +100,7 @@ def _asked(tf, work, source, step, *, out_held):
 
 @cuda_only
 def test_the_disagreement_is_smaller_than_the_oracles_own_rounding(
-    tf, shipped_source, tmp_path
+    tf, shipped_source, comparison_cache
 ) -> None:
     """Test the disagreement is smaller than the oracles own rounding.
 
@@ -123,7 +123,7 @@ def test_the_disagreement_is_smaller_than_the_oracles_own_rounding(
 
     contract.compared(
         tf,
-        tmp_path,
+        comparison_cache,
         shipped_source(MODEL),
         CASES[0],
         ATTENTION,
@@ -140,7 +140,7 @@ def test_the_disagreement_is_smaller_than_the_oracles_own_rounding(
 @cuda_only
 @pytest.mark.parametrize("ctx_len", CTX_LENGTHS)
 def test_the_step_is_authored_over_a_range_of_context_lengths(
-    tf, shipped_source, tmp_path, ctx_len
+    tf, shipped_source, comparison_cache, ctx_len
 ) -> None:
     """The same description, at two context lengths, each against its own oracle.
 
@@ -153,7 +153,7 @@ def test_the_step_is_authored_over_a_range_of_context_lengths(
     assert step.kv_cache.shape[1] == ctx_len
     _asked(
         tf,
-        tmp_path,
+        comparison_cache,
         shipped_source(MODEL),
         step,
         out_held=("allclose", {"atol": _bf16_ulps(want), "rtol": 0.0}),
@@ -161,7 +161,7 @@ def test_the_step_is_authored_over_a_range_of_context_lengths(
 
 
 @cuda_only
-def test_the_step_returns_the_cache_entry_to_append(tf, shipped_source, tmp_path) -> None:
+def test_the_step_returns_the_cache_entry_to_append(tf, shipped_source, comparison_cache) -> None:
     """The returned latent is this token's cache entry.
 
     The returned latent is this token's cache entry: appending it to the cache the
@@ -179,7 +179,7 @@ def test_the_step_returns_the_cache_entry_to_append(tf, shipped_source, tmp_path
     assert torch.equal(grown[:, : step.ctx_len], step.kv_cache)
     _asked(
         tf,
-        tmp_path,
+        comparison_cache,
         shipped_source(MODEL),
         step,
         out_held=("allclose", {"atol": _bf16_ulps(want), "rtol": 0.0}),

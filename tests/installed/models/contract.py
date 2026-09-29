@@ -12,9 +12,11 @@ level that stops being declared has nowhere to come from and the command fails.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 import torch
@@ -276,9 +278,67 @@ def nested_constants(loaded, prefix: str = "") -> dict:
     return found
 
 
+def _tensor_key(tensor: torch.Tensor) -> str:
+    """Hash one tensor's stated form and logical bytes, independent of its argument slot."""
+    plain = tensor.detach().cpu()
+    digest = hashlib.blake2b(digest_size=16)
+    fields = (
+        str(plain.dtype).encode(),
+        json.dumps(tuple(plain.shape), separators=(",", ":")).encode(),
+        json.dumps(tuple(plain.stride()), separators=(",", ":")).encode(),
+        str(plain.storage_offset()).encode(),
+    )
+    for field in fields:
+        digest.update(len(field).to_bytes(8, "little"))
+        digest.update(field)
+    content = plain.contiguous().view(torch.uint8).numpy().reshape(-1)
+    digest.update(memoryview(content))
+    return digest.hexdigest()
+
+
+def _publish(path: Path, write: Callable[[Path], None]) -> Path:
+    """Publish one cache object atomically; another xdist worker may win the race."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        return path
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        write(temporary)
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            pass
+    finally:
+        temporary.unlink(missing_ok=True)
+    return path
+
+
+def _materialize_tensor(tensor: torch.Tensor, cache: Path) -> Path:
+    """Write a tensor once per test run and return its content-addressed path."""
+    path = cache / "tensors" / f"{_tensor_key(tensor)}.pt"
+    return _publish(path, lambda temporary: torch.save(tensor, temporary))
+
+
+def _materialize_weights(weights: Mapping[str, torch.Tensor], cache: Path) -> Path:
+    """Write one named checkpoint once per test run and return its directory."""
+    prepared = {name: value.contiguous() for name, value in weights.items()}
+    digest = hashlib.blake2b(digest_size=16)
+    for name, tensor in sorted(prepared.items()):
+        encoded_name = name.encode()
+        digest.update(len(encoded_name).to_bytes(8, "little"))
+        digest.update(encoded_name)
+        digest.update(bytes.fromhex(_tensor_key(tensor)))
+    room = cache / "checkpoints" / digest.hexdigest()
+    path = room / "model.safetensors"
+    _publish(path, lambda temporary: save_file(prepared, str(temporary)))
+    return room
+
+
 def compared(
     tf,
-    work: Path,
+    cache: Path,
     source: Path,
     case: ModelCase,
     selector: str,
@@ -292,7 +352,8 @@ def compared(
 ):
     """Compare shipped HIR through the CLI, or host orchestration in this test.
 
-    The oracle is written into *work*, so a stale artifact cannot hide disagreement.
+    Artifacts are content-addressed inside the run-scoped *cache*, so a stale
+    artifact cannot hide disagreement and repeated comparisons do not rewrite it.
     Weights travel as a checkpoint because ``check`` accepts non-const parameters
     only through ``--inputs files:...``. An empty selector names host orchestration;
     this test invokes it explicitly and applies the same public comparison layer.
@@ -325,30 +386,21 @@ def compared(
         assert report.passed, report
         return report
 
-    room = Path(tempfile.mkdtemp(dir=work))
     argv = ["check", static(source, case, selector)]
-    input_paths = []
-    for position, tensor in enumerate(activations):
-        path = room / f"in{position}.pt"
-        torch.save(tensor, path)
-        input_paths.append(str(path))
+    input_paths = [str(_materialize_tensor(tensor, cache)) for tensor in activations]
     argv += ["--inputs", f"files:{','.join(input_paths)}"]
 
     if weights:
-        save_file(
-            {
-                f"{_reached_through(case, selector)}{name}": value.contiguous()
-                for name, value in weights.items()
-            },
-            str(room / "model.safetensors"),
-        )
-        argv += ["--weights", f"ckpt:{room}"]
+        checkpoint = {
+            f"{_reached_through(case, selector)}{name}": value
+            for name, value in weights.items()
+        }
+        argv += ["--weights", f"ckpt:{_materialize_weights(checkpoint, cache)}"]
     else:
         argv += ["--weights", "random"]
     argv += dim_args(dims)
-    for position, tensor in enumerate(expected):
-        path = room / f"want{position}.pt"
-        torch.save(tensor, path)
+    for tensor in expected:
+        path = _materialize_tensor(tensor, cache)
         argv += ["--expected", str(path)]
     for position, (predicate, bounds) in enumerate(held):
         out = "output" if len(expected) == 1 else f"output[{position}]"
@@ -362,7 +414,7 @@ def compared(
     return done
 
 
-def disagreed(tf, work: Path, source: Path, case: ModelCase, selector: str, **asked):
+def disagreed(tf, cache: Path, source: Path, case: ModelCase, selector: str, **asked):
     """The same command, held to reporting FAIL.
 
     Perturbed runs must make parity refuse. They use the same bound as the passing
@@ -370,7 +422,7 @@ def disagreed(tf, work: Path, source: Path, case: ModelCase, selector: str, **as
     perturbation. This previously hid five cases, including an identity cache
     permutation.
     """
-    done = compared(tf, work, source, case, selector, _refuse=True, **asked)
+    done = compared(tf, cache, source, case, selector, _refuse=True, **asked)
     assert done.returncode == 1, done.stdout + done.stderr
     assert "FAIL" in done.stdout, done.stdout
     return done

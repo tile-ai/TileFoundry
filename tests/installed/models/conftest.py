@@ -8,11 +8,23 @@ model source runs against the copied directory named by the installed command.
 
 from __future__ import annotations
 
+import os
 import shutil
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(scope="session")
+def comparison_cache(tmp_path_factory) -> Path:
+    """One run-scoped artifact cache, shared by every xdist worker."""
+    root = tmp_path_factory.getbasetemp()
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        root = root.parent
+    cache = root / "model-contract-cache"
+    cache.mkdir(exist_ok=True)
+    return cache
 
 
 @pytest.fixture(scope="session")

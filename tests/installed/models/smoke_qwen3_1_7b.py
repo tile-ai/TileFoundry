@@ -92,7 +92,7 @@ def test_the_command_reports_a_real_model_as_json(tf, shipped_source, case, sele
 
 @pytest.mark.parametrize("ctx_len", [0, 24])
 def test_the_decode_step_and_the_cache_entry_it_hands_back(
-    tf, shipped_source, tmp_path, ctx_len
+    tf, shipped_source, comparison_cache, ctx_len
 ) -> None:
     """One decode step of one layer, and the state the step hands back.
 
@@ -111,7 +111,7 @@ def test_the_decode_step_and_the_cache_entry_it_hands_back(
     want_attention = reference.attention_reference(drawn.layer, drawn.hidden_ctx, drawn.hidden_new)
     contract.compared(
         tf,
-        tmp_path,
+        comparison_cache,
         source,
         case,
         "self_attention",
@@ -125,7 +125,7 @@ def test_the_decode_step_and_the_cache_entry_it_hands_back(
     want_out = reference.decode_step_oracle(drawn)
     contract.compared(
         tf,
-        tmp_path,
+        comparison_cache,
         source,
         case,
         "decoder_layer",
@@ -140,14 +140,14 @@ def test_the_decode_step_and_the_cache_entry_it_hands_back(
     assert entry_k.shape[1] == 1 and want_k.shape[1] == ctx_len + 1
 
 
-def test_the_placed_mlp_matches_the_reference(tf, shipped_source, tmp_path) -> None:
+def test_the_placed_mlp_matches_the_reference(tf, shipped_source, comparison_cache) -> None:
     """The performance witness keeps the shipped MLP's numerical boundary."""
     drawn = reference.decode_step_inputs(ctx_len=0, device="cpu")
     want = reference.mlp_reference(drawn.layer, drawn.hidden_new)
 
     contract.compared(
         tf,
-        tmp_path,
+        comparison_cache,
         shipped_source(MODEL),
         CASES[0],
         "placed_mlp",
