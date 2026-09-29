@@ -521,6 +521,10 @@ class MemoryLevelPeak:
     operand, including a narrowing pointwise operation; an exact contained
     relation MUST keep the operand range inside the result range. These alias
     requirements are mandatory rather than optional placement choices.
+  - `Slice`, `Reshape`, and `Transpose` are non-material allocation views:
+    placement MUST follow their operand to its material allocation. This does
+    not make a transposed access an identity relation; access analysis retains
+    the permutation stated by `Transpose`.
   - Every placed offset MUST be aligned to the greater of 16 bytes and the
     result element width. A staged result's copies MUST be contiguous: copy
     `k` starts at the solved block offset plus `k * buffer_bytes`.

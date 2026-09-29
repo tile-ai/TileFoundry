@@ -1,9 +1,11 @@
-"""Author the distribution of a tiled cast between scheduled instructions.
+"""Author an elementwise and reduction epilogue between scheduled instructions.
 
 Each K tile of ``b_f32`` is copied into registers held by the loader warp,
 narrowed there, and copied into shared memory. The author therefore owns the
 three storage transitions; lowering does not invent a distribution for an
-unscheduled whole-tensor cast.
+unscheduled whole-tensor cast. The accumulator epilogue then exercises
+automatically selected binary, ReLU, reduction, and cast instructions alongside
+an explicit reduction, producing an ``(M, 1)`` result.
 """
 
 from tilefoundry import func, module

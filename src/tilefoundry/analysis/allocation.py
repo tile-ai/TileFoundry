@@ -16,6 +16,7 @@ from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.hir.tensor.slice import Slice
+from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import index_set
 from tilefoundry.ir.types import TensorType
@@ -116,7 +117,9 @@ def view_root(value: Expr, bindings: dict[int, Expr]) -> Expr:
         if bound is not None:
             value = bound
             continue
-        if isinstance(value, Call) and isinstance(value.target, (Slice, Reshape)):
+        if isinstance(value, Call) and isinstance(
+            value.target, (Slice, Reshape, Transpose)
+        ):
             value = value.args[0]
             continue
         if isinstance(value, MeshRegion):

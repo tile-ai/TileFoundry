@@ -61,8 +61,8 @@ FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 CASES = placed_cases()
 INVENTORY = [pytest.param(case, id=case.id) for case in CASES]
 
-_GQA_TRANSPOSE_VIEW_LEFTOVER_12_GMEM = 283_696
-_PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_VIEW_LEFTOVER_12_SMEM = 278_528
+_GQA_TRANSPOSE_VIEW_LEFTOVER_12_GMEM = 281_648
+_PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_VIEW_LEFTOVER_12_SMEM = 148_480
 _QWEN_LOOP_INVARIANT_VALUES_GMEM = 145_409_040
 _MHA_BATCH_GMEM_WITH_8_BYTES_ALIGNMENT_PADDING = 5_245_008
 _MHA_LONGER_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 4_195_376
@@ -116,7 +116,7 @@ EXPECTED_MEMORY_PEAKS = {
     "flash_split_k_decode.FlashSplitKDecode.flash_split_k_decode[ctx=128]": {
         "gmem": 788_480,
         "rmem": 8,
-        "smem": 83_616,
+        "smem": 50_848,
     },
     "fused_boundary.FusedBoundary.inner.run[static]": {"rmem": 128},
     "fused_boundary.FusedBoundary.inner.scale[static]": {"rmem": 256},
@@ -272,7 +272,7 @@ EXPECTED_MEMORY_PEAKS = {
     "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]": {
         "gmem": _QWEN_LOOP_INVARIANT_VALUES_GMEM,
         "rmem": 1_132,
-        "smem": 65_792,
+        "smem": 33_280,
     },
     "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]": {
         "gmem": 163_226_640,
@@ -287,12 +287,12 @@ EXPECTED_MEMORY_PEAKS = {
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=4608,seq=1]": {
         "gmem": 4_763_301_424,
         "rmem": 1_644,
-        "smem": 65_792,
+        "smem": 33_280,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=1]": {
         "gmem": 4_763_301_424,
         "rmem": 1_644,
-        "smem": 65_792,
+        "smem": 33_280,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=512]": {
         "gmem": 5_438_837_264,

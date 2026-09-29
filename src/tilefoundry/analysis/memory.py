@@ -19,6 +19,7 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.mesh import Mesh, separate, within_scope
@@ -382,6 +383,9 @@ def add_traffic(
 def view_root(value: Expr) -> Expr:
     """Follow region results and tuple projections to their material value."""
     while True:
+        if isinstance(value, Call) and isinstance(value.target, Transpose):
+            value = value.args[0]
+            continue
         if isinstance(value, MeshRegion):
             value = value.body
             continue
@@ -447,6 +451,27 @@ def _project_allocation_values(
                 )
             )
     return tuple(result)
+
+
+def _inherit_view_placements(liveness: Liveness) -> None:
+    """Report each non-resident Transpose at its material root's placement."""
+    for interval in liveness.intervals:
+        value = interval.value
+        if not isinstance(value, Call) or not isinstance(value.target, Transpose):
+            continue
+        root = view_root(value)
+        root_record = get_metadata(root, MemoryMetadata)
+        view_record = get_metadata(value, MemoryMetadata)
+        if root_record is None or view_record is None:
+            continue
+        attach(
+            value,
+            replace(
+                view_record,
+                buffer_bytes=root_record.buffer_bytes,
+                offsets=root_record.offsets,
+            ),
+        )
 
 
 def peak_in_window(rows: list[ValueLifetime], entered_at: int, exited_at: int) -> int:
@@ -907,6 +932,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 capacity_bytes=capacity,
             )
         )
+    _inherit_view_placements(liveness)
     levels = tuple(levels_list)
     errors = tuple(
         f"{item.memory_level} placement peak {format_bytes(item.peak_bytes)} exceeds "
