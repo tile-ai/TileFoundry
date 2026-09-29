@@ -178,7 +178,9 @@ RMEM_EXPECTED = {
     "wgmma_cast_between_schedules": {
         "thread@128:128#0": _RmemExpectation(8_192, "64x32 f32 zero accumulator"),
         "thread@128:128#1": _RmemExpectation(8_192, "f32 phi/mma alias chain"),
-        "thread@128:128#2": _RmemExpectation(8_192, "f32 loop result/bf16 cast alias"),
+        "thread@128:128#2": _RmemExpectation(
+            8_448, "f32 loop result plus f32 reduction results and bf16 cast alias"
+        ),
         "thread@0:32#1": _RmemExpectation(
             3_072,
             "16x32 f32 loader tile (2048) plus bf16 cast tile (1024)",
@@ -313,6 +315,12 @@ class _OperandMatchVisitor(StmtVisitor[None]):
         if schema is None:
             return
         inputs = tuple(param for param in schema.signature if param.kind == "input")
+        supplied_optional = len(stmt.args) - sum(not param.optional for param in inputs)
+        optional = tuple(param for param in inputs if param.optional)
+        included = {id(param) for param in optional[: max(0, supplied_optional)]}
+        inputs = tuple(
+            param for param in inputs if not param.optional or id(param) in included
+        )
         atom = getattr(op, "atom", None)
         for param, arg in zip(inputs, stmt.args, strict=True):
             if param.pattern is None:
@@ -998,7 +1006,15 @@ def test_schedule_candidates_omit_selected_schedule_calls(
     assert capsys.readouterr() == ("", "")
     report = json.loads(out.read_text())
     assert report["lines"]
-    assert all(row["op"] != "tf.schedule" for row in report["lines"])
+    ops = [row["op"] for row in report["lines"]]
+    assert "tf.matmul" not in ops
+    assert "tf.reshard" not in ops
+    assert any(
+        op in {"tf.binary", "tf.cast", "tf.clamp", "tf.relu", "tf.reduce", "tf.unary"}
+        for op in ops
+    )
+    if source.stem == "wgmma_cast_between_schedules":
+        assert ops.count("tf.reduce") == 1
 
 
 def test_operand_match_refusal_names_the_failed_pattern() -> None:

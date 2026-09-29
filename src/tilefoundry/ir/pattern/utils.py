@@ -12,13 +12,6 @@ from tilefoundry.ir.types import (
     TensorType,
 )
 from tilefoundry.ir.types.mesh import separate, starts
-from tilefoundry.ir.types.shard_layout import (
-    Broadcast,
-    Split,
-    canonical_shard_layout,
-    layout_axis_to_tensor_axis,
-    shard_layout_of,
-)
 from tilefoundry.ir.types.stride import compact_row_major
 
 from . import predicates as P
@@ -266,16 +259,9 @@ def declared_write_type(op, param, pattern: TensorPattern | None, inputs: dict, 
     source = next(iter(inputs.values()))
     bindings = dict(getattr(getattr(op, "atom", None), "bindings", {}))
     shape = declared_shape(pattern, bindings)
-    if shape is None and hasattr(op, "axes") and hasattr(op, "keepdim"):
-        rank = len(source.shape)
-        axes = tuple(axis + rank if axis < 0 else axis for axis in op.axes)
-        if any(axis < 0 or axis >= rank for axis in axes):
-            raise ValueError(f"{type(op).__name__} axes {op.axes} exceed source rank {rank}")
-        shape = tuple(
-            1 if axis in axes else extent
-            for axis, extent in enumerate(source.shape)
-            if op.keepdim or axis not in axes
-        )
+    shape_rule = getattr(op, "declared_write_shape", None)
+    if shape is None and shape_rule is not None:
+        shape = shape_rule(source)
     if shape is None:
         shape = tuple(source.shape)
     stated_dtype = getattr(op, "dtype", None)
@@ -310,42 +296,17 @@ def declared_write_type(op, param, pattern: TensorPattern | None, inputs: dict, 
                 )
                 storage = choices[0] if len(choices) == 1 else None
                 break
-        if not constrained:
+        if not constrained and getattr(type(op), "write_storage_from_source", False):
             storage = source.storage
         if storage is None:
             raise ValueError(f"{type(op).__name__} does not determine {param.name} storage")
     layout = layout or declared_layout(pattern.layout, bindings, mesh)
-    source_shard = shard_layout_of(source.layout)
+    layout_rule = getattr(op, "declared_write_layout", None)
+    if layout is None and layout_rule is not None:
+        destination = TensorType(shape, dtype, None, storage)
+        layout = layout_rule(source, destination)
     if layout is None and storage is source.storage and tuple(shape) == tuple(source.shape):
         layout = source.layout
-    if (
-        layout is None
-        and source_shard is not None
-        and storage is source.storage
-        and hasattr(op, "axes")
-        and hasattr(op, "keepdim")
-    ):
-        rank = len(source.shape)
-        axes = tuple(axis + rank if axis < 0 else axis for axis in op.axes)
-        layout_to_tensor = layout_axis_to_tensor_axis(
-            source_shard.layout.shape, source.shape
-        )
-        attrs = []
-        for attr in source_shard.attrs:
-            if not isinstance(attr, Split):
-                attrs.append(attr)
-                continue
-            tensor_axis = layout_to_tensor[attr.axis]
-            if tensor_axis in axes:
-                attrs.append(Broadcast())
-                continue
-            output_axis = (
-                tensor_axis
-                if op.keepdim
-                else tensor_axis - sum(axis < tensor_axis for axis in axes)
-            )
-            attrs.append(Split(output_axis))
-        layout = canonical_shard_layout(shape, source_shard.mesh, tuple(attrs))
     layout = layout or Layout(shape, tuple(compact_row_major(shape)))
     return TensorType(shape, dtype, layout, storage)
 

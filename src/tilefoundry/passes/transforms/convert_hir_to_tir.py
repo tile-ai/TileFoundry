@@ -607,7 +607,8 @@ class Lowering(ExprVisitor[Expr]):
             name = type(call.target)._op_schema.name
             identifier = op_identifier(type(op))
             raise LoweringError(
-                f"{_label(call)} is an unscheduled gmem {name}; {identifier} accepts only "
+                f"{_label(call)} is an unscheduled {call.type.storage} {name}; "
+                f"{identifier} accepts only "
                 "rmem operands, so write an explicit tf.schedule for each storage transition"
             )
         result = self._declare(

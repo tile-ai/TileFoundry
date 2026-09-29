@@ -317,11 +317,9 @@ def _schedule_cost(call: Call, ctx) -> Cost:
 @register_typeinfer(ScheduleOp)
 def _infer_schedule(call: Call, ctx) -> TensorType:
     try:
-        reduction = hasattr(call.target.op, "axes") and hasattr(
-            call.target.op, "keepdim"
-        )
+        whole_issue = getattr(type(call.target.op), "schedule_whole_issue", False)
         op, params, reads, writes, patterns, inner, _repeat, _order, _shape = _instruction_view(
-            call, ctx, fragments=not reduction
+            call, ctx, fragments=not whole_issue
         )
     except (TypeError, ValueError) as error:
         ctx.error(call, str(error))
