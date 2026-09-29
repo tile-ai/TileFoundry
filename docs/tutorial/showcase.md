@@ -1097,7 +1097,7 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 #   buffer=cur_pos_2 holds=2.60MB time=none space=cta.head reuse=28B fits=yes
 # roofline ideal-ns=2474 bound-by=memory
 
-        v21 = slice(k_cache, (0, v20, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16"]; compute-cost; memory traffic=rmem:r32B/w0@logical,r32B/w0@total,r32B/w0@cta operands=0:r0/w0;1:r32B/w0;result:r0/w0; roofline
+        v21 = slice(k_cache, (0, v20, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16", Layout((1, 128, 2, 32), (262144, 64, 32, 1))]; compute-cost; memory traffic=rmem:r32B/w0@logical,r32B/w0@total,r32B/w0@cta operands=0:r0/w0;1:r32B/w0;result:r0/w0; roofline
     v6 = cache_update(k_cache, cur_pos, write_len, v5)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; memory traffic=gmem:r136B/w128B@logical,r136B/w128B@total,r136B/w128B@cta footprint=cur_pos:4B;v5:473:128B;v6:474:128B;write_len:4B operands=0:r0/w0;1:r4B/w0;2:r4B/w0;3:r128B/w0;result:r0/w128B; roofline ideal-ns=1 bound-by=memory
 ```
 
