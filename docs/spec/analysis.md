@@ -443,11 +443,13 @@ are monotonic across the whole Function, including nested and sibling regions.
 | `RegionMemoryMetadata.lifetimes` | Every value residency except a non-material view. | As above |
 
 - constraints:
-  - `Reshape` and `Transpose` describe bytes their operand already holds and
-    MUST NOT receive independent lifetimes. A result reached only through a
-    `MeshRegion` result binding edge and tuple projections likewise describes
+  - An op registered with `register_buffer_alias(Op, Op.param)` describes the
+    bytes of that input parameter, re-addressed. `Slice` and `Reshape` register
+    their `x` parameter and MUST NOT receive independent lifetimes. A result
+    reached only through a `MeshRegion` result binding edge and tuple
+    projections likewise describes
     bytes already held by the region body and MUST NOT receive an independent
-    lifetime. Every other result, including a window or a result that overwrites
+    lifetime. Every other result, including `Transpose` or a result that overwrites
     a destination, MUST allocate its own. Analysis MUST use operation semantics
     for this distinction rather than infer aliasing from layouts.
   - A caller-owned parameter MUST NOT be reused. Donation is a contract with
@@ -522,10 +524,23 @@ class MemoryLevelPeak:
     operand, including a narrowing pointwise operation; an exact contained
     relation MUST keep the operand range inside the result range. These alias
     requirements are mandatory rather than optional placement choices.
-  - `Slice`, `Reshape`, and `Transpose` are non-material allocation views:
-    placement MUST follow their operand to its material allocation. This does
-    not make a transposed access an identity relation; access analysis retains
-    the permutation stated by `Transpose`.
+  - Registered buffer aliases MUST follow their named operand to its storage
+    owner and MUST NOT receive independent `buffer_bytes` or `offsets`. Analysis
+    MUST prove that the result-to-operand map is single-valued, injective, and
+    contained in the operand's index box, using the call's own unmodified
+    declared access relation via `renaming_relation`, not its folded accesses.
+    Failure to prove that declaration MUST raise `AnalysisError`. `Transpose`
+    is not registered: it writes a new value, retains its access permutation,
+    and receives its own allocation under the ordinary conflict rules.
+  - Liveness MUST propagate a use through the same storage-sharing edges used
+    by `storage_owners`: registered buffer aliases to their source, mesh-region
+    results to their body, and tuple projections to their selected element.
+    Chains MUST propagate to the final owner. Placement interference, register
+    peaks, and in-place conflict checks MUST consume this liveness directly,
+    without independently rebuilding shared-storage intervals.
+    Storage ownership MUST be resolved once per value for an analysis, with
+    each registered alias proved once; allocation consumers MUST reuse that
+    owner table rather than repeat the proofs.
   - Every placed offset MUST be aligned to the greater of 16 bytes and the
     result element width. A staged result's copies MUST be contiguous: copy
     `k` starts at the solved block offset plus `k * buffer_bytes`.

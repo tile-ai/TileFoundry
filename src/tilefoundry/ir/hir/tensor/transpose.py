@@ -10,19 +10,18 @@ from tilefoundry.ir.core.param_def import ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import Tensor
 from tilefoundry.ir.types import Layout, TensorType
-from tilefoundry.ir.types.shard_layout import shard_layout_of
-from tilefoundry.ir.types.stride import try_compact_major
+from tilefoundry.ir.types.stride import compact_row_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
+    AccessRelations,
     AffineAccess,
+    BoundaryRelation,
     identity_access,
+    iterating,
     register_access_relation,
     relations_of,
-    view_relations,
 )
 from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
-
-from ._view_layout import derive_view_layout
 
 
 @register_op
@@ -30,20 +29,8 @@ class Transpose(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     perm = ParamDef(kind="attribute", annotation=tuple)
 
-def _strides(type_: TensorType) -> tuple | None:
-    """The per-axis strides one position addresses this Type with."""
-    layout = type_.layout
-    shard = shard_layout_of(layout)
-    if shard is not None:
-        layout = shard.layout
-    if not isinstance(layout, Layout) or len(layout.shape) != len(type_.shape):
-        return None
-    if layout.strides is not None:
-        return tuple(layout.strides)
-    return try_compact_major(tuple(layout.shape))
-
-
-def _transpose_view(call: "Call", ctx) -> tuple:
+@register_access_relation(Transpose)
+def _transpose_relations(call: "Call", ctx) -> AccessRelations:
     """Result axis k is source axis perm[k], stated in both sides' positions.
 
     A permutation walks what it reads, so the source's own axes are the
@@ -55,56 +42,33 @@ def _transpose_view(call: "Call", ctx) -> tuple:
     rank = len(source.shape)
     writes_at = [f"d{source_axis}" for source_axis in perm]
     domain = ", ".join(f"d{index}" for index in range(rank))
-    return (
-        identity_access(rank),
-        AffineAccess(isl.map(f"{{ [{domain}] -> [{', '.join(writes_at)}] }}")),
+    return iterating(
+        source.shape,
+        AccessRelations(
+            (BoundaryRelation(identity_access(rank)),),
+            (
+                BoundaryRelation(
+                    AffineAccess(isl.map(f"{{ [{domain}] -> [{', '.join(writes_at)}] }}"))
+                ),
+            ),
+        ),
     )
-
-
-register_access_relation(Transpose)(
-    view_relations(
-        0,
-        _transpose_view,
-        over=lambda call, ctx: ctx.type_of(call.args[0]).shape,
-    )
-)
 
 
 @register_typeinfer(Transpose)
 def _(call: "Call", ctx: "TypeInferContext") -> TensorType:
-    """The same bytes with the axes in another order, and the strides to match.
-
-    A tensor that states no layout is the C order every layer of this IR reads
-    it as, and permuting that is not the C order of the result: a (K, M) read
-    with strides (M, 1) transposes to an (M, K) view whose strides are (1, M),
-    not (K, 1). So an unstated layout is written out as the strides it stands
-    for and those are permuted with the shape.
-    """
+    """A new compact value with its source axes in another order."""
     x_ty = ctx.type_of(call.args[0])
     perm = call.target.perm
     if len(perm) != len(x_ty.shape):
         ctx.error(call, f"perm length {len(perm)} != rank {len(x_ty.shape)}")
     new_shape = tuple(x_ty.shape[p] for p in perm)
 
-    new_layout = x_ty.layout
-    source_shard = shard_layout_of(x_ty.layout)
-    if source_shard is not None:
-        relation = relations_of(call, ctx)
-        derived = derive_output_shard_layout((x_ty,), relation, new_shape, fresh_strides=False)
-        if derived is not None:
-            new_layout = derived
-    else:
-        def transposed(layout: Layout) -> Layout:
-            return Layout(
-                shape=tuple(layout.shape[p] for p in perm),
-                strides=(
-                    None if layout.strides is None else tuple(layout.strides[p] for p in perm)
-                ),
-            )
-
-        new_layout = derive_view_layout(x_ty, new_shape, transposed)
+    new_layout = derive_output_shard_layout(
+        (x_ty,), relations_of(call, ctx), new_shape, fresh_strides=True
+    )
     if new_layout is None:
-        ctx.error(call, f"Transpose cannot preserve {type(x_ty.layout).__name__} layout")
+        new_layout = Layout(new_shape, tuple(compact_row_major(new_shape)))
     return TensorType(shape=new_shape, dtype=x_ty.dtype, layout=new_layout, storage=x_ty.storage)
 
 

@@ -10,8 +10,6 @@ import isl
 
 from tilefoundry.ir.core import Call, Expr
 from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.hir.tensor.slice import Slice
 from tilefoundry.ir.isl_interop import index_set
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.utils import local_type_of, static_dim_value
@@ -21,6 +19,7 @@ from tilefoundry.visitor_registry.access_relation import (
     relation_of,
     renaming_relation,
 )
+from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 from .errors import AnalysisError
@@ -182,10 +181,10 @@ def resolve_access(
     box = index_set(tuple(held.shape)) if isinstance(held, TensorType) else None
     if box is not None:
         relation = relation.intersect_range(box)
-    while isinstance(operand, Call) and isinstance(operand.target, (Slice, Reshape)):
+    while isinstance(operand, Call) and (position := aliased_operand(operand)) is not None:
         folded = renaming_relation(operand, ctx, stated=scope.stated_relations(operand, ctx))
         relation = relation.apply_range(relation_of(folded))
-        operand = operand.args[0]
+        operand = operand.args[position]
         relation, folded_precision = eliminate_parameters(
             relation,
             folded.parameters,

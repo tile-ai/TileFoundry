@@ -34,15 +34,15 @@ from tilefoundry.analysis import (
     analyze,
 )
 from tilefoundry.analysis.access import Access, AccessPrecision
-from tilefoundry.analysis.allocation import aligned, alignment_of
+from tilefoundry.analysis.allocation import aligned, alignment_of, storage_owners
 from tilefoundry.analysis.compute_cost import local_duration_ns
 from tilefoundry.analysis.errors import AnalysisError
 from tilefoundry.analysis.iteration_scope import IterationScope, build_scopes, walk_scopes
 from tilefoundry.analysis.liveness import analyze_liveness
-from tilefoundry.analysis.memory import view_root as resident_view_root
+from tilefoundry.analysis.memory import _allocation_intervals
 from tilefoundry.cli import main as cli_main
 from tilefoundry.cli.source import load_namespace
-from tilefoundry.ir.core import Call, Constant, describe_expr, get_metadata, value_labels
+from tilefoundry.ir.core import Call, describe_expr, get_metadata, value_labels
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.specialize import (
@@ -51,6 +51,7 @@ from tilefoundry.ir.hir.specialize import (
     variant_for,
 )
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
+from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.types import Topology
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.target import CudaTarget, PerformanceServiceFacts, ThroughputFacts
@@ -61,9 +62,9 @@ FAMILIES = ("compute-cost", "memory", "roofline", "performance")
 CASES = placed_cases()
 INVENTORY = [pytest.param(case, id=case.id) for case in CASES]
 
-_GQA_TRANSPOSE_VIEW_GMEM = 281_648
-_PREFILL_MATERIAL_RESHARD_SMEM = 148_480
-_QWEN_LOOP_INVARIANT_VALUES_GMEM = 145_409_040
+_GQA_MATERIAL_TRANSPOSE_GMEM = 284_672
+_PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_SMEM = 278_528
+_QWEN_LOOP_INVARIANT_VALUES_GMEM = 145_374_224
 _MHA_BATCH_GMEM_WITH_8_BYTES_ALIGNMENT_PADDING = 5_245_008
 _MHA_LONGER_GMEM_WITH_12_BYTES_ALIGNMENT_PADDING = 4_195_376
 _MHA_SHORTER_GMEM_WITH_28_BYTES_ALIGNMENT_PADDING = 2_098_224
@@ -90,14 +91,6 @@ KNOWN_OVER_BOUND = {
         "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=512]",
         "smem",
     ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
-    (
-        "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=1]",
-        "gmem",
-    ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
-    (
-        "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=4608,seq=1]",
-        "gmem",
-    ): "LEFTOVERS #14: M2 baseline exceeds the aligned live-byte upper bound",
 }
 
 
@@ -114,9 +107,9 @@ EXPECTED_MEMORY_PEAKS = {
         "gmem": 288,
     },
     "flash_split_k_decode.FlashSplitKDecode.flash_split_k_decode[ctx=128]": {
-        "gmem": 788_480,
+        "gmem": 526_464,
         "rmem": 8,
-        "smem": 50_848,
+        "smem": 83_616,
     },
     "fused_boundary.FusedBoundary.inner.run[static]": {"rmem": 128},
     "fused_boundary.FusedBoundary.inner.scale[static]": {"rmem": 256},
@@ -127,53 +120,53 @@ EXPECTED_MEMORY_PEAKS = {
     },
     "fused_boundary.FusedBoundary.stage[static]": {"smem": 64},
     "gemm_schedules.Gemm_MNK_NT128x128x64_w17x8.gemm[static]": {
-        "gmem": 52_445_184,
+        "gmem": 52_428_800,
         "rmem": 32_768,
         "smem": 49_152,
     },
     "gemm_schedules.Gemm_MK_NN64x128x32_w1x132.gemm[static]": {
-        "gmem": 5_414_912,
+        "gmem": 3_244_032,
         "rmem": 16_384,
         "smem": 16_384,
     },
     "gemm_schedules.Gemm_MNK_NN128x128x64_w12x11_k4096.gemm[static]": {
-        "gmem": 67_125_248,
+        "gmem": 67_108_864,
         "rmem": 32_768,
         "smem": 49_152,
     },
     "gemm_schedules.Gemm_MNK_NN128x128x64_w12x11_k16384.gemm[static]": {
-        "gmem": 268_451_840,
+        "gmem": 268_435_456,
         "rmem": 32_768,
         "smem": 49_152,
     },
     "gemm_schedules.Gemm_MNK_NN64x128x32_w11x12.gemm[static]": {
-        "gmem": 5_414_912,
+        "gmem": 3_244_032,
         "rmem": 16_384,
         "smem": 16_384,
     },
     "gemm_schedules.Gemm_MNK_NN64x128x32_w12x11.gemm[static]": {
-        "gmem": 5_414_912,
+        "gmem": 3_244_032,
         "rmem": 16_384,
         "smem": 16_384,
     },
     "gemm_schedules.Gemm_MNK_NN128.gemm[static]": {
-        "gmem": 163_840,
+        "gmem": 131_072,
         "rmem": 32_768,
         "smem": 98_304,
     },
     "gemm_schedules.Gemm_MNK_NN64.gemm[static]": {
-        "gmem": 139_264,
+        "gmem": 131_072,
         "rmem": 8_192,
         "smem": 24_576,
     },
     "gqa_decode.GqaOnline._ctx_combine[static]": {"gmem": 291_968},
-    "gqa_decode.GqaOnline._ctx_partials[ctx_len=128]": {"gmem": 5_662_720},
+    "gqa_decode.GqaOnline._ctx_partials[ctx_len=128]": {"gmem": 5_531_648},
     "gqa_decode.GqaOnline.gqa_online_attend[ctx_len=128]": {
-        "gmem": _GQA_TRANSPOSE_VIEW_GMEM,
+        "gmem": _GQA_MATERIAL_TRANSPOSE_GMEM,
         "rmem": 0,
     },
     "hand_checked.InvariantReuse.reuse[static]": {
-        "gmem": 80,
+        "gmem": 64,
         "rmem": 0,
         "smem": 16,
     },
@@ -181,14 +174,14 @@ EXPECTED_MEMORY_PEAKS = {
         "gmem": 1_572_864,
         "rmem": 1_572_864,
     },
-    "hand_checked.WaveTruncation.read[static]": {"gmem": 2_056, "rmem": 8},
+    "hand_checked.WaveTruncation.read[static]": {"gmem": 2_048, "rmem": 8},
     "hand_checked.SiblingLoopReuse.read[static]": {"gmem": 32, "rmem": 16},
     "hand_checked.TruncatedWaveReuse.read[static]": {"gmem": 96, "rmem": 32},
     "hand_checked.TruncatedWaveReuse.view[static]": {"gmem": 96, "rmem": 0},
-    "hand_checked.OverlappingReads.read[static]": {"gmem": 48, "rmem": 16},
+    "hand_checked.OverlappingReads.read[static]": {"gmem": 32, "rmem": 16},
     "hand_checked.PackedDtype.read[static]": {"gmem": 5, "rmem": 5},
     "hand_checked.SlicedView.read[static]": {
-        "gmem": 128,
+        "gmem": 64,
         "rmem": 0,
         "smem": 32,
     },
@@ -205,13 +198,13 @@ EXPECTED_MEMORY_PEAKS = {
         "smem": 96,
     },
     "mesh_slice_start.Fixed.scan[static]": {
-        "gmem": 5_120,
+        "gmem": 4_352,
         "rmem": 0,
         "smem": 1_408,
     },
-    "mesh_slice_start.OutOfWindow.oob[static]": {"gmem": 6_144, "rmem": 0},
+    "mesh_slice_start.OutOfWindow.oob[static]": {"gmem": 5_120, "rmem": 0},
     "mesh_slice_start.Strided.scan[static]": {
-        "gmem": 5_120,
+        "gmem": 4_352,
         "rmem": 8,
         "smem": 1_408,
     },
@@ -235,9 +228,9 @@ EXPECTED_MEMORY_PEAKS = {
         "rmem": 49_672,
         "smem": 16_384,
     },
-    "moe_mega_kernel.MoEMegaKernel.experts[static]": {"gmem": 61_440},
-    "moe_mega_kernel.MoEMegaKernel.routed_expert[static]": {"gmem": 61_440},
-    "moe_mega_kernel.MoEMegaKernel.shared_expert[static]": {"gmem": 61_440},
+    "moe_mega_kernel.MoEMegaKernel.experts[static]": {"gmem": 64_256},
+    "moe_mega_kernel.MoEMegaKernel.routed_expert[static]": {"gmem": 61_696},
+    "moe_mega_kernel.MoEMegaKernel.shared_expert[static]": {"gmem": 64_000},
     "nested_twin.Weighted.scaled[static]": {"gmem": 1_348, "rmem": 4},
     "performance_findings.Compare.kernel[static]": {"gmem": 136_192},
     "performance_findings.GmemSquare.kernel[static]": {"gmem": 68_096},
@@ -260,48 +253,48 @@ EXPECTED_MEMORY_PEAKS = {
         "smem": 12_288,
     },
     "persistent_gemm_tiled.PersistentGemmTiled.gemm[static]": {
-        "gmem": 130_945_024,
+        "gmem": 130_940_928,
         "rmem": 16_384,
         "smem": 12_288,
     },
     "prefill_decode_attention.PrefillDecodeAttention.attend[ctx=128,seq=128]": {
         "gmem": 1_310_720,
         "rmem": 0,
-        "smem": _PREFILL_MATERIAL_RESHARD_SMEM,
+        "smem": _PREFILL_MATERIAL_RESHARD_AND_TRANSPOSE_SMEM,
     },
     "qwen3_1_7b_pd.PrefillLayer.layer_decode[ctx_len=128,seq=128]": {
         "gmem": _QWEN_LOOP_INVARIANT_VALUES_GMEM,
         "rmem": 1_132,
-        "smem": 33_280,
+        "smem": 65_792,
     },
     "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]": {
-        "gmem": 163_226_640,
+        "gmem": 163_193_872,
         "rmem": 198_144,
         "smem": 131_072,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=0,seq=512]": {
-        "gmem": 5_438_837_264,
+        "gmem": 5_304_603_152,
         "rmem": 263_680,
         "smem": 131_072,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=4608,seq=1]": {
-        "gmem": 4_763_301_424,
+        "gmem": 4_602_883_616,
         "rmem": 1_644,
-        "smem": 33_280,
+        "smem": 65_792,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=1]": {
-        "gmem": 4_763_301_424,
+        "gmem": 4_602_883_616,
         "rmem": 1_644,
-        "smem": 33_280,
+        "smem": 65_792,
     },
     "qwen3_1_7b_pd.PrefillLayer.model[ctx_len=512,seq=512]": {
-        "gmem": 5_438_837_264,
+        "gmem": 5_304_603_152,
         "rmem": 263_680,
         "smem": 131_072,
     },
     "region_boundaries.RegionBoundaries.helper[static]": {"gmem": 64, "rmem": 32},
     "region_boundaries.RegionBoundaries.run[static]": {
-        "gmem": 64,
+        "gmem": 96,
         "rmem": 32,
         "smem": 32,
     },
@@ -560,18 +553,13 @@ def _every_number_counts_something(result: AnalysisResult) -> None:
                 assert 0 <= held.timeline.start_ns <= held.timeline.end_ns
 
 
-def _allocation_alignments(function: Function) -> dict[str, int]:
+def _allocation_alignments(result: AnalysisResult) -> dict[str, int]:
     """Rebuild the allocator's binding-to-alignment map for bound checks."""
+    function = result.function
     liveness = analyze_liveness(function)
-    resident_ids = {id(parameter) for parameter in function.params}
-    for interval in liveness.intervals:
-        value = interval.value
-        if isinstance(value, (Call, Constant, LoopRegion)) and resident_view_root(value) is value:
-            resident_ids.add(id(value))
-        if isinstance(value, LoopRegion):
-            resident_ids.update(id(phi) for phi in value.carried_args)
-    intervals = tuple(
-        interval for interval in liveness.intervals if id(interval.value) in resident_ids
+    owners = storage_owners(build_scopes(result.module, function), liveness)
+    intervals = _allocation_intervals(
+        liveness, frozenset(id(parameter) for parameter in function.params), owners
     )
     return {
         label: alignment_of(interval.value)
@@ -640,7 +628,7 @@ def test_every_concrete_program_predicts_coherently(
     assert_performance_contract(result)
     placement = get_metadata(result.function, RegionMemoryMetadata)
     assert placement is not None
-    alignments = _allocation_alignments(result.function)
+    alignments = _allocation_alignments(result)
     over_bound: set[tuple[str, str]] = set()
     for peak in reported["peaks"]:
         memory_level = peak["memory_level"]
@@ -682,6 +670,16 @@ def test_every_concrete_program_predicts_coherently(
     }
     observed = {item["memory_level"]: item["peak_bytes"] for item in reported["peaks"]}
     assert observed == EXPECTED_MEMORY_PEAKS[case.id]
+    if case.id == "rmsnorm_quant_seq2.RmsnormQuantSeq2Module.rmsnorm_quant_seq_2[static]":
+        reshaped = next(
+            expr for expr in collect_exprs(result.function.body)
+            if isinstance(expr, Call) and isinstance(expr.target, Reshape)
+        )
+        liveness = analyze_liveness(result.function)
+        assert (
+            liveness.interval_of(reshaped.args[0]).last_used_at
+            == liveness.interval_of(reshaped).last_used_at
+        )
     expected_schedule = EXPECTED_PERSISTENT_SCHEDULES.get(case.id)
     if expected_schedule is not None:
         _assert_persistent_schedule(result, expected_schedule)

@@ -1261,55 +1261,6 @@ def linearized_view(out_shape: tuple, in_shape: tuple) -> "AffineAccess":
     return AffineAccess(isl.map(f"{{ [{domain}] -> [{', '.join(reads)}] }}"))
 
 
-def view_relations(
-    source: int = 0,
-    mapping: "Callable[..., tuple[AffineAccess, AffineAccess]] | None" = None,
-    field: "Callable[..., int | None] | None" = None,
-    over: "Callable[..., Sequence] | None" = None,
-) -> Callable[..., AccessRelations]:
-    """An Op whose whole purpose is to re-address one operand's bytes.
-
-    A reshape, a slice, a reshard, an item of a tuple: the result is those same
-    elements under another name, though a name whose layout may factor its axes
-    differently, so the source states its own positions. Where those elements
-    came from is all this states; whether the two ends can be given the same
-    addresses is the allocation's answer, not this handler's.
-    """
-
-    def _handler(call, ctx) -> AccessRelations:
-        held = ctx.type_of(call.args[source])
-        taken = 0 if field is None else (field(call, ctx) or 0)
-        result = _field_of(held, taken)
-        out_rank = len(result.shape) if hasattr(result, "shape") else 0
-        walked = out_rank if over is None else len(tuple(over(call, ctx)))
-        out_rank = walked
-
-        if mapping is not None:
-            reads, written = mapping(call, ctx)
-        else:
-            reads = identity_access(walked)
-            written = identity_access(out_rank)
-        if isinstance(held, TupleType):
-            begin, count = leaf_span(held, taken)
-            coordinates = ", ".join(f"d{index}" for index in range(walked))
-            reads = AffineAccess(
-                isl.map(f"{{ [{coordinates}] -> [l] : {begin} <= l < {begin + count} }}")
-            )
-        walks = (getattr(result, "shape", ()) or ()) if over is None else over(call, ctx)
-        return iterating(
-            walks,
-            AccessRelations(
-                inputs=tuple(
-                    BoundaryRelation(reads if index == source else control_read(walked, ctx, arg))
-                    for index, arg in enumerate(call.args)
-                ),
-                outputs=(BoundaryRelation(written),),
-            ),
-        )
-
-    return _handler
-
-
 def identity_relations(n_inputs: int) -> Callable[..., AccessRelations]:
     """Identity relations.
 
@@ -1393,6 +1344,5 @@ __all__ = [
     "settled",
     "shape_from_relation",
     "static_bytes",
-    "view_relations",
     "window_source",
 ]

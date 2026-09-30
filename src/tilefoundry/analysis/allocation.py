@@ -10,24 +10,23 @@ from typing import Protocol
 import isl
 from ortools.sat.python import cp_model
 
-from tilefoundry.ir.core import Call, Constant, Expr, Tuple
+from tilefoundry.ir.core import Call, Expr
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
-from tilefoundry.ir.hir.tensor.reshape import Reshape
-from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.hir.tensor.transpose import Transpose
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.isl_interop import index_set
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.utils import local_type_of, tensor_types
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.utils.isl_utils import equates
+from tilefoundry.visitor_registry.access_relation import relation_of, renaming_relation
+from tilefoundry.visitor_registry.buffer_alias import aliased_operand
+from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 from .access import Access, AccessPrecision
 from .errors import AnalysisError
-from .iteration_scope import IterationScope
-from .liveness import Liveness
+from .iteration_scope import IterationScope, walk_scopes
+from .liveness import Liveness, storage_source
 from .metadata import ValueLifetime
 
 
@@ -80,63 +79,53 @@ class AllocationModel:
     boxes_by_expr: dict[int, int]
     model: cp_model.CpModel
     addresses: tuple[cp_model.IntVar, ...]
-    bindings: dict[int, Expr] = field(default_factory=dict)
+    owners: dict[int, Expr]
     aliased: set[tuple[int, int]] = field(default_factory=set)
 
 
-def projected_tuple_element(value: Call, bindings: dict[int, Expr]) -> Expr | None:
-    """Resolve one tuple projection after region and parameter bindings."""
-    source = value.args[0]
-    active = dict(bindings)
-    while True:
-        bound = active.get(id(source))
-        if bound is not None:
-            source = bound
-            continue
-        if isinstance(source, MeshRegion):
-            active.update(zip((id(param) for param in source.params), source.args, strict=True))
-            source = source.body
-            continue
-        break
-    index = value.args[1]
-    if (
-        isinstance(source, Tuple)
-        and isinstance(index, Constant)
-        and type(index.value) is int
-        and 0 <= index.value < len(source.elements)
-    ):
-        return view_root(source.elements[index.value], active)
-    return None
+def storage_owners(root: IterationScope, liveness: Liveness) -> dict[int, Expr]:
+    """Resolve storage once per value and prove each registered alias once."""
+    scopes = tuple(walk_scopes(root))
+    declarations = {key: scope for scope in scopes for key in scope.relations}
+    bindings = {
+        id(param): argument
+        for scope in scopes
+        if isinstance(scope.owner, MeshRegion)
+        for param, argument in zip(scope.owner.params, scope.owner.args, strict=True)
+    }
+    owners: dict[int, Expr] = {}
 
+    def resolve(value: Expr) -> Expr:
+        key = id(value)
+        if key in owners:
+            return owners[key]
+        following = storage_source(value, bindings)
+        if isinstance(value, Call) and (position := aliased_operand(value)) is not None:
+            operand = value.args[position]
+            declared = declarations[key].relations[key][1]
+            relation = relation_of(renaming_relation(value, TypeInferContext(), stated=declared))
+            box = index_set(operand.type.shape)
+            if (
+                box is None
+                or not relation.is_single_valued()
+                or not relation.is_injective()
+                or not relation.range().is_subset(box)
+            ):
+                param = tuple(
+                    param for param in type(value.target)._op_schema.signature
+                    if param.kind == "input"
+                )[position]
+                raise AnalysisError(
+                    f"{type(value.target).__name__} declares its result is {param.name}'s bytes, "
+                    f"but its access relation {relation} is not single-valued, injective, "
+                    "and within the operand"
+                )
+        owners[key] = value if following is None else resolve(following)
+        return owners[key]
 
-def view_root(value: Expr, bindings: dict[int, Expr]) -> Expr:
-    """Follow non-material views and mesh-region bindings to their allocation."""
-    active = dict(bindings)
-    while True:
-        bound = active.get(id(value))
-        if bound is not None:
-            value = bound
-            continue
-        if isinstance(value, Call) and isinstance(
-            value.target, (Slice, Reshape, Transpose)
-        ):
-            value = value.args[0]
-            continue
-        if isinstance(value, MeshRegion):
-            active.update(zip((id(param) for param in value.params), value.args, strict=True))
-            value = value.body
-            continue
-        if isinstance(value, Call) and isinstance(value.target, TupleGetItem):
-            projected = projected_tuple_element(value, active)
-            if projected is not None:
-                value = projected
-                continue
-        return value
-
-
-def is_view_of(value: Expr, source: Expr, bindings: dict[int, Expr]) -> bool:
-    """Whether two expressions name the same material allocation."""
-    return value is source or view_root(value, bindings) is source
+    for interval in liveness.intervals:
+        resolve(interval.value)
+    return owners
 
 
 def is_non_conflicting(
@@ -144,7 +133,7 @@ def is_non_conflicting(
     operand: Expr,
     scope: IterationScope,
     liveness: Liveness,
-    bindings: dict[int, Expr],
+    owners: dict[int, Expr],
 ) -> bool:
     """Prove that reusing *operand* cannot clobber a later ordinary use."""
     source_interval = liveness.interval_of(source)
@@ -154,23 +143,24 @@ def is_non_conflicting(
     if any(
         not use.synthetic
         and use.at > source_interval.defined_at
-        and view_root(use.value, bindings) is view_root(operand, bindings)
-        and not is_view_of(use.value, source, bindings)
+        and use.value is operand
         for use in liveness.uses
     ):
         return False
     if operand_interval.last_used_at <= source_interval.defined_at:
         return True
 
+    operand_owner = owners[id(operand)]
+    source_owner = owners[id(source)]
     cursor: IterationScope | None = scope
     while cursor is not None:
         loop = cursor.owner
         if isinstance(loop, LoopRegion):
             for slot, carried in enumerate(loop.carried_args):
                 if (
-                    view_root(carried, bindings) is view_root(operand, bindings)
+                    owners[id(carried)] is operand_owner
                     and slot < len(loop.yield_values)
-                    and view_root(loop.yield_values[slot], bindings) is view_root(source, bindings)
+                    and owners[id(loop.yield_values[slot])] is source_owner
                 ):
                     return True
         cursor = cursor.parent
@@ -228,7 +218,7 @@ def operand_to_result_relation(
     node: Call,
     scope: IterationScope,
     liveness: Liveness,
-    bindings: dict[int, Expr],
+    owners: dict[int, Expr],
 ) -> tuple[AliasConstraint, ...]:
     """Prove exact logical relations between one result and its operands."""
 
@@ -369,7 +359,7 @@ def operand_to_result_relation(
                 pointwise = False
             relation = complete(operand, input_relation, output_relation) if pointwise else None
             if relation is not None and is_non_conflicting(
-                node, operand, scope, liveness, bindings
+                node, operand, scope, liveness, owners
             ):
                 result.append(AliasConstraint(operand, relation))
                 seen.add(key)
@@ -377,8 +367,8 @@ def operand_to_result_relation(
     if not isinstance(node.target, InsertSlice):
         return tuple(result)
 
-    destination = view_root(node.args[0], bindings)
-    update = view_root(node.args[1], bindings)
+    destination = owners[id(node.args[0])]
+    update = owners[id(node.args[1])]
     written = output_coverage
     destination_coverage = coverage(tuple(by_buffer.get(id(destination), ())))
     update_accesses = tuple(by_buffer.get(id(update), ()))
@@ -402,7 +392,7 @@ def operand_to_result_relation(
             partitioned
             and complete_identity
             and id(destination) not in seen
-            and is_non_conflicting(node, destination, scope, liveness, bindings)
+            and is_non_conflicting(node, destination, scope, liveness, owners)
         ):
             result.append(AliasConstraint(destination, relation))
             seen.add(id(destination))
@@ -419,7 +409,7 @@ def operand_to_result_relation(
     if (
         update_relation is not None
         and id(update) not in seen
-        and is_non_conflicting(node, update, scope, liveness, bindings)
+        and is_non_conflicting(node, update, scope, liveness, owners)
     ):
         result.append(AliasConstraint(update, update_relation))
     return tuple(result)
@@ -447,9 +437,7 @@ class AllocationConstraintVisitor(ExprVisitor[None]):
         child = next(item for item in ctx.current.children if item.owner is node)
         for argument in node.args:
             self.visit(argument, ctx)
-        bindings = dict(ctx.bindings)
-        bindings.update(zip((id(param) for param in node.params), node.args, strict=True))
-        self.visit(node.body, replace(ctx, current=child, bindings=bindings))
+        self.visit(node.body, replace(ctx, current=child))
 
     def visit_LoopRegion(self, node: LoopRegion, ctx: AllocationModel) -> None:
         child = next(item for item in ctx.current.children if item.owner is node)
@@ -523,20 +511,20 @@ class AllocationConstraintVisitor(ExprVisitor[None]):
         result_index = allocation_index(node, ctx)
         if (
             not isinstance(node, Call)
+            or aliased_operand(node) is not None
             or id(node) not in ctx.current.accesses.get("narrow", {})
             or result_index is None
         ):
             return
-        for constraint in operand_to_result_relation(node, ctx.current, ctx.liveness, ctx.bindings):
+        for constraint in operand_to_result_relation(
+            node, ctx.current, ctx.liveness, ctx.owners
+        ):
             self.alias(node, constraint.operand, constraint.relation, ctx)
 
 
 def allocation_index(value: Expr, ctx: AllocationModel) -> int | None:
-    """Prefer a real box, resolving bindings and views only when none exists."""
-    direct = ctx.boxes_by_expr.get(id(value))
-    return (
-        direct if direct is not None else ctx.boxes_by_expr.get(id(view_root(value, ctx.bindings)))
-    )
+    """Find the allocation belonging to this value's proven storage owner."""
+    return ctx.boxes_by_expr.get(id(ctx.owners[id(value)]))
 
 
 def alias_components(count: int, aliased: set[tuple[int, int]]) -> tuple[int, ...]:
@@ -650,6 +638,7 @@ def find_aliases(
     values: tuple[AllocationValue, ...],
     liveness: Liveness,
     root: IterationScope,
+    owners: dict[int, Expr],
 ) -> set[tuple[int, int]]:
     """Required physical aliases, without asking the address solver to place them."""
     limit = max(1, sum(item.lifetime.bytes for item in values))
@@ -663,6 +652,7 @@ def find_aliases(
         addresses=tuple(
             model.new_int_var(0, limit, f"alias_address_{index}") for index in range(len(values))
         ),
+        owners=owners,
     )
     AllocationConstraintVisitor(root_function=root.owner).visit_function_body(root.owner, context)
     return context.aliased
@@ -674,6 +664,7 @@ def solve_allocation(
     liveness: Liveness,
     root: IterationScope,
     *,
+    owners: dict[int, Expr],
     options: SolverOptions,
 ) -> AllocationResult:
     """Return the first feasible whole-function placement for one level."""
@@ -718,6 +709,7 @@ def solve_allocation(
         boxes_by_expr={id(item.value): index for index, item in enumerate(values)},
         model=model,
         addresses=addresses,
+        owners=owners,
     )
     AllocationConstraintVisitor(root_function=root.owner).visit_function_body(root.owner, context)
     interference = build_interference_graph(values, context)

@@ -1,7 +1,7 @@
-"""Read a swizzled MN-major A through a transposed view.
+"""Read an explicitly M-contiguous A with a swizzled MN-major descriptor.
 
-The caller supplies ``at`` with M contiguous; ``tf.transpose`` exposes the
-same bytes as an (M, K) view without moving them. TMA then lands A's 64-element
+The caller supplies ``a`` as an (M, K) tensor with M contiguous.
+TMA lands A's 64-element
 M run as one SW128 row, while B uses a 64-byte N-contiguous row. This isolates
 the atom's major-mode choice from the rest of the 64x32 schedule.
 """
@@ -40,10 +40,9 @@ ACC = ShardLayout(
 class WGMMA_A_MN_MAJOR:
     @func
     def gemm(
-        at: Tensor[(K, M), "bf16"],
+        a: Tensor[(M, K), "bf16", Layout((M, K), (1, M)), "gmem"],
         b: Tensor[(K, N), "bf16"],
     ) -> Tensor[(M, N), "bf16", "umat"]:
-        a = tf.transpose(at, (1, 0))
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
             with Mesh(
                 ("thread",), layout=(2, 128),

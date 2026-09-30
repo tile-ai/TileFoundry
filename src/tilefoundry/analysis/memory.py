@@ -8,7 +8,6 @@ from tilefoundry.ir.core import (
     Call,
     Constant,
     Expr,
-    Tuple,
     VerifyError,
     describe_expr,
     get_metadata,
@@ -19,8 +18,6 @@ from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
-from tilefoundry.ir.hir.tensor.transpose import Transpose
-from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.mesh import Mesh, separate, within_scope
 from tilefoundry.ir.types.shard_layout import shard_layout_of
@@ -42,7 +39,13 @@ from tilefoundry.visitor_registry.access_relation import (
 from tilefoundry.visitor_registry.contexts import Cost, CostContext, FunctionScope
 from tilefoundry.visitor_registry.visitors import CostEvaluator
 
-from .allocation import AllocationValue, alias_components, find_aliases, solve_allocation
+from .allocation import (
+    AllocationValue,
+    alias_components,
+    find_aliases,
+    solve_allocation,
+    storage_owners,
+)
 from .errors import AnalysisError
 from .facts import TARGET_MEMORY_OWNER, MemoryHierarchyFacts
 from .footprint import (
@@ -54,8 +57,8 @@ from .footprint import (
     reuse_windows,
     wave_of,
 )
-from .iteration_scope import IterationScope, walk_scopes
-from .liveness import Liveness, analyze_liveness, result_copies
+from .iteration_scope import IterationScope, build_scopes, walk_scopes
+from .liveness import LiveInterval, Liveness, analyze_liveness, result_copies
 from .metadata import (
     Breakdown,
     MemoryLevelPeak,
@@ -380,52 +383,30 @@ def add_traffic(
                 _accumulate(into.per_unit.setdefault(name, {}), unit, moved, total_trips)
 
 
-def view_root(value: Expr) -> Expr:
-    """Follow region results and tuple projections to their material value."""
-    while True:
-        if isinstance(value, Call) and isinstance(value.target, Transpose):
-            value = value.args[0]
-            continue
-        if isinstance(value, MeshRegion):
-            value = value.body
-            continue
-        if isinstance(value, Call) and isinstance(value.target, TupleGetItem):
-            source = view_root(value.args[0])
-            index = value.args[1]
-            if (
-                isinstance(source, Tuple)
-                and isinstance(index, Constant)
-                and type(index.value) is int
-                and 0 <= index.value < len(source.elements)
-            ):
-                value = source.elements[index.value]
-                continue
-        return value
-
-
-def _resident_value_ids(function: Function, liveness: Liveness) -> frozenset[int]:
-    """Values whose SSA interval represents independently resident bytes."""
-    result = {id(parameter) for parameter in function.params}
+def _allocation_intervals(
+    liveness: Liveness, parameter_ids: frozenset[int], owners: dict[int, Expr]
+) -> tuple[LiveInterval, ...]:
+    """Select independently resident intervals from storage-aware liveness."""
+    resident = set(parameter_ids)
     for interval in liveness.intervals:
         value = interval.value
-        if isinstance(value, (Call, Constant, LoopRegion)) and view_root(value) is value:
-            result.add(id(value))
+        owner = owners[id(value)]
+        if isinstance(value, (Call, Constant, LoopRegion)) and owner is value:
+            resident.add(id(value))
         if isinstance(value, LoopRegion):
-            result.update(id(phi) for phi in value.carried_args)
-    return frozenset(result)
+            resident.update(id(phi) for phi in value.carried_args)
+    return tuple(interval for interval in liveness.intervals if id(interval.value) in resident)
 
 
 def _project_allocation_values(
     liveness: Liveness,
-    resident_ids: frozenset[int],
     parameter_ids: frozenset[int],
     facts: MemoryHierarchyFacts,
     local: CostContext,
+    owners: dict[int, Expr],
 ) -> tuple[AllocationValue, ...]:
     """Project structural intervals into the analysed topology window."""
-    intervals = tuple(
-        interval for interval in liveness.intervals if id(interval.value) in resident_ids
-    )
+    intervals = _allocation_intervals(liveness, parameter_ids, owners)
     result: list[AllocationValue] = []
     labels = value_labels(interval.value for interval in intervals)
     for label, interval in zip(labels, intervals, strict=True):
@@ -451,27 +432,6 @@ def _project_allocation_values(
                 )
             )
     return tuple(result)
-
-
-def _inherit_view_placements(liveness: Liveness) -> None:
-    """Report each non-resident Transpose at its material root's placement."""
-    for interval in liveness.intervals:
-        value = interval.value
-        if not isinstance(value, Call) or not isinstance(value.target, Transpose):
-            continue
-        root = view_root(value)
-        root_record = get_metadata(root, MemoryMetadata)
-        view_record = get_metadata(value, MemoryMetadata)
-        if root_record is None or view_record is None:
-            continue
-        attach(
-            value,
-            replace(
-                view_record,
-                buffer_bytes=root_record.buffer_bytes,
-                offsets=root_record.offsets,
-            ),
-        )
 
 
 def peak_in_window(rows: list[ValueLifetime], entered_at: int, exited_at: int) -> int:
@@ -580,10 +540,10 @@ def analyze_value_lifetimes(
     )
     projected = _project_allocation_values(
         liveness,
-        _resident_value_ids(function, liveness),
         frozenset(id(parameter) for parameter in function.params),
         facts,
         local,
+        storage_owners(build_scopes(module, function), liveness),
     )
     return tuple(item.lifetime for item in projected)
 
@@ -810,12 +770,13 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         topology_level=topology_level,
         topologies=topologies,
     )
+    owners = storage_owners(context.root, liveness)
     allocation_values = _project_allocation_values(
         liveness,
-        _resident_value_ids(function, liveness),
         frozenset(id(parameter) for parameter in function.params),
         facts,
         placement,
+        owners,
     )
     lifetimes = tuple(item.lifetime for item in allocation_values)
     rmem_values = tuple(
@@ -823,7 +784,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
     )
     rmem_groups = alias_components(
         len(rmem_values),
-        find_aliases(rmem_values, liveness, context.root),
+        find_aliases(rmem_values, liveness, context.root, owners),
     )
     rmem_components = {
         id(item.value): group for item, group in zip(rmem_values, rmem_groups, strict=True)
@@ -893,6 +854,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 values,
                 liveness,
                 context.root,
+                owners=owners,
                 options=solver_options,
             )
             peak = solved.peak_bytes
@@ -932,7 +894,6 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                 capacity_bytes=capacity,
             )
         )
-    _inherit_view_placements(liveness)
     levels = tuple(levels_list)
     placement_errors = tuple(
         f"{item.memory_level} placement peak {format_bytes(item.peak_bytes)} exceeds "

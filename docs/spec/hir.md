@@ -664,18 +664,19 @@ Tensor structural operations; consensus ops (`Transpose` / `Slice` / `Concat`
 
 `Transpose`, statically positioned `Slice`, and `Reshape` derive their result
 layout during type inference. Their result `TensorType.layout` MUST NOT be
-`None`; a `Layout` whose `strides` are `None` states that the view arrangement
+`None`; a `Layout` whose `strides` are `None` states that the arrangement
 is known while its steps are not. A missing input layout is the compact
 arrangement that HIR readers assign to that value. This requirement applies to
-these view ops, not to every tensor-producing HIR op.
+these structural ops, not to every tensor-producing HIR op.
 
 Pattern matching and lowering MUST read this result type rather than derive a
-second presentation of the view.
+second presentation of the result.
 
-- `Transpose` MUST permute the layout shape and strides by the same permutation
-  as the tensor shape. A `ShardLayout` MUST remap its split positions through
-  the registered relation. An input with `layout=None` MUST permute the C order
-  it stands for and state the result as a `Layout`.
+- `Transpose` produces a new value, not a storage alias. It MUST permute the
+  tensor shape and use a fresh compact C-order result layout. A `ShardLayout`
+  MUST remap its split positions through the registered relation with fresh
+  strides. Lowering MUST copy the source's permuted-stride view into the new
+  result storage.
 - `Slice` is normalized as `Slice(x, starts, sizes=..., strides=...)`.
   `starts` is a tuple of rank-0 integer operands; `sizes` and `strides` are
   `ShapeDim` attributes stored in the same IR normal form as every other dim.

@@ -78,6 +78,7 @@ from tilefoundry.visitor_registry.access_relation import (
     identity_relations,
     relations_of,
 )
+from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 from tilefoundry.visitor_registry.typeinfer import inference_type
 from tilefoundry.visitor_registry.verify import verify_prim_function
@@ -167,7 +168,9 @@ RMEM_EXPECTED = {
             1_280,
             "512-byte accumulator plus 512-byte lhs and 256-byte rhs fragments",
         ),
-        "thread@32:32#2": _RmemExpectation(512, "f32 loop result/bf16 cast alias"),
+        "thread@32:32#2": _RmemExpectation(
+            768, "512-byte f32 loop result plus 256-byte bf16 cast result"
+        ),
         "thread@0:64#0": _RmemExpectation(1_280, "parent envelope of accumulator/fragments"),
     },
     "wgmma_a_k_major": {
@@ -246,7 +249,9 @@ RMEM_EXPECTED = {
             10_240,
             "2048-byte narrowed p alias plus independent 8192-byte acc initializer",
         ),
-        "thread@128:128#3": _RmemExpectation(8_192, "acc phi/second mma alias chain"),
+        "thread@128:128#3": _RmemExpectation(
+            10_240, "8192-byte acc phi/mma chain plus the live 2048-byte RS lhs"
+        ),
         "thread@128:128#4": _RmemExpectation(8_192, "acc loop result/bf16 cast alias"),
         "thread@0:256#0": _RmemExpectation(10_240, "parent envelope of p/acc transition"),
     },
@@ -366,20 +371,22 @@ def test_scheduled_hir_program_is_well_typed(path: Path) -> None:
     check_program(program, entry)
 
 
-def test_scheduled_hir_view_calls_declare_layouts() -> None:
-    views = []
+def test_scheduled_hir_structural_calls_declare_layouts() -> None:
+    structural_calls = []
     for path in HIR:
         program = _module_in(path)
         entry = next(function for function in program.functions if function.name == "gemm")
         check_program(program, entry)
-        views.extend(
+        structural_calls.extend(
             (path.stem, type(expr.target).__name__, expr)
             for expr in collect_exprs(entry.body)
             if isinstance(expr, Call)
             and isinstance(expr.target, (Reshape, Slice, Transpose))
         )
-    missing = [(path, op) for path, op, expr in views if expr.type.layout is None]
-    assert not missing, f"{len(missing)} of {len(views)} view calls omit layout: {missing}"
+    missing = [(path, op) for path, op, expr in structural_calls if expr.type.layout is None]
+    assert not missing, (
+        f"{len(missing)} of {len(structural_calls)} structural calls omit layout: {missing}"
+    )
 
 
 @pytest.mark.parametrize(("analysis", "metadata_type"), ANALYSES)
@@ -405,6 +412,18 @@ def test_scheduled_hir_program_has_analysis_metadata(
         read_write[0].target.buffers = 3
     result = analyze(program, entry, analysis=analysis)
     assert metadata_type in result.metadata_types
+
+    if analysis == "memory":
+        for expr in collect_exprs(result.function.body):
+            if not isinstance(expr, Call):
+                continue
+            record = get_metadata(expr, MemoryMetadata)
+            if aliased_operand(expr) is not None:
+                assert record.buffer_bytes is None
+                assert not record.offsets
+            elif isinstance(expr.target, Transpose):
+                assert record.buffer_bytes == prod(expr.type.shape) * expr.type.dtype.bit_width // 8
+                assert record.offsets
 
     if analysis == "compute-cost":
         schedules = (

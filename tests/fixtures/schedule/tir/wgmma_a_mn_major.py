@@ -9,12 +9,9 @@ from tilefoundry.target import CudaTarget
 
 @prim_func(target=CudaTarget("nvidia.h200_sxm"))
 def gemm(
-    at: Tensor[(32, 64), "bf16"], b: Tensor[(32, 32), "bf16"], out: Tensor[(64, 32), "bf16"]
+    a: Tensor[(64, 32), "bf16", Layout((64, 32), (1, 64))], b: Tensor[(32, 32), "bf16"], out: Tensor[(64, 32), "bf16"]
 ):
     with Mesh((Topology("cta", 1),), Layout((1,), (1,)), names=("d0",)) as cta:
-        tile = T.tensor_view(
-            T.ptr_of(at[0:0 + 32, 0:0 + 64]), layout=Layout((64, 32), (1, 64)), shape=(64, 32)
-        )
         acc = T.alloc_tensor(
             tensor_type=Tensor[
                 (64, 32), "f32", Layout((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), "rmem"
@@ -56,8 +53,8 @@ def gemm(
                 ), shape=(16, 32)))
             for k in range(0, 32, 16):
                 with scope_3[:1, :32] as scope:
-                    tile_1 = T.tensor_view(
-                        T.ptr_of(tile[0:0 + 64, k:k + 16]),
+                    tile = T.tensor_view(
+                        T.ptr_of(a[0:0 + 64, k:k + 16]),
                         layout=Layout((64, 16), (1, 64)),
                         shape=(64, 16),
                     )
@@ -68,8 +65,8 @@ def gemm(
     outer=Layout((32,), (1,)),
 ), names=("d0",)
                     ) as threads_1:
-                        T.copy_async_tensor(tile_1, lhs_stages[(k // 16) % 2])
-                    tile_2 = T.tensor_view(
+                        T.copy_async_tensor(tile, lhs_stages[(k // 16) % 2])
+                    tile_1 = T.tensor_view(
                         T.ptr_of(b[k:k + 16, 0:0 + 32]),
                         layout=Layout((16, 32), (32, 1)),
                         shape=(16, 32),
@@ -81,7 +78,7 @@ def gemm(
     outer=Layout((32,), (1,)),
 ), names=("d0",)
                     ) as threads_2:
-                        T.copy_async_tensor(tile_2, rhs_stages[(k // 16) % 2])
+                        T.copy_async_tensor(tile_1, rhs_stages[(k // 16) % 2])
                 with scope_3[1:] as scope_1:
                     with Mesh(
                         (Topology("thread", 256),), ComposedLayout(

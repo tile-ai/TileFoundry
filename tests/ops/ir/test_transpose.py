@@ -39,17 +39,17 @@ _B4 = (Broadcast(), Broadcast(), Broadcast(), Broadcast())
 _T10 = Transpose(perm=(1, 0))
 
 
-def test_plain_input_permutes_its_layout():
-    """An unstated layout is the C order it stands for, and is permuted as one."""
+def test_plain_input_produces_a_compact_new_value():
+    """Transpose writes a new C-order result rather than preserving source strides."""
     source = make_tensor_type((16, 8), DType.bf16, layout=Layout(shape=(16, 8), strides=(8, 1)))
     ty = infer_call(_T10, source)
 
-    assert ty.layout == Layout(shape=(8, 16), strides=(1, 8))
+    assert ty.layout == Layout(shape=(8, 16), strides=(16, 1))
     assert infer_call(_T10, make_tensor_type((16, 8), DType.bf16)).layout == ty.layout
 
 
 def test_factorized_split_reorders_subaxes():
-    """Tensor (4096, 2048), axis 0 split on cta -> layout (128, 32, 2048).
+    """Reorder split subaxes into a compact new value.
 
     Tensor (4096, 2048), axis 0 split on cta -> layout (128, 32, 2048). The
     transpose moves tensor axis 1 (layout pos 2) first; axis 0's
@@ -67,14 +67,11 @@ def test_factorized_split_reorders_subaxes():
     assert isinstance(ty.layout, ShardLayout)
     assert ty.layout.attrs == (Broadcast(), Split(axis=1), Broadcast(), Broadcast())
     assert shard_layout_local_shape(ty.layout)[1] == 1
+    assert ty.layout.layout.strides == (4096, 32, 1)
 
 
-def test_implicit_strides_no_crash():
-    """Implicit strides: shape + attrs permute, output keeps implicit strides.
-
-    Implicit (None) strides: shape + attrs permute, output keeps implicit
-    strides (regression: no None-stride indexing crash).
-    """
+def test_implicit_source_strides_produce_fresh_result_strides():
+    """Implicit source strides do not leave a new value's strides unspecified."""
     x_ty = raw_shard_tensor_type(
         (16, 8),
         (16, 8),
@@ -87,3 +84,4 @@ def test_implicit_strides_no_crash():
     assert tuple(ty.shape) == (8, 16)
     assert isinstance(ty.layout, ShardLayout)
     assert ty.layout.attrs == (Split(1), *_B4[1:])
+    assert ty.layout.layout.strides == (16, 1)

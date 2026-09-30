@@ -19,11 +19,14 @@ from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.stride import try_compact_major
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
+    AccessRelations,
+    BoundaryRelation,
     identity_access,
+    iterating,
     linearized_view,
     register_access_relation,
-    view_relations,
 )
+from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
 
 from ._view_layout import derive_view_layout
 
@@ -33,22 +36,20 @@ class Reshape(Op):
     x = ParamDef(kind="input", pattern=Tensor)
     new_shape = ParamDef(kind="attribute", annotation=tuple)
 
-def _reshape_view(call: "Call", ctx) -> tuple:
+@register_access_relation(Reshape)
+def _reshape_relations(call: "Call", ctx) -> AccessRelations:
     """Where a result coordinate sits in the source it was renamed from."""
     out_shape = tuple(call.target.new_shape)
-    return (
-        linearized_view(out_shape, tuple(ctx.type_of(call.args[0]).shape)),
-        identity_access(len(out_shape)),
+    return iterating(
+        out_shape,
+        AccessRelations(
+            (BoundaryRelation(linearized_view(out_shape, tuple(ctx.type_of(call.args[0]).shape))),),
+            (BoundaryRelation(identity_access(len(out_shape))),),
+        ),
     )
 
 
-register_access_relation(Reshape)(
-    view_relations(
-        0,
-        _reshape_view,
-        over=lambda call, ctx: call.target.new_shape,
-    )
-)
+register_buffer_alias(Reshape, Reshape.x)
 
 
 def is_induction_var_singleton_reshape(expr) -> bool:

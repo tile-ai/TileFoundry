@@ -34,9 +34,8 @@ from tilefoundry.ir.hir.math.binary import Binary as HirBinary
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.schedule import ScheduleOp
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
-from tilefoundry.ir.hir.tensor.reshape import Reshape
+from tilefoundry.ir.hir.tensor._view_layout import derive_view_layout
 from tilefoundry.ir.hir.tensor.slice import Slice
-from tilefoundry.ir.hir.tensor.transpose import Transpose
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.hir.tensor.zeros import Zeros
 from tilefoundry.ir.tir.cuda.nn.mma import operand_relations
@@ -74,13 +73,14 @@ from tilefoundry.visitor_registry.access_relation import (
     iteration_universe,
     projected_axes,
 )
+from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.candidates import candidate_ops, sole_candidate
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.registries import typeinfer_registry
+from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 _INDEX = TensorType.umat_scalar()
 _BINDING = TensorType.scalar(DType.i64, storage=StorageKind.RMEM)
-_VIEW_OPS = (Slice, Reshape, Transpose)
 _DIM_BINARY = {
     BinaryKind.ADD: DimAdd,
     BinaryKind.SUB: DimSub,
@@ -323,8 +323,8 @@ class Lowering(ExprVisitor[Expr]):
             if bound is not None:
                 value = bound
                 continue
-            if isinstance(value, Call) and isinstance(value.target, _VIEW_OPS):
-                value = value.args[0]
+            if isinstance(value, Call) and (position := aliased_operand(value)) is not None:
+                value = value.args[position]
                 continue
             if isinstance(value, MeshRegion):
                 value = value.body
@@ -637,18 +637,45 @@ class Lowering(ExprVisitor[Expr]):
         )
 
     def visit_Reshape(self, call: Call, cursor: _Cursor) -> Expr:
-        return self._visit_view(call, cursor)
+        source = self.visit(call.args[0], cursor)
+        desired = replace(call.type, layout=_plain_layout(call.type))
+        return self._window(
+            source,
+            tuple(i64_const(0) for _ in source.type.shape),
+            tuple(source.type.shape),
+            desired,
+            cursor,
+            "tile",
+        )
 
     def visit_Transpose(self, call: Call, cursor: _Cursor) -> Expr:
-        return self._visit_view(call, cursor)
-
-    def _visit_view(self, call: Call, cursor: _Cursor) -> Expr:
         source = self.visit(call.args[0], cursor)
-        desired = call.type
-        layout = _plain_layout(desired)
-        desired = replace(desired, layout=layout)
+        result = self._declare(call, call.type, 1, cursor)
+        source_type = self.logical.get(id(source), source.type)
+        perm = call.target.perm
+
+        def transposed(layout: Layout) -> Layout:
+            return Layout(
+                tuple(layout.shape[p] for p in perm),
+                None if layout.strides is None else tuple(layout.strides[p] for p in perm),
+            )
+
+        scope = self.scope_for_call[id(call)]
+        layout = derive_output_shard_layout(
+            (source_type,), scope.relations[id(call)][1], tuple(call.type.shape),
+            fresh_strides=False,
+        )
+        if layout is None:
+            layout = derive_view_layout(
+                replace(source_type, layout=_plain_layout(source_type)),
+                tuple(call.type.shape),
+                transposed,
+            )
+        if layout is None:
+            raise LoweringError(f"{_label(call)} cannot transpose its source layout")
+        desired = replace(call.type, layout=layout)
         starts = tuple(i64_const(0) for _ in source.type.shape)
-        return self._window(
+        view = self._window(
             source,
             starts,
             tuple(source.type.shape),
@@ -656,6 +683,12 @@ class Lowering(ExprVisitor[Expr]):
             cursor,
             "tile",
         )
+        self.logical[id(view)] = desired
+        self._emit_instruction(
+            call, Copy(), (("src", view), ("dst", result)), scope.enclosing_mesh(),
+            None, result, cursor,
+        )
+        return result
 
     def visit_Zeros(self, call: Call, cursor: _Cursor) -> Expr:
         if call.type.storage is StorageKind.GMEM:

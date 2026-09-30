@@ -23,11 +23,15 @@ from tilefoundry.ir.types.utils import i64_const
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry import register_typeinfer
 from tilefoundry.visitor_registry.access_relation import (
+    AccessRelations,
     AffineAccess,
+    BoundaryRelation,
+    control_read,
     identity_access,
+    iterating,
     register_access_relation,
-    view_relations,
 )
+from tilefoundry.visitor_registry.buffer_alias import register_buffer_alias
 
 from ._view_layout import derive_view_layout
 
@@ -193,13 +197,22 @@ def _slice_view(call: "Call", ctx) -> tuple:
     )
 
 
-register_access_relation(Slice)(
-    view_relations(
-        0,
-        _slice_view,
-        over=lambda call, ctx: call.target.sizes,
+@register_access_relation(Slice)
+def _slice_relations(call: "Call", ctx) -> AccessRelations:
+    reads, writes = _slice_view(call, ctx)
+    return iterating(
+        call.target.sizes,
+        AccessRelations(
+            (
+                BoundaryRelation(reads),
+                BoundaryRelation(control_read(len(call.target.sizes), ctx, call.args[1])),
+            ),
+            (BoundaryRelation(writes),),
+        ),
     )
-)
+
+
+register_buffer_alias(Slice, Slice.x)
 
 
 def _i64(value: int) -> Constant:

@@ -1,7 +1,9 @@
 """Run a two-stage 64x32 WGMMA with a K-major A descriptor.
 
 Binding ``a_major`` selects a descriptor whose core matrix runs along K, so
-the staged A tile and its source both have K at stride one. The 64x16 fragment
+the staged A tile and its source both have K at stride one. In each k iteration,
+the loader copies only that iteration's (BK, M) input window into a compact
+(M, BK) gmem tile before TMA. The 64x16 fragment
 uses two core-matrix offsets while B remains MN-major and the accumulator keeps
 the standard 64x32 register arrangement.
 """
@@ -38,7 +40,7 @@ ACC = ShardLayout(
 class WGMMA_A_K_MAJOR:
     @func
     def gemm(
-        a: Tensor[(M, K), "bf16"],
+        at: Tensor[(K, M), "bf16"],
         b: Tensor[(K, N), "bf16"],
     ) -> Tensor[(M, N), "bf16", "umat"]:
         with Mesh(("cta",), layout=(1,), names=("block",)) as _cta:
@@ -54,8 +56,9 @@ class WGMMA_A_K_MAJOR:
 
                 for k in tile(K, BK):
                     with threads[0, :32] as _loader:
+                        a = tf.transpose(at[k, :], (1, 0))
                         lhs = tf.schedule(
-                            (a[:, k],),
+                            (a,),
                             op=T.copy_async_tensor(smem_layout=A_SMEM),
                             buffers=STAGES,
                         )
