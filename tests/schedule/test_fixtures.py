@@ -1233,9 +1233,11 @@ def test_lowering_rejects_invalid_atom_geometry(
     source = Path(__file__).parents[1] / "fixtures" / "schedule" / "hir" / "wgmma_repeat_along_k.py"
     module = _module_in(source)
     result = analyze(module, module.entry_function(), analysis=("memory",))
-    emit = lowering_module.Lowering._emit_atom
+    emit = lowering_module.Lowering._emit_instruction
 
-    def malformed(self, call, atom, operands, mesh, cursor):
+    def malformed(self, call, op, operands, mesh, output_window, written, cursor):
+        if getattr(op, "atom", None) is None:
+            return emit(self, call, op, operands, mesh, output_window, written, cursor)
         acc, lhs, rhs = (value for _role, value in operands)
         acc_type = self.logical.get(id(acc), acc.type)
         assert isinstance(acc_type.layout, ShardLayout)
@@ -1268,7 +1270,7 @@ def test_lowering_rejects_invalid_atom_geometry(
                 layout=rhs_layout,
             )
         self.logical[id(acc)] = acc_type
-        return emit(self, call, atom, operands, mesh, cursor)
+        return emit(self, call, op, operands, mesh, output_window, written, cursor)
 
     monkeypatch.setattr(lowering_module, "analyze", lambda *_args, **_kwargs: result)
     if case == "group":
@@ -1278,6 +1280,6 @@ def test_lowering_rejects_invalid_atom_geometry(
             return frames(source, required, (3, *repeat[1:]), tile)
 
         monkeypatch.setattr(lowering_module, "issue_frames", misplaced)
-    monkeypatch.setattr(lowering_module.Lowering, "_emit_atom", malformed)
+    monkeypatch.setattr(lowering_module.Lowering, "_emit_instruction", malformed)
 
     _assert_cli_lowering_error(source, message, tmp_path, capsys)

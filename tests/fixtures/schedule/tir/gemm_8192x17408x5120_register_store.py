@@ -21,7 +21,7 @@ def gemm(
             ]
         )
         T.fill(out, 0.0)
-        value = T.alloc_tensor(
+        tile_out = T.alloc_tensor(
             tensor_type=Tensor[
                 (128, 256),
                 "bf16",
@@ -429,14 +429,19 @@ def gemm(
     outer=Layout((2, 4, 8, 4), (128, 32, 4, 1)),
 ), names=("d0", "d1", "d2", "d3")
                         ) as threads_5:
-                            value_view = T.tensor_view(
-                                T.ptr_of(value[0:0 + 128, 0:0 + 256]),
+                            src_frame = T.tensor_view(
+                                T.ptr_of(acc[0:0 + 128, 0:0 + 256]),
                                 layout=((2 @ threads_5.d0, 8 @ threads_5.d2, 2, 4 @ threads_5.d1, 2, 4 @ threads_5.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
                                 shape=(128, 256),
                             )
-                            T.cast(acc, value_view, dtype='bf16')
-                            value_view_1 = T.tensor_view(
-                                T.ptr_of(value[0:0 + 128, 0:0 + 256]),
+                            dst_frame = T.tensor_view(
+                                T.ptr_of(tile_out[0:0 + 128, 0:0 + 256]),
+                                layout=((2 @ threads_5.d0, 8 @ threads_5.d2, 2, 4 @ threads_5.d1, 2, 4 @ threads_5.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
+                                shape=(128, 256),
+                            )
+                            T.cast(src_frame, dst_frame, dtype='bf16')
+                            tile_out_view = T.tensor_view(
+                                T.ptr_of(tile_out[0:0 + 128, 0:0 + 256]),
                                 layout=((2 @ threads_5.d0, 8 @ threads_5.d2, 2, 4 @ threads_5.d1, 2, 4 @ threads_5.d3, 32), (16384, 1, 8, 16, 64, 128, 512)),
                                 shape=(128, 256),
                             )
@@ -445,4 +450,4 @@ def gemm(
                                 layout=Layout((128, 256), (17408, 1)),
                                 shape=(128, 256),
                             )
-                            T.copy(value_view_1, window)
+                            T.copy(tile_out_view, window)

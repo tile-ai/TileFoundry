@@ -240,12 +240,10 @@ def declared_layout(pattern, bindings: dict, mesh: Mesh | None):
     return None if inner is None or frame is None else ShardLayout(inner, pattern.attrs, frame)
 
 
-def declared_write_type(op, param, pattern: TensorPattern | None, inputs: dict, mesh) -> TensorType:
+def declared_write_type(
+    op, param, pattern: TensorPattern, inputs: dict, mesh, relations, collapsed
+) -> TensorType:
     """Resolve one write-only operand from its declaration and read operands."""
-    if pattern is None:
-        raise ValueError(
-            f"{type(op).__name__} {param.name} is write-only and declares no result shape"
-        )
     layout_storages = {
         "gmem_layout": StorageKind.GMEM,
         "smem_layout": StorageKind.SMEM,
@@ -258,12 +256,12 @@ def declared_write_type(op, param, pattern: TensorPattern | None, inputs: dict, 
     )
     source = next(iter(inputs.values()))
     bindings = dict(getattr(getattr(op, "atom", None), "bindings", {}))
-    shape = declared_shape(pattern, bindings)
-    shape_rule = getattr(op, "declared_write_shape", None)
-    if shape is None and shape_rule is not None:
-        shape = shape_rule(source)
-    if shape is None:
-        shape = tuple(source.shape)
+    from tilefoundry.visitor_registry.access_relation import shape_from_relation  # noqa: PLC0415
+    from tilefoundry.visitor_registry.shard_propagate import (  # noqa: PLC0415
+        derive_output_shard_layout,
+    )
+
+    shape = shape_from_relation(relations, source.shape)
     stated_dtype = getattr(op, "dtype", None)
     dtype = (
         stated_dtype
@@ -296,17 +294,19 @@ def declared_write_type(op, param, pattern: TensorPattern | None, inputs: dict, 
                 )
                 storage = choices[0] if len(choices) == 1 else None
                 break
-        if not constrained and getattr(type(op), "write_storage_from_source", False):
+        if not constrained and pattern.storage is None:
             storage = source.storage
         if storage is None:
             raise ValueError(f"{type(op).__name__} does not determine {param.name} storage")
     layout = layout or declared_layout(pattern.layout, bindings, mesh)
-    layout_rule = getattr(op, "declared_write_layout", None)
-    if layout is None and layout_rule is not None:
-        destination = TensorType(shape, dtype, None, storage)
-        layout = layout_rule(source, destination)
-    if layout is None and storage is source.storage and tuple(shape) == tuple(source.shape):
-        layout = source.layout
+    if layout is None:
+        layout = derive_output_shard_layout(
+            tuple(inputs.values()),
+            relations,
+            shape,
+            complete_reduction_dims=collapsed,
+            fresh_strides=bool(collapsed),
+        )
     layout = layout or Layout(shape, tuple(compact_row_major(shape)))
     return TensorType(shape, dtype, layout, storage)
 

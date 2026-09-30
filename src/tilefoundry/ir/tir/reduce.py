@@ -20,7 +20,6 @@ from tilefoundry.ir.pattern import (
 )
 from tilefoundry.ir.pattern import predicates as P
 from tilefoundry.ir.types import DType, StorageKind, UnitType
-from tilefoundry.ir.types.shard_layout import canonical_shard_layout, shard_layout_of
 from tilefoundry.visitor_registry import register_typeinfer, register_verify_stmt
 from tilefoundry.visitor_registry.access_relation import (
     AccessRelations,
@@ -30,7 +29,6 @@ from tilefoundry.visitor_registry.access_relation import (
     iterating,
     register_access_relation,
 )
-from tilefoundry.visitor_registry.shard_propagate import derive_output_shard_layout
 
 __all__ = ["ReduceKind", "Reduce"]
 
@@ -83,8 +81,6 @@ class Reduce(Op):
 
     capability = OpCapability(None)
     execution_mesh = utils.thread_execution_mesh()
-    schedule_whole_issue = True
-    write_storage_from_source = True
 
     src = ParamDef(kind="input", effect=MemoryEffect.READ, pattern=_folding("src_dtype", _PLAIN))
     dst = ParamDef(kind="input", effect=MemoryEffect.WRITE, pattern=_folding("dst_dtype", None))
@@ -98,31 +94,6 @@ class Reduce(Op):
     axes = ParamDef(kind="attribute", annotation=tuple)
     keepdim = ParamDef(kind="attribute", annotation=bool)
     kind = ParamDef(kind="attribute", annotation=ReduceKind)
-
-    def declared_write_shape(self, source) -> tuple:
-        """Derive a scheduled destination shape from axes and keepdim."""
-        return _result_shape(self, source)
-
-    def declared_write_layout(self, source, destination):
-        """Use the same shard propagation rule as value-form HIR Reduce."""
-        source_shard = shard_layout_of(source.layout)
-        if source_shard is None:
-            return None
-        axes = frozenset(_reduced_axes(self, len(source.shape)))
-        derived = derive_output_shard_layout(
-            (source,),
-            _reduce_relations(self, source),
-            destination.shape,
-            complete_reduction_dims=axes,
-            fresh_strides=True,
-        )
-        return (
-            derived
-            if derived is not None
-            else canonical_shard_layout(
-                destination.shape, source_shard.mesh, source_shard.attrs
-            )
-        )
 
 
 @register_typeinfer(Reduce)

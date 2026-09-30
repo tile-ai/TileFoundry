@@ -15,6 +15,7 @@ from typing import Callable
 import isl
 
 from tilefoundry.ir.core.expr import Constant
+from tilefoundry.ir.core.param_def import MemoryEffect
 from tilefoundry.ir.isl_interop import index_set, isl_to_dim, shape_to_isl_domain
 from tilefoundry.ir.types import TensorType, TupleType, Type
 from tilefoundry.ir.types.shard_layout import layout_axis_to_tensor_axis
@@ -1315,16 +1316,23 @@ def identity_relations(n_inputs: int) -> Callable[..., AccessRelations]:
     Factory for a GLOBAL-level access-relation handler whose ``n_inputs``
     inputs and single output are all elementwise identity.
 
-    Each input contributes its own-rank identity; the output uses its own
-    rank. A structural (non-tensor) input arg — e.g. ``TupleGetItem``'s tuple
-    operand — has no shape of its own, so it borrows the output's rank.
+    Read operands contribute their own-rank identities. A write-only operand
+    uses the read iteration rank, so its type need not be known yet. A
+    structural (non-tensor) operand borrows that rank as well.
     """
 
     def _handler(call, ctx) -> AccessRelations:
         walked = ctx.type_of(call.args[0])
         out_rank = len(walked.shape)
 
-        def _rank_of(arg) -> int:
+        params = tuple(
+            param for param in type(call.target)._op_schema.signature if param.kind == "input"
+        )
+
+        def _rank_of(index) -> int:
+            if params[index].effect == MemoryEffect.WRITE:
+                return out_rank
+            arg = call.args[index]
             ty = ctx.type_of(arg)
             return len(ty.shape) if hasattr(ty, "shape") else out_rank
 
@@ -1332,7 +1340,7 @@ def identity_relations(n_inputs: int) -> Callable[..., AccessRelations]:
             walked.shape,
             AccessRelations(
                 inputs=tuple(
-                    BoundaryRelation(identity_access(_rank_of(call.args[index])))
+                    BoundaryRelation(identity_access(_rank_of(index)))
                     for index in range(n_inputs)
                 ),
                 outputs=(BoundaryRelation(identity_access(out_rank)),),

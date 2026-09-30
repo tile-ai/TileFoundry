@@ -20,7 +20,7 @@ def gemm(
                 "rmem",
             ]
         )
-        value = T.alloc_tensor(
+        result = T.alloc_tensor(
             tensor_type=Tensor[
                 (128, 16),
                 "bf16",
@@ -156,12 +156,17 @@ def gemm(
     outer=Layout((2, 4, 8, 4), (128, 32, 4, 1)),
 ), names=("d0", "d1", "d2", "d3")
                 ) as threads_5:
-                    value_view = T.tensor_view(
-                        T.ptr_of(value[0:0 + 128, 0:0 + 16]),
+                    src_frame = T.tensor_view(
+                        T.ptr_of(acc[0:0 + 128, 0:0 + 16]),
                         layout=((2 @ threads_5.d0, 8 @ threads_5.d2, 2, 4 @ threads_5.d1, 2, 4 @ threads_5.d3, 2), (1024, 1, 8, 16, 64, 128, 512)),
                         shape=(128, 16),
                     )
-                    T.cast(acc, value_view, dtype='bf16')
+                    dst_frame = T.tensor_view(
+                        T.ptr_of(result[0:0 + 128, 0:0 + 16]),
+                        layout=((2 @ threads_5.d0, 8 @ threads_5.d2, 2, 4 @ threads_5.d1, 2, 4 @ threads_5.d3, 2), (1024, 1, 8, 16, 64, 128, 512)),
+                        shape=(128, 16),
+                    )
+                    T.cast(src_frame, dst_frame, dtype='bf16')
         with Mesh(
             (Topology("thread", 384),), ComposedLayout(
     inner=None,
@@ -169,9 +174,9 @@ def gemm(
     outer=Layout((2, 4, 8, 4), (128, 32, 4, 1)),
 ), names=("d0", "d1", "d2", "d3")
         ) as threads_6:
-            value_view_1 = T.tensor_view(
-                T.ptr_of(value[0:0 + 128, 0:0 + 16]),
+            result_view = T.tensor_view(
+                T.ptr_of(result[0:0 + 128, 0:0 + 16]),
                 layout=((2 @ threads_6.d0, 8 @ threads_6.d2, 2, 4 @ threads_6.d1, 2, 4 @ threads_6.d3, 2), (1024, 1, 8, 16, 64, 128, 512)),
                 shape=(128, 16),
             )
-            T.copy(value_view_1, out)
+            T.copy(result_view, out)

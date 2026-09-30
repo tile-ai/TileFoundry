@@ -18,7 +18,7 @@ def gemm(
             ]
         )
         T.fill(out, 0.0)
-        value = T.alloc_tensor(
+        tile_out = T.alloc_tensor(
             tensor_type=Tensor[
                 (64, 32), "bf16", Layout((8, 2, 4, 2, 4, 4), (1, 8, 16, 64, 128, 512)), "rmem"
             ]
@@ -112,14 +112,19 @@ def gemm(
     outer=Layout((4, 8, 4), (32, 4, 1)),
 ), names=("d0", "d1", "d2")
                 ) as threads_4:
-                    value_view = T.tensor_view(
-                        T.ptr_of(value[0:0 + 64, 0:0 + 32]),
+                    src_frame = T.tensor_view(
+                        T.ptr_of(acc[0:0 + 64, 0:0 + 32]),
                         layout=((8 @ threads_4.d1, 2, 4 @ threads_4.d0, 2, 4 @ threads_4.d2, 4), (1, 8, 16, 64, 128, 512)),
                         shape=(64, 32),
                     )
-                    T.cast(acc, value_view, dtype='bf16')
-                    value_view_1 = T.tensor_view(
-                        T.ptr_of(value[0:0 + 64, 0:0 + 32]),
+                    dst_frame = T.tensor_view(
+                        T.ptr_of(tile_out[0:0 + 64, 0:0 + 32]),
+                        layout=((8 @ threads_4.d1, 2, 4 @ threads_4.d0, 2, 4 @ threads_4.d2, 4), (1, 8, 16, 64, 128, 512)),
+                        shape=(64, 32),
+                    )
+                    T.cast(src_frame, dst_frame, dtype='bf16')
+                    tile_out_view = T.tensor_view(
+                        T.ptr_of(tile_out[0:0 + 64, 0:0 + 32]),
                         layout=((8 @ threads_4.d1, 2, 4 @ threads_4.d0, 2, 4 @ threads_4.d2, 4), (1, 8, 16, 64, 128, 512)),
                         shape=(64, 32),
                     )
@@ -128,4 +133,4 @@ def gemm(
                         layout=Layout((64, 32), (64, 1)),
                         shape=(64, 32),
                     )
-                    T.copy(value_view_1, window)
+                    T.copy(tile_out_view, window)

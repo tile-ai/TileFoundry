@@ -43,11 +43,7 @@ from tilefoundry.visitor_registry.access_relation import (
     relation_of,
     relations_of,
 )
-from tilefoundry.visitor_registry.candidates import (
-    automatic_candidate,
-    candidate_attributes,
-    candidate_ops,
-)
+from tilefoundry.visitor_registry.candidates import candidate_ops, sole_candidate
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
 
@@ -228,8 +224,15 @@ def _variant_instances(
     site: _Site,
 ) -> tuple[tuple[object | None, dict], ...]:
     if capability.attribute is None:
-        attributes = candidate_attributes(site.call.target, op_type)
-        return () if attributes is None else ((op_type(**attributes), {}),)
+        attributes = {}
+        for param in op_type._op_schema.signature:
+            if param.kind != "attribute":
+                continue
+            if hasattr(site.call.target, param.name):
+                attributes[param.name] = getattr(site.call.target, param.name)
+            elif not param.has_default:
+                return ()
+        return ((op_type(**attributes), {}),)
     declaration = capability.declaration
     states: tuple[dict, ...] = ({},)
     for param in declaration.parameters:
@@ -253,7 +256,7 @@ def _variant_instances(
 
 def _instantiate(op_type: type, capability: OpCapability, variant):
     if capability.attribute is None:
-        return variant if isinstance(variant, op_type) else op_type()
+        return variant
     return op_type(**{capability.attribute: variant})
 
 
@@ -478,7 +481,7 @@ def candidates(module, entry, *, source: str | None = None) -> dict[str, Any]:
     rows = []
     for site in sites:
         site_shape = _site_relation_shape(site, ctx)
-        automatic = automatic_candidate(site.call.target)
+        automatic = sole_candidate(site.call.target)
         automatic_id = None if automatic is None else op_identifier(type(automatic))
         usable, refused = [], []
         handed_result = False

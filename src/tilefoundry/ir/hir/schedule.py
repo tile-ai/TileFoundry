@@ -12,10 +12,15 @@ from tilefoundry.ir.core import Call, Op, Var
 from tilefoundry.ir.core.param_def import MemoryEffect, ParamDef
 from tilefoundry.ir.core.register import register_op
 from tilefoundry.ir.pattern import PatternMatcher, ShardLayoutPattern, Tensor, TensorPattern
-from tilefoundry.ir.pattern.utils import declared_shape, declared_write_type, selected_pattern
+from tilefoundry.ir.pattern.utils import (
+    declared_shape,
+    declared_write_type,
+    selected_pattern,
+)
 from tilefoundry.ir.types import TensorType, UnitType
+from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
 from tilefoundry.ir.types.utils import tile_inner_type
-from tilefoundry.utils.isl_utils import cardinality
+from tilefoundry.utils.isl_utils import cardinality, involved_dims
 from tilefoundry.visitor_registry import (
     register_cost_evaluator,
     register_typeinfer,
@@ -27,6 +32,7 @@ from tilefoundry.visitor_registry.access_relation import (
     BoundaryRelation,
     iteration_universe,
     projected,
+    projected_axes,
     reached_elements,
     register_access_relation,
     relation_of,
@@ -148,10 +154,53 @@ def _instruction_view(call: Call, ctx, *, fragments: bool = True):
     if not all(isinstance(type_, TensorType) for type_ in whole.values()):
         raise ValueError(f"{type(op).__name__} schedule operands must be tensors")
     for param, pattern in zip(params, patterns, strict=True):
+        if param.effect == MemoryEffect.WRITE and pattern is None:
+            raise ValueError(
+                f"{type(op).__name__} {param.name} is write-only and declares no result shape"
+            )
+    whole_relations = _single_issue_relations(
+        op, tuple(whole.get(param.name, UnitType()) for param in params)
+    )
+    whole_shape = _iteration_shape(whole_relations)
+    read_boundaries = tuple(
+        boundary
+        for param, boundary in zip(params, whole_relations.inputs, strict=True)
+        if param.effect & MemoryEffect.READ
+    )
+    write_boundaries = tuple(
+        boundary
+        for param, boundary in zip(params, whole_relations.inputs, strict=True)
+        if param.effect & MemoryEffect.WRITE
+    )
+    collapsed = frozenset(range(len(whole_shape))) - set().union(
+        *(involved_dims(boundary.pattern.relation) for boundary in write_boundaries)
+    )
+    if fragments and getattr(op, "atom", None) is None:
+        for type_, boundary in zip(whole.values(), read_boundaries, strict=True):
+            layout = shard_layout_of(type_.layout)
+            if layout is None:
+                continue
+            axes = projected_axes(boundary.pattern)
+            if any(
+                axis is not None and axes[axis] in collapsed
+                for axis in split_target_axes(layout, type_.shape)
+            ):
+                fragments = False
+                break
+    outputs = {}
+    for param, pattern in zip(params, patterns, strict=True):
         if param.effect & MemoryEffect.WRITE and not param.effect & MemoryEffect.READ:
-            whole[param.name] = declared_write_type(op, param, pattern, whole, ctx.current_mesh)
+            outputs[param.name] = declared_write_type(
+                op,
+                param,
+                pattern,
+                whole,
+                ctx.current_mesh,
+                AccessRelations(read_boundaries, (write_boundaries[writes.index(param)],)),
+                collapsed,
+            )
+    whole.update(outputs)
     whole_types = tuple(whole[param.name] for param in params)
-    whole_shape = _iteration_shape(_single_issue_relations(op, whole_types))
     shapes = tuple(
         _declared_shape(pattern, bindings) or tuple(type_.shape)
         for pattern, type_ in zip(patterns, whole_types, strict=True)
@@ -317,9 +366,8 @@ def _schedule_cost(call: Call, ctx) -> Cost:
 @register_typeinfer(ScheduleOp)
 def _infer_schedule(call: Call, ctx) -> TensorType:
     try:
-        whole_issue = getattr(type(call.target.op), "schedule_whole_issue", False)
         op, params, reads, writes, patterns, inner, _repeat, _order, _shape = _instruction_view(
-            call, ctx, fragments=not whole_issue
+            call, ctx
         )
     except (TypeError, ValueError) as error:
         ctx.error(call, str(error))

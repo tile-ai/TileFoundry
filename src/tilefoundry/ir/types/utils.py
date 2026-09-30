@@ -479,7 +479,13 @@ def _all_split_local_type(type: Type, *, refuse_indivisible: bool) -> Type | Non
 
 
 def try_local_type_of(type: Type) -> Type | None:
-    """Project all splits, returning None when a static split is indivisible."""
+    """Project logical splits, returning None when a factored split has no local box.
+
+    Sequential division along logical axes can fail for factored or reordered
+    shard layouts (for example, 16 / 4 followed by 4 % 8, or 16 % 32).
+    Candidates compare the whole type when that logical projection has no
+    solution; this does not decide whether an instruction issues whole.
+    """
     return _all_split_local_type(type, refuse_indivisible=False)
 
 

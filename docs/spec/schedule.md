@@ -52,9 +52,22 @@ The selected instruction's input `ParamDef`s determine the schedule boundary:
   effects. This applies equally to the optional workspace operands of `Reduce`
   and `Dot`; it does not allocate a workspace on the author's behalf.
 - A write-only result takes fixed shape, dtype, layout, and storage facts from
-  its parameter pattern and instruction attributes. Fields left open by the
-  destination pattern come from the read tile. A layout not otherwise stated
-  is compact.
+  the instruction's own declarations. Its shape is the image of the write
+  access map over the instruction's iteration domain. Its dtype comes from
+  the instruction's `dtype` attribute, then the parameter pattern, then the
+  read tile. Its storage follows the destination pattern and layout attributes;
+  an unstated storage inherits the read tile's storage. Unless a layout is
+  explicitly declared, shard propagation uses the read types and the same
+  access relations, with completely collapsed axes becoming `Broadcast` and
+  receiving fresh strides. A result without a derived shard layout is compact.
+
+Automatic selection and explicit `tf.schedule` use the same instruction
+lowering and emission path. An instruction declaring an `atom` uses that atom's
+participant and fragment geometry. Other instructions issue whole when their
+write access maps collapse an axis Split across participants. Otherwise,
+single-issue verification uses local fragments. Candidate matching projects
+logical Split axes when that projection is possible; if factored splits have
+no local logical box, it compares whole types instead.
 
 Each single-issue operand MUST match the corresponding instruction parameter
 pattern. A source window is matched in the arrangement in which it lies: its
