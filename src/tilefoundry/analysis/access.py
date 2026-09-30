@@ -8,11 +8,13 @@ from enum import Enum, auto
 
 import isl
 
-from tilefoundry.ir.core import Call, Expr
-from tilefoundry.ir.hir.loop_region import LoopRegion
-from tilefoundry.ir.isl_interop import index_set
+from tilefoundry.ir.core import Call, Constant, Expr, Var
+from tilefoundry.ir.hir.mesh_region import MeshRegion
+from tilefoundry.ir.hir.sharding.local import Local
+from tilefoundry.ir.isl_interop import dim_range, dim_to_isl_expr, index_set
 from tilefoundry.ir.types import TensorType
 from tilefoundry.ir.types.utils import local_type_of, static_dim_value
+from tilefoundry.ir.visitor import ExprCloner
 from tilefoundry.utils.isl_utils import cardinality, has_unbounded_param
 from tilefoundry.visitor_registry.access_relation import (
     BoundaryRelation,
@@ -23,7 +25,6 @@ from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.contexts import TypeInferContext
 
 from .errors import AnalysisError
-from .loop_terms import LoopTerm, loop_affine_term
 
 
 class AccessPrecision(Enum):
@@ -45,7 +46,7 @@ class Access:
     output_index: int | None = None
 
 
-def widest_allowed(access: isl.map, name: str, held: object) -> LoopTerm | None:
+def widest_allowed(access: isl.map, name: str, held: object) -> int | None:
     """The value a parameter may take that reaches the most of its operand.
 
     A footprint is an upper bound, so a parameter nobody here can place takes
@@ -64,8 +65,7 @@ def widest_allowed(access: isl.map, name: str, held: object) -> LoopTerm | None:
         return None
     box = index_set(tuple(held.shape)) if isinstance(held, TensorType) else None
     if box is None or box.dim(isl.dim_type.SET) != access.dim(isl.dim_type.OUT):
-        least = ends[0].get_num_si()
-        return LoopTerm(None, 0, least, least)
+        return ends[0].get_num_si()
     best: tuple[int, int] | None = None
     for value in sorted({end.get_num_si() for end in ends}):
         reach = (
@@ -78,74 +78,106 @@ def widest_allowed(access: isl.map, name: str, held: object) -> LoopTerm | None:
             return None
         if best is None or amount > best[0]:
             best = (amount, value)
-    return None if best is None else LoopTerm(None, 0, best[1], best[1])
+    return None if best is None else best[1]
+
+
+class _MeshBindingResolver(ExprCloner):
+    """Resolve mesh bindings and local coordinates before affine rendering."""
+
+    def __init__(self, *, narrow: bool) -> None:
+        super().__init__()
+        self.narrow = narrow
+
+    def visit_Call(self, value: Call, scope: "IterationScope") -> Expr:
+        if isinstance(value.target, Local):
+            return (
+                Constant(type=value.type, value=0)
+                if self.narrow
+                else self.visit(value.args[0], scope)
+            )
+        return self.default_visit(value, scope)
+
+    def visit_Var(self, value: Var, scope: "IterationScope") -> Expr:
+        cursor = scope
+        while cursor is not None:
+            owner = cursor.owner
+            if isinstance(owner, MeshRegion):
+                for param, argument in zip(owner.params, owner.args, strict=True):
+                    if value is param:
+                        return self.visit(argument, cursor.parent)
+            cursor = cursor.parent
+        return value
 
 
 def _parameter_term(
     value: object,
     relation: isl.map,
     name: str,
-    loops: tuple[LoopRegion, ...],
+    scope: "IterationScope",
     held: object,
     *,
     narrow: bool,
-) -> tuple[LoopTerm | None, AccessPrecision]:
+) -> tuple[str | None, dict[str, tuple[int, int] | None], AccessPrecision]:
     number = static_dim_value(value)
     if number is not None:
-        return LoopTerm(None, 0, number, number), AccessPrecision.EXACT
+        return str(number), {}, AccessPrecision.EXACT
     try:
-        term = loop_affine_term(value, loops, narrow=narrow)
-    except (TypeError, ValueError, NotImplementedError):
-        term = None
-    if term is not None:
-        return term, AccessPrecision.EXACT
-    return widest_allowed(relation, name, held), AccessPrecision.WIDENED
-
-
-def _constrain_parameter(
-    relation: isl.map,
-    param_index: int,
-    term: LoopTerm,
-) -> isl.map:
-    local = isl.local_space.from_space(relation.get_space())
-
-    def placed(kind: str, sign: int, constant: int) -> isl.constraint:
-        constraint = getattr(isl.constraint, f"alloc_{kind}")(local)
-        constraint = constraint.set_coefficient_si(isl.dim_type.PARAM, param_index, sign)
-        if term.loop_axis is not None:
-            constraint = constraint.set_coefficient_si(
-                isl.dim_type.IN, term.loop_axis, -sign * term.stride
-            )
-        return constraint.set_constant_si(constant)
-
-    if term.low == term.high:
-        return relation.add_constraint(placed("equality", 1, -term.low))
-    relation = relation.add_constraint(placed("inequality", 1, -term.low))
-    return relation.add_constraint(placed("inequality", -1, term.high))
+        resolved = _MeshBindingResolver(narrow=narrow).visit(value, scope)
+        identities = {
+            id(loop.induction_var): f"__tf_in_{i}"
+            for i, loop in enumerate(scope.enclosing_loops())
+        }
+        param_map = dict(scope.domain_params)
+        identities.update((id(parameter), param) for param, parameter in param_map.items())
+        params = {param: dim_range(parameter) for param, parameter in param_map.items()}
+        expression = dim_to_isl_expr(resolved, params, param_map=param_map, identities=identities)
+    except (TypeError, ValueError, NotImplementedError, isl.Error):
+        pass
+    else:
+        if all(bound is not None for bound in params.values()):
+            return expression, params, AccessPrecision.EXACT
+    number = widest_allowed(relation, name, held)
+    return None if number is None else str(number), {}, AccessPrecision.WIDENED
 
 
 def eliminate_parameters(
     relation: isl.map,
     parameters: Mapping[str, object] | Sequence[tuple[str, object]],
-    loops: tuple[LoopRegion, ...],
+    scope: "IterationScope",
     held: object,
     *,
     narrow: bool,
 ) -> tuple[isl.map, AccessPrecision]:
-    """Eliminate declared parameters using literals, loop terms, or widening."""
+    """Eliminate parameters using scoped affine expressions or widening."""
     precision = AccessPrecision.EXACT
+    inputs = ", ".join(f"__tf_in_{i}" for i in range(relation.dim(isl.dim_type.IN)))
+    outputs = ", ".join(f"__tf_out_{i}" for i in range(relation.dim(isl.dim_type.OUT)))
+    names = dict.fromkeys(
+        relation.get_dim_name(isl.dim_type.PARAM, i)
+        for i in range(relation.dim(isl.dim_type.PARAM))
+    )
     for name, value in dict(parameters).items():
-        param_index = relation.find_dim_by_name(isl.dim_type.PARAM, name)
-        if param_index < 0:
+        if name not in names:
             raise AnalysisError(f"access pattern parameter {name!r} is missing from its relation")
-        term, resolved_precision = _parameter_term(
-            value, relation, name, loops, held, narrow=narrow
+        expression, params, resolved_precision = _parameter_term(
+            value, relation, name, scope, held, narrow=narrow
         )
+        if expression is not None:
+            names.update(dict.fromkeys(params))
+            conditions = " and ".join(
+                (
+                    f"{name} = {expression}",
+                    *(f"{lo} <= {param} < {hi}" for param, (lo, hi) in params.items()),
+                )
+            )
+            relation = relation.intersect(
+                isl.map(f"[{', '.join(names)}] -> {{ [{inputs}] -> [{outputs}] : {conditions} }}")
+            )
         if resolved_precision is AccessPrecision.WIDENED:
             precision = AccessPrecision.WIDENED
-        if term is not None:
-            relation = _constrain_parameter(relation, param_index, term)
+        param_index = relation.find_dim_by_name(isl.dim_type.PARAM, name)
         relation = relation.project_out(isl.dim_type.PARAM, param_index, 1)
+        del names[name]
     return relation, precision
 
 
@@ -170,7 +202,7 @@ def resolve_access(
     relation, precision = eliminate_parameters(
         relation,
         getattr(boundary.pattern, "parameters", ()) or (),
-        loops,
+        scope,
         operand.type,
         narrow=narrow,
     )
@@ -188,7 +220,7 @@ def resolve_access(
         relation, folded_precision = eliminate_parameters(
             relation,
             folded.parameters,
-            loops,
+            scope,
             operand.type,
             narrow=narrow,
         )

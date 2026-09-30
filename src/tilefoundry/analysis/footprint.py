@@ -288,11 +288,15 @@ class MovingBoundary:
 
 
 def time_axis(boundary: MovingBoundary) -> int | None:
-    """Return the outermost loop whose iterations reach the same addresses."""
+    """Return the outermost loop whose iterations reach the same addresses.
+
+    First-iteration restrictions give held(axis) <= held(axis - 1), so only
+    the reverse inclusion remains to prove equality.
+    """
     for axis, loop_scope in enumerate(_loop_scopes(boundary.scope)):
         if loop_scope.trips() <= 1:
             continue
-        if boundary.held(axis).is_equal(boundary.held(axis - 1)):
+        if boundary.held(axis - 1).is_subset(boundary.held(axis)):
             return axis
     return None
 

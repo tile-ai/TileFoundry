@@ -50,6 +50,7 @@ from tilefoundry.ir.hir.specialize import (
     residual_dims,
     variant_for,
 )
+from tilefoundry.ir.hir.tensor.cache_update import CacheUpdate
 from tilefoundry.ir.hir.tensor.insert_slice import InsertSlice
 from tilefoundry.ir.hir.tensor.reshape import Reshape
 from tilefoundry.ir.types import Topology
@@ -248,7 +249,7 @@ EXPECTED_MEMORY_PEAKS = {
     },
     "performance_findings.LocalTier.kernel[static]": {"gmem": 68_096, "rmem": 512},
     "persistent_gemm_flat.PersistentGemmFlat.gemm[static]": {
-        "gmem": 130_957_312,
+        "gmem": 130_940_928,
         "rmem": 16_384,
         "smem": 12_288,
     },
@@ -323,7 +324,7 @@ EXPECTED_PERSISTENT_SCHEDULES = {
     "persistent_gemm_flat.PersistentGemmFlat.gemm[static]": _PersistentScheduleExpectation(
         loop_trips=(("t", 30), ("ki", 128)),
         store_loop="t",
-        store_precision=AccessPrecision.WIDENED,
+        store_precision=AccessPrecision.EXACT,
         compared_units=((0,), (1,)),
     ),
     "persistent_gemm_tiled.PersistentGemmTiled.gemm[static]": _PersistentScheduleExpectation(
@@ -600,11 +601,10 @@ def test_every_concrete_program_predicts_coherently(
 ) -> None:
     """Every placed program, at every size and selector it exposes.
 
-    This inventory is the whole of what these four analyses are held to: it is
-    read off the directory rather than from a list beside it, so a program added
-    there is asked the same questions without anyone choosing to ask. Each of
-    them is asked for all four families and has to answer with a coherent
-    prediction.
+    The directory-derived inventory asks every program for all four families
+    and holds their predictions to the same coherence checks. Qwen CacheUpdate
+    cur/width are runtime values without RangeMetadata; rendering must fall
+    back to widest_allowed and keep their write accesses WIDENED.
     """
     report_path = tmp_path / "memory.json"
     command = [
@@ -670,6 +670,17 @@ def test_every_concrete_program_predicts_coherently(
     }
     observed = {item["memory_level"]: item["peak_bytes"] for item in reported["peaks"]}
     assert observed == EXPECTED_MEMORY_PEAKS[case.id]
+    if case.id == "qwen3_1_7b_pd.PrefillLayer.layer_prefill[ctx_len=128,seq=128]":
+        cache_writes = [
+            access
+            for scope in walk_scopes(build_scopes(result.module, result.function))
+            for call, accesses in scope.outputs.get("narrow", {}).values()
+            if isinstance(call.target, CacheUpdate)
+            for access in accesses
+        ]
+        assert cache_writes and all(
+            access.precision is AccessPrecision.WIDENED for access in cache_writes
+        )
     if case.id == "rmsnorm_quant_seq2.RmsnormQuantSeq2Module.rmsnorm_quant_seq_2[static]":
         reshaped = next(
             expr for expr in collect_exprs(result.function.body)

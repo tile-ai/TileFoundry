@@ -316,36 +316,29 @@ def test_persistent_tiled_holds_the_loop_at_its_start_expression() -> None:
 
 
 def test_persistent_flat_states_its_precision() -> None:
-    """Derived a/b loads and the result store are the unbound operands.
+    """Floor/mod offsets retain the exact first wave's loads and written tiles.
 
-    Their offsets depend on DimFloorDiv/DimMod of ``t``. Those widened
-    boundaries make the Function footprint a lower bound.
+    Affine rendering handles ``t // 66`` and ``t % 66`` without widening.
+    The first wave's ``t = 0..131`` reaches two A row blocks, all 66 B
+    column blocks, and 132 distinct output tiles.
     """
     data = _report(PersistentGemmFlat)
     memory = data["function_records"]["memory"]
-    incomplete_calls = [
-        call
-        for call in data["calls"]
-        if call["memory"]["footprint"]["complete"] is False
-    ]
-    incomplete_buffers = {
-        name
-        for call in incomplete_calls
-        for name in call["memory"]["footprint"]["buffers"]
-    }
     store = next(
         call
-        for call in incomplete_calls
+        for call in data["calls"]
         if any(operand["arg"] == "result" for operand in call["memory"]["operands"])
         and any(operand["name"] == "out" for operand in call["memory"]["operands"])
     )
 
-    assert memory["footprint"]["complete"] is False
-    assert {"a", "b"} <= incomplete_buffers
-    assert store["memory"]["footprint"]["complete"] is False
-    assert _footprint_bytes(memory, "a") == 60 * 64 * 32 * 2
-    assert _footprint_bytes(memory, "b") == 32 * 64 * 2
-    assert _working_set_bytes(memory) > 64 * 64 * 4
+    assert memory["footprint"]["complete"] is True
+    assert store["memory"]["footprint"]["complete"] is True
+    assert _footprint_bytes(memory, "a") == 2 * 64 * 32 * 2
+    assert _footprint_bytes(memory, "b") == 66 * 32 * 64 * 2
+    assert sorted(
+        levels["gmem"]["total"]
+        for levels in store["memory"]["footprint"]["buffers"].values()
+    ) == [64 * 64 * 4, 132 * 64 * 64 * 4]
 
 
 def test_tile_area_scales_traffic_and_working_set() -> None:
