@@ -1118,6 +1118,27 @@ def _assert_cli_lowering_error(
     assert not out.exists()
 
 
+def test_lowering_rejects_smem_placement_above_capacity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = (
+        Path(__file__).parents[1]
+        / "fixtures"
+        / "schedule"
+        / "hir"
+        / "gemm_8192x17408x5120_tma_store.py"
+    )
+    four_stage = tmp_path / source.name
+    four_stage.write_text(source.read_text().replace("STAGES = 3", "STAGES = 4", 1))
+
+    _assert_cli_lowering_error(
+        four_stage,
+        "smem placement peak 256.00KB exceeds capacity 227.00KB",
+        tmp_path,
+        capsys,
+    )
+
+
 def test_lowering_rejects_instruction_without_access_relation(
     monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
