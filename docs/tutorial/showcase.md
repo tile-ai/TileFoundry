@@ -424,7 +424,7 @@ print(report.partition("\n\n")[0].rstrip())
 # analysis target=nvidia.h200_sxm module=Stage2_Sharded function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,2629376@total,328672@cta;f32:2833728@logical,2833728@total,354216@cta other-ops=special:14528@logical,14528@total,1816@cta
-# memory traffic=gmem:r5.31MB/w3.55MB@logical,r5.31MB/w3.55MB@total,r3.75MB/w3.55MB@cta;smem:r9.15MB/w9.04MB@logical,r9.15MB/w9.04MB@total,r1.14MB/w1.13MB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v11:221:128B;v12:222:227.12KB;v13:228:1.77MB;v14:227:1.77MB;v22:220:256B;v24:223:227.12KB;v25:231:1.77MB;v26:230:1.77MB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B peak=gmem:3.75MB;smem:567.69KB persistent=gmem:1.76MB
+# memory traffic=gmem:r5.31MB/w3.55MB@logical,r30.03MB/w28.39MB@total,r3.75MB/w3.55MB@cta;smem:r9.15MB/w9.04MB@logical,r9.15MB/w9.04MB@total,r1.14MB/w1.13MB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v11:221:128B;v12:222:227.12KB;v13:228:1.77MB;v14:227:1.77MB;v22:220:256B;v24:223:227.12KB;v25:231:1.77MB;v26:230:1.77MB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B peak=gmem:3.75MB;smem:567.69KB persistent=gmem:1.76MB
 #   buffer=v13:228 holds=8.85MB time=none space=cta.head reuse=12.41MB fits=yes
 #   buffer=v25:231 holds=8.85MB time=none space=cta.head reuse=12.41MB fits=yes
 #   buffer=cos_cache holds=8.85MB time=none space=cta.head reuse=3.50MB fits=yes
@@ -445,7 +445,7 @@ print(report.partition("\n\n")[0].rstrip())
 #   buffer=cur_pos holds=8.85MB time=none space=cta.head reuse=28B fits=yes
 #   buffer=write_len holds=8.85MB time=none space=cta.head reuse=28B fits=yes
 #   error="smem placement peak 567.69KB exceeds capacity 227.00KB"
-# roofline ideal-ns=1935 bound-by=memory
+# roofline ideal-ns=12763 bound-by=memory
 ```
 
 A larger context increases the solved peak. The CLI still succeeds and writes the complete report, including its capacity error:
@@ -469,7 +469,7 @@ print(report.partition("\n\n")[0].rstrip())
 # analysis target=nvidia.h200_sxm module=Stage2_Sharded function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,2629376@total,328672@cta;f32:2839968@logical,2839968@total,354996@cta other-ops=special:14560@logical,14560@total,1820@cta
-# memory traffic=gmem:r5.31MB/w3.56MB@logical,r5.31MB/w3.56MB@total,r3.76MB/w3.56MB@cta;smem:r9.17MB/w9.06MB@logical,r9.17MB/w9.06MB@total,r1.15MB/w1.13MB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v11:221:128B;v12:222:227.62KB;v13:228:1.78MB;v14:227:1.78MB;v22:220:256B;v24:223:227.62KB;v25:231:1.78MB;v26:230:1.78MB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B peak=gmem:3.76MB;smem:568.94KB persistent=gmem:1.76MB
+# memory traffic=gmem:r5.31MB/w3.56MB@logical,r30.07MB/w28.45MB@total,r3.76MB/w3.56MB@cta;smem:r9.17MB/w9.06MB@logical,r9.17MB/w9.06MB@total,r1.15MB/w1.13MB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v11:221:128B;v12:222:227.62KB;v13:228:1.78MB;v14:227:1.78MB;v22:220:256B;v24:223:227.62KB;v25:231:1.78MB;v26:230:1.78MB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B peak=gmem:3.76MB;smem:568.94KB persistent=gmem:1.76MB
 #   buffer=v13:228 holds=8.87MB time=none space=cta.head reuse=12.44MB fits=yes
 #   buffer=v25:231 holds=8.87MB time=none space=cta.head reuse=12.44MB fits=yes
 #   buffer=cos_cache holds=8.87MB time=none space=cta.head reuse=3.50MB fits=yes
@@ -490,7 +490,7 @@ print(report.partition("\n\n")[0].rstrip())
 #   buffer=cur_pos holds=8.87MB time=none space=cta.head reuse=28B fits=yes
 #   buffer=write_len holds=8.87MB time=none space=cta.head reuse=28B fits=yes
 #   error="smem placement peak 568.94KB exceeds capacity 227.00KB"
-# roofline ideal-ns=1939 bound-by=memory
+# roofline ideal-ns=12786 bound-by=memory
 ```
 
 The formula supplies a cache-only dispatch estimate, while the solved placement and its report error expose the complete capacity requirement.
@@ -612,13 +612,14 @@ for line in report.splitlines():
 
 ```text
 # compute-cost flops=bf16:328896@logical,2629376@total,328672@cta;f32:200448@logical,200448@total,25056@cta other-ops=special:1024@logical,1024@total,128@cta
-# memory traffic=gmem:r1.60MB/w258.62KB@logical,r1.60MB/w258.62KB@total,r1.49MB/w258.19KB@cta;smem:r668.56KB/w659.56KB@logical,r668.56KB/w659.56KB@total,r83.57KB/w82.45KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v11:221:128B;v12:222:16.12KB;v13:228:128.00KB;v14:227:128.00KB;v22:220:256B;v24:223:16.12KB;v25:231:128.00KB;v26:230:128.00KB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B peak=gmem:1.49MB;smem:40.19KB persistent=gmem:1.34MB
-# roofline ideal-ns=405 bound-by=memory
+# memory traffic=gmem:r1.60MB/w258.62KB@logical,r11.90MB/w2.02MB@total,r1.49MB/w258.19KB@cta;smem:r668.56KB/w659.56KB@logical,r668.56KB/w659.56KB@total,r83.57KB/w82.45KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v0:217:1.00KB;v11:221:128B;v12:222:16.12KB;v13:228:128.00KB;v14:227:128.00KB;v22:220:256B;v24:223:16.12KB;v25:231:128.00KB;v26:230:128.00KB;v2:219:256B;v35:251:1.00KB;v37:252:512B;v4:221:640B;v5:221:512B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B peak=gmem:1.49MB;smem:40.19KB persistent=gmem:1.34MB
+# roofline ideal-ns=3040 bound-by=memory
 ```
 
 The f32 work and special work divide by the eight head CTAs. The small bf16 difference is
-placement and gather overhead that is not head-shardable. `ideal-ns` also changes because
-the authored storage choices change the traffic seen by the roofline calculation.
+placement and gather overhead that is not head-shardable. `ideal-ns` rises because the executed total counts
+what every head CTA moves: the cache each one stages is not sharded over the head
+axis, so eight positions each move it.
 
 ## 4. Keep the scan state on chip
 
@@ -758,13 +759,13 @@ print(next(line.rstrip() for line in annotated.splitlines() if "cache_update(k_c
 # analysis target=nvidia.h200_sxm module=Stage3_Fused function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,4392896@total,328672@cta;f32:3239808@logical,6418944@total,200592@cta other-ops=integer:9@logical,288@total,9@cta;special:33056@logical,33152@total,1036@cta
-# memory traffic=gmem:r3.32MB/w4.00MB@logical,r3.32MB/w4.00MB@total,r2.44MB/w4.00MB@cta;rmem:r656B/w72B@logical,r768B/w128B@total,r768B/w128B@cta;smem:r5.57MB/w5.40MB@logical,r5.60MB/w5.43MB@total,r670.41KB/w660.85KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;k_heads:64.00KB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:276:1.00KB;v11:282:512.12KB;v12:284:2.00MB;v2:278:256B;v4:280:640B;v5:280:128B;v63:356:1.00KB;v65:359:512B;v6:281:512.12KB;v7:283:2.00MB;v9:279:256B;v_heads:64.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B peak=gmem:6.81MB;rmem:8B;smem:41.34KB persistent=gmem:2.31MB
+# memory traffic=gmem:r3.32MB/w4.00MB@logical,r10.22MB/w4.02MB@total,r2.44MB/w4.00MB@cta;rmem:r656B/w72B@logical,r24.00KB/w4.00KB@total,r768B/w128B@cta;smem:r5.57MB/w5.40MB@logical,r20.95MB/w20.65MB@total,r670.41KB/w660.85KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;k_heads:64.00KB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:276:1.00KB;v11:282:512.12KB;v12:284:2.00MB;v2:278:256B;v4:280:640B;v5:280:128B;v63:356:1.00KB;v65:359:512B;v6:281:512.12KB;v7:283:2.00MB;v9:279:256B;v_heads:64.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B peak=gmem:6.81MB;rmem:8B;smem:41.34KB persistent=gmem:2.31MB
 #   buffer=w_o holds=6.44MB time=none space=cta.head,cta.worker reuse=3.88MB fits=yes
 #   buffer=k_heads holds=128.50KB time=start space=none reuse=448.00KB fits=yes
 #   buffer=v_heads holds=128.50KB time=start space=none reuse=448.00KB fits=yes
 #   buffer=v63:356 holds=6.44MB time=none space=cta.head,cta.worker reuse=31.00KB fits=yes
 #   buffer=q_rope holds=128.50KB time=start space=none reuse=3.50KB fits=yes
-# roofline ideal-ns=1600 bound-by=memory
+# roofline ideal-ns=3111 bound-by=memory
 
     v6 = cache_update(k_cache, cur_pos, write_len, v5)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; memory traffic=gmem:r136B/w128B@logical,r136B/w128B@total,r136B/w128B@cta footprint=cur_pos:4B;v5:280:128B;v6:281:128B;write_len:4B operands=0:r0/w0;1:r4B/w0;2:r4B/w0;3:r128B/w0;result:r0/w128B; roofline ideal-ns=1 bound-by=memory
 ```
@@ -899,7 +900,7 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 # analysis target=nvidia.h200_sxm module=Stage4_WeightPrepared function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,337408@total,42176@cta;f32:6390528@logical,51124224@total,6390528@cta other-ops=special:32768@logical,262144@total,32768@cta
-# memory traffic=gmem:r26.95MB/w24.38MB@logical,r26.95MB/w24.38MB@total,r26.67MB/w24.38MB@cta;smem:r323.25KB/w322.25KB@logical,r323.25KB/w322.25KB@total,r42.16KB/w41.16KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v10:404:512B;v11:415:2.00KB;v12:418:2.00KB;v13:418:2.00KB;v15:404:128B;v16:405:512.12KB;v17:408:4.00MB;v18:407:4.00MB;v19:416:8.00MB;v21:428:8.00MB;v22:428:256.00KB;v23:429:64B;v24:430:256.00KB;v25:430:256.00KB;v28:398:256B;v30:406:512.12KB;v31:412:4.00MB;v32:411:4.00MB;v33:417:8.00MB;v35:432:8.00MB;v36:432:2.00KB;v37:431:64B;v38:433:2.00KB;v39:433:1.00KB;v3:396:1.00KB;v44:445:512B;v7:397:256B;v9:404:640B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B peak=gmem:10.82MB;smem:16.56KB persistent=gmem:2.31MB
+# memory traffic=gmem:r26.95MB/w24.38MB@logical,r213.38MB/w195.05MB@total,r26.67MB/w24.38MB@cta;smem:r323.25KB/w322.25KB@logical,r337.25KB/w329.25KB@total,r42.16KB/w41.16KB@cta footprint=cos_cache:512.00KB;cur_pos:4B;hidden:512B;pos_ids:4B;sin_cache:512.00KB;v10:404:512B;v11:415:2.00KB;v12:418:2.00KB;v13:418:2.00KB;v15:404:128B;v16:405:512.12KB;v17:408:4.00MB;v18:407:4.00MB;v19:416:8.00MB;v21:428:8.00MB;v22:428:256.00KB;v23:429:64B;v24:430:256.00KB;v25:430:256.00KB;v28:398:256B;v30:406:512.12KB;v31:412:4.00MB;v32:411:4.00MB;v33:417:8.00MB;v35:432:8.00MB;v36:432:2.00KB;v37:431:64B;v38:433:2.00KB;v39:433:1.00KB;v3:396:1.00KB;v44:445:512B;v7:397:256B;v9:404:640B;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B peak=gmem:10.82MB;smem:16.56KB persistent=gmem:2.31MB
 #   buffer=v19:416 holds=51.08MB time=none space=cta.head reuse=56.00MB fits=no
 #   buffer=v21:428 holds=51.08MB time=none space=cta.head reuse=56.00MB fits=no
 #   buffer=v33:417 holds=51.08MB time=none space=cta.head reuse=56.00MB fits=no
@@ -933,13 +934,13 @@ for needle in ("reshard(w_q", "reshard(w_o"):
 #   buffer=cur_pos holds=51.08MB time=none space=cta.head reuse=28B fits=no
 #   buffer=write_len holds=51.08MB time=none space=cta.head reuse=28B fits=no
 #   error="l2 reuse window cta.head holds 51.08MB at a 132-unit wave, exceeding capacity 47.68MB"
-# roofline ideal-ns=11213 bound-by=memory
+# roofline ideal-ns=89223 bound-by=memory
 
     v1 = reshard(w_q, layout=(1, 256, 8 @ mesh.head, 32), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ mesh.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; memory traffic=gmem:r128.00KB/w0@logical,r128.00KB/w0@total,r16.00KB/w0@cta;smem:r0/w128.00KB@logical,r0/w128.00KB@total,r0/w16.00KB@cta footprint=w_q:128.00KB operands=0:r128.00KB/w0;result:r0/w128.00KB; roofline ideal-ns=28 bound-by=memory
-    v2 = matmul(v0, v1, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16", ((1, 1, 8 @ mesh.head, 32), (256, 256, 32, 1)), "smem"]; compute-cost flops=bf16:131072@logical,131072@total,16384@cta; memory traffic=smem:r128.50KB/w512B@logical,r128.50KB/w512B@total,r16.50KB/w64B@cta operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w512B; roofline ideal-ns=1 bound-by=compute
+    v2 = matmul(v0, v1, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16", ((1, 1, 8 @ mesh.head, 32), (256, 256, 32, 1)), "smem"]; compute-cost flops=bf16:131072@logical,131072@total,16384@cta; memory traffic=smem:r128.50KB/w512B@logical,r132.00KB/w512B@total,r16.50KB/w64B@cta operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w512B; roofline ideal-ns=1 bound-by=compute
 
     v42 = reshard(w_o, layout=(1, 256, 8 @ mesh.head, 32), storage=smem)  # Tensor[(1, 256, 256), "bf16", ((1, 256, 8 @ mesh.head, 32), (0, 32, 0, 1)), "smem"]; compute-cost; memory traffic=gmem:r128.00KB/w0@logical,r128.00KB/w0@total,r16.00KB/w0@cta;smem:r0/w128.00KB@logical,r0/w128.00KB@total,r0/w16.00KB@cta footprint=w_o:128.00KB operands=0:r128.00KB/w0;result:r0/w128.00KB; roofline ideal-ns=28 bound-by=memory
-    v43 = matmul(v41, v42, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16", ((1, 1, 8 @ mesh.head, 32), (256, 256, 32, 1)), "smem"]; compute-cost flops=bf16:131072@logical,131072@total,16384@cta; memory traffic=smem:r128.50KB/w512B@logical,r128.50KB/w512B@total,r16.50KB/w64B@cta operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w512B; roofline ideal-ns=1 bound-by=compute
+    v43 = matmul(v41, v42, a_layout="MK", b_layout="KN")  # Tensor[(1, 1, 256), "bf16", ((1, 1, 8 @ mesh.head, 32), (256, 256, 32, 1)), "smem"]; compute-cost flops=bf16:131072@logical,131072@total,16384@cta; memory traffic=smem:r128.50KB/w512B@logical,r132.00KB/w512B@total,r16.50KB/w64B@cta operands=0:r512B/w0;1:r128.00KB/w0;result:r0/w512B; roofline ideal-ns=1 bound-by=compute
 ```
 
 ## 6. Stream the KV cache
@@ -1083,7 +1084,7 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 # analysis target=nvidia.h200_sxm module=Stage5_CachePrepared function=gqa_decode topology=cta wave=132/132
 # selection requested=compute-cost,memory,roofline executed=compute-cost,memory,roofline
 # compute-cost flops=bf16:328896@logical,1246400@total,328672@cta;f32:6410280@logical,6410280@total,801285@cta other-ops=integer:32@logical,256@total,32@cta;special:33040@logical,33040@total,4130@cta
-# memory traffic=gmem:r7.32MB/w4.00MB@logical,r7.32MB/w4.00MB@total,r3.82MB/w4.00MB@cta;rmem:r2.50KB/w0@logical,r2.50KB/w0@total,r2.50KB/w0@cta;smem:r20.78MB/w20.49MB@logical,r20.87MB/w20.55MB@total,r2.61MB/w2.57MB@cta footprint=cos_cache:512.00KB;cur_pos:4B;cur_pos_2:4B;hidden:512B;k_all:512.00KB;k_cache:16.00KB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:469:1.00KB;v10:475:128B;v22:491:128.00KB;v2:471:256B;v38:500:128.00KB;v46:522:256B;v47:521:1.00KB;v4:473:640B;v58:525:256B;v59:524:1.00KB;v5:473:128B;v6:474:128B;v71:551:1.00KB;v73:554:512B;v8:472:256B;v_all:512.00KB;v_cache:16.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B peak=gmem:3.31MB;rmem:0;smem:40.94KB persistent=gmem:2.31MB
+# memory traffic=gmem:r7.32MB/w4.00MB@logical,r22.20MB/w32.02MB@total,r3.82MB/w4.00MB@cta;rmem:r2.50KB/w0@logical,r20.00KB/w0@total,r2.50KB/w0@cta;smem:r20.78MB/w20.49MB@logical,r20.87MB/w20.55MB@total,r2.61MB/w2.57MB@cta footprint=cos_cache:512.00KB;cur_pos:4B;cur_pos_2:4B;hidden:512B;k_all:512.00KB;k_cache:16.00KB;pos_ids:4B;q_rope:512B;sin_cache:512.00KB;v0:469:1.00KB;v10:475:128B;v22:491:128.00KB;v2:471:256B;v38:500:128.00KB;v46:522:256B;v47:521:1.00KB;v4:473:640B;v58:525:256B;v59:524:1.00KB;v5:473:128B;v6:474:128B;v71:551:1.00KB;v73:554:512B;v8:472:256B;v_all:512.00KB;v_cache:16.00KB;w_k:32.00KB;w_o:128.00KB;w_q:128.00KB;w_v:32.00KB;write_len:4B peak=gmem:3.31MB;rmem:0;smem:40.94KB persistent=gmem:2.31MB
 #   buffer=v22:491 holds=288.00KB time=start space=none reuse=3.88MB fits=yes
 #   buffer=v38:500 holds=288.00KB time=start space=none reuse=3.88MB fits=yes
 #   buffer=k_all holds=2.60MB time=none space=cta.head reuse=3.50MB fits=yes
@@ -1095,9 +1096,9 @@ for needle in ("slice(k_cache", "cache_update(k_cache"):
 #   buffer=v46:522 holds=2.60MB time=none space=cta.head reuse=1.75KB fits=yes
 #   buffer=v58:525 holds=2.60MB time=none space=cta.head reuse=1.75KB fits=yes
 #   buffer=cur_pos_2 holds=2.60MB time=none space=cta.head reuse=28B fits=yes
-# roofline ideal-ns=2474 bound-by=memory
+# roofline ideal-ns=11844 bound-by=memory
 
-        v21 = slice(k_cache, (0, v20, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16", Layout((1, 128, 2, 32), (262144, 64, 32, 1))]; compute-cost; memory traffic=rmem:r32B/w0@logical,r32B/w0@total,r32B/w0@cta operands=0:r0/w0;1:r32B/w0;result:r0/w0; roofline
+        v21 = slice(k_cache, (0, v20, 0, 0), sizes=(1, 128, 2, 32), strides=(1, 1, 1, 1))  # Tensor[(1, 128, 2, 32), "bf16", Layout((1, 128, 2, 32), (262144, 64, 32, 1))]; compute-cost; memory traffic=rmem:r32B/w0@logical,r256B/w0@total,r32B/w0@cta operands=0:r0/w0;1:r32B/w0;result:r0/w0; roofline
     v6 = cache_update(k_cache, cur_pos, write_len, v5)  # Tensor[(1, 4096, 2, 32), "bf16"]; compute-cost; memory traffic=gmem:r136B/w128B@logical,r136B/w128B@total,r136B/w128B@cta footprint=cur_pos:4B;v5:473:128B;v6:474:128B;write_len:4B operands=0:r0/w0;1:r4B/w0;2:r4B/w0;3:r128B/w0;result:r0/w128B; roofline ideal-ns=1 bound-by=memory
 ```
 
