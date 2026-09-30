@@ -87,6 +87,15 @@ class _MeshBindingResolver(ExprCloner):
     def __init__(self, *, narrow: bool) -> None:
         super().__init__()
         self.narrow = narrow
+        self._scope_memos: dict[IterationScope, dict[int, tuple[Expr, Expr]]] = {}
+
+    def dispatch_visit(self, value: Expr, scope: "IterationScope") -> Expr:
+        memo = self._memo
+        self._memo = self._scope_memos.setdefault(scope, {})
+        try:
+            return super().dispatch_visit(value, scope)
+        finally:
+            self._memo = memo
 
     def visit_Call(self, value: Call, scope: "IterationScope") -> Expr:
         if isinstance(value.target, Local):

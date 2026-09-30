@@ -335,6 +335,7 @@ def test_persistent_flat_states_its_precision() -> None:
     assert store["memory"]["footprint"]["complete"] is True
     assert _footprint_bytes(memory, "a") == 2 * 64 * 32 * 2
     assert _footprint_bytes(memory, "b") == 66 * 32 * 64 * 2
+    assert _working_set_bytes(memory) == 2_473_984
     assert sorted(
         levels["gmem"]["total"]
         for levels in store["memory"]["footprint"]["buffers"].values()

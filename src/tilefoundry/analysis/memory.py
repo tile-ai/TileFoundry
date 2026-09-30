@@ -736,6 +736,8 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         if item.reached is not None:
             distinct.setdefault(id(item.buffer), item.buffer)
     footprint_labels = dict(zip(distinct, value_labels(distinct.values()), strict=True))
+    liveness = analyze_liveness(function)
+    owners = storage_owners(context.root, liveness)
     reuse = (
         reuse_windows(
             context.root,
@@ -744,6 +746,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             declared_units=wave[1],
             ctx=locals_by_unit.get(topology_level, whole),
             labels=footprint_labels,
+            owners=owners,
         )
         if memory_level is not None and wave is not None
         else ()
@@ -764,13 +767,11 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
                     ),
                 ),
             )
-    liveness = analyze_liveness(function)
     placement = CostContext(
         scope=FunctionScope(module, function),
         topology_level=topology_level,
         topologies=topologies,
     )
-    owners = storage_owners(context.root, liveness)
     allocation_values = _project_allocation_values(
         liveness,
         frozenset(id(parameter) for parameter in function.params),

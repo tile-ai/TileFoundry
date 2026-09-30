@@ -15,10 +15,12 @@ import isl
 from tilefoundry.ir.core import Call, Expr, get_metadata
 from tilefoundry.ir.core.module import Module
 from tilefoundry.ir.hir.loop_region import LoopRegion
+from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.sharding.mesh_coord import MeshCoord
 from tilefoundry.ir.types import DType, Mesh, TensorType, TupleType, Type
 from tilefoundry.ir.types.int_tuple import repeat_like
 from tilefoundry.ir.types.layout import ComposedLayout, flatten
+from tilefoundry.ir.types.mesh import separate
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.target.base import Target, UnsupportedCapabilityError
 from tilefoundry.target.facts import TopologyFacts
@@ -294,7 +296,7 @@ def time_axis(boundary: MovingBoundary) -> int | None:
     the reverse inclusion remains to prove equality.
     """
     for axis, loop_scope in enumerate(_loop_scopes(boundary.scope)):
-        if loop_scope.trips() <= 1:
+        if loop_scope.trips() <= 1 or loop_scope.is_variant(boundary.access.buffer):
             continue
         if boundary.held(axis - 1).is_subset(boundary.held(axis)):
             return axis
@@ -310,9 +312,9 @@ def space_axes(
     window = boundary.scope.depth - 1
     wave_reached = boundary.space_wave_reached(window)
     shared = []
+    shape = flatten(flatten(boundary.mesh.layout).shape)
     for axis, parameter_name in enumerate(boundary.axis_parameters):
-        shape = flatten(flatten(boundary.mesh.layout).shape)
-        extent = static_dim_value(shape[axis]) if axis < len(shape) else None
+        extent = static_dim_value(shape[axis])
         unit_reached = boundary.unit_reached(window, parameter_name)
         if extent is not None and extent > 1 and unit_reached is not None:
             if wave_reached.is_equal(unit_reached):
@@ -454,19 +456,56 @@ def _uncounted_boundaries(call: Call, ctx: CostContext) -> tuple[ReachedAddresse
 def _axis_parameters(
     scope: IterationScope, mesh: Mesh | None
 ) -> tuple[str | None, ...]:
-    """Map each axis of the innermost mesh to its retained isl parameter."""
+    """Map each wave-mesh axis to its retained isl parameter."""
     if mesh is None:
         return ()
-    names_by_axis = {
-        axis: name
-        for name, coordinate in _mesh_parameters(scope)
-        if coordinate.target.mesh == mesh
-        and coordinate.args
-        and (axis := static_dim_value(coordinate.args[0])) is not None
-    }
+    names_by_axis = {}
+    for name, coordinate in _mesh_parameters(scope):
+        axis = static_dim_value(coordinate.args[0])
+        if axis is None:
+            continue
+        start = 0
+        for level in separate(coordinate.target.mesh):
+            rank = len(flatten(flatten(level.layout).shape))
+            if level == mesh and start <= axis < start + rank:
+                names_by_axis[axis - start] = name
+            start += rank
     return tuple(
         names_by_axis.get(axis) for axis in range(len(flatten(flatten(mesh.layout).shape)))
     )
+
+
+def _wave_mesh(scope: IterationScope, topology_level: str) -> Mesh | None:
+    """Find the enclosing mesh at the topology whose units form this wave."""
+    cursor = scope
+    while cursor is not None:
+        if isinstance(cursor.owner, MeshRegion):
+            for mesh in separate(cursor.owner.mesh):
+                topology = mesh.topologies[0]
+                if getattr(topology, "name", topology) == topology_level:
+                    return mesh
+        cursor = cursor.parent
+    return None
+
+
+def _one_time_fill(scope: IterationScope, operands: tuple[TrafficBytes, ...]) -> bool:
+    """A write-only initializer outside loops streams once, without cache reuse."""
+    return scope.depth == 0 and all(item.read == 0 for item in operands)
+
+
+def _shared_origin(
+    scope: IterationScope | None, topology_level: str, wave: tuple[int, int]
+) -> bool:
+    """A material definition made by multiple wave units is not shared data.
+
+    Registered storage-sharing edges have already resolved the origin, so a
+    view of an enclosing definition does not become fresh within this mesh.
+    """
+    mesh = None if scope is None else _wave_mesh(scope, topology_level)
+    if mesh is None:
+        return True
+    axes = tuple(range(len(flatten(flatten(mesh.layout).shape))))
+    return shared_units(mesh, axes, wave) <= 1
 
 
 def moving_boundaries(
@@ -476,17 +515,28 @@ def moving_boundaries(
     wave: tuple[int, int],
     ctx: CostContext,
     labels: Mapping[int, str],
+    owners: Mapping[int, Expr],
 ) -> tuple[MovingBoundary, ...]:
-    """Collect boundaries that move bytes at *memory_level* in one scope walk."""
+    """Collect boundaries that move bytes at *memory_level* in one scope walk.
+
+    Every accessed value has a liveness interval; storage_owners resolves all
+    intervals and their storage-source chains, so owners covers each buffer.
+    """
     whole = replace(ctx, topology_level=None, topologies=())
     wave_units, declared_units = wave
+    topology_level = ctx.topology_level or ctx.scope.module.resolve_target().get_facts(
+        TopologyFacts
+    ).parallel_level
+    definitions = {
+        value_id: scope for scope in walk_scopes(root) for value_id in scope.relations
+    }
     found: list[MovingBoundary] = []
     for scope in walk_scopes(root):
         mesh_parameters = _mesh_parameters(scope)
         position = None
         if wave_units < declared_units and mesh_parameters:
             position = _linear_position(mesh_parameters)
-        mesh = scope.enclosing_mesh()
+        mesh = _wave_mesh(scope, topology_level)
         axis_parameters = _axis_parameters(scope, mesh)
         wave_stated = not (
             wave_units < declared_units and mesh_parameters and position is None
@@ -496,6 +546,8 @@ def moving_boundaries(
         for call, _recorded in scope.accesses.get("narrow", {}).values():
             moved = get_metadata(call, MemoryMetadata)
             if moved is None or len(moved.operands) != len(call.args) + 1:
+                continue
+            if _one_time_fill(scope, moved.operands):
                 continue
             device_recorded = scope.accesses.get("device", {}).get(id(call))
             device_by_boundary = (
@@ -594,7 +646,11 @@ def moving_boundaries(
                         wave_units=wave_units,
                         wave_stated=wave_stated,
                         mesh_parameters=mesh_parameters,
-                        axis_parameters=axis_parameters,
+                        axis_parameters=axis_parameters
+                        if _shared_origin(
+                            definitions.get(id(owners[id(access.buffer)])), topology_level, wave
+                        )
+                        else (),
                         position=position,
                     )
                 )
@@ -619,6 +675,8 @@ def _uncounted_movements(
             accesses = _call_accesses(scope, call)
             if len(operands) != len(call.args) + 1:
                 found.extend((scope, item) for item in _uncounted_boundaries(call, whole))
+                continue
+            if _one_time_fill(scope, operands):
                 continue
             for access in accesses:
                 movement = (
@@ -675,6 +733,8 @@ def reached_by(
 
     if len(operands) != len(call.args) + 1:
         return _uncounted_boundaries(call, ctx)
+    if _one_time_fill(scope, operands):
+        return ()
 
     refused = call in scope.refused.get("narrow", ())
     accesses = _call_accesses(scope, call)
@@ -871,11 +931,12 @@ def reuse_windows(
     declared_units: int,
     ctx: CostContext,
     labels: Mapping[int, str],
+    owners: Mapping[int, Expr],
 ) -> tuple[ReuseWindow, ...]:
     """Describe one cache-residency window per buffer that is read again."""
     wave = (wave_units, declared_units)
     boundaries = moving_boundaries(
-        root, memory_level=memory_level, wave=wave, ctx=ctx, labels=labels
+        root, memory_level=memory_level, wave=wave, ctx=ctx, labels=labels, owners=owners
     )
     buffers = _by_buffer(boundaries, wave)
     if not buffers or ctx.scope is None:

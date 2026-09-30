@@ -258,6 +258,9 @@ class ScopeBuilder:
                 accesses=self._empty_accesses(),
             )
             scope.children = (*scope.children, child)
+            for param, argument in zip(expr.params, expr.args, strict=True):
+                self._record_variance(param, (argument,))
+                self.seen.add(id(param))
             self._visit(expr.body, child)
             self._record_variance(expr, expr_children(expr))
             return

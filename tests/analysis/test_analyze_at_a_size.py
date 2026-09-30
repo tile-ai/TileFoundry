@@ -601,10 +601,11 @@ def test_every_concrete_program_predicts_coherently(
 ) -> None:
     """Every placed program, at every size and selector it exposes.
 
-    The directory-derived inventory asks every program for all four families
-    and holds their predictions to the same coherence checks. Qwen CacheUpdate
-    cur/width are runtime values without RangeMetadata; rendering must fall
-    back to widest_allowed and keep their write accesses WIDENED.
+    This inventory is the whole of what these four analyses are held to: it is
+    read off the directory rather than from a list beside it, so a program added
+    there is asked the same questions without anyone choosing to ask. Each of
+    them is asked for all four families and has to answer with a coherent
+    prediction.
     """
     report_path = tmp_path / "memory.json"
     command = [
@@ -680,7 +681,7 @@ def test_every_concrete_program_predicts_coherently(
         ]
         assert cache_writes and all(
             access.precision is AccessPrecision.WIDENED for access in cache_writes
-        )
+        ), "CacheUpdate cur/width lack RangeMetadata; widest_allowed must keep writes WIDENED"
     if case.id == "rmsnorm_quant_seq2.RmsnormQuantSeq2Module.rmsnorm_quant_seq_2[static]":
         reshaped = next(
             expr for expr in collect_exprs(result.function.body)
