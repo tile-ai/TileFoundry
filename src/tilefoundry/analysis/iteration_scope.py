@@ -15,6 +15,7 @@ from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.isl_interop import dim_range
 from tilefoundry.ir.types import Mesh
 from tilefoundry.ir.types.dim import DimSub, simplify_dim
+from tilefoundry.ir.types.layout import ComposedLayout, get, size
 from tilefoundry.ir.types.utils import static_dim_value
 from tilefoundry.ir.visitor import expr_children
 from tilefoundry.visitor_registry.access_relation import (
@@ -28,6 +29,31 @@ from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContex
 from .access import Access, AccessPrecision, resolve_access
 from .errors import AnalysisError
 from .loop_domain import induction_name, iteration_domain
+
+
+def scope_position_count(mesh: Mesh, topology_level: str | None, topologies: tuple) -> int:
+    """How many positions of *topology_level* execute one mesh region's body.
+
+    Shared by every family that turns one participant's quantity into the whole
+    program's: the product of the mesh's own extents at that level and every
+    level above it.
+    """
+    if topology_level is None:
+        return 1
+    declared = {topology.name: index for index, topology in enumerate(topologies)}
+    selected = declared[topology_level]
+    stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
+    positions = 1
+    for index, topology in enumerate(mesh.topologies):
+        if declared[topology.name] > selected:
+            continue
+        count = size(get(stated, index))
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+            raise AnalysisError(
+                f"mesh level {topology.name!r} needs positive static extents, got {count!r}"
+            )
+        positions *= count
+    return positions
 
 
 @dataclass(eq=False)

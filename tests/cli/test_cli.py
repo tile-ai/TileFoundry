@@ -682,6 +682,11 @@ def test_analyze_binds_an_extent_on_a_root_that_reaches_a_child(tmp_path, capsys
 
 
 def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) -> None:
+    """One rendering carries every family's figures for the inlined kernel.
+
+    Its gmem ``@total`` is one CTA's share once per position of the two mesh
+    regions the kernel splits into, so it exceeds the logical figure.
+    """
     source = Path(__file__).parents[1] / "fixtures" / "placed" / "moe_mega_kernel.py"
     selector = f"{source}:MoEMegaKernel"
     flags = ["--compute-cost", "--memory", "--roofline", "--performance"]
@@ -757,7 +762,7 @@ def test_analyze_reports_the_inlined_mega_kernel_from_one_rendering(tmp_path) ->
         f"{cost['flops']['f32']['total']}@total,"
         f"{cost['flops']['f32']['per_unit'][0]}@{payload['topology']}",
         "# memory traffic=gmem:r120.00KB/w90.00KB@logical,"
-        "r120.00KB/w90.00KB@total,r62.75KB/w32.75KB@cta "
+        "r7.79MB/w3.93MB@total,r62.75KB/w32.75KB@cta "
         "footprint=<value 4>:30.00KB;<value 5>:30.00KB;v0:29:256B;"
         "v1:30:256B;v3:37:2.50KB;v4:38:2.50KB;v6:44:30.00KB "
         "peak=gmem:60.00KB persistent=gmem:30.00KB",

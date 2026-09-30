@@ -361,6 +361,11 @@ def test_tile_area_scales_traffic_and_working_set() -> None:
 
 
 def test_two_waves_share_traffic_but_differ_in_working_set() -> None:
+    """Two waves move the same bytes and hold different amounts of them.
+
+    The tile loops are not sharded over the 132-position mesh, so every
+    position runs all of them and the executed total counts them once each.
+    """
     naive = _memory_record(Gemm_MK_NN64x128x32_w1x132)
     reuse_a = _memory_record(Gemm_MNK_NN64x128x32_w11x12)
     reuse_b = _memory_record(Gemm_MNK_NN64x128x32_w12x11)
@@ -369,7 +374,7 @@ def test_two_waves_share_traffic_but_differ_in_working_set() -> None:
         for memory in (naive, reuse_a, reuse_b)
     }
 
-    assert total_reads == {3_244_032}
+    assert total_reads == {3_244_032 * 132}
     assert _working_set_bytes(naive) == (WAVE_BM + WAVE_C * WAVE_BN) * WAVE_BK * 2
     assert _working_set_bytes(reuse_a) != _working_set_bytes(reuse_b)
 

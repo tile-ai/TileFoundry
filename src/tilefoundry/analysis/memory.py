@@ -21,7 +21,7 @@ from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.hir.tensor.tuple_get_item import TupleGetItem
 from tilefoundry.ir.types import TensorType, TupleType, Type
-from tilefoundry.ir.types.mesh import Mesh, separate, within_scope
+from tilefoundry.ir.types.mesh import Mesh, make_mesh, separate, within_scope
 from tilefoundry.ir.types.shard_layout import shard_layout_of
 from tilefoundry.ir.types.storage import StorageKind
 from tilefoundry.ir.types.utils import bytes_by_storage
@@ -53,7 +53,7 @@ from .footprint import (
     reuse_windows,
     wave_of,
 )
-from .iteration_scope import IterationScope, walk_scopes
+from .iteration_scope import IterationScope, scope_position_count, walk_scopes
 from .liveness import Liveness, analyze_liveness, result_copies
 from .metadata import (
     Breakdown,
@@ -228,6 +228,7 @@ def call_traffic(
     locals_by_unit: "dict[str, CostContext]",
     stated_relations: AccessRelations | None = None,
     asked: "str | None" = None,
+    positions_by_unit: "dict[str, int] | None" = None,
 ) -> MemoryMetadata:
     """What one Call moves, whole and for one participant.
 
@@ -267,12 +268,16 @@ def call_traffic(
                 crossing_per_unit.setdefault(boundary, {})[unit] = moved
         if unit is None:
             operands = positional
+    counted = asked or (next(iter(locals_by_unit)) if locals_by_unit else None)
+    positions = (positions_by_unit or {}).get(counted, 1) if counted else 1
     return MemoryMetadata(
         topologies=tuple(locals_by_unit),
         traffic=Traffic(
-            storage=_occurrence_shares(storage_whole, storage_per_unit, tuple(locals_by_unit)),
+            storage=_occurrence_shares(
+                storage_whole, storage_per_unit, tuple(locals_by_unit), counted, positions
+            ),
             communication=_occurrence_shares(
-                crossing_whole, crossing_per_unit, tuple(locals_by_unit)
+                crossing_whole, crossing_per_unit, tuple(locals_by_unit), counted, positions
             ),
         ),
         operands=operands,
@@ -296,20 +301,35 @@ def _occurrence_shares(
     whole: dict[str, TrafficBytes],
     per_unit: dict[str, dict[str, TrafficBytes]],
     topologies: tuple[str, ...],
+    counted: "str | None" = None,
+    positions: int = 1,
 ) -> "Breakdown[TrafficBytes]":
     """One entry per level, each carrying the whole and every level's share.
 
     The shares run in *topologies* order, so a level a move never reached --
     a unit inside the boundary it crossed -- reads as no bytes rather than as
     a missing entry.
+
+    ``total`` is the counted unit's share times the positions executing it, so
+    a value no one sharded -- which projects to the whole of itself -- is moved
+    once per position, and a sharded one returns the whole exactly once.
     """
+
+    def _total(name: str) -> TrafficBytes:
+        if counted is None:
+            return whole.get(name, TrafficBytes())
+        share = per_unit.get(name, {}).get(counted)
+        if share is None:
+            return whole.get(name, TrafficBytes())
+        return TrafficBytes(read=share.read * positions, write=share.write * positions)
+
     return Breakdown(
         tuple(
             (
                 name,
                 Spread(
                     logical=whole.get(name, TrafficBytes()),
-                    total=whole.get(name, TrafficBytes()),
+                    total=_total(name),
                     per_unit=tuple(
                         per_unit.get(name, {}).get(unit, TrafficBytes()) for unit in topologies
                     ),
@@ -572,6 +592,8 @@ class MemoryContext(AnalyzeContext):
     storage: _TrafficAccounts = field(default_factory=_TrafficAccounts)
     communication: _TrafficAccounts = field(default_factory=_TrafficAccounts)
     memory_level: str | None = None
+    current_mesh: Mesh | None = None
+    executing_positions: dict[str, int] = field(default_factory=dict)
     wave: tuple[int, int] | None = None
     reached: list[ReachedAddresses] = field(default_factory=list)
     call_reached: list[tuple[Call, tuple[ReachedAddresses, ...]]] = field(default_factory=list)
@@ -619,7 +641,15 @@ class MemoryVisitor(ExprVisitor[None]):
         child = next(item for item in ctx.current.children if item.owner is expr)
         for arg in expr.args:
             self.visit(arg, ctx)
-        self.visit(expr.body, replace(ctx, current=child))
+        mesh = make_mesh(ctx.current_mesh, expr.mesh) if ctx.current_mesh else expr.mesh
+        topologies = ctx.module.effective_topologies()
+        positions = {
+            unit: scope_position_count(mesh, unit, topologies) for unit in ctx.locals_by_unit
+        }
+        self.visit(
+            expr.body,
+            replace(ctx, current=child, executing_positions=positions, current_mesh=mesh),
+        )
 
     def visit_LoopRegion(self, expr: LoopRegion, ctx: MemoryContext) -> None:
         child = next(item for item in ctx.current.children if item.owner is expr)
@@ -645,6 +675,7 @@ class MemoryVisitor(ExprVisitor[None]):
                 ctx.locals_by_unit,
                 ctx.current.stated_relations(expr, ctx.whole),
                 ctx.topology_level,
+                ctx.executing_positions,
             )
             if recorded
             else MemoryMetadata()
@@ -740,6 +771,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         whole=whole,
         locals_by_unit=locals_by_unit,
         memory_level=memory_level,
+        executing_positions=dict.fromkeys(locals_by_unit, 1),
         wave=wave,
         reached=refused_reached,
         footprint_available=footprint_available,

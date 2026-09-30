@@ -58,7 +58,13 @@ _ROUNDING_M = 14_593
 
 
 def test_invariant_gemm_operands_repeat_in_total_traffic() -> None:
-    """The QKV tiles load again even when one operand is invariant in one loop."""
+    """The QKV tiles load again even when one operand is invariant in one loop.
+
+    The fixture's tile loops are not sharded over its 132-position mesh, so
+    every position runs all of them: the executed total is one position's
+    traffic once per position, which is what ``compute-cost`` already counts
+    for the same program.
+    """
     result = analyze(
         TiledQKVProjection,
         TiledQKVProjection.entry_function(),
@@ -67,10 +73,58 @@ def test_invariant_gemm_operands_repeat_in_total_traffic() -> None:
     record = get_metadata(result.function, RegionMemoryMetadata)
     gmem = record.traffic.storage.of("gmem")
 
+    positions = 132
     assert gmem is not None
     assert gmem.logical == TrafficBytes(read=27_262_976, write=16_777_216)
-    assert gmem.total == TrafficBytes(read=142_606_336, write=16_777_216)
+    assert gmem.per_unit[0] == TrafficBytes(read=142_606_336, write=16_777_216)
+    assert gmem.total == TrafficBytes(
+        read=142_606_336 * positions, write=16_777_216 * positions
+    )
 
+
+
+@pytest.mark.parametrize("positions", [1, 2, 4, 8, 16])
+def test_replicated_staging_is_counted_once_per_mesh_position(positions: int) -> None:
+    """A tile no mesh axis shards is staged in full by every position.
+
+    The sharded counterpart is the control: there the same product returns the
+    tensor exactly once, because one position's share is already 1/positions of
+    it. Both follow from ``total = per_unit * positions``.
+    """
+    rows, width = 256, 64
+    whole = rows * width * 2
+
+    @module(entry="stage", target=_H200, topologies=(Topology("cta", 132),))
+    class Replicated:
+        @func
+        def stage(x: Tensor[(rows, width), "bf16"]) -> Tensor[(rows, width), "bf16"]:
+            with Mesh(("cta",), layout=(positions,), names=("rep",)) as _cta:
+                staged = tf.reshard(x, (rows, width), "smem")
+                return tf.reshard(staged, (rows, width), "gmem")
+
+    @module(entry="stage", target=_H200, topologies=(Topology("cta", 132),))
+    class Sharded:
+        @func
+        def stage(x: Tensor[(rows, width), "bf16"]) -> Tensor[(rows, width), "bf16"]:
+            with Mesh(("cta",), layout=(positions,), names=("rep",)) as cta:
+                staged = tf.reshard(x, (rows @ cta.rep, width), "smem")
+                return tf.reshard(staged, (rows, width), "gmem")
+
+    def gmem_of(owner):
+        result = analyze(owner, owner.entry_function(), analysis="memory")
+        record = get_metadata(result.function, RegionMemoryMetadata)
+        return record.traffic.storage.of("gmem")
+
+    replicated, sharded = gmem_of(Replicated), gmem_of(Sharded)
+    assert replicated is not None and sharded is not None
+
+    assert replicated.per_unit[0].read == whole
+    assert replicated.total.read == whole * positions
+
+    assert sharded.per_unit[0].read == whole // positions
+    assert sharded.total.read == whole
+
+    assert replicated.logical.read == sharded.logical.read == whole
 
 _ROUNDING_N = 11_489
 _ROUNDING_K = 298_224_413
@@ -238,7 +292,13 @@ def test_performance_orders_a_predecessor_materialized_in_a_child_scope() -> Non
 
 
 def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
-    """Group_index * 32 is an address, not an unbound parameter."""
+    """Group_index * 32 is an address, not an unbound parameter.
+
+    The six extra integer ops are what say so, and the service counts are what
+    witness them. Both spellings reach one bound: this fixture's memory time
+    sits an order above its compute time once replication across its 128 mesh
+    positions is counted, so the six ops do not move the end-to-end projection.
+    """
     observed = {}
     for name, owner in (
         ("literal", _LiteralStoreOffset),
@@ -261,14 +321,28 @@ def test_a_symbolic_store_stride_preserves_the_literal_control_result() -> None:
             integer_ops.per_unit[0],
             bound.ideal_ns,
             summary.timeline.end_ns - summary.timeline.start_ns,
+            bound.bound_by,
         )
 
-    literal_service, literal_local, literal_roofline, literal_performance = observed["literal"]
-    symbolic_service, symbolic_local, symbolic_roofline, symbolic_performance = observed["symbolic"]
-    assert literal_roofline == symbolic_roofline == 398_459
+    (
+        literal_service,
+        literal_local,
+        literal_roofline,
+        literal_performance,
+        literal_bound,
+    ) = observed["literal"]
+    (
+        symbolic_service,
+        symbolic_local,
+        symbolic_roofline,
+        symbolic_performance,
+        symbolic_bound,
+    ) = observed["symbolic"]
     assert symbolic_local - literal_local == 6
     assert symbolic_service - literal_service == 6 * 128
-    assert symbolic_performance - literal_performance == 6
+    assert literal_bound == symbolic_bound == "memory"
+    assert literal_roofline == symbolic_roofline == 2_055_209
+    assert symbolic_performance == literal_performance == literal_roofline
 
 
 def test_roofline_uses_exact_integer_ceiling_above_float_precision() -> None:

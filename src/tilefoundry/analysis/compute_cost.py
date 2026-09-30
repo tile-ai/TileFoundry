@@ -10,7 +10,6 @@ from tilefoundry.ir.hir.function import Function
 from tilefoundry.ir.hir.loop_region import LoopRegion
 from tilefoundry.ir.hir.mesh_region import MeshRegion
 from tilefoundry.ir.types import DType, Mesh
-from tilefoundry.ir.types.layout import ComposedLayout, get, size
 from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.visitor import ExprVisitor
 from tilefoundry.visitor_registry.contexts import CostContext, FunctionScope, TrafficBytes
@@ -18,6 +17,7 @@ from tilefoundry.visitor_registry.visitors import CostEvaluator
 
 from .errors import AnalysisError
 from .facts import PerformanceServiceFacts, ThroughputFacts
+from .iteration_scope import scope_position_count
 from .metadata import Breakdown, ComputeCostMetadata, MemoryMetadata, breakdown, shares
 from .visitor import AnalyzeContext
 
@@ -183,26 +183,6 @@ def _call_cost_record(
     )
 
 
-def _scope_position_count(mesh: Mesh, topology_level: str | None, topologies: tuple) -> int:
-    if topology_level is None:
-        return 1
-    declared = {topology.name: index for index, topology in enumerate(topologies)}
-    selected = declared[topology_level]
-    stated = mesh.layout.outer if isinstance(mesh.layout, ComposedLayout) else mesh.layout
-    positions = 1
-    for index, topology in enumerate(mesh.topologies):
-        if declared[topology.name] > selected:
-            continue
-        count = size(get(stated, index))
-        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
-            raise AnalysisError(
-                f"compute-cost: mesh level {topology.name!r} needs positive static "
-                f"extents, got {count!r}"
-            )
-        positions *= count
-    return positions
-
-
 def _bytes(
     held: Breakdown[TrafficBytes],
     topologies: tuple[str, ...],
@@ -263,7 +243,7 @@ class ComputeCostVisitor(ExprVisitor[None]):
         mesh = make_mesh(ctx.current_mesh, expr.mesh) if ctx.current_mesh else expr.mesh
         topologies = ctx.module.effective_topologies()
         positions = {
-            unit: _scope_position_count(mesh, unit, topologies) for unit in ctx.locals_by_unit
+            unit: scope_position_count(mesh, unit, topologies) for unit in ctx.locals_by_unit
         }
         self.visit(
             expr.body,
