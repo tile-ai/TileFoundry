@@ -43,7 +43,11 @@ from tilefoundry.visitor_registry.access_relation import (
     relation_of,
     relations_of,
 )
-from tilefoundry.visitor_registry.candidates import candidate_ops, sole_candidate
+from tilefoundry.visitor_registry.candidates import (
+    candidate_ops,
+    instruction_from_hir,
+    sole_candidate,
+)
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 
 
@@ -224,15 +228,8 @@ def _variant_instances(
     site: _Site,
 ) -> tuple[tuple[object | None, dict], ...]:
     if capability.attribute is None:
-        attributes = {}
-        for param in op_type._op_schema.signature:
-            if param.kind != "attribute":
-                continue
-            if hasattr(site.call.target, param.name):
-                attributes[param.name] = getattr(site.call.target, param.name)
-            elif not param.has_default:
-                return ()
-        return ((op_type(**attributes), {}),)
+        instruction = instruction_from_hir(site.call.target, op_type)
+        return () if instruction is None else ((instruction, {}),)
     declaration = capability.declaration
     states: tuple[dict, ...] = ({},)
     for param in declaration.parameters:

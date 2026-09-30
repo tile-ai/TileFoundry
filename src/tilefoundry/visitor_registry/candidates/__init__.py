@@ -24,12 +24,8 @@ def candidate_ops(hir_op: type) -> tuple[type, ...]:
     return tuple(_CANDIDATES.get(hir_op, ()))
 
 
-def sole_candidate(hir_op: Op) -> Op | None:
-    """Build the one registered instruction from same-named attributes, or None."""
-    candidates = candidate_ops(type(hir_op))
-    if len(candidates) != 1:
-        return None
-    op_type = candidates[0]
+def instruction_from_hir(hir_op: Op, op_type: type[Op]) -> Op | None:
+    """Build an instruction from same-named HIR attributes, or None if incomplete."""
     attributes = {}
     for param in collect_param_defs(op_type):
         if param.kind != "attribute":
@@ -41,6 +37,14 @@ def sole_candidate(hir_op: Op) -> Op | None:
     return op_type(**attributes)
 
 
+def sole_candidate(hir_op: Op) -> Op | None:
+    """Build the one registered instruction from same-named attributes, or None."""
+    candidates = candidate_ops(type(hir_op))
+    if len(candidates) != 1:
+        return None
+    return instruction_from_hir(hir_op, candidates[0])
+
+
 def _auto_import(pkg_name: str) -> None:
     package = importlib.import_module(pkg_name)
     for _, module_name, _ in pkgutil.walk_packages(package.__path__, f"{pkg_name}."):
@@ -50,6 +54,7 @@ def _auto_import(pkg_name: str) -> None:
 _auto_import(__name__)
 
 __all__ = [
+    "instruction_from_hir",
     "sole_candidate",
     "candidate_ops",
     "register_candidates",

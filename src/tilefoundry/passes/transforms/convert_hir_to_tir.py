@@ -568,44 +568,46 @@ class Lowering(ExprVisitor[Expr]):
         if is_dim_op_call(call):
             result = self._dim(call)
         else:
-            visitor = (
-                None
-                if isinstance(target, HirBinary) and call.type.shape != ()
-                else getattr(self, f"visit_{type(target).__name__}", None)
-            )
+            visitor = getattr(self, f"visit_{type(target).__name__}", None)
             if visitor is None:
-                candidates = candidate_ops(type(target))
-                if not candidates:
-                    raise LoweringError(
-                        f"{_label(call)} uses unknown HIR call {type(target).__name__}"
-                    )
-                op = sole_candidate(target)
-                if op is None:
-                    available = ", ".join(op_identifier(candidate) for candidate in candidates)
-                    raise LoweringError(
-                        f"{_label(call)} has instruction candidates [{available}] but no automatic "
-                        "selection; write tf.schedule to choose the instruction and its attributes"
-                    )
-                if not isinstance(call.type, TensorType):
-                    raise LoweringError(f"{_label(call)} candidate result is not a tensor")
-                if call.type.storage is not StorageKind.RMEM:
-                    name = type(target)._op_schema.name
-                    identifier = op_identifier(type(op))
-                    raise LoweringError(
-                        f"{_label(call)} is an unscheduled {call.type.storage} {name}; "
-                        f"{identifier} accepts only "
-                        "rmem operands, so write an explicit tf.schedule for each storage transition"
-                    )
-                result = self._lower_instruction(call, op, cursor)
+                result = self._lower_automatic_instruction(call, cursor)
             else:
                 result = visitor(call, cursor)
         return result
+
+    def _lower_automatic_instruction(self, call: Call, cursor: _Cursor) -> Expr:
+        target = call.target
+        candidates = candidate_ops(type(target))
+        if not candidates:
+            raise LoweringError(
+                f"{_label(call)} uses unknown HIR call {type(target).__name__}"
+            )
+        op = sole_candidate(target)
+        if op is None:
+            available = ", ".join(op_identifier(candidate) for candidate in candidates)
+            raise LoweringError(
+                f"{_label(call)} has instruction candidates [{available}] but no automatic "
+                "selection; write tf.schedule to choose the instruction and its attributes"
+            )
+        if not isinstance(call.type, TensorType):
+            raise LoweringError(f"{_label(call)} candidate result is not a tensor")
+        if call.type.storage is not StorageKind.RMEM:
+            name = type(target)._op_schema.name
+            identifier = op_identifier(type(op))
+            raise LoweringError(
+                f"{_label(call)} is an unscheduled {call.type.storage} {name}; "
+                f"{identifier} accepts only "
+                "rmem operands, so write an explicit tf.schedule for each storage transition"
+            )
+        return self._lower_instruction(call, op, cursor)
 
     def visit_MeshCoord(self, call: Call, _cursor: _Cursor) -> Expr:
         return self._dim(call)
 
     def visit_Binary(self, call: Call, cursor: _Cursor) -> Expr:
-        return self._dim(call)
+        if isinstance(call.type, TensorType) and call.type.shape == ():
+            return self._dim(call)
+        return self._lower_automatic_instruction(call, cursor)
 
     def visit_TupleGetItem(self, call: Call, cursor: _Cursor) -> Expr:
         source = self.visit(call.args[0], cursor)
@@ -820,10 +822,7 @@ class Lowering(ExprVisitor[Expr]):
 
     def _emit_instruction(self, call, op, operands, mesh, output_window, written, cursor):
         atom = getattr(op, "atom", None)
-        if atom is not None:
-            if any(value is None for _, value in operands):
-                raise LoweringError(f"{_label(call)} cannot issue an atom into an output window")
-        else:
+        if atom is None:
             if mesh is None:
                 raise LoweringError(f"{_label(call)} instruction issue has no lexical mesh")
             declared = next(
@@ -844,6 +843,8 @@ class Lowering(ExprVisitor[Expr]):
             issue.add(Evaluate(self._issued_op(op), tuple(issued)))
             cursor.add(MeshScope(frame, Var(self.names.fresh("threads"), type=_BINDING), issue.build()))
             return written
+        if any(value is None for _, value in operands):
+            raise LoweringError(f"{_label(call)} cannot issue an atom into an output window")
         logical = tuple(self.logical.get(id(value), value.type) for _, value in operands)
         shapes = atom.operand_shapes()
         try:
@@ -876,7 +877,9 @@ class Lowering(ExprVisitor[Expr]):
                 f"{_label(call)} axis {axis_names[axis]} extent {whole[axis]} "
                 f"is not divisible by atom {tile[axis]}"
             )
-        order = getattr(call.target, "order", None) or tuple(range(len(whole)))
+        order = (
+            call.target.order if isinstance(call.target, ScheduleOp) else None
+        ) or tuple(range(len(whole)))
         if mesh is None:
             raise LoweringError(f"{_label(call)} has atom axes but no declared physical mesh")
         try:
