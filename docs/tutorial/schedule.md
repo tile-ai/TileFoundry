@@ -159,7 +159,8 @@ for g in range(64 // 16):
 
 This is the G=16 order: nearby work reuses B through L2, while 132 persistent CTAs
 avoid relaunching 33 waves. AtomSched found the order under sustained load, where GPU
-clock behavior also mattered; neither fact is encoded by `predicted-ns`.
+clock behavior also mattered; neither fact is encoded by `predicted-ns`. The maintained
+fixture calls this same CTA axis `persistent` instead of the shorter `p`.
 
 ## 4. Ask what can implement the HIR
 
