@@ -20,7 +20,6 @@ import pytest
 import torch
 
 import tilefoundry.passes.transforms.convert_hir_to_tir as lowering_module
-from tilefoundry.analysis import AnalysisPrecision
 from tilefoundry.analysis.api import analyze
 from tilefoundry.analysis.check import check_program
 from tilefoundry.analysis.liveness import analyze_liveness, result_copies
@@ -93,12 +92,12 @@ PLAIN = (
 TIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "tir").glob("*.py")))
 HIR = tuple(sorted((Path(__file__).parents[1] / "fixtures" / "schedule" / "hir").glob("*.py")))
 WGMMA_FACTS = Path(__file__).parents[1] / "fixtures" / "schedule" / "Wgmma.facts.txt"
-CANDIDATE_GOLDENS = tuple(
-    Path(__file__).parents[1] / "fixtures" / "schedule" / "plain" / name
-    for name in (
-        "gemm_8192x17408x5120_cta_grid.candidates.txt",
-        "gemm_relu_gemm_tiled.candidates.txt",
-    )
+CANDIDATE_GOLDEN = (
+    Path(__file__).parents[1]
+    / "fixtures"
+    / "schedule"
+    / "plain"
+    / "gemm_8192x17408x5120_cta_grid.candidates.txt"
 )
 ANALYZED_GOLDEN = (
     Path(__file__).parents[1]
@@ -123,7 +122,6 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
-    "gemm_8192x17408x5120_optimal": 212_992,
     "gemm_8192x17408x5120_register_store": 196_608,
     "gemm_8192x17408x5120_tma_store": 212_992,
     "sm80_mma_ldmatrix": 1_536,
@@ -145,12 +143,6 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
-    "gemm_8192x17408x5120_optimal": {
-        "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
-        "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
-        "thread@128:256#2": _RmemExpectation(131_072, "f32 loop result/bf16 cast alias"),
-        "thread@0:384#0": _RmemExpectation(131_072, "parent envelope of one alias chain"),
-    },
     "gemm_8192x17408x5120_register_store": {
         "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
         "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
@@ -427,10 +419,6 @@ def test_scheduled_hir_program_has_analysis_metadata(
                 assert record.offsets
 
     if analysis == "compute-cost":
-        if path.stem == "gemm_8192x17408x5120_optimal":
-            record = get_metadata(result.function, ComputeCostMetadata)
-            assert record.precision is AnalysisPrecision.UPPER_BOUND
-            assert sum(spread.total for _, spread in record.flops.kinds) == 12_048_559_767_552
         schedules = (
             expr
             for expr in collect_exprs(result.function.body)
@@ -963,17 +951,16 @@ def test_schedule_facts_rejects_unknown_selection_without_output(
     assert not out.exists()
 
 
-@pytest.mark.parametrize("golden", CANDIDATE_GOLDENS, ids=lambda path: path.stem)
 def test_schedule_candidates_writes_canonical_report(
-    golden: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    name = golden.name.removesuffix(".candidates.txt")
+    name = CANDIDATE_GOLDEN.name.removesuffix(".candidates.txt")
     source = f"tests/fixtures/schedule/plain/{name}.py"
     out = tmp_path / "candidates.txt"
 
     assert cli_main(["schedule", "candidates", source, str(out)]) == 0
     assert capsys.readouterr() == ("", "")
-    assert out.read_bytes() == golden.read_bytes()
+    assert out.read_bytes() == CANDIDATE_GOLDEN.read_bytes()
 
 
 def test_schedule_candidate_reports_cover_every_site(

@@ -1,4 +1,4 @@
-# TileFoundry in three steps
+# TileFoundry in two steps
 
 TileFoundry is source to source: the reference is source code, the fast
 implementation is source code, and either can be pointed at any command.
@@ -15,7 +15,7 @@ implementation is source code, and either can be pointed at any command.
         │                              ▼
    published model            the reference is finished
 
-  step two — choose the schedule before writing a kernel
+  step two — choose the schedule, implement, and measure
 
         ┌────── change the HIR ◄────── not yet ───────────────────┐
         ▼                                                         │
@@ -25,11 +25,9 @@ implementation is source code, and either can be pointed at any command.
                                               ▼
        candidates + facts ─────► tf.schedule ─────► finalize ─────► TIR
 
-  step three — implement, check, and measure
-
         ┌────── revise the schedule ◄────── not yet ──────────────────┐
         ▼                                                             │
-       TIR ─────► agent writes CUDA ─────► check ─────► agrees? ──────┘
+       TIR ─────► implement a backend ───► check ─────► agrees? ──────┘
                                                  yes │
                                                      ▼
                                                   measure
@@ -38,6 +36,3 @@ implementation is source code, and either can be pointed at any command.
                                              ┌───────┴───────┐
                           no: return to step two             └──► ship
 ```
-
-The [schedule page](schedule.md) takes step two from a CTA-grid HIR through
-candidate discovery, instruction facts, persistent scheduling, and finalized TIR.

@@ -32,7 +32,7 @@ _ANALYSES = ANALYSES
 _COMMANDS = {
     "models": "list the described models, or show one of them",
     "spec": "read one specification: its sections, or one of them",
-    "tutorial": "learn the three-step workflow: its pages, or one of them",
+    "tutorial": "learn the two-step workflow: its pages, or one of them",
     "check": "compare an implementation against its reference, output by output",
     "analyze": "report what a program costs: flops, traffic, bounds, timing",
     "target": "list, show, add, or remove compilation targets",
