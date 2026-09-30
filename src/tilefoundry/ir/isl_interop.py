@@ -174,6 +174,15 @@ def _dim_visitor_type():
                 self.param_map = param_map
                 self.identities = identities
 
+            def _range_params(self) -> dict[str, tuple[int, int] | None]:
+                """Include already named set dimensions while probing affine ranges."""
+                named = (
+                    {}
+                    if self.identities is None
+                    else {name: None for name in self.identities.values()}
+                )
+                return {**named, **self.params}
+
             @contextmanager
             def _speculative_state(self) -> Iterator[Callable[[], None]]:
                 params = self.params.copy()
@@ -231,14 +240,15 @@ def _dim_visitor_type():
             def visit_DimMul(self, dim: Call, ctx=None) -> str:
                 with self._speculative_state() as commit:
                     sa, sb = self._render_operands(dim, ctx)
-                    ca = _constant_value_of(sa, self.params)
-                    cb = _constant_value_of(sb, self.params)
+                    range_params = self._range_params()
+                    ca = _constant_value_of(sa, range_params)
+                    cb = _constant_value_of(sb, range_params)
                     if ca is not None or cb is not None:
                         commit()
                         return f"({ca if ca is not None else sa} * {cb if cb is not None else sb})"
                     bound = _interval_mul(
-                        _bound_of(sa, self.params),
-                        _bound_of(sb, self.params),
+                        _bound_of(sa, range_params),
+                        _bound_of(sb, range_params),
                     )
                 name = _bind_param(dim, self.params, self.param_map, self.identities)
                 if self.params[name] is None:

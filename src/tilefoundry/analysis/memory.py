@@ -934,12 +934,13 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
         )
     _inherit_view_placements(liveness)
     levels = tuple(levels_list)
-    errors = tuple(
+    placement_errors = tuple(
         f"{item.memory_level} placement peak {format_bytes(item.peak_bytes)} exceeds "
         f"capacity {format_bytes(item.capacity_bytes)}"
         for item in levels
         if item.exceeds_capacity
     )
+    errors = placement_errors
     overfull_snapshot_holds: set[int] = set()
     if cache is not None and wave is not None:
         cache_level, _backing_level, cache_capacity_bytes = cache
@@ -997,6 +998,7 @@ def analyze_memory(function: Function, context: AnalyzeContext) -> None:
             reuse_windows=reuse,
             lifetimes=lifetimes,
             peaks=levels,
+            placement_errors=placement_errors,
             solver_status="feasible",
             errors=errors,
         ),

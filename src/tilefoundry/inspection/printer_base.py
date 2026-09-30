@@ -163,8 +163,7 @@ class PythonPrinter(ExprFunctor[str], TypeFunctor[str]):
         axis = static_dim_value(value.args[0]) if value.args else None
         if axis is None or axis < 0 or axis >= len(flatten(target.mesh.layout).shape):
             raise ValueError("MeshCoord requires a literal in-range axis to print")
-        if ctx is None:
-            raise ValueError("MeshCoord requires an active mesh binding to print")
+        ctx = ctx if ctx is not None else self.context
         ref = ctx.mesh_axis_alias(target.mesh, axis)
         if ref is not None:
             return ref

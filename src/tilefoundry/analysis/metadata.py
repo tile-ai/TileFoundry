@@ -206,6 +206,7 @@ class RegionMemoryMetadata(IRMetadata):
     reuse_windows: tuple[ReuseWindow, ...] = ()
     lifetimes: tuple[ValueLifetime, ...] = ()
     peaks: tuple[MemoryLevelPeak, ...] = ()
+    placement_errors: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
     advisories: tuple[str, ...] = ()
 

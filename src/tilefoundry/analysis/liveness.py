@@ -195,6 +195,8 @@ class LivenessVisitor(ExprVisitor[None]):
             self.states[key] = replace(
                 self.states[key], defined_at=phi_definition, last_used_at=backedge
             )
+        if self.loop_entries:
+            self.loop_entries[-1][2].update(staged)
 
         exit_use = self.next_event()
         for source in region.carried_args or (region.body,):

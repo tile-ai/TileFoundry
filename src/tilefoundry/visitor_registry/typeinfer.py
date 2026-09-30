@@ -17,12 +17,13 @@ from tilefoundry.ir.hir.sharding.reshard import Reshard as HirReshard
 from tilefoundry.ir.mesh_scope import covered_by_scope, storage_reaches
 from tilefoundry.ir.tir.shape import ShapeOf
 from tilefoundry.ir.types.callable_type import callable_type_for
+from tilefoundry.ir.types.dim import DimVar
 from tilefoundry.ir.types.mesh import make_mesh
 from tilefoundry.ir.types.shard_layout import ShardLayout
 from tilefoundry.ir.types.substitute import canonicalize_dims
-from tilefoundry.ir.types.tensor_type import TupleType, Type
+from tilefoundry.ir.types.tensor_type import TensorType, TupleType, Type
 from tilefoundry.ir.types.utils import types_compatible
-from tilefoundry.ir.visitor import ExprVisitor
+from tilefoundry.ir.visitor import ExprVisitor, expr_children
 
 from .contexts import FunctionScope, TypeInferContext, TypeInferResults
 from .registries import typeinfer_registry
@@ -69,6 +70,13 @@ class TypeInferVisitor(ExprVisitor[Type]):
             return result
         finally:
             self._visit_depth -= 1
+
+    def visit_operands(self, expr: Expr, ctx: TypeInferContext) -> tuple[Type, ...]:
+        """Infer Expr operands while treating symbolic dimensions as meta-scalars."""
+        return tuple(
+            TensorType.umat_scalar() if isinstance(child, DimVar) else self.visit(child, ctx)
+            for child in expr_children(expr)
+        )
 
     @staticmethod
     def _record_range(expr: Expr, results: TypeInferResults) -> None:
@@ -170,6 +178,9 @@ class TypeInferVisitor(ExprVisitor[Type]):
 
     def visit_LoopRegion(self, region: LoopRegion, ctx: TypeInferContext) -> Type:
         """Infer a loop after binding its induction and carried variables."""
+        for bound in (region.start, region.extent, region.step):
+            if isinstance(bound, Expr):
+                self.visit(bound, ctx)
         inits = tuple(self.visit(arg, ctx) for arg in region.init_args)
         memo = {
             **self._memo,

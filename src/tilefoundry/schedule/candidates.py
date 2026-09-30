@@ -33,9 +33,7 @@ from tilefoundry.ir.pattern import (
 from tilefoundry.ir.types import TensorType, UnitType
 from tilefoundry.ir.types.dim import is_dim_op_call
 from tilefoundry.ir.types.int_tuple import flatten
-from tilefoundry.ir.types.layout import flatten as flatten_layout
-from tilefoundry.ir.types.shard_layout import shard_layout_of, split_target_axes
-from tilefoundry.ir.types.utils import local_type_of
+from tilefoundry.ir.types.utils import try_local_type_of
 from tilefoundry.ir.visitor import collect_exprs
 from tilefoundry.schedule._reporting import capability_families
 from tilefoundry.target import Target
@@ -94,26 +92,8 @@ def _site_types(
 ) -> tuple[tuple[TensorType, ...], TensorType]:
     def candidate_type(type_):
         """Project a site unless it is already one indivisible scheduled issue."""
-        shard = shard_layout_of(getattr(type_, "layout", None))
-        if shard is not None:
-            mesh_extents = tuple(flatten_layout(shard.mesh.layout).shape)
-            local_shape = list(type_.shape)
-            for mesh_axis, tensor_axis in enumerate(
-                split_target_axes(shard, type_.shape)
-            ):
-                if tensor_axis is None or mesh_axis >= len(mesh_extents):
-                    continue
-                size = local_shape[tensor_axis]
-                extent = mesh_extents[mesh_axis]
-                static = all(
-                    isinstance(value, int) and not isinstance(value, bool)
-                    for value in (size, extent)
-                )
-                if static and extent != 0 and size % extent:
-                    return type_
-                if static and extent != 0:
-                    local_shape[tensor_axis] = size // extent
-        return local_type_of(type_)
+        projected = try_local_type_of(type_)
+        return type_ if projected is None else projected
 
     reads = tuple(candidate_type(arg.type) for arg in call.args)
     output = candidate_type(call.type)

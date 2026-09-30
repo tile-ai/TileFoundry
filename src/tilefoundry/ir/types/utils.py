@@ -446,6 +446,43 @@ def make_shard_tensor_type(
     return TensorType(shape=shape, dtype=dtype, layout=layout, storage=storage)
 
 
+def _all_split_local_type(type: Type, *, refuse_indivisible: bool) -> Type | None:
+    """Project every Split, optionally returning None for an indivisible axis."""
+    if not isinstance(type, TensorType):
+        return type
+    layout = shard_layout_of(type.layout)
+    if layout is None:
+        return type
+    local = list(type.shape)
+    for mesh_axis, tensor_axis in enumerate(split_target_axes(layout, type.shape)):
+        if tensor_axis is None:
+            continue
+        extent = flatten(layout.mesh.layout).shape[mesh_axis]
+        if extent is None:
+            local[tensor_axis] = 1
+            continue
+        size = local[tensor_axis]
+        if not isinstance(size, int) or isinstance(size, bool):
+            raise ValueError(
+                f"tensor axis {tensor_axis} is Split-sharded but its extent "
+                f"{size!r} is not a static int"
+            )
+        if size % extent != 0:
+            if not refuse_indivisible:
+                return None
+            raise ValueError(
+                f"tensor axis {tensor_axis} (extent {size}) is not evenly "
+                f"divisible by its mesh extent {extent}"
+            )
+        local[tensor_axis] = size // extent
+    return TensorType(shape=tuple(local), dtype=type.dtype, layout=None, storage=type.storage)
+
+
+def try_local_type_of(type: Type) -> Type | None:
+    """Project all splits, returning None when a static split is indivisible."""
+    return _all_split_local_type(type, refuse_indivisible=False)
+
+
 def local_type_of(
     type: Type, *, topology_level: str | None = None, topologies: tuple[Topology, ...] = ()
 ) -> Type:
@@ -459,32 +496,9 @@ def local_type_of(
     factoring an axis into layout positions would lose the modeled flow.
     """
     if topology_level is None:
-        if not isinstance(type, TensorType):
-            return type
-        layout = shard_layout_of(type.layout)
-        if layout is None:
-            return type
-        local = list(type.shape)
-        for mesh_axis, tensor_axis in enumerate(split_target_axes(layout, type.shape)):
-            if tensor_axis is None:
-                continue
-            extent = flatten(layout.mesh.layout).shape[mesh_axis]
-            if extent is None:
-                local[tensor_axis] = 1
-                continue
-            size = local[tensor_axis]
-            if not isinstance(size, int) or isinstance(size, bool):
-                raise ValueError(
-                    f"tensor axis {tensor_axis} is Split-sharded but its extent "
-                    f"{size!r} is not a static int"
-                )
-            if size % extent != 0:
-                raise ValueError(
-                    f"tensor axis {tensor_axis} (extent {size}) is not evenly "
-                    f"divisible by its mesh extent {extent}"
-                )
-            local[tensor_axis] = size // extent
-        return TensorType(shape=tuple(local), dtype=type.dtype, layout=None, storage=type.storage)
+        projected = _all_split_local_type(type, refuse_indivisible=True)
+        assert projected is not None
+        return projected
 
     levels = {topology.name: index for index, topology in enumerate(topologies)}
     if topology_level not in levels:

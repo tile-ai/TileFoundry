@@ -85,6 +85,7 @@ def iteration_domain(
         bounds.append(f"{start} <= p{index} < {stop}")
         if step != 1:
             bounds.append(f"(p{index} - {start}) mod {step} = 0")
+        identities[id(loop.induction_var)] = f"p{index}"
     for name, bound in params.items():
         if bound is None:
             raise AnalysisError(f"loop domain parameter {name!r} has no stated value range")

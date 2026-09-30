@@ -437,7 +437,7 @@ are monotonic across the whole Function, including nested and sibling regions.
 | `ValueLifetime.binding` | Use the parameter or binding name, suffixed with `:` and the line of the value's source span when it has one. Repeated names differ by the printer's numeric suffix in definition order. A value with neither name nor span is `<value N>` in definition order. | No |
 | `ValueLifetime.memory_level` | Emit one lifetime per storage level occupied by the value's Type. | No |
 | `ValueLifetime.bytes` | Project the Type through every authored split at or coarser than the explicit level's `owner`, then take its logical bytes; a target-owned or undeclared level remains global. A `ScheduleOp` whose selected instruction has a write-only result occupies `buffers` copies of those bytes; a `READ \| WRITE` result occupies one. | `MemoryHierarchyFacts.explicit_levels[].owner` |
-| `ValueLifetime.defined_at` | Definition event on the Function-wide structured SSA timeline. A staged (`buffers > 1`) result starts at its containing loop's phi event rather than its own definition event. | No |
+| `ValueLifetime.defined_at` | Definition event on the Function-wide structured SSA timeline. A staged (`buffers > 1`) result starts at the outermost enclosing loop's phi event rather than its own definition event. | No |
 | `ValueLifetime.last_used_at` | Greatest ordinary-consumer, region-entry, loop-backedge, or region-exit use event; the final timeline event for a parameter. | No |
 | `ValueLifetime.persistent` | True for parameters and false for body allocations. | No |
 | `RegionMemoryMetadata.lifetimes` | Every value residency except a non-material view. | As above |
@@ -490,6 +490,7 @@ class MemoryLevelPeak:
 | `MemoryLevelPeak.capacity_bytes` | Capacity of the matching explicit level, or `None` when unknown. | `MemoryHierarchyFacts.explicit_levels[].capacity_bytes` |
 | `RegionMemoryMetadata.peaks` | One peak per occupied or moved storage level. | As above |
 | `RegionMemoryMetadata.solver_status` | `"feasible"` after the whole-Function placement settles, including when there is no addressable value. | No |
+| `RegionMemoryMetadata.placement_errors` | The placement-capacity subset of `errors`, kept separate so consumers can reject unplaceable schedules without treating cache findings as placement failures. | `MemoryHierarchyFacts` |
 | `RegionMemoryMetadata.errors` | Non-fatal placement-capacity and cache-capacity failures. | `MemoryHierarchyFacts` |
 | `RegionMemoryMetadata.advisories` | Lower-severity target-aware memory findings recorded by this family. | `MemoryHierarchyFacts` |
 
@@ -757,6 +758,7 @@ under `function_records.memory`:
  "peaks": [{"memory_level": <level>, "peak_bytes": <int>,
              "persistent_bytes": <int>, "capacity_bytes": <int|null>}, ...],
  "solver_status": "feasible",
+ "placement_errors": [<text>, ...],
  "errors": [<text>, ...],
  "advisories": [<text>, ...]}
 ```

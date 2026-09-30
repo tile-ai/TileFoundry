@@ -1,4 +1,4 @@
-"""Store the winning four-stage schedule through shared memory with TMA.
+"""Store the winning three-stage schedule through shared memory with TMA.
 
 A and B each occupy one SW128 TMA box. A ``T.copy`` stages the finished tile
 in N-contiguous SW128 rows, then a reverse-direction TMA writes that box to
@@ -19,7 +19,7 @@ N = 17408
 BM = 128
 BN = 256
 BK = 64
-STAGES = 4
+STAGES = 3
 
 _COMPUTE = ThreadMesh((Topology("thread", 384),),
                       ComposedLayout(None, 128, Layout((2, 4, 8, 4), (128, 32, 4, 1))),

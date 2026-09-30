@@ -424,6 +424,21 @@ class BindingSubstitutionCloner(ExprCloner):
         inner.update((id(old), new) for old, new in zip(region.carried_args, carried_args))
         return replace(
             region,
+            start=(
+                self.visit(region.start, ctx)
+                if isinstance(region.start, Expr)
+                else region.start
+            ),
+            extent=(
+                self.visit(region.extent, ctx)
+                if isinstance(region.extent, Expr)
+                else region.extent
+            ),
+            step=(
+                self.visit(region.step, ctx)
+                if isinstance(region.step, Expr)
+                else region.step
+            ),
             induction_var=induction_var,
             carried_args=carried_args,
             init_args=init_args,
@@ -435,7 +450,9 @@ class BindingSubstitutionCloner(ExprCloner):
     def visit_Call(self, expr: Call, ctx: Mapping[int, Expr]) -> Expr:
         return replace(
             expr,
-            args=tuple(self.visit(arg, ctx) for arg in expr.args),
+            args=tuple(
+                self.visit(arg, ctx) if isinstance(arg, Expr) else arg for arg in expr.args
+            ),
             metadata=self._cloned_metadata(expr),
         )
 

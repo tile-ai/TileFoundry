@@ -149,6 +149,10 @@ contributes no bound; it is neither treated as zero bandwidth nor rejected.
 The concrete mapping of issues to participants is a lowering contract rather
 than authored ScheduleOp state.
 
+Finalization MUST reject a scheduled program whose memory analysis reports a
+placement peak above the target capacity. Cache reuse-window and working-set
+findings remain analysis diagnostics and do not prevent finalization.
+
 ## 6. Reference value semantics
 
 Reference evaluation dispatches on the selected TIR instruction through the

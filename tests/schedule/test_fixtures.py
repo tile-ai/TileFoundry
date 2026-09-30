@@ -122,7 +122,7 @@ class _RmemExpectation:
 
 SMEM_GOLDEN = {
     "gemm_8192x17408x5120_register_store": 196_608,
-    "gemm_8192x17408x5120_tma_store": 196_608,
+    "gemm_8192x17408x5120_tma_store": 212_992,
     "sm80_mma_ldmatrix": 1_536,
     "wgmma_a_k_major": 6_144,
     "wgmma_a_mn_major": 6_144,
