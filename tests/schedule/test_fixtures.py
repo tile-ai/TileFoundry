@@ -121,6 +121,7 @@ class _RmemExpectation:
 
 
 SMEM_GOLDEN = {
+    "gemm_8192x17408x5120_optimal": 212_992,
     "gemm_8192x17408x5120_register_store": 196_608,
     "gemm_8192x17408x5120_tma_store": 212_992,
     "sm80_mma_ldmatrix": 1_536,
@@ -142,6 +143,12 @@ SMEM_GOLDEN = {
 }
 
 RMEM_EXPECTED = {
+    "gemm_8192x17408x5120_optimal": {
+        "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
+        "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
+        "thread@128:256#2": _RmemExpectation(131_072, "f32 loop result/bf16 cast alias"),
+        "thread@0:384#0": _RmemExpectation(131_072, "parent envelope of one alias chain"),
+    },
     "gemm_8192x17408x5120_register_store": {
         "thread@128:256#0": _RmemExpectation(131_072, "128x256 f32 zero accumulator"),
         "thread@128:256#1": _RmemExpectation(131_072, "f32 phi/mma alias chain"),
