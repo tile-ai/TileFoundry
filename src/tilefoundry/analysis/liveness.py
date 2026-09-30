@@ -76,6 +76,7 @@ class Liveness:
     uses: tuple[UseEvent, ...]
     regions: tuple[RegionInterval, ...]
     timeline_end: int
+    bindings: dict[int, Expr]
 
     def interval_of(self, value: Expr) -> LiveInterval | None:
         """Return *value*'s interval when it belongs to this timeline."""
@@ -170,6 +171,7 @@ class LivenessVisitor(ExprVisitor[None]):
             uses=tuple(self.uses),
             regions=tuple(self.regions),
             timeline_end=self.point,
+            bindings=self.bindings,
         )
 
     def visit_Var(self, value: Var, ctx=None) -> None:

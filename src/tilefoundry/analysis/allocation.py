@@ -85,21 +85,14 @@ class AllocationModel:
 
 def storage_owners(root: IterationScope, liveness: Liveness) -> dict[int, Expr]:
     """Resolve storage once per value and prove each registered alias once."""
-    scopes = tuple(walk_scopes(root))
-    declarations = {key: scope for scope in scopes for key in scope.relations}
-    bindings = {
-        id(param): argument
-        for scope in scopes
-        if isinstance(scope.owner, MeshRegion)
-        for param, argument in zip(scope.owner.params, scope.owner.args, strict=True)
-    }
+    declarations = {key: scope for scope in walk_scopes(root) for key in scope.relations}
     owners: dict[int, Expr] = {}
 
     def resolve(value: Expr) -> Expr:
         key = id(value)
         if key in owners:
             return owners[key]
-        following = storage_source(value, bindings)
+        following = storage_source(value, liveness.bindings)
         if isinstance(value, Call) and (position := aliased_operand(value)) is not None:
             operand = value.args[position]
             declared = declarations[key].relations[key][1]

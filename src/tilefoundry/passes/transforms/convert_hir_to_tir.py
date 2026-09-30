@@ -14,6 +14,7 @@ import isl
 
 from tilefoundry.analysis import MemoryMetadata, RegionMemoryMetadata, analyze
 from tilefoundry.analysis.iteration_scope import build_scopes, walk_scopes
+from tilefoundry.analysis.liveness import storage_source
 from tilefoundry.ir.core import (
     BindingMetadata,
     Call,
@@ -73,7 +74,6 @@ from tilefoundry.visitor_registry.access_relation import (
     iteration_universe,
     projected_axes,
 )
-from tilefoundry.visitor_registry.buffer_alias import aliased_operand
 from tilefoundry.visitor_registry.candidates import candidate_ops, sole_candidate
 from tilefoundry.visitor_registry.contexts import FunctionScope, TypeInferContext
 from tilefoundry.visitor_registry.registries import typeinfer_registry
@@ -319,15 +319,9 @@ class Lowering(ExprVisitor[Expr]):
         seen: set[int] = set()
         while id(value) not in seen:
             seen.add(id(value))
-            bound = self.bindings.get(id(value))
-            if bound is not None:
-                value = bound
-                continue
-            if isinstance(value, Call) and (position := aliased_operand(value)) is not None:
-                value = value.args[position]
-                continue
-            if isinstance(value, MeshRegion):
-                value = value.body
+            following = storage_source(value, self.bindings)
+            if following is not None:
+                value = following
                 continue
             if isinstance(value, LoopRegion) and len(value.init_args) == 1:
                 value = value.init_args[0]
